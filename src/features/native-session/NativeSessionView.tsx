@@ -153,7 +153,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // What the agent is doing, written at the end of the conversation the way the reading view writes it.
   const step = runningStep(entries);
   const status = waiting ? <div className="reading-status is-waiting" role="status">{t('等你确认')}</div>
-    : working ? <WorkingLine key={sessionId} agent={kind} label={model.compacting ? t('正在压缩上下文…') : step ? t('正在{step}', { step: actionText(step) }) : t('{agent} 正在思考', { agent })} /> : null;
+    : working ? <WorkingLine key={sessionId} agent={kind} label={model.compacting ? t('正在压缩上下文') : step ? t('正在{step}', { step: actionText(step) }) : t('{agent} 正在思考', { agent })} /> : null;
   // The latest round, once it has ended, gets its status above the result and its actions under it; a turn that failed says how.
   const settled = !over && model.session?.state === 'idle' && !model.turn.running && !pending.prompts.length && !model.requests.length && !asksChoice(change);
   // How the turn ended is the provider's own: its status draws the row (a turn that did not complete is never drawn as done) and the sentence main wrote for

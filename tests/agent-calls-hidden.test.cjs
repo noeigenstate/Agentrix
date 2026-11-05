@@ -13,6 +13,8 @@ const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document')
 before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' } } }); });
 after(() => { if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument); else delete globalThis.document; });
 
+// The hooks the card and the chip use, run without a render: the open views come straight from their store.
+const hooks = { ...React, useSyncExternalStore: (subscribe, snapshot) => snapshot(), useState: initial => [initial, () => {}], useRef: current => ({ current }), useEffect() {} };
 const cache = new Map();
 const resolve = (from, name) => [name, `${name}.ts`, `${name}.tsx`].map(candidate => path.resolve(path.dirname(from), candidate)).find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
 function load(filename) {
@@ -22,7 +24,7 @@ function load(filename) {
   cache.set(filename, mod);
   const original = mod.require.bind(mod);
   mod.require = name => {
-    if (name === 'react') return { ...React, useSyncExternalStore: (subscribe, snapshot) => snapshot() };
+    if (name === 'react') return hooks;
     if (name.endsWith('.css')) return {};
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: (_, icon) => () => React.createElement('svg', { 'data-icon': icon }) });
     return name.startsWith('.') ? load(resolve(filename, name)) : original(name);
@@ -70,4 +72,23 @@ test('a hidden call is listed only while its view is open; a model with no call 
   assert.deepEqual([none.empty, none.heads, none.rows], [true, [], []], 'every call hidden: the existing empty line');
   assert.equal(card([], terminalId).empty, true);
   assert.deepEqual(card([call('gpt-6.1-sol', [])], terminalId).heads.length, 1, 'a model that never had a call keeps its head, as before');
+});
+
+test('the narrow window’s chip counts the calls the list shows: hidden ones are left out, so its popover is never empty behind a number, and an open view keeps its call', () => {
+  const store = files('features/agents/subagent-splits.ts'), terminalId = 't-chip';
+  files('shared/i18n.ts').applyLanguage('zh');
+  const { SubagentChip } = files('features/agents/SubagentChip.tsx');
+  const chip = items => {
+    const tree = SubagentChip({ terminal: { id: terminalId, agentUsage: { provider: 'OpenAI', limits: [], calls: [call('gpt-6.1-sol', items)] } } });
+    const button = tree && elements(tree).find(node => node.type === 'button' && node.props.className === 'button small subagent-chip');
+    return button && [React.Children.toArray(button.props.children)[0], elements(button).find(node => node.props.className === 'subagent-chip-run')?.props.children.at?.(-1) ?? null];
+  };
+  const items = [item('a', { state: 'running' }), item('b', { hidden: true, state: 'running' }), item('c', { hidden: true })];
+  assert.deepEqual(chip(items), ['子 agent 1', 1], 'one listed call, one running: the hidden ones are not counted');
+  assert.equal(chip([item('x', { hidden: true }), item('y', { hidden: true })]), null, 'every call hidden: no chip');
+  store.openSplit(terminalId, 'b');
+  assert.deepEqual(chip(items)?.[0], '子 agent 2', 'a hidden call whose view is open is listed, and counted');
+  store.closeSplit(terminalId, 'b');
+  assert.deepEqual(chip(items)?.[0], '子 agent 1');
+  assert.equal(chip([item('p', { viewable: false })]), null, 'and a chip still exists only for a call whose record can be read');
 });

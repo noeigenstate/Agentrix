@@ -1,7 +1,7 @@
 // The sub-agent views the owner has opened beside a terminal's conversation: which ones are open, and how a view follows its
 // agent. Transient (nothing is saved) and read-only: opening a view only reads the sub-agent's record through window.agentrix.
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import type { Result, SubagentFeed, SubagentFeedEvent } from '../../shared/types';
+import type { AgentCall, Result, SubagentFeed, SubagentFeedEvent } from '../../shared/types';
 
 export type SubagentSplit = { terminalId: string; callId: string };
 
@@ -15,6 +15,11 @@ const same = (a: SubagentSplit, terminalId: string, callId: string) => a.termina
 
 export const isSplitOpen = (open: readonly SubagentSplit[], terminalId: string, callId: string) => open.some(item => same(item, terminalId, callId));
 export const splitsOf = (open: readonly SubagentSplit[], terminalId: string) => open.filter(item => item.terminalId === terminalId);
+
+// The calls the owner's lists show (the Agent tab, and the narrow window's chip with its count): a call main has hidden (it ended and no process keeps it)
+// is left out unless its view is open beside the conversation, and a model whose calls are all hidden has no entry; one that never had a call keeps its head.
+export const listedCalls = (calls: readonly AgentCall[], open: readonly SubagentSplit[], terminalId: string) =>
+  calls.map(call => ({ call, items: call.items.filter(item => !item.hidden || isSplitOpen(open, terminalId, item.id)) })).filter(group => group.items.length || !group.call.items.length);
 
 // A terminal has one view beside its conversation, at any width: opening another sub-agent replaces it (and drops the feed kept for it).
 export function openSplit(terminalId: string, callId: string) {

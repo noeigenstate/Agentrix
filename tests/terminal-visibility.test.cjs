@@ -231,72 +231,65 @@ test('an expanded later-terminal launcher targets its own terminal despite an ea
   assert.deepEqual(calls, [['launch', 'chosen', 'codex', 'new'], ['start', 'chosen'], ['active', 'chosen']]);
 });
 
-test('SSH empty cards keep the terminal prompt and never mount an agent launcher', () => {
+// The launcher of an SSH project is the same card as a local one, told its kind: the stand-in says what it was given.
+const sshLauncher = props => React.createElement('div', { className: 'agent-launcher', 'data-kind': props.kind, 'data-terminal': props.terminalId }, props.runningCount > 0 && `${props.runningCount} 个终端运行中 · 点击展开`);
+
+test('SSH empty cards mount the agent launcher told they are SSH, in place of the old start block', () => {
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', {
-    AgentLauncher: { AgentLauncher: () => assert.fail('SSH projects must never mount AgentLauncher') },
+    AgentLauncher: { AgentLauncher: sshLauncher },
   });
   for (const count of [1, 2]) for (const focused of [false, true]) {
     const terminals = Array.from({ length: count }, (_, index) => terminal(`empty-${index}`, { sessionId: null, status: 'stopped' }));
     const markup = renderToStaticMarkup(React.createElement(ProjectTerminals, { project: { id: 'p', kind: 'ssh', terminals }, focused, activeId: null, setActiveId() {} }));
-    assert.equal((markup.match(/class="terminal-empty"/g) ?? []).length, focused ? count : 1);
-    assert.match(markup, /项目已就位/); assert.match(markup, /启动终端，在这里开始开发/);
-    assert.equal((markup.match(/>启动终端<\/button>/g) ?? []).length, focused ? count : 1);
-    assert.doesNotMatch(markup, /agent-launcher|选择助手|原生审批|个终端运行中/);
+    assert.equal((markup.match(/class="agent-launcher" data-kind="ssh"/g) ?? []).length, focused ? count : 1, 'one launcher on a small card, one per terminal on an expanded one');
+    assert.doesNotMatch(markup, /terminal-empty|项目已就位|启动终端|个终端运行中/);
   }
 });
 
 test('SSH shell-only cards retain hidden panes and expand through their running count', () => {
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', {
     react: { useRef: current => ({ current }), useState: initial => [initial, () => {}], useEffect() {} },
-    AgentLauncher: { AgentLauncher: () => assert.fail('SSH projects must never mount AgentLauncher') },
+    AgentLauncher: { AgentLauncher: sshLauncher },
   });
   for (const count of [1, 2]) {
     const calls = [], shells = Array.from({ length: count }, (_, index) => terminal(`shell-${index}`));
     const terminals = [terminal('empty', { sessionId: null, status: 'stopped' }), ...shells, terminal('exited', { status: 'exited' })];
     const props = { project: { id: 'p', kind: 'ssh', terminals }, activeId: 'shell-0', setActiveId: id => calls.push(['active', id]), onExpand: () => calls.push('expand') };
     const tree = ProjectTerminals({ ...props, focused: false }), markup = renderToStaticMarkup(tree);
-    assert.match(markup, /项目已就位/); assert.match(markup, /启动终端，在这里开始开发/);
-    assert.doesNotMatch(markup, /class="agent-launcher"|>启动终端<\/button>|is-active-terminal/);
+    assert.match(markup, /class="agent-launcher" data-kind="ssh" data-terminal="empty">/); assert.doesNotMatch(markup, /is-active-terminal/);
     for (const item of [...shells, terminals.at(-1)]) {
       assert.ok(markup.includes(`data-terminal-slot="${item.id}" style="display:none"`));
       assert.ok(markup.includes(`data-pane="${item.id}"`), 'plain PTY panes stay mounted while hidden');
     }
-    elements(tree).find(node => node.type === 'button' && node.props.children === `${count} 个终端运行中 · 点击展开`).props.onClick();
-    assert.deepEqual(calls, ['expand'], 'only the explicit count action expands, preserving selection');
+    assert.match(markup, new RegExp(`${count} 个终端运行中 · 点击展开`));
+    elements(tree).find(node => node.type === sshLauncher).props.onExpand();
+    assert.deepEqual(calls, ['expand'], 'only the launcher’s explicit count action expands, preserving selection');
     const expanded = renderToStaticMarkup(ProjectTerminals({ ...props, focused: true }));
     assert.doesNotMatch(expanded, /display:none|个终端运行中/);
-    assert.match(expanded, />启动终端<\/button>/, 'expanded session-less SSH terminals retain the old start block');
+    assert.match(expanded, /class="agent-launcher" data-kind="ssh" data-terminal="empty">/, 'expanded session-less SSH terminals keep their launcher');
     for (const item of shells) assert.ok(expanded.includes(`data-pane="${item.id}"`));
   }
 });
 
-test('SSH terminal start selects its record and expands only a small card', async t => {
-  const previous = globalThis.window;
-  t.after(() => { if (previous) globalThis.window = previous; else delete globalThis.window; });
+test('an SSH launcher opens its terminal through the card: its record is selected and only a small card expands', () => {
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', {
     react: { useRef: current => ({ current }), useState: initial => [initial, () => {}], useEffect() {} },
-    AgentLauncher: { AgentLauncher: () => assert.fail('SSH projects must never mount AgentLauncher') },
+    AgentLauncher: { AgentLauncher: sshLauncher },
   });
   for (const focused of [false, true]) {
-    const calls = [];
-    let finish;
-    globalThis.window = { agentrix: { startTerminal: id => { calls.push(['start', id]); return new Promise(resolve => { finish = resolve; }); } } };
-    const terminals = ['first', 'chosen'].map(id => terminal(id, { sessionId: null, status: 'stopped' }));
+    const calls = [], terminals = ['first', 'chosen'].map(id => terminal(id, { sessionId: null, status: 'stopped' }));
     const tree = ProjectTerminals({ project: { id: 'p', kind: 'ssh', terminals }, focused, activeId: null, setActiveId: id => calls.push(['active', id]), onExpand: () => calls.push('expand'), onAction: async promise => (await promise).value });
     renderToStaticMarkup(tree);
-    const start = elements(tree).filter(node => node.type === 'button' && React.Children.toArray(node.props.children).includes('启动终端')).at(-1);
-    start.props.onClick();
-    const id = focused ? 'chosen' : 'first';
-    assert.deepEqual(calls, [['start', id]], 'selection waits for terminal startup');
-    finish({ ok: true });
-    await new Promise(resolve => setImmediate(resolve));
-    assert.deepEqual(calls, [['start', id], ['active', id], ...(!focused ? ['expand'] : [])]);
+    const launcher = elements(tree).filter(node => node.type === sshLauncher).at(-1), id = focused ? 'chosen' : 'first';
+    assert.deepEqual([launcher.props.kind, launcher.props.terminalId, launcher.props.projectId], ['ssh', id, 'p']);
+    launcher.props.onOpenTerminal(id);
+    assert.deepEqual(calls, [['active', id], ...(!focused ? ['expand'] : [])], 'typing, selecting and copying in a small card never expand it; opening the terminal does');
   }
 });
 
 test('a user-typed SSH agent becomes visible while plain PTY panes stay mounted', () => {
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', {
-    AgentLauncher: { AgentLauncher: () => assert.fail('SSH projects must never mount AgentLauncher') },
+    AgentLauncher: { AgentLauncher: sshLauncher },
   });
   for (const agent of ['claude', 'codex']) {
     const shell = terminal('shell'), typed = terminal('typed');

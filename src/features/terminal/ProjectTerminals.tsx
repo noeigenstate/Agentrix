@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { ArrowCounterClockwise, DotsSixVertical, Play, Terminal as TerminalIcon, X } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, DotsSixVertical, X } from '@phosphor-icons/react';
 import { SubagentPane } from '../agents/SubagentPane';
 import { closeSplit, splitsOf, useSplits } from '../agents/subagent-splits.ts';
 import { AgentLauncher } from './AgentLauncher';
@@ -60,12 +60,6 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const reorder = useReorder(multiple, project.id, terminals.map(terminal => terminal.id), ids => onAction(window.agentrix.reorderTerminals(project.id, ids)), TERMINAL_SPLITS);
   const records = new Map(terminals.map(terminal => [terminal.id, terminal]));
   const shown = reorder.order ? reorder.order.flatMap(id => records.get(id) ?? []) : terminals;
-  const sshEmpty = (terminalId: string, count = 0) => <div className="terminal-empty">
-    <TerminalIcon size={28} weight="light" /><p>{t('项目已就位')}</p><span>{t('启动终端，在这里开始开发')}</span>
-    {count > 0
-      ? <button className="text-button agent-launcher-running" onClick={onExpand}>{t('{count} 个终端运行中 · 点击展开', { count })}</button>
-      : <button className="button secondary small" onClick={async () => { await onAction(window.agentrix.startTerminal(terminalId)); openTerminal(terminalId); }}><Play size={13} weight="fill" />{t('启动终端')}</button>}
-  </div>;
   return <div ref={area} className={`panel-terminal-area terminal-grid ${cells > 1 ? 'has-splits' : ''} ${multiple ? 'has-terminals' : ''} ${reorder.drag ? 'is-reordering' : ''}`} style={{ '--terminal-columns': columns, '--terminal-rows': rows } as CSSProperties}
     onPointerDown={reorder.onPointerDown} onClickCapture={reorder.onClickCapture}>
     {shown.map(terminal => {
@@ -88,9 +82,8 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
           <NativePathNote terminalId={terminal.id} terminalActive={!!terminal.sessionId} switchState={terminal.switchState} sessionId={terminal.nativeRuntimeSessionId ?? null} />
           {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
             : native ? <NativeSessionView terminalId={terminal.id} projectId={project.id} autoFocus={focused && selected === terminal.id} switchState={terminal.switchState} handoff={handoff} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />
-            // A local project starts with the agent chosen here; an SSH project connects first, in its terminal.
-            : reading ? null : project.kind !== 'ssh' ? <AgentLauncher terminalId={terminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} />
-            : sshEmpty(terminal.id)}
+            // The card's launcher: a local project picks its agent here; an SSH project offers Codex (it runs on the other computer) and a plain terminal.
+            : reading ? null : <AgentLauncher terminalId={terminal.id} projectId={project.id} kind={project.kind} onAction={onAction} onOpenTerminal={openTerminal} />}
         </div>}</WithHandoff>
         {multiple && stopped && terminal.sessionId && <button className="button secondary small terminal-split-restart" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}>{t('重新启动')}</button>}
       </section></div>;
@@ -98,7 +91,6 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
     {views.map(view => <div key={`${view.terminalId}/${view.callId}`} className="subagent-slot">
       <SubagentPane terminalId={view.terminalId} callId={view.callId} projectId={project.id} onClose={() => closeSplit(view.terminalId, view.callId)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />
     </div>)}
-    {!focused && !visible.length && (project.kind === 'ssh' ? sshEmpty(launcherTerminal.id, runningCount)
-      : <AgentLauncher terminalId={launcherTerminal.id} projectId={project.id} onAction={onAction} onOpenTerminal={openTerminal} runningCount={runningCount} onExpand={onExpand} />)}
+    {!focused && !visible.length && <AgentLauncher terminalId={launcherTerminal.id} projectId={project.id} kind={project.kind} onAction={onAction} onOpenTerminal={openTerminal} runningCount={runningCount} onExpand={onExpand} />}
   </div>;
 }
