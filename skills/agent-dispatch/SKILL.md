@@ -1,6 +1,6 @@
 ---
 name: agent-dispatch
-description: Use whenever a session inside Agentrix starts a Codex or Claude Code worker from the command line (codex exec, claude -p) — launch it only through Agentrix's dispatch helper, which declares the assignment to the app and reports how the worker ended; covers the helper's arguments, the roundtable before work, the shared project memory and the per-round consolidation, the event protocol and what the activity pane shows. Also use when changing the helper, the event server or the called-models pane.
+description: Use whenever a session inside Agentrix starts a Codex or Claude Code worker from the command line — launch it only through Agentrix's dispatch helper, which declares the assignment to the app and reports how the worker ended; covers the helper's arguments, the roundtable before work, the shared project memory and the per-round consolidation, the event protocol and what the activity pane shows. Also use when changing the helper, the event server or the called-models pane.
 ---
 
 # Dispatching command-line workers
@@ -22,10 +22,8 @@ node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues 
 node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <file.md>
 ```
 
-Inside Agentrix a Codex worker runs on `codex app-server` by default; `codex exec` is only the fallback when app-server cannot start before any input, or outside Agentrix, and the helper prints a `transport … codex-exec fallback` line saying why. The helper builds the real command itself (`codex exec -m … -c model_reasoning_effort=… -c service_tier="fast" --json -C … -o <out> -` /
-`claude -p --model … --effort … --permission-mode … --output-format stream-json --verbose`; the helper reads these streams itself and
-sends only the token rate while the worker runs), feeds the
-brief on stdin, so what is declared is what runs. It exits with the worker's exit code and writes a log next to `--out`
+A Codex worker runs only on `codex app-server`, which the helper starts itself with the declared model, effort, speed, folder and sandbox. If app-server cannot start, the helper fails with the reason on its end line and does not fall back to another way of running Codex. A Claude worker runs through the app's Claude runtime where it is available, else as `claude -p --model … --effort … --permission-mode … --output-format stream-json --verbose`, whose stream the helper reads itself and sends only the token rate while the worker runs. The helper gives the
+brief to the worker itself, so what is declared is what runs. It exits with the worker's exit code and writes a log next to `--out`
 (`<out>.log`). `--role`: 执行 / exec, 调查 / investigate or 审查 / review (English aliases become the corresponding Chinese
 role in events). `--help` lists all six values. `--title`: one line, what the worker does.
 
@@ -58,7 +56,7 @@ role in events). `--help` lists all six values. `--title`: one line, what the wo
   never repeat the owner's decisions by memory. In a git repository the findings also go to the project memory
   (below), so a worker on another module reads them without a ledger.
 - `--resume <session id>` (from the start line's `session`): continues that worker's conversation —
-  `codex exec resume <id> …` (keeps the session's own folder; a build run is writable and a roundtable or `--read-only` run stays read-only) or `claude -p --resume`. Pass the whole session id: a shortened one starts a new session.
+  a Codex thread resumed on app-server (keeps the session's own folder; a build run is writable and a roundtable or `--read-only` run stays read-only) or `claude -p --resume`. Pass the whole session id: a shortened one starts a new session.
   Use it for a follow-up on the same work (a review finding, a failing test) instead of re-explaining in a new worker.
 
 A worker reads its surroundings: a ledger or answer lying in a sibling folder is context too. Keep unrelated tasks'
@@ -241,7 +239,7 @@ confirmed worker runs.
 
 ## Rules
 
-- Start every command-line Codex or Claude worker through the helper, as a background command; never `codex exec` /
+- Start every command-line Codex or Claude worker through the helper, as a background command; never `codex` or
   `claude -p` directly.
 - Give every worker that changes files `--allow` for its module, and every task with owner decisions a `--ledger`.
 - In a git repository, hold the roundtable (`--meeting`) before the build, resume the confirmed session with the same

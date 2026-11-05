@@ -22,10 +22,10 @@ Write the prompt to a scratch file:
 - Output: `.test-output/<topic>/<n>-<slug>.png`, copied from where the image tool saves them. No other file changes,
   no commit, no app or test run.
 
-Run it in the background:
+Run it in the background through Agentrix's dispatch helper (`skills/agent-dispatch`), with the prompt as the brief and each reference given with `--image`:
 
 ```
-codex exec -m gpt-6.1-sol -c model_reasoning_effort=high -c service_tier='"fast"' -C <repo> -i <reference.png> -o <scratch>/out.md - < <scratch>/prompt.md
+node "<helper>" codex --role 执行 --title "<element> concepts" --model gpt-6.1-sol --effort high --fast --cwd <repo> --allow ".test-output/**" --image <reference.png> --brief <scratch>/prompt.md --out <scratch>/out.md
 ```
 
 It takes about two minutes per image. Keep working on other things meanwhile.

@@ -2741,7 +2741,6 @@
   "模型已设为 {value}": "Model set to {value}",
   "思考强度已设为 {value}": "Effort set to {value}",
   "模型已恢复默认": "Model back to the default",
-  "{count} 万": "{count}0k",
   "上下文已压缩（手动）": "Context compacted (manual)",
   "上下文已压缩（自动）": "Context compacted (automatic)",
   "有一条结果太大，未显示，任务继续": "A result was too large to show. The task continues.",

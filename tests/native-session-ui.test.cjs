@@ -1930,6 +1930,9 @@ const ok = value => async () => ({ ok: true, value });
 test('a compaction and a dropped result are lines of the conversation, and the compaction under way is told on the working line', async () => {
   const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), { nativeEntries } = load('features/native-session/native-entries.ts'), { tokenWords, sizeWords } = load('features/native-session/native-notices.ts'), ev = stream();
   assert.deepEqual([180000, 21000, 20000, 10000, 8600, 0].map(tokenWords), ['18 万', '2.1 万', '2 万', '1 万', '8600', '0'], 'ten thousand on in 万 with one decimal, ".0" dropped; below it the number');
+  const i18n = load('shared/i18n.ts');
+  i18n.applyLanguage('en');
+  try { assert.deepEqual([180000, 21000, 20000, 12345, 10000, 8600, 0].map(tokenWords), ['180k', '21k', '20k', '12.3k', '10k', '8600', '0'], 'English counts in k'); } finally { i18n.applyLanguage('zh'); }
   assert.deepEqual([4404019, 73400320, 0].map(sizeWords), ['4.2', '70.0', '0.0']);
   const model = applyEvents(emptyModel(), [ev('session.state', { state: 'running', reason: null }), ev('turn.started', { origin: 'user', clientMessageId: null }), ev('context.compacting', { active: true })]).model;
   assert.equal(model.compacting, true);
@@ -2050,4 +2053,19 @@ test('a line that starts with ! is a shell command: noted over the box, sent as 
     codex.type('!ls'); assert.equal(elements(codex.tree()).some(node => node.type === 'code' && node.props.children === '!'), false, 'a Codex session has no such line');
     codex.press(); await settle(); assert.deepEqual(sent.map(send => send[3]), ['!ls']);
   } finally { codex.done(); }
+});
+
+test('a /fast the runtime cannot do shows its reason and never says fast mode is on: typed, or chosen from the menu', async () => {
+  const reason = 'Claude Agent SDK 目前不支持快速模式', patches = [];
+  const view = sessionView(idle, { runOptions: async (...args) => { patches.push(args[2]); return args[2].fast === true ? { ok: false, error: reason } : { ok: true, value: { model: null, effort: null, fast: false } }; } });
+  try {
+    await typeIn(view, '/fast on'); keyIn(view, 'Enter'); await settle(); view.tree();
+    assert.deepEqual([patches, view.box().props.value, alertOf(view), statuses(view)], [[{ fast: true }], '/fast on', reason, []], 'the words come back with the reason, and nothing is told as set');
+    patches.length = 0; await typeIn(view, '/fast'); keyIn(view, 'Enter'); await settle(); view.tree();
+    assert.deepEqual(optionNames(view), ['on', 'off']);
+    options(view)[0].props.onClick(); await settle(); view.tree();
+    assert.deepEqual([patches.at(-1), alertOf(view), statuses(view), listbox(view)], [{ fast: true }, reason, [], undefined], 'choosing 开 from the menu ends the same way');
+    await typeIn(view, '/fast off'); keyIn(view, 'Enter'); await settle(); view.tree();
+    assert.deepEqual([alertOf(view), statuses(view)], [undefined, ['快速模式已关闭']], 'what it can do is still told');
+  } finally { view.done(); }
 });
