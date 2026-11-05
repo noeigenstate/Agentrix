@@ -1261,13 +1261,11 @@ function structuredEvent(id, event) {
     if (text) s.promptQueue.start(text, event.receivedAtMs, event.payload.clientMessageId);
   }
   if (event.type === 'turn.started') {
-    if (spec.agent === 'codex') store.setRestore(id, { interrupted: true });
     if (event.payload.origin === 'user') { s.completionWork.begin(event.receivedAtMs); store.expectCompletion(project.id); }
     s.activityInputAt = event.receivedAtMs;
     applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId, state: 'working', updatedAt: event.receivedAtMs });
   }
   if (event.type === 'turn.completed') {
-    if (spec.agent === 'codex') store.setRestore(id, { interrupted: ['interrupted', 'unknown'].includes(event.payload.status) });
     applyActivity(project, s, { threadId: event.providerSessionId || event.runtimeSessionId, turnId: event.turnId,
       state: event.payload.status === 'completed' ? 'complete' : event.payload.status === 'unknown' ? 'unknown' : 'interrupted', ended: true, updatedAt: event.receivedAtMs });
   }
@@ -1552,6 +1550,7 @@ async function initializeNativeSessions() {
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
+    saveInterrupted: (id, interrupted) => { if (!quitting) store.setRestore(id, { interrupted }); },
     terminal: async (spec, reason) => {
       const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId, { preserveNative: true });
       nativeSpecs.delete(spec.terminalId);
@@ -1920,7 +1919,12 @@ function registerIpc() {
     }
     return true;
   });
-  handle('agent:history', id => nativeSessions.history(id));
+  handle('agent:history', id => {
+    if (findProject(id).kind !== 'ssh') return folderHistory(folderOf(id));
+    // A launcher mount is not permission to connect or prompt for an SSH password.
+    const saved = store.findTerminal(id).record.restore;
+    return { claude: null, codex: saved?.threadId ? { id: saved.threadId } : null };
+  });
   handle('agent:launch', async (id, agent, mode) => {
     const project = findProject(id);
     if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
@@ -1929,10 +1933,8 @@ function registerIpc() {
     if (agent === 'codex') {
       if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
       launchPlans.delete(id); restorePlans.delete(id);
-      const saved = store.findTerminal(id).record.restore;
-      const history = mode === 'continue' ? saved?.threadId ? { id: saved.threadId } : (await nativeSessions.history(id)).codex : null;
-      if (history) store.setRestore(id, { agent: 'codex', threadId: history.id });
-      await nativeSessions.start(id, { agent, resume: !!history }); broadcast(); return true;
+      // start resolves the saved thread, or queries folder history, only after this click.
+      await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;
     }
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
     launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });

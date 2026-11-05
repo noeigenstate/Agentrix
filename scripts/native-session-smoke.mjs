@@ -44,7 +44,7 @@ export async function switchContracts(output, stages) {
       'native-worker-codex-finish.test.cjs', 'dispatch-interventions.test.cjs', 'dispatch-events.test.cjs',
       'native-commands.test.cjs', 'native-commands-codex.test.cjs', 'claude-sdk-provenance.test.cjs', 'native-api-quota.test.cjs',
       'codex-auto-reset.test.cjs', 'codex-auto-reset-runtime.test.cjs', 'codex-auto-reset-main.test.cjs',
-      'r13-history.test.cjs', 'r13-review2.test.cjs', 'native-large-frames.test.cjs', 'native-parity-backend.test.cjs', 'native-parity-review.test.cjs', 'native-ui-backend.test.cjs', 'native-shell.test.cjs', 'session-restore.test.cjs', 'agent-calls.test.cjs',
+      'r13-history.test.cjs', 'r13-review2.test.cjs', 'restore-owner-stop.test.cjs', 'native-large-frames.test.cjs', 'native-parity-backend.test.cjs', 'native-parity-review.test.cjs', 'native-ui-backend.test.cjs', 'native-shell.test.cjs', 'session-restore.test.cjs', 'agent-calls.test.cjs',
       'ssh-codex.test.cjs', 'codex-app-server-only.test.cjs', 'dispatch-startup.test.cjs'].includes(name));
   await stages.run('switch contracts: Claude handoffs, Codex app-server only, drafts, rollback and no duplicate notifications', async () => {
     const child = spawn(process.execPath, ['--test', ...files.map(name => path.join(root, 'tests', name))], {

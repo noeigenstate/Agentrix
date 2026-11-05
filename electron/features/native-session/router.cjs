@@ -4,7 +4,7 @@ const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
-function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
+function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
   const projectLimits = new Map(), historyReads = new Map();
@@ -70,6 +70,9 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     if (!validEvent(event) || event.projectId !== spec.projectId || event.terminalId !== id || event.runtimeSessionId !== spec.runtimeSessionId ||
       record.epoch && event.connectionEpoch !== record.epoch || event.sequence <= (record.sequence || 0)) return;
     record.epoch = event.connectionEpoch; record.sequence = event.sequence;
+    if (agent === 'codex' && !event.replay && ['turn.started', 'turn.completed'].includes(event.type)) {
+      saveInterrupted(id, !record.ownerStopped && (event.type === 'turn.started' || ['interrupted', 'unknown'].includes(event.payload.status)));
+    }
     if (['turn.started', 'turn.completed'].includes(event.type)) record.turnRevision = (record.turnRevision || 0) + 1;
     if (!record.retiring && event.type === 'session.state' && ended.has(event.payload.state)
       && switches.failed(id, spec.runtimeSessionId)) return;
@@ -295,9 +298,9 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     history,
     async continueInterrupted(id, runtimeSessionId, beforeSend) {
       const record = current(id, runtimeSessionId), revision = record.turnRevision;
-      if (record.spec.agent !== 'codex' || record.continued || record.ownerInput || !record.runtime.canContinueInterrupted) return;
+      if (record.spec.agent !== 'codex' || record.continued || record.ownerInput || record.ownerStopped || !record.runtime.canContinueInterrupted) return;
       const unfinished = await record.runtime.canContinueInterrupted();
-      if (current(id, runtimeSessionId) !== record || record.turnRevision !== revision || record.continued || record.ownerInput || !unfinished) return;
+      if (current(id, runtimeSessionId) !== record || record.turnRevision !== revision || record.continued || record.ownerInput || record.ownerStopped || !unfinished) return;
       record.continued = true;
       beforeSend();
       const receipt = await record.runtime.send({ clientMessageId: randomUUID(), text: '继续', images: [] });
@@ -371,6 +374,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         if (selected.path !== 'api') { reconcile(); return unsent(record, message, selected.reason || 'api_unavailable'); }
       }
       switches.input(id, runtimeSessionId);
+      record.ownerStopped = false;
       try {
         const receipt = await record.runtime.send(message);
         return receipt.status === 'rejected' && !record.inputs.has(message.clientMessageId) ? unsent(record, message, 'input_rejected') : receipt;
@@ -383,7 +387,12 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         reconcile(); return unsent(record, message, 'path_changed');
       }
     },
-    interrupt(id, runtimeSessionId) { return current(id, runtimeSessionId).runtime.interrupt(); },
+    interrupt(id, runtimeSessionId) {
+      const record = current(id, runtimeSessionId);
+      record.ownerStopped = true;
+      if (record.spec.agent === 'codex') saveInterrupted(id, false);
+      return record.runtime.interrupt();
+    },
     answer(id, runtimeSessionId, requestId, answer) {
       if (answer.switch || answer.handoff) {
         resolveSpec(id, sessions.get(id)?.spec.agent || 'claude', false, true);

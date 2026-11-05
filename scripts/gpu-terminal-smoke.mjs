@@ -1,3 +1,4 @@
+import './clipboard-guard.mjs';
 // The GPU terminal renderer, as a user meets it with the default settings: the terminal draws on a canvas,
 // typed commands run, text can be selected and copied without the card expanding, and switching to the
 // compatible renderer and back keeps the session. Uses its own profile; never touches a real workspace.

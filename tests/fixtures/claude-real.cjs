@@ -30,7 +30,7 @@ const thinkingThenText = data => [opening(data), { type: 'content_block_start', 
 async function harness(t, respond) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-real-cli-')), home = path.join(directory, 'home'), cwd = path.join(directory, 'project');
   const cleanup = [];
-  t.after(async () => { for (const close of cleanup.reverse()) await close(); server.closeAllConnections(); server.close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
+  t.after(async () => { for (const close of cleanup.reverse()) await close(); server.closeAllConnections(); server.close(); await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   const env = {};
   for (const name of ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATH', 'PATHEXT']) { const key = Object.keys(process.env).find(item => item.toLowerCase() === name.toLowerCase()); if (key) env[key] = process.env[key]; }
   Object.assign(env, { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'r'), LOCALAPPDATA: path.join(home, 'l'), TEMP: path.join(directory, 't'), TMP: path.join(directory, 't'), TMPDIR: path.join(directory, 't'),

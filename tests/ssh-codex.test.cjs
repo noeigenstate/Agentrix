@@ -115,7 +115,7 @@ test('missing remote Codex preserves a typed actionable startup failure', async 
 
 test('N10 SSH thread history uses its remote byte channel and closes the lookup without account or model requests', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-ssh-history-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  t.after(async () => await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
   const f = transport(t, root), forbidden = () => assert.fail('remote history consulted local executables'); let options;
   const factory = createCodexRuntime({ resolveExecutable: forbidden, spawnProcess: forbidden, launchRemote: async (_spec, config) => {
     options = config; return { cwd: root, child: createRemoteCodexProcess(f.connection) };
@@ -142,7 +142,7 @@ test('N10 history lookup preserves the actionable missing-remote-Codex reason', 
 
 test('N10 aborting a history lookup before SSH connects reaps the late channel', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-history-abort-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  t.after(async () => await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
   const f = transport(t, root), abort = new AbortController(); let release, linked;
   const factory = createCodexRuntime({ launchRemote: async (_spec, options) => { linked = options.signal; return new Promise(resolve => { release = resolve; }); } });
   const pending = factory.history({ kind: 'ssh', cwd: '/srv/project' }, { signal: abort.signal }).then(value => ({ value }), error => ({ error }));

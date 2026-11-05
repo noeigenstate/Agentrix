@@ -56,8 +56,9 @@ try {
   await page.evaluate(id => window.agentrix.restartTerminal(id), terminalId);
   await waitFor(async () => (await terminal()).shellReady, 'cmd ready for manual Codex');
   shellSession = (await terminal()).sessionId;
-  await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex\r'), terminalId);
+  await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex "中文参数"\r'), terminalId);
   await waitFor(async () => (await receipt())?.args[0] !== 'app-server' && (await terminal()).codexActive, 'manual Codex started');
+  assert.deepEqual((await receipt()).args.slice(-1), ['中文参数'], 'manual cmd wrapper preserves the Chinese argument after its configuration flags');
   // Leaving Codex returns to the cmd prompt, which reports itself through its invisible marker.
   await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03'), terminalId);
   await waitFor(async () => { const state = await terminal(); return !state.codexActive && state.shellReady; }, 'back at the cmd prompt after Codex exits');

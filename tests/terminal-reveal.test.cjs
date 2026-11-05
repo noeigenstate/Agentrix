@@ -5,6 +5,7 @@ const path = require('node:path');
 const ts = require('typescript');
 const { chromium } = require('playwright-core');
 const { timeoutScale } = require('../scripts/wait.mjs');
+const { githubActions } = require('../scripts/clipboard-policy.cjs');
 
 // Use an installed browser with Playwright's temporary profile; Electron and real sessions are never opened.
 const browserPath = [
@@ -14,7 +15,7 @@ const browserPath = [
 ].find(filename => filename && fs.existsSync(filename));
 const root = path.resolve(__dirname, '..');
 
-test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewport', { skip: !browserPath, timeout: 60000 * timeoutScale }, async t => {
+test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewport', { skip: !githubActions(process.env) ? 'Browser GUI tests run only in GitHub Actions.' : !browserPath, timeout: 60000 * timeoutScale }, async t => {
   const sources = Object.fromEntries([
     ['react', 'react/cjs/react.production.js'], ['react/jsx-runtime', 'react/cjs/react-jsx-runtime.production.js'],
     ['react-dom', 'react-dom/cjs/react-dom.production.js'], ['react-dom/client', 'react-dom/cjs/react-dom-client.production.js'],

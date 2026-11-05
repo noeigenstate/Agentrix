@@ -47,13 +47,14 @@ test('the launcher sends every local and SSH Codex mode to app-server', async ()
     store: { findTerminal: () => ({ record: { restore: saved } }), setRestore: (_id, value) => Object.assign(saved, value) }, broadcast() {}, startTerminal: () => assert.fail('no local Codex TUI') };
   vm.createContext(context); vm.runInContext(main.slice(main.indexOf("  handle('agent:launch',"), main.indexOf('  registerNativeIpc({ handle });')), context);
   for (const mode of ['new', 'continue']) await handlers.get('agent:launch')('t', 'codex', mode);
-  assert.equal(calls.length, 2); assert.equal(calls[1][1].resume, true); assert.equal(saved.threadId, 'same-thread');
+  assert.equal(calls.length, 2); assert.equal(calls[1][1].resume, true);
+  // Folder lookup and same-thread persistence belong to router.start (r13-history.test.cjs).
   await assert.rejects(handlers.get('agent:launch')('t', 'codex', 'native'), /Unsupported agent session mode/);
   kind = 'ssh'; await handlers.get('agent:launch')('t', 'codex', 'new');
   assert.equal(calls.at(-1)[1].agent, 'codex');
   delete saved.threadId; context.folderHistory = () => assert.fail('SSH must not read local history');
   await handlers.get('agent:launch')('t', 'codex', 'continue');
-  assert.equal(calls.at(-1)[1].resume, true); assert.equal(saved.threadId, 'same-thread');
+  assert.equal(calls.at(-1)[1].resume, true);
   await assert.rejects(handlers.get('agent:launch')('t', 'claude', 'new'), /SSH/);
 });
 

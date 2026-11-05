@@ -4,6 +4,30 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { spawn } = require('node:child_process');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
+test('R1 R7 launcher mount reads saved SSH identity without any RemoteConnection; local history needs no native runtime', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  for (const kind of ['ssh', 'local']) for (const threadId of [null, 'saved-thread']) {
+    let handler, connections = 0, reads = 0;
+    const context = { handle(name, fn) { assert.equal(name, 'agent:history'); handler = fn; },
+      findProject: () => ({ kind }), store: { findTerminal: () => ({ record: { restore: { threadId } } }) },
+      folderOf: () => '/local', folderHistory: async () => { reads++; return { claude: { id: 'local-claude' }, codex: null }; },
+      nativeSessions: kind === 'ssh' ? { history() { connections++; throw new Error('RemoteConnection created during mount'); } } : null };
+    require('node:vm').runInNewContext(source.slice(source.indexOf("  handle('agent:history'"), source.indexOf("  handle('agent:launch'")), context);
+    const history = await handler('terminal');
+    assert.equal(connections, 0);
+    if (kind === 'ssh') { assert.equal(reads, 0); assert.equal(history.codex?.id || null, threadId); assert.equal(history.claude, null); }
+    else { assert.equal(reads, 1); assert.equal(history.claude.id, 'local-claude'); }
+  }
+});
+test('R1 clicking continue defers unknown SSH history to router.start and retains the resume request', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'); let handler, options;
+  const context = { handle(_name, fn) { handler = fn; }, findProject: () => ({ kind: 'ssh' }),
+    launchPlans: new Map(), restorePlans: new Map(), broadcast() {},
+    nativeSessions: { history() { assert.fail('launch must let start own lookup and cancellation'); }, async start(_id, value) { options = value; } } };
+  require('node:vm').runInNewContext(source.slice(source.indexOf("  handle('agent:launch'"), source.indexOf('  registerNativeIpc({ handle });')), context);
+  await handler('t', 'codex', 'continue'); assert.equal(options.resume, true);
+  await handler('t', 'codex', 'new'); assert.equal(options.resume, false);
+});
 for (const kind of ['local', 'ssh']) test(`N10 ${kind} history lookup resumes the listed thread without a model or account read`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-history-')), home = path.join(root, 'codex');
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
@@ -19,7 +43,7 @@ for (const kind of ['local', 'ssh']) test(`N10 ${kind} history lookup resumes th
   const forbidden = () => assert.fail('SSH history used a local resolver');
   const factory = createCodexRuntime({ resolveExecutable: kind === 'ssh' ? forbidden : async () => 'fixture', spawnProcess: kind === 'ssh' ? forbidden : launch,
     launchRemote: async (_spec, options) => { readOnly = options.readOnly; return { cwd: root, child: launch() }; } });
-  t.after(async () => { for (const runtime of runtimes.reverse()) await runtime.close(); for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
+  t.after(async () => { for (const runtime of runtimes.reverse()) await runtime.close(); for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   const spec = { kind, cwd: kind === 'ssh' ? '/remote/project' : root, env, projectId: 'p', terminalId: 't', owner: 'gui' };
   const history = await factory.history(spec); assert.equal(history.id, threadId);
   if (kind === 'ssh') assert.equal(readOnly, true, 'lookup does not consume a first-open delivery');
@@ -35,7 +59,7 @@ for (const last of ['task_started', 'task_complete']) test(`N3 continuation veri
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
   fs.writeFileSync(path.join(home, 'sessions', 'rollout-' + threadId + '.jsonl'), [{ type: 'session_meta', payload: { id: threadId, cwd: root } }, { type: 'event_msg', payload: { type: last } }].map(JSON.stringify).join('\n') + '\n');
   const methods = []; let facade;
-  t.after(async () => { await facade?.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
+  t.after(async () => { await facade?.close(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   const factory = createCodexRuntime({ resolveExecutable: async () => 'fixture', spawnProcess: (_file, _args, options) => {
     const child = spawn(process.execPath, [path.join(__dirname, 'fixtures/gui-codex-app-server.cjs')], { ...options, env: { ...options.env, CODEX_HOME: home, GIT_CEILING_DIRECTORIES: root } });
     const write = child.stdin.write.bind(child.stdin); child.stdin.write = (line, ...args) => { methods.push(JSON.parse(line)); return write(line, ...args); }; return child;

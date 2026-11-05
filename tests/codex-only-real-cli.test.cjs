@@ -10,7 +10,7 @@ const { spawn } = require('node:child_process');
 
 test('real app-server starts and resumes the same thread despite legacy terminal settings; missing CLI never falls back', {
   skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX', timeout: 45000,
-}, async () => {
+}, async t => {
   const temporary = os.tmpdir(), root = fs.mkdtempSync(path.join(temporary, 'agx-codex-only-')), cwd = path.join(root, 'project');
   fs.mkdirSync(cwd);
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(SystemRoot|WINDIR|COMSPEC|PATH|PATHEXT)$/i.test(name)));
@@ -24,9 +24,10 @@ test('real app-server starts and resumes the same thread despite legacy terminal
   const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
   const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
   const { deadline } = require('./fixtures/codex-app-server-lifecycle.cjs');
-  const children = [];
+  const children = [], processes = [];
   const launch = (file, args, options) => {
     const child = spawn(file, args, options);
+    processes.push(child);
     children.push(new Promise(resolve => child.once('close', resolve)));
     return child;
   };
@@ -63,6 +64,8 @@ test('real app-server starts and resumes the same thread despite legacy terminal
   try {
     const direct = codex.create(spec('initial'), event => events.push(event)); sessions.push(direct);
     threadId = (await direct.start()).providerSessionId;
+    t.diagnostic('real thread/start source: ' + direct.threadResponse.thread.source);
+    assert.equal(direct.threadResponse.thread.source, 'vscode');
     await direct.send({ clientMessageId: 'initial', text: 'Offline new thread' });
     for (let n = 0; n < 600 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(events.some(event => event.type === 'item.upsert' && event.payload.content?.text === 'OFFLINE CODEX ONLY'));
@@ -70,7 +73,9 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     await direct.close();
     const beforeHistory = requests.length;
     historyLookup = true;
-    assert.equal((await codex.history(spec('history'))).id, threadId, 'real thread/list finds the same thread');
+    const listed = await codex.history({ ...spec('history'), providerSessionId: null });
+    assert.equal(listed?.id, threadId, 'real thread/list finds an Agentrix-created thread without saved-ID fallback');
+    assert.ok(Number.isSafeInteger(listed.at) && listed.at > 0, 'launcher receives its at timestamp in milliseconds');
     historyLookup = false;
     assert.equal(requests.length, beforeHistory, 'history lookup never sends a model request');
     const unfinished = codex.create(spec('interrupted'), () => {}); sessions.push(unfinished);
@@ -84,6 +89,45 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     const interrupted = codex.create(spec('verified-interruption'), () => {}); sessions.push(interrupted);
     await interrupted.resume(); assert.equal(await interrupted.canContinueInterrupted(), true, 'real resumed last turn reports interruption');
     await interrupted.close();
+
+    // Owner intent is host policy: the CLI correctly reports both cases as unfinished.
+    // Exercise the actual restoreTerminal entry with real persisted turn verification.
+    const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+    for (const cause of ['owner', 'crash']) {
+      const saved = { agent: 'codex', codex: true, threadId }, id = 'policy-' + cause;
+      const makeFacade = () => createNativeSessions({ directory: path.join(root, id), codex,
+        claude: { apiState: () => ({ status: 'no_key' }) }, resolveSpec: name => spec(name), emit() {},
+        saveInterrupted(_id, value) { saved.interrupted = value; }, terminal() { assert.fail('no TUI'); } });
+      let policy = makeFacade(); sessions.push(policy);
+      const opened = await policy.start(id, { agent: 'codex', resume: true });
+      hold = true; const beforeStop = requests.length;
+      await policy.send(id, opened.runtimeSessionId, { clientMessageId: id, text: 'INTERRUPT_PROOF' });
+      for (let n = 0; n < 500 && requests.length === beforeStop; n++) await new Promise(resolve => setTimeout(resolve, 20));
+      assert.ok(requests.length > beforeStop); assert.equal(saved.interrupted, true);
+      if (cause === 'owner') {
+        await policy.interrupt(id, opened.runtimeSessionId);
+        for (let n = 0; n < 500 && policy.snapshot(id).state !== 'idle'; n++) await new Promise(resolve => setTimeout(resolve, 20));
+        assert.equal(saved.interrupted, false, 'a real stop remains cleared after the provider end');
+      } else {
+        const child = processes.at(-1), gone = once(child, 'close'); child.kill('SIGKILL'); await gone;
+        assert.equal(saved.interrupted, true, 'process loss retains the crash marker');
+      }
+      await policy.close(); hold = false;
+      policy = makeFacade(); sessions.push(policy);
+      const context = require('node:vm').createContext({ nativeSessions: policy, restorePlans: new Map(), startupErrors: new Map(), broadcast() {},
+        store: { findTerminal: () => ({ record: { restore: saved } }), setRestore(_id, patch) { Object.assign(saved, patch); } } });
+      require('node:vm').runInContext(main.slice(main.indexOf('function restoreTerminal('), main.indexOf('function startTerminal(')), context);
+      const beforeRestore = requests.length; await context.restoreTerminal(id);
+      if (cause === 'crash') {
+        for (let n = 0; n < 500 && (requests.length === beforeRestore || policy.snapshot(id).state !== 'idle'); n++) await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(context.startupErrors.size, 0);
+      assert.equal(requests.length - beforeRestore, cause === 'owner' ? 0 : 1, 'restore sends only after a non-owner interruption');
+      assert.equal(saved.interrupted, false); await policy.close();
+      policy = makeFacade(); sessions.push(policy); context.nativeSessions = policy;
+      const beforeSecondOpen = requests.length; await context.restoreTerminal(id);
+      assert.equal(requests.length, beforeSecondOpen, 'reopening cannot submit another continuation'); await policy.close();
+    }
 
     if (process.platform === 'win32') {
       const config = path.join(env.CODEX_HOME, 'config.toml');

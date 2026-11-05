@@ -1,3 +1,4 @@
+import './clipboard-guard.mjs';
 // Linux desktop check: the app starts a Bash or zsh terminal through the integration, runs a command, follows
 // codex from start to finish (with a stand-in codex that calls the real notify command), draws its own window
 // buttons and copies terminal text with Ctrl+Shift+C. Runs with an isolated profile and its own HOME, so the

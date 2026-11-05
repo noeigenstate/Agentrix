@@ -57,7 +57,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         check(); rpc = createRpc(child);
         assertCompatible(await rpc.request('initialize', { clientInfo: { name: 'agentrix-history', version: '1.0.0' }, capabilities: { experimentalApi: true } }));
         rpc.notify('initialized');
-        const page = await rpc.request('thread/list', { cwd, limit: 100, sortKey: 'updated_at', sortDirection: 'desc', archived: false, sourceKinds: ['cli', 'appServer'] });
+        const page = await rpc.request('thread/list', { cwd, limit: 100, sortKey: 'updated_at', sortDirection: 'desc', archived: false, sourceKinds: ['cli', 'vscode'] });
         if (!Array.isArray(page.data)) throw new Error('invalid_history');
         let thread = page.data.find(thread => thread.id === spec.providerSessionId) || page.data[0];
         if (spec.providerSessionId && thread?.id !== spec.providerSessionId) {
@@ -65,7 +65,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           catch (error) { if (!error.missingThread) throw error; }
         }
         if (!thread || typeof thread.id !== 'string' || thread.cwd !== cwd) return null;
-        return { id: thread.id, title: String(thread.name || thread.preview || '').slice(0, 200), updatedAt: Number.isSafeInteger(thread.updatedAt) ? thread.updatedAt * 1000 : null };
+        return { id: thread.id, title: String(thread.name || thread.preview || '').slice(0, 200), at: Number.isSafeInteger(thread.updatedAt) ? thread.updatedAt * 1000 : null };
       } finally {
         signal?.removeEventListener('abort', cancel); rpc?.close();
         try { await stopProcess(child); } finally { child?.dispose?.(); abort.abort(); }

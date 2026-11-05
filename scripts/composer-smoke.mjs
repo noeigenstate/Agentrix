@@ -1,3 +1,4 @@
+import './clipboard-guard.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';

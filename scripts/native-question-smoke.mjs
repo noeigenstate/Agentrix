@@ -1,4 +1,4 @@
-// Real reading view + xterm + native proxy, using an injected synthetic Codex TUI and isolated homes.
+// Real reading view and app-server question cards, using an injected protocol peer and isolated homes.
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -89,11 +89,16 @@ async function run(theme, output) {
     assert.equal(await submit.isDisabled(), true, 'one answer cannot bypass validation');
     await question.getByRole('textbox', { name: 'Explain your choice', exact: true }).fill('Because it fits');
     assert.equal(await submit.isEnabled(), true);
+    // Even with valid answers, Enter in the message box cannot submit the question.
+    await composer.fill(''); await composer.press('Enter');
+    assert.equal(await fs.stat(answered).then(() => true, () => false), false, 'composer Enter never answers the provider request');
+    assert.equal(await question.isVisible(), true);
+    await composer.fill('keep this draft');
     const rect = await question.boundingBox(), viewport = page.viewportSize() || await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
     assert.ok(rect.x >= 0 && rect.x + rect.width <= viewport.width + 1, 'question fits the minimum window width');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
     await page.screenshot({ path: path.join(dir, 'question-validated.png') });
-    checks.push('actual app-server request; minimum window; draft retained; validation requires every answer');
+    checks.push('actual app-server request; minimum window; draft retained; validation requires every answer; composer Enter never answers');
     await submit.click();
     await waitFor(() => fs.stat(answered).then(() => true, () => false), 'exact request answered');
     assert.deepEqual(JSON.parse(await fs.readFile(answered, 'utf8')), { answers: { q: { answers: ['One'] }, q2: { answers: ['Because it fits'] } } });

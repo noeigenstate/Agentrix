@@ -6,7 +6,7 @@ Owns an independent app-server runtime over local stdio or an injected SSH byte 
 - `electron/features/codex-app-server/**`
 
 ## Interface
-- `createCodexRuntime` (`electron/features/codex-app-server/index.cjs`) — injected local and remote process launchers, executable resolver and clock; provides create(spec, emit), limits(scope), and a read-only history(spec, { signal }) lookup through thread/list and thread/read; a runtime provides start, resume, send, interrupt, answer, snapshot, close and read-only account reads. GUI planners retain their host-provided project bootstrap for authenticated helpers; dispatch workers strip it.
+- `createCodexRuntime` (`electron/features/codex-app-server/index.cjs`) — injected local and remote process launchers, executable resolver and clock; provides create(spec, emit), limits(scope), and a read-only history(spec, { signal }) lookup through thread/list and thread/read, returning { id, title, at } with a nullable millisecond timestamp. History admits cli and vscode sources, including the runtime's own app-server threads. A runtime provides start, resume, send, interrupt, answer, snapshot, close and read-only account reads. GUI planners retain their host-provided project bootstrap for authenticated helpers; dispatch workers strip it.
 - `commands` (`electron/features/codex-app-server/index.cjs`) — cached enabled skills from `skills/list` for its own cwd; selected slash skills become structured skill input using the host-held path, never a renderer-supplied path
 - `createRpc` (`electron/features/codex-app-server/rpc.cjs`) — bounded stdio transport, also used by the separately admitted owner reset-credit client
 

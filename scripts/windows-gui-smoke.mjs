@@ -8,7 +8,7 @@ import { selectSuites } from './gui-suites.mjs';
 let plan;
 try { plan = selectSuites(process.argv, process.env); } catch (error) { console.error(error.message); process.exit(1); }
 const { selected, skipped } = plan;
-if (skipped.length) console.log(`Skipped (they use the system clipboard, so they run only on the remote CI): ${skipped.join(', ')}`);
+if (skipped.length) console.log(`Skipped (they use the system clipboard and require GITHUB_ACTIONS=true): ${skipped.join(', ')}`);
 const output = await fs.mkdtemp(path.join(os.tmpdir(), 'agx-windows-gui-'));
 const results = [];
 console.log('GUI evidence: '+output);

@@ -1,3 +1,4 @@
+import './clipboard-guard.mjs';
 import { guiCodexEnvironment } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';

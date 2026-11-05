@@ -1,4 +1,5 @@
 param([Parameter(Mandatory=$true)][string]$Destination, [Parameter(Mandatory=$true)][string]$Expected)
+if ($env:GITHUB_ACTIONS -cne 'true') { [Console]::Error.WriteLine('System clipboard tests run only in GitHub Actions (GITHUB_ACTIONS=true).'); exit 1 }
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 $files = [System.Windows.Forms.Clipboard]::GetFileDropList()

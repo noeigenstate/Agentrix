@@ -1,3 +1,4 @@
+import './clipboard-guard.mjs';
 // macOS desktop check: the app starts a Bash (the default) or zsh terminal through the integration, runs a command,
 // follows codex from start to finish (with a stand-in codex that calls the real notify command), keeps macOS window
 // buttons and copies terminal text with ⌘C. Runs with an isolated profile and its own HOME, so the user's start-up
