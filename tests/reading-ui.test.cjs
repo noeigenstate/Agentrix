@@ -73,6 +73,9 @@ function loadUI(name, overrides = {}) {
     // Width fitting needs a real box; here the composer shows its longest hint.
     if (key === './useFittingHint') return { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, hints) => hints[0] };
     if (key === './useNativePictures') return loadUI('features/reading/useNativePictures.ts', overrides);
+    if (key === './useComposerHistory') return loadUI('features/reading/useComposerHistory.ts', overrides);
+    if (key === './useCommandPalette') return loadUI('features/reading/useCommandPalette.ts', overrides);
+    if (key === './CommandList') return loadUI('features/reading/CommandList.tsx', overrides);
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');
     if (key === './pasted-pictures') return require('../src/features/reading/pasted-pictures.ts');
     if (key === './sign-in-screen') return require('../src/features/agents/sign-in-screen.ts');
@@ -560,6 +563,22 @@ for (const agent of ['claude', 'codex']) {
     assert.deepEqual(h.written, before, 'an open popup still owns the keys');
     h.popup().props.onClose(); h.render();
     assert.equal(h.node.disabled, false); assert.equal(stop().props.disabled, false);
+  });
+
+  test(agent + ': ↑ and ↓ walk the messages sent from the box and give back the draft that was not sent, and "/" still lists the commands', async t => {
+    const h = workingComposerHarness(t, agent);
+    for (const text of ['first note', 'second note']) { h.edit(text); h.press('Enter'); await h.tick(0); await h.tick(700); await h.tick(400); await h.tick(700); }
+    assert.equal(h.node.value, '');
+    h.edit('unsent draft');
+    h.node.selectionStart = h.node.selectionEnd = 5; assert.notEqual(h.press('ArrowUp').prevented, true, 'not at the start: the caret moves');
+    h.node.selectionStart = h.node.selectionEnd = 0; assert.equal(h.press('ArrowUp', { shiftKey: true }).prevented, undefined, 'a modifier keeps the arrow the box’s');
+    assert.equal(h.press('ArrowUp').prevented, true); assert.equal(h.node.value, 'second note'); assert.equal(h.node.selectionStart, 0);
+    h.press('ArrowUp'); assert.equal(h.node.value, 'first note'); h.press('ArrowUp'); assert.equal(h.node.value, 'first note');
+    h.node.selectionStart = h.node.selectionEnd = 'first note'.length; h.press('ArrowDown'); assert.equal(h.node.value, 'second note');
+    h.node.selectionStart = h.node.selectionEnd = 'second note'.length; h.press('ArrowDown'); assert.equal(h.node.value, 'unsent draft');
+    h.node.selectionStart = h.node.selectionEnd = 'unsent draft'.length; assert.notEqual(h.press('ArrowDown').prevented, true, 'the walk is over');
+    h.edit('/mo'); await h.tick(0); const listed = () => elements(h.tree()).some(element => element.props.role === 'listbox');
+    assert.equal(listed(), true); h.edit('');
   });
 
   test(agent + ': working input enables the mention hook and quotes on the next ordinary message', async t => {

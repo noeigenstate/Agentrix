@@ -28,6 +28,9 @@ import { t } from '../../shared/i18n';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { useMentions } from './useMentions';
 import { MentionPalette } from './MentionPalette';
+import { useComposerHistory } from './useComposerHistory';
+import { useCommandPalette } from './useCommandPalette';
+import { commandList, composerAria } from './CommandList';
 import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } from './pending-prompts';
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages } from './PendingPromptEntries';
@@ -144,8 +147,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   useLayoutEffect(() => { setOutbox(waitingMessages.get(ownHistory) ?? []); }, [ownHistory]);
   const [sendingSoon, setSendingSoon] = useState(false);
   const [commands, setCommands] = useState<AgentCommand[]>([]), [requested, setRequested] = useState(false);
-  const [dismissed, setDismissed] = useState(false), [selection, setSelection] = useState(0);
-  const historyAt = useRef<number | null>(null), unsent = useRef(''), caret = useRef<number | null>(null), sending = useRef(false);
+  const caret = useRef<number | null>(null), sending = useRef(false);
   const interaction = useRef(0), pictureGeneration = useRef(0);
   const native = useNativePictures({ owner: conversation, terminalId: terminal.id, agent: kind, sending, interaction,
     blocked: () => choiceVisible.current, preserveDraft: ownInput, onError });
@@ -243,18 +245,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     }).catch(error => { if (active) onError(String(error)); });
     return () => { active = false; };
   }, [terminal.id, terminal.agent, requested]);
-  const matches = useMemo(() => {
-    const query = draft.slice(1).toLowerCase(), name = (command: AgentCommand) => command.name.slice(1).toLowerCase();
-    // The command named exactly comes first (a project's /doc before the built-in /doctor), then those it begins.
-    const rank = (command: AgentCommand) => name(command) === query ? 0 : name(command).startsWith(query) ? 1 : 2;
-    return commands.filter(command => name(command).includes(query)).sort((a, b) => rank(a) - rank(b));
-  }, [commands, draft]);
+  const recall = useComposerHistory({ messages: () => history.get(terminal.id) || [], draft, setDraft, input, onRecall: () => dictationSend.cancel() });
   // A command recalled from history (↑) is sent as it is: the list stays shut, so ↑ goes on through history.
-  const palette = !inputBlocked && !dismissed && historyAt.current === null && /^\/[^\s]*$/.test(draft), selected = matches[selection];
-  const listId = `reading-commands-${terminal.id}`, optionId = (index: number) => `${listId}-${index}`;
-  useEffect(() => { setSelection(0); }, [draft, commands]);
-  useEffect(() => { if (palette) document.getElementById(optionId(selection))?.scrollIntoView({ block: 'nearest' }); }, [palette, selection]);
-  const edit = (value: string) => { dictationSend.cancel(); setDraft(value); setDismissed(false); historyAt.current = null; };
+  const palette = useCommandPalette({ id: terminal.id, commands, draft, blocked: inputBlocked, recalled: recall.recalled, showEmpty: true, complete: command => complete(command), send: () => void send() });
+  const edit = (value: string) => { dictationSend.cancel(); setDraft(value); palette.dismiss(false); recall.forget(); };
   const lastNativeDraft = useRef({ conversation, text: '' });
   // Reflect terminal edits only when they replace the last reflected draft. A separate reading draft wins a conflict.
   useEffect(() => {
@@ -267,7 +261,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     setDraft(current => !current || current === previous ? text : current);
   }, [conversation, visibleScreen, state.canDeliver]);
   // Text written for this terminal on the home page waits here for the reader to send it.
-  useEffect(() => onComposerPrefill(terminal.id, text => { dictationSend.cancel(); setDraft(text); setDismissed(true); requestAnimationFrame(() => input.current?.focus()); }), [terminal.id]);
+  useEffect(() => onComposerPrefill(terminal.id, text => { dictationSend.cancel(); setDraft(text); palette.dismiss(true); requestAnimationFrame(() => input.current?.focus()); }), [terminal.id]);
   const complete = (command: AgentCommand) => {
     caret.current = command.name.length + 1; edit(command.name + ' '); input.current?.focus();
   };
@@ -589,28 +583,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (event.key === 'Enter') dictationSend.cancel();
     if (event.key === 'Tab' && event.shiftKey && !deliveryBlocked) { event.preventDefault(); window.agentrix.writeTerminal(terminal.id, '\x1b[Z'); return; }
     if (mentions.keys(event)) return;
-    if (palette) {
-      if (event.key === 'Escape') { event.preventDefault(); setDismissed(true); return; }
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') { event.preventDefault(); if (matches.length) setSelection(index => (index + (event.key === 'ArrowUp' ? -1 : 1) + matches.length) % matches.length); return; }
-      if (selected && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
-        event.preventDefault(); if (event.key === 'Enter' && draft === selected.name) void send(); else complete(selected); return;
-      }
-    } else {
+    if (palette.keys(event)) return;
+    if (!palette.open) {
       if (event.key === 'Escape') { if (working && !deliveryBlocked) { event.preventDefault(); interrupt(); } return; }
-      const node = event.currentTarget, sent = history.get(terminal.id) || [];
-      if (!event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && node.selectionStart === node.selectionEnd && ((event.key === 'ArrowUp' && node.selectionStart === 0) || (event.key === 'ArrowDown' && node.selectionEnd === draft.length))) {
-        if (event.key === 'ArrowUp' && sent.length) {
-          event.preventDefault(); dictationSend.cancel(); if (historyAt.current === null) { unsent.current = draft; historyAt.current = sent.length; }
-          historyAt.current = Math.max(0, historyAt.current - 1); caret.current = 0; setDraft(sent[historyAt.current]);
-        } else if (event.key === 'ArrowDown' && historyAt.current !== null) {
-          event.preventDefault(); dictationSend.cancel(); historyAt.current++;
-          const next = historyAt.current >= sent.length ? unsent.current : sent[historyAt.current];
-          if (historyAt.current >= sent.length) historyAt.current = null;
-          caret.current = next.length; setDraft(next);
-        } else return;
-        node.setSelectionRange(caret.current!, caret.current!);
-        return;
-      }
+      if (recall.keys(event)) return;
     }
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
   };
@@ -676,13 +652,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     {outbox.length > 0 && <div className="reading-outbox" role="status"><span>{hasChoice ? t('等终端处理完后发送') : t('等待终端输入就绪后发送')}</span><ol>{outbox.map(message => <li key={message.id}>{message.text}{message.uncertain && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}<button type="button" className="text-button" onClick={() => { if (draft || sending.current) return; saveOutbox(outbox.filter(item => item.id !== message.id)); edit(message.text); }} disabled={!!draft || sending.current}>{t('取回')}</button></li>)}</ol></div>}
     {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
-    {palette && <div className="reading-commands is-inline" id={listId} role="listbox" aria-label={t('命令')}>{matches.map((command, index) => <div key={command.name} id={optionId(index)} role="option" aria-selected={selection === index} className="reading-command" onMouseDown={event => event.preventDefault()} onClick={() => complete(command)}>
-        <code>{command.name}</code><span>{command.source === 'builtin' ? t(command.description) : command.description}</span>{command.source !== 'builtin' && <small>{command.source === 'project' ? t('项目') : command.source === 'user' ? t('用户') : t('技能')}</small>}
-    </div>)}</div>}
+    {commandList(palette)}
     <div ref={composer} tabIndex={-1} className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`} style={terminal.agentCommand ? { display: 'none' } : undefined}>
       <MentionPalette mentions={mentions} />
       {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{hints[0]}</span>}
-      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} aria-expanded={palette || mentions.open} aria-controls={palette ? listId : mentions.open ? mentions.listId : undefined} aria-activedescendant={palette && selected ? optionId(selection) : mentions.open && mentions.files[mentions.selection] ? mentions.optionId(mentions.selection) : undefined} placeholder={hint} {...fullHint} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
+      <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} {...composerAria(palette, mentions)} placeholder={hint} {...fullHint} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
       {working && <button type="button" className="icon-button" disabled={inputBlocked || deliveryBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>

@@ -32,24 +32,36 @@ function hookHarness(filename, overrides = {}) {
     useCallback: (callback, deps) => memo(() => callback, deps),
     useLayoutEffect: effect,
     useEffect: effect,
+    useId: () => memo(() => `id-${slots.length}`, []),
   };
-  const full = path.resolve(__dirname, '..', '..', filename), mod = new Module(full, module);
-  mod.filename = full; mod.paths = Module._nodeModulePaths(path.dirname(full));
-  const original = mod.require.bind(mod);
-  const key = name => name.startsWith('.') ? './' + path.basename(name) : name;
-  mod.require = name => name === 'react' ? hooks : Object.hasOwn(overrides, key(name)) ? overrides[key(name)] : original(name);
-  mod._compile(ts.transpileModule(fs.readFileSync(full, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText, full);
+  // The message box's hooks live in files of their own; they run on this harness's hooks, so one render sees all their state.
+  const shared = /\/(useComposerHistory|useCommandPalette|useMentions|useNativeCommands|CommandList)(\.tsx?)?$/, modules = new Map();
+  const resolve = (from, name) => [name, `${name}.ts`, `${name}.tsx`].map(candidate => path.resolve(path.dirname(from), candidate)).find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  const compile = full => {
+    if (modules.has(full)) return modules.get(full).exports;
+    const mod = new Module(full, module);
+    modules.set(full, mod);
+    mod.filename = full; mod.paths = Module._nodeModulePaths(path.dirname(full));
+    const original = mod.require.bind(mod);
+    const key = name => name.startsWith('.') ? './' + path.basename(name) : name;
+    mod.require = name => name === 'react' ? hooks : Object.hasOwn(overrides, key(name)) ? overrides[key(name)] : shared.test(name) ? compile(resolve(full, name)) : original(name);
+    mod._compile(ts.transpileModule(fs.readFileSync(full, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText, full);
+    return mod.exports;
+  };
+  const exported = compile(path.resolve(__dirname, '..', '..', filename));
   return {
     render(name, ...args) {
       const renders = [];
       do {
         if (renders.length > 20) throw new Error('Hook did not settle before paint');
         cursor = 0; effects = []; dirty = false;
-        renders.push(mod.exports[name](...args));
+        renders.push(exported[name](...args));
         for (const run of effects) run();
       } while (dirty);
       return { result: renders.at(-1), renders };
     },
+    // A source file of the module under test, compiled on the same hooks and overrides (for a stand-in that must run the real hook).
+    load: file => compile(path.resolve(__dirname, '..', '..', file)),
     dispose() { for (const slot of slots) slot?.cleanup?.(); },
   };
 }

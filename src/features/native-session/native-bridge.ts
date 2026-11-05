@@ -1,7 +1,7 @@
 // The renderer's one view of the main process's native sessions: window.agentrix.nativeSession (contract-addendum 4). The bridge itself
 // and its preload wiring belong to the main side; this file is the consumer-side shape of it, so the rest of the module never reaches
 // into window. Every call returns a Result; a build or a test without the bridge reads as "no native sessions" (null).
-import type { ConnectionTest, Result } from '../../shared/types';
+import type { AgentCommand, ConnectionTest, Result } from '../../shared/types';
 import type { AgentEvent, LimitsPayload as SharedLimits, NativeAnswer, NativeSnapshot } from '../../shared/agent-events';
 export type { NativeAnswer, NativeSnapshot, NativeDraft, NativeHandoff, NativeHandoffReceipt, NativePendingInput, SwitchState } from '../../shared/agent-events';
 
@@ -39,6 +39,8 @@ export interface NativeBridge {
   start(terminalId: string, options: { agent: NativeAgent; resume?: boolean }): Promise<Result<{ runtimeSessionId: string }>>;
   send(terminalId: string, runtimeSessionId: string, clientMessageId: string, text: string, images?: string[]): Promise<Result<unknown>>;
   interrupt(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
+  // The commands the session runs without a terminal (contract addendum, native composer); an older main has none, and that reads as an empty list.
+  commands?(terminalId: string, runtimeSessionId: string): Promise<Result<AgentCommand[]>>;
   stop(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
   answer(terminalId: string, runtimeSessionId: string, requestId: string, answer: NativeAnswer): Promise<Result<unknown>>;
   snapshot(terminalId: string): Promise<Result<NativeSnapshot | null>>;

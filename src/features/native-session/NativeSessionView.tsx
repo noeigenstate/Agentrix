@@ -8,14 +8,15 @@ import { t } from '../../shared/i18n';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { actionText } from '../agents/action-text';
 import { ConversationDecorations, ConversationFeed } from '../reading/ConversationFeed';
-import { AgentMark, latestResult, pastedPicture, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultChecks, ResultStatus, TimelineStep, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
+import { AgentMark, commandList, composerAria, isCommandDraft, latestResult, MentionPalette, pastedPicture, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultChecks, ResultStatus, TimelineStep, useCommandPalette, useComposerHistory, useMentions, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
 import { nativeBridge, type NativePendingInput, type SwitchState } from './native-bridge.ts';
 import type { Handoff } from './draft-handoff.ts';
-import { nativeEntries, nativePending, runningStep, type SentMessage } from './native-entries.ts';
+import { nativeEntries, nativePending, runningStep, sentTexts, type SentMessage } from './native-entries.ts';
 import { canSend, isOver, isWorking } from './native-model.ts';
 import { MAX_PICTURES, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
 import { NativeRequestCard } from './NativeRequestCard';
+import { useNativeCommands } from './useNativeCommands.ts';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
 import { noticeWords, reasonWords, sentence, switchLine, turnFacts, turnFailed } from './native-words';
 import './native-session.css';
@@ -47,6 +48,18 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const shownHints = open ? hints() : [locked ? t('正在切换运行方式，稍后继续') : t('会话已结束，不能再发消息')];
   const hint = useFittingHint(box, shownHints) || shownHints.at(-1)!, hintId = `native-hint-${terminalId}`, fullHint = fullHintProps(shownHints, hint, hintId);
 
+  // The box's helpers, the reading view's own: ↑↓ through what was sent (the replayed history included), the "/" list of the commands the session runs without
+  // a terminal, and "@" for a file. Nothing opens while the box is shut. Every change of the box's words that is not the owner's walk through the
+  // history goes through edit, which leaves that walk and opens the list again.
+  const sentRef = useRef<string[]>([]);
+  sentRef.current = useMemo(() => sentTexts(entries, pending.prompts), [entries, pending]);
+  const recall = useComposerHistory({ messages: () => sentRef.current, draft: text, setDraft: setText, input: box });
+  const commands = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
+  const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false,
+    complete: command => { edit(`${command.name} `); box.current?.focus(); }, send: () => void send() });
+  const edit = (value: string) => { setText(value); palette.dismiss(false); recall.forget(); };
+  const mentions = useMentions({ projectId, draft: text, input: box, disabled: !open || isCommandDraft(text), edit, onError: setError });
+
   // New steps keep the end in view while the owner is at the end; scrolling up pauses that until they come back. A new request waits at the end of the
   // conversation, so it pulls the view down to it.
   const { stuck, unseen, toBottom, ready } = useStickToBottom(scroller, content, entries, sessionId);
@@ -65,7 +78,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     const draft = handoff.incoming && handoff.take();
     if (!draft) return;
     const typed = text.trim(), words = draft.text.trim() ? { clientMessageId: crypto.randomUUID(), text: draft.text } : null;
-    if (words && !typed) setText(draft.text);
+    if (words && !typed) edit(draft.text);
     setCarried(list => [...list, ...draft.images.filter(image => !list.includes(image))]);
     setUnsent(list => [...list, ...(words && typed && typed !== draft.text.trim() ? [words] : []),
       ...draft.undelivered.filter(message => !pending.lost.has(message.clientMessageId) && !list.some(held => held.clientMessageId === message.clientMessageId))]);
@@ -84,7 +97,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const send = async () => {
     const value = text.trim(), pictures = carried, quoted = quote;
     if (!(value || pictures.length) || !open) return;
-    setText(''); setCarried([]); setQuote(null);
+    edit(''); setCarried([]); setQuote(null);
     if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
   };
   // A picture pasted or dropped joins the ones that go with the next message; one the runtime would refuse is refused here, with the reason.
@@ -116,13 +129,18 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     const result = await nativeBridge()?.interrupt(terminalId, sessionId).catch(failure);
     if (result && !result.ok) setError(result.error);
   };
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Escape') { if (working && open) { event.preventDefault(); void stop(); } return; }
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.nativeEvent.isComposing) return;
+    if (mentions.keys(event) || palette.keys(event)) return;
+    if (!palette.open) {
+      if (event.key === 'Escape') { if (working && open) { event.preventDefault(); void stop(); } return; }
+      if (recall.keys(event)) return;
+    }
+    if (event.key !== 'Enter' || event.shiftKey) return;
     event.preventDefault(); void send();
   };
   // An unsent message returns to the box by the owner's click, when the box is empty; nothing takes it from here.
-  const take = (item: NativePendingInput) => { setText(item.text); setCarried(list => [...list, ...item.images ?? []]); setUnsent(list => list.filter(held => held !== item)); };
+  const take = (item: NativePendingInput) => { edit(item.text); setCarried(list => [...list, ...item.images ?? []]); setUnsent(list => list.filter(held => held !== item)); };
 
   // What the agent is doing, written at the end of the conversation the way the reading view writes it.
   const step = runningStep(entries);
@@ -141,7 +159,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     [entries, settled, stopped, failed, why, facts]);
   // Only the owner's click on a message's 引用 gets here.
   const quoteMessage = (who: string, words: string) => { const excerpt = quoteExcerpt(words); if (excerpt) { setQuote({ who, excerpt }); box.current?.focus(); } };
-  const continueWith = (prefill?: string) => { if (prefill && !text.trim()) setText(prefill); box.current?.focus(); };
+  const continueWith = (prefill?: string) => { if (prefill && !text.trim()) edit(prefill); box.current?.focus(); };
   const resultStatus = result && <ResultStatus result={result} taskTitle={undefined} onError={setError} />;
   const resultActions = result && <>
     {result.kind === 'code' && <ResultChecks result={result} />}
@@ -184,9 +202,11 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     {unsent.length > 0 && <div className="reading-outbox" role="status"><span>{t('未发送的消息')}</span><ol>{unsent.map(item => <li key={item.clientMessageId}>{item.text}
       <button type="button" className="text-button" disabled={!!text.trim() || locked} onClick={() => take(item)}>{t('取回')}</button></li>)}</ol></div>}
     {quote && <QuoteChip quote={quote} onRemove={() => { setQuote(null); box.current?.focus(); }} />}
+    {commandList(palette)}
     <div className="reading-composer">
-      <textarea ref={box} rows={1} value={text} disabled={!open} aria-label={t('给 {name} 发消息', { name: agent })} placeholder={hint} {...fullHint}
-        onChange={event => setText(event.target.value)} onKeyDown={onKeyDown} onPaste={pasteImage} />
+      <MentionPalette mentions={mentions} />
+      <textarea ref={box} rows={1} value={text} disabled={!open} aria-label={t('给 {name} 发消息', { name: agent })} {...composerAria(palette, mentions)} placeholder={hint} {...fullHint}
+        onChange={event => edit(event.target.value)} onKeyDown={onKeyDown} onSelect={mentions.trackCaret} onPaste={pasteImage} />
       {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{shownHints[0]}</span>}
       {working && <button type="button" className="icon-button" disabled={!open} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={() => void stop()}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={!open || !(text.trim() || carried.length)} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>

@@ -45,7 +45,7 @@ const load = makeLoader({
   './ResetQuota': { ResetQuota: () => null },
 });
 const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
-before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' } } }); load('shared/i18n.ts').applyLanguage('zh'); });
+before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' }, getElementById: () => null } }); load('shared/i18n.ts').applyLanguage('zh'); });
 after(() => { if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument); else delete globalThis.document; });
 
 const settle = async () => { for (let round = 0; round < 6; round++) await new Promise(resolve => setImmediate(resolve)); };
@@ -502,11 +502,19 @@ function sessionView(events, bridge, base = {}) {
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const build = list => ({ model: model.applyEvents(model.emptyModel(), list).model, dismissed: null, noteDismissed: false, handoff: null });
   const parts = { AgentMark() {}, PendingPromptEntries() {}, QuoteChip() {}, quoteExcerpt: load('features/reading/message-quote.ts').quoteExcerpt, withQuote: load('features/reading/message-quote.ts').withQuote, ResultActions() {}, ResultChecks() {}, ResultStatus() {}, TimelineStep() {}, UserImages() {}, WorkingLine() {}, pastedPicture: load('features/reading/image-input.ts').pastedPicture, latestResult: load('features/reading/result-round.ts').latestResult, useStickToBottom: () => ({ stuck: true, unseen: 0, toBottom: () => toBottom.push(true), ready: true }) };
+  // The message box's helpers are the reading view's real ones, run on the same hooks as the view (the harness is made just below).
+  const readingFile = file => harness.load(`src/features/reading/${file}`);
+  Object.defineProperties(parts, {
+    splitQuote: { value: load('features/reading/message-quote.ts').splitQuote }, isCommandDraft: { get: () => readingFile('useCommandPalette.ts').isCommandDraft },
+    useComposerHistory: { get: () => readingFile('useComposerHistory.ts').useComposerHistory }, useCommandPalette: { get: () => readingFile('useCommandPalette.ts').useCommandPalette },
+    useMentions: { get: () => readingFile('useMentions.ts').useMentions }, MentionPalette: { get: () => harness.load('src/features/reading/MentionPalette.tsx').MentionPalette },
+    commandList: { get: () => readingFile('CommandList.tsx').commandList }, composerAria: { get: () => readingFile('CommandList.tsx').composerAria },
+  });
   const feed = { ConversationDecorations: { Provider() {} }, ConversationFeed() {} };
   const harness = hookHarness('src/features/native-session/NativeSessionView.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
-    './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-session.css': {},
+    './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-session.css': {},
     './native-store.ts': { dismissNative: id => dismissed.push(id), nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
     './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
@@ -644,11 +652,11 @@ test('Stop is the composer’s button while it works, Esc does the same, neither
   const working = sessionView(ev => [...idle(ev), ev('turn.started', { origin: 'user', clientMessageId: null })], bridge);
   try {
     stopButton(working).props.onClick(); await settle();
-    working.box().props.onKeyDown({ key: 'Escape', preventDefault() {} }); await settle();
+    working.box().props.onKeyDown({ key: 'Escape', nativeEvent: { isComposing: false }, preventDefault() {} }); await settle();
     assert.deepEqual(interrupts, [['t1', 'rs1'], ['t1', 'rs1']]);
     working.show(idle(working.ev));
     assert.equal(stopButton(working), undefined, 'idle: no Stop');
-    working.box().props.onKeyDown({ key: 'Escape', preventDefault() {} }); await settle();
+    working.box().props.onKeyDown({ key: 'Escape', nativeEvent: { isComposing: false }, preventDefault() {} }); await settle();
     assert.equal(interrupts.length, 2, 'and Esc interrupts nothing');
   } finally { working.done(); }
   const ended = sessionView(ev => [ev('session.state', { state: 'stopped', reason: 'user' })], bridge);
@@ -658,6 +666,178 @@ test('Stop is the composer’s button while it works, Esc does the same, neither
     ended.find(node => node.type === 'button' && node.props.children === '开始新的对话').props.onClick();
     assert.deepEqual(ended.dismissed, ['t1']);
   } finally { ended.done(); }
+});
+
+// ---- the message box: the reading view's ↑↓ history, "/" command list and "@" files, on the same code -------------------------------------
+// A stand-in for the textarea the key is pressed in: the caret and the selection, as the reading view's history reads them.
+const caretAt = (start, end = start) => ({ selectionStart: start, selectionEnd: end, parentElement: null, focus() {}, setSelectionRange(from, to) { this.selectionStart = from; this.selectionEnd = to; } });
+const keyIn = (view, key, init = {}) => {
+  const prevented = [];
+  view.box().props.onKeyDown({ key, shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, currentTarget: caretAt(0), nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init });
+  return prevented.length;
+};
+// Typing as the owner does: the box takes the words, the view draws them, and what it asked for meanwhile has been answered.
+const typeIn = async (view, value) => { view.type(value); view.tree(); await settle(); view.tree(); };
+const userMessage = (ev, id, text, extra = {}) => ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId: id } }, { itemId: id, ...extra });
+const listbox = view => elements(view.tree()).find(node => node.props?.role === 'listbox');
+const options = view => elements(listbox(view)).filter(node => node.props?.role === 'option');
+const optionNames = view => options(view).map(node => elements(node).find(child => child.type === 'code').props.children);
+
+test('↑ at the start of the box takes the message sent before, ↓ at the end the one after, and past the newest the draft that was not sent; the history replayed after a switch is in it', () => {
+  const view = sessionView(ev => [...idle(ev), userMessage(ev, 'c1', 'first', { replay: true }), userMessage(ev, 'c2', '> quoted\n\nsecond', { replay: true }), userMessage(ev, 'c3', 'third')], {});
+  try {
+    view.type('my draft');
+    const body = () => view.box().props.value, caret = caretAt(0), press = (key, init) => keyIn(view, key, { currentTarget: caret, ...init });
+    assert.equal(press('ArrowUp', { shiftKey: true }) + press('ArrowUp', { ctrlKey: true }) + press('ArrowUp', { altKey: true }) + press('ArrowUp', { metaKey: true }), 0, 'with a modifier the arrow is the box’s own');
+    caret.selectionEnd = 5; assert.equal(press('ArrowUp'), 0, 'with words selected it is the box’s own'); caret.selectionEnd = 0;
+    caret.selectionStart = caret.selectionEnd = 3; assert.equal(press('ArrowUp'), 0, 'not at the start: the caret moves up a line'); caret.selectionStart = caret.selectionEnd = 0;
+    assert.equal(press('ArrowDown'), 0, 'before any ↑, ↓ is the box’s own');
+    assert.equal(press('ArrowUp'), 1); assert.equal(body(), 'third'); assert.equal(caret.selectionStart, 0, 'the caret waits at the start so ↑ goes on');
+    assert.equal(press('ArrowUp'), 1); assert.equal(body(), 'second', 'a quote it carried is not part of what is brought back');
+    press('ArrowUp'); assert.equal(body(), 'first', 'the replayed history is reachable');
+    press('ArrowUp'); assert.equal(body(), 'first', 'the oldest stays');
+    assert.equal(press('ArrowDown', { currentTarget: caretAt(0) }), 0, 'in the middle of the words ↓ is the box’s own');
+    press('ArrowDown', { currentTarget: caretAt(5) }); assert.equal(body(), 'second'); press('ArrowDown', { currentTarget: caretAt(6) }); assert.equal(body(), 'third');
+    press('ArrowDown', { currentTarget: caretAt(5) }); assert.equal(body(), 'my draft', 'past the newest: the draft that was not sent');
+    assert.equal(press('ArrowDown', { currentTarget: caretAt(8) }), 0, 'and the walk is over');
+    view.type('other'); press('ArrowUp', { currentTarget: caretAt(0) }); press('ArrowUp', { currentTarget: caretAt(0) }); view.type('edited'); press('ArrowUp', { currentTarget: caretAt(0) }); press('ArrowDown', { currentTarget: caretAt(5) });
+    assert.equal(body(), 'edited', 'typing leaves the walk: the arrows start from the newest again, and the draft is what was typed');
+    assert.equal(keyIn(view, 'ArrowUp', { currentTarget: caretAt(0), nativeEvent: { isComposing: true } }), 0, 'a composing input method gets its own keys');
+  } finally { view.done(); }
+});
+
+test('what was sent here but is not echoed yet, and only the last 50, are in the history; with nothing sent ↑ stays the box’s own', async () => {
+  const none = sessionView(idle, {});
+  try { assert.equal(keyIn(none, 'ArrowUp'), 0, 'nothing sent'); } finally { none.done(); }
+  const { sentTexts } = load('features/native-session/native-entries.ts'), many = Array.from({ length: 60 }, (_, index) => ({ role: 'user', text: `m${index}` }));
+  assert.deepEqual(sentTexts(many, [{ text: 'pending' }]).slice(-2), ['m59', 'pending']); assert.equal(sentTexts(many, []).length, 50);
+  assert.deepEqual(sentTexts([{ role: 'user', text: '' }, { role: 'assistant', text: 'reply' }, { role: 'user', text: ' hi ' }], []), ['hi'], 'pictures alone and replies are no words to bring back');
+  const view = sessionView(idle, { send: async () => ({ ok: true, value: {} }) });
+  try {
+    view.type('sent now'); view.press(); await settle(); view.type('');
+    assert.equal(keyIn(view, 'ArrowUp'), 1); assert.equal(view.box().props.value, 'sent now', 'a message still being sent is in the history');
+  } finally { view.done(); }
+});
+
+test('the box is the reading view’s: its aria says what is open over it, the caret is followed for @, and the file panel stands in the composer', () => {
+  const view = sessionView(idle, {});
+  try {
+    const box = view.box().props;
+    assert.deepEqual([box['aria-expanded'], box['aria-controls'], box['aria-activedescendant']], [false, undefined, undefined]);
+    assert.equal(typeof box.onSelect, 'function');
+    assert.ok(elements(view.tree()).some(node => node.type === view.parts.MentionPalette));
+  } finally { view.done(); }
+});
+
+const COMMANDS = [{ name: '/compact', description: 'Compact the conversation', source: 'builtin', view: 'reading' }, { name: '/review', description: 'Review', source: 'builtin', view: 'reading' },
+  { name: '/security-review', description: 'Security review', source: 'skill', view: 'reading' }, { name: '/resume', description: 'Resume', source: 'builtin', view: 'reading' }, { name: '/fix-issue', description: 'Fix', source: 'project', view: 'reading' }];
+
+test('"/" lists the session’s commands as the reading view does: the one named first, then those it begins, then those that contain it; ↑↓ choose and wrap, Tab completes, Esc closes', async () => {
+  const reads = [], view = sessionView(idle, { commands: async (...args) => { reads.push(args); return { ok: true, value: COMMANDS }; } });
+  try {
+    await typeIn(view, 'hello'); assert.deepEqual([reads.length, listbox(view)], [0, undefined], 'nothing is read until a command is started');
+    await typeIn(view, '/');
+    assert.deepEqual(reads, [['t1', 'rs1']]); assert.deepEqual(optionNames(view), COMMANDS.map(command => command.name), 'the whole list for a bare /');
+    const box = () => view.box().props;
+    assert.deepEqual([box()['aria-expanded'], box()['aria-controls'], box()['aria-activedescendant']], [true, listbox(view).props.id, options(view)[0].props.id]);
+    await typeIn(view, '/re');
+    assert.deepEqual(optionNames(view), ['/review', '/resume', '/security-review'], 'prefix matches precede contained matches, case ignored');
+    await typeIn(view, '/REVIEW'); assert.deepEqual(optionNames(view), ['/review', '/security-review'], 'the command named exactly comes first');
+    await typeIn(view, '/re');
+    const selected = () => options(view).findIndex(node => node.props['aria-selected']);
+    assert.equal(selected(), 0); assert.equal(keyIn(view, 'ArrowDown'), 1); assert.equal(selected(), 1);
+    keyIn(view, 'ArrowDown'); keyIn(view, 'ArrowDown'); assert.equal(selected(), 0, 'it wraps round'); keyIn(view, 'ArrowUp'); assert.equal(selected(), 2);
+    assert.equal(box()['aria-activedescendant'], options(view)[2].props.id);
+    assert.equal(keyIn(view, 'Tab'), 1); assert.equal(box().value, '/security-review ', 'Tab puts the chosen command in the box');
+    assert.equal(listbox(view), undefined, 'and the list closes once a word follows');
+    await typeIn(view, '/re'); options(view)[1].props.onClick(); assert.equal(view.box().props.value, '/resume ', 'a click chooses too');
+    await typeIn(view, '/c'); assert.equal(keyIn(view, 'Escape'), 1); assert.equal(listbox(view), undefined, 'Esc closes the list and leaves the words');
+    assert.equal(view.box().props.value, '/c'); await typeIn(view, '/co'); assert.ok(listbox(view), 'typing opens it again');
+  } finally { view.done(); }
+});
+
+test('Enter completes a partial command and sends a whole one as a message; a command the list does not have is sent as a message too; Esc closes the list before it stops the agent', async () => {
+  const sends = [], interrupts = [], view = sessionView(ev => [...idle(ev), ev('turn.started', { origin: 'user', clientMessageId: null })], {
+    commands: async () => ({ ok: true, value: COMMANDS }), send: async (...args) => { sends.push(args); return { ok: true, value: {} }; }, interrupt: async (...args) => { interrupts.push(args); return { ok: true, value: {} }; } });
+  try {
+    await typeIn(view, '/rev'); assert.equal(keyIn(view, 'Enter'), 1);
+    assert.deepEqual([view.box().props.value, sends.length], ['/review ', 0], 'Enter on a partial command only completes it');
+    await typeIn(view, '/review'); assert.equal(keyIn(view, 'Enter'), 1); await settle();
+    assert.deepEqual(sends.map(send => send[3]), ['/review'], 'a command written in full is sent, as text and to no terminal'); assert.equal(view.box().props.value, '');
+    await typeIn(view, '/unknown-thing'); assert.equal(listbox(view), undefined, 'no match: no empty panel');
+    keyIn(view, 'Enter'); await settle(); assert.deepEqual(sends.map(send => send[3]), ['/review', '/unknown-thing']);
+    await typeIn(view, '/fix-issue 42'); assert.equal(listbox(view), undefined, 'a command with arguments has no list'); keyIn(view, 'Enter'); await settle();
+    assert.equal(sends.at(-1)[3], '/fix-issue 42');
+    await typeIn(view, '/c'); keyIn(view, 'Escape'); assert.deepEqual(interrupts, [], 'the first Esc closes the list');
+    keyIn(view, 'Escape'); await settle(); assert.deepEqual(interrupts, [['t1', 'rs1']], 'the next stops the agent');
+    view.type(''); const before = sends.length; keyIn(view, 'Enter'); await settle(); assert.equal(sends.length, before, 'an empty box sends nothing');
+  } finally { view.done(); }
+});
+
+test('a command taken back from the history with ↑ opens no list and is sent as it is; typing it again does', async () => {
+  const sends = [], view = sessionView(ev => [...idle(ev), userMessage(ev, 'c1', '/review')], { commands: async () => ({ ok: true, value: COMMANDS }), send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
+  try {
+    keyIn(view, 'ArrowUp'); await settle(); assert.equal(view.box().props.value, '/review'); assert.equal(listbox(view), undefined, 'no list over a recalled command');
+    assert.equal(keyIn(view, 'ArrowUp', { currentTarget: caretAt(0) }), 1, '↑ goes on through the history, not the list');
+    keyIn(view, 'Enter'); await settle(); assert.deepEqual(sends.map(send => send[3]), ['/review']);
+    await typeIn(view, '/review'); assert.ok(listbox(view), 'typed by hand it lists');
+  } finally { view.done(); }
+});
+
+test('the command list is read when a command is started and again when the session state changes; a read that fails, a main without the call or no bridge leaves the box alone', async () => {
+  let mode = 'ok', reads = 0;
+  const view = sessionView(idle, { commands: async () => { reads++; if (mode === 'throw') throw new Error('boom'); return mode === 'ok' ? { ok: true, value: COMMANDS } : { ok: false, error: 'no' }; } });
+  const running = () => [view.ev('session.state', { state: 'running', reason: null })];
+  try {
+    await typeIn(view, '/'); assert.deepEqual([reads, optionNames(view).length], [1, 5]);
+    await typeIn(view, '/c'); assert.equal(reads, 1, 'typing on does not read again');
+    view.show(running()); view.tree(); await settle(); assert.equal(reads, 2, 'a new state asks again');
+    mode = 'throw'; view.show(idle(view.ev)); view.tree(); await settle(); assert.equal(reads, 3);
+    assert.deepEqual(optionNames(view), ['/compact', '/security-review'], 'a failed read keeps what was known'); assert.equal(view.find(node => node.props?.role === 'alert'), undefined, 'and says nothing');
+    mode = 'refused'; view.show(running()); view.tree(); await settle(); assert.equal(reads, 4); assert.equal(view.find(node => node.props?.role === 'alert'), undefined);
+  } finally { view.done(); }
+  const old = sessionView(idle, { send: async () => ({ ok: true, value: {} }) });
+  try {
+    await typeIn(old, '/'); assert.equal(listbox(old), undefined, 'a main without the call is an empty list: no panel'); assert.equal(old.box().props['aria-expanded'], false);
+    await typeIn(old, '/help'); assert.equal(keyIn(old, 'Enter'), 1, 'and the command is a plain message');
+  } finally { old.done(); }
+  const rejected = sessionView(idle, { commands: async () => { throw new Error('ipc closed'); } });
+  try { await typeIn(rejected, '/'); assert.equal(listbox(rejected), undefined); assert.equal(rejected.find(node => node.props?.role === 'alert'), undefined); } finally { rejected.done(); }
+  const bare = sessionView(idle, null);
+  try { await typeIn(bare, '/'); assert.equal(listbox(bare), undefined); } finally { bare.done(); }
+});
+
+test('while the box is shut (an ended session, a switch under way) no list and no file panel opens and nothing is read', async () => {
+  let reads = 0, searched = 0;
+  const ended = sessionView(ev => [ev('session.state', { state: 'stopped', reason: 'user' })], { commands: async () => { reads++; return { ok: true, value: COMMANDS }; } });
+  globalThis.window.agentrix.findFiles = async () => { searched++; return { ok: true, value: [] }; };
+  try {
+    await typeIn(ended, '/'); ended.type('@s'); await sleep(120); await settle(); assert.deepEqual([reads, searched, listbox(ended)], [0, 0, undefined]);
+  } finally { ended.done(); }
+  const view = sessionView(idle, { commands: async () => { reads++; return { ok: true, value: COMMANDS }; } });
+  try {
+    await typeIn(view, '/'); assert.ok(listbox(view)); view.handoff.locked = true;
+    assert.equal(listbox(view), undefined, 'a switch shuts the box and the list with it'); assert.equal(view.box().props.disabled, true);
+  } finally { view.done(); }
+});
+
+test('"@" lists the project’s files as in the reading view: the panel follows the caret, Tab completes the file, Esc closes it, and a "/" command has none', async () => {
+  const searches = [], view = sessionView(idle, {});
+  globalThis.window.agentrix.findFiles = async (project, query) => { searches.push([project, query]); return { ok: true, value: [{ path: 'src/a.ts', kind: 'file' }, { path: 'src/lib', kind: 'dir' }] }; };
+  try {
+    const node = caretAt(3); view.tree(); view.box().props.ref.current = node;
+    const mention = () => elements(view.tree()).find(element => element.type === view.parts.MentionPalette).props.mentions;
+    view.type('@sr'); view.tree(); await sleep(150); view.tree();
+    assert.deepEqual(searches, [['p1', 'sr']]); assert.deepEqual(mention().files.map(file => file.path), ['src/a.ts', 'src/lib']); assert.equal(mention().open, true);
+    const box = () => view.box().props;
+    assert.equal(box()['aria-expanded'], true); assert.equal(box()['aria-controls'], mention().listId);
+    assert.equal(keyIn(view, 'ArrowDown'), 1); assert.equal(mention().selection, 1);
+    assert.equal(keyIn(view, 'Escape'), 1); assert.equal(mention().open, false, 'Esc closes the file panel');
+    node.selectionStart = node.selectionEnd = 4; await typeIn(view, '@src'); await sleep(150); view.tree();
+    assert.equal(mention().open, true, 'a changed word opens it again'); keyIn(view, 'ArrowDown');
+    assert.equal(keyIn(view, 'Tab'), 1); view.tree(); assert.equal(box().value, '@src/lib/', 'a folder keeps the token open to go on into it');
+    view.type('/x'); node.selectionStart = node.selectionEnd = 2; view.tree(); await sleep(150); view.tree(); assert.equal(mention().open, false, 'a command has no file panel');
+  } finally { view.done(); }
 });
 
 test('the working line says the step in hand, the result belongs to a round that has ended, and a waiting session says it waits', () => {

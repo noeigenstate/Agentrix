@@ -3,7 +3,7 @@
 // event carried stays empty (no time is 0, no output is made up); a thinking summary is not part of the reading view's conversation.
 import type { AgentActionBrief, ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import type { MessageEntry, PendingPrompt } from '../reading/feed-parts';
+import { splitQuote, type MessageEntry, type PendingPrompt } from '../reading/feed-parts';
 import { isOver, type NativeItem, type NativeModel } from './native-model.ts';
 import { commandOf, fieldOf, fileChanges, generatedOf, itemState, messageText, picturesOf, planText, shortPath, toolOf, type StepMark } from './native-words';
 
@@ -124,3 +124,10 @@ export function nativePending(model: NativeModel, sent: readonly SentMessage[], 
 
 // The step the agent is on now, for the line that says what it is doing; null when no step runs.
 export const runningStep = (entries: readonly ConversationEntry[]) => entries.filter(entry => entry.tool && !entry.tool.done).at(-1)?.tool ?? null;
+
+// What the owner has sent in this conversation, oldest first, for ↑ in the message box: the messages of the conversation (the history replayed after a
+// run-mode switch included) and those not echoed yet, each without the quote it carried, as the reading view keeps what was typed. The last 50.
+export const SENT_KEPT = 50;
+export const sentTexts = (entries: readonly ConversationEntry[], pending: readonly PendingPrompt[]): string[] =>
+  [...entries.filter(entry => entry.role === 'user').map(entry => entry.text ?? ''), ...pending.map(prompt => prompt.text)]
+    .map(text => splitQuote(text).rest.trim()).filter(Boolean).slice(-SENT_KEPT);
