@@ -247,7 +247,7 @@ test('Codex’s automatic reset is a switch that is off by default, saves alone 
   } finally { view.done(); }
   const stored = fake(); stored.state.settings.codexAutoReset = true;
   const again = page(stored);
-  try { again.render(); await settle(); assert.equal(again.tree().find(node => node.type === 'input' && node.props.type === 'checkbox').props.checked, false, 'the saved choice is shown'); } finally { again.done(); }
+  try { again.render(); await settle(); assert.equal(again.tree().find(node => node.type === 'input' && node.props.type === 'checkbox').props.checked, true, 'the saved choice is shown'); } finally { again.done(); }
 });
 
 test('the page’s spacing values are on the scale and its buttons keep a 32px hit area', () => {
