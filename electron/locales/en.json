@@ -2760,5 +2760,14 @@
   "此会话不支持模型菜单。": "This session does not support the model menu.",
   "此会话不支持运行命令。": "This session does not support running commands.",
   "此会话不支持新对话。": "This session does not support a new conversation.",
-  "请等待当前任务结束后再开始新对话。": "Wait for the current task to finish before starting a new conversation."
+  "请等待当前任务结束后再开始新对话。": "Wait for the current task to finish before starting a new conversation.",
+  "Claude Agent SDK 目前不支持快速模式": "The Claude Agent SDK does not support fast mode yet",
+  "SSH 原生会话目前仅支持 Codex。": "Native SSH sessions support Codex only for now.",
+  "Codex 必须通过 app-server 启动。": "Codex must start through app-server.",
+  "Codex 终端入口已停用，请使用 app-server。": "The Codex terminal entry is retired. Use app-server.",
+  "无效的远程进程标识。": "Invalid remote process ID.",
+  "远程进程已关闭或已经启动。": "The remote process is closed or already started.",
+  "远程 Codex 进程数量已达上限。": "Too many remote Codex processes.",
+  "远端未找到 Codex 程序。": "Codex was not found on the remote machine.",
+  "远程输入块过大。": "The remote input block is too large."
 }
