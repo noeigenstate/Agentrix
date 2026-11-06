@@ -96,7 +96,7 @@ async function harness(t, respond) {
       const query = sdk.query({ prompt, options: configured });
       for await (const message of query) {
         if (message.type === 'system' && message.subtype === 'init') require('../../electron/prompt-queue.cjs').rememberClaudeSource(message.session_id, changes.owner || 'gui');
-        onMessage(message, query);
+        await onMessage(message, query);
         if (message.type === 'result') return message;
       }
     } finally { abort.abort(); configured.abortController.abort(); }

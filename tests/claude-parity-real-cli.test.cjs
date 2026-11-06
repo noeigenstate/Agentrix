@@ -28,7 +28,13 @@ async function terminal(t, f, args = [], capture = false) {
     projects: { [f.cwd.replaceAll('\\', '/')]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } } }));
   const child = fork(path.join(__dirname, 'fixtures/claude-terminal-peer.cjs'), [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   child.stderr.resume(); const ended = once(child, 'exit');
-  f.cleanup(async () => { if (child.exitCode === null && child.signalCode === null) child.send({ type: 'stop' }); await ended; });
+  f.cleanup(async () => {
+    if (child.exitCode === null && child.signalCode === null && child.connected) child.send({ type: 'stop' });
+    // ConPTY's synchronous kill can stall its owned peer. Bound cleanup rather
+    // than leaving a completed CLI test waiting forever in its after hook.
+    const timer = setTimeout(() => child.kill('SIGKILL'), 4000);
+    try { await ended; } finally { clearTimeout(timer); }
+  });
   let output = '';
   child.on('message', message => { if (message.type === 'data') output = (output + message.data).slice(-65536); });
   child.send({ type: 'start', cli: process.env.AGENTRIX_REAL_CLAUDE, cwd: f.cwd, env, args, capture });
@@ -284,7 +290,8 @@ test('real terminal shell context and SDK request parity have an exact differenc
   assert.ok(terminalAgents.includes('claude-code-guide'));
   assert.deepEqual(sdkAgents, terminalAgents.filter(name => name !== 'claude-code-guide'));
   const { compareTools, compareSystem } = require('./fixtures/claude-parity.cjs');
-  compareTools(sdk.tools, tui.tools); compareSystem(sdk.system, tui.system);
+  const version = compareSystem(sdk.system, tui.system);
+  compareTools(sdk.tools, tui.tools, version);
   for (const key of ['model', 'thinking', 'context_management', 'max_tokens']) assert.deepEqual(sdk[key], tui[key], key);
   const terminalMessages = JSON.stringify(tui.messages);
   assert.match(terminalMessages, /<bash-input>printf SHELL_CONTEXT_PARITY<\/bash-input>/);

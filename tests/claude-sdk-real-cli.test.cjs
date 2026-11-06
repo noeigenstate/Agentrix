@@ -1,5 +1,6 @@
 // Fake CLIs answer as we assume the real one does. These checks once passed while no owner session could run a tool or show a reply.
-// Opt-in, because they need an installed CLI: AGENTRIX_REAL_CLAUDE=<path to claude> node --test tests/claude-sdk-real-cli.test.cjs
+// Opt in with npm run test:real-cli: the default is the locked native package
+// (--locked-prefix for a private install); --claude explicitly tests another installed release.
 // A fake key, a throwaway profile and a local stub; nothing reaches an account.
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -472,15 +473,30 @@ test('A4 A5 A9 A11 real persisted history keeps the newest records, provenance, 
   const f = await harness(t, data => [opening(data), ...textBlock(0, 'REPLY'), ...finish('end_turn')]);
   const id = randomUUID(), queue = inputQueue(), png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
   queue.push({ type: 'user', uuid: id, parent_tool_use_id: null, session_id: '', message: { role: 'user', content: [{ type: 'text', text: 'PICTURE' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }] } });
-  const result = await f.run({}, () => {}, {}, queue); queue.close();
   const previous = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = f.env.CLAUDE_CONFIG_DIR;
   const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.env.CLAUDE_CONFIG_DIR, 'host'),
     loadSdk: async () => f.sdk, resolveExecutable: async () => cli, safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   try {
-    const history = await f.sdk.getSessionMessages(result.session_id, { dir: f.cwd }), pictureEvents = [];
+    let history;
+    const result = await f.run({}, async message => {
+      if (message.type !== 'result') return;
+      // A result is a turn receipt, not a disk-flush receipt. Keep this CLI alive
+      // until its exact input and final reply are readable; run() aborts on return.
+      const deadline = Date.now() + 5000;
+      do {
+        history = await f.sdk.getSessionMessages(message.session_id, { dir: f.cwd });
+        if (history.some(row => row.uuid === id) && history.some(row => row.type === 'assistant'
+          && row.message?.content?.some?.(block => block.type === 'text' && block.text === 'REPLY'))) return;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      } while (Date.now() < deadline);
+      assert.fail(`CLI transcript did not persist input ${id} and its reply within 5 seconds`);
+    }, {}, queue);
+    queue.close();
+    const pictureEvents = [];
     const normalize = createNormalizer((type, payload, extra) => pictureEvents.push({ type, payload, ...extra }));
     history.forEach(record => normalize({ ...record, isReplay: true }));
     const picture = pictureEvents.find(event => event.itemId === id);
+    assert.ok(picture, 'the persisted client UUID must normalize to the same picture item');
     assert.deepEqual(picture.payload.content.images, [`data:image/png;base64,${png}`]); assert.ok(picture.occurredAtMs > 0);
     const projects = path.join(f.env.CLAUDE_CONFIG_DIR, 'projects'), file = path.join(projects, fs.readdirSync(projects)[0], `${result.session_id}.jsonl`);
     const tail = fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(record => record.uuid).at(-1);
@@ -497,7 +513,7 @@ test('A4 A5 A9 A11 real persisted history keeps the newest records, provenance, 
     assert.equal(text[0], 'Q1204'); assert.ok(text.includes('Q2199')); assert.ok(text.includes('/model'));
     assert.equal(text.some(value => value.includes('INTERNAL')), false);
     assert.equal(events.filter(event => event.type === 'item.upsert').every(event => event.occurredAtMs === Date.parse('2025-01-02T03:04:05Z')), true);
-  } finally { await runtime.close(); if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous; }
+  } finally { queue.close(); await runtime.close(); if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = previous; }
 });
 
 
@@ -669,6 +685,3 @@ test('B4 B8 real running-turn mode changes ask about background tasks and full r
   assert.equal(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length, 1);
   await facade.close(); await new Promise(resolve => setTimeout(resolve, 200)); assert.equal(alive(ownedPid), false);
 });
-
-// The CI real-CLI entrypoint also owns the paired terminal regression.
-if (process.env.AGENTRIX_REQUIRE_REAL_CLI === '1') require('./claude-parity-real-cli.test.cjs');

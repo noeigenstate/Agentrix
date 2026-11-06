@@ -67,7 +67,7 @@ test('local plan replays the Windows build followed by every desktop shard in ma
   assert.ok(realCli.number < steps.find(step => step.run === 'npm test').number);
   assert.equal(realCli.env.AGENTRIX_REQUIRE_REAL_CLI, '1');
   assert.match(realCli.run, /package-lock\.json/); assert.match(realCli.run, /claude\.exe/);
-  assert.match(realCli.run, /node --test tests\/claude-sdk-real-cli\.test\.cjs/);
+  assert.match(realCli.run, /node scripts\/real-cli-tests\.cjs --locked-prefix "\$RUNNER_TEMP\/claude-contract"/);
   assert.equal(steps.filter(step => step.kind === 'gui').length, 23);
   assert.equal(steps.find(step => step.name === 'Build Windows installer').kind, 'command');
   assert.equal(steps.find(step => step.name === 'Create checksum and build notes').skip, null);

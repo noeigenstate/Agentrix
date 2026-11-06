@@ -140,7 +140,7 @@ jobs:
         run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Install Codex CLI for offline startup checks
-        run: npm install --global @openai/codex@0.163.0 --no-audit --no-fund
+        run: npm install --global @openai/codex@0.166.0 --no-audit --no-fund
 
       - name: Real Claude CLI contract (offline)
         shell: bash
@@ -152,7 +152,7 @@ jobs:
           export AGENTRIX_REAL_CLAUDE="$RUNNER_TEMP/claude-contract/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"
           test -f "$AGENTRIX_REAL_CLAUDE"
           "$AGENTRIX_REAL_CLAUDE" --version
-          node --test tests/claude-sdk-real-cli.test.cjs
+          node scripts/real-cli-tests.cjs --locked-prefix "$RUNNER_TEMP/claude-contract"
 
       - name: Run unit and integration tests
         env:
@@ -268,7 +268,7 @@ jobs:
         run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Install Codex CLI for offline startup checks
-        run: npm install --global @openai/codex@0.163.0 --no-audit --no-fund
+        run: npm install --global @openai/codex@0.166.0 --no-audit --no-fund
 
       - name: Build Windows test helpers
         run: node scripts/build-ssh-askpass.cjs

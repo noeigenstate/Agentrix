@@ -30,6 +30,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
       const request=JSON.parse(line), p=request.params||{};
       if (request.id === undefined) return;
       if (['thread/resume','turn/start','turn/steer','turn/interrupt'].includes(request.method) && !p.threadId) return rpc({id:request.id,error:{code:-32600,message:'Invalid request: missing field \`threadId\`'}});
+      fs.appendFileSync(path.join(fixture.root, 'rpc-methods'), request.method + '\\n');
       if (request.method === 'turn/start') {turnRequest=request; resolve(p.input.map(x=>x.text||'').join('\\n'));return;}
       if (request.method === 'turn/steer') return rpc({id:request.id,error:{code:-32602,message:'Turn ended'}});
       if (request.method === 'turn/interrupt') rpc({method:'turn/completed',params:{threadId:fixture.session,turn:{id:'fixture-turn',status:'interrupted'}}});
@@ -70,12 +71,13 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   else {
     rpc({method:'item/completed',params:{threadId:id,turnId:'fixture-turn',item:{id:'input',type:'userMessage',clientId:turnRequest.params.clientUserMessageId,content:turnRequest.params.input}}});
     rpc({method:'item/completed',params:{threadId:id,turnId:'fixture-turn',item:{id:'answer',type:'agentMessage',text:'done '+round,phase:'final_answer'}}});
+    fs.writeFileSync(path.join(fixture.root, 'completed-' + round), 'done ' + round);
     rpc({method:'turn/completed',params:{threadId:id,turn:{id:'fixture-turn',status:'completed'}}});
   }
 })().catch(error => {process.stderr.write(String(error));process.exitCode=1;});
 `;
 
-async function fixture(t, { agent = 'codex', descendant = false, badSession = false, outsideScope = false, readOnly = false, untimedRound = null } = {}) {
+async function fixture(t, { agent = 'codex', descendant = false, badSession = false, outsideScope = false, readOnly = false, untimedRound = null, closeWithSignal = false } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-owner-dispatch-'))), repo = path.join(root, 'repo');
   fs.mkdirSync(path.join(repo, 'src'), { recursive: true }); fs.writeFileSync(path.join(repo, '.gitignore'), '.dispatch/\n'); fs.writeFileSync(path.join(repo, 'src/a.js'), 'base');
   const git = args => execFileSync('git', args, { cwd: repo, stdio: 'ignore', windowsHide: true });
@@ -95,9 +97,20 @@ async function fixture(t, { agent = 'codex', descendant = false, badSession = fa
     ...(agent === 'codex' ? ['--fast', ...(readOnly ? ['--read-only'] : [])] : ['--permission', 'plan'])];
   let stdout = '', finished = false;
   const children = [];
+  const completedAtExit = [];
   const result = run(args, { env, rateInterval: 30, stdout: { write: text => { stdout += text; } },
     resolveExecutable: (_, argv) => ({ file: process.execPath, args: [worker, ...argv] }),
-    launch: (file, argv, options) => { const child = spawn(file, argv, options); children.push(child); return child; },
+    launch: (file, argv, options) => {
+      const child = spawn(file, argv, options); children.push(child);
+      child.once('exit', () => completedAtExit.push(fs.existsSync(path.join(root, 'completed-1'))));
+      if (closeWithSignal) {
+        // Reproduce POSIX app-server shutdown on Windows too: it is a persistent
+        // server, so closing the transport need not give process exit code zero.
+        const end = child.stdin.end.bind(child.stdin);
+        child.stdin.end = (...args) => { child.kill('SIGKILL'); return end(...args); };
+      }
+      return child;
+    },
   }).finally(() => { finished = true; });
   const release = round => fs.writeFileSync(path.join(root, 'release-' + round), '');
   t.after(async () => {
@@ -114,7 +127,7 @@ async function fixture(t, { agent = 'codex', descendant = false, badSession = fa
   const target = { terminalId:'terminal',callId:'dispatch:'+id,route:'dispatch',runId:id,cwd:repo,projectPath:repo,title:'Synthetic worker',parentSessionId:'planner',confirmed:true,done:false,local:true };
   const api = createInterventions({resolve:()=>target,sendParentPrompt:(_,text)=>{notifications.push(text);}});
   const captures = () => fs.existsSync(path.join(root, 'captures')) ? fs.readFileSync(path.join(root, 'captures'), 'utf8').trim().split('\n').map(JSON.parse) : [];
-  return { root, repo, team, id, api, target, notifications, result, events, children, release, captures, stdout: () => stdout, out, session };
+  return { root, repo, team, id, api, target, notifications, result, events, children, completedAtExit, release, captures, stdout: () => stdout, out, session };
 }
 
 test('default send leaves the child running and joins ordered messages in same-session resumes', async t => {
@@ -179,18 +192,29 @@ test('transient inbox polling errors leave the child running and retry the inter
   assert.doesNotMatch(f.stdout(), /stop requested|reason error|owner stopped/);
 });
 
-test('a failed final empty check reports an error only after the worker exits without killing it or resuming', async t => {
-  const f = await fixture(t), take = RunInbox.prototype.take;
-  let finalChecks = 0;
-  t.mock.method(RunInbox.prototype, 'take', function (finish) {
-    if (this.id === f.id && finish) { finalChecks++; throw new Error('synthetic final empty-check failure'); }
-    return take.call(this, finish);
+test('a failed final empty check reports an error after completion and server shutdown without interruption or resume', async t => {
+  for (const closeWithSignal of [false, true]) await t.test(closeWithSignal ? 'signal shutdown' : 'platform shutdown', async t => {
+    const f = await fixture(t, { closeWithSignal }), take = RunInbox.prototype.take;
+    let finalChecks = 0;
+    t.mock.method(RunInbox.prototype, 'take', function (finish) {
+      if (this.id === f.id && finish) {
+        finalChecks++;
+        assert.deepEqual(f.completedAtExit, [true], 'the completed turn must precede server exit and the final inbox check');
+        throw new Error('synthetic final empty-check failure');
+      }
+      return take.call(this, finish);
+    });
+    assert.equal(f.children[0].exitCode, null); assert.equal(finalChecks, 0);
+    assert.equal(fs.existsSync(path.join(f.root, 'completed-1')), false); f.release(1);
+    assert.equal(await f.result, 1); assert.equal(finalChecks, 1);
+    assert.notEqual(f.children[0].exitCode ?? f.children[0].signalCode, null, 'the persistent server must be reaped after its completed turn');
+    if (closeWithSignal) assert.equal(f.children[0].signalCode, 'SIGKILL');
+    assert.deepEqual(f.completedAtExit, [true]);
+    assert.equal(fs.readFileSync(path.join(f.root, 'rpc-methods'), 'utf8').split('\n').includes('turn/interrupt'), false);
+    assert.equal(f.captures().length, 1); assert.match(f.stdout(), /reason error/);
+    assert.equal(fs.readFileSync(path.join(f.root, 'completed-1'), 'utf8'), 'done 1');
+    assert.doesNotMatch(f.stdout(), /stop requested|owner stopped/);
   });
-  assert.equal(f.children[0].exitCode, null); f.release(1);
-  assert.equal(await f.result, 1); assert.equal(finalChecks, 1);
-  assert.equal(f.children[0].exitCode, 0); assert.equal(f.children[0].signalCode, null);
-  assert.equal(f.captures().length, 1); assert.match(f.stdout(), /reason error/);
-  assert.doesNotMatch(f.stdout(), /stop requested|owner stopped/);
 });
 
 test('explicit stop terminates the old process tree before resuming queued work', async t => {

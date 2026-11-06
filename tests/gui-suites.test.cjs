@@ -4,6 +4,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const fs = require('node:fs');
+const { githubActions } = require('../scripts/clipboard-policy.cjs');
 
 // Every clipboard suite runs only in GitHub Actions, including directly named entrypoints.
 const script = path.join(__dirname, '..', 'scripts', 'windows-gui-smoke.mjs');
@@ -36,7 +37,14 @@ test('naming a clipboard suite with --only is refused outside Actions before it 
   assert.throws(() => selectSuites(['node', 'x', '--only', 'nonsense'], { CI: 'true' }), /Unknown GUI suite/);
 });
 
-test('clipboard entrypoints refuse CI=true before importing any launch dependency', () => {
+test('clipboard entrypoints import the guard before any launch dependency', () => {
+  for (const name of [...CLIPBOARD, 'mac', 'linux']) {
+    const entry = path.join(__dirname, '..', 'scripts', `${name}-smoke.mjs`);
+    assert.equal(fs.readFileSync(entry, 'utf8').split(/\r?\n/)[0], "import './clipboard-guard.mjs';", name);
+  }
+});
+
+test('clipboard entrypoints refuse CI=true before importing any launch dependency', { skip: !githubActions(process.env) && 'clipboard entrypoints run only in GitHub Actions, including refusal probes' }, () => {
   const root = path.resolve(__dirname, '..');
   for (const name of [...CLIPBOARD, 'mac', 'linux']) {
     const entry = path.join(root, 'scripts', `${name}-smoke.mjs`);
