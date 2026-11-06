@@ -21,7 +21,7 @@ function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
     const receipt = path.join(directory, 'exit').replaceAll('\\', '/');
     const quoted = "'" + receipt.replaceAll("'", "'\\''") + "'";
     let finishClose; const closed = new Promise(resolve => { finishClose = resolve; });
-    let child, stdout = '', stderr = '', stopped = false, settled = false, truncated = false, drain, timer, poll;
+    let child, stdout = '', stderr = '', combined = '', stopped = false, settled = false, truncated = false, drain, timer, poll;
     const cleanup = () => {
       clearTimeout(timer); clearTimeout(drain); clearInterval(poll);
       signal.removeEventListener('abort', stop);
@@ -30,7 +30,7 @@ function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
     const result = code => {
       if (settled) return;
       settled = true; clearTimeout(timer); clearTimeout(drain); clearInterval(poll);
-      resolve({ exitCode: stopped ? null : code, stdout, stderr, closed });
+      resolve({ exitCode: stopped ? null : code, stdout, stderr, combined, closed });
     };
     const stop = () => {
       if (stopped) return;
@@ -55,13 +55,15 @@ function runShell({ cwd, env, command, signal, output, timeout = 120000 }) {
       const remaining = 30000 - stdout.length - stderr.length, text = value.toString();
       const clipped = text.slice(0, Math.max(0, remaining));
       if (field === 'stdout') stdout += clipped; else stderr += clipped;
+      combined += clipped;
       if (text.length > remaining) {
         truncated = true;
         const marker = '\n[输出已截断]';
+        combined = combined.slice(0, 30000 - marker.length) + marker;
         if (stderr.length >= marker.length) stderr = stderr.slice(0, -marker.length) + marker;
         else { stdout = stdout.slice(0, 30000 - stderr.length - marker.length); stderr += marker; }
       }
-      output({ stdout, stderr });
+      output({ stdout, stderr, combined });
     };
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', value => append('stdout', value)); child.stderr.on('data', value => append('stderr', value));

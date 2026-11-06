@@ -60,7 +60,8 @@ test('real app-server starts and resumes the same thread despite legacy terminal
   const codex = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX,
     spawnProcess: (file, args, options) => { assert.equal(options.env.AGENTRIX_BOOTSTRAP, historyLookup ? undefined : env.AGENTRIX_BOOTSTRAP); launches.push(args); return launch(file, args, options); } });
   let threadId, historyLookup = false;
-  const spec = id => ({ owner: 'gui', projectId: 'p', terminalId: id, cwd, env, context: 'REVIEW_LOCAL_DEVELOPER_INSTRUCTIONS', model: 'gpt-6.1-sol', providerSessionId: threadId });
+  const spec = id => ({ owner: 'gui', projectId: 'p', terminalId: id, cwd, env,
+    context: 'REVIEW_LOCAL_DEVELOPER_INSTRUCTIONS ' + cwd + ' FORWARD ' + cwd.replace(/\\/g, '/'), model: 'gpt-6.1-sol', providerSessionId: threadId });
   try {
     const direct = codex.create(spec('initial'), event => events.push(event)); sessions.push(direct);
     threadId = (await direct.start()).providerSessionId;
@@ -70,6 +71,12 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     for (let n = 0; n < 600 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 20));
     assert.ok(events.some(event => event.type === 'item.upsert' && event.payload.content?.text === 'OFFLINE CODEX ONLY'));
     assert.match(requests.at(-1), /REVIEW_LOCAL_DEVELOPER_INSTRUCTIONS/);
+    const developer = JSON.parse(requests.at(-1)).input.filter(item => item.role === 'developer');
+    const wireCwd = require('../electron/session-files.cjs').expandShortPath(cwd);
+    assert.ok(JSON.stringify(developer).includes(JSON.stringify(wireCwd).slice(1, -1)), 'developer instructions use the wire cwd');
+    assert.ok(JSON.stringify(developer).includes(wireCwd.replace(/\\/g, '/')), 'startup-note forward-slash paths use the wire cwd');
+    if (wireCwd !== cwd) assert.ok(!JSON.stringify(developer).includes(JSON.stringify(cwd).slice(1, -1)), 'the old short cwd is not left in instructions');
+    if (wireCwd !== cwd) assert.ok(!JSON.stringify(developer).includes(cwd.replace(/\\/g, '/')), 'the old forward-slash short cwd is not left in instructions');
     await direct.close();
     const beforeHistory = requests.length;
     historyLookup = true;
@@ -131,6 +138,16 @@ test('real app-server starts and resumes the same thread despite legacy terminal
 
     if (process.platform === 'win32') {
       const config = path.join(env.CODEX_HOME, 'config.toml');
+      const trustedAlias = path.join(fs.realpathSync.native(root), 'trusted-junction');
+      fs.symlinkSync(fs.realpathSync.native(cwd), trustedAlias, 'junction');
+      const originalConfig = fs.readFileSync(config, 'utf8');
+      fs.writeFileSync(config, originalConfig + `\n[projects.${JSON.stringify(trustedAlias)}]\ntrust_level = "trusted"\n`);
+      const trusted = codex.create({ ...spec('trusted-alias'), cwd: trustedAlias, providerSessionId: null,
+        context: 'REVIEW_TRUSTED_ALIAS ' + trustedAlias }, () => {}); sessions.push(trusted);
+      await trusted.start();
+      assert.equal(trusted.threadResponse.sandbox.type, 'workspaceWrite', 'junction trust stays bound to its alias');
+      await trusted.close();
+      fs.writeFileSync(config, originalConfig);
       const blankWindows = fs.readFileSync(config, 'utf8').replace('[windows]\nsandbox = "unelevated"\n', '');
       fs.writeFileSync(config, blankWindows);
       const workerEvents = [], worker = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX, spawnProcess: launch })

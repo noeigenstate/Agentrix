@@ -119,6 +119,21 @@ test('dispatched Codex exec workers resolve their own rollout identity and reuse
   assert.ok(!f.calls.running().some(call => call.id === 'dispatch:codex'));
 });
 
+test('Codex dispatch cwd aliases retain the worker feed and token-rate records', async t => {
+  const f = await fixture(t), alias = path.join(f.root, 'project-alias');
+  await fs.mkdir(f.cwd);
+  await fs.symlink(f.cwd, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const sessionId = dispatch(f, 'cwd-alias', 'codex', 'session-cwd-alias', alias);
+  const filename = await rollout(f, sessionId, {}, [
+    { type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Aliased worker output.' } },
+  ]);
+  assert.equal(await findRolloutSession(path.join(f.codexHome, 'sessions'), sessionId, alias), filename);
+  const feed = await f.calls.feed('dispatch:cwd-alias');
+  assert.equal(feed.entries.at(-1).text, 'Aliased worker output.');
+  f.calls.dispatch({ type: 'dispatch-rate', id: 'cwd-alias', outputTokens: 40, activeMs: 2000 });
+  assert.equal((await f.calls.feed('dispatch:cwd-alias')).rate.outputTokens, 40);
+});
+
 test('dispatched Claude workers use dispatch cwd rather than the parent cwd and never fall back to another project', async t => {
   const f = await fixture(t), workerCwd = path.join(f.root, 'worker-worktree');
   const sessionId = dispatch(f, 'claude', 'claude', 'claude-session', workerCwd);

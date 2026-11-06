@@ -9,6 +9,7 @@ const { createCodexRuntime } = require('../electron/features/codex-app-server/in
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+const { bashEnvironment, missingTmpWarning } = require('./fixtures/bash-environment.cjs');
 const disposers = new Map();
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function directory(t) {
@@ -88,7 +89,7 @@ test('S10 stopping during SSH connection disposes the late child without initial
 });
 test('S14 shell removes provider key and OAuth names in every letter case', async t => {
   const root = directory(t), abort = new AbortController();
-  const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: { ...process.env,
+  const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: { ...bashEnvironment(root),
     CODEX_API_KEY: 'private', CLAUDE_CODE_OAUTH_TOKEN: 'private', AWS_SECRET_ACCESS_KEY: 'private', AWS_REGION: 'offline-region', AWS_PROFILE: 'offline-profile' }, signal: abort.signal,
     command: 'printf "%s:%s:%s:%s:%s" "${CODEX_API_KEY-unset}" "${CLAUDE_CODE_OAUTH_TOKEN-unset}" "${AWS_SECRET_ACCESS_KEY-unset}" "${AWS_REGION-unset}" "${AWS_PROFILE-unset}"', output() {} });
   assert.equal(result.stdout, 'unset:unset:unset:offline-region:offline-profile');
@@ -96,7 +97,7 @@ test('S14 shell removes provider key and OAuth names in every letter case', asyn
 test('S3 shell background descendants cannot hold timeout and cancellation hostage', async t => {
   const root = directory(t), abort = new AbortController();
   const began = Date.now();
-  const task = require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: process.env, command: 'sleep 5 & echo started',
+  const task = require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: bashEnvironment(root), command: 'sleep 5 & echo started',
     signal: abort.signal, timeout: 1000, output() { setTimeout(() => abort.abort(), 250); } });
   const result = await Promise.race([task, pause(2500).then(() => assert.fail('shell timeout did not settle'))]);
   assert.ok(Date.now() - began < 2500); abort.abort(); await result.closed;
@@ -127,16 +128,20 @@ test('S13 oversized history response shrinks a page without a dropped-item notic
   await assert.rejects(request, { code: 'history_frame_limit' }); assert.equal(notices, 0); rpc.close();
 });
 
-test('S1 S2 shell submits an independent immediate user turn and leaves slash input intact', async t => {
+for (const missingTmp of [false, true]) test('S1 S2 shell submits an independent immediate user turn and leaves slash input intact' + (missingTmp ? ' with real startup stderr' : ''),
+  { skip: missingTmp && process.platform !== 'win32' && 'Git Bash MSYS startup warning requires Windows' }, async t => {
   const root = directory(t), fake = fakeSdk(), events = [];
   const runtime = createClaudeRuntime({ directory: root, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'fake-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save('sk-ant-offline-review-not-a-real-key'); disposers.get(root).push(() => runtime.close());
-  const session = runtime.create({ owner: 'gui', cwd: root, env: { ...process.env, HOME: root, USERPROFILE: root, GIT_CEILING_DIRECTORIES: root } }, event => events.push(event));
-  await session.start(); await session.shell('shell', 'printf REVIEW_SHELL'); await pause(20);
+  const session = runtime.create({ owner: 'gui', cwd: root, env: bashEnvironment(root, { missingTmp }) }, event => events.push(event));
+  const command = 'printf REVIEW_SHELL' + (missingTmp ? '; printf "REVIEW_STDERR\\n" >&2' : '');
+  await session.start(); await session.shell('shell', command); await pause(20);
   assert.equal(fake.inputs.length, 1);
-  assert.deepEqual(fake.inputs[0].message.content, [{ type: 'text', text: '<bash-input>printf REVIEW_SHELL</bash-input>\n' },
-    { type: 'text', text: '<bash-stdout>REVIEW_SHELL</bash-stdout><bash-stderr></bash-stderr>' }]);
+  assert.deepEqual(fake.inputs[0].message.content, [{ type: 'text', text: '<bash-input>' + command + '</bash-input>\n' },
+    { type: 'text', text: '<bash-stdout>' + (missingTmp ? missingTmpWarning : '') + 'REVIEW_SHELL' + (missingTmp ? 'REVIEW_STDERR' : '') + '</bash-stdout><bash-stderr></bash-stderr>' }]);
+  assert.equal(events.findLast(row => row.itemId === 'shell:shell').payload.content.output,
+    (missingTmp ? missingTmpWarning : '') + 'REVIEW_SHELL' + (missingTmp ? 'REVIEW_STDERR\n' : ''), 'the card retains all stderr and its final newline');
   assert.equal(events.filter(row => row.type === 'turn.started' && row.payload.origin === 'user').length, 1);
   await session.send({ clientMessageId: 'compact', text: '/compact' }); await pause(10);
   assert.equal(fake.inputs[1].message.content, '/compact');
@@ -164,7 +169,7 @@ test('S8 escaped image property names cannot retain pixels', () => {
 test('S3 cancellation stops background writes and timeout stops foreground writes before closing', { timeout: 10000 }, async t => {
   for (const mode of ['abort', 'timeout']) {
     const root = directory(t), abort = new AbortController();
-    const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: { ...process.env, GIT_CEILING_DIRECTORIES: root },
+    const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: bashEnvironment(root),
       command: 'while true; do printf x >> heartbeat; sleep 0.05; done' + (mode === 'abort' ? ' & echo started' : ''), signal: abort.signal, timeout: mode === 'timeout' ? 1500 : 5000, output() {} });
     if (mode === 'abort') abort.abort();
     await result.closed;
@@ -207,7 +212,7 @@ test('S14 shell also removes Claude credential prefixes and custom API key names
   const root = directory(t), names = ['ClAuDe_CoDe_SeSsIoN_AcCeSs_ToKeN', 'CLAUDE_AUTH_TOKEN', 'CLAUDE_API_KEY', 'CUSTOM_MODEL_API_KEY'];
   const script = 'process.stdout.write(JSON.stringify(Object.keys(process.env).filter(name=>' + JSON.stringify(names.map(name => name.toUpperCase())) + '.includes(name.toUpperCase()))))';
   const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root,
-    env: { ...process.env, GIT_CEILING_DIRECTORIES: root, ...Object.fromEntries(names.map(name => [name, 'private'])) },
+    env: { ...bashEnvironment(root), ...Object.fromEntries(names.map(name => [name, 'private'])) },
     command: 'node -e ' + JSON.stringify(script), signal: new AbortController().signal, output() {} });
   assert.deepEqual(JSON.parse(result.stdout), []);
 });

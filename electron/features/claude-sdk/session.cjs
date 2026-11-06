@@ -512,15 +512,19 @@ function createClaudeSession(spec, emit, dependencies) {
     };
     card('running'); setState('running');
     const task = runShell({ cwd: spec.cwd, env: spec.env || process.env, command, signal: abort.signal,
-      output: ({ stdout, stderr }) => card('running', stdout + stderr) }).then(async result => {
+      output: ({ stdout, stderr, combined }) => card('running', combined ?? stdout + stderr) }).then(async result => {
       job.closed = result.closed;
       job.returned = true;
       void result.closed.then(() => shellControllers.delete(job));
-      card(result.exitCode === 0 ? 'completed' : result.exitCode === null ? 'interrupted' : 'failed', result.stdout + result.stderr, result.exitCode);
+      card(result.exitCode === 0 ? 'completed' : result.exitCode === null ? 'interrupted' : 'failed', result.combined ?? result.stdout + result.stderr, result.exitCode);
       if (!abort.signal.aborted && result.exitCode !== null) {
+        // Terminal success rows omit initial empty lines and trailing whitespace,
+        // while preserving leading spaces; raw streams and card output stay intact.
+        const merged = result.exitCode === 0 && typeof result.combined === 'string';
+        const stdout = merged ? result.combined.replace(/^[\r\n]+/, '').trimEnd() : result.stdout, stderr = merged ? '' : result.stderr;
         const delivery = await send({ clientMessageId, text: '!' + command }, [
         { type: 'text', text: `<bash-input>${command}</bash-input>\n` },
-        { type: 'text', text: `<bash-stdout>${result.stdout || (!result.stderr ? '(Bash completed with no output)' : '')}</bash-stdout><bash-stderr>${result.stderr}</bash-stderr>` },
+        { type: 'text', text: `<bash-stdout>${stdout || (!stderr ? '(Bash completed with no output)' : '')}</bash-stdout><bash-stderr>${stderr}</bash-stderr>` },
         ]);
         if (delivery.status === 'rejected') throw new Error(notSent);
       }

@@ -5,6 +5,31 @@ const path = require('node:path');
 const { transcriptWindow } = require('./transcript-window.cjs');
 
 const ROLLOUT = /^rollout-.*\.jsonl$/;
+function physicalDirectory(value) {
+  try { return fs.realpathSync.native(value); } catch { return value; }
+}
+function directoryKey(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const normal = process.platform === 'win32'
+    ? value.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\(?=[A-Za-z]:\\)/, '') : value;
+  const resolved = path.resolve(normal);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+function sameDirectory(candidate, directory) {
+  if (!directoryKey(candidate) || !directoryKey(directory)) return false;
+  if (directoryKey(candidate) === directoryKey(directory)) return true;
+  const identity = directoryKey(physicalDirectory(directory));
+  // A local record must not initiate a connection to a foreign UNC host.
+  if (process.platform === 'win32' && /^\\\\/.test(directoryKey(candidate)) && !/^\\\\/.test(identity)) return false;
+  return directoryKey(physicalDirectory(candidate)) === identity;
+}
+function expandShortPath(value) {
+  if (process.platform !== 'win32' || !/(?:^|[\\/])[^\\/]*~\d[^\\/]*(?:[\\/]|$)/.test(value)) return value;
+  const resolved = physicalDirectory(value), root = path.parse(value).root;
+  // Keep mapped/subst drive spelling rather than turning it into a UNC/root alias.
+  const relative = path.relative(physicalDirectory(root), resolved);
+  return path.isAbsolute(relative) || relative.startsWith('..') ? value : path.join(root, relative);
+}
 // Without a watcher every file is looked at again this often. With one, only the files it reports are;
 // a walk of the folder names and a rarer full walk remain as a safety net for events that never arrive
 // (some network folders).
@@ -188,7 +213,7 @@ async function findRolloutSession(directory, id, cwd) {
       file = await fsp.open(filename, 'r');
       if (!await containedFile(directory, filename, { file })) continue;
       const record = await sessionHeader(file), meta = record?.type === 'session_meta' && record.payload;
-      if (meta?.id === id && typeof meta.cwd === 'string' && path.isAbsolute(meta.cwd) && !path.relative(path.resolve(meta.cwd), path.resolve(cwd))) {
+      if (meta?.id === id && typeof meta.cwd === 'string' && path.isAbsolute(meta.cwd) && sameDirectory(meta.cwd, cwd)) {
         if (found && found !== filename) return null;
         found = filename;
       }
@@ -198,4 +223,5 @@ async function findRolloutSession(directory, id, cwd) {
   return found;
 }
 
-module.exports = { records, rolloutFiles, sessionMeta, nativeWatchPath, containedFile, sessionHeader, findRolloutSession };
+module.exports = { records, rolloutFiles, sessionMeta, nativeWatchPath, containedFile, sessionHeader, findRolloutSession,
+  physicalDirectory, sameDirectory, expandShortPath };

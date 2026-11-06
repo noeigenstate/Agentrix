@@ -624,7 +624,8 @@ test('expired project answers never replay into a new session before a fresh acc
 });
 
 test('account fingerprints use a random runtime HMAC key and remain stable only within that runtime', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/features/agents/codex-account-usage.cjs'), 'utf8');
+  const filename = path.join(__dirname, '../electron/features/agents/codex-account-usage.cjs');
+  const source = fs.readFileSync(filename, 'utf8'), moduleRequire = require('node:module').createRequire(filename);
   const crypto = require('node:crypto'), keys = [];
   const loadScope = () => {
     const context = { module: { exports: {} }, process, require: name => name === 'node:crypto' ? {
@@ -632,7 +633,7 @@ test('account fingerprints use a random runtime HMAC key and remain stable only 
         assert.equal(algorithm, 'sha256'); assert.equal(key.length, 32); keys.push(key);
         return crypto.createHmac(algorithm, key);
       },
-    } : require(name) };
+    } : moduleRequire(name) };
     vm.runInNewContext(source, context);
     return context.module.exports.usageScope;
   };

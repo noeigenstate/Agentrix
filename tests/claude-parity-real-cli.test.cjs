@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const { harness, opening, textBlock, finish } = require('./fixtures/claude-real.cjs');
+const { bashEnvironment, missingTmpWarning } = require('./fixtures/bash-environment.cjs');
 const skip = !process.env.AGENTRIX_REAL_CLAUDE;
 const { fork } = require('node:child_process');
 const { once } = require('node:events');
@@ -19,6 +20,14 @@ function product(t, f, emit, changes = {}) {
   runtime.credentials.save(f.env.ANTHROPIC_API_KEY);
   f.cleanup(() => runtime.close());
   return runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: 'real-parity', model: 'claude-sonnet-4-5', monthlyBudgetUsd: 10, ...changes }, emit);
+}
+
+function configureBash(f, options) {
+  const env = bashEnvironment(f.cwd, options);
+  if (process.platform === 'win32') f.env.CLAUDE_CODE_GIT_BASH_PATH = env.CLAUDE_CODE_GIT_BASH_PATH;
+  const pathName = Object.keys(env).find(name => name.toUpperCase() === 'PATH');
+  if (pathName) f.env.PATH = env[pathName];
+  f.env.LC_ALL = 'C';
 }
 
 async function terminal(t, f, args = [], capture = false) {
@@ -93,6 +102,7 @@ test('worker policy deny dominates loaded project allow hooks and permissions', 
 test('real host shell keeps keys out, preserves CLI context wrappers and renews acknowledged options', { skip, timeout: 60000 }, async t => {
   const requests = [], events = [];
   const f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'ACK'), ...finish('end_turn')]; });
+  configureBash(f);
   const session = product(t, f, event => events.push(event)); await session.start();
   assert.equal((await session.runOptions({})).model, null);
   assert.equal(requests.length, 0);
@@ -262,6 +272,7 @@ test('real SDK fork returns the parent turn while its child is still running', {
 test('real terminal shell context and SDK request parity have an exact difference whitelist', { skip, timeout: 70000 }, async t => {
   const bodies = [], sdkAgents = [];
   const f = await harness(t, data => { bodies.push(data); return [opening(data), ...textBlock(0, 'PARITY_REPLY'), ...finish('end_turn')]; });
+  configureBash(f);
   fs.writeFileSync(path.join(f.cwd, 'CLAUDE.md'), 'PARITY_PROJECT_MEMORY\n');
   fs.mkdirSync(path.join(f.cwd, '.claude/skills/parity-skill'), { recursive: true });
   fs.writeFileSync(path.join(f.cwd, '.claude/skills/parity-skill/SKILL.md'), '---\nname: parity-skill\ndescription: PARITY_PROJECT_SKILL\n---\nPARITY_PROJECT_SKILL $ARGUMENTS\n');
@@ -299,10 +310,14 @@ test('real terminal shell context and SDK request parity have an exact differenc
   assert.match(terminalMessages, /<bash-stderr>[\s\S]*<\/bash-stderr>/);
 });
 
-test('S1 S2 real terminal and native shell have the same immediate independent request flow', { skip, timeout: 70000 }, async t => {
+for (const missingTmp of [false, true]) test('S1 S2 real terminal and native shell have the same immediate independent request flow' + (missingTmp ? ' with real startup stderr' : ''),
+  { skip: skip || missingTmp && process.platform !== 'win32' && 'Git Bash MSYS startup warning requires Windows', timeout: 70000 }, async t => {
   const bodies = [], f = await harness(t, data => { bodies.push(data); return [opening(data), ...textBlock(0, 'FLOW_ACK'), ...finish('end_turn')]; });
+  configureBash(f, { missingTmp });
+  fs.writeFileSync(path.join(f.cwd, 'shell-streams.cjs'), "process.stdout.write('\\n\\n REVIEW_FLOW'); setTimeout(() => process.stderr.write('REVIEW_STDERR \\n'), 80);\n");
+  const command = 'node shell-streams.cjs';
   const input = await terminal(t, f, [], true);
-  input('!printf REVIEW_FLOW');
+  input('!' + command);
   await until(() => bodies.some(body => body.tools?.length && JSON.stringify(body.messages).includes('REVIEW_FLOW')));
   const tui = bodies.find(body => body.tools?.length && JSON.stringify(body.messages).includes('REVIEW_FLOW'));
   const shellMessage = body => body.messages.find(message => message.role === 'user' && Array.isArray(message.content)
@@ -328,7 +343,7 @@ test('S1 S2 real terminal and native shell have the same immediate independent r
     'the terminal also compacts immediately after its independent shell round');
   const before = bodies.length, events = [];
   const session = product(t, f, event => events.push(event)); await session.start();
-  await session.shell('flow', 'printf REVIEW_FLOW');
+  await session.shell('flow', command);
   await until(() => session.snapshot().state === 'idle' && bodies.length > before);
   const native = bodies.slice(before).find(body => body.tools?.length);
   await until(() => terminalRecords().some(record => record.type === 'user' && Array.isArray(record.message?.content)
@@ -346,6 +361,9 @@ test('S1 S2 real terminal and native shell have the same immediate independent r
   // Exact whitelist: the terminal's Windows cwd bookkeeping line. No model input,
   // tool output, ordering, or user text is removed by this normalization.
   assert.deepEqual(bash(shellMessage(native)), bash(expected), 'same two adjacent blocks in a standalone shell round');
+  assert.deepEqual(bash(expected).map(({ type, text }) => ({ type, text })), [{ type: 'text', text: '<bash-input>' + command + '</bash-input>\n' },
+    { type: 'text', text: '<bash-stdout>' + (missingTmp ? missingTmpWarning + '\n\n ' : ' ') + 'REVIEW_FLOWREVIEW_STDERR</bash-stdout><bash-stderr></bash-stderr>' }],
+  'the real terminal preserves the complete application stderr and MSYS startup warning');
   for (const message of [expected, shellMessage(native)]) {
     const at = message.content.findIndex(block => block.text?.startsWith('<bash-input>'));
     assert.equal(message.content[at + 1].text.startsWith('<bash-stdout>'), true);

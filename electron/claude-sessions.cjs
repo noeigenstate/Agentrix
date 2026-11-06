@@ -34,31 +34,59 @@ async function recordedProject(filename) {
   return null;
 }
 
-async function belongsToProject(filename, identity, knownFolder, identities = new Map()) {
-  // Preserve the CLI's exact namespace, including old/relocated transcripts
-  // whose first cwd no longer exists. Only additional alias folders need proof.
-  if (knownFolder) return true;
-  const cwd = await recordedProject(filename);
-  // Older transcripts may have no cwd. Only their exact project folder remains
-  // admissible; an arbitrary alias candidate always needs filesystem identity.
-  if (!cwd) return false;
-  if (!path.isAbsolute(cwd) || process.platform === 'win32' && /^[\\/]{2}/.test(cwd) && !/^[\\/]{2}/.test(identity)) return false;
-  if (!identities.has(cwd)) identities.set(cwd, projectIdentity(cwd).catch(() => null));
-  return await identities.get(cwd) === identity;
+// One ownership probe per project directory, shared by concurrent card mounts.
+// Directory changes invalidate the probe; transcript growth alone needs no rescan.
+const folderOwners = new Map(), OWNER_LIMIT = 2048;
+async function folderOwner(folder, root) {
+  const stat = await fs.stat(folder);
+  const stamp = [stat.dev, stat.ino, stat.mtimeMs, stat.ctimeMs].join(':');
+  if (folderOwners.get(folder)?.stamp === stamp) return folderOwners.get(folder).value;
+  const value = (async () => {
+    const entries = await fs.readdir(folder, { withFileTypes: true });
+    const sample = entries.find(entry => entry.isFile() && entry.name.endsWith('.jsonl') && SESSION_ID.test(entry.name.slice(0, -6)));
+    if (!sample) return null;
+    const filename = await containedFile(root, path.join(folder, sample.name), { exact: true });
+    return filename ? recordedProject(filename) : null;
+  })();
+  const cached = { stamp, value }; folderOwners.set(folder, cached);
+  if (folderOwners.size > OWNER_LIMIT) folderOwners.delete(folderOwners.keys().next().value);
+  try {
+    const cwd = await value;
+    // Empty/partial first records can become readable without a directory change.
+    if (!cwd && folderOwners.get(folder) === cached) folderOwners.delete(folder);
+    return cwd;
+  } catch (error) { if (folderOwners.get(folder) === cached) folderOwners.delete(folder); throw error; }
 }
-
-async function directories(folder) {
-  try { return (await fs.readdir(folder, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => path.join(folder, entry.name)); }
-  catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+async function matchingFolders(cwd, home) {
+  const root = path.join(home, 'projects'), exact = projectFolder(cwd, home);
+  const identity = await projectIdentity(cwd), identities = new Map(), result = [exact];
+  let directories;
+  try { directories = (await fs.readdir(root, { withFileTypes: true })).filter(entry => entry.isDirectory()).map(entry => path.join(root, entry.name)); }
+  catch (error) { if (error.code === 'ENOENT') return result; throw error; }
+  // Bound outstanding filesystem reads when many cards mount together.
+  for (let i = 0; i < directories.length; i += 16) {
+    const matching = await Promise.all(directories.slice(i, i + 16).map(async folder => {
+      if (folder === exact) return null;
+      try {
+        const recorded = await folderOwner(folder, root);
+        if (!recorded || !path.isAbsolute(recorded) || process.platform === 'win32' && /^[\\/]{2}/.test(recorded) && !/^[\\/]{2}/.test(identity)) return null;
+        if (!identities.has(recorded)) identities.set(recorded, projectIdentity(recorded).catch(() => null));
+        return await identities.get(recorded) === identity ? folder : null;
+      } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    }));
+    result.push(...matching.filter(Boolean));
+  }
+  return result;
 }
-
 async function findClaudeSession(cwd, id, home = claudeConfigDir(), { strict = false } = {}) {
   if (typeof id !== 'string' || !SESSION_ID.test(id)) return null;
-  const folder = projectFolder(cwd, home);
-  const identity = await projectIdentity(cwd);
-  for (const candidate of new Set([folder, ...await directories(path.join(home, 'projects'))])) {
-    const filename = await containedFile(path.join(home, 'projects'), path.join(candidate, `${id}.jsonl`), { exact: strict });
-    if (filename && await belongsToProject(filename, identity, candidate === folder)) return filename;
+  const root = path.join(home, 'projects'), exact = projectFolder(cwd, home);
+  const own = await containedFile(root, path.join(exact, id + '.jsonl'), { exact: strict });
+  if (own) return own;
+  for (const folder of await matchingFolders(cwd, home)) {
+    if (folder === exact) continue;
+    const filename = await containedFile(root, path.join(folder, id + '.jsonl'), { exact: strict });
+    if (filename) return filename;
   }
   return null;
 }
@@ -97,9 +125,9 @@ async function listClaudeSessions(cwd, currentId = null, home = claudeConfigDir(
   // Read the journal only; live() also prunes the board and is not a read API.
   const team = require('./features/team/team.cjs').projectTeam(cwd);
   for (const entry of team?.entries() || []) if (entry.agent === 'claude' && entry.session) rememberClaudeSource(entry.session, 'dispatch');
-  const folder = projectFolder(cwd, home), identity = await projectIdentity(cwd), identities = new Map();
+  const folders = await matchingFolders(cwd, home);
   const candidates = [];
-  for (const candidate of new Set([folder, ...await directories(path.join(home, 'projects'))])) {
+  for (const candidate of folders) {
     let entries;
     try { entries = await fs.readdir(candidate, { withFileTypes: true }); }
     catch (error) { if (error.code === 'ENOENT') continue; throw error; }
@@ -107,7 +135,7 @@ async function listClaudeSessions(cwd, currentId = null, home = claudeConfigDir(
       const id = entry.name.replace(/\.jsonl$/, '');
       if (!entry.isFile() || !entry.name.endsWith('.jsonl') || !SESSION_ID.test(id) || id === currentId || claudeSessionSource({ sessionId: id }) === 'dispatch') continue;
       const filename = path.join(candidate, entry.name);
-      try { candidates.push({ id, filename, knownFolder: candidate === folder, modified: (await fs.stat(filename)).mtimeMs }); }
+      try { candidates.push({ id, filename, modified: (await fs.stat(filename)).mtimeMs }); }
       catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
   }
@@ -117,7 +145,7 @@ async function listClaudeSessions(cwd, currentId = null, home = claudeConfigDir(
     if (seen.has(item.id)) continue;
     try {
       const filename = await containedFile(path.join(home, 'projects'), item.filename, { exact: true });
-      if (!filename || !await belongsToProject(filename, identity, item.knownFolder, identities)) continue;
+      if (!filename) continue;
       const summary = await sessionSummary(filename, item.id);
       if (summary) { result.push(summary); seen.add(item.id); }
       if (result.length === 30) break;

@@ -1,5 +1,5 @@
 const path = require('node:path');
-const fs = require('node:fs/promises');
+const { physicalDirectory, sameDirectory, expandShortPath } = require('../../session-files.cjs');
 const { spawn, execFile } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const { homedir } = require('node:os');
@@ -12,7 +12,6 @@ const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = requ
 const { workerEnvironment } = require('./environment.cjs');
 
 const occupied = new Map();
-const localPath = value => fs.realpath(value).catch(() => value);
 function stopProcess(child) {
   if (!child) return Promise.resolve();
   // A CLI metadata child can inherit stdout after the app-server itself exits.
@@ -48,7 +47,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       try {
         check();
         const remote = spec.kind === 'ssh' ? await launchRemote(spec, { signal: abort.signal, readOnly: true }) : null;
-        const cwd = spec.kind === 'ssh' ? remote?.cwd || spec.cwd : await localPath(spec.cwd);
+        const cwd = spec.kind === 'ssh' ? remote?.cwd || spec.cwd : expandShortPath(spec.cwd);
         if (remote) child = remote.child;
         else {
           const env = workerEnvironment(spec.env || process.env), file = await resolveExecutable(env);
@@ -62,12 +61,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         const rows = new Map();
         // Retain threads recorded under the caller's old alias as well as new
         // threads created with the physical cwd. SSH paths stay remote-only.
-        for (const directory of new Set(remote ? [cwd] : [cwd, spec.cwd])) {
+        for (const directory of new Set(remote ? [cwd] : [cwd, spec.cwd, physicalDirectory(spec.cwd)])) {
           const page = await rpc.request('thread/list', { cwd: directory, limit: 100, sortKey: 'updated_at', sortDirection: 'desc', archived: false, sourceKinds: ['cli', 'vscode'] });
           if (!Array.isArray(page.data)) throw new Error('invalid_history');
           for (const row of page.data) {
             if (typeof row.cwd !== 'string' || !path.isAbsolute(row.cwd)
-              || (remote ? row.cwd !== cwd : scopePathKey(await localPath(row.cwd)) !== scopePathKey(cwd))) continue;
+              || (remote ? row.cwd !== cwd : !sameDirectory(row.cwd, cwd))) continue;
             if (!rows.has(row.id) || row.updatedAt > rows.get(row.id).updatedAt) rows.set(row.id, row);
           }
         }
@@ -78,7 +77,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           catch (error) { if (!error.missingThread) throw error; }
         }
         if (!thread || typeof thread.id !== 'string' || typeof thread.cwd !== 'string' || !path.isAbsolute(thread.cwd)
-          || (remote ? thread.cwd !== cwd : scopePathKey(await localPath(thread.cwd)) !== scopePathKey(cwd))) return null;
+          || (remote ? thread.cwd !== cwd : !sameDirectory(thread.cwd, cwd))) return null;
         check();
         return { id: thread.id, title: String(thread.name || thread.preview || '').slice(0, 200), at: Number.isSafeInteger(thread.updatedAt) ? thread.updatedAt * 1000 : null };
       } finally {
@@ -212,7 +211,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (!path.isAbsolute(spec.cwd || '')) throw new Error('invalid_cwd');
           // Windows sandbox roots must use one spelling of the same directory;
           // an 8.3 cwd otherwise becomes an unenforceable split writable root.
-          wireCwd = spec.kind === 'ssh' ? spec.cwd : await localPath(spec.cwd);
+          wireCwd = spec.kind === 'ssh' ? spec.cwd : expandShortPath(spec.cwd);
           const source = spec.env || process.env, env = workerEnvironment(source);
           // The GUI planner's helpers must reach their authenticated project control channel.
           // Dispatched workers still strip the bootstrap and cannot inherit the planner capability.
@@ -245,11 +244,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           stage = resuming ? 'thread_resume' : 'thread_start';
           const threadId = spec.providerSessionId || spec.threadId || spec.sessionId;
           if (resuming && !threadId) throw new Error('missing_thread');
-          if (spec.kind !== 'ssh') wireHome = await localPath(spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex'));
+          if (spec.kind !== 'ssh') wireHome = physicalDirectory(spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex'));
           assertOpen();
           if (resuming) bind(threadId);
+          const context = wireCwd === spec.cwd ? spec.context : spec.context?.replaceAll(spec.cwd, wireCwd)
+            .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
-            config: { model_reasoning_effort: spec.effort || 'high', ...(spec.context ? { developer_instructions: spec.context } : {}) },
+            config: { model_reasoning_effort: spec.effort || 'high', ...(context ? { developer_instructions: context } : {}) },
             ...((spec.readOnly || spec.roundtable) ? { sandbox: 'read-only' }
               : spec.policy?.sandbox ? { sandbox: spec.policy.sandbox }
                 : spec.owner === 'dispatch' ? { sandbox: 'workspace-write' } : {}),
@@ -275,7 +276,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             assertOpen();
           }
           if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
-            && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : scopePathKey(await localPath(result.cwd)) !== scopePathKey(wireCwd))) throw new Error('invalid_thread');
+            && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
           if (options.sandbox === 'read-only' && result.sandbox?.type !== 'readOnly') throw Object.assign(new Error('Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。'), { code: 'sandbox_mismatch', requestedSandbox: 'read-only' });
           if (spec.owner === 'dispatch' && options.sandbox === 'workspace-write' && result.sandbox?.type !== 'workspaceWrite') throw Object.assign(new Error('Codex 返回只读沙箱。请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。'), { code: 'sandbox_mismatch' });
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
@@ -430,7 +431,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (closed || generation !== skillsGeneration) return [];
           const next = new Map();
           for (const entry of result?.data || []) {
-            if (typeof entry.cwd !== 'string' || scopePathKey(spec.kind === 'ssh' ? entry.cwd : await localPath(entry.cwd)) !== scopePathKey(wireCwd)) continue;
+            if (typeof entry.cwd !== 'string' || (spec.kind === 'ssh' ? scopePathKey(entry.cwd) !== scopePathKey(wireCwd) : !sameDirectory(entry.cwd, wireCwd))) continue;
             if (closed || generation !== skillsGeneration) return [];
             for (const skill of Array.isArray(entry.skills) ? entry.skills : []) {
               if (next.size >= 300) break;

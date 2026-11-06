@@ -1,12 +1,4 @@
-const fs = require('node:fs');
-const path = require('node:path');
-const { records } = require('./session-files.cjs');
-
-function sameDirectory(a, b) {
-  if (typeof a !== 'string') return false;
-  const normalize = value => { let result; try { result = fs.realpathSync(value); } catch { result = path.resolve(value); } return process.platform === 'win32' ? result.toLowerCase() : result; };
-  return normalize(a) === normalize(b);
-}
+const { records, sameDirectory } = require('./session-files.cjs');
 
 // Whether a rollout file is an interactive session (not a child agent or exec run) started in this folder.
 function interactiveSession(meta, directory) {

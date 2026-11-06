@@ -1,7 +1,7 @@
 const path = require('node:path');
 const { TranscriptTail } = require('../../agent-actions.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('../../conversation.cjs');
-const { containedFile, sessionHeader, findRolloutSession } = require('../../session-files.cjs');
+const { containedFile, sessionHeader, findRolloutSession, sameDirectory } = require('../../session-files.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
 
 const ENTRY_LIMIT = 400, FINAL_LIMIT = 20, FINAL_TTL = 30 * 60000, PUSH_INTERVAL = 250;
@@ -11,7 +11,7 @@ const rootValue = value => typeof value === 'function' ? value() : value;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const ownsRecord = (call, record) => call.agent === 'Codex'
   ? record?.type !== 'session_meta' || record.payload?.id === call.sessionId && typeof record.payload.cwd === 'string' &&
-    path.isAbsolute(record.payload.cwd) && !path.relative(path.resolve(record.payload.cwd), path.resolve(call.cwd))
+    path.isAbsolute(record.payload.cwd) && sameDirectory(record.payload.cwd, call.cwd)
   : record?.sessionId == null || record.sessionId === call.sessionId;
 
 // Logs stay separate from the parent conversation. Task records share its existing tail; dispatches

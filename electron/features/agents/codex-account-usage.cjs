@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const { sameDirectory } = require('../../session-files.cjs');
 const path = require('node:path');
 const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
@@ -247,7 +248,7 @@ function usageScope({ codexHome, cwd, recordedCwd, env = process.env, provider, 
   if (provider && provider !== 'openai') return { reason: 'provider' };
   if (!opening && accountLaunch !== 'model-only-v1') return { reason: 'scope' };
   const directory = path.resolve(cwd || process.cwd());
-  if (recordedCwd === null || recordedCwd && scopePathKey(recordedCwd) !== scopePathKey(directory)) return { reason: 'scope' };
+  if (recordedCwd === null || recordedCwd && !sameDirectory(recordedCwd, directory)) return { reason: 'scope' };
   const userHome = environmentValue(env, process.platform === 'win32' ? 'USERPROFILE' : 'HOME') || os.homedir();
   const home = path.resolve(directory, codexHome || environmentValue(env, 'CODEX_HOME') || path.join(userHome, '.codex'));
   // Project opens prove the default route in config preflight, not session_meta.
