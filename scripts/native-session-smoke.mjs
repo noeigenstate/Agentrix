@@ -471,8 +471,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       return testRun(contractsOnly ? 'native-session-contracts' : 'native-session',
         process.env.AGENTRIX_TEST_OUTPUT_ROOT ? { root: process.env.AGENTRIX_TEST_OUTPUT_ROOT } : {});
     }); stages.output(output);
-    await switchContracts(output, stages);
-    if (!contractsOnly) await stages.run('GUI lock and native suite', () => withGuiLock('native-session', () => process.argv.includes('--runtime') ? runtimeSmoke(output, stages) : run(output, stages)), 140000);
+    // The contracts are tests/ files that `npm test` already runs: only the run that names them runs them here, and the desktop runs go straight to the GUI.
+    if (contractsOnly) await switchContracts(output, stages);
+    else await stages.run('GUI lock and native suite', () => withGuiLock('native-session', () => process.argv.includes('--runtime') ? runtimeSmoke(output, stages) : run(output, stages)), 140000);
     console.log('PASS: native session smoke. Evidence: ' + output);
     process.exitCode = 0;
   } catch (error) { console.error('[native-smoke] FAIL ' + String(error.message).replace(/sk-ant-[\w-]+/g, '<offline-key>')); stages.force(); process.exitCode = 1; }
