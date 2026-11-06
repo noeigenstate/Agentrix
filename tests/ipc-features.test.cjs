@@ -306,6 +306,19 @@ test('terminal add rolls back a failed new start and never removes the primary p
   }
 });
 
+test('terminal attach returns an empty PTY snapshot for native hosts without invoking PTY methods', () => {
+  const h = handlers();
+  let session = { nativeStructured: true, sessionId: 'native-host' };
+  require('../electron/features/terminal/ipc.cjs').registerTerminalIpc({ ...h,
+    findProject: () => ({ id: 'p' }), getSession: () => session,
+  });
+  const attach = h.handles.get('terminal:attach');
+  assert.deepEqual(attach('t'), { sessionId: null, seq: 0, data: '' });
+  session = { nativeStructured: true, flush() { throw new Error('not a PTY'); },
+    get approval() { throw new Error('no PTY capability for native hosts'); } };
+  assert.deepEqual(attach('t'), { sessionId: null, seq: 0, data: '' });
+});
+
 test('terminal registrar flushes attach, validates paste and resize, and changes focus ownership', () => {
   const h = handlers(), calls = []; let active = null, fileTree = 'p';
   const session = { status: 'shell', sessionId: 'session', seq: 0, chunks: ['data'], flush: () => { calls.push('flush'); session.seq++; }, terminal: { resize: (...args) => calls.push(args) } };

@@ -9,7 +9,11 @@ const { createNativeSession, resolveCli } = require('../scripts/codex-terminal-p
 function isolatedEnvironment(home, inherited = process.env) {
   const env = {};
   for (const [key, value] of Object.entries(inherited)) {
+    if (key.toLowerCase() === 'psmodulepath') { if (value) env.PSModulePath = value; continue; }
     if (['path', 'pathext', 'systemroot', 'windir', 'comspec', 'temp', 'tmp', 'lang'].includes(key.toLowerCase())) env[key] = value;
+  }
+  if (process.platform === 'win32' && !env.PSModulePath) {
+    env.PSModulePath = path.join(env.SystemRoot || env.SYSTEMROOT || 'C:/Windows', 'System32/WindowsPowerShell/v1.0/Modules');
   }
   return Object.assign(env, { HOME: home, USERPROFILE: home, APPDATA: home, LOCALAPPDATA: home, XDG_CONFIG_HOME: home,
     XDG_CACHE_HOME: home, XDG_DATA_HOME: home, CODEX_HOME: path.join(home, 'codex'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'),

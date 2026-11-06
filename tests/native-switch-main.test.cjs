@@ -49,6 +49,51 @@ test('I4: a wrong terminal resume identity restores the original native surface 
   assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0); assert.equal(f.signals.length, 0);
 });
 
+test('a live terminal cold start can pass fifteen seconds and still resume the exact provider', async () => {
+  const f = fixture(), start = f.context.startTerminal;
+  let elapsed = 0, waits = 0;
+  f.context.Date = { now: () => elapsed };
+  f.context.startTerminal = (...args) => {
+    start(...args);
+    Object.assign(f.sessions.get('t'), { status: 'starting', claudeSessionId: null, cliState: null });
+  };
+  f.context.setTimeout = callback => setImmediate(() => {
+    elapsed += 16000; waits++;
+    if (waits === 2) Object.assign(f.sessions.get('t'), {
+      status: 'codex', claudeSessionId: 'same-conversation', cliState: { sessionId: 'new-pty', state: 'idle' },
+    });
+    callback();
+  });
+  const prepared = await f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true);
+  assert.equal(elapsed, 32000);
+  assert.equal(f.sessions.get('t').switchPreviousHost, f.old, 'keep the API view until actual readiness');
+  assert.equal(f.saves.length, 0, 'elapsed time cannot commit or abandon the source');
+  prepared.commit();
+  assert.equal(f.saves[0].threadId, 'same-conversation');
+});
+
+test('an owner cancellation during terminal startup reaps the staged host and preserves the source', async () => {
+  const f = fixture(), start = f.context.startTerminal;
+  let current = true;
+  f.context.startTerminal = (...args) => { start(...args); Object.assign(f.sessions.get('t'), { status: 'starting', claudeSessionId: null, cliState: null }); };
+  f.context.setTimeout = callback => setImmediate(() => { current = false; callback(); });
+  await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => current), /session_changed/);
+  assert.equal(f.sessions.get('t'), f.old);
+  assert.equal(f.saves.length, 0);
+});
+
+for (const failure of ['error', 'identity']) test(`terminal startup fails on confirmed ${failure}, rather than waiting indefinitely`, async () => {
+  const f = fixture(), start = f.context.startTerminal;
+  f.context.startTerminal = (...args) => {
+    start(...args);
+    Object.assign(f.sessions.get('t'), failure === 'error' ? { error: 'missing executable' } : { claudeSessionId: 'wrong-conversation' });
+  };
+  await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true),
+    failure === 'error' ? /terminal_start_failed/ : /terminal_resume_identity_mismatch/);
+  assert.equal(f.sessions.get('t'), f.old);
+  assert.equal(f.saves.length, 0);
+});
+
 test('quota handoff uses tracked paste and Enter once; CLI drafts and concurrent edits never get cleared or submitted', async () => {
   for (const draft of [false, true, 'concurrent']) {
     const f = fixture(), writes = [];

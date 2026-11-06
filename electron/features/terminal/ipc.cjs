@@ -25,7 +25,7 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
   handle('terminal:attach', id => {
     findProject(id);
     const s = getSession(id);
-    if (!s) return { sessionId: null, seq: 0, data: '' };
+    if (!s || s.nativeStructured) return { sessionId: null, seq: 0, data: '' };
     s.flush();
     return { sessionId: s.sessionId, seq: s.seq, data: s.chunks.join(''), ...(s.approval ? { approval: approvalStamp(s) } : {}) };
   });

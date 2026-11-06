@@ -1395,15 +1395,18 @@ async function prepareSwitchTerminal(spec, _handoff, currentChange, transition =
     startTerminal(id, null, true, old); staged = sessions.get(id);
     staged.nativeRuntimeSessionId = spec.runtimeSessionId;
     Object.assign(spec, { sessionId: staged.sessionId, bootstrapFile: staged.bootstrapFile, env: staged.usageEnv || spec.env });
-    const deadline = Date.now() + 15000;
+    // OS/shell cold starts have no reliable wall-clock limit. Keep the source
+    // surface until the same CLI is ready; closing or changing the switch
+    // cancels this wait and disposes only the staged PTY.
     while (currentChange() && sessions.get(id) === staged && staged.status !== 'exited') {
+      if (staged.error) throw new Error('terminal_start_failed');
       if (staged.status === 'shell' && staged.ready && !staged.agentStarting && !launchPlans.has(id)) throw new Error('terminal_agent_exited');
       const provider = staged.claudeSessionId;
       const ready = staged.cliState?.state === 'idle';
-      if (provider && (!spec.providerSessionId || provider === spec.providerSessionId) && ready) {
+      if (provider && ready) {
+        if (spec.providerSessionId && provider !== spec.providerSessionId) throw new Error('terminal_resume_identity_mismatch');
         spec.providerSessionId = provider; break;
       }
-      if (Date.now() >= deadline) throw new Error('terminal_resume_timeout');
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     if (!currentChange() || sessions.get(id) !== staged || staged.status === 'exited') throw new Error('session_changed');

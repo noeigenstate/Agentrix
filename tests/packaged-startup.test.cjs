@@ -67,6 +67,19 @@ test('native smoke overall watchdog terminates a lost stage instead of waiting f
   assert.ifError(result.error); assert.equal(result.status, 1); assert.match(result.stdout, /DIAGNOSTICS overall deadline exceeded.*injected overall hang/);
 });
 
+test('isolated PowerShell fixtures preserve module discovery paths and use a system fallback only when absent', () => {
+  const { isolatedEnvironment } = require('../scripts/native-approval-probe.cjs');
+  const native = 'native-modules;additional-modules';
+  assert.equal(isolatedEnvironment('/offline/home', { PSModulePath: native }).PSModulePath, native);
+  const uppercase = isolatedEnvironment('/offline/home', { PSMODULEPATH: native });
+  assert.equal(uppercase.PSModulePath, native);
+  assert.equal(Object.keys(uppercase).filter(key => key.toLowerCase() === 'psmodulepath').length, 1);
+  if (process.platform === 'win32') assert.equal(isolatedEnvironment('/offline/home', { SystemRoot: 'C:/System' }).PSModulePath,
+    path.join('C:/System', 'System32/WindowsPowerShell/v1.0/Modules'));
+  if (process.platform === 'win32') assert.equal(Object.keys(isolatedEnvironment('/offline/home', { PSMODULEPATH: '' }))
+    .filter(key => key.toLowerCase() === 'psmodulepath').length, 1);
+});
+
 test('Linux native desktop smoke retains Xvfb access while isolating credentials', async () => {
   const { desktopEnvironment } = await import('../scripts/native-session-smoke.mjs');
   const inherited = { DISPLAY: ':99', XAUTHORITY: '/offline/xauth', ANTHROPIC_API_KEY: 'offline-secret', GH_TOKEN: 'offline-token' };

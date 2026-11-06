@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import { _electron as electron } from 'playwright-core';
-import { waitFor } from './wait.mjs';
+import { waitFor, timeoutScale } from './wait.mjs';
 import { withGuiLock } from './gui-lock.mjs';
 import { chooseFromAppMenu } from './app-menu-helper.mjs';
 
@@ -18,6 +18,7 @@ const require = createRequire(import.meta.url), root = path.resolve(path.dirname
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const { createSmokeStages, closeSmokeApplication, offlineStorage } = require('../tests/fixtures/claude-sdk-smoke.cjs');
 const packaged = process.argv.includes('--packaged');
+const coldStart = process.argv.includes('--cold-start');
 
 // xvfb-run supplies display access; credential isolation must not strip it before Electron starts.
 export function displayEnvironment(inherited = process.env, platform = process.platform) {
@@ -112,6 +113,7 @@ async function runtimeSmoke(output, stages) {
     await fs.writeFile(path.join(profile, 'native-session/usage.json'), '{broken-offline-fixture');
     const env = { ...isolatedEnvironment(runtime), ...displayEnvironment(), PATH: bin, AGENTRIX_DATA_DIR: profile,
       AGENTRIX_FAKE_NODE: await fs.realpath(process.execPath), AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: runtime };
+    if (coldStart) env.PSModuleAnalysisCachePath = path.join(runtime, 'cold-module-cache');
     delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
     if (process.platform === 'win32') delete env.Path;
     for (const name of ['claude', 'codex']) {
@@ -142,6 +144,12 @@ async function runtimeSmoke(output, stages) {
         process.env.NODE_PATH = modules; process.getBuiltinModule('module').Module._initPaths();
       }, process.env.NODE_PATH);
     });
+    if (coldStart) {
+      assert.equal(process.platform, 'win32', '--cold-start measures Windows PowerShell');
+      const { installColdPowerShell } = require('../tests/fixtures/powershell-cold.cjs');
+      await stage('prepare owned cold PowerShell load', () => app.evaluate(installColdPowerShell,
+        { node: env.AGENTRIX_FAKE_NODE, cache: env.PSModuleAnalysisCachePath }), 20000);
+    }
     const recovered = await stage('read recovered settings', () => page.evaluate(() => window.agentrix.nativeSession.getSettings()));
     assert.equal(recovered.value.claudePath, 'api-then-terminal');
     assert.ok((await fs.readdir(path.join(profile, 'native-session'))).some(name => name.includes('.corrupt')));
@@ -241,6 +249,7 @@ async function runtimeSmoke(output, stages) {
         const before = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
         const provider = before.value.events.findLast(event => event.providerSessionId)?.providerSessionId;
         for (const [mode, expected] of [['terminal-only', 'terminal'], ['api-only', 'api']]) {
+          const switchTimeout = coldStart ? 90000 : 30000;
           await stage(`switch actual main to ${expected}`, async () => {
             stages.observe('switchRequest', { expected, operation: 'settings' });
             assert.equal((await page.evaluate(mode => window.agentrix.nativeSession.setSettings({ claudePath: mode }), mode)).ok, true);
@@ -259,7 +268,16 @@ async function runtimeSmoke(output, stages) {
                 const terminal = await page.evaluate(id => window.agentrix.attachTerminal(id), terminalId);
                 throw new Error(`switch failed: ${JSON.stringify({ state, host, terminal })}`);
               }
-              if (state?.phase === 'stable' && state.current === expected) { id = value.runtimeSessionId; return true; }
+              if (state?.phase === 'stable' && state.current === expected) {
+                id = value.runtimeSessionId;
+                if (coldStart && expected === 'terminal') {
+                  const cold = await app.evaluate(() => process.__agxColdPowerShellClose());
+                  stages.observe('coldStartup', cold);
+                  assert.ok(cold.startupMs > 15000, `cold startup must cross the old product deadline: ${cold.startupMs}ms`);
+                  checks.push(`cold PowerShell resumed after ${cold.startupMs}ms without abandoning the API source`);
+                }
+                return true;
+              }
               if (['awaiting-choice', 'waiting-background'].includes(state?.phase)) {
                 stages.observe('switchRequest', { expected, operation: 'choice' });
                 await page.evaluate(p => window.agentrix.nativeSession.answer(p.terminalId, p.runtime, p.state.requestId,
@@ -272,8 +290,8 @@ async function runtimeSmoke(output, stages) {
                 stages.observe('handoff', receipt);
               }
               return false;
-            }, `actual main switched to ${expected}`, 25000);
-          }, 30000);
+            }, `actual main switched to ${expected}`, switchTimeout - 5000);
+          }, switchTimeout * timeoutScale);
         }
         const after = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
         assert.equal(after.value.events.findLast(event => event.providerSessionId)?.providerSessionId, provider);
@@ -300,6 +318,9 @@ async function runtimeSmoke(output, stages) {
           assert.equal(await launches(), previousLaunches + 1, 'sending cannot start a second failed terminal');
           const host = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(item => item.id === terminalId);
           assert.equal(host.nativeMode, 'claude-sdk'); assert.equal(host.status, 'codex');
+          const raw = await page.evaluate(id => window.agentrix.attachTerminal(id), terminalId);
+          assert.equal(raw.ok, true, JSON.stringify(raw));
+          assert.deepEqual(raw.value, { sessionId: null, seq: 0, data: '' }, 'a restored native host has no raw PTY snapshot');
           await fs.unlink(path.join(runtime, 'exit-terminal'));
           await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only' }));
         }, 30000);
@@ -341,7 +362,12 @@ async function runtimeSmoke(output, stages) {
     // Dispatched workers scrub credentials in the independent claude-sdk-wire test.
     await stage('capture runtime evidence', () => page.screenshot({ path: path.join(output, 'runtime-providers.png'), timeout: 5000 }));
   } finally {
-    try { await closeSmokeApplication(app, stages); }
+    let coldCleanupError;
+    if (coldStart && app) await stage('stop owned cold PowerShell load', async () => {
+      const cold = await app.evaluate(() => process.__agxColdPowerShellClose?.());
+      if (cold) stages.observe('coldStartup', cold);
+    }, 10000).catch(error => { coldCleanupError = error; });
+    try { await closeSmokeApplication(app, stages); if (coldCleanupError) throw coldCleanupError; }
     finally {
       await stage('write runtime results', () => fs.writeFile(path.join(output, 'runtime-results.json'), JSON.stringify({ checks, stages: stages.history }, null, 2)), 3000);
       await stage('remove isolated runtime', () => fs.rm(runtime, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }), 5000);
@@ -438,7 +464,7 @@ async function run(output, stages) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const stages = createSmokeStages();
+  const stages = createSmokeStages(coldStart ? { totalMs: 210000 } : {});
   try {
     const contractsOnly = process.argv.includes('--switch-contracts');
     const output = await stages.run('prepare output', async () => {
