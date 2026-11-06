@@ -15,7 +15,7 @@ function allowSmokeQuit({ dialog }) {
 }
 function createSmokeStages({ timeoutMs = 20000, totalMs = 150000, log = line => fs.writeSync(1, line + '\n'), fatal = () => process.exit(1) } = {}) {
   let current = 'initialization', output, runtime, child, closed = false, failed;
-  const history = [], tail = [];
+  const history = [], tail = [], observations = {};
   function write(text) {
     const line = clean(`[native-smoke] ${text}`); log(line);
     if (output) fs.appendFileSync(path.join(output, 'stages.log'), line + '\n');
@@ -32,7 +32,7 @@ function createSmokeStages({ timeoutMs = 20000, totalMs = 150000, log = line => 
         providers[provider] = { processes, wire: providers[provider] };
       } catch { providers[provider] = 'no wire records'; }
     }
-    return { stage: current, firstFailure: failed, lastCompleted: history.at(-1), electron: child ? { pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode, closed } : null, providers, tail };
+    return { stage: current, firstFailure: failed, lastCompleted: history.at(-1), electron: child ? { pid: child.pid, exitCode: child.exitCode, signalCode: child.signalCode, closed } : null, providers, tail, observations };
   }
   function dump(reason) {
     const snapshot = status();
@@ -54,6 +54,7 @@ function createSmokeStages({ timeoutMs = 20000, totalMs = 150000, log = line => 
   return {
     history, dump, force,
     output(directory) { output = directory; }, runtime(directory) { runtime = directory; },
+    observe(name, value) { observations[name] = value; },
     attach(app) {
       child = app.process(); child.once('close', () => { closed = true; write(`Electron closed code=${child.exitCode} signal=${child.signalCode}`); });
       for (const name of ['stdout', 'stderr']) child[name]?.on('data', data => {

@@ -199,6 +199,15 @@ async function runtimeSmoke(output, stages) {
       checks.push('connection checks send no user turn; token sources and startup errors select a safe path; cached identity failures reset on key/settings changes');
     });
     const terminalId = (await stage('read terminal identity', () => page.evaluate(() => window.agentrix.getState()))).value.projects[0].terminals[0].id;
+    // Keep PTY startup evidence even when preparation rolls back before the
+    // terminal is published, or main stops answering a later snapshot request.
+    let terminalOutput = '';
+    await page.exposeFunction('__nativeSmokeTerminal', packet => {
+      if (packet.id !== terminalId) return;
+      terminalOutput = (terminalOutput + packet.data).slice(-8192);
+      stages.observe('terminal', { sessionId: packet.sessionId, seq: packet.seq, data: terminalOutput });
+    });
+    await page.evaluate(() => { window.agentrix.onTerminalData(packet => { void window.__nativeSmokeTerminal(packet); }); });
     for (const agent of ['claude', 'codex']) {
       const first = await stage(`start fake ${agent === 'claude' ? 'claude SDK' : 'codex app-server'}`, () => page.evaluate(({ terminalId, agent }) => window.agentrix.nativeSession.start(terminalId, { agent }), { terminalId, agent }), 30000);
       assert.equal(first.ok, true, JSON.stringify(first));
@@ -233,18 +242,34 @@ async function runtimeSmoke(output, stages) {
         const provider = before.value.events.findLast(event => event.providerSessionId)?.providerSessionId;
         for (const [mode, expected] of [['terminal-only', 'terminal'], ['api-only', 'api']]) {
           await stage(`switch actual main to ${expected}`, async () => {
+            stages.observe('switchRequest', { expected, operation: 'settings' });
             assert.equal((await page.evaluate(mode => window.agentrix.nativeSession.setSettings({ claudePath: mode }), mode)).ok, true);
+            let observed;
             await waitFor(async () => {
+              stages.observe('switchRequest', { expected, operation: 'snapshot' });
               const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
               const value = snapshot.value, state = value?.switchState;
+              const diagnostic = JSON.stringify({ ok: snapshot.ok, error: snapshot.error, state: value?.state, switchState: state });
+              stages.observe('switch', JSON.parse(diagnostic));
+              assert.equal(snapshot.ok, true, diagnostic);
+              if (diagnostic !== observed) { observed = diagnostic; console.log(`[native-smoke] switch observation ${diagnostic}`); }
+              if (state?.phase === 'stable' && state.outcome === 'failed') {
+                const host = (await page.evaluate(() => window.agentrix.getState())).value.projects
+                  .flatMap(project => project.terminals).find(terminal => terminal.id === terminalId);
+                const terminal = await page.evaluate(id => window.agentrix.attachTerminal(id), terminalId);
+                throw new Error(`switch failed: ${JSON.stringify({ state, host, terminal })}`);
+              }
               if (state?.phase === 'stable' && state.current === expected) { id = value.runtimeSessionId; return true; }
               if (['awaiting-choice', 'waiting-background'].includes(state?.phase)) {
+                stages.observe('switchRequest', { expected, operation: 'choice' });
                 await page.evaluate(p => window.agentrix.nativeSession.answer(p.terminalId, p.runtime, p.state.requestId,
                   { switch: { changeId: p.state.changeId, requestId: p.state.requestId, action: 'now' } }), { terminalId, runtime: value.runtimeSessionId, state });
               } else if (state?.phase === 'preparing') {
-                await page.evaluate(p => window.agentrix.nativeSession.answer(p.terminalId, p.runtime, `handoff-${p.state.changeId}`,
+                stages.observe('switchRequest', { expected, operation: 'handoff' });
+                const receipt = await page.evaluate(p => window.agentrix.nativeSession.answer(p.terminalId, p.runtime, `handoff-${p.state.changeId}`,
                   { handoff: { changeId: p.state.changeId, draft: { version: p.version, text: '', images: [], undelivered: [] } } }),
                 { terminalId, runtime: value.runtimeSessionId, state, version: (value.handoff?.draft.version || 0) + 1 });
+                stages.observe('handoff', receipt);
               }
               return false;
             }, `actual main switched to ${expected}`, 25000);

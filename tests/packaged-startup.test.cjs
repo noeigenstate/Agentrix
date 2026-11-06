@@ -36,9 +36,12 @@ test('native runtime smoke answers the macOS quit confirmation for its isolated 
 test('native smoke bounds a hung IPC promise and prints the exact stage without credentials', { timeout: 2000 }, async () => {
   const logs = [], stages = createSmokeStages({ timeoutMs: 30, log: line => logs.push(line) });
   try {
+    stages.observe('switch', { phase: 'preparing' });
+    stages.observe('terminal', { data: '\x1b[6n sk-ant-api03-offline-private-value' });
     await assert.rejects(stages.run('claude send: injected hung IPC', () => new Promise(() => {})), /Stage timed out.*claude send/);
     await assert.rejects(stages.run('fake error', () => { throw new Error('sk-ant-api03-offline-private-value'); }), /offline-private/);
     assert.ok(logs.some(line => line.includes('DIAGNOSTICS') && line.includes('claude send')));
+    assert.ok(logs.some(line => line.includes('"phase":"preparing"') && line.includes('\\u001b[6n')));
     assert.ok(!logs.join('').includes('sk-ant-api03'));
   } finally { stages.dispose(); }
 });

@@ -13,12 +13,13 @@ const { ActionLog } = require('../electron/agent-actions.cjs');
 const { ConversationLog } = require('../electron/conversation.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const ts = require('typescript');
+const { timeoutScale } = require('../scripts/wait.mjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve)); };
 const draft = { version: 1, text: '', images: [], undelivered: [] };
 async function fixture(t, { native = false, ssh = false, apiOnly = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-switch-review-'));
-  const project = { id: 'p', path: directory, kind: ssh ? 'ssh' : 'local' }, events = [], created = [];
+  const project = { id: 'p', path: directory, kind: ssh ? 'ssh' : 'local' }, events = [], created = [], phaseListeners = new Set();
   let saved = true, facade;
   t.after(async () => { await facade?.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const host = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true, sessionId: 'pty', status: 'codex',
@@ -58,7 +59,10 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   const validateProject = vm.runInContext(`projectId => {${validation[1]}\n}`, context);
   facade = createNativeSessions({ directory, claude: provider, resolveSpec: id => ({ owner: 'gui', projectId: 'p', terminalId: id, agent: 'claude', cwd: directory }),
     terminalSessions: context.localSwitchSessions, observeTerminal: context.observeSwitchTerminal, validateProject,
-    switchOptions: { handoffTimeoutMs: 20 }, connections: async () => ({}), emit: event => events.push(event),
+    switchOptions: { handoffTimeoutMs: 20 }, connections: async () => ({}), emit: event => {
+      events.push(event);
+      if (event.type === 'switch.updated') for (const listener of phaseListeners) listener(event.payload.phase);
+    },
     changed: (_id, event) => { if (event) context.structuredEvent('t', event); },
     activateNative, terminal: () => { host.nativeStructured = false; } });
   context.nativeSessions = facade; host.observeNativeSwitch = () => facade.observe('t');
@@ -70,7 +74,15 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   const settings = patch => handlers.get('native:settings-set')(patch);
   const answer = action => { const state = facade.switchState('t'); return facade.answer('t', facade.snapshot('t')?.runtimeSessionId || 't', state.requestId,
     { switch: { changeId: state.changeId, requestId: state.requestId, action } }); };
-  return { facade, host, context, events, created, settings, answer, handlers, directory };
+  const waitForPhase = phase => facade.switchState('t')?.phase === phase ? Promise.resolve() : new Promise((resolve, reject) => {
+    const listener = next => {
+      if (next !== phase) return;
+      clearTimeout(timer); phaseListeners.delete(listener); resolve();
+    };
+    const timer = setTimeout(() => { phaseListeners.delete(listener); reject(new Error(`Switch did not reach ${phase}`)); }, 1000 * timeoutScale);
+    phaseListeners.add(listener);
+  });
+  return { facade, host, context, events, created, settings, answer, handlers, directory, waitForPhase };
 }
 
 test('F1 real InputGate launch/escape traffic does not invent a draft in main or block the coordinator', async t => {
@@ -80,7 +92,8 @@ test('F1 real InputGate launch/escape traffic does not invent a draft in main or
   f.host.submissions.write('real draft'); assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).draftBlocked, true);
   f.host.completionWork.start('observed-job', Date.now()); assert.equal(f.context.observeSwitchTerminal({ identity: f.host }).background.count, 1);
   f.host.completionWork.finish('observed-job'); assert.deepEqual(JSON.parse(JSON.stringify(f.context.observeSwitchTerminal({ identity: f.host }).background)), { known: true, count: 0 });
-  f.host.submissions.write('\x15'); await f.settings({ claudePath: 'api-only' }); await tick();
+  f.host.submissions.write('\x15'); await f.settings({ claudePath: 'api-only' });
+  await f.waitForPhase('preparing');
   assert.equal(f.facade.switchState('t').phase, 'preparing', 'G5 an observed idle terminal without tasks switches directly');
 });
 
