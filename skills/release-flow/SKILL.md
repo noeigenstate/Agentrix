@@ -175,9 +175,9 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    afterwards. `ci-preflight local` stops each step at the CI job's `timeout-minutes`, so such a hang fails in the job time
    instead of holding the run open. Objects main.cjs keeps per session (for example `s.usageAccount`, which receives every
    terminal chunk through `output()`) must keep the whole interface; a unit test calls each method main calls.
-29. **Owner forbids the system clipboard.** `test:sessions`, `test:composer`, `test:workspace`, `test:editor-terminals` and
-   `test:clipboard` write the system clipboard. Then run every other local step with `--only` (not a full `local` run)
-   and leave those five suites to the CI run: in the beta flow the beta tag's run, which must be green before the owner is
+29. **Owner forbids the system clipboard.** `test:sessions`, `test:composer`, `test:workspace`, `test:editor-terminals`,
+   `test:gpu-terminal` and `test:clipboard` write the system clipboard, and refuse to start outside GitHub Actions. Then run every other local step with `--only` (not a full `local` run)
+   and leave those six suites to the CI run: in the beta flow the beta tag's run, which must be green before the owner is
    asked to approve; outside it `ci-preflight remote`, which must be green before main moves.
 30. **Wrapper changes on a Windows machine.** The Bash/zsh wrapper tests (`linux-integration`, `zsh-integration`) and the
    real SSH worker test (`ssh-connection` with the native worker) run only on Linux and macOS, so `npm test` here skips them.

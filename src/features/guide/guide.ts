@@ -2,6 +2,13 @@
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
+  { title: "图片不再断任务", text: "生成细节多的大图或输出很长时，任务不再中断；实在放不下的结果只跳过那一条并说明。", group: 'new' },
+  { title: "Codex 原生运行", text: "应用启动的 Codex 全部走 app-server，不再有终端模式；启动失败会写明原因，长对话也能接着恢复。", group: 'new' },
+  { title: "原生界面命令", text: "原生界面可以用 /clear、/new、/model、/effort，也可以用 ! 运行命令，输出会进入对话。", group: 'new' },
+  { title: "压缩提示", text: "压缩上下文时会显示进度，完成或失败都有一行说明。", group: 'new' },
+  { title: "子代理读项目设置", text: "Claude 子代理和终端一样读取 CLAUDE.md、技能和项目设置。", group: 'new' },
+  { title: "结束的记录自动离开", text: "调用的模型里，结束的记录自动消失，失败的保留 30 秒，分屏开着时不消失。", group: 'new' },
+  { title: "API 会话修复", text: "修好了 API 会话遇到第一个工具就停下、回复不显示，以及项目设置可能把已保存的密钥发到别处的问题。", group: 'new' },
   { title: "运行方式立刻生效", text: "改运行方式或保存、清除密钥后，正在运行的会话也会切过去，不用重开，对话接着走：空闲的马上切，工作中的等本轮结束，有后台任务的先问你。", group: 'new' },
   { title: "Agent 标签", text: "调用的模型挪到左栏，和文件、Git 并列，打开项目时默认显示。", group: 'new' },
   { title: "活动栏不再整体滚动", text: "放不下时只有列表在内部滚动；上下文长度和额度放在一起，走 API 显示花费和预算，走订阅显示 5 小时和每周额度。", group: 'new' },
