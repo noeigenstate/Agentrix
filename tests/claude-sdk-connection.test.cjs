@@ -116,6 +116,7 @@ test('connection tests use the saved key and new-session options without changin
   await session.start(); await session.send({ clientMessageId: 'm', text: 'synthetic work' });
   for (let n = 0; n < 100 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 2));
   const probe = fake.calls[0].options, actual = fake.calls[1].options;
+  assert.equal(probe.maxBudgetUsd, 10, 'billing preflight uses the monthly allowance without a five-dollar ceiling');
   for (const field of ['cwd', 'model', 'effort', 'pathToClaudeCodeExecutable', 'env', 'permissionMode', 'includePartialMessages', 'settingSources', 'systemPrompt', 'maxBudgetUsd']) {
     assert.deepEqual(probe[field], actual[field], field);
   }

@@ -6,7 +6,6 @@
 __pg_socket=$AGENTRIX_SOCKET __pg_project=$AGENTRIX_PROJECT_ID __pg_key=$AGENTRIX_SESSION_KEY
 __pg_node=$AGENTRIX_NODE __pg_helper=$AGENTRIX_EVENT_HELPER __pg_start=$AGENTRIX_START_DIR __pg_note=$AGENTRIX_READING_NOTE
 __pg_note_file=$AGENTRIX_READING_NOTE_FILE
-__pg_account_baseline=$AGENTRIX_ACCOUNT_BASELINE
 __pg_login_files=$AGENTRIX_LOGIN_FILES
 __pg_sequence=0
 unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE AGENTRIX_LOGIN_FILES
@@ -75,7 +74,7 @@ __pg_send() {
   __pg_program codex && codex=true
   __pg_program claude && claude=true
   ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "$__pg_socket" "$__pg_project" "$__pg_key" \
-    "$1" "$__pg_sequence" "${2:-0}" "${3:-codex}" "$codex" "$claude" "${CODEX_HOME:-$HOME/.codex}" "$PWD" "${4:-}" "${5:-}" </dev/null >/dev/null 2>&1
+    "$1" "$__pg_sequence" "${2:-0}" "${3:-codex}" "$codex" "$claude" "${CODEX_HOME:-$HOME/.codex}" "$PWD" "${4:-}" "${5:-}" "${6-}" </dev/null >/dev/null 2>&1
   return 0
 }
 
@@ -87,39 +86,18 @@ __pg_command() {
   return 0
 }
 
-# Private stdin to the shared bounded classifier; only its enum is emitted.
-__pg_account_scope() {
-  local word separator=
-  [[ -n $__pg_account_baseline ]] || { printf unavailable; return; }
-  {
-    printf '{"baseline":%s,"args":[' "$__pg_account_baseline"
-    for word in "$@"; do __pg_json "$word"; printf '%s%s' "$separator" "$REPLY"; separator=,; done
-    printf ']}'
-  } | ELECTRON_RUN_AS_NODE=1 "$__pg_node" "${__pg_helper%/*}/codex-account-scope.cjs" 2>/dev/null
-}
-
+# Request the existing native session path; no Codex executable runs here.
 codex() {
-  local __pg_words
-  if ! __pg_program codex; then
-    printf '\e[33m%s\e[0m\n' 'Codex CLI was not found in PATH. Install it, then restart this terminal.'
-    return 127
-  fi
-  local -a program=("${__pg_words[@]}")
-  # Codex runs this after every turn with one JSON argument: Agentrix's own executable, run as Node.
-  local notify= word REPLY
-  for word in /usr/bin/env ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" codex-notify "$__pg_socket" "$__pg_project" "$__pg_key"; do
-    __pg_json "$word"; notify+=${notify:+,}$REPLY
+  local -a __pg_words
+  __pg_program codex || __pg_words=(codex)
+  local word REPLY payload='[' separator=
+  for word in "${__pg_words[@]:1}" "$@"; do
+    __pg_json "$word"; payload+="$separator$REPLY"; separator=,
   done
-  __pg_send codex-started 0 codex "$(__pg_command "$@")" "$(__pg_account_scope "${program[@]:1}" "$@")"
-  # What the reading view can show (electron/features/agents/reading-note.cjs); the user's own -c comes later and wins.
-  local -a note=()
-  local current_note=$(__pg_reading_note)
-  [[ -n $current_note ]] && note=(-c "developer_instructions=\"$current_note\"")
-  # Bash 3.2 treats an empty array as unset under nounset.
-  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' ${note[@]+"${note[@]}"} "$@"
-  local code=$?
-  __pg_send codex-exited $code
-  return $code
+  payload+=']'
+  __pg_send codex-started 0 codex '' '' "$payload"
+  printf '%s\n' '已请求在原生模式打开 Codex。'
+  return 0
 }
 
 # Claude Code reports each turn through hooks passed with --settings, which merge with the user's own settings
@@ -169,5 +147,5 @@ else PROMPT_COMMAND="__pg_precmd${PROMPT_COMMAND:+; $PROMPT_COMMAND}"; fi
 
 # The user's start-up files may have changed directory; the terminal opens where Agentrix asked.
 [[ -n $__pg_start && -d $__pg_start ]] && builtin cd -- "$__pg_start"
-printf '\e[90m%s\e[0m\n' '  AGENTRIX' '  Type codex or claude to start, or codex resume to continue a session.' ''
+printf '\e[90m%s\e[0m\n' '  AGENTRIX' '  Type codex or claude to start, or codex resume --last to continue.' ''
 __pg_send shell-ready

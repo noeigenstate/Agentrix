@@ -172,22 +172,14 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   type('printf "%s\\n" "${AGENTRIX_SESSION_KEY-0}${AGENTRIX_SOCKET-0}${AGENTRIX_NODE-0}${AGENTRIX_READING_NOTE-0}${AGENTRIX_LOGIN_FILES-0}|$PG_TEST_STARTUP|$PG_TEST_LAST|$LANG|$TERM_PROGRAM|$(bash -c \'type -t codex\' 2>/dev/null)" > "$PG_TEST_LOG/state"');
   assert.equal(await readLog('state'), `00000|1|1|${locale}|agentrix|file`);
 
-  // codex: started and exited around the real program, which gets notify and the title setting first.
+  // Manual Codex returns to the shell and requests the native host instead of running a TUI.
   type('codex resume --last');
-  const exited = await waitEvent(event => event.type === 'codex-exited', 'codex-exited');
-  const started = events.find(event => event.type === 'codex-started');
-  assert.ok(started && started.sequence < exited.sequence); assert.equal(started.agent, 'codex'); assert.equal(started.command, 'resume', 'the first word goes with it (agent-command.cjs)'); assert.equal(exited.exitCode, 3);
-  await waitEvent(event => event.type === 'shell-prompt' && event.sequence > exited.sequence, 'the prompt after Codex exits');
-  const codexArgs = JSON.parse(fs.readFileSync(path.join(log, 'codex.json'), 'utf8'));
-  const prefix = loginFiles ? 2 : 0;
-  if (loginFiles) assert.deepEqual(codexArgs.slice(0, prefix), ['--model', 'login-model']);
-  // What the reading view can show comes next, before the user's own arguments.
-  assert.deepEqual(codexArgs.slice(prefix + 2), ['-c', 'tui.terminal_title=["session-id"]', ...(readingNote ? ['-c', `developer_instructions="${readingNote}"`] : []), 'resume', '--last']);
-  assert.equal(codexArgs[prefix], '-c');
-  const notify = JSON.parse(codexArgs[prefix + 1].replace(/^notify=/, ''));
-  assert.deepEqual(notify, ['/usr/bin/env', 'ELECTRON_RUN_AS_NODE=1', process.execPath, helper, 'codex-notify', server.address, 'project', 'key']);
-  await promisify(execFile)(notify[0], [...notify.slice(1), JSON.stringify({ type: 'agent-turn-complete', 'thread-id': 'thread', 'turn-id': 'turn' })]);
-  await waitEvent(event => event.type === 'turn-complete' && event.eventId === 'thread:turn', 'turn-complete');
+  const started = await waitEvent(event => event.type === 'codex-started', 'native Codex request');
+  assert.equal(started.agent, 'codex');
+  assert.deepEqual(started.args, [...(loginFiles ? ['--model', 'login-model'] : []), 'resume', '--last']);
+  await waitEvent(event => event.type === 'shell-prompt' && event.sequence > started.sequence, 'the prompt after the native request');
+  assert.equal(fs.existsSync(path.join(log, 'codex.json')), false, 'the shell never executes Codex');
+  assert.equal(events.some(event => event.type === 'codex-exited'), false);
 
   // claude: the user's alias still applies, and the hooks it is given report each turn.
   type('claude -p "中文 prompt"');

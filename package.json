@@ -14,6 +14,7 @@
   "main": "electron/main.cjs",
   "desktopName": "agentrix.desktop",
   "scripts": {
+    "test:affected": "node scripts/affected-tests.mjs",
     "test:real-cli": "node scripts/real-cli-tests.cjs",
     "test:windows-gui": "node scripts/windows-gui-smoke.mjs",
     "postinstall": "node scripts/claude-sdk-pack.cjs --clean",

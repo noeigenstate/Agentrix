@@ -165,6 +165,9 @@
 .subagent-empty { margin: 0; color: var(--text-2); }
 .subagent-sent { width: fit-content; max-width: 85%; margin: 12px 0 0 auto; padding: 8px 12px; border-radius: 12px; background: var(--bg-selected); color: var(--text-1); font-size: 14px; line-height: 22px; overflow-wrap: anywhere; }
 .subagent-sent p { margin: 0; white-space: pre-wrap; }
+.subagent-sent-who { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; color: var(--text-2); font-size: 13px; }
+.subagent-sent-who b { font-weight: 400; }
+.subagent-sent-who .user-avatar { width: 16px; height: 16px; flex: none; }
 .subagent-sent small { display: block; margin-top: 4px; color: var(--text-3); font-size: 12px; }
 .subagent-jump.button { position: absolute; bottom: 12px; left: 50%; z-index: 3; background: var(--bg-menu); transform: translateX(-50%); }
 @container (max-width: 480px) { .subagent-body { padding: 12px 16px; } }

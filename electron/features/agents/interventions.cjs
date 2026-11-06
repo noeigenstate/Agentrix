@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { projectTeam } = require('../team/team.cjs');
 const { validText, runId } = require('../team/inbox.cjs');
 
-function createInterventions({ resolve, pushControl, sendDirect, now = Date.now }) {
+function createInterventions({ resolve, pushControl, sendDirect, noteInput = () => {}, now = Date.now }) {
   const pending = new Map();
   function submit(terminalId, callId, text, stopping) {
     if (typeof terminalId !== 'string' || !terminalId || typeof callId !== 'string' || !/^(?:dispatch:|agent:)[\w-]{1,160}$/.test(callId)) return Promise.reject(new Error('无效的子代理。'));
@@ -32,6 +32,7 @@ function createInterventions({ resolve, pushControl, sendDirect, now = Date.now 
       const team = projectTeam(target.cwd), parent = projectTeam(target.projectPath);
       if (!team || !parent || fs.realpathSync.native(team.directory) !== fs.realpathSync.native(parent.directory)) throw new Error('此工作者的插话通道不可用。');
       await team.queueControl(target.runId, control, notify);
+      if (!stopping) { try { noteInput(target, control.id, { text, at: control.at }); } catch {} }
       if (pushControl) {
         try {
           const result = await pushControl(target.runId, { messageId: control.id, type: stopping ? 'stop' : 'intervene', ...(!stopping ? { text } : {}) });

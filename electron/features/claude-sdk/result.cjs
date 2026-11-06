@@ -16,7 +16,7 @@ const reasons = {
   tool_deferred: ['interrupted', '这次工具调用被钩子推迟，没有执行。'],
   max_turns: ['interrupted', '已达到本轮最大执行次数。'],
   background_requested: ['interrupted', '本轮已转入后台，尚未完成。'],
-  budget_exhausted: ['interrupted', '本轮 API 预算上限已用完。'],
+  budget_exhausted: ['interrupted', 'API 预算上限已用完。'],
   structured_output_retry_exhausted: ['failed', '结构化输出重试次数已用完。'],
   tool_deferred_unavailable: ['failed', '工具无法延期执行，本轮已停止。'],
   turn_setup_failed: ['failed', '本轮初始化失败。'],

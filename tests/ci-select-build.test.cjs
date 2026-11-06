@@ -49,6 +49,15 @@ test('beta selects only Windows artifacts from a green dispatch on the exact com
   assert.deepEqual(await selectBuild({ read: stable.read, env: beta.env }), { runId: 101, artifactIds: [1001] });
 });
 
+test('a beta exact-commit green build can contain skipped unaffected suite steps, while required jobs must still succeed', async () => {
+  const { selectBuild } = await import('../scripts/ci-select-build.mjs');
+  const f = await fixture(true);
+  f.jobs.find(job => job.name === 'Windows desktop terminals').steps = [{ name: 'Unaffected suite', conclusion: 'skipped' }];
+  assert.deepEqual(await selectBuild(f), { runId: 101, artifactIds: [1001] });
+  f.jobs.find(job => job.name === 'Windows desktop terminals').conclusion = 'skipped';
+  assert.equal(await selectBuild(f), null, 'the logging/gating job itself must complete successfully');
+});
+
 test('beta rejects every unsuccessful Windows job and invalid Windows artifact using the shared validators', async () => {
   const { selectBuild } = await import('../scripts/ci-select-build.mjs');
   for (const name of JSON.parse((await fixture(true)).env.REQUIRED_JOBS)) {

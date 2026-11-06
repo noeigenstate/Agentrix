@@ -1,0 +1,389 @@
+{
+  "fullOn": [
+    "src/shared/**",
+    "electron/main.cjs",
+    "electron/preload.cjs",
+    "electron/**/*ipc*.cjs",
+    "electron/**/preload.cjs",
+    "electron/shared/**",
+    "package.json",
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    ".github/**",
+    "scripts/**",
+    "tests/fixtures/**",
+    "tests/helpers/**",
+    "tests/affected-tests.test.cjs"
+  ],
+  "globalTests": [
+    "tests/about-channel.test.cjs",
+    "tests/affected-tests.test.cjs",
+    "tests/agent-commands.test.cjs",
+    "tests/agents.test.cjs",
+    "tests/boundaries.test.cjs",
+    "tests/ci-preflight.test.cjs",
+    "tests/ci-select-build.test.cjs",
+    "tests/ci-workflow.test.cjs",
+    "tests/claude-hook-url.test.cjs",
+    "tests/clipboard-writes.test.cjs",
+    "tests/delivery.test.cjs",
+    "tests/design-audit.test.cjs",
+    "tests/desktop-glass.test.cjs",
+    "tests/desktop-locale-fixtures.test.cjs",
+    "tests/dev-profile.test.cjs",
+    "tests/directory-reads.test.cjs",
+    "tests/editor-commands.test.cjs",
+    "tests/editor-find.test.cjs",
+    "tests/editor-git.test.cjs",
+    "tests/events.test.cjs",
+    "tests/file-edit.test.cjs",
+    "tests/file-operations.test.cjs",
+    "tests/fixture-cleanup.test.cjs",
+    "tests/grid-navigation.test.cjs",
+    "tests/gui-isolation.test.cjs",
+    "tests/gui-lock.test.cjs",
+    "tests/i18n-coverage.test.cjs",
+    "tests/i18n.test.cjs",
+    "tests/image-save.test.cjs",
+    "tests/ipc-adapter.test.cjs",
+    "tests/main-material-cleanup.test.cjs",
+    "tests/material-teardown.test.cjs",
+    "tests/module-boundaries.test.cjs",
+    "tests/motion-bounds.test.cjs",
+    "tests/native-approval-probe.test.cjs",
+    "tests/native-titlebar-style.test.cjs",
+    "tests/notify.test.cjs",
+    "tests/oversized-record.test.cjs",
+    "tests/project-files.test.cjs",
+    "tests/project-git.test.cjs",
+    "tests/project-image-auto.test.cjs",
+    "tests/project-image-candidates.test.cjs",
+    "tests/project-image-conventions.test.cjs",
+    "tests/project-image-ui.test.cjs",
+    "tests/project-reorder-release.test.cjs",
+    "tests/project-svg.test.cjs",
+    "tests/question-appearance.test.cjs",
+    "tests/release-notes.test.cjs",
+    "tests/review-grade.test.cjs",
+    "tests/select.test.cjs",
+    "tests/session-files.test.cjs",
+    "tests/ssh-config.test.cjs",
+    "tests/state-updates.test.cjs",
+    "tests/state.test.cjs",
+    "tests/system-proxy.test.cjs",
+    "tests/terminal-cleanup.test.cjs",
+    "tests/terminal-reveal.test.cjs",
+    "tests/test-output.test.cjs",
+    "tests/updates-ipc.test.cjs",
+    "tests/updates-provider.test.cjs",
+    "tests/updates-release.test.cjs",
+    "tests/updates.test.cjs",
+    "tests/user-avatar.test.cjs",
+    "tests/voice-motion.test.cjs",
+    "tests/voice-runtime.test.cjs",
+    "tests/voice.test.cjs",
+    "tests/waiting-card.test.cjs",
+    "tests/workspace-ipc-updates.test.cjs"
+  ],
+  "tests": {
+    "tests/claude-sdk-process-lifecycle.test.cjs": [
+      "electron/features/claude-sdk/BOUNDARY.md"
+    ],
+    "tests/codex-app-server-lifecycle.test.cjs": [
+      "electron/features/codex-app-server/BOUNDARY.md"
+    ],
+    "tests/codex-scope-wrappers.test.cjs": [
+      "electron/features/codex-app-server/BOUNDARY.md"
+    ],
+    "tests/remote_worker_test.py": [
+      "electron/features/ssh/BOUNDARY.md"
+    ],
+    "tests/remote_claude_test.py": [
+      "electron/features/ssh/BOUNDARY.md"
+    ],
+    "tests/remote_skill_leases_test.py": [
+      "electron/features/ssh/BOUNDARY.md"
+    ],
+    "tests/windows-integration.test.cjs": [
+      "electron/features/terminal/BOUNDARY.md"
+    ],
+    "tests/path-refresh.test.cjs": [
+      "electron/features/terminal/BOUNDARY.md"
+    ],
+    "tests/files-preview.test.cjs": [
+      "electron/features/files/BOUNDARY.md"
+    ],
+    "tests/reading-ready.test.cjs": [
+      "src/features/reading/BOUNDARY.md"
+    ],
+    "tests/native-cli-resolution.test.cjs": [
+      "src/features/native-session/BOUNDARY.md"
+    ],
+    "tests/sign-in-screen.test.cjs": [
+      "electron/features/agents/BOUNDARY.md"
+    ],
+    "tests/agent-screen.test.cjs": [
+      "electron/features/agents/BOUNDARY.md"
+    ],
+    "tests/agent-question.test.cjs": [
+      "electron/features/agents/BOUNDARY.md"
+    ],
+    "tests/skill-privacy.test.cjs": [
+      "electron/features/agents/BOUNDARY.md"
+    ]
+  },
+  "gui": {
+    "session": {
+      "file": "scripts/session-smoke.mjs",
+      "shard": "interaction",
+      "modules": [
+        "electron/features/terminal/BOUNDARY.md",
+        "electron/features/ssh/BOUNDARY.md",
+        "electron/features/native-session/BOUNDARY.md"
+      ]
+    },
+    "focus-motion": {
+      "file": "scripts/focus-motion-smoke.mjs",
+      "shard": "interaction",
+      "modules": [
+        "src/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "workspace": {
+      "file": "scripts/workspace-smoke.mjs",
+      "shard": "interaction",
+      "modules": [
+        "electron/features/files/BOUNDARY.md",
+        "src/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "editor-terminals": {
+      "file": "scripts/editor-terminals-smoke.mjs",
+      "shard": "interaction",
+      "modules": [
+        "src/features/terminal/BOUNDARY.md",
+        "electron/features/files/BOUNDARY.md"
+      ]
+    },
+    "themes-markdown": {
+      "file": "scripts/themes-markdown-smoke.mjs",
+      "shard": "interaction",
+      "modules": [
+        "src/features/reading/BOUNDARY.md",
+        "electron/features/files/BOUNDARY.md"
+      ]
+    },
+    "git": {
+      "file": "scripts/git-smoke.mjs",
+      "shard": "interaction",
+      "modules": [
+        "electron/features/files/BOUNDARY.md"
+      ]
+    },
+    "dashboard": {
+      "file": "scripts/dashboard-smoke.mjs",
+      "shard": "interaction",
+      "modules": [
+        "src/features/dashboard/BOUNDARY.md"
+      ]
+    },
+    "smoke": {
+      "file": "scripts/smoke.mjs",
+      "shard": "terminals",
+      "modules": [
+        "src/features/terminal/BOUNDARY.md",
+        "electron/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "path-refresh": {
+      "file": "scripts/path-refresh-smoke.mjs",
+      "shard": "terminals",
+      "modules": [
+        "electron/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "restore-slow": {
+      "file": "scripts/restore-slow-smoke.mjs",
+      "shard": "terminals",
+      "modules": [
+        "electron/features/terminal/BOUNDARY.md",
+        "electron/features/native-session/BOUNDARY.md"
+      ]
+    },
+    "completion": {
+      "file": "scripts/completion-smoke.mjs",
+      "shard": "terminals",
+      "modules": [
+        "electron/BOUNDARY.md"
+      ]
+    },
+    "gpu-terminal": {
+      "file": "scripts/gpu-terminal-smoke.mjs",
+      "shard": "terminals",
+      "modules": [
+        "src/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "cmd": {
+      "file": "scripts/cmd-smoke.mjs",
+      "shard": "terminals",
+      "modules": [
+        "electron/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "clipboard": {
+      "file": "scripts/clipboard-smoke.mjs",
+      "shard": "terminals",
+      "modules": [
+        "src/features/terminal/BOUNDARY.md",
+        "electron/features/files/BOUNDARY.md"
+      ]
+    },
+    "visual": {
+      "file": "scripts/visual-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "src/features/reading/BOUNDARY.md",
+        "src/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "navigation": {
+      "file": "scripts/navigation-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "src/features/terminal/BOUNDARY.md",
+        "src/features/reading/BOUNDARY.md"
+      ]
+    },
+    "material": {
+      "file": "scripts/material-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "src/features/terminal/BOUNDARY.md",
+        "src/features/reading/BOUNDARY.md"
+      ]
+    },
+    "composer": {
+      "file": "scripts/composer-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "src/features/reading/BOUNDARY.md"
+      ]
+    },
+    "reading": {
+      "file": "scripts/reading-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "src/features/reading/BOUNDARY.md",
+        "electron/features/terminal/BOUNDARY.md"
+      ]
+    },
+    "native-question": {
+      "file": "scripts/native-question-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "electron/features/native-session/BOUNDARY.md",
+        "src/features/native-session/BOUNDARY.md",
+        "electron/features/codex-app-server/BOUNDARY.md"
+      ]
+    },
+    "native-session": {
+      "file": "scripts/native-session-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "electron/features/native-session/BOUNDARY.md",
+        "src/features/native-session/BOUNDARY.md",
+        "electron/features/claude-sdk/BOUNDARY.md",
+        "electron/features/codex-app-server/BOUNDARY.md"
+      ]
+    },
+    "native-session-runtime": {
+      "file": "scripts/native-session-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "electron/features/native-session/BOUNDARY.md",
+        "src/features/native-session/BOUNDARY.md",
+        "electron/features/claude-sdk/BOUNDARY.md",
+        "electron/features/codex-app-server/BOUNDARY.md"
+      ]
+    },
+    "reading-hierarchy": {
+      "file": "scripts/reading-hierarchy-smoke.mjs",
+      "shard": "reading",
+      "modules": [
+        "src/features/reading/BOUNDARY.md",
+        "src/features/agents/BOUNDARY.md",
+        "electron/features/agents/BOUNDARY.md"
+      ]
+    }
+  },
+  "dynamicLoads": {
+    "electron/features/claude-sdk/runtime.cjs": {
+      "digest": "5514a683472814e99f5536a593b1f3b9875b04f709de90992715e45115f083c5",
+      "targets": [],
+      "reason": "Loads the installed external Agent SDK; dependency changes force full coverage."
+    },
+    "electron/features/lab/executor.cjs": {
+      "digest": "af6fc420d002304d13b4d22f5d9530b87d6c281dd1ed58caa681071abc1e3aa0",
+      "targets": [],
+      "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
+    },
+    "electron/remote-connection.cjs": {
+      "digest": "aa07a06a501c6c0d71fc1e2128305ddfbd1a3ea0c958f9bc0003f4b2464f6082",
+      "targets": [
+        "integration/dispatch.cjs"
+      ],
+      "reason": "Reads the carried dispatch runtime inventory."
+    },
+    "electron/voice-worker.cjs": {
+      "digest": "dbde1e6005d856cd483f152a10d80a7035d3f2f0617f709ea386b1248dcad42c",
+      "targets": [],
+      "reason": "Loads a downloaded external native speech engine."
+    },
+    "integration/agent-event.cjs": {
+      "digest": "28fa60455255557d5bb93fc1c4e186b63c199d143ec8bbb639791492a828bb9a",
+      "targets": [
+        "electron/features/skills/session.cjs"
+      ],
+      "reason": "The packaged runtime root is electron."
+    },
+    "integration/dispatch.cjs": {
+      "digest": "f5163a46cca43ff4c337f452286c4ebf0fc1c21e596f4ea180a46e81d5420ab8",
+      "targets": [
+        "electron/features/agents/token-rate.cjs",
+        "electron/features/agents/agent-settings.cjs",
+        "electron/session-files.cjs",
+        "electron/transcript-tail.cjs",
+        "electron/oversized-record.cjs",
+        "electron/boundaries.cjs",
+        "electron/features/team/team.cjs",
+        "electron/features/team/inbox.cjs",
+        "electron/features/team/minutes-page.cjs",
+        "electron/features/dashboard/records-routing.cjs",
+        "electron/features/skills/worker-proposals.cjs",
+        "electron/features/codex-app-server/index.cjs",
+        "electron/features/agents/dispatch-control.cjs"
+      ],
+      "reason": "All dynamic runtime paths point into the carried electron tree."
+    },
+    "electron/updates.cjs": {
+      "digest": "48725f320ea0b968c87bdff1e7e669d40f09a67d457456b02efc85a15f3fd833",
+      "targets": [],
+      "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
+    }
+  },
+  "unresolvedImports": {
+    "electron/app/mac-titlebar.cjs": {
+      "targets": [
+        "../../native/mac-titlebar/build/Release/mac_titlebar.node"
+      ],
+      "reason": "Generated macOS native binary; native/build infrastructure changes are unowned and force a full run."
+    }
+  },
+  "ignored": [
+    {
+      "glob": ".notes/**",
+      "reason": "Local evidence only; never shipped or loaded by the test harness."
+    }
+  ]
+}

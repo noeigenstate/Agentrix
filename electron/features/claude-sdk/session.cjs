@@ -54,12 +54,17 @@ function createClaudeSession(spec, emit, dependencies) {
   }
   const canContinue = () => dependencies.canContinue?.() !== false;
   function reserve(run) {
+    if (run.reservation && usage.currentReservation?.(run.reservation.id) === false) {
+      usage.finish(run.reservation.id, { started: run.initialized }); run.reservation = null;
+    }
     run.reservation ||= usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId,
       maxBudgetUsd: run.remainingBudgetUsd });
   }
   function releaseIdle(run) {
     if (!run.reservation) return;
-    usage.release(run.reservation.id); run.reservation = null;
+    // A resumed history anchor may still have unknown spend. Keep ownership of its
+    // held allowance so the same capped query can obtain the later accounting evidence.
+    if (usage.release(run.reservation.id) !== false) run.reservation = null;
   }
   function finishReservation(run) {
     if (!run.reservation) return;
@@ -94,9 +99,9 @@ function createClaudeSession(spec, emit, dependencies) {
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
   }
   function budgetNotice() {
-    const exhausted = usage.available(spec.monthlyBudgetUsd ?? null) <= 0;
+    const exhausted = usage.available(spec.monthlyBudgetUsd ?? null, active?.reservation?.id) <= 0;
     const message = exhausted ? '本月 API 预算已用完。' : active?.background.size
-      ? '本轮 API 预算上限已用完。后台任务结束后才能继续，或先停止它们。' : '本轮 API 预算上限已用完，请发送新消息继续。';
+      ? 'API 预算上限已用完。后台任务结束后才能继续，或先停止它们。' : 'API 预算上限已用完，请发送新消息继续。';
     publish('error', { code: 'budget_exhausted', message, retryable: !exhausted, willRetry: false, stage: 'runtime' });
     if (exhausted) publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'budget_exhausted' });
@@ -286,7 +291,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed) throw new Error('会话已停止。');
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
-    const maxBudgetUsd = spec.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(spec.monthlyBudgetUsd) / 1e6, 5);
+    const maxBudgetUsd = spec.monthlyBudgetUsd == null ? undefined : usage.available(spec.monthlyBudgetUsd) / 1e6;
     const run = { key, reservation: null, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
       remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
@@ -359,8 +364,8 @@ function createClaudeSession(spec, emit, dependencies) {
       await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task;
     }
     if (active && !active.busy && !active.background.size) {
-      const availableUsd = usage.available(spec.monthlyBudgetUsd ?? null) / 1e6;
-      const freshBudgetUsd = spec.monthlyBudgetUsd == null ? Infinity : Math.min(availableUsd, 5);
+      const availableUsd = usage.available(spec.monthlyBudgetUsd ?? null, active.reservation?.id) / 1e6;
+      const freshBudgetUsd = spec.monthlyBudgetUsd == null ? Infinity : availableUsd;
       if (active.remainingBudgetUsd !== freshBudgetUsd) {
         // SDK caps accumulate across turns. Renew at an explicit message boundary, preserving live background work.
         cancelQuery(active, 'budget'); await active.task;
@@ -555,7 +560,7 @@ function createClaudeSession(spec, emit, dependencies) {
       return claudeCommands(Array.isArray(current) ? current : null, fallback, run.terminalCommands)
         .map(row => ({ ...row, description: clean(row.description) }));
     },
-    hasAllowance: () => !!active?.reservation && active.remainingBudgetUsd > 0,
+    hasAllowance: () => !!active?.reservation && usage.currentReservation?.(active.reservation.id) !== false && active.remainingBudgetUsd > 0,
     checkpoint(restore) {
       let key; try { key = active?.key || credentials.read(); } catch { return null; }
       return key ? (spec, emit) => restore(spec, emit, { status: credentials.status,

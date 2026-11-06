@@ -29,6 +29,22 @@ test('product Codex command builders cannot restore exec or terminal input', () 
   assert.equal(fs.existsSync(path.join(root, 'electron/features/terminal/native-session.cjs')), false);
 });
 
+test('Agentrix injected shells never start a Codex TUI, including manually typed commands', () => {
+  for (const [file, start, end] of [
+    ['bootstrap.ps1', 'function global:codex {', '# Claude Code reports each turn'],
+    ['bash-integration.bash', 'codex() {', '# Claude Code reports each turn'],
+    ['zsh-integration.zsh', 'codex() {', '# Claude Code reports each turn'],
+    ['remote-worker.py', 'function codex {', 'function claude {'],
+  ]) {
+    const source = fs.readFileSync(path.join(__dirname, '../integration', file), 'utf8');
+    const begin = source.indexOf(start), wrapper = source.slice(begin, source.indexOf(end, begin));
+    assert.ok(begin >= 0 && wrapper.length > start.length, file);
+    assert.match(wrapper, /codex-started/, file + ' uses the existing authenticated shell event');
+    assert.match(wrapper, /原生模式/, file + ' tells the owner where Codex opens');
+    assert.doesNotMatch(wrapper, /Process\]::Start|\$executable|\$\{program|notify=|tui\.terminal_title|codex-exited/, file + ' has no manual terminal exception');
+  }
+});
+
 test('Python lookup follows CI order and supports python3-only and py-only hosts', () => {
   const { findPython } = require('../scripts/python-command.cjs');
   for (const available of ['python3', 'python', 'py']) {

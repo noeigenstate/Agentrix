@@ -17,6 +17,7 @@ const isNpmTest = run => /^\s*npm test\s*$/m.test(run || '');
 const clipboardCommands = new Set([...clipboardSuites, 'sessions']);
 
 function skipReason(step) {
+  if (step.id === 'affected' || step.name === 'Explain selected and skipped GUI suites' || step.name === 'Run selected test files') return 'The affected-test command is the local selector; the full replica keeps its full unit/GUI commands.';
   if (step.uses) {
     if (step.uses.startsWith('actions/checkout@')) return 'Use the current checkout; no checkout or reset.';
     if (step.uses.startsWith('actions/setup-node@')) return 'Use the installed Node.js; no runtime installation.';
@@ -51,15 +52,22 @@ export function localPlan(workflow) {
   for (const { id, job, matrix } of jobs) {
     for (const [index, step] of job.steps.entries()) {
       if (step.if && step.if !== 'always()') {
-        const match = /^matrix\.shard == '([a-z-]+)'$/.exec(step.if);
-        if (!matrix || !match) throw new Error(`Unsupported local step condition in ${step.name}: ${step.if}`);
-        if (matrix.shard !== match[1]) continue;
+        if (!matrix && ["steps.affected.outputs.full == 'true'", "steps.affected.outputs.full != 'true'", "steps.affected.outputs.real == 'true'"].includes(step.if)) {
+          // The explicit full replica ignores selective beta gates, never its assertions.
+        } else if (matrix && step.if === 'contains(fromJSON(needs.windows.outputs.shards), matrix.shard)') {
+          // The full replica includes the setup of every fixed desktop shard.
+        } else {
+          const match = /^matrix\.shard == '([a-z-]+)'(?: && contains\(fromJSON\(needs\.windows\.outputs\.gui\), '[a-z-]+'\))?$/.exec(step.if);
+          if (!matrix || !match) throw new Error(`Unsupported local step condition in ${step.name}: ${step.if}`);
+          if (matrix.shard !== match[1]) continue;
+        }
       }
+      const run = (step.run || '').replace('scripts/affected-tests.mjs --plan .test-output/affected-tests.json --run --kind real', 'scripts/real-cli-tests.cjs');
       plan.push({
         number: plan.length + 1,
         key: `${id}/${slug(step.name || `step-${index + 1}`)}`,
         name: step.name || `Step ${index + 1}`,
-        run: step.run || '',
+        run,
         shell: step.shell || job.defaults?.run?.shell || workflow.defaults?.run?.shell || 'pwsh',
         env: { ...workflow.env, ...job.env, ...step.env },
         skip: skipReason(step),
@@ -168,7 +176,7 @@ export function pushArguments(sha, branch, remove = false) {
 
 const tagCondition = "startsWith(github.ref, 'refs/tags/v')";
 const dryRunCondition = "(github.event_name == 'workflow_dispatch' && inputs.release_dry_run)";
-export const windowsBetaCondition = "(startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/beta' && !inputs.full_matrix)";
+export const windowsBetaCondition = "!inputs.full_matrix && ((startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || github.ref == 'refs/heads/beta')";
 export const releaseMutationCondition = `${tagCondition} && !${dryRunCondition}`;
 export const releaseJobCondition = [
   `always() && !cancelled() && (${tagCondition} || ${dryRunCondition}) &&`,

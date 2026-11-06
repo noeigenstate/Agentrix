@@ -75,6 +75,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     './ResultCard': { ResultActions: noop, ResultChecks: noop, ResultStatus: noop, WorkingLine: noop },
     './result-round': { latestResult: () => null }, './AgentCommandRun': { AgentCommandRun: noop },
     './voice-input': { dictateInto: () => () => {} },
+    './VoiceButton': { VoiceButton() { return null; } },
     './i18n': { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) },
   });
   const props = { projectId: 'fixture', terminal: { id: 'popup-fixture-' + ++nextId, sessionId: 'fixture-session', agent,

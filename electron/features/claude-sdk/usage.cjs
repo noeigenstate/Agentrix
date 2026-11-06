@@ -43,13 +43,17 @@ function createUsage({ file, now = Date.now }) {
     }
   }
   return {
-    available(budget) { return budget === null ? Infinity : Math.max(0, micros(budget) - spent() - held()); },
+    available(budget, reservationId = null) {
+      const own = data.reservations[reservationId];
+      return budget === null ? Infinity : Math.max(0, micros(budget) - spent() - held() + (own?.month === monthOf() ? own.micros : 0));
+    },
+    currentReservation(id) { return data.reservations[id]?.month === monthOf(); },
     reserve(budget, { sessionId = null, resume = false, maxBudgetUsd = Infinity } = {}) {
       const available = this.available(budget);
       if (available <= 0) throw Object.assign(new Error('本月 API 预算已用完。'), { code: 'budget_exhausted' });
       const cap = maxBudgetUsd === Infinity ? Infinity : micros(maxBudgetUsd);
-      const id = randomUUID(), amount = budget === null ? 0 : Math.min(available, 5e6, cap ?? 0);
-      if (budget !== null && amount <= 0) throw Object.assign(new Error('本轮 API 预算已用完。'), { code: 'budget_exhausted' });
+      const id = randomUUID(), amount = budget === null ? 0 : Math.min(available, cap ?? 0);
+      if (budget !== null && amount <= 0) throw Object.assign(new Error('API 预算上限已用完。'), { code: 'budget_exhausted' });
       const baseline = sessionId && data.sessions[sessionId] ? data.sessions[sessionId].cost : resume ? null : 0;
       const next = structuredClone(data);
       next.reservations[id] = { month: monthOf(), micros: amount, sessionId, baseline, day: utcDay(now()) };
@@ -61,8 +65,10 @@ function createUsage({ file, now = Date.now }) {
       const next = structuredClone(data); next.reservations[id].sessionId = sessionId; commit(next);
     },
     release(id) {
-      if (!data.reservations[id] || data.reservations[id].uncertain) return;
+      if (!data.reservations[id]) return true;
+      if (data.reservations[id].uncertain) return false;
       const next = structuredClone(data); delete next.reservations[id]; commit(next);
+      return true;
     },
     unverified(id) {
       if (!data.reservations[id]) return;

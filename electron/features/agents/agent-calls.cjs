@@ -24,6 +24,7 @@ class AgentCalls {
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
     this.dispatchAlive = dispatchAlive;
     this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
+      plannerOf: id => this.calls?.get(id)?.planner || null,
       read: async call => { this.refresh(call.key); await this.work; } });
     this.reset();
   }
@@ -37,6 +38,10 @@ class AgentCalls {
   setFolder(folder) { if (folder !== this.folder) { this.reset(true); this.folder = folder; } }
   history(reading) { this.replaying = reading; }
   feed(id) { return this.feeds.get(id); }
+  ownerInput(id, messageId, message) {
+    const call = this.byId(id);
+    if (call?.dispatch) this.feeds.ownerInput(call, messageId, call.key, message);
+  }
   byId(id) { return [...this.calls.values()].find(call => call.id === id) || null; }
   dispose() { this.reset(); this.finishedIds.clear(); }
   running() {
@@ -76,6 +81,7 @@ class AgentCalls {
       if (call || this.calls.size >= 1024) return false;
       const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared,
+        planner: event.planner || { kind: 'planner', agent: null, model: null },
         kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
         role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd,
@@ -84,7 +90,13 @@ class AgentCalls {
       this.calls.set(event.id, next); this.feeds.track(next); this.schedule();
       return true;
     }
-    if (!call?.dispatch || call.done || call.reviewed) return false;
+    if (!call?.dispatch) return false;
+    // Input identity can arrive after the last transcript read. It changes presentation only.
+    if (event.type === 'dispatch-input') {
+      if (event.sessionId !== call.sessionId) return false;
+      return this.feeds.noteInput(call, event);
+    }
+    if (call.done || call.reviewed) return false;
     if (event.type === 'dispatch-receipt') {
       const entry = this.feeds.owned(call);
       if (entry) { entry.dirty = true; this.feeds.update(call); }
@@ -173,6 +185,7 @@ class AgentCalls {
         const settings = { model: text(input.model) || 'default', effort: text(input.effort).trim() || null, fast: null };
         const next = {
           id: `agent:${block.id}`, key: block.id, sourceAgent: 'claude', startedAt: time(at), cwd: record.cwd,
+          planner: { kind: 'planner', agent: 'claude', model: typeof record.message.model === 'string' && record.message.model !== '<synthetic>' ? record.message.model : null },
           agent: 'Claude Code', provider: null, ...settings, requested: settings, rate: null,
           task: short(input.description || block.description || input.subagent_type || block.name),
           title: text(input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim(),

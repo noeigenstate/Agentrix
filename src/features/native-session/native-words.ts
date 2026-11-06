@@ -89,7 +89,7 @@ export function receiptLine({ status, reason }: Receipt) {
 const REASON_WORDS: Record<string, string> = {
   budget_exhausted: '本月 API 预算已用完', credits_exhausted: 'API 额度已用完', rate_limited: 'API 被限流', no_key: '还没有保存 API key',
   native_cli_required: '未找到原生 Claude Code，无法通过 API 运行', settings: '按设置运行', user: '你选择了终端',
-  codex_cli_required: '未找到 Codex 命令行，无法使用原生界面', unsupported_codex_version: '这个 Codex 版本不支持原生界面', terminal_selected: '按设置使用终端',
+  codex_cli_required: '未找到 Codex 命令行，无法使用原生模式', unsupported_codex_version: '这个 Codex 版本不支持原生模式', terminal_selected: '按设置使用终端',
 };
 
 // A folder for a single line: short ones whole, long ones as … and their last two parts (the whole path goes in a tooltip).
@@ -102,7 +102,7 @@ export function shortPath(path: string, max = 32) {
 const CODE = /^[a-z][a-z0-9_.-]*$/i;
 export const reasonWords = (reason: string | null | undefined) => (!reason ? null : REASON_WORDS[reason] ? t(REASON_WORDS[reason]) : CODE.test(reason) ? null : reason);
 
-export const routeWord = (route: string | null | undefined) => (route === 'api' ? 'API' : route === 'terminal' ? t('终端') : route === 'native' ? t('原生') : route === 'subscription' ? t('订阅') : t('未知'));
+export const routeWord = (route: string | null | undefined) => (route === 'api' ? 'API' : route === 'terminal' ? t('终端') : route === 'native' ? t('原生模式') : route === 'subscription' ? t('订阅') : t('未知'));
 
 // ── The run-mode switch ──
 // The header's line while a change is on its way to this session; null when the header has nothing to add (nothing under way, the owner's

@@ -9,6 +9,9 @@ const optionalCount = value => value == null || Number.isSafeInteger(value) && v
 function validDispatch(event) {
   if (!event || !uuid(event.id) || Buffer.byteLength(JSON.stringify(event)) > 16384) return false;
   if (event.type === 'dispatch-rate') return totals(event) && event.activeMs > 0;
+  if (event.type === 'dispatch-input') return line(event.sessionId, 160) && line(event.entryId, 200)
+    && event.entryId.startsWith('u:') && (event.inputId == null || line(event.inputId, 160)) && ['owner', 'planner'].includes(event.origin)
+    && (event.ownerMessageIds == null || Array.isArray(event.ownerMessageIds) && event.ownerMessageIds.length <= 32 && event.ownerMessageIds.every(uuid));
   if (event.type === 'dispatch-receipt') return typeof event.messageId === 'string' && /^[\w-]{1,160}$/.test(event.messageId)
     && ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(event.status);
   if (!routing(event)) return false;
@@ -32,7 +35,10 @@ function validDispatch(event) {
 // calls: the session's called models (AgentCalls), present whether or not an agent runs in that terminal.
 function acceptDispatch(session, event, calls) {
   if (!session || event.sessionKey !== session.sessionKey || event.projectId !== session.terminalId || !validDispatch(event)) return false;
-  return calls?.dispatch(event) || false;
+  const agent = ['claude', 'codex'].includes(session.agent) ? session.agent : null;
+  const model = session.nativeStructured ? session.nativeObservedModel : session.usage?.rates?.model;
+  const planner = { kind: 'planner', agent, model: line(model, 160) && model !== '<synthetic>' ? model : null };
+  return calls?.dispatch(event.type === 'dispatch-start' ? { ...event, planner } : event) || false;
 }
 
 module.exports = { acceptDispatch, validDispatch };

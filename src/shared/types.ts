@@ -83,7 +83,10 @@ export type AgentAction = AgentActionBrief & { id: string; at: number; descripti
 // queued: a message Claude Code holds in its queue until it takes it up, never shown as a message itself.
 // cancelled: a retired queue receipt, hidden but still used to cancel its renderer echo.
 // receivedAt: a queued message's confirmed handoff, separate from the time it was sent.
-export type ConversationEntry = { timeline?: { turn: { id: string; at: number; user?: string }; tools?: { id: string; at: number } }; id: string; at: number; receivedAt?: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string; answer?: boolean; queued?: boolean; cancelled?: boolean; omitted?: boolean; images?: string[]; generated?: { path: string; prompt: string }; tool?: AgentActionBrief & { failed: boolean } };
+// clientMessageId: a child feed's main-confirmed owner control identity, never a text match.
+// Main-owned channel provenance for child messages. Missing planner identity stays unknown; text never identifies a sender.
+export type ConversationSender = { kind: 'owner' } | { kind: 'planner'; agent: 'claude' | 'codex' | null; model: string | null };
+export type ConversationEntry = { clientMessageId?: string; sender?: ConversationSender; timeline?: { turn: { id: string; at: number; user?: string }; tools?: { id: string; at: number } }; id: string; at: number; receivedAt?: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string; answer?: boolean; queued?: boolean; cancelled?: boolean; omitted?: boolean; images?: string[]; generated?: { path: string; prompt: string }; tool?: AgentActionBrief & { failed: boolean } };
 export type ConversationPacket = { id: string; sessionId?: string; historyKey?: string; list?: ConversationEntry[]; changes?: ConversationEntry[] };
 export type ReadingHistoryScope = { key: string; agent: 'codex' | 'claude'; threadId: string };
 export type ConversationPage = { key: string; entries: ConversationEntry[]; beforeCursor: string | null };

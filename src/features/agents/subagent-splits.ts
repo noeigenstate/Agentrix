@@ -86,15 +86,9 @@ export function followFeed(bridge: FeedBridge, terminalId: string, callId: strin
 // How many entries came after the last one the owner saw (the whole feed when that entry has scrolled out of it).
 // A word sent to a dispatched worker is delivered once its resumed transcript opens with 「业主插话：」 and the word; the same word sent twice
 // needs two such lines. A word relayed through the parent session leaves no trace in the worker's record, so it is never reported delivered.
-export function deliveredIds(entries: readonly { role: string; text?: string }[], sent: readonly { id: string; text: string; route: string }[]) {
-  const users = entries.filter(entry => entry.role === 'user').map(entry => entry.text ?? ''), asked = new Map<string, number>();
-  return new Set(sent.filter(item => {
-    if (item.route !== 'dispatch') return false;
-    const line = `业主插话：${item.text}`, nth = (asked.get(line) ?? 0) + 1;
-    asked.set(line, nth);
-    // A word resumed into a Claude worker carries the prefix; one steered into a running Codex turn arrives as it was typed.
-    return users.reduce((total, text) => total + (text.trim() === item.text.trim() ? 1 : text.split(line).length - 1), 0) >= nth;
-  }).map(item => item.id));
+export function deliveredIds(entries: readonly { role: string; clientMessageId?: string; sender?: { kind: string } }[], sent: readonly { id: string; text: string; route: string }[]) {
+  const received = new Set(entries.filter(entry => entry.role === 'user' && entry.sender?.kind === 'owner').map(entry => entry.clientMessageId));
+  return new Set(sent.filter(item => item.route === 'dispatch' && received.has(item.id)).map(item => item.id));
 }
 
 export function unreadAfter(entries: readonly { id: string }[], lastSeenId: string | null) {

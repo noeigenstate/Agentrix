@@ -19,10 +19,10 @@ async function fixture(t) {
   const inbox = new RunInbox(team, id); await inbox.open();
   const target = { terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, done: false,
     route: 'dispatch', runId: id, title: 'Synthetic worker', cwd: repo, projectPath: repo, local: true };
-  const notifications = [];
-  const api = createInterventions({ resolve: () => target, sendParentPrompt: (terminal, text) => { notifications.push({ terminal, text }); }, now: () => 1000 });
+  const notifications = [], observedInputs = [];
+  const api = createInterventions({ resolve: () => target, noteInput: (bound, id) => observedInputs.push({ callId: bound.callId, id }), sendParentPrompt: (terminal, text) => { notifications.push({ terminal, text }); }, now: () => 1000 });
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  return { root, repo, team, id, inbox, target, notifications, api };
+  return { root, repo, team, id, inbox, target, notifications, observedInputs, api };
 }
 
 test('send persists exact text without a planner paste; stop is a separate control', async t => {
@@ -37,7 +37,17 @@ test('send persists exact text without a planner paste; stop is a separate contr
   const stopped = await f.api.stopAgent('terminal', f.target.callId);
   assert.deepEqual(await f.inbox.take(), [{ id: stopped.id, type: 'stop', at: 1000 }]);
   assert.equal(stopped.text, '停下'); assert.deepEqual(f.notifications, []);
+  assert.deepEqual(f.observedInputs, [{ callId: f.target.callId, id: receipt.id }], 'only an admitted owner message marks its sender; stop is not a user message');
   assert.equal(f.team.entries().filter(entry => entry.type === 'stop').length, 1);
+});
+
+test('a failed sender observation never refuses or withdraws an admitted owner message', async t => {
+  const f = await fixture(t);
+  const api = createInterventions({ resolve: () => f.target, noteInput() { throw new Error('presentation unavailable'); } });
+  const receipt = await api.interveneAgent('terminal', f.target.callId, 'Keep going.');
+  assert.equal(receipt.status, 'queued');
+  assert.equal((await f.inbox.take())[0].id, receipt.id);
+  assert.equal(f.team.entries().some(entry => entry.type === 'withdrawn'), false);
 });
 
 test('Task calls require a direct transport and never paste a prompt into the parent', async t => {

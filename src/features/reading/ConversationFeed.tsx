@@ -1,8 +1,9 @@
 import { createContext, Fragment, useContext, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
-import { CaretDown, CaretUp } from '@phosphor-icons/react';
+import { CaretDown, CaretUp, Robot } from '@phosphor-icons/react';
 import type { ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
+import { modelName } from '../../shared/model-name.ts';
 import { stepVerb } from '../agents/action-text';
 import { showPopup } from '../files/file-popup';
 import { Markdown } from './Markdown';
@@ -24,6 +25,7 @@ import './reading-flow.css';
 export const ConversationDecorations = createContext<{
   start: number; status: ReactNode; running: boolean; anchor?: string; beforeResult: ReactNode; afterResult: ReactNode;
   quote?: { disabled: string | null; pick: (who: string, text: string) => void };
+  tools?: (entries: ConversationEntry[], details: (entries: ConversationEntry[]) => ReactNode) => ReactNode;
   frame?: { ref: RefObject<HTMLDivElement | null>; style: CSSProperties; before: ReactNode };
 } | null>(null);
 
@@ -135,9 +137,13 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
       {decorations?.frame?.before}
       {turns.map((turn, index) => {
         if (turn.kind === 'user') {
-          return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={t('你')} latest={index === latestUser} mark={<UserAvatar />}>
+          const sender = turn.entry.sender, planner = sender?.kind === 'planner';
+          const identified = planner && sender.agent && sender.model;
+          const who = identified ? modelName(sender.model!) : planner ? t('主模型') : t('你');
+          const mark = planner ? identified ? <AgentMark agent={sender.agent!} /> : <Robot size={18} /> : <UserAvatar />;
+          return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={who} latest={index === latestUser} mark={mark}>
             <div data-reading-entry={turn.entry.id} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
-              {turn.entry.answer && <span className="reading-user-label">{t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} /><QuoteOf entry={turn.entry} who={t('你')} /></div>
+              {turn.entry.answer && <span className="reading-user-label">{planner ? t('{name} 回答了它的问题', { name: who }) : t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} /><QuoteOf entry={turn.entry} who={who} /></div>
           </TimelineStep>;
         }
         const liveStatus = index === turns.length - 1 ? decorations?.status : null;
@@ -153,7 +159,9 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
                 const state = block.entries.some(entry => !entry.tool?.done) ? 'running' : block.entries.some(entry => entry.tool?.failed) ? 'failed' : null;
                 return <Fragment key={block.id}>
                   <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state}>
-                    <ToolGroup entries={block.entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} onError={onError} />
+                    {decorations?.tools
+                      ? decorations.tools(block.entries, entries => <ToolGroup entries={entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} onError={onError} />)
+                      : <ToolGroup entries={block.entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} onError={onError} />}
                   </AgentTurnItem>
                   {index === latestAgent && block.entries.some(entry => entry.id === decorations?.anchor) && <div className="result-block">{decorations?.beforeResult}{decorations?.afterResult}</div>}
                 </Fragment>;

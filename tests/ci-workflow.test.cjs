@@ -131,7 +131,9 @@ test('desktop shards consume the one Windows build with the same tools and envir
   assert.deepEqual(desktop.env, build.env);
   for (const name of ['Set up Node.js', 'Install locked dependencies', 'Install Codex CLI for offline startup checks']) {
     const original = build.steps.find(step => step.name === name);
-    assert.deepEqual(desktop.steps.find(step => step.name === name), original);
+    const { if: gate, ...selected } = desktop.steps.find(step => step.name === name);
+    assert.equal(gate, 'contains(fromJSON(needs.windows.outputs.shards), matrix.shard)');
+    assert.deepEqual(selected, original);
   }
   assert.equal(build.steps.filter(step => step.run === 'npm run dist').length, 1);
   assert.equal(build.steps.filter(step => step.run === 'npm test').length, 1);
@@ -140,7 +142,7 @@ test('desktop shards consume the one Windows build with the same tools and envir
   assert.ok(!desktop.steps.some(step => /npm run dist|^npm test$/m.test(step.run || '')));
   const setup = desktop.steps.find(step => step.run === 'node scripts/build-ssh-askpass.cjs');
   assert.ok(setup, 'Fresh shards must compile file-clipboard.exe and ssh-askpass.exe for the test harness');
-  assert.equal(setup.if, undefined);
+  assert.equal(setup.if, 'contains(fromJSON(needs.windows.outputs.shards), matrix.shard)');
   assert.ok(desktop.steps.indexOf(setup) < desktop.steps.findIndex(step => step.run?.includes('scripts/retry.mjs')));
   const upload = build.steps.find(step => step.with?.name === 'Agentrix-windows-unpacked');
   assert.equal(upload.with.path, 'release/win-unpacked/');
@@ -165,7 +167,7 @@ test('each shard uploads screenshots under a unique name and workspace retains t
   assert.deepEqual(Object.keys(desktop.strategy.matrix), ['include']);
   assert.equal(new Set(entries.map(entry => entry.screenshots)).size, 3);
   const workspace = desktop.steps.find(step => step.run?.includes('npm run test:workspace'));
-  const shard = entries.find(entry => workspace.if === `matrix.shard == '${entry.shard}'`);
+  const shard = entries.find(entry => workspace.if.startsWith(`matrix.shard == '${entry.shard}' &&`));
   assert.equal(shard.screenshots, 'desktop-test-screenshots');
   const screenshots = desktop.steps.find(step => step.with?.name === '${{ matrix.screenshots }}');
   assert.equal(screenshots.if, 'always()');
@@ -178,8 +180,7 @@ test('each shard uploads screenshots under a unique name and workspace retains t
 function evaluate(expression, { ref = 'refs/tags/v1.3.24', event = 'push', dryRun = false, fullMatrix = false, reused = false,
   builds = {}, reuse = 'success', cancelled = false } = {}) {
   const needs = Object.fromEntries(['windows', 'windows-desktop', 'macos', 'linux', 'remote-linux'].map(id => [id, { result: builds[id] || 'success' }]));
-  const windowsOnly = (ref.startsWith('refs/tags/v') && ref.includes('-beta.'))
-    || (event === 'workflow_dispatch' && ref === 'refs/heads/beta' && !fullMatrix);
+  const windowsOnly = !fullMatrix && ((ref.startsWith('refs/tags/v') && ref.includes('-beta.')) || ref === 'refs/heads/beta');
   needs.reuse = { result: reuse, outputs: { 'run-id': reused ? '1234' : '', 'windows-only': String(windowsOnly) } };
   return vm.runInNewContext(expression, {
     github: { ref, event_name: event }, inputs: { release_dry_run: dryRun, full_matrix: fullMatrix }, needs,
@@ -233,7 +234,7 @@ test('dry runs cannot create, upload or edit a release, even when dispatched on 
 test('beta tags and default beta dispatches run Windows only; full_matrix restores all platforms', async () => {
   const { windowsBetaCondition } = await helpers;
   const parsed = await workflow();
-  assert.deepEqual(parsed.on.push.branches, ['main']);
+  assert.deepEqual(parsed.on.push.branches, ['main', 'beta']);
   assert.deepEqual(parsed.on.push.tags, ['v*']);
   assert.deepEqual(parsed.on.pull_request.branches, ['main']);
   assert.deepEqual(parsed.on.workflow_dispatch.inputs.full_matrix, {
@@ -247,7 +248,9 @@ test('beta tags and default beta dispatches run Windows only; full_matrix restor
   const required = selection.env.REQUIRED_JOBS.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
   for (const [context, windowsOnly] of [
     [{ ref: 'refs/tags/v8.2.7-beta.12' }, true],
+    [{ ref: 'refs/tags/v8.2.7-beta.12', event: 'workflow_dispatch', fullMatrix: true }, false],
     [{ ref: 'refs/heads/beta', event: 'workflow_dispatch' }, true],
+    [{ ref: 'refs/heads/beta', event: 'push' }, true],
     [{ ref: 'refs/heads/beta', event: 'workflow_dispatch', fullMatrix: true }, false],
     [{ ref: 'refs/tags/v8.2.7' }, false],
     [{ ref: 'refs/tags/v8.2.7-rc.1' }, false],

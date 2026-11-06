@@ -18,8 +18,14 @@ for (const setting of ['api-then-terminal', 'api-only', 'terminal-only']) test(`
     assert.equal(choosePath({ agent: 'claude', claudePath: setting, apiState: { status } }).path, expected);
   }
 });
-test('Codex native is default and terminal remains an explicit choice', () => {
+test('Codex always selects app-server even with a legacy terminal preference', () => {
   assert.equal(choosePath({ agent: 'codex' }).path, 'native'); assert.equal(choosePath({ agent: 'codex', codexView: 'terminal' }).path, 'native');
+});
+
+test('an explicit shell resume with no matching history refuses instead of starting a different thread', async t => {
+  const f = fixture(); t.after(() => f.router.close());
+  await assert.rejects(f.router.start('t', { agent: 'codex', resume: true, launch: { resume: true, latest: true } }), /没有找到可恢复的 Codex 会话/);
+  assert.equal(f.created.length, 0); assert.equal(f.terminals.length, 0);
 });
 function fixture(config = {}) {
   const events = [], terminals = [], created = [], settings = { get: () => ({ claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null, ...config }) };

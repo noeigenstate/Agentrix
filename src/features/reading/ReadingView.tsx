@@ -3,6 +3,7 @@ import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-
 import type { AgentCommand, ProjectTerminal } from '../../shared/types';
 import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
+import { VoiceButton } from '../voice/VoiceButton';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
 import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
@@ -508,7 +509,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const next = value.slice(0, at) + text + value.slice(end);
     caret.current = at + text.length; edit(next); node?.focus();
     if (submit) dictationSend.start();
-  }), [terminal.id]);
+  }, true, { available: () => !inputBlocked, sessionId: terminal.sessionId ?? undefined }), [terminal.id, terminal.sessionId, inputBlocked]);
   // SSH receives a saved file; the native-picture hook stages local attachments in the CLI.
   const pasteImage = (event: ClipboardEvent<HTMLTextAreaElement>) => {
     const generation = pictureGeneration.current;
@@ -658,6 +659,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{hints[0]}</span>}
       <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} {...composerAria(palette, mentions)} placeholder={hint} {...fullHint} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
+      <VoiceButton terminalId={terminal.id} sessionId={terminal.sessionId} name={agent} size={15} disabled={inputBlocked} onError={onError} />
       {working && <button type="button" className="icon-button" disabled={inputBlocked || deliveryBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>
     </div>

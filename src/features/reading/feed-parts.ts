@@ -4,7 +4,7 @@
 export { AgentMark, TimelineStep } from './Timeline';
 export { PendingPromptEntries, UserImages, type MessageEntry } from './PendingPromptEntries';
 export { pastedPicture } from './image-input';
-export { ResultActions, ResultChecks, ResultStatus, WorkingLine } from './ResultCard';
+export { ResultActions, ResultChecks, ResultStatus, StepState, WorkingLine } from './ResultCard';
 export { latestResult, type ResultFacts } from './result-round';
 export { useStickToBottom } from './useStickToBottom';
 export type { PendingPrompt } from './pending-prompts';
@@ -15,3 +15,4 @@ export { isCommandDraft, useCommandPalette } from './useCommandPalette';
 export { commandList, composerAria } from './CommandList';
 export { useMentions } from './useMentions';
 export { MentionPalette } from './MentionPalette';
+export { createDictationSend } from './dictation-send';

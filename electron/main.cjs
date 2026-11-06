@@ -575,6 +575,7 @@ function resolveIntervention(terminalId, callId) {
     ...(call.dispatch ? { local: project.kind !== 'ssh', runId: callId.slice('dispatch:'.length), cwd: call.cwd } : {}) };
 }
 const interventions = createInterventions({ resolve: resolveIntervention,
+  noteInput: (target, messageId, message) => sessions.get(target.terminalId)?.calls?.ownerInput(target.callId, messageId, message),
   pushControl: (runId, control) => dispatchControl?.pushControl(runId, control),
   sendDirect: async () => { throw new Error('该子代理没有直达控制通道。'); } });
 // The dashboard's 正在运行 strip: every terminal's running sub-agents and dispatched workers, with their project.
@@ -927,6 +928,28 @@ function claudeActivity(project, s, event) {
   } else applyActivity(project, s, snapshot);
 }
 
+async function openCodexFromShell(project, s, event) {
+  try {
+    const launch = require('./features/agents/agent-command.cjs').codexLaunch(event.args === undefined && !event.command ? [] : event.args);
+    const paths = project.kind === 'ssh' ? path.posix : path;
+    if (typeof event.cwd !== 'string' || !paths.isAbsolute(event.cwd) || event.cwd.length > 4096 || event.cwd.includes('\0')) throw new Error('Codex 启动目录无效，请重启终端后重试。');
+    launch.cwd = launch.cwd ? paths.resolve(event.cwd, launch.cwd) : event.cwd;
+    if (launch.cwd.length > 4096) throw new Error('Codex 启动目录无效，请重启终端后重试。');
+    if (typeof event.codexHome === 'string' && paths.isAbsolute(event.codexHome) && event.codexHome.length <= 4096 && !event.codexHome.includes('\0')) launch.codexHome = event.codexHome;
+    if (!nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
+    launchPlans.delete(s.terminalId); restorePlans.delete(s.terminalId);
+    const opened = await nativeSessions.start(s.terminalId, { agent: 'codex', resume: launch.resume, launch });
+    if (launch.prompt) await nativeSessions.send(s.terminalId, opened.runtimeSessionId, { clientMessageId: randomUUID(), text: launch.prompt });
+    broadcast();
+  } catch (error) {
+    if (sessions.get(s.terminalId) === s && !s.nativeStructured) {
+      const data = `\r\n${error.message}\r\n`;
+      s.chunks.push(data); s.bytes += data.length; s.pending += data; s.flush();
+    } else if (store.findTerminal(s.terminalId)) startupErrors.set(s.terminalId, error.message);
+    broadcast();
+  }
+}
+
 function onEvent(event) {
   const s = sessions.get(event.projectId);
   if (!s || event.sessionKey !== s.sessionKey) return;
@@ -941,6 +964,8 @@ function onEvent(event) {
   }
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
+  if (event.type === 'codex-started' && event.agent !== 'claude') { void openCodexFromShell(project, s, event); return; }
+  if (event.type === 'codex-exited' && event.agent !== 'claude') return;
   s.approval?.context('shell-event', [event.type, event.sequence]);
   if (event.type === 'shell-ready' || event.type === 'shell-prompt') {
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
@@ -1187,7 +1212,7 @@ function localShell(fresh = false) {
   return localShells;
 }
 
-function nativeSpec(id, agent, resume, validateOnly = false) {
+function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const project = findProject(id), old = sessions.get(id);
   if (project.kind === 'ssh' && agent !== 'codex') throw new Error('SSH 原生会话目前仅支持 Codex。');
   if (validateOnly) return;
@@ -1195,22 +1220,27 @@ function nativeSpec(id, agent, resume, validateOnly = false) {
   if (old?.codexActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
   if (old) disposeTerminal(id, { preserveNative: !!old.nativeStructured });
   const saved = store.findTerminal(id).record.restore;
+  const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
+  const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
+  const runOptions = { model: launch?.model || null, effort: launch?.effort || 'high', fast: launch?.fast ?? true };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
     const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
-      sessionId, sessionKey, cwd: resume ? saved?.cwd || project.path : project.path, env: {}, model: null, effort: 'high', fast: true,
-      providerSessionId: resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null };
+      sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
     nativeSpecs.set(id, spec); return spec;
   }
   const bootstrapFile = path.join(runtimeDir, `${sessionId}.json`);
   fs.writeFileSync(bootstrapFile, JSON.stringify({ projectId: id, projectPath: project.path, sessionKey,
     controlAddress, controlCapability, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address }), { mode: 0o600 });
   const env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
+  if (launch?.codexHome) {
+    for (const key of Object.keys(env)) if (key.toUpperCase() === 'CODEX_HOME') delete env[key];
+    env.CODEX_HOME = launch.codexHome;
+  }
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
     skills.delivery(project, false, sessionId, { agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
-  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd: resume ? saved?.cwd || project.path : project.path, env, context,
-    sessionId, sessionKey, bootstrapFile, controlCapability, model: null, effort: 'high', fast: true,
-    providerSessionId: resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null };
+  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, context,
+    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, providerSessionId };
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
   nativeSpecs.set(id, spec); return spec;
 }
@@ -1249,6 +1279,7 @@ function structuredEvent(id, event) {
   }
   if (event.type === 'routing.updated') {
     const { observed, effective } = event.payload;
+    if (typeof observed?.model === 'string') s.nativeObservedModel = observed.model;
     s.agentSettings = Object.fromEntries(['model', 'effort', 'fast'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
   }
   if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
@@ -1510,11 +1541,12 @@ async function initializeNativeSessions() {
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
     readHistory: async (id, { signal } = {}) => {
       const project = findProject(id);
-      if (project.kind !== 'ssh') return folderHistory(folderOf(id));
+      const spec = nativeSpecs.get(id);
+      if (project.kind !== 'ssh' && spec?.agent !== 'codex') return folderHistory(folderOf(id));
       const saved = store.findTerminal(id).record.restore;
-      const history = await codexFactory.history({ kind: 'ssh', owner: 'gui', projectId: project.id, terminalId: id,
-        cwd: saved?.cwd || project.path, sessionId: randomUUID(), sessionKey: randomUUID(), providerSessionId: saved?.threadId || null }, { signal }).catch(error => {
-        if (error.code === 'codex_cli_required') throw Object.assign(new Error(t('远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。')), { code: error.code });
+      const history = await codexFactory.history({ kind: project.kind, owner: 'gui', projectId: project.id, terminalId: id,
+        cwd: spec?.cwd || saved?.cwd || project.path, env: spec?.env, sessionId: randomUUID(), sessionKey: randomUUID(), providerSessionId: null }, { signal }).catch(error => {
+        if (error.code === 'codex_cli_required' && project.kind === 'ssh') throw Object.assign(new Error(t('远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。')), { code: error.code });
         throw error;
       });
       if (findProject(id) !== project) throw new Error('项目已变化，请重试。');
@@ -1572,7 +1604,7 @@ function restoreTerminal(id, ...args) {
   const localCodex = (saved?.agent || 'codex') === 'codex' && (saved?.codex || saved?.nativeTransport);
   if (localCodex || saved?.nativeTransport && nativeSessions) {
     restorePlans.delete(id);
-    if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
+    if (!nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
     const interrupted = saved.interrupted === true;
     return nativeSessions.start(id, { agent: saved.agent || 'codex', resume: !!saved.threadId }).then(async opened => {
       if ((saved.agent || 'codex') === 'codex' && saved.threadId && interrupted) {
@@ -1826,7 +1858,7 @@ function registerUnavailableNative(handle) {
     if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['agent', 'resume'].includes(key)) ||
       !['claude', 'codex'].includes(options.agent) || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
     const project = findProject(id), saved = store.findTerminal(id).record.restore;
-    if (options.agent === 'codex') throw new Error('Codex app-server 连接失败，请重试。');
+    if (options.agent === 'codex') throw new Error('Codex 原生模式连接失败，请重试。');
     if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
     launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
@@ -1934,7 +1966,7 @@ function registerIpc() {
     if (project.kind === 'ssh' && agent !== 'codex') throw new Error('SSH 原生会话目前仅支持 Codex。');
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     if (agent === 'codex') {
-      if (!nativeSessions) throw new Error('Codex app-server 连接失败，请重试。');
+      if (!nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
       launchPlans.delete(id); restorePlans.delete(id);
       // start resolves the saved thread, or queries folder history, only after this click.
       await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;

@@ -1,6 +1,6 @@
 ---
 name: release-flow
-description: Publish a new Agentrix version — a beta prerelease on the one `beta` branch first, then, after the owner approves, the stable release. Covers the bump, update notes, the full local test pass, commit, tag, push and watching CI. Use when asked to 发布新版本 / release.
+description: Publish a new Agentrix version — a beta prerelease on the one `beta` branch first, then, after the owner approves, the stable release. Covers the bump, update notes, affected or full tests, commit, tag, push and watching CI. Use when asked to 发布新版本 / release.
 ---
 
 # Releasing Agentrix
@@ -12,12 +12,12 @@ agrees does it become the stable release.
 
 - **One branch: `beta`.** Create it from `main` when it does not exist (`git switch -c beta main`). Release work lives
   there. Never create a `ci/preflight-*` branch or run `ci-preflight remote` for a beta.
-  Beta dispatches default to Windows only; `full_matrix=true` explicitly enables all platforms.
+  Beta pushes and dispatches default to Windows only; `full_matrix=true` explicitly enables all platforms and full tests.
 - **Beta version `X.Y.Z-beta.N`** (N starts at 1 and rises for each further beta of the same X.Y.Z):
   `npm version X.Y.Z-beta.N --no-git-tag-version`. Write the update notes (step 3) now. Leave the versions in
   `docs/usage.md` (step 2) alone until the stable bump.
 - **Check, commit, tag, push.** Local checks (step 4), commit (step 6), then `git tag vX.Y.Z-beta.N` on `beta` and push
-  the branch and the tag. A push to the `beta` branch triggers nothing; the tag matches `v*`. Beta tags run only Windows
+  the branch and the tag. A push to `beta` runs affected Windows tests; the tag matches `v*`. Beta tags run only Windows
   and its three desktop shards, skipping macOS, Linux and Linux SSH. They publish only the Windows installer,
   its `.blockmap`, `latest.yml` and Windows checksums as a GitHub **prerelease** (`--prerelease --latest=false`).
   Installed Windows copies on the beta channel (Settings › About › 更新通道) receive it; stable-channel copies do not.
@@ -48,17 +48,35 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    no internals and no repeating the title. Add the English of every title and sentence to the end of
    `electron/locales/en.json` (keep the older entries). The notes show as a list in the guide, which opens on this page
    after an update, and on the About page; about seven fit the guide card, a longer list scrolls.
-4. **Local checks, in order.** Prefer `node scripts/ci-preflight.mjs local` from the main checkout, which runs the Windows
-   CI job's own steps under CI conditions. In the beta flow that is the only preflight: the beta tag's run is the remote
-   check. Outside the beta flow, run `node scripts/ci-preflight.mjs remote` before tagging. By hand: `npm run build`, `npm test`, `python -m unittest discover -s tests -p '*_test.py'`,
-   then the sixteen desktop suites one at a time (each starts Electron with its own isolated profile; never run
-   them in parallel or against the real app): `test:desktop`, `test:path-refresh`, `test:sessions`,
-   `test:restore-slow`, `test:completion`, `test:gpu-terminal`, `test:workspace`, `test:editor-terminals`,
-   `test:themes-markdown`, `test:visual`, `test:navigation`, `test:git`, `test:cmd`, `test:material`,
-   `test:composer`, `test:reading`.
-   For a follow-up changing only test fixtures, docs and version metadata after a recorded full pass, verify that
-   `electron/`, `src/`, `integration/`, `assets/` and dependency definitions are unchanged. Reuse the unaffected local
-   desktop results; rerun the changed unit/fixture tests and their packaged desktop cases in the failing environment.
+4. **Local checks, in order.** First preview `node scripts/affected-tests.mjs --base <last-tested-ref>` (or
+   `npm run test:affected -- --base <last-tested-ref>`). It prints the unit, offline real-CLI and GUI selections with
+   reasons. Add `--run --kind unit` to run selected unit tests; `--kind real --locked-prefix <private-directory>` runs
+   the selected real-CLI contracts with the locked CLI, and `--kind gui --packaged` runs the selected desktop suites.
+   Local GUI execution still requires the task's authorization; the six clipboard suites remain CI-only and are
+   explicitly skipped locally, even with `CI=true`. `--catalog` prints each boundary module's full test mapping.
+   An invalid/missing base, unknown ownership, an uncovered test or shared infrastructure change selects full coverage.
+   `src/shared`, main/preload, IPC, package/lockfile, CI and test harness changes always select full coverage;
+   a known individual smoke script selects its own suites and importing tests. Use `--full` for an explicit full plan.
+   The dependency graph comes from imports/requires and declared boundary dependencies; manual GUI/test/dynamic-load
+   exceptions live in `scripts/affected-tests-map.json`, checked by `tests/affected-tests.test.cjs`. A changed dynamic
+   loader requires reviewing its pinned mapping; until classified it cannot narrow coverage. Mixed-provider test files
+   stay selected when they exercise the changed provider, regardless of their filename.
+
+   Beta Windows CI compares the commit against the latest verified **full** green beta ancestor, not the previous push
+   or a selective run. It verifies repository/workflow identity, ancestry, every required job, actual full unit/CLI steps
+   and every GUI step. No baseline/API/history proof means a full run. Unaffected desktop suite and setup steps skip
+   with an explicit shard log; the fixed shard job still succeeds. The plan and reasons are uploaded as `affected-tests`.
+   Thus an all-green selective run can supply exact-commit tested artifacts to a beta tag: skipped groups are covered by
+   the verified full baseline plus the cumulative unaffected diff. Selective runs never become full baselines themselves.
+   Tags without an exact-commit green build run full Windows coverage. Stable and `full_matrix` run the full matrix;
+   stable reuse still requires every platform job and artifact. Version/package changes also force full tests.
+
+   For an explicit full replica use `node scripts/ci-preflight.mjs local` from the main checkout, which runs the Windows
+   CI job's own steps under CI conditions and skips the six clipboard suites locally. GUI checks are sequential with
+   private profiles, never against the real app. In the beta flow use the beta branch/tag runs as the remote check;
+   never create a preflight branch for it. Outside the beta flow, run `node scripts/ci-preflight.mjs remote` before tagging.
+   Regenerate the selection after each follow-up change. Shared fixtures and package/version metadata force full
+   coverage; do not override that decision with a manual unaffected-results exemption.
    Rebuild and verify the new version's artifacts. Before publication the required matrix must pass: Windows for beta
    tags, all platforms for stable releases. Full-platform validation on `beta` precedes the stable approval request.
    The tag's release is published from its tested builds (step 7).

@@ -2,7 +2,7 @@ name: Build Windows, macOS and Linux executables
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     tags: ['v*']
   pull_request:
     branches: [main]
@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: windows-build-${{ github.workflow }}-${{ github.ref }}
@@ -37,7 +38,7 @@ jobs:
       artifact-ids: ${{ steps.select.outputs.artifact-ids }}
       windows-only: ${{ steps.policy.outputs.windows-only }}
     env:
-      WINDOWS_ONLY: ${{ (startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/beta' && !inputs.full_matrix) }}
+      WINDOWS_ONLY: ${{ !inputs.full_matrix && ((startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || github.ref == 'refs/heads/beta') }}
     steps:
       - name: Select platform policy
         id: policy
@@ -100,6 +101,8 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       installer: ${{ steps.version.outputs.installer }}
+      gui: ${{ steps.affected.outputs.gui }}
+      shards: ${{ steps.affected.outputs.shards }}
     defaults:
       run:
         shell: pwsh
@@ -114,6 +117,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -142,7 +146,23 @@ jobs:
       - name: Install Codex CLI for offline startup checks
         run: npm install --global @openai/codex@0.166.0 --no-audit --no-fund
 
+      - name: Select affected tests from a verified full beta baseline
+        id: affected
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AFFECTED_FULL_MATRIX: ${{ inputs.full_matrix }}
+        run: node scripts/affected-tests-ci.mjs
+
+      - name: Upload affected test evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: affected-tests
+          path: .test-output/affected-tests.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Real Claude CLI contract (offline)
+        if: steps.affected.outputs.real == 'true'
         shell: bash
         env:
           AGENTRIX_REQUIRE_REAL_CLI: '1'
@@ -152,12 +172,19 @@ jobs:
           export AGENTRIX_REAL_CLAUDE="$RUNNER_TEMP/claude-contract/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"
           test -f "$AGENTRIX_REAL_CLAUDE"
           "$AGENTRIX_REAL_CLAUDE" --version
-          node scripts/real-cli-tests.cjs --locked-prefix "$RUNNER_TEMP/claude-contract"
+          node scripts/affected-tests.mjs --plan .test-output/affected-tests.json --run --kind real --locked-prefix "$RUNNER_TEMP/claude-contract"
 
       - name: Run unit and integration tests
+        if: steps.affected.outputs.full == 'true'
         env:
           AGENTRIX_LAB_TEST_PREPARE_HOST: '1'
         run: npm test
+
+      - name: Run selected test files
+        if: steps.affected.outputs.full != 'true'
+        env:
+          AGENTRIX_LAB_TEST_PREPARE_HOST: '1'
+        run: node scripts/affected-tests.mjs --plan .test-output/affected-tests.json --run --kind unit
 
       - name: Build Windows installer
         run: npm run dist
@@ -250,60 +277,76 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       AGENTRIX_TEST_TIMEOUT_SCALE: '3'
     steps:
+      - name: Explain selected and skipped GUI suites
+        env:
+          SELECTED_GUI: ${{ needs.windows.outputs.gui }}
+          SELECTED_SHARDS: ${{ needs.windows.outputs.shards }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          if ((ConvertFrom-Json $env:SELECTED_SHARDS) -contains $env:SHARD) { Write-Host "RUN $env:SHARD; selected suites: $env:SELECTED_GUI" }
+          else { Write-Host "SKIP $env:SHARD; no affected module since the verified full baseline. All suite steps are skipped." }
+
       - name: Check out source
+        if: contains(fromJSON(needs.windows.outputs.shards), matrix.shard)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up Node.js
+        if: contains(fromJSON(needs.windows.outputs.shards), matrix.shard)
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
           cache: npm
 
       - name: Install locked dependencies
+        if: contains(fromJSON(needs.windows.outputs.shards), matrix.shard)
         shell: bash
         run: npm ci --no-audit --no-fund || { sleep 10; npm ci --no-audit --no-fund; }
       - name: Remove bundled Claude platform binaries
+        if: contains(fromJSON(needs.windows.outputs.shards), matrix.shard)
         run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Install Codex CLI for offline startup checks
+        if: contains(fromJSON(needs.windows.outputs.shards), matrix.shard)
         run: npm install --global @openai/codex@0.166.0 --no-audit --no-fund
 
       - name: Build Windows test helpers
+        if: contains(fromJSON(needs.windows.outputs.shards), matrix.shard)
         run: node scripts/build-ssh-askpass.cjs
 
       - name: Download the desktop test build
+        if: contains(fromJSON(needs.windows.outputs.shards), matrix.shard)
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: Agentrix-windows-unpacked
           path: release/win-unpacked
 
       - name: Download the installer for the actual payload check
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'focus-motion')
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: Agentrix-windows-x64
           path: release
 
       - name: Verify desktop with actual terminal button clicks
-        if: matrix.shard == 'terminals'
+        if: matrix.shard == 'terminals' && contains(fromJSON(needs.windows.outputs.gui), 'smoke')
         run: node scripts/retry.mjs npm run test:desktop -- --packaged
 
       - name: Verify local terminal restarts refresh Windows PATH without restarting the app
-        if: matrix.shard == 'terminals'
+        if: matrix.shard == 'terminals' && contains(fromJSON(needs.windows.outputs.gui), 'path-refresh')
         run: node scripts/retry.mjs npm run test:path-refresh -- --packaged
 
       - name: Verify session recovery, clipboard and SSH desktop interaction
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'session')
         run: node scripts/retry.mjs npm run test:sessions -- --packaged
 
       - name: Verify session recovery with delayed window cursor-position answers
-        if: matrix.shard == 'terminals'
+        if: matrix.shard == 'terminals' && contains(fromJSON(needs.windows.outputs.gui), 'restore-slow')
         run: node scripts/retry.mjs npm run test:restore-slow -- --packaged
 
       - name: Verify animated project expansion and return
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'focus-motion')
         run: |
           node scripts/verify-installer-payload.cjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -311,75 +354,75 @@ jobs:
           node scripts/retry.mjs node scripts/focus-motion-smoke.mjs --executable $installed.executable
 
       - name: Verify completion notifications only rearm after new input
-        if: matrix.shard == 'terminals'
+        if: matrix.shard == 'terminals' && contains(fromJSON(needs.windows.outputs.gui), 'completion')
         run: node scripts/retry.mjs npm run test:completion -- --packaged
 
       - name: Test GPU terminal renderer
-        if: matrix.shard == 'terminals'
+        if: matrix.shard == 'terminals' && contains(fromJSON(needs.windows.outputs.gui), 'gpu-terminal')
         run: node scripts/retry.mjs npm run test:gpu-terminal -- --packaged
 
       - name: Verify file operations and microphone UI with isolated test devices
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'workspace')
         run: node scripts/retry.mjs npm run test:workspace -- --packaged --slow-copy
 
       - name: Verify editing, path copying and independent split terminals
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'editor-terminals')
         run: node scripts/retry.mjs npm run test:editor-terminals -- --packaged
 
       - name: Verify persistent themes, automatic editing and Markdown previews
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'themes-markdown')
         run: node scripts/retry.mjs npm run test:themes-markdown -- --packaged
 
       - name: Verify synchronized lights, readable themes and quiet completed cards
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'visual')
         run: node scripts/retry.mjs npm run test:visual -- --packaged
 
       - name: Verify internal navigation and removed external editor and manual completion actions
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'navigation')
         run: node scripts/retry.mjs npm run test:navigation -- --packaged
 
       - name: Verify Git status, history and explorer switching for local and SSH projects
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'git')
         run: node scripts/retry.mjs npm run test:git -- --packaged
 
       - name: Verify Command Prompt terminals report prompts, run agents and resume sessions
-        if: matrix.shard == 'terminals'
+        if: matrix.shard == 'terminals' && contains(fromJSON(needs.windows.outputs.gui), 'cmd')
         run: node scripts/retry.mjs npm run test:cmd -- --packaged
 
       - name: Verify image paths use text-only clipboard data and latest-copy ordering
-        if: matrix.shard == 'terminals'
+        if: matrix.shard == 'terminals' && contains(fromJSON(needs.windows.outputs.gui), 'clipboard')
         run: node scripts/retry.mjs npm run test:clipboard -- --packaged
 
       - name: Verify liquid glass under terminal load and reduced transparency
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'material')
         run: node scripts/retry.mjs npm run test:material -- --packaged
 
       - name: Verify transparent real Codex input and bright text without model requests
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'composer')
         run: node scripts/retry.mjs npm run test:composer -- --packaged
 
       - name: Verify reading commands, CLI keys and permission handoff
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'reading')
         run: node scripts/retry.mjs npm run test:reading -- --packaged
 
       - name: Verify the model dashboard window, its filters, adoption and layouts
-        if: matrix.shard == 'interaction'
+        if: matrix.shard == 'interaction' && contains(fromJSON(needs.windows.outputs.gui), 'dashboard')
         run: node scripts/retry.mjs npm run test:dashboard -- --packaged
 
       - name: Verify app-server question cards at the minimum window and exact validated answers
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'native-question')
         run: node scripts/retry.mjs npm run test:native-question -- --packaged
 
       - name: Verify native session events, requests, settings and usage
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'native-session')
         run: node scripts/retry.mjs npm run test:native-session -- --packaged
 
       - name: Verify packaged SDK and app-server through fake native executables
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'native-session-runtime')
         run: node scripts/retry.mjs npm run test:native-session -- --packaged --runtime
 
       - name: Verify agent hierarchy, queued messages, paged popups and slow autosave
-        if: matrix.shard == 'reading'
+        if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'reading-hierarchy')
         run: node scripts/retry.mjs node scripts/reading-hierarchy-smoke.mjs --packaged
 
       - name: Upload desktop test screenshots

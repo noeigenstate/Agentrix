@@ -18,7 +18,7 @@ const listeners = new Set<() => void>();
 const set = (patch: Partial<VoiceSnapshot>) => { snapshot = { ...snapshot, ...patch }; listeners.forEach(listener => listener()); };
 
 const capture = new MicrophoneCapture();
-let target: { id: string; sessionId: string; onError: (message: string) => void } | null = null;
+let target: { id: string; sessionId: string; composer: Composer | null; onError: (message: string) => void } | null = null;
 let started = false;
 // Microphone opens run one after another, so a cancelled open that finishes late never closes a newer recording.
 let opening: Promise<unknown> = Promise.resolve();
@@ -28,12 +28,15 @@ let lastTerminal: string | null = null;
 // box instead (submit: send them as the next message). A text box of its own, such as the decision page's
 // (data-voice-target="<id>" on it, for the shortcut), takes dictation under its id with no terminal at all;
 // sends: false when Enter only puts the words in.
-type Composer = { insert: (text: string, submit: boolean) => void; sends: boolean };
+type Composer = { insert: (text: string, submit: boolean) => void; sends: boolean; available: () => boolean; sessionId?: string };
 const composers = new Map<string, Composer>();
-export function dictateInto(id: string, insert: (text: string, submit: boolean) => void, sends = true) {
-  const composer = { insert, sends };
+export function dictateInto(id: string, insert: (text: string, submit: boolean) => void, sends = true, options: { available?: () => boolean; sessionId?: string } = {}) {
+  const composer = { insert, sends, available: options.available ?? (() => true), sessionId: options.sessionId };
   composers.set(id, composer);
-  return () => { if (composers.get(id) === composer) composers.delete(id); };
+  return () => {
+    if (composers.get(id) === composer) composers.delete(id);
+    if (target?.composer === composer) void cancelDictation();
+  };
 }
 // Such a text box (the decision page's new work, a review's comments): the words go in at its caret, or at the end
 // when it has no focus, and Enter only puts them in; sending stays the box's own button.
@@ -99,18 +102,21 @@ async function cancelDictation() {
 async function finish(submit = false) {
   const current = target; if (!current) return;
   target = null; measuredLevel = 0; set({ recording: null, busy: current.id, sending: submit && snapshot.sends });
+  const currentComposer = () => !current.composer || composers.get(current.id) === current.composer && current.composer.available();
   try {
     const wav = await capture.stopRecording(); await capture.close();
+    if (!currentComposer()) return;
     const text = await window.agentrix.transcribe(wav);
     if (!text.ok) throw new Error(text.error);
     if (!text.value.trim()) throw new Error(t('没有识别出文字，请再说一遍。'));
     const composer = composers.get(current.id);
+    if (!currentComposer() || composer && (!composer.available() || composer.sessionId && composer.sessionId !== current.sessionId)) return;
     if (composer) { composer.insert(text.value.trim(), submit && composer.sends); return; }
     const pasted = await window.agentrix.pasteTerminal(current.id, text.value, current.sessionId);
     if (!pasted.ok) throw new Error(pasted.error);
     if (submit) { await new Promise(resolve => setTimeout(resolve, SUBMIT_DELAY)); window.agentrix.writeTerminal(current.id, '\r'); }
     focusTerminal(current.id);
-  } catch (error) { current.onError(microphoneMessage(error)); }
+  } catch (error) { if (currentComposer()) current.onError(microphoneMessage(error)); }
   finally { await capture.close(); set({ busy: null, sending: false, label: null }); }
 }
 
@@ -119,6 +125,8 @@ async function finish(submit = false) {
 export async function toggleDictation(id: string, sessionId: string | null, onError: (message: string) => void, label = '') {
   if (snapshot.busy) return onError(t('正在识别上一段语音，请稍候。'));
   if (snapshot.recording) return snapshot.recording === id ? finish() : onError(t('另一个终端正在录音，请先结束那一段。'));
+  const composer = composers.get(id) ?? null;
+  if (composer && !composer.available()) return;
   if (!sessionId && !composers.has(id)) return onError(t('请先启动终端，再使用语音输入。'));
   if (snapshot.microphone === false) { void refreshMicrophone(); return onError(t('未检测到麦克风，请连接后重试。')); }
   if (!snapshot.model?.ready) {
@@ -127,7 +135,7 @@ export async function toggleDictation(id: string, sessionId: string | null, onEr
     return onError(t('语音模型开始下载，完成后即可使用。'));
   }
   // Recording counts from the keypress or click, so an Escape while the microphone is still opening cancels it.
-  const pending = { id, sessionId: sessionId ?? '', onError };
+  const pending = { id, sessionId: composer?.sessionId ?? sessionId ?? '', composer, onError };
   target = pending; measuredLevel = 0; set({ recording: id, label: label || null, sends: composers.get(id)?.sends ?? true });
   // The recognizer is released after a few idle minutes; load it again while the user is speaking.
   void window.agentrix.warmVoice();
@@ -145,7 +153,8 @@ export async function toggleDictation(id: string, sessionId: string | null, onEr
   } catch (error) {
     if (target === pending) { target = null; measuredLevel = 0; set({ recording: null, label: null }); }
     if (!target) await capture.close();
-    onError(microphoneMessage(error)); void refreshMicrophone();
+    if (!composer || composers.get(id) === composer && composer.available()) onError(microphoneMessage(error));
+    void refreshMicrophone();
   }
 }
 

@@ -41,11 +41,11 @@ test('B4 stop requests a final result before AbortError and a resumed cumulative
   await until(() => resumed.snapshot().state === 'idle');
   assert.equal(factory.usage.available(10), 9000000); assert.equal(factory.usage.summary().monthUsdMicros, 1000000);
 });
-test('B4 SDK failure keeps bounded unverified spend without locking the month', async t => {
+test('B4 SDK failure keeps its unverified monthly allowance reserved', async t => {
   const { session, fake, factory } = runtime(t);
   await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'hold' }); await until(() => fake.inputs.length === 1);
   fake.fail(new Error('synthetic SDK crash')); await until(() => session.snapshot().state === 'failed');
-  assert.equal(factory.apiState(10).status, 'ready'); assert.equal(factory.usage.available(10), 5000000);
+  assert.equal(factory.apiState(10).status, 'budget_exhausted'); assert.equal(factory.usage.available(10), 0);
 });
 test('B4 missing resume baseline anchors history, holds one lease, and reconciles on later cumulative evidence', async t => {
   const id = randomUUID(), { session, fake, factory } = runtime(t, { providerSessionId: id });
@@ -53,9 +53,26 @@ test('B4 missing resume baseline anchors history, holds one lease, and reconcile
   await session.resume(); await session.send({ clientMessageId: randomUUID(), text: 'resume old' }); await until(() => fake.inputs.length === 1);
   fake.emit({ type: 'result', uuid: 'baseline', total_cost_usd: 20, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle');
-  assert.equal(factory.apiState(10).status, 'ready'); assert.equal(factory.usage.available(10), 5000000);
+  assert.equal(factory.apiState(10).status, 'budget_exhausted'); assert.equal(factory.usage.available(10), 0);
+  assert.equal(session.hasAllowance(), true, 'the live query still owns its allowance; another query cannot spend it');
   await session.send({ clientMessageId: randomUUID(), text: 'next' }); await until(() => fake.inputs.length === 2);
   fake.emit({ type: 'result', uuid: 'next', total_cost_usd: 20.2, modelUsage: {}, queued_turn_count: 0 });
+  await until(() => session.snapshot().state === 'idle'); assert.equal(factory.usage.available(10), 9800000);
+});
+
+test('an uncertain retained query acquires a current-month reservation after UTC rollover', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 10, 30, 23, 59, 59) });
+  const { session, fake, factory } = runtime(t, { providerSessionId: randomUUID() });
+  await session.resume(); await session.send({ clientMessageId: 'before-month', text: 'anchor history' }); await until(() => fake.inputs.length === 1);
+  fake.emit({ type: 'result', uuid: 'old-anchor', total_cost_usd: 20, modelUsage: {}, queued_turn_count: 0 });
+  await until(() => session.snapshot().state === 'idle');
+  assert.equal(factory.usage.available(10), 0); assert.equal(session.hasAllowance(), true);
+  t.mock.timers.tick(2000);
+  assert.equal(session.hasAllowance(), false); assert.equal(factory.usage.available(10), 10000000);
+  await session.send({ clientMessageId: 'after-month', text: 'new monthly allowance' }); await until(() => fake.inputs.length === 2);
+  assert.equal(factory.usage.available(10), 0, 'the new month is reserved before sending, without spending the prior reservation twice');
+  assert.equal(fake.calls.length, 1);
+  fake.emit({ type: 'result', uuid: 'new-month', total_cost_usd: 20.2, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle'); assert.equal(factory.usage.available(10), 9800000);
 });
 test('M2 opened idle sessions reserve nothing and finished idle queries release their unused budget', async t => {
@@ -76,7 +93,7 @@ test('M2 a result with queued turns retains its query and reservation until the 
   await until(() => fake.inputs.length === 2);
   fake.emit({ type: 'result', uuid: 'first', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 1 });
   await until(() => factory.usage.baseline(fake.sessionId) === 100000);
-  assert.equal(fake.calls.length, 1); assert.equal(factory.usage.available(10), 5000000);
+  assert.equal(fake.calls.length, 1); assert.equal(factory.usage.available(10), 0);
   fake.emit({ type: 'result', uuid: 'queued', total_cost_usd: 0.2, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle');
   assert.equal(factory.usage.available(10), 9800000); assert.equal(fake.calls.length, 1);

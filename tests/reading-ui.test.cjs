@@ -40,6 +40,7 @@ function loadUI(name, overrides = {}) {
     if (Object.hasOwn(overrides, key) && key === './agent-screen') { const { choiceIdentity, waitingTitle } = require('../src/features/agents/agent-screen.ts'); return { choiceIdentity, waitingTitle, ...overrides[key] }; }
     if (Object.hasOwn(overrides, key)) return overrides[key];
     if (name.endsWith('.css')) return {};
+    if (key === './VoiceButton') return { VoiceButton: ({ disabled }) => React.createElement('button', { type: 'button', className: 'icon-button voice-button', disabled, 'aria-label': 'Voice input' }) };
     // Every icon renders as a plain svg carrying its class name.
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => props => React.createElement('svg', { className: props.className }) });
     if (key === './i18n') return { currentLanguage: () => 'en', t: (text, values = {}) => (en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) };
@@ -426,6 +427,15 @@ function dictationHarness(t, overrides = {}) {
     async tick(ms) { t.mock.timers.tick(ms); for (let i = 0; i < 12; i++) await Promise.resolve(); render(); },
   };
 }
+
+test('the reading composer uses the shared microphone beside send, with the same disabled state as its input', t => {
+  const VoiceButton = () => null, h = dictationHarness(t, { './VoiceButton': { VoiceButton } });
+  const microphone = () => elements(h.tree()).find(node => node.type === VoiceButton).props;
+  assert.deepEqual([microphone().terminalId, microphone().sessionId, microphone().size, microphone().disabled], ['dictation', 'session', 15, false]);
+  h.props.handoff = { locked: true, incoming: null, offer() {}, take() {} }; h.render();
+  assert.equal(microphone().disabled, h.render().props.disabled); assert.equal(microphone().disabled, true);
+  h.props.handoff.locked = false; h.render(); assert.equal(microphone().disabled, false);
+});
 
 function workingComposerHarness(t, agent, overrides = {}) {
   let clock = 10000, sequence = 0;

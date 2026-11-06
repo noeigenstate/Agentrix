@@ -4,11 +4,11 @@ const { agentCommand } = require('../electron/features/agents/agent-command.cjs'
 const { commandRun, commandRows } = require('../src/features/reading/agent-command-run.ts');
 
 test('a run of the CLI that is no conversation is told by its first word', () => {
-  assert.equal(agentCommand('codex', 'update'), 'update');
+  assert.equal(agentCommand('codex', 'update'), null);
   assert.equal(agentCommand('claude', 'update'), 'update');
-  assert.equal(agentCommand('codex', '--version'), '--version');
+  assert.equal(agentCommand('codex', '--version'), null);
   assert.equal(agentCommand('claude', '-p'), '-p');
-  assert.equal(agentCommand('codex', 'login'), 'login');
+  assert.equal(agentCommand('codex', 'login'), null);
   // A conversation: nothing, resume, a model option, a prompt.
   for (const word of [undefined, '', 'resume', 'fork', '--model', '-m', 'hello', '修复登录页', '--update; rm -rf /']) assert.equal(agentCommand('codex', word), null, String(word));
   assert.equal(agentCommand('claude', '--resume'), null);

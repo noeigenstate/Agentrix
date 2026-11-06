@@ -43,6 +43,8 @@ const load = makeLoader({
   '../../shared/UserAvatar': { UserAvatar: () => React.createElement('i', { className: 'avatar' }) },
   '../../shared/useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[fit.index] ?? '' },
   './ResetQuota': { ResetQuota: () => null },
+  '../voice/voice-input': { dictateInto: () => () => {} },
+  '../voice/VoiceButton': { VoiceButton: ({ disabled, name }) => React.createElement('button', { type: 'button', className: 'icon-button voice-button', disabled, 'aria-label': `语音输入 ${name}` }) },
 });
 const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' }, getElementById: () => null } }); load('shared/i18n.ts').applyLanguage('zh'); });
@@ -54,6 +56,22 @@ const elements = node => Array.isArray(node) ? node.flatMap(elements) : React.is
 // The same, with the hook-free components below the first level run as well, so a card’s inner parts are seen.
 const deep = node => Array.isArray(node) ? node.flatMap(deep) : React.isValidElement(node) ? (typeof node.type === 'function' ? deep(node.type(node.props)) : [node, ...deep(node.props.children)]) : [];
 const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
+
+test('a child user-side message shows its factual planner or owner avatar, with a neutral unknown planner', () => {
+  const { ConversationFeed } = load('features/reading/ConversationFeed.tsx');
+  const render = sender => renderToStaticMarkup(React.createElement(ConversationFeed, {
+    entries: [{ id: 'u:brief', at: 1000, role: 'user', text: 'Same words', sender }], agent: 'codex', projectId: 'p', live: false, onError() {},
+  }));
+  const planner = render({ kind: 'planner', agent: 'claude', model: 'claude-opus-5-5' });
+  assert.match(planner, /Opus 5\.5/); assert.doesNotMatch(planner, /class="avatar"|>你</);
+  const unknown = render({ kind: 'planner', agent: null, model: null });
+  assert.match(unknown, /主模型/); assert.doesNotMatch(unknown, /class="avatar"|>你</);
+  const unreported = render({ kind: 'planner', agent: 'claude', model: null });
+  assert.match(unreported, /主模型/); assert.doesNotMatch(unreported, /agent-brand-claude|class="avatar"/);
+  const codex = render({ kind: 'planner', agent: 'codex', model: 'gpt-6.1-sol' });
+  assert.match(codex, /GPT-6\.1-Sol/); assert.match(codex, /agent-brand-codex/); assert.doesNotMatch(codex, /class="avatar"|>你</);
+  assert.match(render({ kind: 'owner' }), /class="avatar"/); assert.match(render(undefined), />你</);
+});
 
 // One runtime's event stream: sequence numbers count up; `extra` overrides any field of an event.
 function stream(base = {}) {
@@ -278,11 +296,11 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
 test('the launcher starts a native session or a terminal by the settings, says where the click goes, and a missing key never starts a hidden terminal', async () => {
   const set = claudePath => ({ claudePath, monthlyBudgetUsd: null });
   const cases = [
-    ['claude', { settings: set('api-then-terminal'), saved: true }, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], '开始新的对话 · API · 原生界面'],
+    ['claude', { settings: set('api-then-terminal'), saved: true }, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], '开始新的对话 · API · 原生模式'],
     ['claude', { settings: set('terminal-only'), saved: true }, [['launch', 't1', 'claude', 'new']], '开始新的对话'],
     ['claude', { settings: set('api-then-terminal'), saved: false }, [['launch', 't1', 'claude', 'new'], ['note', 't1', 'no_key']], '开始新的对话 · 没有 API key，改用终端'],
     ['claude', { settings: set('api-only'), saved: false }, [], '开始新的对话 · 需先保存 API key'],
-    ['codex', { settings: set('api-then-terminal'), saved: false }, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], '开始新的对话 · 原生界面'],
+    ['codex', { settings: set('api-then-terminal'), saved: false }, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], '开始新的对话 · 原生模式'],
   ];
   for (const [agent, runtime, expected, note] of cases) {
     const calls = [], view = launcher(runtime, calls);
@@ -303,7 +321,7 @@ test('the launcher of an SSH project offers Codex and a plain terminal only; Cod
   try {
     remote.render(); await settle();
     assert.deepEqual(agents(remote), ['is-codex'], 'Claude on another computer is the owner’s own, in its terminal');
-    assert.equal(remote.note('codex'), '开始新的对话 · 原生界面', 'no "not installed" for a computer that is not the one it runs on');
+    assert.equal(remote.note('codex'), '开始新的对话 · 原生模式', 'no "not installed" for a computer that is not the one it runs on');
     remote.button('codex').props.onClick(); await settle();
     assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], 'the session starts through the bridge, with no install and no Node.js');
     calls.length = 0;
@@ -317,7 +335,7 @@ test('the launcher of an SSH project offers Codex and a plain terminal only; Cod
     assert.match(failing.text(), /<p class="agent-launcher-error" role="alert">远端未找到 Codex 程序。<\/p>/, 'what main says about the other computer is said once, in the card, where no session has taken its place');
   } finally { failing.done(); }
   const local = launcher(runtime, [], { kind: 'local', codexHere: false });
-  try { local.render(); await settle(); assert.deepEqual(agents(local), ['is-claude', 'is-codex']); assert.match(local.note('codex'), /未安装/, 'a local project still offers the install'); assert.equal(local.note('claude'), '开始新的对话 · API · 原生界面'); } finally { local.done(); }
+  try { local.render(); await settle(); assert.deepEqual(agents(local), ['is-claude', 'is-codex']); assert.match(local.note('codex'), /未安装/, 'a local project still offers the install'); assert.equal(local.note('claude'), '开始新的对话 · API · 原生模式'); } finally { local.done(); }
 });
 
 test('the history of an SSH project can always be chosen: it is asked after the click, which resumes and says main’s reason if there is none', async () => {
@@ -327,7 +345,7 @@ test('the history of an SSH project can always be chosen: it is asked after the 
   try {
     remote.render(); await settle();
     assert.deepEqual([radio(remote).props.disabled, radio(remote).props.title], [false, undefined], 'no record is known here, and nothing says there is none');
-    radio(remote).props.onClick(); assert.equal(remote.note('codex'), '接着上次的对话 · 原生界面', 'it does not say it starts again: the click asks');
+    radio(remote).props.onClick(); assert.equal(remote.note('codex'), '接着上次的对话 · 原生模式', 'it does not say it starts again: the click asks');
     remote.button('codex').props.onClick(); await settle();
     assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: true }], ['refresh', 't1']]);
   } finally { remote.done(); }
@@ -336,8 +354,8 @@ test('the history of an SSH project can always be chosen: it is asked after the 
     const view = launcher(runtime, [], { kind: 'ssh', codexHere: false, history });
     try { view.render(); await settle(); radio(view).props.onClick(); return view.note('codex'); } finally { view.done(); }
   };
-  assert.equal(await noted({ claude: null, codex: { id: 'thread-1' } }), '接着上次的对话 · 原生界面', 'no time, no dangling dot');
-  assert.match(await noted({ claude: null, codex: { id: 'thread-1', at: Date.now() } }), /^接着上次的对话 · .* · 原生界面$/, 'with a time it is the same sentence as a local one');
+  assert.equal(await noted({ claude: null, codex: { id: 'thread-1' } }), '接着上次的对话 · 原生模式', 'no time, no dangling dot');
+  assert.match(await noted({ claude: null, codex: { id: 'thread-1', at: Date.now() } }), /^接着上次的对话 · .* · 原生模式$/, 'with a time it is the same sentence as a local one');
   const failing = launcher(runtime, [], { kind: 'ssh', codexHere: false, startError: '远端没有可继承的对话。' });
   try {
     failing.render(); await settle(); radio(failing).props.onClick(); failing.button('codex').props.onClick(); await settle();
@@ -530,21 +548,78 @@ test('what the owner sent and the conversation does not show is pending: sending
   assert.equal(nativePending(model, sent, new Set(['c2'])).lost.has('c2'), false, 'a dismissed card is gone with its mark');
 });
 
-test('the view is the reading view’s: its markup is the feed’s, the working line and the stop are the reading view’s, and nothing is native-only but the requests', async () => {
+test('native steps show only summaries and status while file changes keep the reading view details', async () => {
   const html = await viewHtml(richSession);
   assert.match(html, /<div class="reading-view" data-agent="claude" data-native-session="rs1">/);
   assert.match(html, /class="reading-step is-user/); assert.match(html, /<p class="is-folded">fix the test<\/p>/); assert.match(html, /class="reading-step is-agent is-claude/);
   assert.match(html, /<div class="md">Done: it passes now\.<\/div>/);
-  assert.match(html, /class="reading-tools[^"]*is-running/); assert.match(html, /运行 1 条命令/);
+  assert.match(html, /class="reading-tools[^"]*is-running/); assert.match(html, /运行命令/);
   const running = await viewHtml(ev => [ev('session.state', { state: 'running' }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test' } }, { itemId: 'k1' }), ev('item.delta', { channel: 'output', text: 'FAIL a.test.js' }, { itemId: 'k1' })]);
-  assert.match(running, /<pre class="reading-tool-output">FAIL a\.test\.js<\/pre>/, 'the group at the end that still runs is open, with the output so far, as the reading view opens it');
-  assert.match(html, /运行 1 条命令 · 编辑 1 个文件/); assert.match(html, /<code class="reading-tools-file">[^>]*a\.ts/); assert.match(html, /调用 1 个工具/, 'the plan and the diff are steps of the last group');
-  assert.match(html, /reading-status is-working is-claude/); assert.match(html, /正在运行 npm test/); assert.match(html, /Esc 中断/);
+  assert.doesNotMatch(running, /FAIL a\.test\.js|npm test|reading-tools-head|reading-tool-output/, 'a command has no expansion or raw output, including while running');
+  assert.match(html, /编辑 1 个文件/); assert.match(html, /<code class="reading-tools-file">[^>]*a\.ts/);
+  assert.match(html, /reading-status is-working is-claude/); assert.match(html, /正在运行命令/); assert.match(html, /Esc 中断/);
   assert.match(html, /title="中断（Esc）"/, 'the stop button is the reading view’s, in the composer'); assert.doesNotMatch(html, /<textarea[^>]*disabled/, 'and the message box stays usable');
   assert.match(html, /<div class="native-tail">/); assert.match(html, /Run rm -rf build/); assert.match(html, />允许本次</); assert.match(html, />拒绝</);
   assert.doesNotMatch(html, /native-head|native-state|native-runtime|native-stop|native-receipt|native-step|Claude · API|已被读取|会话已就绪|→/, 'no header, no receipt words, no native-only decoration');
   assert.doesNotMatch(html, /思考摘要|Looking at the failing/, 'a thinking summary is not drawn');
   assert.doesNotMatch(html, /Codex/);
+});
+
+test('both native providers hide failed tool and shell commands, raw output and tooltip details', async () => {
+  for (const provider of ['claude', 'codex']) {
+    const html = await viewHtml(ev => [
+      ev('session.state', { state: 'idle' }),
+      ev('item.upsert', { kind: 'command', status: 'failed', content: { command: 'echo RAW_COMMAND_SECRET', output: 'RAW_OUTPUT_SECRET', exitCode: 2, origin: 'shell' } }, { itemId: 'shell:one' }),
+      ev('item.upsert', { kind: 'tool', status: 'failed', content: { name: 'Read', input: { file_path: 'RAW_PATH_SECRET' }, result: 'RAW_TOOL_SECRET' } }, { itemId: 'read' }),
+    ], { provider, transport: provider === 'claude' ? 'claude-sdk' : 'codex-app-server' });
+    assert.doesNotMatch(html, /RAW_\w+|reading-tools-head|reading-tool-output/);
+    assert.match(html, /运行命令/); assert.match(html, /读取文件/); assert.match(html, /命令以退出码 2 结束/);
+    assert.match(html, /工具执行失败，未提供具体原因/); assert.match(html, /失败/);
+  }
+});
+
+test('the terminal feed still opens running command details and retains raw command and output', () => {
+  const { ConversationFeed } = load('features/reading/ConversationFeed.tsx');
+  const html = renderToStaticMarkup(React.createElement(ConversationFeed, { agent: 'claude', projectId: 'p', live: true, onError() {}, entries: [
+    { id: 'command', at: 1000, role: 'tool', tool: { kind: 'command', tool: 'Bash', target: 'echo TERMINAL_COMMAND', detail: '', output: 'TERMINAL_OUTPUT', done: false, failed: false } },
+  ] }));
+  assert.match(html, /TERMINAL_COMMAND/); assert.match(html, /TERMINAL_OUTPUT/); assert.match(html, /aria-expanded="true"/);
+});
+
+test('native command summaries keep the observed phrase for both providers and never offer details after completion', async () => {
+  for (const provider of ['claude', 'codex']) {
+    for (const state of ['in_progress', 'completed']) {
+      const html = await viewHtml(ev => [
+        ev('session.state', { state: state === 'in_progress' ? 'running' : 'idle' }),
+        ev('item.upsert', { kind: 'command', status: state, content: { command: 'git log RAW_COMMAND', phrase: '查看提交历史', cwd: '/RAW_CWD', output: 'RAW_OUTPUT' } }, { itemId: 'history' }),
+      ], { provider, transport: provider === 'claude' ? 'claude-sdk' : 'codex-app-server' });
+      assert.match(html, /查看提交历史/);
+      assert.match(html, state === 'in_progress' ? /进行中/ : /已完成/);
+      assert.doesNotMatch(html, /RAW_\w+|reading-tools-head|reading-tool-output|<details/);
+      const summary = html.match(/<div data-reading-entry="history"[^>]*>[\s\S]*?<\/div>/)?.[0];
+      assert.ok(summary);
+      assert.doesNotMatch(summary, /<button|aria-expanded|title=/, 'the step itself has no expansion or tooltip; composer controls remain accessible');
+    }
+  }
+});
+
+test('native summaries pass file changes unchanged to the existing detail renderer and hide command targets in result checks only when requested', () => {
+  const { NativeSteps } = load('features/native-session/native-steps.tsx');
+  const { ResultChecks } = load('features/reading/ResultCard.tsx');
+  const change = { id: 'edit', at: 1, role: 'tool', tool: { kind: 'edit', target: 'src/a.ts', output: '-before\n+after', done: true, failed: false } };
+  const command = { id: 'check', at: 2, role: 'tool', tool: { kind: 'command', target: 'npm test RAW_TARGET', phrase: '运行测试', output: 'RAW_OUTPUT', done: true, failed: false } };
+  const passed = [];
+  const html = renderToStaticMarkup(React.createElement(NativeSteps, { entries: [change, command], details: entries => {
+    passed.push(...entries);
+    return React.createElement('pre', null, entries[0].tool.output);
+  } }));
+  assert.deepEqual(passed, [change]);
+  assert.match(html, /-before\n\+after/);
+  assert.doesNotMatch(html, /RAW_TARGET|RAW_OUTPUT/);
+  const result = { checks: [{ id: 'check', target: command.tool.target, phrase: '运行测试', failed: false }] };
+  const checks = summaryOnly => renderToStaticMarkup(React.createElement(ResultChecks, { result, summaryOnly }));
+  assert.doesNotMatch(checks(true), /RAW_TARGET/);
+  assert.match(checks(false), /RAW_TARGET/);
 });
 
 test('a finished session says why and offers a new conversation; a Codex session is the reading view’s Codex; an idle one has no stop and no line of its own before there is a reply', async () => {
@@ -564,7 +639,8 @@ test('a finished session says why and offers a new conversation; a Codex session
 // The session component with real hooks, the heavy neighbours stood in. `show` replaces the model's events; `change` is the terminal's SwitchState.
 function sessionView(events, bridge, base = {}) {
   const model = require('../src/features/native-session/native-model.ts'), ev = stream(base), dismissed = [], refreshed = [], handoff = handoffStub(), toBottom = [];
-  let change = null;
+  let change = null, voice = null;
+  const VoiceButton = () => null;
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const build = list => ({ model: model.applyEvents(model.emptyModel(), list).model, dismissed: null, noteDismissed: false, handoff: null });
@@ -572,6 +648,7 @@ function sessionView(events, bridge, base = {}) {
   // The message box's helpers are the reading view's real ones, run on the same hooks as the view (the harness is made just below).
   const readingFile = file => harness.load(`src/features/reading/${file}`);
   Object.defineProperties(parts, {
+    createDictationSend: { value: require('../src/features/reading/dictation-send.ts').createDictationSend },
     splitQuote: { value: load('features/reading/message-quote.ts').splitQuote }, isCommandDraft: { get: () => readingFile('useCommandPalette.ts').isCommandDraft },
     useComposerHistory: { get: () => readingFile('useComposerHistory.ts').useComposerHistory }, useCommandPalette: { get: () => readingFile('useCommandPalette.ts').useCommandPalette },
     useMentions: { get: () => readingFile('useMentions.ts').useMentions }, MentionPalette: { get: () => harness.load('src/features/reading/MentionPalette.tsx').MentionPalette },
@@ -583,10 +660,13 @@ function sessionView(events, bridge, base = {}) {
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
     './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
     './native-store.ts': { dismissNative: id => dismissed.push(id), refreshNativeSession: id => refreshed.push(id), nativeItem: (terminal, id) => entry.model.items[id], nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
-    './native-composer.ts': load('features/native-session/native-composer.ts'),
+    './native-steps': load('features/native-session/native-steps.tsx'), './native-composer.ts': load('features/native-session/native-composer.ts'),
     './native-notices.ts': load('features/native-session/native-notices.ts'),
     // The hook of the Claude commands runs on the same hooks as the view (the harness is made just below).
     './useComposerActions.ts': { get useComposerActions() { return harness.load('src/features/native-session/useComposerActions.ts').useComposerActions; } },
+    './dictation-send': require('../src/features/reading/dictation-send.ts'),
+    './voice-input': { dictateInto: (id, insert, sends, options) => { const binding = { id, insert, sends, options }; voice = binding; return () => { if (voice === binding) voice = null; }; } },
+    './VoiceButton': { VoiceButton },
     './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
   let entry = build(events(ev));
@@ -594,14 +674,82 @@ function sessionView(events, bridge, base = {}) {
   const find = predicate => elements(tree()).find(predicate), box = () => find(node => node.type === 'textarea');
   return {
     ev, find, box, tree, dismissed, refreshed, handoff, parts, toBottom, show(list) { entry = build(list); }, switching(state) { change = state; },
+    voice: () => { tree(); return voice; }, voiceButton: () => find(node => node.type === VoiceButton)?.props,
     prompts: () => find(node => node.type === parts.PendingPromptEntries).props, decorations: () => find(node => node.props?.value?.frame).props.value, feed: () => find(node => node.type === feed.ConversationFeed).props,
     type: value => box().props.onChange({ target: { value } }),
-    press: (init = {}) => { const prevented = []; box().props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), ...init }); return prevented.length; },
+    press: (init = {}) => { const prevented = []; box().props.onKeyDown({ key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, preventDefault: () => prevented.push(true), stopPropagation() {}, ...init }); return prevented.length; },
     done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; },
   };
 }
 const idle = ev => [ev('session.state', { state: 'idle', reason: null })];
 const stopButton = view => view.find(node => node.type === 'button' && node.props.title === '中断（Esc）');
+
+function voiceBox(view, value = '', at = value.length, end = at) {
+  const node = { value, selectionStart: at, selectionEnd: end, focus() { document.activeElement = node; }, setSelectionRange(start, finish) { node.selectionStart = start; node.selectionEnd = finish; } };
+  view.box().props.ref.current = node; document.activeElement = node;
+  view.type(value); return node;
+}
+
+for (const provider of ['claude', 'codex']) test(`${provider}: native dictation inserts at the caret, and only an explicit voice submit uses the shared half-second grace`, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } }, { provider });
+  try {
+    const node = voiceBox(view, 'before after', 7);
+    assert.ok(view.voice(), 'native composer registers with the existing dictation controller');
+    assert.deepEqual([view.voice().id, view.voice().sends, view.voiceButton().disabled], ['t1', true, false]);
+    view.voice().insert('spoken ', false); view.tree();
+    assert.equal(view.box().props.value, 'before spoken after');
+    assert.equal(node.selectionStart, 14); t.mock.timers.tick(500); await settle(); assert.deepEqual(sends, []);
+    node.value = view.box().props.value; node.selectionStart = node.selectionEnd = node.value.length;
+    view.voice().insert(' next', true); view.tree();
+    t.mock.timers.tick(499); await settle(); assert.deepEqual(sends, []);
+    t.mock.timers.tick(1); await settle();
+    assert.equal(sends.length, 1); assert.equal(sends[0][3], 'before spoken after next');
+    view.voiceButton().onError('麦克风访问被拒绝，请在 Windows 设置中允许桌面应用使用麦克风。');
+    assert.match(view.find(node => node.props.role === 'alert').props.children, /麦克风访问被拒绝/);
+  } finally { document.activeElement = null; view.done(); }
+});
+
+test('native dictation follows composer availability and discards stale recordings and delayed sends across switches and session replacement', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
+  try {
+    voiceBox(view);
+    view.show([view.ev('session.state', { state: 'running' })]);
+    assert.equal(view.voiceButton().disabled, false, 'work still takes owner input');
+    const previous = view.voice(); previous.insert('held', true); view.tree();
+    view.handoff.locked = true; view.tree();
+    assert.equal(view.voiceButton().disabled, true); assert.equal(view.voice().options.available(), false);
+    view.handoff.locked = false; view.tree();
+    previous.insert('STALE', true); view.tree(); t.mock.timers.tick(500); await settle();
+    assert.equal(view.box().props.value, 'held'); assert.deepEqual(sends, []);
+    const oldSession = view.voice(), other = stream({ runtimeSessionId: 'replacement' });
+    view.show([other('session.state', { state: 'idle' })]); view.tree();
+    oldSession.insert('OLD_SESSION', true); view.tree();
+    assert.doesNotMatch(view.box().props.value, /OLD_SESSION/);
+    view.show([other('session.state', { state: 'closed' })]); view.tree();
+    assert.equal(view.voiceButton().disabled, true); assert.equal(view.voice().options.available(), false);
+    t.mock.timers.tick(500); await settle(); assert.deepEqual(sends, []);
+  } finally { document.activeElement = null; view.done(); }
+});
+
+test('native dictation grace cancels on editing, IME, Escape, unmount and direct Enter sends once', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const action of ['edit', 'ime', 'escape', 'unmount', 'enter']) {
+    const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
+    let disposed = false;
+    try {
+      voiceBox(view); view.voice().insert('spoken', true); view.tree();
+      if (action === 'edit') view.type('edited');
+      if (action === 'ime') view.box().props.onCompositionStart();
+      if (action === 'escape') view.press({ key: 'Escape' });
+      if (action === 'unmount') { view.done(); disposed = true; }
+      if (action === 'enter') view.press();
+      if (!disposed) view.tree(); t.mock.timers.tick(500); await settle();
+      assert.equal(sends.length, action === 'enter' ? 1 : 0, action);
+    } finally { document.activeElement = null; if (!disposed) view.done(); }
+  }
+});
 
 test('Enter sends the trimmed message at once and shows it as sending until the runtime echoes it; Shift+Enter, IME and an empty box send nothing', async () => {
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
@@ -916,7 +1064,7 @@ test('the working line says the step in hand, the result belongs to a round that
   const view = sessionView(ev => [...idle(ev), ev('turn.started', { origin: 'user', clientMessageId: 'c1' }), user(ev), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test' } }, { itemId: 'k1' })], {});
   try {
     const working = view.decorations().status;
-    assert.equal(working.type, view.parts.WorkingLine); assert.deepEqual([working.props.agent, working.props.label], ['claude', '正在command:npm test']);
+    assert.equal(working.type, view.parts.WorkingLine); assert.deepEqual([working.props.agent, working.props.label], ['claude', '正在运行命令']);
     assert.equal(view.decorations().running, true); assert.equal(view.decorations().anchor, undefined, 'no result while it works');
     view.show([...idle(view.ev), view.ev('turn.started', { origin: 'user', clientMessageId: 'c1' }), user(view.ev)]);
     assert.equal(view.find(node => node.type === view.parts.WorkingLine).props.label, 'Claude Code 正在思考', 'no step: it is thinking, on a step of its own after your message');
@@ -1091,8 +1239,8 @@ test('the requests and the switch question stand at the end of the timeline on t
 test('only what the reading view does not have stays in native-session.css', () => {
   const css = fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   const classes = new Set(css.match(/\.native-[a-z-]+/g));
-  assert.deepEqual([...classes].sort(), ['.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
-    'no header, step, receipt, diff or plan style of its own');
+  assert.deepEqual([...classes].sort(), ['.native-tool-summary', '.native-tool-label', '.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
+    'only native requests, notices and non-expandable step summaries have native styles');
 });
 
 test('a new request pulls the view to it even when the owner had scrolled up; an ordinary step does not', () => {
@@ -1106,11 +1254,11 @@ test('a new request pulls the view to it even when the owner had scrolled up; an
   } finally { view.done(); }
 });
 
-test('a command’s folder reads as its last two parts on one line with the whole path as the tooltip of the step’s line', async () => {
+test('a native command retains its folder in the model but shows no path or tooltip', async () => {
   const { shortPath } = words(), cwd = '/home/someone/work/very/long/path/to/the/project';
   assert.deepEqual([shortPath('/work'), shortPath('C:\\Users\\someone\\work\\very\\long\\path\\project\\sub'), shortPath(cwd)], ['/work', '…\\project\\sub', '…/the/project']);
   const html = await viewHtml(ev => [ev('session.state', { state: 'running', reason: null }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test', cwd } }, { itemId: 'k' })]);
-  assert.ok(html.includes('…/the/project')); assert.doesNotMatch(html.replace(/ title="[^"]*"/g, ''), /\/home\/someone/, 'the folder’s head is not drawn');
+  assert.doesNotMatch(html, /the\/project|home\/someone|npm test/, 'no folder, command or raw tooltip is drawn');
 });
 
 test('the message box always has a hint: the longest that fits, and the shortest when none does', async () => {
@@ -1121,7 +1269,7 @@ test('the message box always has a hint: the longest that fits, and the shortest
 });
 
 test('Codex falling back to the terminal leaves its reason where the native view stood, in words; the owner’s own choice of the terminal gives no reason to tell', async () => {
-  const cases = [['codex_cli_required', '已改用终端 · 未找到 Codex 命令行，无法使用原生界面'], ['unsupported_codex_version', '已改用终端 · 这个 Codex 版本不支持原生界面'], ['some_new_code', '已改用终端'], [null, '已改用终端']];
+  const cases = [['codex_cli_required', '已改用终端 · 未找到 Codex 命令行，无法使用原生模式'], ['unsupported_codex_version', '已改用终端 · 这个 Codex 版本不支持原生模式'], ['some_new_code', '已改用终端'], [null, '已改用终端']];
   for (const [reason, words] of cases) {
     const ev = stream({ provider: 'codex', transport: 'codex-app-server' }), events = [ev('path.changed', { previous: null, selected: 'terminal', reason })];
     let html = '', shown = null;
@@ -1163,6 +1311,18 @@ const usageSection = (html, agent) => {
   return section[1];
 };
 
+test('Codex billing keeps ChatGPT subscriptions while legacy terminal snapshots require app-server restoration', async () => {
+  const usage = async () => ({ ok: true, value: usageOf() });
+  for (const sessionId of ['legacy-pty', null]) {
+    const html = await usageHtml({ usage }, terminal('codex-billing', { agent: 'codex', codexActive: true, sessionId }));
+    const codex = usageSection(html, 'Codex');
+    assert.match(codex, /ChatGPT 订阅/);
+    assert.doesNotMatch(codex, /<span>终端<\/span>/);
+    assert.match(codex, sessionId ? /需用原生模式恢复/ : /<span>原生模式<\/span>/);
+    assert.doesNotMatch(codex, /app-server|SDK/);
+  }
+});
+
 test('the usage block groups Claude and Codex separately: only a connection row, spend and a set budget as a bar under an API connection, the subscription bars under a subscription, the last switch under its agent', async () => {
   const asked = [];
   const html = await usageHtml({ usage: async projectId => { asked.push(projectId); return { ok: true, value: usageOf() }; } });
@@ -1171,8 +1331,9 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.deepEqual(asked, ['p1'], 'the read is scoped to the project in view');
   assert.match(html, /<h3 class="activity-card-title">运行方式与额度<\/h3>/);
   assert.match(claude, /<h4[^>]*>Claude<\/h4>/); assert.match(codex, /<h4[^>]*>Codex<\/h4>/);
-  assert.deepEqual(labels(claude), ['连接']); assert.deepEqual(labels(codex), ['连接', '通道']);
-  assert.ok(codex.includes('<dt>通道</dt><dd><span>app-server</span></dd>'), 'who pays and which way it runs are told apart');
+  assert.deepEqual(labels(claude), ['连接', '通道']); assert.deepEqual(labels(codex), ['连接', '通道']);
+  assert.ok(codex.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'), 'who pays and which way it runs are told apart');
+  assert.ok(claude.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'));
   assert.doesNotMatch(html, /最近切换/, 'the owner asked for no last-switch row, even after a switch');
   assert.doesNotMatch(html, /新会话/, 'the new-session row is gone, and so is the route it showed');
   assert.ok(claude.includes('<dt>连接</dt><dd><span title="session init: ANTHROPIC_API_KEY">已连接 API</span></dd>'), 'the connection source stays in its tooltip');
@@ -1339,7 +1500,7 @@ const switchState = (patch = {}) => ({ changeId: 3, current: 'api', target: 'ter
 test('switch words: the header says where a change goes and when, a failure says the session stayed, and an unknown background count is never a number', () => {
   const words = load('features/native-session/native-words.ts'), line = patch => words.switchLine(switchState(patch));
   assert.equal(line(), '本轮结束后切到 终端');
-  assert.equal(line({ target: 'native' }), '本轮结束后切到 原生'); assert.equal(line({ target: 'api' }), '本轮结束后切到 API');
+  assert.equal(line({ target: 'native' }), '本轮结束后切到 原生模式'); assert.equal(line({ target: 'api' }), '本轮结束后切到 API');
   assert.equal(line({ reason: '输入框里有未发送的文字' }), '输入框里有未发送的文字', 'a reason from main is the line');
   assert.equal(line({ phase: 'waiting-background' }), '等后台任务结束后再切到 终端');
   assert.deepEqual(['preparing', 'switching'].map(phase => line({ phase })), ['正在切到 终端', '正在切到 终端']);
@@ -1780,7 +1941,7 @@ test('a draft waits while the box cannot take it', t => {
 
 // ---- the structured end of a turn, the provider's notice, command phrases ------------------------------------------------------------
 const mainWords = {
-  completed: '本轮已完成。', tool_deferred: '这次工具调用被钩子推迟，没有执行。', max_turns: '已达到本轮最大执行次数。', budget_exhausted: '本轮 API 预算上限已用完。',
+  completed: '本轮已完成。', tool_deferred: '这次工具调用被钩子推迟，没有执行。', max_turns: '已达到本轮最大执行次数。', budget_exhausted: 'API 预算上限已用完。',
   api_error: 'API 请求失败，本轮未能完成。', owner: '本轮已中断。',
 };
 // One finished round of a session: your message, a reply (unless `reply` is false) and the turn.completed the provider sent.
@@ -1914,7 +2075,7 @@ test('a command’s phrase comes from main and the checks it names are listed un
     e => e('item.upsert', { kind: 'file-change', status: 'completed', content: { path: 'src/a.ts', diff: '+x' } }, { itemId: 'f1' }),
     e => e('item.upsert', { kind: 'command', status: 'completed', content: { command: 'npm test', phrase: '运行测试', exitCode: 0 } }, { itemId: 'k1' }),
     e => e('item.upsert', { kind: 'command', status: 'failed', content: { name: 'Bash', input: '{"command":"npx tsc"}', phrase: '检查类型' } }, { itemId: 'k2' })] });
-  assert.match(html, /<p class="result-list-head">验证<\/p>/); assert.match(html, /运行测试<small>[\s\S]*?npm test/); assert.match(html, /检查类型<small>[\s\S]*?npx tsc/);
+  assert.match(html, /<p class="result-list-head">验证<\/p>/); assert.match(html, /运行测试/); assert.match(html, /检查类型/); assert.doesNotMatch(html, /npm test|npx tsc/);
   assert.match(html, /<li class="is-failed">[\s\S]*?检查类型/, 'a check that failed is listed as failed');
 });
 

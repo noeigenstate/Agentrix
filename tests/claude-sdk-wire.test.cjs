@@ -60,7 +60,7 @@ test('B3 the real SDK launches a fake native CLI whose helper, hook, MCP and tra
 });
 for (const budget of [null, 10]) test(budget === null
   ? 'N2 a real SDK owner query keeps its fake native process alive across idle turns'
-  : 'M1 real SDK renews per-turn caps across more than five dollars in one resumed owner session', {
+  : 'M1 real SDK keeps the full monthly allowance across more than five dollars in one owner session', {
   skip: !sdkModule && 'SDK dependency is not installed in this isolated worktree', timeout: 30000,
 }, async t => {
   const scope = fixtureProcesses(t, 'agx-owner-wire-'), { directory } = scope;
@@ -93,9 +93,9 @@ for (const budget of [null, 10]) test(budget === null
     }
     assert.equal(session.snapshot().state, 'idle');
     assert.equal(factory.usage.available(10), 10000000 - cost);
-    const spawned = wire().filter(row => row.spawn); assert.equal(spawned.length, budget === null ? 1 : count);
+    const spawned = wire().filter(row => row.spawn); assert.equal(spawned.length, 1);
     assert.equal(spawned.at(-1).scrub, false); assert.doesNotThrow(() => process.kill(spawned.at(-1).pid, 0));
-    if (budget !== null) assert.ok(spawned.at(-1).args.includes('--max-budget-usd=5'));
+    if (budget !== null) assert.ok(spawned.at(-1).args.includes('--max-budget-usd=10'));
   }
   assert.ok(wire().filter(row => row.childResults).every(row => row.childResults.every(child => child.keyPresent)));
   await session.close();

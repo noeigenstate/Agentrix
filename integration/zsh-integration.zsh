@@ -29,7 +29,6 @@ if [[ $__pg_user_zdotdir == $HOME && -z $AGENTRIX_USER_ZDOTDIR ]]; then unset ZD
 typeset -g __pg_socket=$AGENTRIX_SOCKET __pg_project=$AGENTRIX_PROJECT_ID __pg_key=$AGENTRIX_SESSION_KEY
 typeset -g __pg_node=$AGENTRIX_NODE __pg_helper=$AGENTRIX_EVENT_HELPER __pg_start=$AGENTRIX_START_DIR __pg_note=$AGENTRIX_READING_NOTE
 typeset -g __pg_note_file=$AGENTRIX_READING_NOTE_FILE
-typeset -g __pg_account_baseline=$AGENTRIX_ACCOUNT_BASELINE
 typeset -gi __pg_sequence=0
 unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_USER_ZDOTDIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
 
@@ -90,7 +89,7 @@ __pg_send() {
   if [[ $1 == codex-started ]]; then
     # Wait for the main process to finish the launch note before the CLI reads it.
     ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "$__pg_socket" "$__pg_project" "$__pg_key" \
-      "$1" "$__pg_sequence" "${2:-0}" "${3:-codex}" "$codex" "$claude" "${CODEX_HOME:-$HOME/.codex}" "$PWD" "${4:-}" "${5:-}" </dev/null >/dev/null 2>&1
+      "$1" "$__pg_sequence" "${2:-0}" "${3:-codex}" "$codex" "$claude" "${CODEX_HOME:-$HOME/.codex}" "$PWD" "${4:-}" "${5:-}" "${6-}" </dev/null >/dev/null 2>&1
     return 0
   fi
   local line="{\"projectId\":$project,\"sessionKey\":$key,\"type\":\"$1\",\"sequence\":$__pg_sequence,\"exitCode\":${2:-0},\"agent\":\"${3:-codex}\",\"codexAvailable\":$codex,\"claudeAvailable\":$claude,\"codexHome\":$home,\"cwd\":$cwd,\"command\":$command}"
@@ -106,40 +105,19 @@ __pg_command() {
   return 0
 }
 
-# Private stdin to the same classifier Bash and PowerShell use.
-__pg_account_scope() {
-  emulate -L zsh
-  local word separator=
-  [[ -n $__pg_account_baseline ]] || { print -rn -- unavailable; return; }
-  {
-    printf '{"baseline":%s,"args":[' "$__pg_account_baseline"
-    for word in "$@"; do __pg_json "$word"; printf '%s%s' "$separator" "$REPLY"; separator=,; done
-    printf ']}'
-  } | ELECTRON_RUN_AS_NODE=1 "$__pg_node" "${__pg_helper%/*}/codex-account-scope.cjs" 2>/dev/null
-}
-
+# Request the existing native session path; no Codex executable runs here.
 codex() {
   emulate -L zsh
-  local -a program
-  if ! __pg_program codex; then
-    print -P '%F{yellow}Codex CLI was not found in PATH. Install it, then restart this terminal.%f'
-    return 127
-  fi
-  program=("${reply[@]}")
-  # Codex runs this after every turn with one JSON argument: Agentrix's own executable, run as Node.
-  local notify= word
-  for word in /usr/bin/env ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" codex-notify "$__pg_socket" "$__pg_project" "$__pg_key"; do
-    __pg_json "$word"; notify+=${notify:+,}$REPLY
+  local -a reply
+  __pg_program codex || reply=(codex)
+  local word REPLY payload='[' separator=
+  for word in "${reply[@]:1}" "$@"; do
+    __pg_json "$word"; payload+="$separator$REPLY"; separator=,
   done
-  __pg_send codex-started 0 codex "$(__pg_command "$@")" "$(__pg_account_scope "${program[@]:1}" "$@")"
-  # What the reading view can show (electron/features/agents/reading-note.cjs); the user's own -c comes later and wins.
-  local -a note=()
-  local current_note=$(__pg_reading_note)
-  [[ -n $current_note ]] && note=(-c "developer_instructions=\"$current_note\"")
-  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" -c "notify=[$notify]" -c 'tui.terminal_title=["session-id"]' "${note[@]}" "$@"
-  local code=$?
-  __pg_send codex-exited $code
-  return $code
+  payload+=']'
+  __pg_send codex-started 0 codex '' '' "$payload"
+  printf '%s\n' '已请求在原生模式打开 Codex。'
+  return 0
 }
 
 # Claude Code reports each turn through hooks passed with --settings, which merge with the user's own settings
@@ -187,6 +165,6 @@ add-zsh-hook precmd __pg_precmd
 # The user's start-up files may have changed directory; the terminal opens where Agentrix asked.
 [[ -n $__pg_start && -d $__pg_start ]] && builtin cd -q -- $__pg_start
 print -P '%F{8}  AGENTRIX%f'
-print -P '%F{8}  Type codex or claude to start, or codex resume to continue a session.%f'
+print -P '%F{8}  Type codex or claude to start, or codex resume --last to continue.%f'
 print
 __pg_send shell-ready

@@ -31,7 +31,7 @@ export function VoiceModelSetting({ choice, onChoose }: { choice: string; onChoo
 }
 
 // Blue: a microphone is connected. Red: none is connected. Pulsing: recording this terminal.
-export function VoiceButton({ terminalId, sessionId, name, size = 14, onError }: { terminalId: string; sessionId: string | null; name: string; size?: number; onError: (message: string) => void }) {
+export function VoiceButton({ terminalId, sessionId, name, size = 14, disabled = false, onError }: { terminalId: string; sessionId: string | null; name: string; size?: number; disabled?: boolean; onError: (message: string) => void }) {
   const voice = useVoice();
   const recording = voice.recording === terminalId, busy = voice.busy === terminalId;
   const model = voice.model;
@@ -42,8 +42,8 @@ export function VoiceButton({ terminalId, sessionId, name, size = 14, onError }:
     : model && !model.ready ? t('麦克风已连接 · 点击下载语音模型')
     : t('麦克风已连接 · 点击或按 {key} 说话', { key: shortcut('voice') });
   const tone = recording ? 'is-recording' : busy ? 'is-busy' : voice.microphone === false ? 'mic-missing' : voice.microphone ? 'mic-connected' : '';
-  return <button type="button" className={`icon-button voice-button ${tone}`} title={status} aria-label={t('语音输入 {name}', { name })} aria-pressed={recording}
-    onClick={event => { event.stopPropagation(); void toggleDictation(terminalId, sessionId, onError, name); }}>
+  return <button type="button" className={`icon-button voice-button ${tone}`} disabled={disabled} title={status} aria-label={t('语音输入 {name}', { name })} aria-pressed={recording}
+    onClick={event => { event.stopPropagation(); if (!disabled) void toggleDictation(terminalId, sessionId, onError, name); }}>
     {busy ? <SpinnerGap className="loading-spinner" size={size} /> : <Microphone size={size} weight={recording ? 'fill' : 'regular'} />}
   </button>;
 }

@@ -139,9 +139,11 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind, notice = noticeWords(state?.limits?.notice);
   // The session in view belongs to one agent; only it has a context length and a round.
   const current = terminal.codexActive && terminal.agent === agent, tokens = terminal.agentUsage;
-  // 连接 says who pays; a ChatGPT subscription runs on app-server as well as in a terminal, so Codex says which. Its session in view, else where a new one starts.
-  const onTerminal = current ? !!terminal.sessionId : state?.next?.path === 'terminal', known = current || !!state?.next?.path;
-  const channel = agent === 'codex' && known ? onTerminal ? t('终端') : 'app-server' : null;
+  // Subscription is a billing source. Every Codex session runs on app-server;
+  // a legacy PTY snapshot needs restoration, not a second supported run mode.
+  const known = current || !!state?.next?.path;
+  const channel = agent === 'codex' && known ? current && terminal.sessionId ? t('需用原生模式恢复') : t('原生模式')
+    : (current && terminal.nativeMode || !current && state?.next?.path === 'api') ? t('原生模式') : null;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
   // A session that reported plan windows of its own is on a plan even when main could not tell the connection (a terminal session): its bars show, and it is not 额度 未知.
   const plan = kind === 'subscription' || (kind !== 'api' && current && windowsFromScreen(tokens).length > 0), shown = plan || kind === 'api';

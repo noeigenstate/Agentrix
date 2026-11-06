@@ -14,8 +14,8 @@ the latest round, and the switch between reading and the raw terminal.
 - `hasCliInput` (`src/features/reading/cli-panel.ts`) — what the CLI's input line holds; the file also exports isAtPrompt, cliInputDraft and isCliIdle
 - `sameMessage` (`src/features/reading/pending-prompts.ts`) — whether a sent message is the one still in the CLI input
 - `lastRound` (`src/features/reading/result-round.ts`) — the latest round of a conversation; the file also exports CHECKS and changeLabel
-- `ConversationFeed` (`src/features/reading/ConversationFeed.tsx`) — grouped read-only messages and tool steps, independent of composer and terminal state; the reading view, the sub-agent split and a session without a terminal render with it; the file also exports `ConversationDecorations`, the slots the interactive reader fills
-- `TimelineStep` (`src/features/reading/feed-parts.ts`) — the parts around a feed that a view without a terminal draws the way the reading view does: timeline steps, pending messages, the working line, the result row, picture chips (and `pastedPicture`, the picture a paste carries), the scroll that follows the newest step and the message box's helpers: `useComposerHistory` (↑↓ through what was sent), `useCommandPalette` with `commandList` and `composerAria` (the "/" list), `useMentions` and `MentionPalette` ("@" files)
+- `ConversationFeed` (`src/features/reading/ConversationFeed.tsx`) — grouped read-only messages and tool steps, independent of composer and terminal state; the reading view, the sub-agent split and a session without a terminal render with it; the file also exports `ConversationDecorations`, the slots the interactive reader fills, including the native-only tools renderer; user-side messages use main-owned sender metadata (owner or planner), with an unknown planner shown neutrally
+- `TimelineStep` (`src/features/reading/feed-parts.ts`) — the parts around a feed that a view without a terminal draws the way the reading view does: timeline steps, StepState, pending messages, the working line, the result row, picture chips (and `pastedPicture`, the picture a paste carries), the scroll that follows the newest step and the message box's helpers: `useComposerHistory` (↑↓ through what was sent), `useCommandPalette` with `commandList` and `composerAria` (the "/" list), `useMentions` and `MentionPalette` ("@" files), and `createDictationSend` (the cancellable half-second dictation submit shared with the native composer)
 - `QuoteChip` (`src/features/reading/ReadingQuote.tsx`) — the 引用 button on a message (`QuoteAction`) and the one quote chip above the composer; `message-quote.ts` exports quoteExcerpt, withQuote and splitQuote; ConversationFeed offers the button only when its parent supplies quote decorations (the sub-agent split supplies none)
 - `FileCards` (`src/features/reading/FileCards.tsx`) — the preview cards of the files a reply names; the file also exports previewable
 - `replyFiles` (`src/features/reading/reply-files.ts`) — the local pictures, pages and videos a reply names
@@ -29,6 +29,7 @@ the latest round, and the switch between reading and the raw terminal.
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/files/file-popup.ts`
 - `src/features/voice/voice-input.ts`
+- `src/features/voice/VoiceButton.tsx`
 - `src/features/terminal/terminal-*.ts`
 - `src/features/terminal/active-terminal.ts`
 

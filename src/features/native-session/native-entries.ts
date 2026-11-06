@@ -6,10 +6,11 @@ import { t } from '../../shared/i18n';
 import { splitQuote, type MessageEntry, type PendingPrompt } from '../reading/feed-parts';
 import { isOver, type NativeItem, type NativeModel } from './native-model.ts';
 import { noticeText } from './native-notices.ts';
+import type { NativeStep } from './native-steps';
 import { commandOf, fieldOf, fileChanges, generatedOf, itemState, messageText, picturesOf, planText, shortPath, toolOf, type StepMark } from './native-words';
 
 // The reading view's tool step, with what the step printed (a command's output, a diff, a tool's result) for the opened group to show.
-type Step = AgentActionBrief & { failed: boolean; output?: string };
+type Step = NativeStep;
 const DONE_STEP = /^(completed|done)$/i;
 const idOf = (item: NativeItem) => (typeof item.content.clientMessageId === 'string' && item.content.clientMessageId ? item.content.clientMessageId : item.id);
 
@@ -59,7 +60,14 @@ function stepOf(item: NativeItem, settled: boolean): Step | null {
       default: return null;
     }
   })();
-  return step && state === 'interrupted' ? { ...step, detail: [step.detail, t('已中断')].filter(Boolean).join(' · ') } : step;
+  if (!step) return null;
+  if (state === 'interrupted') step.detail = [step.detail, t('已中断')].filter(Boolean).join(' · ');
+  step.nativeState = state === 'running' ? 'running' : state === 'interrupted' ? 'interrupted' : state === null ? 'unknown' : step.failed ? 'failed' : 'done';
+  const code = item.kind === 'command' ? commandOf(item).exitCode : null;
+  step.nativeReason = state === 'interrupted' ? t('操作已中断。') : state === null ? t('结果未能确认。')
+    : step.failed ? code ? t('命令以退出码 {code} 结束。', { code }) : t('工具执行失败，未提供具体原因。') : undefined;
+  if (item.content.modelDelivery === 'rejected') step.nativeReason = [step.nativeReason, t('输出未发送给模型')].filter(Boolean).join(' · ');
+  return step;
 }
 
 // The messages not in the conversation yet: one the runtime refused (an item marked unsent, or a rejected receipt) or holds in its queue.

@@ -6,9 +6,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEv
 import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
-import { actionText } from '../agents/action-text';
+import { NativeSteps, nativeStepLabel } from './native-steps';
+import { dictateInto } from '../voice/voice-input';
+import { VoiceButton } from '../voice/VoiceButton';
 import { ConversationDecorations, ConversationFeed } from '../reading/ConversationFeed';
-import { AgentMark, commandList, composerAria, isCommandDraft, latestResult, MentionPalette, pastedPicture, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultChecks, ResultStatus, TimelineStep, useCommandPalette, useComposerHistory, useMentions, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
+import { AgentMark, commandList, composerAria, createDictationSend, isCommandDraft, latestResult, MentionPalette, pastedPicture, PendingPromptEntries, QuoteChip, quoteExcerpt, ResultActions, ResultChecks, ResultStatus, TimelineStep, useCommandPalette, useComposerHistory, useMentions, useStickToBottom, UserImages, withQuote, WorkingLine, type MessageQuote, type PendingPrompt } from '../reading/feed-parts';
 import { nativeBridge, type NativePendingInput, type SwitchState } from './native-bridge.ts';
 import type { Handoff } from './draft-handoff.ts';
 import { nativeEntries, nativePending, runningStep, sentTexts, shellRound, type SentMessage } from './native-entries.ts';
@@ -46,6 +48,11 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // A file is being dragged over the view (the box takes it as a picture).
   const [dropping, setDropping] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null), scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null);
+  const caret = useRef<number | null>(null), voiceSend = useRef<() => void>(() => {});
+  const [sendingSoon, setSendingSoon] = useState(false);
+  const [dictationSend] = useState(() => createDictationSend(() => voiceSend.current(), setSendingSoon));
+  useLayoutEffect(() => () => { dictationSend.cancel(); }, [dictationSend, terminalId, sessionId, autoFocus]);
+  useLayoutEffect(() => { if (caret.current !== null) { box.current?.setSelectionRange(caret.current, caret.current); caret.current = null; } });
   // The commands only a Claude session has (/clear /new /reset /model /effort /fast and "!"); a new conversation shuts the box until the card shows it.
   const actions = useComposerActions({ terminalId, sessionId, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
   const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing, over = isOver(model), working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
@@ -59,11 +66,11 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // history goes through edit, which leaves that walk and opens the list again.
   const sentRef = useRef<string[]>([]);
   sentRef.current = useMemo(() => sentTexts(entries, pending.prompts), [entries, pending]);
-  const recall = useComposerHistory({ messages: () => sentRef.current, draft: text, setDraft: setText, input: box });
+  const recall = useComposerHistory({ messages: () => sentRef.current, draft: text, setDraft: setText, input: box, onRecall: () => dictationSend.cancel() });
   const commands: readonly ListLine[] = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
   const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false, menu: actions.menu, note: claude && open && text.startsWith('!') ? { name: '!', description: t('运行命令，输出会进入对话'), source: 'builtin' } : null,
     complete: command => { if (actions.menu) { actions.choose(command.name); return; } edit(`${command.name} `); box.current?.focus(); }, send: () => void send(), close: actions.close });
-  const edit = (value: string) => { setText(value); palette.dismiss(false); recall.forget(); actions.forget(); };
+  const edit = (value: string) => { dictationSend.cancel(); setText(value); palette.dismiss(false); recall.forget(); actions.forget(); };
   const mentions = useMentions({ projectId, draft: text, input: box, disabled: !open || isCommandDraft(text), edit, onError: setError });
 
   // New steps keep the end in view while the owner is at the end; scrolling up pauses that until they come back. A new request waits at the end of the
@@ -101,6 +108,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   };
   // The box empties at once and takes the words back if the main process refuses them, unless something new was typed meanwhile. Pictures alone are a message too.
   const send = async () => {
+    dictationSend.cancel();
     const value = text.trim(), pictures = carried, quoted = quote;
     if (!(value || pictures.length) || !open) return;
     const action = claude ? composerAction(value) : null;
@@ -108,6 +116,21 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     edit(''); setCarried([]); setQuote(null);
     if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }
   };
+  voiceSend.current = () => { void send(); };
+  const voiceInput = useRef({ open, edit });
+  voiceInput.current = { open, edit };
+  useLayoutEffect(() => {
+    let current = true;
+    const unregister = dictateInto(terminalId, (words, submit) => {
+      const node = box.current;
+      if (!current || !voiceInput.current.open || !node) return;
+      const here = document.activeElement === node, at = here ? node.selectionStart : node.value.length, end = here ? node.selectionEnd : node.value.length;
+      caret.current = at + words.length;
+      voiceInput.current.edit(node.value.slice(0, at) + words + node.value.slice(end)); node.focus();
+      if (submit) dictationSend.start();
+    }, true, { available: () => current && voiceInput.current.open, sessionId });
+    return () => { current = false; dictationSend.cancel(); unregister(); };
+  }, [terminalId, sessionId, open, dictationSend]);
   // A picture pasted or dropped joins the ones that go with the next message; one the runtime would refuse is refused here, with the reason.
   const attach = async (files: File[]) => {
     const { pictures, error: problem } = await readPictures(files, MAX_PICTURES - carried.length);
@@ -138,7 +161,9 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     if (result && !result.ok) setError(result.error);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) return;
+    if (event.key === 'Escape' && dictationSend.cancel()) { event.preventDefault(); event.stopPropagation(); return; }
+    if (event.nativeEvent.isComposing) { dictationSend.cancel(); return; }
+    if (event.key === 'Enter') dictationSend.cancel();
     if (mentions.keys(event) || palette.keys(event)) return;
     if (!palette.open) {
       if (event.key === 'Escape') { if (working && open) { event.preventDefault(); void stop(); } return; }
@@ -153,7 +178,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // What the agent is doing, written at the end of the conversation the way the reading view writes it.
   const step = runningStep(entries);
   const status = waiting ? <div className="reading-status is-waiting" role="status">{t('等你确认')}</div>
-    : working ? <WorkingLine key={sessionId} agent={kind} label={model.compacting ? t('正在压缩上下文') : step ? t('正在{step}', { step: actionText(step) }) : t('{agent} 正在思考', { agent })} /> : null;
+    : working ? <WorkingLine key={sessionId} agent={kind} label={model.compacting ? t('正在压缩上下文') : step ? t('正在{step}', { step: nativeStepLabel(step) }) : t('{agent} 正在思考', { agent })} /> : null;
   // The latest round, once it has ended, gets its status above the result and its actions under it; a turn that failed says how.
   const settled = !over && model.session?.state === 'idle' && !model.turn.running && !pending.prompts.length && !model.requests.length && !asksChoice(change);
   // How the turn ended is the provider's own: its status draws the row (a turn that did not complete is never drawn as done) and the sentence main wrote for
@@ -173,7 +198,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const resultStatus = result && <ResultStatus result={result} taskTitle={undefined} onError={setError} />;
   // A round a "!" line drove has no message to send again, so it offers no retry (nor any other action under it).
   const resultActions = result && !shellRound(entries) && <>
-    {result.kind === 'code' && <ResultChecks result={result} />}
+    {result.kind === 'code' && <ResultChecks result={result} summaryOnly />}
     <ResultActions result={result} projectId={projectId} remote={false} canSend={open} onContinue={continueWith} onRetry={() => void post(result.request, NO_PICTURES)} onError={setError} />
   </>;
   const last = entries.at(-1), statusInTurn = !!last && last.role !== 'user' && pending.prompts.every(prompt => pending.queued.has(prompt.id));
@@ -204,7 +229,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   return <div className={`reading-view${dropping ? ' is-dropping' : ''}`} data-agent={kind} data-native-session={sessionId} onDragOver={dragOver} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false); }} onDrop={drop}>
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}>
-        <ConversationDecorations.Provider value={{ start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+        <ConversationDecorations.Provider value={{ tools: (entries, details) => <NativeSteps entries={entries} details={details} />, start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
           quote: { disabled: open ? null : t('输入框暂时不可用，等它可用后再引用'), pick: quoteMessage },
           frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: null } }}>
           <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
@@ -222,10 +247,11 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
       <button type="button" className="text-button" disabled={!!text.trim() || locked} onClick={() => take(item)}>{t('取回')}</button></li>)}</ol></div>}
     {quote && <QuoteChip quote={quote} onRemove={() => { setQuote(null); box.current?.focus(); }} />}
     {commandList(palette)}
-    <div className="reading-composer">
+    <div className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`}>
       <MentionPalette mentions={mentions} />
       <textarea ref={box} rows={1} value={text} disabled={!open} aria-label={t('给 {name} 发消息', { name: agent })} {...composerAria(palette, mentions)} placeholder={hint} {...fullHint}
-        onChange={event => edit(event.target.value)} onKeyDown={onKeyDown} onSelect={mentions.trackCaret} onPaste={pasteImage} />
+        onChange={event => edit(event.target.value)} onKeyDown={onKeyDown} onCompositionStart={() => dictationSend.cancel()} onSelect={mentions.trackCaret} onPaste={pasteImage} />
+      <VoiceButton terminalId={terminalId} sessionId={null} name={agent} size={15} disabled={!open} onError={setError} />
       {fullHint['aria-describedby'] && <span id={hintId} style={HIDDEN_NOTE}>{shownHints[0]}</span>}
       {working && <button type="button" className="icon-button" disabled={!open} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={() => void stop()}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={!open || !(text.trim() || carried.length)} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>

@@ -7,6 +7,6 @@ for /f "usebackq delims=" %%P in (`powershell.exe -NoLogo -NoProfile -ExecutionP
 doskey codex=powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0agent.ps1" codex $*
 doskey claude=powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0agent.ps1" claude $*
 echo   AGENTRIX
-echo   Type codex or claude to start, or codex resume to continue a session.
+echo   Type codex or claude to start, or codex resume --last to continue.
 echo.
 prompt $E]6973;Agentrix;prompt;$P$E\$P$G

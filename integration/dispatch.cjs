@@ -322,6 +322,8 @@ class WorkerOutput {
     if (!record || typeof record !== 'object') return;
     if (this.agent === 'claude' && (record.parent_tool_use_id || record.isSidechain)) return;
     const type = record.type;
+    if (this.agent === 'claude' && type === 'user' && typeof record.uuid === 'string'
+      && (typeof record.message?.content === 'string' || record.message?.content?.some(part => part.type === 'text'))) this.onInput?.(record.uuid);
     if (['error', 'turn.failed'].includes(type) || record.is_error === true || type === 'result' && /^error_/.test(record.subtype || '')) {
       this.failed = true;
       if (/\bat capacity\b|overloaded|capacity exceeded/i.test(JSON.stringify(record))) this.capacity = true;
@@ -469,6 +471,15 @@ function readWorkerOutput(child, agent, log, output) {
   return () => { for (const tail of tails) tail(); };
 }
 
+// Associate a provider echo with the input channel that supplied its identifier. Content never selects an origin.
+function workerInput(event, controls, resumeIds, resumeInputId) {
+  if (event.type !== 'item.upsert' || event.payload?.kind !== 'user-message' || event.replay || typeof event.itemId !== 'string') return null;
+  const inputId = event.payload.content?.clientMessageId;
+  const direct = controls.has(inputId);
+  const ownerMessageIds = direct ? [inputId] : resumeIds.length && inputId === resumeInputId ? resumeIds : [];
+  return { entryId: `u:${event.itemId}`, inputId, origin: direct ? 'owner' : 'planner', ownerMessageIds };
+}
+
 async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL } = {}) {
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
@@ -493,6 +504,18 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const deferredControlIds = [];
   let resumeControlIds = [], resumeInputId;
   let receiptTail = Promise.resolve();
+  const inputFacts = new Map();
+  let inputTail = Promise.resolve();
+  function recordInput(entryId, inputId, origin, ownerMessageIds = []) {
+    if (!output.sessionId || typeof entryId !== 'string' || entryId.length > 200 || inputFacts.size >= 2000) return;
+    const key = `${output.sessionId}:${entryId}`;
+    if (inputFacts.has(key)) return;
+    const fact = { type: 'dispatch-input', id, sessionId: output.sessionId, entryId, inputId: inputId || null, origin, ownerMessageIds: ownerMessageIds.slice(0, 32), at: Date.now() };
+    inputFacts.set(key, fact);
+    inputTail = inputTail.catch(() => {}).then(() => team?.locked(() => team.append(fact)));
+    if (started) send(fact);
+  }
+  const cliInput = uuid => recordInput(`u:${uuid}`, uuid, 'planner', resumeControlIds);
   function recordReceipt(messageId, status, reason) {
     if (!['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(status)) status = 'unknown';
     const previous = controlReceipts.get(messageId);
@@ -599,6 +622,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       started = true;
       signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
       send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
+      for (const fact of inputFacts.values()) send(fact);
     }
     if (final || rateTimer) return;
     rateTimer = setInterval(() => {
@@ -609,6 +633,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     }, rateInterval);
   };
   let output = new WorkerOutput(argv[0], () => confirm());
+  output.onInput = cliInput;
   let rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
@@ -849,6 +874,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true;
         if (options.agent === 'codex') void rollout.read().then(() => confirm()); else confirm();
         if (resumeControlIds.length) resumeInputId = event.payload.clientMessageId;
+      } else if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && !event.replay) {
+        const fact = workerInput(event, controlInputs, resumeControlIds, resumeInputId);
+        if (fact) recordInput(fact.entryId, fact.inputId, fact.origin, fact.ownerMessageIds);
       } else if (event.type === 'routing.updated' && event.payload.observed) output.settings(event.payload.observed);
       else if (event.type === 'input.receipt' && controlReceipts.has(event.payload.clientMessageId)) void recordReceipt(event.payload.clientMessageId, event.payload.status).catch(() => {});
       else if (event.type === 'input.receipt' && event.payload.clientMessageId === resumeInputId) {
@@ -903,6 +931,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
       const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
       const bookkeeping = await recordTeam({ answer, header, reason });
+      await inputTail.catch(() => {});
       if (!team) { try { recordFindings(options, answer, header); } catch {} }
       const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
         : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
@@ -923,6 +952,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       const effective = resumeSession ? { ...options, resume: resumeSession } : options;
       if (resumeSession) {
         const nextOutput = new WorkerOutput(options.agent, () => confirm());
+        nextOutput.onInput = cliInput;
         const nextRollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), nextOutput);
         if (options.agent === 'codex') await nextRollout.prepare(resumeSession);
         await readInbox();
@@ -962,7 +992,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           }
           child = { pid: activeRuntime.pid, exitCode: null };
           pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
-          const receipt = await activeRuntime.send({ clientMessageId: id, text: brief.toString('utf8'), images: options.images });
+          const receipt = await activeRuntime.send({ clientMessageId: randomUUID(), text: brief.toString('utf8'), images: options.images });
           if (receipt.status !== 'delivered') throw new Error('native_input_' + receipt.status);
           result = await completion;
         } else {
@@ -1119,4 +1149,4 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
 }
 
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
-module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, runtimeFiles, run, RATE_INTERVAL };
+module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, RATE_INTERVAL };

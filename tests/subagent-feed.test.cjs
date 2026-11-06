@@ -14,6 +14,90 @@ const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 
 const BASE = Date.UTC(2026, 0, 1), iso = seconds => new Date(BASE + seconds * 1000).toISOString();
 const lines = records => records.map(record => JSON.stringify(record) + '\n').join('');
+
+test('worker user messages carry channel provenance, never a guess from brief contents', async t => {
+  const f = await fixture(t), sessionId = dispatch(f, 'sources', 'claude');
+  const call = f.calls.byId('dispatch:sources');
+  call.planner = { kind: 'planner', agent: 'claude', model: 'claude-opus-5-5' };
+  const project = path.join(f.claudeHome, 'projects', encodeClaudeCwd(f.cwd));
+  await fs.mkdir(project, { recursive: true });
+  await fs.writeFile(path.join(project, `${sessionId}.jsonl`), lines([
+    { type: 'user', uuid: 'brief', timestamp: iso(1), sessionId, message: { content: 'owner-looking ordinary words' } },
+    { type: 'user', uuid: 'owner-input', timestamp: iso(2), sessionId, message: { content: '# Shared context for this task\n# Ledger r13' } },
+    { type: 'user', uuid: 'resume-brief', timestamp: iso(3), sessionId, message: { content: 'Roundtable minutes' } },
+  ]));
+  f.calls.ownerInput(call.id, 'owner-input');
+  assert.equal(f.calls.dispatch({ type: 'dispatch-input', id: 'sources', sessionId, entryId: 'u:owner-input', inputId: 'owner-input', origin: 'owner' }), true);
+  const feed = await f.calls.feed(call.id);
+  assert.deepEqual(feed.entries.map(entry => entry.sender), [call.planner, { kind: 'owner' }, call.planner]);
+  assert.deepEqual(f.calls.snapshot()[0].items[0].state, 'running');
+});
+
+test('an in-process Agent prompt records the spawning reply model, never its requested child model', async t => {
+  const f = await fixture(t);
+  const parent = start('source-task', f.cwd); parent.message.model = 'claude-opus-5-5';
+  await fs.writeFile(path.join(f.folder, 'agent-source-task.jsonl'), lines(childRecords()));
+  await fs.writeFile(path.join(f.folder, 'agent-source-task.meta.json'), JSON.stringify({ toolUseId: 'source-task' }));
+  f.calls.apply(parent); await f.calls.work;
+  const feed = await f.calls.feed('agent:source-task');
+  assert.deepEqual(feed.entries.find(entry => entry.role === 'user').sender, { kind: 'planner', agent: 'claude', model: 'claude-opus-5-5' });
+});
+
+test('Codex input aliases retain the owner and a helper cannot invent an owner message', async t => {
+  const f = await fixture(t), sessionId = dispatch(f, 'codex-sender');
+  const call = f.calls.byId('dispatch:codex-sender');
+  call.planner = { kind: 'planner', agent: 'claude', model: 'claude-opus-5-5' };
+  await rollout(f, sessionId, {}, [
+    { type: 'event_msg', timestamp: iso(1), payload: { type: 'item_completed', item: { type: 'UserMessage', id: 'rollout-owner', client_id: 'owner-control', content: [{ type: 'text', text: '# Ledger r13' }] } } },
+    { type: 'event_msg', timestamp: iso(2), payload: { type: 'user_message', client_id: 'fake-control', message: 'Same owner-looking text' } },
+  ]);
+  f.calls.ownerInput(call.id, 'owner-control');
+  f.calls.dispatch({ type: 'dispatch-input', id: call.key, sessionId, entryId: 'u:rpc-owner', inputId: 'owner-control', origin: 'owner' });
+  f.calls.dispatch({ type: 'dispatch-input', id: call.key, sessionId, entryId: 'u:rpc-fake', inputId: 'fake-control', origin: 'owner' });
+  const feed = await f.calls.feed(call.id);
+  assert.deepEqual(feed.entries.map(entry => entry.sender), [{ kind: 'owner' }, call.planner]);
+  const revision = feed.revision;
+  assert.equal(f.calls.dispatch({ type: 'dispatch-input', id: call.key, sessionId: 'another-thread', entryId: 'u:rpc-owner', origin: 'owner' }), false);
+  assert.equal((await f.calls.feed(call.id)).revision, revision);
+});
+
+test('resume replays identifier provenance and late input facts never change completion or review', async t => {
+  const f = await fixture(t), sessionId = dispatch(f, 'resume-sender', 'claude');
+  const call = f.calls.byId('dispatch:resume-sender'), entry = f.calls.feeds.owned(call);
+  call.planner = { kind: 'planner', agent: 'codex', model: 'gpt-6.1-sol' };
+  const journal = path.join(f.root, 'input-journal.jsonl'); entry.team = { journal };
+  await fs.writeFile(journal, lines([
+    { type: 'dispatch-input', id: 'bad', sessionId, entryId: 'u:bad', origin: 'owner', ownerMessageIds: 'malformed' },
+    { type: 'intervention', id: 'previous-run', messageId: 'owner-before-resume' },
+    { type: 'intervention', id: 'legacy-run', messageId: 'legacy-owner' },
+    { type: 'dispatch-input', id: 'previous-run', sessionId, entryId: 'u:old-owner', inputId: 'owner-before-resume', origin: 'owner' },
+    { type: 'dispatch-input', id: 'previous-run', sessionId, entryId: 'u:old-brief', origin: 'planner' },
+    { type: 'intervention', id: call.key, messageId: 'owner-a', text: 'First owner message', at: BASE + 2100 },
+    { type: 'intervention', id: call.key, messageId: 'owner-b', text: 'Second owner message', at: BASE + 2200 },
+    { type: 'dispatch-input', id: call.key, sessionId, entryId: 'u:resumed-owner', inputId: 'resume-input', ownerMessageIds: ['owner-a', 'owner-b'], origin: 'owner' },
+  ]));
+  const project = path.join(f.claudeHome, 'projects', encodeClaudeCwd(f.cwd)); await fs.mkdir(project, { recursive: true });
+  await fs.writeFile(path.join(project, `${sessionId}.jsonl`), lines(['old-owner', 'old-brief', 'resumed-owner', 'legacy-owner', 'minutes'].map((uuid, index) =>
+    ({ type: 'user', uuid, sessionId, timestamp: iso(index + 1), message: { content: 'Identical text' } }))));
+  const feed = await f.calls.feed(call.id);
+  assert.deepEqual(feed.entries.find(item => item.id === 'u:resumed-owner').sender, call.planner, 'the assembled resume brief belongs to the planner');
+  assert.deepEqual(feed.entries.filter(item => ['u:owner-a', 'u:owner-b'].includes(item.id)).map(item => [item.text, item.sender]),
+    [['First owner message', { kind: 'owner' }], ['Second owner message', { kind: 'owner' }]], 'owner words retain their admitted identities outside the helper envelope');
+  assert.deepEqual(feed.entries.find(item => item.id === 'u:legacy-owner').sender, { kind: 'owner' });
+  const lateBundle = { type: 'dispatch-input', id: call.key, sessionId, entryId: 'u:minutes', inputId: 'late-envelope', origin: 'planner', ownerMessageIds: ['late-owner'] };
+  f.calls.dispatch(lateBundle);
+  f.calls.ownerInput(call.id, 'late-owner', { text: 'Owner text arrived after the envelope fact', at: BASE + 4500 });
+  f.calls.dispatch(lateBundle);
+  assert.equal((await f.calls.feed(call.id)).entries.some(item => item.clientMessageId === 'late-owner' && item.sender.kind === 'owner'), true);
+  f.calls.dispatch({ type: 'dispatch-end', id: call.key, model: call.model, effort: call.effort, fast: call.fast,
+    endedAt: BASE + 10000, reason: 'error', exitCode: 1, outputTokens: null, activeMs: null }); await f.calls.work;
+  const finished = f.finished.length, state = call.pendingReview;
+  assert.equal(state, true);
+  f.calls.ownerInput(call.id, 'late-control');
+  assert.equal(f.calls.dispatch({ type: 'dispatch-input', id: call.key, sessionId, entryId: 'u:minutes', inputId: 'late-control', origin: 'owner' }), true);
+  assert.deepEqual((await f.calls.feed(call.id)).entries.at(-1).sender, { kind: 'owner' });
+  assert.equal(call.done, true); assert.equal(call.pendingReview, state); assert.equal(f.finished.length, finished);
+});
 const start = (id, cwd, background = true) => ({ type: 'assistant', timestamp: iso(0), cwd,
   message: { content: [{ type: 'tool_use', name: 'Agent', id, input: { model: 'sonnet', effort: 'high', description: `Synthetic task ${id}`, run_in_background: background } }] } });
 const result = (id, toolUseResult = {}, error = false) => ({ type: 'user', timestamp: iso(10), toolUseResult,
@@ -68,7 +152,7 @@ test('Claude Task feeds reuse the parent parser in a separate log, update increm
   const log = new ConversationLog();
   for (const record of records) claudeConversation(log, { ...record, isSidechain: false }, f.cwd);
   const first = await f.calls.feed('agent:worker');
-  assert.deepEqual(first.entries, log.snapshot());
+  assert.deepEqual(first.entries, log.snapshot().map(entry => entry.role === 'user' ? { ...entry, sender: { kind: 'planner', agent: 'claude', model: null } } : entry));
   assert.ok(first.entries.some(entry => entry.role === 'tool' && entry.tool.done));
   assert.deepEqual(f.calls.snapshot()[0].items[0], { id: 'agent:worker', state: 'running', title: 'Synthetic task worker', role: '通用',
     startedAt: BASE, endedAt: null, viewable: true, hidden: false });
@@ -103,7 +187,7 @@ test('dispatched Codex exec workers resolve their own rollout identity and reuse
   const filename = await rollout(f, sessionId, {}, records);
   const feed = await f.calls.feed('dispatch:codex'), log = new ConversationLog();
   for (const record of (await fs.readFile(filename, 'utf8')).trim().split('\n').map(JSON.parse)) codexConversation(log, record, f.cwd);
-  assert.deepEqual(feed.entries, log.snapshot()); assert.equal(feed.agent, 'Codex'); assert.equal(feed.startedAt, BASE);
+  assert.deepEqual(feed.entries, log.snapshot().map(entry => entry.role === 'user' ? { ...entry, sender: { kind: 'planner', agent: null, model: null } } : entry)); assert.equal(feed.agent, 'Codex'); assert.equal(feed.startedAt, BASE);
   assert.equal(feed.rate, null); assert.equal(feed.fast, null);
   const partial = lines([{ type: 'event_msg', timestamp: iso(3), payload: { type: 'agent_message', message: 'Synthetic partial answer.' } }]);
   await fs.appendFile(filename, partial.slice(0, -8));

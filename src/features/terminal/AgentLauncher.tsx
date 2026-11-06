@@ -107,7 +107,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   const routeNote = (agent: Agent) => {
     if (missing(agent)) return null;
     const route = routeOf(agent);
-    if (route.how === 'native') return agent === 'claude' ? t('API · 原生界面') : t('原生界面');
+    if (route.how === 'native') return agent === 'claude' ? t('API · 原生模式') : t('原生模式');
     return route.how === 'blocked' ? t('需先保存 API key') : route.reason ? t('没有 API key，改用终端') : null;
   };
   return <div className="agent-launcher"><div className="agent-launcher-body">

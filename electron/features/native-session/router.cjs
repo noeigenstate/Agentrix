@@ -102,16 +102,19 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     record.stream.publish(event.type, event.payload, { itemId: event.itemId, replay: event.replay, occurredAtMs: event.occurredAtMs });
     switches.observe(id);
   }
-  async function start(id, { agent, resume = false }) {
+  async function start(id, { agent, resume = false, launch = null }) {
     if (busy.has(id)) throw new Error('会话正在启动。');
     busy.add(id);
     try {
-      const config = settings.get(), resolved = resolveSpec(id, agent, resume);
+      const config = settings.get(), resolved = resolveSpec(id, agent, resume, false, agent === 'codex' ? launch : null);
       const spec = { ...resolved, agent, runtimeSessionId: randomUUID(), monthlyBudgetUsd: config.monthlyBudgetUsd };
       if (resume && !spec.providerSessionId) {
         spec.providerSessionId = (await history(id))?.[agent]?.id || null;
         resolveSpec(id, agent, false, true);
-        if (!spec.providerSessionId) resume = false;
+        if (!spec.providerSessionId) {
+          if (agent === 'codex' && launch?.resume) throw new Error('没有找到可恢复的 Codex 会话，请使用 codex 开始新会话。');
+          resume = false;
+        }
       }
       terminalStreams.delete(id);
       const previous = sessions.get(id);

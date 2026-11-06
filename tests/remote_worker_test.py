@@ -213,7 +213,7 @@ class RemoteFilesTest(unittest.TestCase):
         thread = threading.Thread(target=self.worker.events_loop, daemon=True)
         thread.start()
         env = dict(os.environ, AGENTRIX_SOCKET=socket_path, AGENTRIX_TOKEN=self.worker.token)
-        process = subprocess.Popen([sys.executable, "-c", remote.NOTIFY_SOURCE, "codex-started"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen([sys.executable, "-c", remote.NOTIFY_SOURCE, "codex-started", "", "claude"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         event = events.get(timeout=5)["event"]
         self.assertIsNone(process.poll(), "launch waits until the host writes its note")
@@ -1052,5 +1052,42 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
             server.join(5)
             self.assertFalse(server.is_alive())
             self.assertTrue(second.stopping)
+
+class RemoteCodexShellNotifyTest(unittest.TestCase):
+    def test_manual_codex_request_is_acknowledged_without_waiting_for_a_terminal_skill_note(self):
+        worker = object.__new__(remote.Worker)
+        worker.stopping = False; worker.token = "key"; worker.project_id = "p"
+        worker.sequence = 0; worker.sequence_lock = threading.Lock()
+        worker.skill_note_ready = mock.Mock()
+        event = {"type": "codex-started", "agent": "codex", "token": "key", "cwd": "/remote/sub", "args": ["resume", "--last"]}
+        client = mock.MagicMock(); client.__enter__.return_value = client
+        client.recv.return_value = (json.dumps(event) + "\n").encode()
+        worker.listener = mock.Mock(); worker.listener.accept.return_value = (client, None)
+        events = []
+        def emit(value):
+            events.append(value); worker.stopping = True
+        worker.emit = emit
+        worker.events_loop()
+        worker.skill_note_ready.wait.assert_not_called()
+        client.sendall.assert_called_once_with(b"\n")
+        self.assertEqual(events[0]["event"]["args"], ["resume", "--last"])
+        self.assertEqual(events[0]["event"]["sessionKey"], "key")
+        self.assertEqual(events[0]["event"]["projectId"], "p")
+
+    def test_manual_codex_request_keeps_argv_on_existing_authenticated_shell_channel(self):
+        args = ["resume", "11111111-1111-4111-8111-111111111111", "-m", "fixture", '中文 "quoted" \\ end']
+        client = mock.MagicMock(); client.__enter__.return_value = client
+        with mock.patch("sys.argv", ["notify.py", "codex-started", "", "codex", json.dumps(args)]), \
+             mock.patch.dict(os.environ, {"AGENTRIX_TOKEN": "test", "AGENTRIX_SOCKET": "test.sock"}), \
+             mock.patch("socket.AF_UNIX", 1, create=True), mock.patch("socket.socket", return_value=client):
+            exec(remote.NOTIFY_SOURCE, {})
+        event = json.loads(client.sendall.call_args[0][0])
+        self.assertEqual(event["type"], "codex-started")
+        self.assertEqual(event["agent"], "codex")
+        self.assertEqual(event["token"], "test")
+        self.assertEqual(event["args"], args)
+        self.assertNotIn("command", event)
+        self.assertNotIn("exitCode", event)
+
 
 if __name__ == "__main__": unittest.main()

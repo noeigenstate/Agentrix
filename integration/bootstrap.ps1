@@ -1,26 +1,15 @@
-$ErrorActionPreference = 'Continue'
+﻿$ErrorActionPreference = 'Continue'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $OutputEncoding = [Console]::OutputEncoding
 . (Join-Path $PSScriptRoot 'refresh-path.ps1')
 $global:AgentrixSession = Get-Content -LiteralPath $env:AGENTRIX_BOOTSTRAP -Raw -Encoding UTF8 | ConvertFrom-Json
 $global:AgentrixEventSequence = 0
-$global:AgentrixAccountBaseline = $env:AGENTRIX_ACCOUNT_BASELINE
 Remove-Item Env:AGENTRIX_ACCOUNT_BASELINE -ErrorAction SilentlyContinue
 # agent.ps1 (Command Prompt terminals) loads only the codex and claude wrappers below and keeps its own directory.
 $global:AgentrixAgentOnly = $env:AGENTRIX_AGENT_ONLY -eq '1'
 if (-not $global:AgentrixAgentOnly) { Set-Location -LiteralPath $global:AgentrixSession.projectPath }
 $global:AgentrixCodexCommand = Get-Command codex -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
-$global:AgentrixCodexExecutable = $global:AgentrixCodexCommand
-$global:AgentrixCodexPrefix = @()
-if ($global:AgentrixCodexCommand -and [IO.Path]::GetExtension($global:AgentrixCodexCommand) -in @('.ps1', '.cmd')) {
-    $npmEntry = Join-Path (Split-Path $global:AgentrixCodexCommand -Parent) 'node_modules\@openai\codex\bin\codex.js'
-    $nodeCommand = Get-Command node.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
-    if ((Test-Path -LiteralPath $npmEntry) -and $nodeCommand) {
-        $global:AgentrixCodexExecutable = $nodeCommand
-        $global:AgentrixCodexPrefix = @($npmEntry)
-    }
-}
 
 $global:AgentrixClaudeCommand = Get-Command claude -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
 $global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand
@@ -60,7 +49,7 @@ function global:ConvertTo-AgentrixArgument {
 }
 
 function global:Send-AgentrixEvent {
-    param([string]$Type, [int]$ExitCode = 0, [string]$Agent = 'codex', [string]$Command = '', [string]$AccountLaunch = '')
+    param([string]$Type, [int]$ExitCode = 0, [string]$Agent = 'codex', [string]$Command = '', [string[]]$Arguments = @())
     $global:AgentrixEventSequence++
     try {
         $eventData = @{
@@ -77,7 +66,7 @@ function global:Send-AgentrixEvent {
             command = $Command
         }
         if ($Type -eq 'codex-started' -and $Agent -eq 'codex') {
-            $eventData.accountLaunch = if ($AccountLaunch -ceq 'model-only-v1') { 'model-only-v1' } else { 'unavailable' }
+            $eventData.args = @($Arguments)
         }
         $eventData = $eventData | ConvertTo-Json -Compress
         $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $global:AgentrixSession.pipeName, [System.IO.Pipes.PipeDirection]::InOut)
@@ -103,70 +92,12 @@ function global:Get-AgentrixCommand($arguments) {
     if ($first -cmatch '^-{0,2}[A-Za-z][A-Za-z-]{0,23}$') { $first } else { '' }
 }
 
-# Owned helper, bounded and silent. Full argv goes only through its private stdin;
-# the event receives a capability, never a prompt, config or credential value.
-function global:Get-AgentrixAccountLaunch($arguments) {
-    $scopeProcess = $null
-    try {
-        if (-not $global:AgentrixAccountBaseline -or -not $global:AgentrixSession.nodePath -or -not $global:AgentrixSession.accountScopeHelper) { return 'unavailable' }
-        $info = [Diagnostics.ProcessStartInfo]::new()
-        $info.FileName = $global:AgentrixSession.nodePath
-        $info.Arguments = ConvertTo-AgentrixArgument $global:AgentrixSession.accountScopeHelper
-        $info.UseShellExecute = $false; $info.CreateNoWindow = $true
-        $info.EnvironmentVariables['ELECTRON_RUN_AS_NODE'] = '1'
-        $info.RedirectStandardInput = $true; $info.RedirectStandardOutput = $true; $info.RedirectStandardError = $true
-        $scopeProcess = [Diagnostics.Process]::Start($info)
-        $output = $scopeProcess.StandardOutput.ReadToEndAsync()
-        $diagnostics = $scopeProcess.StandardError.ReadToEndAsync()
-        $payload = @{ args = @($arguments); baseline = ($global:AgentrixAccountBaseline | ConvertFrom-Json) } | ConvertTo-Json -Depth 5 -Compress
-        $scopeProcess.StandardInput.Write($payload); $scopeProcess.StandardInput.Close()
-        if (-not $scopeProcess.WaitForExit(3000)) { $scopeProcess.Kill(); return 'unavailable' }
-        if ($scopeProcess.ExitCode -eq 0 -and $output.Result -ceq 'model-only-v1') { return 'model-only-v1' }
-    } catch { } finally {
-        if ($scopeProcess) { try { if (-not $scopeProcess.HasExited) { $scopeProcess.Kill() } } catch { }; $scopeProcess.Dispose() }
-    }
-    return 'unavailable'
-}
-
+# Codex stays native inside Agentrix. The authenticated shell event requests
+# app-server on this terminal; only the host interprets the bounded argv.
 function global:codex {
-    if (-not $global:AgentrixCodexCommand) {
-        Write-Host 'Codex CLI was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
-        return
-    }
-    $forwardArgs = @($args)
-    $notifyCommand = @(
-        $global:AgentrixSession.powershellPath,
-        '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-File', $global:AgentrixSession.notifyPath,
-        '-PipeName', $global:AgentrixSession.pipeName,
-        '-ProjectId', $global:AgentrixSession.projectId,
-        '-SessionKey', $global:AgentrixSession.sessionKey
-    ) | ConvertTo-Json -Compress
-    Send-AgentrixEvent 'codex-started' -Command (Get-AgentrixCommand $args) -AccountLaunch (Get-AgentrixAccountLaunch $forwardArgs)
-    $codexExit = 0
-    try {
-        if ([IO.Path]::GetExtension($global:AgentrixCodexExecutable) -ne '.exe') {
-            throw 'Use a native Codex executable or the standard npm installation of Codex.'
-        }
-        # What the reading view can show (electron/features/agents/reading-note.cjs); the user's own -c comes later and wins.
-        $currentNote = Get-AgentrixReadingNote
-        $readingNote = if ($currentNote) { @('-c', ('developer_instructions="' + $currentNote + '"')) } else { @() }
-        $nativeArgs = @($global:AgentrixCodexPrefix) + @('-c', ('notify=' + $notifyCommand), '-c', 'tui.terminal_title=["session-id"]') + $readingNote + $forwardArgs
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = $global:AgentrixCodexExecutable
-        $startInfo.Arguments = (($nativeArgs | ForEach-Object { ConvertTo-AgentrixArgument ([string]$_) }) -join ' ')
-        $startInfo.UseShellExecute = $false
-        $startInfo.WorkingDirectory = (Get-Location).Path
-        $codexProcess = [Diagnostics.Process]::Start($startInfo)
-        try { $codexProcess.WaitForExit(); $codexExit = $codexProcess.ExitCode }
-        finally { $codexProcess.Dispose() }
-    } catch {
-        Write-Error $_
-        $codexExit = 1
-    } finally {
-        Send-AgentrixEvent 'codex-exited' $codexExit
-        $global:LASTEXITCODE = $codexExit
-    }
+    Send-AgentrixEvent 'codex-started' -Arguments @($args)
+    Write-Host '已请求在原生模式打开 Codex。'
+    $global:LASTEXITCODE = 0
 }
 
 # Claude Code reports each turn through hooks injected with --settings, which merge with the
@@ -239,6 +170,6 @@ function global:prompt {
 
 # No user profile is modified. This wrapper exists only inside this terminal.
 Write-Host '  AGENTRIX' -ForegroundColor DarkGray
-Write-Host '  Type codex to start, or codex resume to continue a session.' -ForegroundColor DarkGray
+Write-Host '  Type codex to open the native view, or codex resume --last to continue.' -ForegroundColor DarkGray
 Write-Host ''
 Send-AgentrixEvent 'shell-ready'

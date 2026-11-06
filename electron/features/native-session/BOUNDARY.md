@@ -7,7 +7,7 @@ Owns provider-neutral session routing, validated renderer IPC, settings and work
 
 ## Interface
 - `createNativeSessions` (`electron/features/native-session/index.cjs`) — compose trusted provider runtimes and register the native IPC namespace
-- `choosePath` (`electron/features/native-session/routing.cjs`) — pure shared path choice for the main process and helper; local Codex always selects app-server, and legacy codexView preferences are ignored on read
+- `choosePath` (`electron/features/native-session/routing.cjs`) — pure shared path choice for the main process and helper; Codex always selects app-server, and legacy codexView preferences are ignored on read. Router start accepts host-mapped shell launch settings through resolveSpec; renderer start IPC still accepts only agent/resume.
 - `readJson` (`electron/features/native-session/storage.cjs`) — local metadata reads and atomic writeJson persistence
 - `createEventStream` (`electron/features/native-session/events.cjs`) — versioned event publication and replay snapshots
 - `registerClaudeWorker` (`electron/features/native-session/worker.cjs`) — authenticated helper run registration

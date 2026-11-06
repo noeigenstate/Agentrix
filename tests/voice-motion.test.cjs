@@ -58,24 +58,25 @@ test('the actual capture worklet sends one level per 4096 samples, plus the fina
   assert.equal(messages[1].samples.length, 128); assert.equal(messages[2].flushed, true);
 });
 
-function voiceController() {
+function voiceController({ devices = [{ kind: 'audioinput' }], openError = null } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '../src/features/voice/voice-input.ts'), 'utf8');
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const events = new Map(), exports = {};
-  let emit, notifications = 0, subscribed = false, recognize;
+  let emit, notifications = 0, subscribed = false, recognize, opens = 0;
+  const pasted = [], written = [];
   const ready = { ready: true, phase: 'ready' };
   vm.runInNewContext(compiled, {
     exports, setTimeout, CSS: { escape: value => value },
     document: { addEventListener: (name, fn) => events.set(name, fn) },
-    navigator: { mediaDevices: { addEventListener() {}, enumerateDevices: async () => [{ kind: 'audioinput' }] } },
+    navigator: { mediaDevices: { addEventListener() {}, enumerateDevices: async () => devices } },
     window: { agentrix: { onVoiceState() {}, getVoiceState: async () => ({ ok: true, value: ready }), warmVoice() {},
-      transcribe: () => new Promise(resolve => { recognize = resolve; }) } },
+      transcribe: () => new Promise(resolve => { recognize = resolve; }), pasteTerminal: async (...args) => { pasted.push(args); return { ok: true }; }, writeTerminal: (...args) => written.push(args) } },
     require(name) {
       if (name === 'react') return { useSyncExternalStore(subscribe, get) {
         if (!subscribed) { subscribed = true; subscribe(() => notifications++); } return get();
       } };
       if (name === './voice-audio') return { MicrophoneCapture: class {
-        async open(_id, onLevel) { emit = onLevel; } async close() {} startRecording() {} async stopRecording() { return new ArrayBuffer(0); }
+        async open(_id, onLevel) { opens++; if (openError) throw openError; emit = onLevel; } async close() {} startRecording() {} async stopRecording() { return new ArrayBuffer(0); }
       } };
       if (name.endsWith('/i18n')) return { t: text => text };
       if (name.endsWith('/platform')) return {};
@@ -85,6 +86,7 @@ function voiceController() {
   });
   exports.useVoice();
   return { controller: exports, emit: value => emit(value), get notifications() { return notifications; },
+    pasted, written, get opens() { return opens; },
     recognize: result => recognize(result), cancel() { events.get('keydown')({ key: 'Escape', preventDefault() {}, stopPropagation() {} }); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -114,4 +116,77 @@ test('recognition resets the level and ignores the final audio messages while bu
   f.emit(.2); assert.equal(f.controller.getVoiceLevel(), 0);
   f.recognize({ ok: true, value: 'hello' }); await finishing;
   assert.deepEqual(words, [['hello', false]]); assert.equal(f.controller.useVoice().busy, null);
+});
+
+test('a native composer refuses recording while disabled and a removed/replaced binding never falls back to terminal paste', async () => {
+  const f = voiceController(); await flush();
+  const words = [];
+  const unavailable = f.controller.dictateInto('native', assert.fail, true, { available: () => false, sessionId: 'runtime' });
+  await f.controller.toggleDictation('native', null, assert.fail); assert.equal(f.opens, 0); unavailable();
+  const unregister = f.controller.dictateInto('native', (text, submit) => words.push([text, submit]), true, { sessionId: 'runtime' });
+  await f.controller.toggleDictation('native', null, assert.fail);
+  const finishing = f.controller.toggleDictation('native', null, assert.fail); await flush();
+  unregister();
+  const replacement = f.controller.dictateInto('native', () => assert.fail('old recognition entered the replacement session'), true, { sessionId: 'replacement' });
+  f.recognize({ ok: true, value: 'late result' }); await finishing; replacement();
+  assert.deepEqual(words, []); assert.deepEqual(f.pasted, []); assert.deepEqual(f.written, []);
+});
+
+test('unmount cancels native recording and late recognition errors stay with their original composer only', async () => {
+  const f = voiceController(); await flush();
+  const errors = [], unregister = f.controller.dictateInto('native', assert.fail, true, { sessionId: 'runtime' });
+  await f.controller.toggleDictation('native', null, message => errors.push(message));
+  unregister(); await flush(); assert.equal(f.controller.useVoice().recording, null);
+  const dispose = f.controller.dictateInto('native', assert.fail, true, { sessionId: 'next' });
+  await f.controller.toggleDictation('native', null, message => errors.push(message));
+  const finishing = f.controller.toggleDictation('native', null, message => errors.push(message)); await flush();
+  dispose(); f.recognize({ ok: false, error: 'late failure' }); await finishing;
+  assert.deepEqual(errors, []); assert.deepEqual(f.pasted, []);
+});
+
+test('the existing voice shortcut submits native recognition through its composer and never a terminal', async () => {
+  const f = voiceController(); await flush();
+  const words = [], unregister = f.controller.dictateInto('native', (text, submit) => words.push([text, submit]), true, { sessionId: 'runtime' });
+  await f.controller.toggleDictation('native', null, assert.fail);
+  const finishing = f.controller.quickDictation(assert.fail); await flush();
+  f.recognize({ ok: true, value: 'shortcut words' }); await finishing;
+  assert.deepEqual(words, [['shortcut words', true]]); assert.deepEqual(f.pasted, []); assert.deepEqual(f.written, []); unregister();
+});
+
+test('native dictation uses the existing missing-device, permission, occupied-device and recognition error messages', async () => {
+  for (const [options, expected] of [[{ devices: [] }, /未检测到麦克风/], [{ openError: { name: 'NotAllowedError' } }, /麦克风访问被拒绝/], [{ openError: { name: 'NotReadableError' } }, /麦克风无法使用/], [{}, /识别失败/]]) {
+    const f = voiceController(options); await flush();
+    const errors = [], unregister = f.controller.dictateInto('native', assert.fail, true, { sessionId: 'runtime' });
+    await f.controller.toggleDictation('native', null, message => errors.push(message));
+    if (!options.devices && !options.openError) {
+      const finishing = f.controller.toggleDictation('native', null, message => errors.push(message)); await flush();
+      f.recognize({ ok: false, error: '识别失败' }); await finishing;
+    }
+    assert.match(errors[0], expected); assert.deepEqual(f.pasted, []); unregister();
+  }
+});
+
+test('the shared microphone button retains icons and status, stops click propagation and obeys the composer disabled state', () => {
+  const React = require('react'), { renderToStaticMarkup } = require('react-dom/server');
+  const file = path.join(__dirname, '../src/features/voice/VoiceButton.tsx');
+  const compiled = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+  const exports = {}, toggles = [];
+  let snapshot = { microphone: true, model: { ready: true }, recording: null, busy: null };
+  vm.runInNewContext(compiled, { exports, require(name) {
+    if (name === 'react' || name === 'react/jsx-runtime') return require(name);
+    if (name === './voice-input') return { useVoice: () => snapshot, toggleDictation: (...args) => toggles.push(args) };
+    if (name.endsWith('/i18n')) return { t: text => text };
+    if (name.endsWith('/shortcuts')) return { shortcut: () => 'Ctrl+T' };
+    if (name === '@phosphor-icons/react') return { Microphone: props => React.createElement('svg', { 'data-icon': 'microphone', ...props }), SpinnerGap: props => React.createElement('svg', { 'data-icon': 'spinner', ...props }) };
+    return {};
+  } });
+  const button = disabled => exports.VoiceButton({ terminalId: 'native', sessionId: null, name: 'Codex', disabled, onError() {} });
+  let stopped = 0; button(true).props.onClick({ stopPropagation() { stopped++; } });
+  assert.equal(toggles.length, 0); assert.match(renderToStaticMarkup(button(true)), /disabled=""/);
+  button(false).props.onClick({ stopPropagation() { stopped++; } }); assert.equal(toggles.length, 1); assert.equal(stopped, 2);
+  snapshot = { ...snapshot, recording: 'native', sends: true };
+  assert.match(renderToStaticMarkup(button(false)), /is-recording/); assert.match(button(false).props.title, /Enter 识别并发送/);
+  snapshot = { ...snapshot, recording: null, busy: 'native' };
+  assert.match(renderToStaticMarkup(button(false)), /data-icon="spinner"/); assert.equal(button(false).props.title, '正在识别…');
+  snapshot = { ...snapshot, busy: null, microphone: false }; assert.equal(button(false).props.title, '未检测到麦克风');
 });

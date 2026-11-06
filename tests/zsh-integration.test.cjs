@@ -144,20 +144,14 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   // macOS's /etc/zshrc names a history file; Linux leaves that to the user's own files.
   assert.equal(state, `unset|${process.platform === 'darwin' ? path.join(home, '.zsh_history') : ''}|00|111|en_US.UTF-8|agentrix`);
 
-  // codex: started and exited around the real program, which gets notify and the title setting first.
+  // Manual Codex returns to the shell and requests the native host instead of running a TUI.
   type('codex resume --last');
-  const exited = await waitEvent(event => event.type === 'codex-exited', 'codex-exited');
-  const started = events.find(event => event.type === 'codex-started');
-  assert.ok(started && started.sequence < exited.sequence); assert.equal(started.agent, 'codex'); assert.equal(started.command, 'resume', 'the first word goes with it (agent-command.cjs)'); assert.equal(exited.exitCode, 3);
-  const codexArgs = JSON.parse(fs.readFileSync(path.join(log, 'codex.json'), 'utf8'));
-  // What the reading view can show comes next, before the user's own arguments.
-  assert.deepEqual(codexArgs.slice(2), ['-c', 'tui.terminal_title=["session-id"]', '-c', `developer_instructions="${NOTE}"`, 'resume', '--last']);
-  assert.equal(codexArgs[0], '-c');
-  const notify = JSON.parse(codexArgs[1].replace(/^notify=/, ''));
-  assert.deepEqual(notify, ['/usr/bin/env', 'ELECTRON_RUN_AS_NODE=1', process.execPath, helper, 'codex-notify', server.address, 'project', 'key']);
-  // Codex appends the turn's JSON and runs the command; the event reaches the window.
-  await promisify(execFile)(notify[0], [...notify.slice(1), JSON.stringify({ type: 'agent-turn-complete', 'thread-id': 'thread', 'turn-id': 'turn' })]);
-  await waitEvent(event => event.type === 'turn-complete' && event.eventId === 'thread:turn', 'turn-complete');
+  const started = await waitEvent(event => event.type === 'codex-started', 'native Codex request');
+  assert.equal(started.agent, 'codex');
+  assert.deepEqual(started.args, ['resume', '--last']);
+  await waitEvent(event => event.type === 'shell-prompt' && event.sequence > started.sequence, 'the prompt after the native request');
+  assert.equal(fs.existsSync(path.join(log, 'codex.json')), false, 'the shell never executes Codex');
+  assert.equal(events.some(event => event.type === 'codex-exited'), false);
 
   // claude: the user's alias still applies, and the hooks it is given report each turn.
   type('claude -p "中文 prompt"');

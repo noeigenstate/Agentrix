@@ -8,7 +8,7 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
-const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, RATE_INTERVAL } = require('../integration/dispatch.cjs');
+const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, RATE_INTERVAL } = require('../integration/dispatch.cjs');
 const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { createEventServer } = require('../electron/events.cjs');
@@ -18,6 +18,29 @@ const helper = path.resolve(__dirname, '../integration/dispatch.cjs');
 const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
 const session = '22222222-2222-4222-8222-222222222222';
 const at = seconds => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
+
+test('helper observes Claude user identifiers by record channel, excluding tool results and sidechains', () => {
+  const observed = [], output = new WorkerOutput('claude', () => {});
+  output.onInput = id => observed.push(id);
+  output.record({ type: 'user', uuid: 'brief', message: { content: '# Shared context' } });
+  output.record({ type: 'user', uuid: 'owner', message: { content: [{ type: 'text', text: 'ordinary words' }] } });
+  output.record({ type: 'user', uuid: 'tool-result', message: { content: [{ type: 'tool_result', content: 'not a human input' }] } });
+  output.record({ type: 'user', uuid: 'sidechain', parent_tool_use_id: 'child', message: { content: 'child prompt' } });
+  assert.deepEqual(observed, ['brief', 'owner']);
+});
+
+test('native helper input origins follow admitted control ids through new turns, steering and resumed briefs', () => {
+  const user = (id, text) => ({ type: 'item.upsert', itemId: `provider-${id}`, payload: { kind: 'user-message', content: { clientMessageId: id, text } } });
+  const controls = new Map([['owner-control', 'ordinary words']]);
+  const brief = user('brief', 'ordinary words'), owner = user('owner-control', '# Shared context for this task');
+  assert.equal(workerInput(brief, controls, [], null).origin, 'planner');
+  assert.deepEqual(workerInput(owner, controls, [], null), { entryId: 'u:provider-owner-control', inputId: 'owner-control', origin: 'owner', ownerMessageIds: ['owner-control'] });
+  assert.equal(workerInput(user('minutes', 'ordinary words'), controls, ['owner-control'], 'resume-owner').origin, 'planner', 'resuming is not evidence that every user-role item is an owner message');
+  assert.deepEqual(workerInput(user('resume-owner', 'wrapped owner input'), controls, ['owner-control'], 'resume-owner').ownerMessageIds, ['owner-control']);
+  assert.equal(workerInput(user('resume-owner', 'wrapped owner input'), controls, ['owner-control'], 'resume-owner').origin, 'planner', 'the helper envelope has the planner avatar');
+  assert.equal(workerInput({ ...owner, replay: true }, controls, [], null), null, 'replay cannot rewrite old provenance');
+  assert.equal(workerInput({ ...owner, payload: { kind: 'agent-message' } }, controls, [], null), null);
+});
 const records = name => require('node:fs').readFileSync(path.join(__dirname, 'fixtures', name), 'utf8').trim().split('\n').map(JSON.parse);
 const rollout = records('codex-dispatch-rollout.jsonl');
 const claude = records('claude-dispatch-stream.jsonl');

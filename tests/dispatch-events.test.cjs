@@ -7,6 +7,23 @@ const { acceptDispatch, validDispatch } = require('../electron/features/agents/d
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 
 const routing = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
+
+test('dispatch sender identity comes from the authenticated parent, not helper declarations', t => {
+  const calls = new AgentCalls(); t.after(() => calls.dispose());
+  const parent = { terminalId: 'terminal', sessionKey: 'test-key', agent: 'claude', usage: { rates: { model: 'claude-opus-5-5' } } };
+  const event = start(undefined, { planner: { kind: 'planner', agent: 'codex', model: 'forged' } });
+  assert.equal(acceptDispatch(parent, event, calls), true);
+  assert.deepEqual(calls.byId(`dispatch:${event.id}`).planner, { kind: 'planner', agent: 'claude', model: 'claude-opus-5-5' });
+  const unknown = start(); assert.equal(acceptDispatch({ terminalId: 'terminal', sessionKey: 'test-key' }, unknown, calls), true);
+  assert.deepEqual(calls.byId(`dispatch:${unknown.id}`).planner, { kind: 'planner', agent: null, model: null });
+  const native = start();
+  assert.equal(acceptDispatch({ ...parent, nativeStructured: true, nativeObservedModel: 'claude-sonnet-5-5', agentSettings: { model: 'guessed-config' } }, native, calls), true);
+  assert.deepEqual(calls.byId(`dispatch:${native.id}`).planner, { kind: 'planner', agent: 'claude', model: 'claude-sonnet-5-5' });
+  const fact = { type: 'dispatch-input', projectId: 'terminal', sessionKey: 'test-key', id: native.id, sessionId: native.sessionId, entryId: 'u:brief', origin: 'planner' };
+  assert.equal(acceptDispatch(parent, fact, calls), true);
+  assert.equal(acceptDispatch(parent, { ...fact, sessionKey: 'forged' }, calls), false);
+  for (const patch of [{ origin: 'invented' }, { entryId: 'a:assistant' }, { entryId: 'u:' + 'x'.repeat(201) }, { ownerMessageIds: ['not-an-id'] }]) assert.equal(validDispatch({ ...fact, ...patch }), false);
+});
 const start = (id = randomUUID(), extra = {}) => ({ type: 'dispatch-start', projectId: 'terminal', sessionKey: 'test-key', id, agent: 'codex',
   role: '执行', title: 'Repair the parser', ...routing, cwd: '/project', brief: '/brief.md', out: '/out.md', sessionId: randomUUID(), startedAt: 1000, ...extra });
 const end = (id, extra = {}) => ({ type: 'dispatch-end', projectId: 'terminal', sessionKey: 'test-key', id, ...routing,

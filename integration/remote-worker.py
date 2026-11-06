@@ -282,6 +282,9 @@ try:
     elif mode in ("codex-started","codex-exited"):
         event["agent"]="claude" if len(sys.argv)>3 and sys.argv[3]=="claude" else "codex"
         if mode=="codex-exited": event["exitCode"]=int(sys.argv[2])
+        elif event["agent"] == "codex":
+            event["args"] = json.loads(sys.argv[4]) if len(sys.argv)>4 else []
+            if not isinstance(event["args"], list) or len(event["args"])>64 or any(not isinstance(arg, str) or "\0" in arg for arg in event["args"]) or len(json.dumps(event["args"]))>32768: sys.exit(0)
         elif len(sys.argv)>2 and sys.argv[2]: event["command"]=sys.argv[2][:24]
     if event.get("agent")=="claude":
         home=os.path.expanduser("~")
@@ -308,18 +311,11 @@ __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
 # from a conversation by it. Anything else is not sent.
 __pg_command() { local pattern='^-{0,2}[A-Za-z][A-Za-z-]{0,23}$'; [[ ${1-} =~ $pattern ]] && printf '%s' "$1"; return 0; }
 function codex {
-    local executable result
-    executable=$(type -P codex)
-    if [ -z "$executable" ]; then printf 'Codex CLI was not found on this SSH host.\n'; return 127; fi
-    __pg_emit codex-started "$(__pg_command "$@")"
-    # What the reading view can show (electron/features/agents/reading-note.cjs); the user's own -c comes later and wins.
-    local -a note=()
-    local current_note=$(__pg_reading_note)
-    [ -n "$current_note" ] && note=(-c "developer_instructions=\"$current_note\"")
-    "$executable" -c "notify=$AGENTRIX_NOTIFY_COMMAND" -c 'tui.terminal_title=["session-id"]' "${note[@]}" "$@"
-    result=$?
-    __pg_emit codex-exited "$result"
-    return "$result"
+    local arguments
+    arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
+    __pg_emit codex-started '' codex "$arguments"
+    printf '%s\n' '已请求在原生模式打开 Codex。'
+    return 0
 }
 function claude {
     local executable result settings
@@ -366,7 +362,7 @@ fi
 # TUIs such as Codex. These bindings are private to this generated shell rc.
 bind -m emacs-standard '"\e[13;2u":"\C-v\C-j"' 2>/dev/null || true
 bind -m vi-insertion '"\e[13;2u":"\C-v\C-j"' 2>/dev/null || true
-printf '\033[36m  AGENTRIX / SSH\033[0m\n  Type codex or claude to start, codex resume or claude --resume to continue.\n\n'
+printf '\033[36m  AGENTRIX / SSH\033[0m\n  Type codex or claude to start, codex resume --last or claude --resume to continue.\n\n'
 '''
 
 def image_type(data):
@@ -1437,12 +1433,13 @@ class Worker:
                     with self.sequence_lock:
                         self.sequence += 1
                         event.update(projectId=self.project_id, sessionKey=self.token, sequence=self.sequence)
-                        if event.get("type") == "codex-started":
+                        needs_note = event.get("type") == "codex-started" and event.get("agent") == "claude"
+                        if needs_note:
                             self.skill_note_sequence = self.sequence
                             self.skill_note_ready.clear()
                         self.emit({"type": "event", "event": event})
                     if event.get("type") == "codex-started":
-                        self.skill_note_ready.wait(4)
+                        if needs_note: self.skill_note_ready.wait(4)
                         client.sendall(b"\n")
                 except (OSError, ValueError): pass
 

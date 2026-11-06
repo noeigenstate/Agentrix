@@ -7,6 +7,7 @@ import type { AgentIntervention, SubagentFeed } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
+import { UserAvatar } from '../../shared/UserAvatar';
 import { ConversationFeed } from '../reading/ConversationFeed';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { elapsedClock } from './ActivityPane';
@@ -100,6 +101,7 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {/* Once the conversation shows a word, it is not shown again; a refused one stays, with why. Having been read needs no saying. */}
         {sent.filter(item => !delivered.has(item.id) || receipts.get(item.id)!.status === 'rejected').map(item => <div key={item.id} className="subagent-sent">
+          <span className="subagent-sent-who"><UserAvatar size={16} /><b>{t('你')}</b></span>
           <p>{item.text}</p>{receipts.get(item.id)!.status !== 'consumed' && <small>{receiptLine(receipts.get(item.id)!)}</small>}
         </div>)}
       </div>

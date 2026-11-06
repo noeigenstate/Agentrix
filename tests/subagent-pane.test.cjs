@@ -265,20 +265,20 @@ test('a finished Task subagent (reviewing, with an end time) takes no word, keep
   assert.doesNotMatch(reviewing, /<textarea[^>]*disabled/, 'a reviewer still at work can be told something'); assert.match(reviewing, /subagent-state is-reviewing">审核中</);
 }));
 
-test('a word to a dispatched worker is delivered once its resumed transcript carries it; a parent relay and a word not yet seen stay queued', () => {
-  const { deliveredIds } = splits(), user = text => ({ id: text, role: 'user', text }), item = (id, text, route = 'dispatch') => ({ id, text, route });
-  const entries = [user('first brief'), { id: 'a', role: 'assistant', text: '业主插话：fix the test' }, user('业主插话：fix the test\n\n业主插话：and the docs\n\n继续执行当前任务。')];
+test('only a main-confirmed owner input id retires its echo; identical planner text never does', () => {
+  const { deliveredIds } = splits(), user = (id, text) => ({ id: `u:${id}`, clientMessageId: id, role: 'user', text, sender: { kind: 'owner' } }), item = (id, text, route = 'dispatch') => ({ id, text, route });
+  const entries = [user('1', 'fix the test'), user('2', 'and the docs'), { id: 'brief', role: 'user', text: '业主插话：later word', sender: { kind: 'planner' } }];
   const delivered = sent => [...deliveredIds(entries, sent)];
   assert.deepEqual(delivered([item('1', 'fix the test'), item('2', 'and the docs'), item('3', 'later word')]), ['1', '2'], 'only the owner\'s own lines count, and only words found');
-  assert.deepEqual(delivered([item('1', 'fix the test'), item('2', 'fix the test')]), ['1'], 'the same word twice needs two lines');
+  assert.deepEqual(delivered([item('1', 'fix the test'), item('3', 'fix the test')]), ['1'], 'the same word twice still needs two real input identities');
   assert.deepEqual(delivered([item('1', 'fix the test', 'parent')]), [], 'a relay through the parent leaves no trace to check');
   assert.deepEqual([...deliveredIds([], [item('1', 'x')])], []);
-  assert.deepEqual([...deliveredIds([user('如何了')], [item('1', '如何了')])], ['1'], 'a word steered into a running turn arrives as it was typed');
+  assert.deepEqual([...deliveredIds([user('1', '如何了')], [item('1', '如何了')])], ['1'], 'steering uses the same input identity');
 });
 
 test('a word the conversation already shows has no second bubble; a queued one reads 已排队', () => zh(() => {
   const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
-  const entries = [{ id: 'u1', role: 'user', text: '业主插话：fix the test\n\n继续执行当前任务。' }];
+  const entries = [{ id: 'u1', clientMessageId: 'i1', sender: { kind: 'owner' }, role: 'user', text: 'fix the test' }];
   const html = paneMarkup(ok({ entries }), undefined, withSent([intervention(), intervention({ id: 'i2', text: 'and the docs' }), intervention({ id: 'i3', text: 'fix the test', route: 'parent' })]));
   assert.doesNotMatch(html, /<p>fix the test<\/p><small>已送达<\/small>/);
   assert.match(html, /<p>and the docs<\/p><small>已排队<\/small>/);
@@ -400,15 +400,15 @@ test('a finished or lost view takes no word: the box is off and says why in its 
 test('what the owner sent shows under the conversation as queued, with only its worker receipt', () => zh(() => {
   const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
   const html = paneMarkup(ok({}), undefined, withSent([intervention(), intervention({ id: 'i2', text: 'and the docs', route: 'parent' })]));
-  assert.match(html, /<div class="subagent-sent"><p>fix the test<\/p><small>已排队<\/small><\/div>/);
-  assert.match(html, /<div class="subagent-sent"><p>and the docs<\/p><small>已排队<\/small><\/div>/);
+  assert.match(html, /<div class="subagent-sent"><span class="subagent-sent-who"><svg data-icon="User"><\/svg><b>你<\/b><\/span><p>fix the test<\/p><small>已排队<\/small><\/div>/);
+  assert.match(html, /<div class="subagent-sent"><span class="subagent-sent-who"><svg data-icon="User"><\/svg><b>你<\/b><\/span><p>and the docs<\/p><small>已排队<\/small><\/div>/);
   assert.ok(html.indexOf('conversation-feed') < html.indexOf('subagent-sent') && html.indexOf('subagent-sent') < html.indexOf('subagent-input'), 'after the conversation, before the box');
   assert.equal(count(paneMarkup(ok({})), /subagent-sent/g), 0);
 }));
 
 test('the worker\'s own receipt decides the bubble: read, a final refusal in words without the machine code, then the sent answer, then the transcript match', () => zh(() => {
   const withSent = items => { let slot = 0; return { ...hookApi, useState: start => [slot++ === 1 ? items : typeof start === 'function' ? start() : start, () => {}] }; };
-  const entries = [{ id: 'u1', role: 'user', text: '业主插话：matched\n\n继续执行当前任务。' }];
+  const entries = [{ id: 'u1', clientMessageId: 'i5', sender: { kind: 'owner' }, role: 'user', text: 'matched' }];
   const controlReceipts = [
     { id: 'i1', status: 'consumed' }, { id: 'i2', status: 'rejected', reason: 'worker_ended_without_resume' }, { id: 'i3', status: 'rejected', reason: 'worker_ended_before_read' },
     { id: 'i4', status: 'rejected', reason: 'some_new_code' }, { id: 'i5', status: 'queued' }, { id: 'i6', status: 'unknown' },
