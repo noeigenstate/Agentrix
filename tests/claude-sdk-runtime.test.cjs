@@ -139,6 +139,13 @@ test('concurrent reservations and crash leftovers cannot spend the budget twice'
   assert.equal(partial.maxBudgetUsd, 2); assert.equal(remainder.maxBudgetUsd, 4);
   assert.throws(() => usage.reserve(6));
 });
+test('an explicitly capped reservation leaves the rest of the month available to another query', t => {
+  const file = path.join(directory(t), 'usage.json'), usage = createUsage({ file });
+  const one = usage.reserve(12, { maxBudgetUsd: 7 }), two = usage.reserve(12);
+  assert.equal(one.maxBudgetUsd, 7); assert.equal(two.maxBudgetUsd, 5); assert.throws(() => usage.reserve(12));
+  assert.equal(createUsage({ file }).available(12), 0);
+  usage.release(one.id); assert.equal(usage.available(12), 7000000);
+});
 test('UTC month rollover keeps key-independent prior spend and a zero budget blocks API', t => {
   let now = Date.UTC(2026, 10, 30, 23, 59); const usage = createUsage({ file: path.join(directory(t), 'usage.json'), now: () => now });
   usage.record('s', { uuid: 'r', total_cost_usd: 1 }); assert.equal(usage.summary().month, '2026-11');

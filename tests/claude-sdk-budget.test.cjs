@@ -53,6 +53,36 @@ test('a single turn can use more than five dollars and a session without a month
   }
 });
 
+test('M1 a query uses the remaining monthly budget across idle turns without charging resumed history', { timeout: 5000 }, async t => {
+  const f = fixture(t); await f.session.start();
+  for (const total of [2, 4, 7]) { await f.send(); await f.result(total); }
+  assert.deepEqual(f.fake.calls.map(call => call.options.maxBudgetUsd), [10]);
+  assert.equal(f.fake.closes.length, 0, 'spending alone does not restart the idle query');
+  assert.equal(f.runtime.usage.available(10), 3e6); assert.equal(f.runtime.usage.summary().monthUsdMicros, 7e6);
+  f.runtime.usage.record('other-session', { uuid: 'external-cost', total_cost_usd: 1, modelUsage: {} });
+  await f.send();
+  assert.equal(f.fake.calls[1].options.maxBudgetUsd, 2);
+  assert.equal(f.fake.calls[1].options.resume, f.fake.sessionId);
+  await f.result(7.5);
+  assert.equal(f.runtime.usage.summary().monthUsdMicros, 8.5e6, 'resume charges only the new half dollar');
+  assert.equal(f.fake.inputs.length, 4, 'no input is automatically replayed');
+});
+
+test('M1 automatic wake at an old query cap preserves a raised monthly allowance', { timeout: 5000 }, async t => {
+  const f = fixture(t); await f.session.start(); await f.send(); await f.result(1);
+  f.spec.monthlyBudgetUsd = 20;
+  f.fake.emit({ type: 'assistant', uuid: randomUUID(), message: { content: [{ type: 'text', text: 'background work' }] } });
+  await until(() => f.session.snapshot().state === 'running'); await f.result(10);
+  f.fake.emit({ type: 'assistant', uuid: randomUUID(), message: { id: randomUUID(), content: [{ type: 'text', text: 'background wake' }] } });
+  await until(() => f.fake.closes.length === 1 && f.session.snapshot().state === 'idle');
+  const turn = f.events.findLast(event => event.type === 'turn.completed');
+  assert.equal(turn.payload.status, 'interrupted'); assert.match(turn.payload.error, /API 预算上限/);
+  assert.doesNotMatch(turn.payload.error, /本月.*已用完/);
+  assert.equal(f.runtime.apiState(20).status, 'ready');
+  assert.ok(!f.events.some(event => event.type === 'error' && event.payload.code === 'sdk_failed'));
+  assert.ok(!f.events.some(event => event.type === 'session.state' && event.payload.state === 'failed'));
+});
+
 test('M1 live background tasks preserve their process until a safe explicit message boundary', { timeout: 5000 }, async t => {
   const f = fixture(t); await f.session.start(); await f.send();
   f.fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'monitor', run_id: '2' }] });
