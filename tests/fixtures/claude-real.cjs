@@ -28,7 +28,7 @@ const thinkingThenText = data => [opening(data), { type: 'content_block_start', 
   ...textBlock(1, 'THE VISIBLE ANSWER'), ...finish('end_turn')];
 
 async function harness(t, respond) {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-real-cli-')), home = path.join(directory, 'home'), cwd = path.join(directory, 'project');
+  const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-real-cli-'))), home = path.join(directory, 'home'), cwd = path.join(directory, 'project');
   const cleanup = [];
   t.after(async () => { for (const close of cleanup.reverse()) await close(); server.closeAllConnections(); server.close(); await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   const env = {};

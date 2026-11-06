@@ -74,6 +74,7 @@ test('I4: preparation failure retains the old path with a readable reason and ne
 });
 
 test('I4: failure during commit restores the source, retrying temporary restore failures without losing a newer draft', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   let source = { identity: {}, path: 'terminal', spec: { owner: 'gui', agent: 'claude', terminalId: 't', runtimeSessionId: 'old' } };
   let restores = 0, restoredDraft;
   const switches = createSwitches({ list: () => [source], choose: () => ({ path: 'api' }), retryMs: 5,
@@ -94,8 +95,7 @@ test('I4: failure during commit restores the source, retrying temporary restore 
   const changeId = switches.state('t').changeId;
   assert.equal(switches.answer('t', 'new', { handoff: { changeId, draft: draft(2) } }).accepted, true); await settle();
   assert.equal(switches.state('t').phase, 'rolling-back'); assert.match(switches.state('t').reason, /草稿已保留/);
-  const deadline = Date.now() + 1000;
-  while (switches.state('t').phase !== 'stable' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+  t.mock.timers.tick(5); await settle();
   assert.equal(restores, 2); assert.equal(switches.state('t').current, 'terminal');
   assert.match(switches.state('t').reason, /已恢复原会话/); assert.deepEqual(restoredDraft, draft(2));
 });

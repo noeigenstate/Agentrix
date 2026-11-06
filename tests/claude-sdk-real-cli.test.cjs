@@ -480,16 +480,12 @@ test('A4 A5 A9 A11 real persisted history keeps the newest records, provenance, 
     let history;
     const result = await f.run({}, async message => {
       if (message.type !== 'result') return;
-      // A result is a turn receipt, not a disk-flush receipt. Keep this CLI alive
-      // until its exact input and final reply are readable; run() aborts on return.
-      const deadline = Date.now() + 5000;
-      do {
-        history = await f.sdk.getSessionMessages(message.session_id, { dir: f.cwd });
-        if (history.some(row => row.uuid === id) && history.some(row => row.type === 'assistant'
-          && row.message?.content?.some?.(block => block.type === 'text' && block.text === 'REPLY'))) return;
-        await new Promise(resolve => setTimeout(resolve, 20));
-      } while (Date.now() < deadline);
-      assert.fail(`CLI transcript did not persist input ${id} and its reply within 5 seconds`);
+      // The CLI has already written this turn. Use the same canonical fixture
+      // directory for its writer and SDK reader; no flush polling is needed.
+      history = await f.sdk.getSessionMessages(message.session_id, { dir: f.cwd });
+      assert.ok(history.some(row => row.uuid === id), `canonical history lookup lost input ${id}`);
+      assert.ok(history.some(row => row.type === 'assistant'
+        && row.message?.content?.some?.(block => block.type === 'text' && block.text === 'REPLY')));
     }, {}, queue);
     queue.close();
     const pictureEvents = [];

@@ -68,8 +68,8 @@
     "id": "electron/features/codex-app-server/index.cjs:74b6934bfd7d22001795421f"
   },
   {
-    "text": "spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: spec.cwd, env, windowsHide: true,\r\n              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/codex-app-server/index.cjs:b972cddd8d12347d8f7d8d7b"
+    "text": "spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,\r\n              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
+    "id": "electron/features/codex-app-server/index.cjs:736ac26a2e0e631385a05a1a"
   },
   {
     "text": "execFile('git', ['-C', project.path, ...args], { windowsHide: true, timeout: 3000 }, (error, stdout) => done(error ? '' : stdout.trim()))",

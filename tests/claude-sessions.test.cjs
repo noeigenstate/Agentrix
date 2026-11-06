@@ -35,8 +35,8 @@ test('Claude cwd encoding replaces every separator, punctuation and Unicode char
   assert.equal(encodeClaudeCwd('/tmp/a_b.c +é😀'), '-tmp-a-b-c----');
 });
 
-test('session lookup prefers the encoded project and scans folders only when it is absent', async t => {
-  const f = await fixture(t), known = await f.write('known', [user('hello')]);
+test('session lookup prefers the encoded project and admits only verified legacy aliases', async t => {
+  const f = await fixture(t), known = await f.write('known', [{ ...user('hello'), cwd: f.cwd }]);
   const other = path.join(f.home, 'projects', 'edge-encoding'); await fs.mkdir(other);
   await fs.writeFile(path.join(other, 'other.jsonl'), '{}\n');
   assert.equal(await findClaudeSession(f.cwd, 'known', f.home), known);

@@ -140,6 +140,10 @@ test('real app-server starts and resumes the same thread despite legacy terminal
       await worker.send({ clientMessageId: 'write-proof', text: 'REVIEW_WRITE_PROOF' });
       for (let n = 0; n < 1000 && !workerEvents.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 20));
       assert.ok(workerEvents.some(event => event.type === 'turn.completed'), 'real tool round completed');
+      if (!fs.existsSync(path.join(cwd, 'proof.txt'))) {
+        t.diagnostic(JSON.stringify({ cwd, canonical: fs.realpathSync.native(cwd), tools: workerEvents.filter(event => event.type === 'item.upsert'),
+          results: requests.flatMap(body => JSON.parse(body).input || []).filter(item => ['function_call_output', 'custom_tool_call_output'].includes(item.type)) }).slice(-9000));
+      }
       const written = fs.readFileSync(path.join(cwd, 'proof.txt'));
       assert.match(written.toString(written[0] === 0xff && written[1] === 0xfe ? 'utf16le' : 'utf8'), /REVIEW_WRITTEN/);
       assert.equal(fs.readFileSync(config, 'utf8'), blankWindows, 'retry did not write user configuration');

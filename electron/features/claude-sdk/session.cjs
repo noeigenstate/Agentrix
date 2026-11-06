@@ -9,6 +9,7 @@ const { turnResult, tokensOf, hasModelReply } = require('./result.cjs');
 const { rateLimits } = require('./limits.cjs');
 const { claudeCommands } = require('./commands.cjs');
 const { runShell } = require('./shell.cjs');
+const { sessionHistory } = require('./history.cjs');
 
 async function waitWithin(task, milliseconds) {
   let timer;
@@ -561,7 +562,7 @@ function createClaudeSession(spec, emit, dependencies) {
     async prepareResume({ allowFresh = false } = {}) {
       if (!started || closed || !providerId && !allowFresh) throw new Error('resume_unavailable');
       // Read the actual persisted chain, then initialize a real resumed CLI with an empty input queue.
-      const history = providerId ? await sdk.getSessionMessages?.(providerId, { dir: spec.cwd }) : [];
+      const history = providerId ? await sessionHistory(sdk, spec, providerId) : [];
       if (!history || !history.length && !allowFresh || history.some(message => message.session_id !== providerId)) throw new Error('resume_history_unavailable');
       if (!history.length) { providerId = null; stream.provider(null); }
       preparing ||= createQuery(true).finally(() => { preparing = null; });

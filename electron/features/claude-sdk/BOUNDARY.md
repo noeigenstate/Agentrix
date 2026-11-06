@@ -18,6 +18,8 @@ Project hooks remain enabled for workers, matching the trusted project's CLI beh
 - `commands` (`electron/features/claude-sdk/session.cjs`) — a native-safe command catalog from the live SDK, its replacement pushes or the shared file catalog before a query exists; listing never starts a query
 
 ## May import
+- `electron/claude-sessions.cjs` (verified local project identity for aliased transcript history)
+- `electron/session-files.cjs` (contained-file and open-handle identity checks for that read)
 - `electron/command-phrase.cjs`
 - `electron/conversation-record.cjs`
 - `electron/prompt-queue.cjs`
