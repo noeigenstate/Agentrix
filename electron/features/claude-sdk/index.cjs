@@ -64,7 +64,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       probeBilling: async (key, config = {}, observedGeneration) => {
         const scope = config.projectId || '';
         const result = await probeBillingIdentity({ key, spec: connectionSpec(config.projectId), loadSdk, resolveExecutable,
-          maxBudgetUsd: config.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(config.monthlyBudgetUsd) / 1e6, 5), timeoutMs: initializationTimeoutMs });
+          maxBudgetUsd: config.monthlyBudgetUsd == null ? undefined : usage.available(config.monthlyBudgetUsd) / 1e6, timeoutMs: initializationTimeoutMs });
         if (result.status === 'mismatch') onFailure(scope, 'billing_identity_mismatch', { message: result.reason }, observedGeneration);
         else if (result.status === 'ok') onIdentity(scope, observedGeneration, true);
         return result;

@@ -130,10 +130,10 @@ test('unknown resume baselines never charge historical totals', t => {
 });
 test('concurrent reservations and crash leftovers cannot spend the budget twice', t => {
   const file = path.join(directory(t), 'usage.json'), usage = createUsage({ file });
-  const one = usage.reserve(6), two = usage.reserve(6);
-  assert.equal(one.maxBudgetUsd, 5); assert.equal(two.maxBudgetUsd, 1); assert.throws(() => usage.reserve(6));
-  assert.equal(createUsage({ file }).available(6), 0);
-  usage.release(one.id); assert.equal(usage.available(6), 5000000);
+  const one = usage.reserve(12, { maxBudgetUsd: 7 }), two = usage.reserve(12);
+  assert.equal(one.maxBudgetUsd, 7); assert.equal(two.maxBudgetUsd, 5); assert.throws(() => usage.reserve(12));
+  assert.equal(createUsage({ file }).available(12), 0);
+  usage.release(one.id); assert.equal(usage.available(12), 7000000);
 });
 test('UTC month rollover keeps key-independent prior spend and a zero budget blocks API', t => {
   let now = Date.UTC(2026, 10, 30, 23, 59); const usage = createUsage({ file: path.join(directory(t), 'usage.json'), now: () => now });

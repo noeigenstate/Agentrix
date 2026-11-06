@@ -96,8 +96,10 @@ test('F8 an exhausted cap with background tasks explains why an explicit send ca
   const runtime = createClaudeRuntime({ directory: path.join(f.directory, 'state'), loadSdk: async () => fake.sdk, resolveExecutable: async () => 'offline-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   t.after(() => runtime.close()); runtime.credentials.save('sk-ant-offline-background-cap');
-  const session = runtime.create({ ...f.spec, agent: 'claude', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 20 }, event => events.push(event));
+  const spec = { ...f.spec, agent: 'claude', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 5 };
+  const session = runtime.create(spec, event => events.push(event));
   await session.start(); await session.send({ clientMessageId: 'first', text: 'first' }); await tick();
+  spec.monthlyBudgetUsd = 20;
   fake.emit({ type: 'system', subtype: 'task_started', task_id: 'owned', is_backgrounded: true });
   fake.emit({ type: 'result', uuid: 'result', terminal_reason: 'budget_exhausted', subtype: 'error_max_budget_usd', total_cost_usd: 5, modelUsage: {} }); await tick();
   assert.match(events.findLast(event => event.type === 'turn.completed').payload.error, /后台任务/);

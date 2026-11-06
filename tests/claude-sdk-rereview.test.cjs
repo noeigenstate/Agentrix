@@ -78,7 +78,7 @@ test('N3 owner and dispatch environments override inherited scrub settings and p
   assert.equal(owner.ANTHROPIC_API_KEY, fakeKey); assert.equal(inherited.ANTHROPIC_API_KEY, undefined);
 });
 
-test('N4 two mid-turn stops collect interrupt usage and do not consume two full five-dollar leases', async t => {
+test('N4 two mid-turn stops collect interrupt usage and do not consume two full monthly-budget leases', async t => {
   const { fake, factory, create, ledger } = setup(t, { uniqueSessions: true });
   for (let index = 1; index <= 2; index++) {
     const { session } = create(); await session.start(); await send(session);
@@ -114,9 +114,9 @@ test('N4 a timed-out interrupt closes within a bound and converts only the prove
   await send(session); await until(() => fake.inputs.length === 2);
   const started = Date.now(); await session.close(); assert.ok(Date.now() - started < 2500);
   assert.deepEqual(ledger().reservations, {});
-  assert.equal(fake.calls[1].options.maxBudgetUsd, 5);
-  assert.equal(Object.values(ledger().estimates)[0].micros, 5000000);
-  assert.equal(factory.apiState(10).status, 'ready');
+  assert.equal(fake.calls[0].options.maxBudgetUsd, 10);
+  assert.equal(Object.values(ledger().estimates)[0].micros, 9900000);
+  assert.equal(factory.apiState(10).status, 'budget_exhausted');
   factory.usage.record(fake.sessionId, result(0.15), { resume: true });
   assert.equal(factory.usage.available(10), 9850000); assert.deepEqual(ledger().estimates, {});
 });

@@ -1,6 +1,7 @@
 const { apiEnvironment } = require('./credentials.cjs');
 const { billingIdentityError } = require('./identity.cjs');
 const { routeSettings } = require('./routing.cjs');
+const { LOOKUP_AGENT_NAME, LOOKUP_AGENT, lookupDecision } = require('./lookup-agent.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -10,7 +11,8 @@ const path = require('node:path');
 const IDENTITY_CONTEXT = "You are Claude Code, Anthropic's official CLI for Claude.";
 const NATIVE_CONTEXT = IDENTITY_CONTEXT + '\n'
   + 'If you need the user to run a shell command themselves, suggest they type `! <command>` in the prompt; its output becomes context in this conversation.\n'
-  + 'The fork subagent runs in the background, so you can keep chatting with the user while it works.';
+  + 'The fork subagent runs in the background, so you can keep chatting with the user while it works.\n'
+  + `Delegate simple grep, file listings and short log lookups to the ${LOOKUP_AGENT_NAME} Haiku 5.5 subagent. Batch related lookups into one call and read its concise conclusions. Run CI judgments, diffs you must review and release steps yourself.`;
 
 function privateSettings(value, signal) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-claude-settings-'));
@@ -53,10 +55,14 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudg
     // this mode, and questions still reach canUseTool: both proved against the real CLI in tests/claude-sdk-real-cli.test.cjs.
     abortController: abort, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, includePartialMessages: true,
     settingSources: ['user', 'project', 'local'],
+    ...(spec.owner === 'gui' ? { agents: { [LOOKUP_AGENT_NAME]: LOOKUP_AGENT } } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT, spec.context].filter(Boolean).join('\n\n') },
     ...(providerSessionId ? { resume: providerSessionId } : {}),
     ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
+      const lookup = spec.owner === 'gui' && lookupDecision(input);
+      if (lookup) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: lookup,
+        permissionDecisionReason: 'Lookup Bash supports only pwd and fixed ls forms; use Read, Grep or Glob for other lookups.' } };
       const decision = policy(input.tool_name, input.tool_input);
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",
       // so the owner's rules get their say by the hook answering nothing.

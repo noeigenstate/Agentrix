@@ -26,7 +26,7 @@ test('clearing a live owner monthly budget through IPC removes the old query cap
     }
     assert.fail('offline query did not become idle');
   };
-  await idle(1); assert.equal(fake.calls[0].options.maxBudgetUsd, 5);
+  await idle(1); assert.equal(fake.calls[0].options.maxBudgetUsd, 10);
   const closes = fake.closes.length;
   assert.equal(handlers.get('native:settings-set')({ monthlyBudgetUsd: null }).monthlyBudgetUsd, null);
   assert.equal(fake.closes.length, closes, 'saving settings alone does not terminate a live query');

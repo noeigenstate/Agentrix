@@ -96,7 +96,7 @@ function createClaudeSession(spec, emit, dependencies) {
   function budgetNotice() {
     const exhausted = usage.available(spec.monthlyBudgetUsd ?? null) <= 0;
     const message = exhausted ? '本月 API 预算已用完。' : active?.background.size
-      ? '本轮 API 预算上限已用完。后台任务结束后才能继续，或先停止它们。' : '本轮 API 预算上限已用完，请发送新消息继续。';
+      ? 'API 预算上限已用完。后台任务结束后才能继续，或先停止它们。' : 'API 预算上限已用完，请发送新消息继续。';
     publish('error', { code: 'budget_exhausted', message, retryable: !exhausted, willRetry: false, stage: 'runtime' });
     if (exhausted) publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'budget_exhausted' });
@@ -286,7 +286,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed) throw new Error('会话已停止。');
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
-    const maxBudgetUsd = spec.monthlyBudgetUsd == null ? undefined : Math.min(usage.available(spec.monthlyBudgetUsd) / 1e6, 5);
+    const maxBudgetUsd = spec.monthlyBudgetUsd == null ? undefined : usage.available(spec.monthlyBudgetUsd) / 1e6;
     const run = { key, reservation: null, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
       remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
@@ -359,8 +359,7 @@ function createClaudeSession(spec, emit, dependencies) {
       await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task;
     }
     if (active && !active.busy && !active.background.size) {
-      const availableUsd = usage.available(spec.monthlyBudgetUsd ?? null) / 1e6;
-      const freshBudgetUsd = spec.monthlyBudgetUsd == null ? Infinity : Math.min(availableUsd, 5);
+      const freshBudgetUsd = usage.available(spec.monthlyBudgetUsd ?? null) / 1e6;
       if (active.remainingBudgetUsd !== freshBudgetUsd) {
         // SDK caps accumulate across turns. Renew at an explicit message boundary, preserving live background work.
         cancelQuery(active, 'budget'); await active.task;

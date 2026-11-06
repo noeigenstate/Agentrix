@@ -20,7 +20,8 @@ function fixture(t, budget = 10) {
   const runtime = createClaudeRuntime({ directory, loadSdk: async () => fake.sdk, resolveExecutable: async () => process.execPath,
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() } });
   runtime.credentials.save('sk-ant-api03-budget-offline-test-only');
-  const session = runtime.create({ agent: 'claude', owner: 'gui', runtimeSessionId: randomUUID(), projectId: 'p', terminalId: 't', cwd: directory, monthlyBudgetUsd: budget }, event => events.push(event));
+  const spec = { agent: 'claude', owner: 'gui', runtimeSessionId: randomUUID(), projectId: 'p', terminalId: 't', cwd: directory, monthlyBudgetUsd: budget };
+  const session = runtime.create(spec, event => events.push(event));
   t.after(() => runtime.close());
   async function send() { const id = randomUUID(); await session.send({ clientMessageId: id, text: 'offline turn' }); await until(() => fake.inputs.some(input => input.uuid === id)); return id; }
   async function result(total, extra = {}) {
@@ -28,17 +29,21 @@ function fixture(t, budget = 10) {
     fake.emit({ type: 'result', uuid: randomUUID(), subtype: 'success', total_cost_usd: total, modelUsage: {}, ...extra });
     await until(() => session.snapshot().state === 'idle' && events.filter(event => event.type === 'turn.completed').length > count);
   }
-  return { directory, runtime, session, fake, events, send, result };
+  return { directory, runtime, session, fake, events, send, result, spec };
 }
 
-test('M1 each explicit idle turn renews its five-dollar cap without charging resumed history', { timeout: 5000 }, async t => {
+test('M1 a query uses the remaining monthly budget across idle turns without charging resumed history', { timeout: 5000 }, async t => {
   const f = fixture(t); await f.session.start();
-  for (const total of [2, 4, 6]) { await f.send(); await f.result(total); }
-  assert.deepEqual(f.fake.calls.map(call => call.options.maxBudgetUsd), [5, 5, 5]);
-  assert.equal(f.fake.calls[1].options.resume, f.fake.sessionId); assert.equal(f.fake.calls[2].options.resume, f.fake.sessionId);
-  assert.equal(f.fake.closes.length, 2, 'the idle query is retained until the next explicit send');
-  assert.equal(f.runtime.usage.available(10), 4e6); assert.equal(f.runtime.usage.summary().monthUsdMicros, 6e6);
-  await f.send(); assert.equal(f.fake.calls[3].options.maxBudgetUsd, 4);
+  for (const total of [2, 4, 7]) { await f.send(); await f.result(total); }
+  assert.deepEqual(f.fake.calls.map(call => call.options.maxBudgetUsd), [10]);
+  assert.equal(f.fake.closes.length, 0, 'spending alone does not restart the idle query');
+  assert.equal(f.runtime.usage.available(10), 3e6); assert.equal(f.runtime.usage.summary().monthUsdMicros, 7e6);
+  f.runtime.usage.record('other-session', { uuid: 'external-cost', total_cost_usd: 1, modelUsage: {} });
+  await f.send();
+  assert.equal(f.fake.calls[1].options.maxBudgetUsd, 2);
+  assert.equal(f.fake.calls[1].options.resume, f.fake.sessionId);
+  await f.result(7.5);
+  assert.equal(f.runtime.usage.summary().monthUsdMicros, 8.5e6, 'resume charges only the new half dollar');
   assert.equal(f.fake.inputs.length, 4, 'no input is automatically replayed');
 });
 
@@ -49,14 +54,15 @@ test('M1 live background tasks preserve their process until a safe explicit mess
   f.fake.emit({ type: 'system', subtype: 'task_notification', task_id: 'monitor', run_id: '1', status: 'completed' });
   await f.result(2); await f.send(); assert.equal(f.fake.calls.length, 1, 'a late task completion cannot permit a restart');
   f.fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
-  await f.result(3); await f.send(); assert.equal(f.fake.calls.length, 2);
+  await f.result(3); await f.send(); assert.equal(f.fake.calls.length, 1);
 });
 
-test('M1 a query cap interruption leaves remaining monthly funds available for the next explicit turn', { timeout: 5000 }, async t => {
-  const f = fixture(t); await f.session.start(); await f.send();
+test('M1 raising a monthly budget leaves new funds available after the old query cap', { timeout: 5000 }, async t => {
+  const f = fixture(t, 5); await f.session.start(); await f.send();
+  f.spec.monthlyBudgetUsd = 10;
   await f.result(5, { subtype: 'error_max_budget_usd', is_error: true });
   const turn = f.events.findLast(event => event.type === 'turn.completed');
-  assert.equal(turn.payload.status, 'interrupted'); assert.match(turn.payload.error, /本轮 API 预算/);
+  assert.equal(turn.payload.status, 'interrupted'); assert.match(turn.payload.error, /API 预算上限/);
   assert.equal(f.runtime.apiState(10).status, 'ready');
   await f.send(); assert.equal(f.fake.calls[1].options.maxBudgetUsd, 5);
   assert.ok(!f.events.some(event => event.type === 'session.state' && event.payload.state === 'failed'));
@@ -65,12 +71,16 @@ test('M1 a query cap interruption leaves remaining monthly funds available for t
 for (const limit of ['month', 'query']) test(`M1 automatic wake with no ${limit} allowance stops cleanly instead of failing the session`, { timeout: 5000 }, async t => {
   const f = fixture(t); await f.session.start(); await f.send(); await f.result(1);
   if (limit === 'month') f.runtime.usage.record('other-offline-session', { uuid: 'other-cost', total_cost_usd: 9, modelUsage: {} });
-  else { await f.send(); await f.result(6); }
+  else {
+    f.spec.monthlyBudgetUsd = 20;
+    f.fake.emit({ type: 'assistant', uuid: randomUUID(), message: { content: [{ type: 'text', text: 'background work' }] } });
+    await until(() => f.session.snapshot().state === 'running'); await f.result(10);
+  }
   f.fake.emit({ type: 'assistant', uuid: randomUUID(), message: { id: randomUUID(), content: [{ type: 'text', text: 'background wake' }] } });
-  await until(() => f.fake.closes.length === (limit === 'month' ? 1 : 2) && f.session.snapshot().state === 'idle');
+  await until(() => f.fake.closes.length === 1 && f.session.snapshot().state === 'idle');
   const turn = f.events.findLast(event => event.type === 'turn.completed');
-  assert.equal(turn.payload.status, 'interrupted'); assert.match(turn.payload.error, limit === 'month' ? /本月 API 预算/ : /本轮 API 预算/);
-  assert.equal(f.runtime.apiState(10).status, limit === 'month' ? 'budget_exhausted' : 'ready');
+  assert.equal(turn.payload.status, 'interrupted'); assert.match(turn.payload.error, limit === 'month' ? /本月 API 预算/ : /API 预算上限/);
+  assert.equal(f.runtime.apiState(limit === 'month' ? 10 : 20).status, limit === 'month' ? 'budget_exhausted' : 'ready');
   assert.ok(!f.events.some(event => event.type === 'error' && event.payload.code === 'sdk_failed'));
   assert.ok(!f.events.some(event => event.type === 'session.state' && event.payload.state === 'failed'));
 });

@@ -48,8 +48,8 @@ function createUsage({ file, now = Date.now }) {
       const available = this.available(budget);
       if (available <= 0) throw Object.assign(new Error('本月 API 预算已用完。'), { code: 'budget_exhausted' });
       const cap = maxBudgetUsd === Infinity ? Infinity : micros(maxBudgetUsd);
-      const id = randomUUID(), amount = budget === null ? 0 : Math.min(available, 5e6, cap ?? 0);
-      if (budget !== null && amount <= 0) throw Object.assign(new Error('本轮 API 预算已用完。'), { code: 'budget_exhausted' });
+      const id = randomUUID(), amount = budget === null ? 0 : Math.min(available, cap ?? 0);
+      if (budget !== null && amount <= 0) throw Object.assign(new Error('API 预算上限已用完，请发送新消息继续。'), { code: 'budget_exhausted' });
       const baseline = sessionId && data.sessions[sessionId] ? data.sessions[sessionId].cost : resume ? null : 0;
       const next = structuredClone(data);
       next.reservations[id] = { month: monthOf(), micros: amount, sessionId, baseline, day: utcDay(now()) };
