@@ -2822,5 +2822,14 @@
   "Codex 原生模式连接失败，请重试。": "Codex native mode could not connect. Please try again.",
   "API 预算上限已用完。": "The API budget limit has been reached.",
   "API 预算上限已用完，请发送新消息继续。": "The API budget limit has been reached. Send a new message to continue.",
-  "API 预算上限已用完。后台任务结束后才能继续，或先停止它们。": "The API budget limit has been reached. Wait for background tasks to finish or stop them before continuing."
+  "API 预算上限已用完。后台任务结束后才能继续，或先停止它们。": "The API budget limit has been reached. Wait for background tasks to finish, or stop them before continuing.",
+  "原生运行": "Native mode",
+  "Codex 在 Agentrix 中统一使用原生模式，在终端输入 codex 也会打开原生界面。": "Codex always uses native mode in Agentrix, including when you type codex in a terminal.",
+  "步骤摘要": "Step summaries",
+  "Claude 和 Codex 原生模式的工具与命令步骤只显示一行摘要和状态，文件改动仍可查看详情。": "Tools and commands in Claude and Codex native mode show a one-line summary and status, while file changes retain their details.",
+  "来源署名": "Message senders",
+  "子 Agent 分屏会按真实来源标明消息发送者，区分你的插话与主模型的指令。": "Sub-agent splits identify each message's actual sender, distinguishing your interventions from the main model's instructions.",
+  "预算放宽": "Higher turn allowance",
+  "Claude 原生模式不再限制每轮最多花费 5 美元，仍按你设置的月预算使用。": "Claude native mode no longer has a $5 per-turn cap and continues to follow your monthly budget.",
+  "点输入框旁的麦克风，就能在 Claude 和 Codex 原生模式里用语音输入文字。": "Click the microphone beside the message box to dictate text in Claude and Codex native mode."
 }
