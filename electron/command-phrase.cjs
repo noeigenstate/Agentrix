@@ -26,15 +26,32 @@ const COMMAND_PHRASES = [
   [/\b(?:Start-Sleep|sleep)\b/i, '等待'],
 ];
 const SCRIPT = /\b(?:node|python3?|py|deno|bun|tsx|ts-node)\s+(?:-\S+\s+)*["']?([^\s"';&|]+)/i;
+const shellSyntax = text => text.replace(/\\[\s\S]|'[^']*'|"(?:\\[\s\S]|[^"\\])*"/g, value => ' '.repeat(value.length));
+function filePhrase(syntax) {
+  // Quoted/escaped operators are data. Only stdout redirection writes the read
+  // command's result; stderr redirects and descriptor duplication do not.
+  for (let i = 0; i < syntax.length; i++) {
+    if (syntax.slice(i, i + 2) === '<<') return '写入文件';
+    if (syntax[i] !== '>') continue;
+    const fd = /(?:^|[\s;&|()])(\d+)$/.exec(syntax.slice(0, i))?.[1] || '1';
+    if (syntax[i + 1] === '>') i++;
+    if (fd === '1' && !/^&(?:\d+|-)/.test(syntax.slice(i + 1))) return '写入文件';
+  }
+  return '读取文件';
+}
+const READ_PIPE = /(?:^|&&|\|\||[;\n])\s*(?:cat|head|tail)\b(?:(?!&&)[^|;\n])*\|(?!\|)/i;
 // { phrase, object }: the phrase is one of COMMAND_PHRASES (or 运行脚本 / 运行命令), the object a script or program name.
 function commandPhrase(command) {
   const text = String(command || '');
-  for (const [pattern, phrase] of COMMAND_PHRASES) if (pattern.test(text)) return { phrase, object: '' };
+  for (const [pattern, phrase] of COMMAND_PHRASES) if (pattern.test(text)) {
+    const syntax = phrase === '读取文件' || phrase === '搜索代码' ? shellSyntax(text) : '';
+    return { phrase: phrase === '读取文件' || phrase === '搜索代码' && READ_PIPE.test(syntax) ? filePhrase(syntax) : phrase, object: '' };
+  }
   const script = SCRIPT.exec(text);
   if (script) return { phrase: '运行脚本', object: script[1].split(/[\\/]/).pop() };
   const program = /^\s*(?:&\s*)?["']?([^\s"']+)/.exec(text);
   return { phrase: '运行命令', object: program ? program[1].split(/[\\/]/).pop() : '' };
 }
-const PHRASES = [...COMMAND_PHRASES.map(([, phrase]) => phrase), '运行脚本', '运行命令'];
+const PHRASES = [...COMMAND_PHRASES.map(([, phrase]) => phrase), '写入文件', '运行脚本', '运行命令'];
 
 module.exports = { commandPhrase, PHRASES };
