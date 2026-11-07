@@ -10,7 +10,7 @@
 .focus-mode .terminal-split-body[data-reading="true"] { background: var(--bg-app); }
 .terminal-split-body[data-reading="true"] > .terminal-host { visibility: hidden; }
 .reading-scroll-area { position: relative; flex: 1; min-height: 0; display: flex; }
-.reading-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 14px var(--reading-pad-right) 8px var(--reading-pad-left); display: flex; flex-direction: column; font: 400 calc(13px * var(--reading-text))/1.7 var(--font-ui); color: var(--text-1); overscroll-behavior: contain; overflow-anchor: none; }
+.reading-scroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; scrollbar-gutter: stable; padding: 14px var(--reading-pad-right) 8px var(--reading-pad-left); display: flex; flex-direction: column; font: 400 calc(13px * var(--reading-text))/1.7 var(--font-ui); color: var(--text-1); overscroll-behavior: contain; overflow-anchor: none; outline: none; }
 .reading-content { flex: 1 0 auto; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
 .reading-earlier.text-button { align-self: center; flex: none; font-size: calc(12px * var(--reading-text)); }
 .reading-latest { position: absolute; right: 18px; bottom: 12px; display: flex; align-items: center; gap: 8px; }
@@ -89,7 +89,7 @@
 }
 @keyframes reading-mark-pulse { 50% { opacity: .3; } }
 /* The message box at the foot. */
-.reading-composer { position: relative; display: flex; align-items: flex-end; gap: 8px; margin: 0 12px 12px; padding: 8px 8px 8px 16px; min-height: 48px; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); }
+.reading-composer { position: relative; display: flex; align-items: flex-end; gap: 8px; margin: 0 12px 12px; padding: 8px 8px 8px 16px; min-height: 48px; border-radius: 12px; background: var(--bg-input); border: 1px solid var(--border); outline: none; }
 .reading-commands.dropdown { position: absolute; top: auto; bottom: calc(100% + 4px); left: 0; right: 0; width: auto; z-index: 3; padding: 4px; max-height: 266px; overflow-y: auto; transform-origin: bottom center; }
 /* Slash commands listed in the page, between the conversation and the message box. */
 .reading-commands.is-inline { flex: none; margin: 0 12px 8px; padding: 4px; max-height: min(266px, 40%); overflow-y: auto; border-radius: 12px; background: var(--bg-menu); border: 1px solid var(--border); }
