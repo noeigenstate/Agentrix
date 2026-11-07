@@ -25,7 +25,6 @@ import './reading-flow.css';
 export const ConversationDecorations = createContext<{
   start: number; status: ReactNode; running: boolean; anchor?: string; beforeResult: ReactNode; afterResult: ReactNode;
   quote?: { disabled: string | null; pick: (who: string, text: string) => void };
-  tools?: (entries: ConversationEntry[], details: (entries: ConversationEntry[]) => ReactNode) => ReactNode;
   frame?: { ref: RefObject<HTMLDivElement | null>; style: CSSProperties; before: ReactNode };
 } | null>(null);
 
@@ -159,9 +158,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
                 const state = block.entries.some(entry => !entry.tool?.done) ? 'running' : block.entries.some(entry => entry.tool?.failed) ? 'failed' : null;
                 return <Fragment key={block.id}>
                   <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state}>
-                    {decorations?.tools
-                      ? decorations.tools(block.entries, entries => <ToolGroup entries={entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} onError={onError} />)
-                      : <ToolGroup entries={block.entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} onError={onError} />}
+                    <ToolGroup entries={block.entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} onError={onError} />
                   </AgentTurnItem>
                   {index === latestAgent && block.entries.some(entry => entry.id === decorations?.anchor) && <div className="result-block">{decorations?.beforeResult}{decorations?.afterResult}</div>}
                 </Fragment>;

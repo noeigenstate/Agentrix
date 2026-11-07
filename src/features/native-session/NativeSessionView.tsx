@@ -6,7 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEv
 import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
-import { NativeSteps, nativeStepLabel } from './native-steps';
+import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
 import { VoiceButton } from '../voice/VoiceButton';
 import { ConversationDecorations, ConversationFeed } from '../reading/ConversationFeed';
@@ -178,7 +178,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // What the agent is doing, written at the end of the conversation the way the reading view writes it.
   const step = runningStep(entries);
   const status = waiting ? <div className="reading-status is-waiting" role="status">{t('等你确认')}</div>
-    : working ? <WorkingLine key={sessionId} agent={kind} label={model.compacting ? t('正在压缩上下文') : step ? t('正在{step}', { step: nativeStepLabel(step) }) : t('{agent} 正在思考', { agent })} /> : null;
+    : working ? <WorkingLine key={sessionId} agent={kind} label={model.compacting ? t('正在压缩上下文') : step ? t('正在{step}', { step: actionText(step) }) : t('{agent} 正在思考', { agent })} /> : null;
   // The latest round, once it has ended, gets its status above the result and its actions under it; a turn that failed says how.
   const settled = !over && model.session?.state === 'idle' && !model.turn.running && !pending.prompts.length && !model.requests.length && !asksChoice(change);
   // How the turn ended is the provider's own: its status draws the row (a turn that did not complete is never drawn as done) and the sentence main wrote for
@@ -198,7 +198,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const resultStatus = result && <ResultStatus result={result} taskTitle={undefined} onError={setError} />;
   // A round a "!" line drove has no message to send again, so it offers no retry (nor any other action under it).
   const resultActions = result && !shellRound(entries) && <>
-    {result.kind === 'code' && <ResultChecks result={result} summaryOnly />}
+    {result.kind === 'code' && <ResultChecks result={result} />}
     <ResultActions result={result} projectId={projectId} remote={false} canSend={open} onContinue={continueWith} onRetry={() => void post(result.request, NO_PICTURES)} onError={setError} />
   </>;
   const last = entries.at(-1), statusInTurn = !!last && last.role !== 'user' && pending.prompts.every(prompt => pending.queued.has(prompt.id));
@@ -229,7 +229,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   return <div className={`reading-view${dropping ? ' is-dropping' : ''}`} data-agent={kind} data-native-session={sessionId} onDragOver={dragOver} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropping(false); }} onDrop={drop}>
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}>
-        <ConversationDecorations.Provider value={{ tools: (entries, details) => <NativeSteps entries={entries} details={details} />, start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+        <ConversationDecorations.Provider value={{ start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
           quote: { disabled: open ? null : t('输入框暂时不可用，等它可用后再引用'), pick: quoteMessage },
           frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: null } }}>
           <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>

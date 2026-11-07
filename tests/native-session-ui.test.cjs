@@ -548,78 +548,21 @@ test('what the owner sent and the conversation does not show is pending: sending
   assert.equal(nativePending(model, sent, new Set(['c2'])).lost.has('c2'), false, 'a dismissed card is gone with its mark');
 });
 
-test('native steps show only summaries and status while file changes keep the reading view details', async () => {
+test('the view is the reading view’s: its markup is the feed’s, the working line and the stop are the reading view’s, and nothing is native-only but the requests', async () => {
   const html = await viewHtml(richSession);
   assert.match(html, /<div class="reading-view" data-agent="claude" data-native-session="rs1">/);
   assert.match(html, /class="reading-step is-user/); assert.match(html, /<p class="is-folded">fix the test<\/p>/); assert.match(html, /class="reading-step is-agent is-claude/);
   assert.match(html, /<div class="md">Done: it passes now\.<\/div>/);
-  assert.match(html, /class="reading-tools[^"]*is-running/); assert.match(html, /运行命令/);
+  assert.match(html, /class="reading-tools[^"]*is-running/); assert.match(html, /运行 1 条命令/);
   const running = await viewHtml(ev => [ev('session.state', { state: 'running' }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test' } }, { itemId: 'k1' }), ev('item.delta', { channel: 'output', text: 'FAIL a.test.js' }, { itemId: 'k1' })]);
-  assert.doesNotMatch(running, /FAIL a\.test\.js|npm test|reading-tools-head|reading-tool-output/, 'a command has no expansion or raw output, including while running');
-  assert.match(html, /编辑 1 个文件/); assert.match(html, /<code class="reading-tools-file">[^>]*a\.ts/);
-  assert.match(html, /reading-status is-working is-claude/); assert.match(html, /正在运行命令/); assert.match(html, /Esc 中断/);
+  assert.match(running, /<pre class="reading-tool-output">FAIL a\.test\.js<\/pre>/, 'the group at the end that still runs is open, with the output so far, as the reading view opens it');
+  assert.match(html, /运行 1 条命令 · 编辑 1 个文件/); assert.match(html, /<code class="reading-tools-file">[^>]*a\.ts/); assert.match(html, /调用 1 个工具/, 'the plan and the diff are steps of the last group');
+  assert.match(html, /reading-status is-working is-claude/); assert.match(html, /正在运行 npm test/); assert.match(html, /Esc 中断/);
   assert.match(html, /title="中断（Esc）"/, 'the stop button is the reading view’s, in the composer'); assert.doesNotMatch(html, /<textarea[^>]*disabled/, 'and the message box stays usable');
   assert.match(html, /<div class="native-tail">/); assert.match(html, /Run rm -rf build/); assert.match(html, />允许本次</); assert.match(html, />拒绝</);
   assert.doesNotMatch(html, /native-head|native-state|native-runtime|native-stop|native-receipt|native-step|Claude · API|已被读取|会话已就绪|→/, 'no header, no receipt words, no native-only decoration');
   assert.doesNotMatch(html, /思考摘要|Looking at the failing/, 'a thinking summary is not drawn');
   assert.doesNotMatch(html, /Codex/);
-});
-
-test('both native providers hide failed tool and shell commands, raw output and tooltip details', async () => {
-  for (const provider of ['claude', 'codex']) {
-    const html = await viewHtml(ev => [
-      ev('session.state', { state: 'idle' }),
-      ev('item.upsert', { kind: 'command', status: 'failed', content: { command: 'echo RAW_COMMAND_SECRET', output: 'RAW_OUTPUT_SECRET', exitCode: 2, origin: 'shell' } }, { itemId: 'shell:one' }),
-      ev('item.upsert', { kind: 'tool', status: 'failed', content: { name: 'Read', input: { file_path: 'RAW_PATH_SECRET' }, result: 'RAW_TOOL_SECRET' } }, { itemId: 'read' }),
-    ], { provider, transport: provider === 'claude' ? 'claude-sdk' : 'codex-app-server' });
-    assert.doesNotMatch(html, /RAW_\w+|reading-tools-head|reading-tool-output/);
-    assert.match(html, /运行命令/); assert.match(html, /读取文件/); assert.match(html, /命令以退出码 2 结束/);
-    assert.match(html, /工具执行失败，未提供具体原因/); assert.match(html, /失败/);
-  }
-});
-
-test('the terminal feed still opens running command details and retains raw command and output', () => {
-  const { ConversationFeed } = load('features/reading/ConversationFeed.tsx');
-  const html = renderToStaticMarkup(React.createElement(ConversationFeed, { agent: 'claude', projectId: 'p', live: true, onError() {}, entries: [
-    { id: 'command', at: 1000, role: 'tool', tool: { kind: 'command', tool: 'Bash', target: 'echo TERMINAL_COMMAND', detail: '', output: 'TERMINAL_OUTPUT', done: false, failed: false } },
-  ] }));
-  assert.match(html, /TERMINAL_COMMAND/); assert.match(html, /TERMINAL_OUTPUT/); assert.match(html, /aria-expanded="true"/);
-});
-
-test('native command summaries keep the observed phrase for both providers and never offer details after completion', async () => {
-  for (const provider of ['claude', 'codex']) {
-    for (const state of ['in_progress', 'completed']) {
-      const html = await viewHtml(ev => [
-        ev('session.state', { state: state === 'in_progress' ? 'running' : 'idle' }),
-        ev('item.upsert', { kind: 'command', status: state, content: { command: 'git log RAW_COMMAND', phrase: '查看提交历史', cwd: '/RAW_CWD', output: 'RAW_OUTPUT' } }, { itemId: 'history' }),
-      ], { provider, transport: provider === 'claude' ? 'claude-sdk' : 'codex-app-server' });
-      assert.match(html, /查看提交历史/);
-      assert.match(html, state === 'in_progress' ? /进行中/ : /已完成/);
-      assert.doesNotMatch(html, /RAW_\w+|reading-tools-head|reading-tool-output|<details/);
-      const summary = html.match(/<div data-reading-entry="history"[^>]*>[\s\S]*?<\/div>/)?.[0];
-      assert.ok(summary);
-      assert.doesNotMatch(summary, /<button|aria-expanded|title=/, 'the step itself has no expansion or tooltip; composer controls remain accessible');
-    }
-  }
-});
-
-test('native summaries pass file changes unchanged to the existing detail renderer and hide command targets in result checks only when requested', () => {
-  const { NativeSteps } = load('features/native-session/native-steps.tsx');
-  const { ResultChecks } = load('features/reading/ResultCard.tsx');
-  const change = { id: 'edit', at: 1, role: 'tool', tool: { kind: 'edit', target: 'src/a.ts', output: '-before\n+after', done: true, failed: false } };
-  const command = { id: 'check', at: 2, role: 'tool', tool: { kind: 'command', target: 'npm test RAW_TARGET', phrase: '运行测试', output: 'RAW_OUTPUT', done: true, failed: false } };
-  const passed = [];
-  const html = renderToStaticMarkup(React.createElement(NativeSteps, { entries: [change, command], details: entries => {
-    passed.push(...entries);
-    return React.createElement('pre', null, entries[0].tool.output);
-  } }));
-  assert.deepEqual(passed, [change]);
-  assert.match(html, /-before\n\+after/);
-  assert.doesNotMatch(html, /RAW_TARGET|RAW_OUTPUT/);
-  const result = { checks: [{ id: 'check', target: command.tool.target, phrase: '运行测试', failed: false }] };
-  const checks = summaryOnly => renderToStaticMarkup(React.createElement(ResultChecks, { result, summaryOnly }));
-  assert.doesNotMatch(checks(true), /RAW_TARGET/);
-  assert.match(checks(false), /RAW_TARGET/);
 });
 
 test('a finished session says why and offers a new conversation; a Codex session is the reading view’s Codex; an idle one has no stop and no line of its own before there is a reply', async () => {
@@ -660,7 +603,7 @@ function sessionView(events, bridge, base = {}) {
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
     './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
     './native-store.ts': { dismissNative: id => dismissed.push(id), refreshNativeSession: id => refreshed.push(id), nativeItem: (terminal, id) => entry.model.items[id], nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
-    './native-steps': load('features/native-session/native-steps.tsx'), './native-composer.ts': load('features/native-session/native-composer.ts'),
+    './native-composer.ts': load('features/native-session/native-composer.ts'),
     './native-notices.ts': load('features/native-session/native-notices.ts'),
     // The hook of the Claude commands runs on the same hooks as the view (the harness is made just below).
     './useComposerActions.ts': { get useComposerActions() { return harness.load('src/features/native-session/useComposerActions.ts').useComposerActions; } },
@@ -1064,7 +1007,7 @@ test('the working line says the step in hand, the result belongs to a round that
   const view = sessionView(ev => [...idle(ev), ev('turn.started', { origin: 'user', clientMessageId: 'c1' }), user(ev), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test' } }, { itemId: 'k1' })], {});
   try {
     const working = view.decorations().status;
-    assert.equal(working.type, view.parts.WorkingLine); assert.deepEqual([working.props.agent, working.props.label], ['claude', '正在运行命令']);
+    assert.equal(working.type, view.parts.WorkingLine); assert.deepEqual([working.props.agent, working.props.label], ['claude', '正在command:npm test']);
     assert.equal(view.decorations().running, true); assert.equal(view.decorations().anchor, undefined, 'no result while it works');
     view.show([...idle(view.ev), view.ev('turn.started', { origin: 'user', clientMessageId: 'c1' }), user(view.ev)]);
     assert.equal(view.find(node => node.type === view.parts.WorkingLine).props.label, 'Claude Code 正在思考', 'no step: it is thinking, on a step of its own after your message');
@@ -1239,8 +1182,8 @@ test('the requests and the switch question stand at the end of the timeline on t
 test('only what the reading view does not have stays in native-session.css', () => {
   const css = fs.readFileSync(path.join(src, 'features/native-session/native-session.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
   const classes = new Set(css.match(/\.native-[a-z-]+/g));
-  assert.deepEqual([...classes].sort(), ['.native-tool-summary', '.native-tool-label', '.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
-    'only native requests, notices and non-expandable step summaries have native styles');
+  assert.deepEqual([...classes].sort(), ['.native-ask', '.native-ended', '.native-error', '.native-path-note', '.native-path-summary', '.native-preview', '.native-request', '.native-switch', '.native-switch-question', '.native-switch-text', '.native-tail', '.native-unsent'].sort(),
+    'no header, step, receipt, diff or plan style of its own');
 });
 
 test('a new request pulls the view to it even when the owner had scrolled up; an ordinary step does not', () => {
@@ -1254,11 +1197,11 @@ test('a new request pulls the view to it even when the owner had scrolled up; an
   } finally { view.done(); }
 });
 
-test('a native command retains its folder in the model but shows no path or tooltip', async () => {
+test('a command’s folder reads as its last two parts on one line with the whole path as the tooltip of the step’s line', async () => {
   const { shortPath } = words(), cwd = '/home/someone/work/very/long/path/to/the/project';
   assert.deepEqual([shortPath('/work'), shortPath('C:\\Users\\someone\\work\\very\\long\\path\\project\\sub'), shortPath(cwd)], ['/work', '…\\project\\sub', '…/the/project']);
   const html = await viewHtml(ev => [ev('session.state', { state: 'running', reason: null }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test', cwd } }, { itemId: 'k' })]);
-  assert.doesNotMatch(html, /the\/project|home\/someone|npm test/, 'no folder, command or raw tooltip is drawn');
+  assert.ok(html.includes('…/the/project')); assert.doesNotMatch(html.replace(/ title="[^"]*"/g, ''), /\/home\/someone/, 'the folder’s head is not drawn');
 });
 
 test('the message box always has a hint: the longest that fits, and the shortest when none does', async () => {
@@ -2075,7 +2018,7 @@ test('a command’s phrase comes from main and the checks it names are listed un
     e => e('item.upsert', { kind: 'file-change', status: 'completed', content: { path: 'src/a.ts', diff: '+x' } }, { itemId: 'f1' }),
     e => e('item.upsert', { kind: 'command', status: 'completed', content: { command: 'npm test', phrase: '运行测试', exitCode: 0 } }, { itemId: 'k1' }),
     e => e('item.upsert', { kind: 'command', status: 'failed', content: { name: 'Bash', input: '{"command":"npx tsc"}', phrase: '检查类型' } }, { itemId: 'k2' })] });
-  assert.match(html, /<p class="result-list-head">验证<\/p>/); assert.match(html, /运行测试/); assert.match(html, /检查类型/); assert.doesNotMatch(html, /npm test|npx tsc/);
+  assert.match(html, /<p class="result-list-head">验证<\/p>/); assert.match(html, /运行测试<small>[\s\S]*?npm test/); assert.match(html, /检查类型<small>[\s\S]*?npx tsc/);
   assert.match(html, /<li class="is-failed">[\s\S]*?检查类型/, 'a check that failed is listed as failed');
 });
 
