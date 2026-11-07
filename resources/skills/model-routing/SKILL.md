@@ -42,6 +42,12 @@ do their task themselves; a worker never hands it on to another.
 | Execution engineer | Routine features, front-end components and polish, unit tests, maintenance, docs |
 | Visual and verification | UI checks, reading screenshots, driving the interface, small quick tasks |
 
+Simple lookups go to the smallest model. Searching, reading logs and reading files to find something go to a Haiku subagent
+(an Agent call with `model: "haiku"`, or `agentrix-lookup` where the session has it; a Codex lead starts a read-only Haiku
+worker through the helper), several in one call, and the orchestrator keeps only the conclusion: every tool call in a long
+session re-reads its whole context. The orchestrator still reads for itself what it must judge exactly: a diff under review,
+a CI verdict it acts on, the steps of a release. With no Haiku available, it does the lookup itself.
+
 Back-end design and debugging go almost entirely to the core engineer: in the plan the architect splits the work and
 names the back-end modules, the core engineer drafts their design (data, interfaces, IPC, storage, failure handling) and
 the architect checks it against the module split; every debugging task, front end included, starts with the core engineer.
@@ -330,6 +336,7 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 - The lead orchestrates and holds permissions; workers stay within their brief and never delegate further.
 - Route every change to a worker, however small; the lead never builds alone. A task too small for a roundtable skips it with a stated reason.
 - Route by difficulty and responsibility, not by renderer versus main-process location.
+- Hand searches, log reads and file reads to a Haiku subagent and keep the conclusion; read yourself only what you must judge exactly.
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
 - GPT models default to high effort with fast mode; Claude models default to high effort. Honor the user's chosen settings.

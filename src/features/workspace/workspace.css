@@ -14,7 +14,7 @@
 .project-slot:has(> .focus-motion-panel) { z-index: 50; }
 .project-slot > .project-panel { height: 100%; }
 .project-slot.drag-placeholder::before { content: ''; position: absolute; inset: 0; border: 1px dashed var(--border-hover); border-radius: 16px; pointer-events: none; }
-.project-panel { --panel-header-height: 40px; --panel-pad: 0px; --pane-top: calc(var(--panel-pad) + var(--panel-header-height)); position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; isolation: isolate; border-radius: 16px; background: var(--bg-card); }
+.project-panel { --panel-header-height: 40px; --panel-pad: 0px; --pane-top: calc(var(--panel-pad) + var(--panel-header-height)); position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; container-type: inline-size; isolation: isolate; border-radius: 16px; background: var(--bg-card); outline: none; }
 .project-panel:has(.panel-menu) { z-index: 20; }
 .focus-mode .project-panel { --panel-pad: 12px; padding: var(--panel-pad); border-radius: 0; background: var(--bg-app); }
 .project-slot > .project-panel.focus-motion-panel { position: fixed; left: 0; top: 0; width: var(--focus-width); height: var(--focus-height); margin: 0; transform-origin: 0 0; will-change: transform; animation: none; transition: none; }
@@ -129,7 +129,7 @@
 .panel-error > svg { flex: none; color: var(--danger); }
 .panel-error span { min-width: 0; }
 
-/* Split terminals: divided by 1px, with no bars. The split in use has a thin inner edge (only among several terminals: a lone conversation beside sub-agent views is not picked out); a small cluster (drag grip, restart, close) shows in its corner while the pointer or the keyboard is in it. */
+/* Split terminals: divided by 1px, with no bars. The split in use has no frame, and a click on a card or split draws no outline; a small cluster (drag grip, restart, close) shows in its corner while the pointer or the keyboard is in it. */
 .terminal-grid { display: grid; grid-template-columns: repeat(var(--terminal-columns), minmax(0, 1fr)); grid-template-rows: repeat(var(--terminal-rows), minmax(0, 1fr)); }
 .terminal-grid.has-splits { gap: 1px; padding: 0; overflow: auto; grid-template-rows: repeat(var(--terminal-rows), minmax(170px, 1fr)); background: var(--divider); }
 .terminal-split { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg-card); }
@@ -139,7 +139,6 @@
 /* A sub-agent's read-only view takes a cell of the terminal grid: no grip, no restart or close tools, and it is never reordered or saved. */
 .subagent-slot { position: relative; display: flex; min-width: 0; min-height: 0; }
 .terminal-split-body { position: relative; flex: 1; min-height: 0; overflow: hidden; }
-.has-terminals .is-active-terminal::after { content: ''; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 1px var(--border-hover); pointer-events: none; }
 .terminal-split-tools { position: absolute; top: 6px; right: 16px; z-index: 3; display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: color-mix(in srgb, var(--bg-card) 88%, transparent); opacity: 0; pointer-events: none; transition: opacity .12s linear; }
 .focus-mode .terminal-split-tools { background: color-mix(in srgb, var(--bg-app) 88%, transparent); }
 .terminal-split:hover .terminal-split-tools, .terminal-split:focus-within .terminal-split-tools { opacity: 1; pointer-events: auto; }

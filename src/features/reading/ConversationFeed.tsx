@@ -74,7 +74,11 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
       {!result && picture}<QuoteOf entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} /></div>;
 }
 
-function ToolGroup({ entries, live, projectId, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; onError: (message: string) => void }) {
+// The native view hides what a tool printed: the step line stays, and a failed step keeps one short reason. A "!" line's card (shell:), a change's diff and the plan (native:) keep theirs.
+const quietOutput = (entry: ConversationEntry) => !entry.id.startsWith('shell:') && !entry.id.startsWith('native:') && entry.tool?.kind !== 'edit';
+const failureReason = (output: string) => { const line = output.split(/\r?\n/).find(row => row.trim())?.trim() || ''; return line.length > 140 ? `${line.slice(0, 139)}…` : line; };
+
+function ToolGroup({ entries, live, projectId, hideToolOutput = false, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; hideToolOutput?: boolean; onError: (message: string) => void }) {
   const running = entries.some(entry => !entry.tool?.done);
   const [open, setOpen] = useState(false);
   const failed = entries.filter(entry => entry.tool?.failed).length;
@@ -96,10 +100,11 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
       {shown ? <CaretUp size={13} weight="bold" className="reading-tools-caret" /> : <CaretDown size={13} weight="bold" className="reading-tools-caret" />}
     </button>
     {shown && <ul className="reading-tools-tree">{entries.map(entry => {
-      const tool = entry.tool!, output = tool.output || '';
+      const tool = entry.tool!, quiet = hideToolOutput && quietOutput(entry), output = quiet ? '' : tool.output || '', reason = quiet && tool.failed ? failureReason(tool.output || '') : '';
       return <li key={entry.id} className={`${tool.done ? '' : 'is-running'} ${tool.failed ? 'is-failed' : ''} reading-tool-${tool.kind}`}>
         <StepState running={!tool.done} failed={tool.failed} filled />
         <b>{stepVerb(tool)}</b><code title={tool.target}><PathText text={tool.target} literal={tool.kind === 'read' || tool.kind === 'edit'} /></code>{tool.detail && <small title={tool.detail}><PathText text={tool.detail} /></small>}
+        {reason && <small className="reading-tool-reason" title={reason}>{reason}</small>}
         {output && <pre className="reading-tool-output">{output}</pre>}
       </li>;
     })}</ul>}
@@ -108,8 +113,8 @@ function ToolGroup({ entries, live, projectId, onError }: { entries: Conversatio
   </div>;
 }
 
-export function ConversationFeed({ entries, agent: kind, projectId, live, onError, onOpenLink, children }: {
-  entries: ConversationEntry[]; agent: 'claude' | 'codex'; projectId: string; live: boolean;
+export function ConversationFeed({ entries, agent: kind, projectId, live, hideToolOutput = false, onError, onOpenLink, children }: {
+  entries: ConversationEntry[]; agent: 'claude' | 'codex'; projectId: string; live: boolean; hideToolOutput?: boolean;
   onError: (message: string) => void; onOpenLink?: (target: string) => void; children?: ReactNode;
 }) {
   const decorations = useContext(ConversationDecorations);
@@ -158,7 +163,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, onErro
                 const state = block.entries.some(entry => !entry.tool?.done) ? 'running' : block.entries.some(entry => entry.tool?.failed) ? 'failed' : null;
                 return <Fragment key={block.id}>
                   <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state}>
-                    <ToolGroup entries={block.entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} onError={onError} />
+                    <ToolGroup entries={block.entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} hideToolOutput={hideToolOutput} onError={onError} />
                   </AgentTurnItem>
                   {index === latestAgent && block.entries.some(entry => entry.id === decorations?.anchor) && <div className="result-block">{decorations?.beforeResult}{decorations?.afterResult}</div>}
                 </Fragment>;

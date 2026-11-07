@@ -555,7 +555,8 @@ test('the view is the reading view’s: its markup is the feed’s, the working 
   assert.match(html, /<div class="md">Done: it passes now\.<\/div>/);
   assert.match(html, /class="reading-tools[^"]*is-running/); assert.match(html, /运行 1 条命令/);
   const running = await viewHtml(ev => [ev('session.state', { state: 'running' }), ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'npm test' } }, { itemId: 'k1' }), ev('item.delta', { channel: 'output', text: 'FAIL a.test.js' }, { itemId: 'k1' })]);
-  assert.match(running, /<pre class="reading-tool-output">FAIL a\.test\.js<\/pre>/, 'the group at the end that still runs is open, with the output so far, as the reading view opens it');
+  assert.match(running, /<code title="npm test">/, 'the group at the end that still runs is open, as the reading view opens it, with the step’s row');
+  assert.doesNotMatch(running, /reading-tool-output|FAIL a\.test\.js/, 'the native view draws no output box for a step, running or done');
   assert.match(html, /运行 1 条命令 · 编辑 1 个文件/); assert.match(html, /<code class="reading-tools-file">[^>]*a\.ts/); assert.match(html, /调用 1 个工具/, 'the plan and the diff are steps of the last group');
   assert.match(html, /reading-status is-working is-claude/); assert.match(html, /正在运行 npm test/); assert.match(html, /Esc 中断/);
   assert.match(html, /title="中断（Esc）"/, 'the stop button is the reading view’s, in the composer'); assert.doesNotMatch(html, /<textarea[^>]*disabled/, 'and the message box stays usable');
@@ -563,6 +564,19 @@ test('the view is the reading view’s: its markup is the feed’s, the working 
   assert.doesNotMatch(html, /native-head|native-state|native-runtime|native-stop|native-receipt|native-step|Claude · API|已被读取|会话已就绪|→/, 'no header, no receipt words, no native-only decoration');
   assert.doesNotMatch(html, /思考摘要|Looking at the failing/, 'a thinking summary is not drawn');
   assert.doesNotMatch(html, /Codex/);
+});
+
+test('the native view hides tool output: the rows stay, a failed step gives one reason, a "!" card keeps its output', async () => {
+  const html = await viewHtml(ev => [ev('session.state', { state: 'running' }),
+    ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'npm run build', exitCode: 2, output: 'error TS1: first problem\nmore lines\nand more' } }, { itemId: 'k1' }),
+    ev('item.upsert', { kind: 'tool', status: 'completed', content: { name: 'Read', input: '{"file_path":"/a/b.ts"}', output: 'FILE_TEXT_BODY' } }, { itemId: 't1' }),
+    ev('item.upsert', { kind: 'command', status: 'completed', content: { command: 'ls -la', exitCode: 0, output: 'BANG_LISTING' } }, { itemId: 'shell:c1' }),
+    ev('item.upsert', { kind: 'command', status: 'in_progress', content: { command: 'sleep 9' } }, { itemId: 'k3' })]); // a running step keeps the last group open
+  assert.doesNotMatch(html, /FILE_TEXT_BODY|more lines|and more/, 'no output of a read or a command');
+  assert.match(html, /<code title="npm run build">/); assert.match(html, /<code title="\/a\/b\.ts">/, 'the rows keep the command and the path');
+  assert.match(html, /<small class="reading-tool-reason" title="error TS1: first problem">error TS1: first problem<\/small>/, 'a failed step says why in one line');
+  assert.match(html, /退出码 2/, 'and keeps its failed mark and exit code');
+  assert.match(html, /<pre class="reading-tool-output">BANG_LISTING<\/pre>/, 'a "!" card is the owner’s own command: its output shows');
 });
 
 test('a finished session says why and offers a new conversation; a Codex session is the reading view’s Codex; an idle one has no stop and no line of its own before there is a reply', async () => {

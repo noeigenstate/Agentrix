@@ -2482,6 +2482,24 @@ test('list markers take the running agent\'s colour: Claude orange for Claude Co
   assert.equal(token(dark, '--agent-claude'), '#d97757');
 });
 
+test('ConversationFeed shows a step’s output by default; hideToolOutput (the native view’s) keeps the row, one reason for a failed step, and the output of a "!" card, a diff and the plan', t => {
+  readingHarness(t);
+  const common = { './action-text': { stepVerb: step => step.kind }, './Markdown': { Markdown: ({ text }) => React.createElement('p', null, text) }, './FileCards': { FileCards: () => null, previewable: () => false } };
+  const { ConversationFeed } = loadUI('features/reading/ConversationFeed.tsx', common);
+  const entries = [readingTool('ran-ok', 2, { output: 'LONG_OUTPUT_OK', done: false }), readingTool('ran-bad', 3, { output: '\nboom: first line\nsecond line', failed: true, detail: '退出码 1' }),
+    readingTool('shell:s1', 4, { output: 'BANG_OUTPUT' }), readingTool('f1', 5, { kind: 'edit', output: '+DIFF_LINE' }), readingTool('native:plan', 6, { kind: 'other', output: 'PLAN_WORDS' })];
+  const draw = hide => renderToStaticMarkup(React.createElement(ConversationFeed, { entries, agent: 'claude', projectId: 'fixture', live: true, ...(hide ? { hideToolOutput: true } : {}), onError: assert.fail }));
+  const terminal = draw(false);
+  for (const word of ['LONG_OUTPUT_OK', 'boom: first line', 'second line', 'BANG_OUTPUT', 'DIFF_LINE', 'PLAN_WORDS']) assert.match(terminal, new RegExp(word), `the terminal reading view keeps ${word}`);
+  assert.doesNotMatch(terminal, /reading-tool-reason/);
+  const native = draw(true);
+  assert.doesNotMatch(native, /LONG_OUTPUT_OK|second line/, 'no output box for a running or a finished step');
+  assert.match(native, /<code title="ran-ok">/); assert.match(native, /<code title="ran-bad">/, 'the rows stay');
+  assert.match(native, /<small class="reading-tool-reason" title="boom: first line">boom: first line<\/small>/, 'a failed step says why in one line');
+  assert.equal((native.match(/reading-tool-reason/g) || []).length, 1, 'only the failed step has a reason line');
+  for (const word of ['BANG_OUTPUT', 'DIFF_LINE', 'PLAN_WORDS']) assert.match(native, new RegExp(word), `${word} stays`);
+});
+
 test('ConversationFeed works without a terminal or composer and forwards project links', t => {
   readingHarness(t);
   const entries = [readingEntry('feed-user', 'user', 1, { text: 'Inspect the fixture' }), readingTool('feed-tool', 2, { done: true }), readingEntry('feed-reply', 'assistant', 3, { text: 'Done' })];
