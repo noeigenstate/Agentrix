@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const { physicalDirectory, sameDirectory, expandShortPath } = require('../../session-files.cjs');
 const { spawn, execFile } = require('node:child_process');
@@ -7,9 +8,31 @@ const { createRpc } = require('./rpc.cjs');
 const { createEvents, itemPayload, turnCompletion } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
 const { mergeLimits, accountConnection, restrictedLimits } = require('./account.cjs');
-const { assertCompatible, probeCapabilities } = require('./compatibility.cjs');
+const { assertCompatible, probeCapabilities, commandName, builtinCommands, unsupported } = require('./compatibility.cjs');
 const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
+
+// Host-owned choices only, separate from CLI configuration and transcript files.
+// SSH choices are host metadata, keyed by the authenticated remote scope; remote
+// CODEX_HOME paths are never opened on the local filesystem.
+function optionStore(spec, scope, hostHome) {
+  const home = spec.kind === 'ssh' ? hostHome || process.env.CODEX_HOME || path.join(homedir(), '.codex')
+    : spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
+  const key = createHash('sha256').update(JSON.stringify(scope)).digest('hex');
+  const file = path.join(home, 'agentrix-run-options', key + '.json');
+  const valid = value => value && Object.keys(value).length === 3 && (value.model === null || typeof value.model === 'string' && value.model.length <= 160)
+    && (value.effort === null || typeof value.effort === 'string' && /^[\w-]{1,32}$/.test(value.effort)) && typeof value.fast === 'boolean';
+  return {
+    read() { try { const data = fs.readFileSync(file, 'utf8'); const value = data.length <= 1024 && JSON.parse(data); return valid(value) ? value : null; } catch { return null; } },
+    write(value) {
+      if (!valid(value)) throw new Error('无效的运行选项。');
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      const temporary = file + '.' + randomUUID();
+      try { fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(temporary, file); }
+      finally { try { fs.unlinkSync(temporary); } catch { } }
+    },
+  };
+}
 
 const occupied = new Map();
 function stopProcess(child) {
@@ -35,7 +58,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value, platform = process.platform } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -95,6 +118,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let wireCwd = spec.cwd, wireHome;
       let accountRead = null;
+      let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null;
       const connectionAbort = new AbortController();
       const assertOpen = () => { if (closed) throw Object.assign(new Error('session_closed'), { code: 'closed' }); };
       let executionSeen = false, resetting = null, resetRetry = null, lastReset = null;
@@ -110,6 +134,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         occupied.set(key, spec.runtimeSessionId); lockKey = key; events.binding.providerSessionId = threadId;
       }
       function started(turn) {
+        if (manualCommand === 'review' && turn?.rootTurnId) turn = { ...turn, id: turn.rootTurnId };
         if (!turn || typeof turn.id !== 'string') throw Object.assign(new Error('invalid_turn'), { uncertain: true });
         if (finished.has(turn.id) || active && events.binding.turnId === turn.id) return;
         events.binding.turnId = turn.id; active = true; currentUsage = null; executionSeen = false; events.beginTurn();
@@ -121,6 +146,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           method = 'item/completed'; params = { ...params, item: { ...params.msg.item, type: 'imageGeneration' } };
         }
         if (params.threadId && params.threadId !== events.binding.providerSessionId) return;
+        if (method === 'thread/settings/updated' && params.threadSettings) {
+          const settings = params.threadSettings;
+          threadResponse = { ...threadResponse, model: settings.model, reasoningEffort: settings.effort, serviceTier: settings.serviceTier };
+          events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
+            effective: { model: settings.model ?? null, effort: settings.effort ?? null, fast: ['fast', 'priority'].includes(settings.serviceTier) }, observed: { model: null, effort: null, fast: null }, reason: null });
+          return;
+        }
         if (active && (method.startsWith('item/') && params.item?.type !== 'userMessage'
           || ['thread/tokenUsage/updated', 'turn/plan/updated', 'turn/diff/updated'].includes(method))) executionSeen = true;
         if (method === 'skills/changed') { ++skillsGeneration; skills = null; skillsRead = null; }
@@ -139,7 +171,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             scopes.set(scope, limit); events.publish('limits.updated', limit);
           }
           events.finishTurn(outcome.status); events.publish('turn.completed', outcome);
-          setState('idle');
+          manualCommand = null; setState('idle');
           if (outcome.terminalReason === 'usageLimitExceeded') {
             const entry = receipts.get(clientMessageId);
             const safe = !executionSeen && !currentUsage && Array.isArray(turn.items) && turn.items.length === 0 && entry
@@ -153,11 +185,15 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (usageAtLimit(params)) void resetLimit(null, events.binding.turnId);
         } else if (method === 'account/updated') {
           ++accountGeneration;
+          catalog = null;
           accountRead = null;
           limitsRead = null;
           scopes.delete(spec.scopeId || spec.runtimeSessionId);
           events.publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'unknown', observedAtMs: now(), state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'codex-app-server' });
-        } else events.notification(method, params);
+        } else {
+          if (manualCommand === 'compact' && params.item?.type === 'contextCompaction') params = { ...params, item: { ...params.item, trigger: 'manual' } };
+          events.notification(method, params);
+        }
       }
       async function resetLimit(entry, failedTurnId) {
         if (spec.owner !== 'gui' || spec.kind === 'ssh' || spec.remote || !resetAtLimit || closed) return;
@@ -187,7 +223,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (!retry) return;
           entry.retried = true; clientMessageId = entry.id; origin = 'user';
           const response = await rpc.request('turn/start', { threadId: events.binding.providerSessionId, clientUserMessageId: entry.id, input: entry.input,
-            effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
+            model: spec.model ?? null, effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
           started(response.turn); inputReceipt(entry.id, 'delivered');
         }).catch(error => {
           if (entry?.retried) inputReceipt(entry.id, error.uncertain ? 'unknown' : 'rejected');
@@ -247,6 +283,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (spec.kind !== 'ssh') wireHome = physicalDirectory(spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex'));
           assertOpen();
           if (resuming) bind(threadId);
+          const choiceScope = spec.kind === 'ssh' ? [child?.remoteScope || spec.projectId, wireCwd] : wireHome;
+          const saved = resuming && spec.owner === 'gui' && spec.preserveRunOptions
+            ? optionStore(spec, [spec.kind || 'local', choiceScope, threadId], optionsHome).read() : null;
+          if (saved) Object.assign(spec, saved);
           const context = wireCwd === spec.cwd ? spec.context : spec.context?.replaceAll(spec.cwd, wireCwd)
             .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
@@ -255,6 +295,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               : spec.policy?.sandbox ? { sandbox: spec.policy.sandbox }
                 : spec.owner === 'dispatch' ? { sandbox: 'workspace-write' } : {}),
             ...(spec.policy?.approvalPolicy ? { approvalPolicy: spec.policy.approvalPolicy } : {}), approvalsReviewer: 'user' };
+          if (resuming && spec.preserveRunOptions && !saved) {
+            options.model = null; options.serviceTier = null; delete options.config.model_reasoning_effort;
+          }
           let result, resumed = resuming;
           try { result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId, excludeTurns: true } : {}) }); }
           catch (error) {
@@ -282,8 +325,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
           assertOpen();
           bind(result.thread.id); threadResponse = result;
+          choicesStore = optionStore(spec, [spec.kind || 'local', choiceScope, result.thread.id], optionsHome);
+          if (!saved) {
+            spec.model = result.model ?? spec.model ?? null;
+            spec.effort = result.reasoningEffort ?? spec.effort ?? null;
+            spec.fast = ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : spec.preserveRunOptions ? false : spec.fast;
+          }
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
-            effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast: result.serviceTier === 'fast' ? true : result.serviceTier === 'default' ? false : null }, observed: { model: null, effort: null, fast: null }, reason: null });
+            effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast: ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : null }, observed: { model: null, effort: null, fast: null }, reason: null });
           // Dispatch needs the resumed model context, not a copy of its historical output.
           if (resumed && spec.owner !== 'dispatch') await replayHistory();
           assertOpen();
@@ -341,8 +390,16 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (prior) return prior.fingerprint === fingerprint ? prior.promise : Promise.reject(new Error('message_id_conflict'));
         if (receipts.size >= 2000) return Promise.reject(new Error('input_limit'));
         const promise = sending.catch(() => {}).then(async () => {
+          await changingOptions;
           if (!rpc || closed || !['idle', 'running', 'waiting'].includes(state)) throw new Error('session_unavailable');
           const clientId = input.clientMessageId;
+          const name = commandName(input.text);
+          if (unsupported.has(name)) throw new Error(translate('原生模式暂不支持这个命令'));
+          if (['model', 'effort', 'fast', 'new', 'clear'].includes(name)) throw new Error(translate('请使用原生输入框的命令菜单。'));
+          if (['compact', 'review', 'status'].includes(name) || input.text.trim().startsWith('!')) {
+            if (input.images?.length) throw new Error(translate('命令不能附带图片。'));
+            return localCommand(clientId, input.text.trim(), name);
+          }
           inputReceipt(clientId, 'queued');
           const userInput = [...(input.text.trim() ? [{ type: 'text', text: input.text, text_elements: [] }] : []), ...(input.images || []).map(value => value.startsWith('data:') ? { type: 'image', url: value } : { type: 'localImage', path: value })];
           try {
@@ -356,7 +413,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             const entry = receipts.get(clientId); entry.id = clientId; entry.input = userInput;
             clientMessageId = clientId; origin = 'user';
             const base = { threadId: events.binding.providerSessionId, clientUserMessageId: clientId, input: userInput };
-            const startTurn = () => rpc.request('turn/start', { ...base, effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
+            const startTurn = () => rpc.request('turn/start', { ...base, model: spec.model ?? null, effort: spec.effort ?? null, serviceTier: spec.fast === true ? 'fast' : spec.fast === false ? 'default' : null });
             let result, newTurn = !steering;
             try { result = steering ? await rpc.request('turn/steer', { ...base, expectedTurnId: events.binding.turnId }) : await startTurn(); }
             catch (error) {
@@ -380,7 +437,91 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             return { clientMessageId: clientId, status, ...(!error.uncertain && error.code === -32602 ? { reason: 'worker_ended' } : {}) };
           }
         });
-        receipts.set(input.clientMessageId, { fingerprint, promise }); sending = promise; return promise;
+        receipts.set(input.clientMessageId, { fingerprint, promise });
+        // A refused local control never reached the provider. It may be corrected
+        // and retried by the caller; accepted/uncertain requests stay deduplicated.
+        void promise.catch(() => { if (!receipts.get(input.clientMessageId)?.status) receipts.delete(input.clientMessageId); });
+        sending = promise; return promise;
+      }
+      const optionsSnapshot = () => ({ model: spec.model ?? threadResponse?.model ?? null,
+        effort: spec.effort ?? threadResponse?.reasoningEffort ?? null, fast: spec.fast === true });
+      async function models() {
+        assertOpen(); if (!rpc) throw new Error('session_unavailable');
+        if (!catalog) {
+          const rows = [], cursors = new Set(); let cursor = null, pages = 0;
+          do {
+            const page = await rpc.request('model/list', { cursor, limit: 100, includeHidden: false }); assertOpen();
+            for (const row of page.data || []) {
+              if (rows.length >= 300) break;
+              if (typeof row.model === 'string' && row.model.length > 0 && row.model.length <= 160 && !rows.some(value => value.model === row.model)) rows.push(row);
+            }
+            cursor = page.nextCursor; if (cursors.has(cursor)) break; cursors.add(cursor);
+          } while (cursor && rows.length < 300 && ++pages < 10);
+          catalog = rows;
+        }
+        return catalog.map(row => ({ value: row.model, displayName: String(row.displayName || row.model), description: String(row.description || ''),
+          efforts: (row.supportedReasoningEfforts || []).map(value => value.reasoningEffort).filter(value => typeof value === 'string') }));
+      }
+      async function runOptions(patch) {
+        if (!Object.keys(patch).length) { await changingOptions; assertOpen(); return optionsSnapshot(); }
+        const previous = changingOptions;
+        const task = previous.catch(() => {}).then(async () => {
+          await models(); assertOpen();
+          const next = { ...optionsSnapshot(), ...patch };
+          const model = catalog.find(row => row.model === (next.model || catalog.find(value => value.isDefault)?.model));
+          if (!model) throw new Error(translate('没有可用的模型。'));
+          next.model = model.model;
+          const efforts = (model.supportedReasoningEfforts || []).map(value => value.reasoningEffort);
+          if (Object.hasOwn(patch, 'effort') && next.effort !== null && !efforts.includes(next.effort)) throw new Error(translate('此模型不支持这个思考强度。'));
+          if (!next.effort || !efforts.includes(next.effort)) next.effort = model.defaultReasoningEffort || null;
+          if (next.fast && !(model.additionalSpeedTiers?.includes('fast') || model.serviceTiers?.some(value => value.id === 'priority' || value.id === 'fast'))) {
+            if (patch.fast === true) throw new Error(translate('此模型不支持快速模式。'));
+            next.fast = false;
+          }
+          choicesStore.write(next); Object.assign(spec, next);
+          events.publish('routing.updated', { declared: { ...next }, effective: { model: threadResponse?.model ?? null, effort: null, fast: null }, observed: { model: null, effort: null, fast: null }, reason: null });
+          return next;
+        });
+        changingOptions = task.then(() => {}, () => {}); return task;
+      }
+      async function localCommand(id, text, name) {
+        const argument = name ? text.slice(name.length + 1).trim() : text.slice(1).trim();
+        if (name !== 'status' && state !== 'idle') throw new Error(translate('请等待当前任务结束后再运行命令。'));
+        if (['compact', 'status'].includes(name) && argument) throw new Error(translate('这个命令不接受参数。'));
+        if (!name && !argument) throw new Error(translate('请输入要运行的命令。'));
+        if (name === 'status') {
+          const account = await readAccount(); assertOpen();
+          const limit = scopes.get(spec.scopeId || spec.runtimeSessionId);
+          const options = optionsSnapshot();
+          const windows = Object.values(limit?.limitsById || {}).flatMap(bucket => [bucket.primary, bucket.secondary]).filter(window => window?.usedPercent != null);
+          const quota = limit?.notice?.message || (windows.length ? windows.map(window => translate('已用 {value}%').replace('{value}', String(window.usedPercent))).join(' / ')
+            : limit?.ordinaryUsageAllowed === true ? translate('可用') : translate('未知'));
+          const text = translate('Codex 状态：模型 {model}；思考强度 {effort}；快速模式 {fast}；账号 {account}；额度 {quota}。')
+            .replace('{model}', options.model || translate('未知')).replace('{effort}', options.effort || translate('未知'))
+            .replace('{fast}', translate(options.fast ? '开' : '关')).replace('{account}', translate(account.kind === 'api' ? 'API' : account.kind === 'subscription' ? '订阅' : '未知'))
+            .replace('{quota}', quota);
+          events.publish('item.upsert', { kind: 'agent-message', status: 'completed', content: { text } }, { itemId: randomUUID(), turnId: null });
+          inputReceipt(id, 'consumed'); return { clientMessageId: id, status: 'consumed' };
+        }
+        clientMessageId = id; origin = 'user'; manualCommand = name || 'shell';
+        const previousTurn = events.binding.turnId;
+        try {
+          const params = { threadId: events.binding.providerSessionId };
+          let response;
+          if (name === 'compact') {
+            events.publish('context.compacting', { active: true }); response = await rpc.request('thread/compact/start', params);
+          } else if (name === 'review') {
+            response = await rpc.request('review/start', { ...params, target: argument ? { type: 'custom', instructions: argument } : { type: 'uncommittedChanges' }, delivery: 'inline' });
+            if (response.reviewThreadId !== events.binding.providerSessionId) throw Object.assign(new Error('invalid_review_thread'), { uncertain: true });
+            started(response.turn);
+          } else await rpc.request('thread/shellCommand', { ...params, command: argument });
+          inputReceipt(id, 'consumed'); return { clientMessageId: id, status: 'consumed' };
+        } catch (error) {
+          manualCommand = null; events.publish('context.compacting', { active: false });
+          const uncertain = error.uncertain || events.binding.turnId !== previousTurn;
+          if (uncertain) { inputReceipt(id, 'unknown'); setState('disconnected', 'input_delivery_unknown'); }
+          throw Object.assign(new Error(translate('命令未能确认执行，请查看会话状态。')), { uncertain });
+        }
       }
       async function interrupt() {
         if (closed || !rpc) return;
@@ -422,8 +563,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       async function commands() {
         if (closed || !rpc) return [];
-        const list = () => [...(skills?.values() || [])].map(skill => ({ name: '/' + skill.name,
-          description: skill.description, source: 'skill', view: 'reading' }));
+        const list = () => {
+          const selected = catalog?.find(row => row.model === spec.model);
+          const builtins = builtinCommands().filter(row => row.name !== '/fast' || !selected
+            || selected.additionalSpeedTiers?.includes('fast') || selected.serviceTiers?.some(tier => ['fast', 'priority'].includes(tier.id)));
+          return [...builtins, ...[...(skills?.values() || [])].filter(skill => !unsupported.has(skill.name) && !builtinCommands().some(command => command.name === '/' + skill.name))
+            .map(skill => ({ name: '/' + skill.name, description: skill.description, source: 'skill', view: 'reading' }))];
+        };
         if (skills && now() < skillsExpireAt) return list();
         if (skillsRead) return skillsRead;
         const generation = skillsGeneration;
@@ -445,13 +591,20 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           return list();
         }).catch(() => {
           if (!closed && generation === skillsGeneration) { skills = new Map(); skillsExpireAt = now() + 5000; }
-          return [];
+          return list();
         }).finally(() => { if (skillsRead === task) skillsRead = null; });
         skillsRead = task; return task;
       }
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
         answer: (id, answer) => requests.answer(id, answer), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
-        readLimits, readAccount, commands, activity: events.activity,
+        readLimits, readAccount, commands, models, runOptions, activity: events.activity,
+        shell: async (id, command) => {
+          try { await send({ clientMessageId: id, text: '!' + command }); return { exitCode: null }; }
+          catch (error) {
+            if (error.uncertain) events.publish('item.upsert', { kind: 'command', status: 'unknown', content: { command, modelDelivery: 'unknown', output: null, exitCode: null } }, { itemId: `shell:${id}` });
+            throw error;
+          }
+        },
         async canContinueInterrupted() {
           if (closed || active || state !== 'idle') return false;
           const page = await rpc.request('thread/turns/list', { threadId: events.binding.providerSessionId, limit: 1, sortDirection: 'desc', itemsView: 'notLoaded' });

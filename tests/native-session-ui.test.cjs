@@ -2219,7 +2219,7 @@ test('/clear, /new and /reset begin a new conversation, the box shut meanwhile; 
   const old = sessionView(idle, { send: async () => ({ ok: true, value: {} }) });
   try { old.type('/new'); old.press(); await settle(); assert.deepEqual([old.box().props.value, alertOf(old)], ['/new', '当前版本还不支持这个命令'], 'a main without the call refuses'); } finally { old.done(); }
   const sent = [], codex = sessionView(idle, { newConversation: ok({ runtimeSessionId: 'x' }), send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
-  try { codex.type('/clear'); codex.press(); await settle(); assert.deepEqual(sent.map(send => send[3]), ['/clear'], 'a Codex session has none of these commands: it is a message'); } finally { codex.done(); }
+  try { codex.type('/clear'); codex.press(); await settle(); assert.deepEqual(sent, []); assert.deepEqual(codex.refreshed, ['t1'], 'Codex also starts a new conversation through main'); } finally { codex.done(); }
 });
 
 test('/model, /effort and /fast set with an argument and open a menu without one: the current value is marked, ↑↓ Enter and Esc work, a refusal brings the words back', async () => {
@@ -2260,8 +2260,17 @@ test('/model, /effort and /fast set with an argument and open a menu without one
   } finally { view.done(); }
   const nothing = sessionView(idle, { runOptions: ok({ model: null, effort: null, fast: false }), send: async () => ({ ok: true, value: {} }) });
   try { nothing.type('/model'); nothing.press(); await settle(); assert.deepEqual([nothing.box().props.value, alertOf(nothing)], ['/model', '当前版本还不支持这个命令'], 'a main without the model list refuses'); } finally { nothing.done(); }
-  const sent = [], codex = sessionView(idle, { runOptions: ok({}), send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
-  try { codex.type('/model'); codex.press(); await settle(); assert.deepEqual(sent.map(send => send[3]), ['/model'], 'a Codex session sends it as a message'); } finally { codex.done(); }
+  const sent = [], codex = sessionView(idle, { ...bridge, send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
+  refuse = null; now = { model: 'sonnet', effort: 'high', fast: false };
+  try {
+    codex.type('/model'); codex.press(); await settle(); codex.tree();
+    assert.deepEqual(optionNames(codex), ['opus', 'sonnet'], 'Codex uses the same native model menu');
+    keyIn(codex, 'Escape'); await typeIn(codex, '/model opus'); keyIn(codex, 'Enter'); await settle();
+    assert.deepEqual(patches.at(-1), { model: 'opus' });
+    await typeIn(codex, '/effort max'); keyIn(codex, 'Enter'); await settle(); assert.deepEqual(patches.at(-1), { effort: 'max' });
+    await typeIn(codex, '/fast on'); keyIn(codex, 'Enter'); await settle(); assert.deepEqual(patches.at(-1), { fast: true });
+    assert.deepEqual(sent, [], 'no model control is sent as model text');
+  } finally { codex.done(); }
 });
 
 test('a line that starts with ! is a shell command: noted over the box, sent as the command without the !, kept in the history, and never a message', async () => {
@@ -2290,9 +2299,19 @@ test('a line that starts with ! is a shell command: noted over the box, sent as 
   } finally { view.done(); }
   const sent = [], codex = sessionView(idle, { shell: ok({ exitCode: 0 }), send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
   try {
-    codex.type('!ls'); assert.equal(elements(codex.tree()).some(node => node.type === 'code' && node.props.children === '!'), false, 'a Codex session has no such line');
-    codex.press(); await settle(); assert.deepEqual(sent.map(send => send[3]), ['!ls']);
+    codex.type('!ls'); assert.equal(elements(codex.tree()).some(node => node.type === 'code' && node.props.children === '!'), true, 'Codex also explains shell input');
+    codex.press(); await settle(); assert.deepEqual(sent, []);
   } finally { codex.done(); }
+});
+
+test('Codex unknown shell delivery is told without restoring an executable draft', async () => {
+  const view = sessionView(idle, { shell: async (...args) => {
+    view.show([...idle(view.ev), view.ev('item.upsert', { kind: 'command', status: 'unknown',
+      content: { command: 'echo proof', exitCode: null, output: null, modelDelivery: 'unknown' } }, { itemId: `shell:${args[2]}` })]);
+    return { ok: false, error: '执行状态未知' };
+  } }, CODEX);
+  try { view.type('!echo proof'); view.press(); await settle(); assert.deepEqual([view.box().props.value, alertOf(view)], ['', '执行状态未知']); }
+  finally { view.done(); }
 });
 
 test('a /fast the runtime cannot do shows its reason and never says fast mode is on: typed, or chosen from the menu', async () => {

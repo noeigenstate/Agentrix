@@ -18,7 +18,7 @@ function registerIpc({ handle, router, settings, claude }) {
   handle('native:run-options', (terminalId, runtimeSessionId, patch) => {
     binding(terminalId, runtimeSessionId);
     assert(exact(patch, ['model', 'effort', 'fast']) && (patch.model === undefined || patch.model === null || text(patch.model, 160))
-      && (patch.effort === undefined || patch.effort === null || ['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effort))
+      && (patch.effort === undefined || patch.effort === null || typeof patch.effort === 'string' && /^[\w-]{1,32}$/.test(patch.effort))
       && (patch.fast === undefined || typeof patch.fast === 'boolean'));
     return router.runOptions(terminalId, runtimeSessionId, patch);
   });

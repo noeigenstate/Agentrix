@@ -2831,5 +2831,21 @@
   "子 Agent 分屏会按真实来源标明消息发送者，区分你的插话与主模型的指令。": "Sub-agent splits identify each message's actual sender, distinguishing your interventions from the main model's instructions.",
   "预算放宽": "Higher turn allowance",
   "Claude 原生模式不再限制每轮最多花费 5 美元，仍按你设置的月预算使用。": "Claude native mode no longer has a $5 per-turn cap and continues to follow your monthly budget.",
-  "点输入框旁的麦克风，就能在 Claude 和 Codex 原生模式里用语音输入文字。": "Click the microphone beside the message box to dictate text in Claude and Codex native mode."
+  "点输入框旁的麦克风，就能在 Claude 和 Codex 原生模式里用语音输入文字。": "Click the microphone beside the message box to dictate text in Claude and Codex native mode.",
+  "原生模式暂不支持这个命令": "This command is not yet supported in native mode",
+  "请使用原生输入框的命令菜单。": "Use the native message box command menu.",
+  "命令不能附带图片。": "Commands cannot include pictures.",
+  "没有可用的模型。": "No model is available.",
+  "此模型不支持这个思考强度。": "This model does not support this reasoning effort.",
+  "此模型不支持快速模式。": "This model does not support Fast mode.",
+  "请等待当前任务结束后再运行命令。": "Wait for the current task to finish before running a command.",
+  "这个命令不接受参数。": "This command does not accept arguments.",
+  "请输入要运行的命令。": "Enter a command to run.",
+  "命令未能确认执行，请查看会话状态。": "Command execution could not be confirmed. Check the session state.",
+  "Codex 状态：模型 {model}；思考强度 {effort}；快速模式 {fast}；账号 {account}；额度 {quota}。": "Codex status: model {model}; reasoning effort {effort}; Fast mode {fast}; account {account}; quota {quota}.",
+  "选择思考强度": "Choose reasoning effort",
+  "切换快速模式": "Toggle Fast mode",
+  "审查当前改动": "Review current changes",
+  "查看账号和额度": "Show account and quota",
+  "已用 {value}%": "{value}% used"
 }

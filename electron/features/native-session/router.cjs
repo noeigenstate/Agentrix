@@ -108,6 +108,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     try {
       const config = settings.get(), resolved = resolveSpec(id, agent, resume, false, agent === 'codex' ? launch : null);
       const spec = { ...resolved, agent, runtimeSessionId: randomUUID(), monthlyBudgetUsd: config.monthlyBudgetUsd };
+      if (agent === 'codex' && resume && !launch) spec.preserveRunOptions = true;
       if (resume && !spec.providerSessionId) {
         spec.providerSessionId = (await history(id))?.[agent]?.id || null;
         resolveSpec(id, agent, false, true);
@@ -312,25 +313,32 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async runOptions(id, runtimeSessionId, patch) {
       const record = current(id, runtimeSessionId);
-      if (record.spec.agent !== 'claude' || !record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
+      if (!record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
+      if (record.spec.agent === 'claude' && patch.effort != null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effort)) throw new Error('无效的运行选项。');
       const result = await record.runtime.runOptions(patch);
-      current(id, runtimeSessionId); return result;
+      current(id, runtimeSessionId);
+      if (record.spec.agent === 'codex') Object.assign(record.spec, result);
+      return result;
     },
     async models(id, runtimeSessionId) {
       const record = current(id, runtimeSessionId);
-      if (record.spec.agent !== 'claude' || !record.runtime.models) throw new Error('此会话不支持模型菜单。');
+      if (!record.runtime.models) throw new Error('此会话不支持模型菜单。');
       const result = await record.runtime.models();
       current(id, runtimeSessionId); return result;
     },
     async shell(id, runtimeSessionId, clientMessageId, command) {
       const record = current(id, runtimeSessionId);
-      if (record.spec.agent !== 'claude' || !record.runtime.shell) throw new Error('此会话不支持运行命令。');
+      if (!record.runtime.shell) throw new Error('此会话不支持运行命令。');
+      if (record.spec.agent === 'codex') {
+        if (busy.has(id) || switches.state(id)?.phase && switches.state(id).phase !== 'stable') throw new Error('会话正在切换，请稍后重试。');
+        record.ownerInput = true; record.ownerStopped = false; switches.input(id, runtimeSessionId);
+      }
       const result = await record.runtime.shell(clientMessageId, command);
       current(id, runtimeSessionId); return result;
     },
     async newConversation(id, runtimeSessionId) {
       const previous = current(id, runtimeSessionId);
-      if (previous.spec.agent !== 'claude') throw new Error('此会话不支持新对话。');
+      if (!previous.runtime.runOptions) throw new Error('此会话不支持新对话。');
       if (busy.has(id) || previous.runtime.snapshot().state !== 'idle' || previous.runtime.activity?.().count > 0) throw new Error('请等待当前任务结束后再开始新对话。');
       busy.add(id);
       let next;
@@ -339,15 +347,18 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         current(id, runtimeSessionId);
         const spec = { ...previous.spec, ...options, model: options.model || previous.spec.model, runtimeSessionId: randomUUID(), providerSessionId: null, threadId: null };
         next = makeRecord(spec, true);
-        await next.runtime.start();
+        const started = await next.runtime.start();
+        if (previous.spec.agent === 'codex') spec.providerSessionId = started.providerSessionId;
         current(id, runtimeSessionId);
         await activateNative(spec, null, { newConversation: true });
         sessions.set(id, next); switches.forget(id);
-        saveSession(id, { agent: 'claude', providerSessionId: null });
+        saveSession(id, { agent: spec.agent, providerSessionId: spec.agent === 'codex' ? spec.providerSessionId : null });
+        if (spec.agent === 'codex') next.persisted = true;
         next.staged = false;
         for (const event of next.buffered) forward(next, event);
         next.buffered = [];
-        next.stream.publish('path.changed', { previous: 'api', selected: 'api', reason: null });
+        const selected = spec.agent === 'codex' ? 'subscription' : 'api';
+        next.stream.publish('path.changed', { previous: selected, selected, reason: null });
         if (previous.lock) occupied.delete(previous.lock);
         // The new binding is committed. A cleanup error must not tell the renderer
         // that its still-active old binding survived the transition.

@@ -53,7 +53,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const [dictationSend] = useState(() => createDictationSend(() => voiceSend.current(), setSendingSoon));
   useLayoutEffect(() => () => { dictationSend.cancel(); }, [dictationSend, terminalId, sessionId, autoFocus]);
   useLayoutEffect(() => { if (caret.current !== null) { box.current?.setSelectionRange(caret.current, caret.current); caret.current = null; } });
-  // The commands only a Claude session has (/clear /new /reset /model /effort /fast and "!"); a new conversation shuts the box until the card shows it.
+  // Both providers use the same native controls; a new conversation shuts this binding's box until its replacement arrives.
   const actions = useComposerActions({ terminalId, sessionId, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
   const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing, over = isOver(model), working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
   const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
@@ -68,7 +68,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   sentRef.current = useMemo(() => sentTexts(entries, pending.prompts), [entries, pending]);
   const recall = useComposerHistory({ messages: () => sentRef.current, draft: text, setDraft: setText, input: box, onRecall: () => dictationSend.cancel() });
   const commands: readonly ListLine[] = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
-  const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false, menu: actions.menu, note: claude && open && text.startsWith('!') ? { name: '!', description: t('运行命令，输出会进入对话'), source: 'builtin' } : null,
+  const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false, menu: actions.menu, note: open && text.startsWith('!') ? { name: '!', description: t('运行命令，输出会进入对话'), source: 'builtin' } : null,
     complete: command => { if (actions.menu) { actions.choose(command.name); return; } edit(`${command.name} `); box.current?.focus(); }, send: () => void send(), close: actions.close });
   const edit = (value: string) => { dictationSend.cancel(); setText(value); palette.dismiss(false); recall.forget(); actions.forget(); };
   const mentions = useMentions({ projectId, draft: text, input: box, disabled: !open || isCommandDraft(text), edit, onError: setError });
@@ -111,7 +111,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     dictationSend.cancel();
     const value = text.trim(), pictures = carried, quoted = quote;
     if (!(value || pictures.length) || !open) return;
-    const action = claude ? composerAction(value) : null;
+    const action = composerAction(value, claude ? 'claude' : 'codex');
     if (action) { void actions.run(action, value); return; }
     edit(''); setCarried([]); setQuote(null);
     if (!await post(withQuote(quoted?.excerpt, value), pictures)) { setText(current => current || value); setCarried(current => current.length ? current : pictures); setQuote(current => current ?? quoted); }

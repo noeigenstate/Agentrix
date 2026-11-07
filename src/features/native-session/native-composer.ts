@@ -13,8 +13,8 @@ const NEW = /^\/(?:clear|new|reset)$/, OPTION = /^\/(model|effort|fast)(?:\s+([\
 
 // The action the (trimmed) words ask for; null when they are an ordinary message. `value` is '' when the option is named without one (a menu); a "!" with
 // no command gives an empty command, which does nothing.
-export function composerAction(words: string): ComposerAction | null {
-  if (NEW.test(words)) return { kind: 'new' };
+export function composerAction(words: string, agent: 'claude' | 'codex' = 'claude'): ComposerAction | null {
+  if ((agent === 'claude' ? NEW : /^\/(?:clear|new)$/).test(words)) return { kind: 'new' };
   if (words.startsWith('!')) return { kind: 'shell', command: words.slice(1).trim() };
   const option = OPTION.exec(words);
   return option ? { kind: 'option', option: option[1] as ComposerOption, value: option[2]?.trim() ?? '' } : null;

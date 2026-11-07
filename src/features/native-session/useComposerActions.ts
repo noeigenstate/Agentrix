@@ -5,12 +5,12 @@ import { nativeBridge } from './native-bridge.ts';
 import { effortChoices, fastChoices, modelChoices, optionPatch, optionTold, type Choice, type ComposerAction, type ComposerOption } from './native-composer.ts';
 import { nativeItem, refreshNativeSession } from './native-store.ts';
 
-// A call the main process answers, or does not (an older main, a Codex session) or fails on: the last two read as a refusal with the reason.
+// An unavailable or failed main-process call reads as a refusal with its reason.
 function ask<T>(call: Promise<Result<T>> | undefined): Promise<Result<T>> {
   return (call ?? Promise.resolve({ ok: false as const, error: t('当前版本还不支持这个命令') })).catch(error => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
 }
 
-// What a Claude session's box does with /clear, /new, /reset, /model, /effort, /fast and "!": the calls to the main process, the choice menu the options open,
+// The native controls of both providers: the main-process calls, shared choice menus,
 // and the line that says what was set. `clear` empties the box when the words are taken, `restore` puts them back if main refuses them (unless something new
 // was typed meanwhile), `onError` shows a refusal. A new conversation shuts the box until the card shows the new session: the view of this one goes with it.
 export function useComposerActions({ terminalId, sessionId, clear, restore, onError }: {
@@ -51,7 +51,7 @@ export function useComposerActions({ terminalId, sessionId, clear, restore, onEr
       // A refusal before the command ran gives the words back; one after it ran (its card has an exit code or output) must not, or Enter would run it again.
       if (result.ok) return;
       const card = nativeItem(terminalId, `shell:${id}`)?.content;
-      if (card && (card.exitCode != null || card.output)) onError(result.error); else fail(words, result.error);
+      if (card && (card.exitCode != null || card.output || card.modelDelivery === 'unknown')) onError(result.error); else fail(words, result.error);
       return;
     }
     const { option, value } = action;

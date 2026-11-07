@@ -40,8 +40,8 @@ export interface NativeBridge {
   interrupt(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;
   // The commands the session runs without a terminal (contract addendum, native composer); an older main has none, and that reads as an empty list.
   commands?(terminalId: string, runtimeSessionId: string): Promise<Result<AgentCommand[]>>;
-  // Claude's own commands (round r13): the model, effort and fast mode a session runs with (an empty patch only answers the current values), the models it can
-  // run, a new conversation in the same card and a shell command in the project. A Codex session or an older main has none of them: each is a refusal.
+  // Native provider controls: an empty patch reads choices without starting a turn.
+  // A new conversation replaces the binding; shell execution stays with the provider.
   runOptions?(terminalId: string, runtimeSessionId: string, patch: NativeRunOptionsPatch): Promise<Result<NativeRunOptions>>;
   models?(terminalId: string, runtimeSessionId: string): Promise<Result<NativeModelOption[]>>;
   newConversation?(terminalId: string, runtimeSessionId: string): Promise<Result<{ runtimeSessionId: string }>>;

@@ -15,7 +15,8 @@ test('Codex lists only enabled bound skills, caches reads, invalidates changes a
   } }).create({ cwd: root, env: { PATH: '', CODEX_HOME: root, SYNTHETIC_CODEX_MODE: 'skill-catalog', SYNTHETIC_CODEX_LOG: log, SYNTHETIC_SKILL_PATH: skill } }, () => {});
   lifetime.defer('close runtime', () => runtime.close());
   await runtime.start();
-  assert.deepEqual(await runtime.commands(), [{ name: '/offline', description: 'Offline skill', source: 'skill', view: 'reading' }]);
+  assert.deepEqual((await runtime.commands()).filter(row => row.source === 'skill'), [{ name: '/offline', description: 'Offline skill', source: 'skill', view: 'reading' }]);
+  assert.deepEqual((await runtime.commands()).filter(row => row.source === 'builtin').map(row => row.name), ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status']);
   await runtime.commands();
   const requests = () => fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(requests().filter(row => row.method === 'skills/list').length, 1);
@@ -24,7 +25,7 @@ test('Codex lists only enabled bound skills, caches reads, invalidates changes a
   assert.deepEqual(input.find(row => row.type === 'skill'), { type: 'skill', name: 'offline', path: skill });
   assert.equal(input[0].text, '/offline ARG');
   await new Promise(resolve => setTimeout(resolve, 100));
-  assert.equal((await runtime.commands())[0].name, '/replacement');
+  assert.equal((await runtime.commands()).find(row => row.source === 'skill').name, '/replacement');
   assert.equal(requests().filter(row => row.method === 'skills/list').length, 2);
   assert.ok(!JSON.stringify(await runtime.commands()).includes(root), 'renderer gets names, never an executable skill path');
 });
@@ -35,7 +36,7 @@ test('an unavailable optional skills RPC returns no terminal commands and leaves
     lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options)),
   }).create({ cwd: os.tmpdir(), env: { PATH: '', CODEX_HOME: path.join(os.tmpdir(), 'fake-unused-home'), SYNTHETIC_CODEX_MODE: 'missing-skills' } }, event => events.push(event));
   lifetime.defer('close runtime', () => runtime.close());
-  await runtime.start(); assert.deepEqual(await runtime.commands(), []);
+  await runtime.start(); assert.ok((await runtime.commands()).every(row => row.source === 'builtin'));
   assert.equal((await runtime.send({ clientMessageId: 'ordinary', text: 'Continue normally' })).status, 'delivered');
   for (let n = 0; n < 200 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(runtime.snapshot().state, 'idle');
