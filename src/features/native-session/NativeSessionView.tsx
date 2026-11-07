@@ -232,7 +232,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
         <ConversationDecorations.Provider value={{ start: 0, status: statusInTurn ? status : null, running: working, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
           quote: { disabled: open ? null : t('输入框暂时不可用，等它可用后再引用'), pick: quoteMessage },
           frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: null } }}>
-          <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
+          <ConversationFeed entries={entries} agent={kind} projectId={projectId} live={!settled} hideToolOutput onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
         </ConversationDecorations.Provider>
       </div>
       {!stuck && <div className="reading-latest">
