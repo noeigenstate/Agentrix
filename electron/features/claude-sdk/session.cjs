@@ -206,6 +206,13 @@ function createClaudeSession(spec, emit, dependencies) {
         const budgetBlocked = message.terminal_reason === 'budget_exhausted' || message.subtype === 'error_max_budget_usd';
         const interrupted = run.interrupted;
         const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros, compacted: context?.compacted });
+        // Raw SDK input can change the CLI model too. Carry only a successful,
+        // identified local /model command into the next query. Its new init may
+        // arrive on the next input; a reply's model is not a configuration choice.
+        const modelInput = run.turnInputs?.find(input => input.clientMessageId === message.user_message_uuid);
+        const modelChoice = message.local_command === 'model' && message.subtype === 'success' && message.is_error === false && outcome.status === 'completed'
+          && /^\/model\s+(\S+)\s*$/.exec(modelInput?.text?.trim() || '');
+        if (modelChoice) { defaultModelReset = modelChoice[1] === 'default'; spec.model = defaultModelReset ? null : modelChoice[1]; }
         if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
         if (!run.interrupted && !run.modelReplied && (message.is_error === true || outcome.status === 'failed')) {
           for (const id of run.shellInputs || []) shells.get(id)?.reject(null, { completedTurn: true,

@@ -23,7 +23,7 @@ function fixture(t, budget = 10) {
   const spec = { agent: 'claude', owner: 'gui', runtimeSessionId: randomUUID(), projectId: 'p', terminalId: 't', cwd: directory, monthlyBudgetUsd: budget };
   const session = runtime.create(spec, event => events.push(event));
   t.after(() => runtime.close());
-  async function send() { const id = randomUUID(); await session.send({ clientMessageId: id, text: 'offline turn' }); await until(() => fake.inputs.some(input => input.uuid === id)); return id; }
+  async function send(text = 'offline turn') { const id = randomUUID(); await session.send({ clientMessageId: id, text }); await until(() => fake.inputs.some(input => input.uuid === id)); return id; }
   async function result(total, extra = {}) {
     const count = events.filter(event => event.type === 'turn.completed').length;
     fake.emit({ type: 'result', uuid: randomUUID(), subtype: 'success', total_cost_usd: total, modelUsage: {}, ...extra });
@@ -31,6 +31,57 @@ function fixture(t, budget = 10) {
   }
   return { directory, runtime, session, spec, fake, events, send, result };
 }
+
+test('a CLI-confirmed raw model choice survives renewal before its next init observation', async t => {
+  const f = fixture(t); f.spec.model = 'original-model'; await f.session.start();
+  const id = await f.send('/model selected-model');
+  await f.result(0, { local_command: 'model', is_error: false, user_message_uuid: id });
+  assert.equal(f.spec.model, 'selected-model');
+  assert.equal((await f.session.runOptions({})).model, 'fake-model', 'a choice does not invent an observation');
+  f.spec.monthlyBudgetUsd = 11;
+  await f.send();
+  assert.equal(f.fake.calls[1].options.model, 'selected-model');
+  assert.equal(f.fake.calls[1].options.resume, f.fake.sessionId);
+  assert.equal(f.fake.inputs.length, 2, 'renewal never replays the slash input');
+  await f.result(0, { terminal_reason: 'completed' });
+});
+
+test('a CLI-confirmed raw default reset is reapplied when the query renews', async t => {
+  const f = fixture(t), resets = [], query = f.fake.sdk.query;
+  f.fake.sdk.query = spec => ({ ...query(spec), async setModel(model) { resets.push(model); },
+    async getContextUsage() { return { model: 'default-model' }; } });
+  f.spec.model = 'original-model'; await f.session.start();
+  const id = await f.send('/model default');
+  await f.result(0, { local_command: 'model', is_error: false, user_message_uuid: id });
+  assert.equal(f.spec.model, null);
+  f.spec.monthlyBudgetUsd = 11; await f.send();
+  assert.equal(f.fake.calls[1].options.model, undefined);
+  assert.deepEqual(resets, [undefined]);
+  assert.equal((await f.session.runOptions({})).model, 'default-model');
+  await f.result(0, { terminal_reason: 'completed' });
+});
+
+test('only a successful identified parent model change becomes a renewed configuration', async t => {
+  for (const kind of ['read', 'failed', 'interrupted', 'unmatched', 'unidentified', 'replay', 'child', 'reply']) {
+    const f = fixture(t); f.spec.model = 'original-model'; await f.session.start();
+    const id = await f.send(kind === 'read' ? '/model' : '/model selected-model');
+    const result = { local_command: 'model', is_error: false, user_message_uuid: id };
+    if (kind === 'failed') { result.subtype = 'error_during_execution'; result.is_error = true; }
+    if (kind === 'interrupted') result.terminal_reason = 'interrupted';
+    if (kind === 'unmatched') result.user_message_uuid = 'another-input';
+    if (kind === 'unidentified') delete result.user_message_uuid;
+    if (['replay', 'child', 'reply'].includes(kind)) {
+      f.fake.emit(kind === 'reply' ? { type: 'assistant', message: { model: 'fallback-model', content: [{ type: 'text', text: 'reply' }] } }
+        : { type: 'result', uuid: randomUUID(), subtype: 'success', ...result,
+          ...(kind === 'replay' ? { isReplay: true } : { parent_tool_use_id: 'child' }) });
+      await f.result(0, { terminal_reason: 'completed' });
+    } else await f.result(0, result);
+    assert.equal(f.spec.model, 'original-model', kind);
+    f.spec.monthlyBudgetUsd = 11; await f.send();
+    assert.equal(f.fake.calls[1].options.model, 'original-model', kind);
+    await f.result(0, { terminal_reason: 'completed' });
+  }
+});
 
 test('monthly allowance above five dollars stays available across idle turns without charging history', { timeout: 5000 }, async t => {
   const f = fixture(t); await f.session.start();

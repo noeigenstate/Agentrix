@@ -111,8 +111,9 @@ for (const [command, expected, marker] of [
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
   });
   f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-native-slash-fixture');
-  const events = [], session = runtime.create({ owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: randomUUID(), model: 'claude-sonnet-4-5',
-    ...(command.startsWith('/model ') ? { monthlyBudgetUsd: 10 } : {}) }, event => events.push(event));
+  const spec = { owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: randomUUID(), model: 'claude-sonnet-4-5',
+    ...(command.startsWith('/model ') ? { monthlyBudgetUsd: 10 } : {}) };
+  const events = [], session = runtime.create(spec, event => events.push(event));
   await session.start();
   const fallback = await require('../electron/agent-commands.cjs').listAgentCommands({ agent: 'claude', projectPath: f.cwd, home: f.env.HOME, claudeHome: f.env.CLAUDE_CONFIG_DIR });
   const lazy = await session.commands(fallback);
@@ -139,8 +140,16 @@ for (const [command, expected, marker] of [
   if (['/context', '/model'].includes(command)) assert.equal(bodies.length, previousRequests);
   if (command.startsWith('/model ')) {
     await session.send({ clientMessageId: 'check-model', text: 'Check the chosen model' }); await wait(3);
+    assert.equal(queries, 1, 'normal consumption keeps the same CLI query alive');
+    assert.equal(bodies.at(-1).model, 'claude-haiku-4-5', 'raw slash input retains the model the CLI selected');
+    assert.equal((await session.runOptions({})).model, 'claude-haiku-4-5', 'host observations follow the CLI model');
+    spec.monthlyBudgetUsd = 11; // Force a real safe-boundary query renewal, rather than assuming one occurred.
     await session.send({ clientMessageId: 'check-renewed-model', text: 'Check after cap renewal' }); await wait(4);
-    assert.match(bodies.at(-1).model, /sonnet/, 'raw SDK slash input does not mutate host options; the GUI control uses runOptions');
+    assert.equal(queries, 2); assert.equal(bodies.at(-1).model, 'claude-haiku-4-5', 'budget renewal cannot undo the CLI model choice');
+    await session.runOptions({ model: 'claude-sonnet-4-5' });
+    spec.monthlyBudgetUsd = 12;
+    await session.send({ clientMessageId: 'check-gui-model', text: 'Check the native model control' }); await wait(5);
+    assert.equal(queries, 3); assert.equal(bodies.at(-1).model, 'claude-sonnet-4-5', 'the GUI control can still change and retain the model');
   }
   if (command === '/compact') {
     const notices = events.slice(start);
