@@ -7,6 +7,20 @@ const skip = !process.env.AGENTRIX_REAL_CLAUDE;
 const { fork } = require('node:child_process');
 const { once } = require('node:events');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+test('agent catalog parity admits only the exact native lookup and existing terminal guide differences', () => {
+  const { compareAgents } = require('./fixtures/claude-parity.cjs');
+  const sdk = ['general-purpose', 'parity-project', 'agentrix-lookup'];
+  const tui = ['general-purpose', 'claude-code-guide', 'parity-project'];
+  compareAgents(sdk, tui);
+  for (const name of ['unexpected-agent', 'agentrix-lookup-extra']) {
+    assert.throws(() => compareAgents([...sdk, name], tui), /new agent-name differences/);
+    assert.throws(() => compareAgents(sdk, [...tui, name]), /new agent-name differences/);
+  }
+  assert.throws(() => compareAgents(sdk.filter(name => name !== 'agentrix-lookup'), tui), /lookup preset exactly once/);
+  assert.throws(() => compareAgents([...sdk, 'agentrix-lookup'], tui), /lookup preset exactly once/);
+  assert.throws(() => compareAgents(sdk, tui.filter(name => name !== 'claude-code-guide')), /retain the CLI guide/);
+  assert.throws(() => compareAgents(sdk, [...tui, 'agentrix-lookup']), /new agent-name differences/);
+});
 async function until(check) {
   for (let i = 0; i < 300; i++) { if (check()) return; await sleep(50); }
   assert.fail('the isolated CLI did not reach the expected state');
@@ -299,8 +313,8 @@ test('real terminal shell context and SDK request parity have an exact differenc
   assert.ok(inventory);
   const terminalAgents = [...inventory.text.matchAll(/^- ([\w-]+):/gm)].map(match => match[1]);
   assert.ok(terminalAgents.includes('claude-code-guide'));
-  assert.deepEqual(sdkAgents, terminalAgents.filter(name => name !== 'claude-code-guide'));
-  const { compareTools, compareSystem } = require('./fixtures/claude-parity.cjs');
+  const { compareTools, compareSystem, compareAgents } = require('./fixtures/claude-parity.cjs');
+  compareAgents(sdkAgents, terminalAgents);
   const version = compareSystem(sdk.system, tui.system);
   compareTools(sdk.tools, tui.tools, version);
   for (const key of ['model', 'thinking', 'context_management', 'max_tokens']) assert.deepEqual(sdk[key], tui[key], key);

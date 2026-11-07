@@ -134,24 +134,68 @@ test('D1 D3 D5 real CLI shell then compact completes and notifies once through t
   assert.equal(h.alerts(), 4);
 });
 
-test('a second Codex launch in the same PTY cannot bind its new input to the previous provider', async t => {
-  const h = await harness(t, 'ssh'), { s, context, project } = h;
-  Object.assign(context, { acceptShellEvent: () => true, agentCommand: () => null, quitting: false, stopUsageAccount() {},
-    sshHandoff: async () => false, startUsage() {}, monitorActivity: () => ({ stop() {}, poll: async () => null }) });
-  s.sessionKey = 'cap'; s.actions.reset = () => {};
+for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind} shell cannot bind native input to the previous provider`, async t => {
+  const h = await harness(t, kind), { s, context, project } = h;
+  const launches = [], errors = [], nativeSpecs = new Map();
+  if (kind === 'ssh') project.path = '/remote/project';
+  Object.assign(context, { path, nativeSpecs, launchPlans: new Map(), startupErrors: new Map(), quitting: false,
+    acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent, stopUsageAccount() {}, launchAfterPrompt() {},
+    require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return require('../electron/features/agents/agent-command.cjs'); },
+    ActionLog: require('../electron/agent-actions.cjs').ActionLog,
+    createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage,
+    clearTimeout, syncDashboardLive() {}, skills: { endSession() {}, delivery() {} }, cleanupTerminalFiles() {}, report: error => errors.push(error),
+    runtimeDir: project.path, fs: syncFs, process: { platform: process.platform, env: {} },
+    createTerminalEnvironment: () => ({}), withoutAppImage: value => value, eventServer: { name: 'fixture-pipe' }, controlAddress: 'fixture-control',
+    startupNote: () => '', READING_NOTE: '', handoffFile: () => '', integrationDir: 'integration' });
+  s.sessionKey = 'old-cap'; s.gate.dispose = () => {};
+  s.terminal = { kill() {} };
+  const dispose = main.indexOf('function disposeTerminal(');
+  vm.runInContext(main.slice(dispose, main.indexOf('\nfunction registerUnavailableNative(', dispose)), context);
+  const publish = (type, payload, at, extra = {}) => context.structuredEvent(s.terminalId, {
+    runtimeSessionId: 'new-runtime', providerSessionId: 'new-provider', transport: 'codex-app-server', type, payload, receivedAtMs: at, ...extra,
+  });
+  Object.assign(context, { nativeSessions: {
+    forget: async () => {},
+    start: async (id, options) => {
+      // Exercise main's real shell route, spec resolution, old-host disposal and
+      // structured host creation; only the app-server process is a fake peer.
+      const spec = context.nativeSpec(id, options.agent, options.resume, false, options.launch);
+      launches.push(spec); publish('session.state', { state: 'starting' }, 2300);
+      return { runtimeSessionId: 'new-runtime' };
+    },
+  } });
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
-  const event = type => context.onEvent({ projectId: s.terminalId, sessionKey: 'cap', type, agent: 'codex', cwd: project.path, sentAt: 2300 });
+  const event = (type, sequence) => context.onEvent({ projectId: s.terminalId, sessionKey: 'old-cap', type, sequence, agent: 'codex', args: [], cwd: project.path, sentAt: 2300 });
   h.write('First task\r'); h.user('First task', 2000); h.apply('complete', 'first', 2100);
   assert.equal(h.alerts(), 1); h.store.acknowledge(project.id);
   const previous = s.rootThreadId;
-  event('codex-exited'); h.now(2300); event('codex-started');
-  h.now(2400); h.write('Second task\r'); h.user('Second task', 2400);
-  assert.notEqual(s.cliProviderId, previous, 'new input cannot revive the old root binding');
-  context.applyActivity(project, s, { threadId: 'new-provider', turnId: 'second', state: 'complete', updatedAt: 2500 });
-  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 2); assert.equal(project.unread, 1);
-  const revision = s.cliState.revision;
+  // The wrapper returns to a shell prompt before a manually typed codex can
+  // request a native session. It no longer launches another Codex TUI in this PTY.
+  h.now(2300); event('codex-exited', 1); event('shell-prompt', 2); event('codex-started', 3);
+  await Promise.resolve();
+  assert.equal(launches.length, 1); assert.deepEqual(errors, []);
+  assert.equal(context.startupErrors.size, 0); assert.equal(launches[0].providerSessionId, null, 'a fresh launch never inherits the old restore binding');
+  const next = h.sessions.get(s.terminalId);
+  t.after(() => { next?.promptQueue.reset(); next?.completionWork.reset(); });
+  assert.notEqual(next, s); assert.equal(next.nativeStructured, true); assert.notEqual(next.sessionId, 'pty');
+  assert.equal(next.cliProviderId, undefined); assert.notEqual(next.reportedThreadId, previous);
+  publish('item.upsert', { kind: 'user-message', content: { clientMessageId: 'second-input', text: 'Second task' } }, 2400, { itemId: 'second-input' });
+  publish('input.receipt', { clientMessageId: 'second-input', status: 'consumed' }, 2400);
+  publish('turn.started', { origin: 'user' }, 2400, { turnId: 'second' });
+  assert.equal(next.rootThreadId, 'new-provider', 'new input cannot revive the old root binding');
+  assert.equal(next.nativeMessages.get('second-input'), 'Second task'); assert.equal(s.promptQueue.list().length, 0);
+  assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 1);
+  const snapshot = next.activitySnapshot;
+  h.user('Late old PTY input', 2450);
+  event('codex-started', 4); // The old shell capability cannot open another native host.
   context.applyActivity(project, s, { threadId: previous, turnId: 'first', state: 'complete', updatedAt: 2600 });
-  assert.equal(s.cliState.revision, revision); assert.equal(h.alerts(), 2);
+  context.applyActivity(project, next, { threadId: previous, turnId: 'first', state: 'complete', updatedAt: 2600 });
+  publish('item.upsert', { kind: 'user-message', content: { clientMessageId: 'stale', text: 'Wrong session' } }, 2600, { runtimeSessionId: 'old-runtime', providerSessionId: previous });
+  publish('turn.completed', { status: 'completed' }, 2600, { runtimeSessionId: 'old-runtime', providerSessionId: previous, turnId: 'first' });
+  assert.equal(launches.length, 1); assert.equal(next.activitySnapshot, snapshot); assert.equal(next.nativeMessages.has('stale'), false);
+  assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
+  publish('turn.completed', { status: 'completed' }, 2700, { turnId: 'second' });
+  assert.equal(next.codexActivity, 'complete'); assert.equal(h.alerts(), 2); assert.equal(project.unread, 1);
 });
 
 test('completion catch-up hides provisional completion without finishing prompts, notifying or rearming', async t => {
