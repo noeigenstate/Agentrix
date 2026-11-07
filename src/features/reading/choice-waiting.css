@@ -1,4 +1,4 @@
 /* A single way back to a dismissed CLI dialog, without copying its options. */
-.reading-waiting { display: flex; align-items: center; gap: 12px; padding: 8px 16px; color: var(--text-2); font-size: calc(13px * var(--reading-text)); }
+.reading-waiting { outline: none; display: flex; align-items: center; gap: 12px; padding: 8px 16px; color: var(--text-2); font-size: calc(13px * var(--reading-text)); }
 .reading-waiting > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reading-waiting .result-button { flex: none; font-size: inherit; }
