@@ -16,6 +16,7 @@ Owns provider-neutral session routing, validated renderer IPC, settings and work
 - `createProjectAccounts` (`electron/features/native-session/project-accounts.cjs`) — focused pane account reads, cached by the existing account service; no session or background project launch
 - `history` (`electron/features/native-session/router.cjs`) — coalesced read-only folder history; forgetting a terminal or closing the router aborts its pending lookup, including an SSH connection still being established.
 - `native:commands` (`electron/features/native-session/ipc.cjs`) — sender-guarded `Result<AgentCommand[]>` bound to terminalId and runtimeSessionId; the router checks the host binding before and after asynchronous provider reads
+- `tokenRate` (`electron/features/native-session/router.cjs`) — synchronous host-only read of the bound runtime's shared meter for the activity pane; no renderer IPC or provider event schema extension
 
 ## May import
 

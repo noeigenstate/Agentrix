@@ -1271,7 +1271,7 @@ function structuredEvent(id, event) {
   }
   s.nativeRuntimeSessionId = event.runtimeSessionId;
   s.nativeUsage ||= createNativeUsage(spec.agent);
-  s.nativeUsage.apply(event);
+  s.nativeUsage.apply(event, event.type === 'usage.updated' ? nativeSessions.tokenRate(id, event.runtimeSessionId) : null);
   if (event.type === 'error' && event.payload.code === 'native_cli_outdated') store.warning = t(event.payload.message);
   if (event.providerSessionId) {
     if (spec.agent === 'claude') s.claudeSessionId = event.providerSessionId;

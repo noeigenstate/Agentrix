@@ -82,9 +82,73 @@ class TokenRates {
     this.nodeWaiters = new Map(); this.toolWaiters = new Map(); this.replyWaiters = new Map(); this.pending = new Map();
     this.replies = new Map(); this.nodes = new Map(); this.prompts = []; this.results = new Map(); this.owners = new Map(); this.sealedAt = -Infinity;
     this.boundary = null; this.tools = new Map(); this.toolEntries = new Map(); this.clearTools();
-    this.generation = null; this.counter = partial ? null : 0; this.credit = 0; this.turn = null;
+    this.generation = null; this.counter = partial ? null : 0; this.credit = 0; this.turn = null; this.native = null;
   }
   snapshot(model = this.model) { return { ...(this.rates.get(model) || emptyRate(this.partial)), partial: this.partial }; }
+  // Native transports have response usage but no transcript ancestry. Their adapters
+  // supply explicit prompt/tool boundaries; the same sample replacement and sums apply.
+  nativeBegin(at) { this.native = { boundary: at, tools: new Set(), response: null, counter: null, serial: this.native?.serial || 0 }; }
+  nativeEnd() { if (this.native) { this.native.boundary = null; this.native.response = null; this.native.tools.clear(); } }
+  nativeUsage(output, at, final = false) {
+    const reply = this.native?.response;
+    if (!reply?.id || !reply.model || !Number.isFinite(at) || !Number.isSafeInteger(output) || output <= 0 || output < (reply.output ?? 0) || at < (reply.at ?? -Infinity)) return false;
+    if (reply.output === output && (!final || reply.finished)) return false;
+    if (final) reply.finished = true;
+    reply.output = output; reply.at = at;
+    this.replies.set(reply.id, reply);
+    this.setModel(reply.model, at); this.sample(reply, reply.start); this.trim();
+    return !!reply.sample;
+  }
+  nativeClaude(message, at) {
+    if (!this.native || message.isReplay || message.parent_tool_use_id || message.isSidechain) return false;
+    const state = this.native, event = message.event;
+    if (message.type === 'stream_event' && event?.type === 'message_start') {
+      const value = event.message;
+      state.response = this.replies.get(value?.id) || { id: value?.id, model: modelOf(value?.model), start: state.tools.size ? null : state.boundary };
+      state.response.streamed = true;
+      state.boundary = null;
+      return this.nativeUsage(value?.usage?.output_tokens, at);
+    }
+    if (message.type === 'stream_event' && event?.type === 'message_delta') return this.nativeUsage(event.usage?.output_tokens, at, !!event.delta?.stop_reason);
+    if (message.type === 'stream_event' && event?.type === 'message_stop') return this.nativeUsage(state.response?.output, at, true);
+    if (message.type === 'user') {
+      for (const block of Array.isArray(message.message?.content) ? message.message.content : []) if (block.type === 'tool_result' && state.tools.delete(block.tool_use_id) && !state.tools.size) state.boundary = at;
+    }
+    if (message.type === 'stream_event' && event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') state.tools.add(event.content_block.id);
+    if (message.type !== 'assistant' || !modelOf(message.message?.model)) return false;
+    const value = message.message;
+    if (state.response?.id !== value.id) {
+      state.response = this.replies.get(value.id) || { id: value.id, model: modelOf(value.model), start: state.tools.size ? null : state.boundary };
+      state.boundary = null;
+    }
+    for (const block of Array.isArray(value.content) ? value.content : []) if (block.type === 'tool_use') state.tools.add(block.id);
+    return this.nativeUsage(value.usage?.output_tokens, at, !state.response.streamed);
+  }
+  nativeCodex(method, params, at) {
+    const state = this.native;
+    if (!state) return false;
+    const item = params.item, delta = ['item/agentMessage/delta', 'item/reasoning/summaryTextDelta', 'item/reasoning/textDelta', 'item/plan/delta'].includes(method);
+    const tool = item && ['commandExecution', 'mcpToolCall', 'dynamicToolCall', 'collabAgentToolCall', 'fileChange', 'webSearch'].includes(item.type) && item.source !== 'userShell';
+    const model = delta || item && (['agentMessage', 'reasoning', 'plan'].includes(item.type) || tool && method === 'item/started');
+    if (model) {
+      state.response ||= { id: `native:${++state.serial}`, start: state.tools.size ? null : state.boundary, model: this.model };
+      state.response.end = at;
+    }
+    if (tool) {
+      if (method === 'item/started') { state.tools.add(item.id); state.boundary = null; }
+      else if (method === 'item/completed' && state.tools.delete(item.id) && !state.tools.size) state.boundary = at;
+    }
+    if (method !== 'thread/tokenUsage/updated') return false;
+    const total = params.tokenUsage?.total?.outputTokens;
+    if (!Number.isSafeInteger(total) || state.counter !== null && total <= state.counter) return false;
+    state.counter = total;
+    const output = params.tokenUsage?.last?.outputTokens;
+    if (!Number.isSafeInteger(output) || output <= 0) return false;
+    const changed = this.nativeUsage(output, state.response?.end);
+    if (!state.tools.size && state.boundary === state.response?.start) state.boundary = null;
+    state.response = null;
+    return changed;
+  }
   // Dispatch reports cumulative completed-response totals; replace, never add a repeated report.
   totals(model, outputTokens, activeMs, at) {
     this.setModel(model, at);

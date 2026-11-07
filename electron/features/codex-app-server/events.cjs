@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { tokenUsage } = require('./account.cjs');
 const { commandPhrase } = require('../../command-phrase.cjs');
 const { isGeneratedImage } = require('../../generated-image-path.cjs');
+const { TokenRates } = require('../agents/token-rate.cjs');
 /** @typedef {import('../../../src/shared/agent-events').AgentEvent} AgentEvent */
 const KINDS = { userMessage: 'user-message', agentMessage: 'agent-message', reasoning: 'reasoning-summary', commandExecution: 'command',
   fileChange: 'file-change', mcpToolCall: 'tool', dynamicToolCall: 'tool', plan: 'plan', webSearch: 'web', imageGeneration: 'agent-message' };
@@ -47,11 +48,15 @@ function itemPayload(item, completed, renderImage = () => null, translate = valu
 }
 
 function createEvents(spec, emit, now, renderImage, translate) {
+  const rates = new TokenRates('codex');
   let sequence = 0, dropped = false;
   const events = [], items = new Map(), itemEvents = new Map(), completed = new Set(), children = new Set();
   const binding = { connectionEpoch: randomUUID(), providerSessionId: null, turnId: null };
   let cumulative = spec.providerSessionId ? null : { input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }, baseline = cumulative;
   function publish(type, payload, extra = {}) {
+    if (type === 'routing.updated') rates.setModel(payload.observed?.model || payload.effective?.model || rates.model, now());
+    if (type === 'turn.started') rates.nativeBegin(now());
+    if (type === 'turn.completed') rates.nativeEnd();
     if (type === 'item.dropped') dropped = true;
     const event = { schemaVersion: 1, eventId: randomUUID(), sequence: ++sequence, ...binding, provider: 'codex', transport: 'codex-app-server',
       projectId: spec.projectId, terminalId: spec.terminalId, runtimeSessionId: spec.runtimeSessionId, runId: spec.runId ?? null,
@@ -62,6 +67,7 @@ function createEvents(spec, emit, now, renderImage, translate) {
     emit(event); return event;
   }
   function notification(method, params) {
+    if (!params.turnId || params.turnId === binding.turnId) rates.nativeCodex(method, params, now());
     if (method === 'item/started' || method === 'item/completed') {
       const item = params.item;
       if (!item || typeof item.id !== 'string' || completed.has(item.id)) return;
@@ -105,7 +111,7 @@ function createEvents(spec, emit, now, renderImage, translate) {
     else if (method === 'error') { publish('context.compacting', { active: false }); publish('error', { code: 'provider_error', message: 'Codex 报告了错误', retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' }); }
     while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
   }
-  return { binding, publish, notification,
+  return { binding, publish, notification, tokenRate: () => ({ ...rates.snapshot(), model: rates.model }),
     finishTurn(status = 'interrupted') {
       publish('context.compacting', { active: false });
       for (const [itemId, payload] of items) if (['command', 'tool', 'file-change'].includes(payload.kind) && ['running', 'in-progress', 'pending'].includes(payload.status)

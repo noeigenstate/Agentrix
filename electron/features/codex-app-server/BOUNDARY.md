@@ -17,6 +17,7 @@ Owns an independent app-server runtime over local stdio or an injected SSH byte 
 - `electron/generated-image-path.cjs`
 - `src/shared/agent-events.ts`
 - `electron/features/agents/codex-account-usage.cjs`
+- `electron/features/agents/token-rate.cjs` (shared response samples from root-thread token usage, excluding tool waits and child threads)
 
 ## Invariants
 - An optional missing skills RPC leaves native built-ins usable and lists no terminal-only commands; skill changes invalidate the bounded catalog. Native built-ins are protocol controls, unsupported known built-ins never become model text, and custom names/skills remain input. Only catalog-admitted choices persist through resume/new conversation, without changing user CLI configuration; an uncertain command never retries. Review child turn starts use the provider root identity and compaction/shell finish only on provider events — test: `tests/native-commands-codex.test.cjs` › "an unavailable optional skills RPC returns no terminal commands and leaves the connection usable".

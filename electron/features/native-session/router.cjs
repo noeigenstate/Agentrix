@@ -420,6 +420,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       return current(id, runtimeSessionId).runtime.answer(requestId, answer);
     },
     async stop(id, runtimeSessionId) { const record = current(id, runtimeSessionId); switches.forget(id); await record.runtime.close(); if (record.lock) occupied.delete(record.lock); },
+    tokenRate(id, runtimeSessionId) { return current(id, runtimeSessionId).runtime.tokenRate?.() || null; },
     snapshot(id) {
       const record = sessions.get(id);
       if (!record) {

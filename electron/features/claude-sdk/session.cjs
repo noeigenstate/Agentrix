@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { createEventStream } = require('../native-session/events.cjs');
 const { createNormalizer } = require('./normalize.cjs');
+const { TokenRates } = require('../agents/token-rate.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
 const { billingIdentityError, startupFailure } = require('./identity.cjs');
@@ -40,7 +41,12 @@ function createClaudeSession(spec, emit, dependencies) {
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
     return text;
   }
-  const publish = (type, payload, extra) => stream.publish(type, JSON.parse(clean(JSON.stringify(payload))), extra);
+  const rates = new TokenRates('claude');
+  let rateUsage = { input: null, cachedInput: null, cacheWrite: null, output: null, reasoning: null, contextWindow: null, costUsdMicros: null, costEstimated: null };
+  const publish = (type, payload, extra) => {
+    if (type === 'usage.updated') rateUsage = payload;
+    return stream.publish(type, JSON.parse(clean(JSON.stringify(payload))), extra);
+  };
   const setState = (next, reason = null) => { state = next; publish('session.state', { state, reason }); };
   const requests = createRequests({ publish, state: next => { if (!closed && !stopping) setState(next); } });
   const normalize = createNormalizer(publish, clean), policy = createPolicy(spec, audit);
@@ -50,6 +56,8 @@ function createClaudeSession(spec, emit, dependencies) {
   }
   function begin(origin, clientMessageId) {
     turnId = randomUUID(); stream.turn(turnId);
+    rates.nativeBegin(now());
+    rateUsage = { ...rateUsage, round: null };
     publish('turn.started', { origin, clientMessageId }); setState('running');
   }
   const canContinue = () => dependencies.canContinue?.() !== false;
@@ -172,6 +180,7 @@ function createClaudeSession(spec, emit, dependencies) {
           }
           reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
         }
+        if (rates.nativeClaude(message, now())) publish('usage.updated', rateUsage);
         const context = normalize(message, { live: true });
         if (message.type !== 'result' || message.parent_tool_use_id) continue;
         const resultId = message.uuid || message.result_index;
@@ -222,7 +231,7 @@ function createClaudeSession(spec, emit, dependencies) {
         publish('turn.completed', outcome);
         run.turnInputs = []; run.shellInputs = null; run.modelReplied = false; run.executed = false; run.synthetic = false; run.quotaRejected = false;
         run.interrupted = false;
-        turnId = null; stream.turn(null);
+        rates.nativeEnd(); turnId = null; stream.turn(null);
         if (interrupted) unknownInput();
         if (budgetBlocked) {
           run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput();
@@ -550,6 +559,7 @@ function createClaudeSession(spec, emit, dependencies) {
     shells.set(clientMessageId, { command, task, reject: rejected }); return task;
   }
   return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
+    tokenRate: () => ({ ...rates.snapshot(), model: rates.model }),
     runOptions, models, shell,
     fallbackInput: () => fallbackInput && structuredClone(fallbackInput),
     async commands(fallback = []) {
