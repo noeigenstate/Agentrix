@@ -84,13 +84,13 @@ export function ResultStatus({ result, taskTitle, onShowTerminal, onError }: { r
 }
 
 // Level 2 of a round that wrote files: the checks the round actually ran.
-export function ResultChecks({ result, summaryOnly = false }: { result: LatestResult; summaryOnly?: boolean }) {
+export function ResultChecks({ result }: { result: LatestResult }) {
   if (!result.checks.length) return null;
   return <div className="result-evidence">
     <div><p className="result-list-head">{t('验证')}</p>
       <ul className="result-list">{result.checks.map(check => <li key={check.id} className={check.failed ? 'is-failed' : 'is-passed'}>
         {check.failed ? <XCircle size={16} className="result-check" aria-hidden="true" /> : <CheckCircle size={16} className="result-check" aria-hidden="true" />}
-        <span className="result-check-name">{t(check.phrase)}{!summaryOnly && <small><PathText text={check.target} /></small>}</span>
+        <span className="result-check-name">{t(check.phrase)}<small><PathText text={check.target} /></small></span>
         <span className="result-state-text">{check.failed ? t('失败') : t('通过')}</span>
       </li>)}</ul>
     </div>

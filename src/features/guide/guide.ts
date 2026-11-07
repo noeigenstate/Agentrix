@@ -3,13 +3,12 @@
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
   { title: "原生运行", text: "Codex 在 Agentrix 中统一使用原生模式，在终端输入 codex 也会打开原生界面。", group: 'new' },
-  { title: "步骤摘要", text: "Claude 和 Codex 原生模式的工具与命令步骤只显示一行摘要和状态，文件改动仍可查看详情。", group: 'new' },
   { title: "来源署名", text: "子 Agent 分屏会按真实来源标明消息发送者，区分你的插话与主模型的指令。", group: 'new' },
   { title: "预算放宽", text: "Claude 原生模式不再限制每轮最多花费 5 美元，仍按你设置的月预算使用。", group: 'new' },
   { title: "语音输入", text: "点输入框旁的麦克风，就能在 Claude 和 Codex 原生模式里用语音输入文字。", group: 'new' },
   { title: "图片不再断任务", text: "生成细节多的大图或输出很长时，任务不再中断；实在放不下的结果只跳过那一条并说明。" },
   { title: "Codex 原生运行", text: "应用里的 Codex 全部使用原生模式；启动失败会写明原因，长对话也能接着恢复。" },
-  { title: "原生模式命令", text: "Claude 的原生模式可以用 /clear、/new、/model、/effort，也可以用 ! 运行命令；步骤只显示摘要和状态。" },
+  { title: "原生模式命令", text: "Claude 的原生模式可以用 /clear、/new、/model、/effort，也可以用 ! 运行命令，输出会进入对话。" },
   { title: "压缩提示", text: "压缩上下文时会显示进度，完成或失败都有一行说明。" },
   { title: "子代理读项目设置", text: "Claude 子代理和终端一样读取 CLAUDE.md、技能和项目设置。" },
   { title: "结束的记录自动离开", text: "调用的模型里，结束的记录自动消失，失败的保留 30 秒，分屏开着时不消失。" },
@@ -20,7 +19,7 @@ export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
   { title: "工作者修复", text: "修好了 API 工作者结束时可能卡住、圆桌后的 Codex 工作者写不了文件、被结束的工作者一直显示运行中，以及模型别名被误报为不符。" },
   { title: "计费检查", text: "测试连接会确认 Claude Code 报告的计费来源是 API 密钥；不是的话，新会话转到终端并说明原因，不再直接失败。" },
   { title: "原生通道修复", text: "修好了 Codex 的原生连接和 Claude 走 API 时的启动失败。" },
-  { title: "原生模式", text: "Claude 和 Codex 都可以在原生模式下运行；工具和命令步骤只显示摘要和状态，文件改动保持原有显示。需要你回答的提问和策略要求的确认也在这里处理；Claude 也可以在设置里改回终端界面。" },
+  { title: "原生模式", text: "Claude 和 Codex 都可以在原生模式下运行，命令、改动和计划都直接显示，需要你回答的提问和策略要求的确认也在这里处理；Claude 也可以在设置里改回终端界面。" },
   { title: "运行方式", text: "设置里可以保存 API 密钥、测试连接、设定月预算；Claude 默认走 API，额度用完自动转到订阅登录的终端，接着同一段对话。" },
   { title: "连接与额度", text: "活动栏显示 Claude、Codex 当前连接的是 API 还是订阅，以及 API 今日和本月的估算花费、预算和限流状态。" },
   { title: "插话直达", text: "给子代理的话直接送到它那里（Claude 中途接收，Codex 在当前一步后接收），不再转给主会话，分屏里显示送达状态。" },
