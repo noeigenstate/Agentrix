@@ -12,17 +12,24 @@ agrees does it become the stable release.
 
 - **One branch: `beta`.** Create it from `main` when it does not exist (`git switch -c beta main`). Release work lives
   there. Never create a `ci/preflight-*` branch or run `ci-preflight remote` for a beta.
-  Beta pushes and dispatches default to Windows only; `full_matrix=true` explicitly enables all platforms and full tests.
+  Pushing `beta` does not trigger a build. Dispatch on `beta` with `build_only=true` for the test release: only Windows
+  dependencies, packaging, validation and installer upload run; unit/real-CLI tests and all three desktop shards skip,
+  as do macOS, Linux and SSH. The input defaults to false and is ignored outside a beta-branch dispatch. If both inputs
+  are true, `build_only` takes precedence on beta; stable preparation uses `build_only=false`, `full_matrix=true`.
 - **Beta version `X.Y.Z-beta.N`** (N starts at 1 and rises for each further beta of the same X.Y.Z):
   `npm version X.Y.Z-beta.N --no-git-tag-version`. Write the update notes (step 3) now. Leave the versions in
   `docs/usage.md` (step 2) alone until the stable bump.
-- **Check, commit, tag, push.** Local checks (step 4), commit (step 6), then `git tag vX.Y.Z-beta.N` on `beta` and push
-  the branch and the tag. A push to `beta` runs affected Windows tests; the tag matches `v*`. Beta tags run only Windows
-  and its three desktop shards, skipping macOS, Linux and Linux SSH. They publish only the Windows installer,
+- **Check, commit, build, tag.** Run the task-authorized local checks (step 4), commit (step 6), push `beta` (no
+  automatic build), then dispatch `build-windows.yml` on `beta` with `build_only=true`. Wait for that exact commit's
+  Windows build to succeed before `git tag vX.Y.Z-beta.N` and pushing the tag. The beta tag reuses the verified
+  installer from that build-only run; skipped desktop dependencies must not block publication. Without reusable
+  same-commit artifacts, a beta tag builds and tests Windows including all three desktop shards, skipping macOS, Linux
+  and Linux SSH. They publish only the Windows installer,
   its `.blockmap`, `latest.yml` and Windows checksums as a GitHub **prerelease** (`--prerelease --latest=false`).
   Installed Windows copies on the beta channel (Settings › About › 更新通道) receive it; stable-channel copies do not.
   A failed job is step 9; a code defect needs a new commit and the next beta number, keeping the old tag.
-- **Before requesting stable approval:** dispatch the workflow on `beta` with `full_matrix=true`, fix all failures and
+- **Before requesting stable approval:** dispatch the workflow on `beta` with `build_only=false` and `full_matrix=true`,
+  fix all failures and
   obtain a green full-platform run. Then report the beta and that result to the owner. Nothing merges to `main` and no
   stable tag exists until the owner approves. Stable releases always require the full matrix.
 - **After the owner approves:** on `beta`, `npm version X.Y.Z --no-git-tag-version`, replace the `docs/usage.md`
@@ -62,7 +69,8 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    loader requires reviewing its pinned mapping; until classified it cannot narrow coverage. Mixed-provider test files
    stay selected when they exercise the changed provider, regardless of their filename.
 
-   Beta Windows CI compares the commit against the latest verified **full** green beta ancestor, not the previous push
+   For beta dispatches with `build_only=false`, Windows CI compares the commit against the latest verified **full**
+   green beta ancestor, not the previous push
    or a selective run. It verifies repository/workflow identity, ancestry, every required job, actual full unit/CLI steps
    and every GUI step. No baseline/API/history proof means a full run. Unaffected desktop suite and setup steps skip
    with an explicit shard log; the fixed shard job still succeeds. The plan and reasons are uploaded as `affected-tests`.
@@ -78,22 +86,27 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    Regenerate the selection after each follow-up change. Shared fixtures and package/version metadata force full
    coverage; do not override that decision with a manual unaffected-results exemption.
    Rebuild and verify the new version's artifacts. Before publication the required matrix must pass: Windows for beta
-   tags, all platforms for stable releases. Full-platform validation on `beta` precedes the stable approval request.
-   The tag's release is published from its tested builds (step 7).
+   tags unless the owner selected build-only, all platforms for stable releases. Full-platform validation on `beta` precedes the stable approval request.
+   The tag's release is published from its verified builds (step 7), including the explicitly selected build-only beta path.
 5. **Look at the pictures.** `test:workspace` saves `guide-whats-new.png` and `guide-shortcuts.png` in its
    `.test-output/workspace-*` folder: check the notes fit and read well before committing.
 6. **Commit.** Stage everything except local-only files (`.claude/`, personal product drafts under `docs/`), scan
    the staged diff for personal data (user names, home paths, host addresses, emails, secrets) and commit as
    `Release X.Y.Z: <the user-visible changes>` with a bulleted body (a beta: `Beta X.Y.Z-beta.N: <the changes>`).
-7. **Tag and push.** A beta: `git tag vX.Y.Z-beta.N` on `beta`, push the branch, then the tag; nothing goes to `main`.
+7. **Tag and push.** A beta: push `beta` (it does not trigger CI), dispatch `build_only=true`, wait for successful
+   Windows packaging on the exact SHA, then create and push `vX.Y.Z-beta.N`; nothing goes to `main`.
    The stable release: `git tag vX.Y.Z` on `main` after the fast-forward, push `main`, wait for its run to go green, then push the tag. Pushes of `main` and of
    tags first run the "Select tested build" job, which looks
    for a successful run of this workflow on exactly this commit (the stable `main` push's own run, or outside the beta
    flow the `remote` preflight's dispatch run; every required job really run, installer artifacts not expired).
-   Beta reuse needs five successful jobs and the Windows artifact; stable reuse needs all nine jobs and all four
-   platform artifacts. A Windows-only run cannot satisfy stable reuse. If it finds one, build and test jobs are skipped; only
+   A tested beta reuse needs five successful jobs and the Windows artifact. A beta tag may also reuse a same-SHA
+   successful beta dispatch whose Windows job successfully recorded `Record beta build-only mode`: only `Select tested
+   build` and `Windows x64 build` must succeed. A merely skipped or missing desktop job without that marker is
+   insufficient. Main and stable tags never accept a marked build-only run, even if all artifacts exist; they still
+   require all nine jobs and all four platform artifacts. A Windows-only run cannot satisfy stable reuse. If it finds
+   one, build and test jobs are skipped; only
    the tag's run adds the "Publish GitHub Release" job, which downloads that run's installers, checks their sha256
-   sums and the version, and publishes exactly the tested files in about 1–2 minutes (as a prerelease for a beta tag).
+   sums and the version, and publishes exactly the verified files in about 1–2 minutes (as a prerelease for a beta tag).
    If no such run exists, the run builds and tests the required platforms: Windows for beta, all platforms for stable.
    The release page's "## Changes in X.Y.Z" list is printed from `WHATS_NEW` by `node scripts/release-notes.mjs
    --version X.Y.Z` (the English of each note); it fails if a note has no English.
@@ -101,7 +114,8 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    nothing). Read the token from `git credential fill` inside the script and never print it. The jobs: Windows x64
    (build, then the "Windows desktop interaction / terminals / reading" shards that run the packaged desktop suites in
    parallel against the uploaded `win-unpacked`), Linux x64, Linux arm64, macOS Apple silicon, and Linux SSH integration (the real-ssh check of the
-   remote worker). Beta runs skip the non-Windows jobs unless a beta branch dispatch sets `full_matrix=true`.
+   remote worker). Beta build-only dispatches skip every test job; `build_only=false`, `full_matrix=true` on beta runs
+   all platforms. Beta branch pushes do not run this workflow.
    Wait for the tag's run (and, for stable, the `main` run), then confirm the release lists its
    assets: for a beta, only the Windows installer, its `.blockmap`, `latest.yml` and checksums, marked as a prerelease.
    The beta release body names it as a Windows test build and omits macOS/Linux installation instructions. Outside the beta flow, to
@@ -196,7 +210,8 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
 29. **Owner forbids the system clipboard.** `test:sessions`, `test:composer`, `test:workspace`, `test:editor-terminals`,
    `test:gpu-terminal` and `test:clipboard` write the system clipboard, and refuse to start outside GitHub Actions. Then run every other local step with `--only` (not a full `local` run)
    and leave those six suites to the CI run: in the beta flow the beta tag's run, which must be green before the owner is
-   asked to approve; outside it `ci-preflight remote`, which must be green before main moves.
+   asked to approve unless this is an explicitly selected build-only beta; before stable approval dispatch the full
+   matrix with build_only=false. Outside it `ci-preflight remote` must be green before main moves.
 30. **Wrapper changes on a Windows machine.** The Bash/zsh wrapper tests (`linux-integration`, `zsh-integration`) and the
    real SSH worker test (`ssh-connection` with the native worker) run only on Linux and macOS, so `npm test` here skips them.
    After any change to `integration/*.bash`, `integration/*.zsh` or `remote-worker.py`, get a full CI run before

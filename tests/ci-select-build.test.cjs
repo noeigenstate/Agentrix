@@ -94,3 +94,37 @@ test('current-run beta selection requires only Windows; the default still requir
     }), /Invalid installer artifact selection/);
   }
 });
+
+test('only beta tags reuse a marked beta build-only dispatch, never main or stable even with every artifact present', async () => {
+  const { selectBuild } = await import('../scripts/ci-select-build.mjs');
+  const f = await fixture(true);
+  f.run.head_branch = 'beta';
+  f.env.GITHUB_REF = 'refs/tags/v8.2.7-beta.1'; f.env.ALLOW_BUILD_ONLY = 'true';
+  f.jobs.find(job => job.name === 'Windows x64 build').steps = [{ name: 'Record beta build-only mode', conclusion: 'success' }];
+  for (const job of f.jobs.filter(job => job.name.startsWith('Windows desktop '))) job.conclusion = 'skipped';
+  assert.deepEqual(await selectBuild(f), { runId: 101, artifactIds: [1001] });
+  for (const name of ['Select tested build', 'Windows x64 build']) {
+    const job = f.jobs.find(row => row.name === name);
+    for (const conclusion of ['failure', 'cancelled', 'skipped']) {
+      job.conclusion = conclusion; assert.equal(await selectBuild(f), null, `${name}: ${conclusion}`);
+    }
+    job.conclusion = 'success';
+  }
+  f.artifacts[0].expired = true; assert.equal(await selectBuild(f), null);
+  f.artifacts[0].expired = false;
+  for (const ref of ['refs/heads/main', 'refs/heads/beta', 'refs/tags/v8.2.7', 'refs/tags/v8.2.7-rc.1']) {
+    assert.equal(await selectBuild({ ...f, env: { ...f.env, GITHUB_REF: ref } }), null, ref);
+  }
+  assert.equal(await selectBuild({ ...f, env: { ...f.env, ALLOW_BUILD_ONLY: 'false' } }), null);
+  for (const field of ['head_branch', 'event']) {
+    const before = f.run[field]; f.run[field] = field === 'event' ? 'push' : 'main';
+    assert.equal(await selectBuild(f), null); f.run[field] = before;
+  }
+  const marker = f.jobs.find(job => job.steps).steps[0]; marker.conclusion = 'skipped';
+  assert.equal(await selectBuild(f), null, 'skipped GUI jobs alone do not prove an authorized build-only run');
+  marker.conclusion = 'success';
+  for (const job of f.jobs) job.conclusion = 'success';
+  const stable = await fixture(false); f.artifacts.push(...stable.artifacts.slice(1));
+  assert.equal(await selectBuild({ ...f, env: { ...stable.env, GITHUB_REF: 'refs/heads/main', ALLOW_BUILD_ONLY: 'true' } }), null);
+  assert.equal(await selectBuild({ ...f, env: { ...stable.env, GITHUB_REF: 'refs/tags/v8.2.7', ALLOW_BUILD_ONLY: 'true' } }), null);
+});

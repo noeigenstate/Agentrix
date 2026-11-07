@@ -17,7 +17,9 @@ export async function selectBuild({ currentRun = false, read = readGitHub, env =
     return { runId: options.runId, artifactIds };
   }
   try {
-    return await findReusableRun(read, { ...options, requiredJobs: JSON.parse(env.REQUIRED_JOBS) });
+    const allowBuildOnly = env.ALLOW_BUILD_ONLY === 'true' && env.WINDOWS_ONLY === 'true'
+      && env.GITHUB_REF?.startsWith('refs/tags/v') && env.GITHUB_REF.includes('-beta.');
+    return await findReusableRun(read, { ...options, requiredJobs: JSON.parse(env.REQUIRED_JOBS), allowBuildOnly });
   } catch {
     // A failed reuse lookup falls back to all builds/tests; credential-bearing errors must never reach the log.
     return null;

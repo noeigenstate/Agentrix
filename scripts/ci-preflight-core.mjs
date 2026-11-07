@@ -17,6 +17,7 @@ const isNpmTest = run => /^\s*npm test\s*$/m.test(run || '');
 const clipboardCommands = new Set([...clipboardSuites, 'sessions']);
 
 function skipReason(step) {
+  if (step.name === 'Record beta build-only mode') return 'The full local replica never enables beta build-only mode.';
   if (step.id === 'affected' || step.name === 'Explain selected and skipped GUI suites' || step.name === 'Run selected test files') return 'The affected-test command is the local selector; the full replica keeps its full unit/GUI commands.';
   if (step.uses) {
     if (step.uses.startsWith('actions/checkout@')) return 'Use the current checkout; no checkout or reset.';
@@ -51,8 +52,9 @@ export function localPlan(workflow) {
   const plan = [];
   for (const { id, job, matrix } of jobs) {
     for (const [index, step] of job.steps.entries()) {
-      if (step.if && step.if !== 'always()') {
-        if (!matrix && ["steps.affected.outputs.full == 'true'", "steps.affected.outputs.full != 'true'", "steps.affected.outputs.real == 'true'"].includes(step.if)) {
+      const gate = !matrix ? step.if?.replace(/^needs\.reuse\.outputs\['build-only'\] != 'true'(?: && )?/, '') : step.if;
+      if (gate && gate !== 'always()' && !(step.name === 'Record beta build-only mode' && gate === "needs.reuse.outputs['build-only'] == 'true'")) {
+        if (!matrix && ["steps.affected.outputs.full == 'true'", "steps.affected.outputs.full != 'true'", "steps.affected.outputs.real == 'true'"].includes(gate)) {
           // The explicit full replica ignores selective beta gates, never its assertions.
         } else if (matrix && step.if === 'contains(fromJSON(needs.windows.outputs.shards), matrix.shard)') {
           // The full replica includes the setup of every fixed desktop shard.
@@ -176,7 +178,8 @@ export function pushArguments(sha, branch, remove = false) {
 
 const tagCondition = "startsWith(github.ref, 'refs/tags/v')";
 const dryRunCondition = "(github.event_name == 'workflow_dispatch' && inputs.release_dry_run)";
-export const windowsBetaCondition = "!inputs.full_matrix && ((startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || github.ref == 'refs/heads/beta')";
+export const buildOnlyCondition = "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/beta' && inputs.build_only";
+export const windowsBetaCondition = `(${buildOnlyCondition}) || (!inputs.full_matrix && ((startsWith(github.ref, 'refs/tags/v') && contains(github.ref, '-beta.')) || github.ref == 'refs/heads/beta'))`;
 export const releaseMutationCondition = `${tagCondition} && !${dryRunCondition}`;
 export const releaseJobCondition = [
   `always() && !cancelled() && (${tagCondition} || ${dryRunCondition}) &&`,
@@ -252,7 +255,7 @@ export async function findInstallerArtifactIds(read, { repository, sha, runId, a
 }
 
 // Only real build/test runs qualify. A green run that merely reused another run's artifacts is not evidence itself.
-export async function findReusableRun(read, { repository, sha, runId, requiredJobs, artifactNames = installerArtifacts, now = Date.now }) {
+export async function findReusableRun(read, { repository, sha, runId, requiredJobs, artifactNames = installerArtifacts, allowBuildOnly = false, now = Date.now }) {
   if (!Array.isArray(requiredJobs) || !requiredJobs.length || new Set(requiredJobs).size !== requiredJobs.length) {
     throw new Error('Reuse requires a nonempty, unique list of build/test jobs.');
   }
@@ -270,7 +273,14 @@ export async function findReusableRun(read, { repository, sha, runId, requiredJo
   for (const run of runs) {
     if (!eligible(run)) continue;
     const jobs = await listWorkflowResults(read, `${root}/actions/runs/${run.id}/jobs?filter=latest`, 'jobs');
-    if (!requiredJobs.every(name => {
+    const buildOnly = jobs.some(job => job.name === 'Windows x64 build'
+      && job.steps?.some(step => step.name === 'Record beta build-only mode' && step.conclusion === 'success'));
+    // Only beta tags admit this explicitly recorded dispatch; missing desktop jobs
+    // on an ordinary run must never silently lower the required test coverage.
+    if (buildOnly && (!allowBuildOnly || run.event !== 'workflow_dispatch' || run.head_branch !== 'beta'
+      || artifactNames.length !== 1 || artifactNames[0] !== installerArtifacts[0])) continue;
+    const required = buildOnly ? ['Select tested build', 'Windows x64 build'] : requiredJobs;
+    if (!required.every(name => {
       const matches = jobs.filter(job => job.name === name);
       return matches.length === 1 && matches[0].status === 'completed' && matches[0].conclusion === 'success';
     })) continue;

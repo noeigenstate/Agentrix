@@ -35,6 +35,16 @@ test('local selection recognizes direct guarded scripts without masking unrelate
   for (const row of steps.slice(3)) assert.equal(row.skip, null);
 });
 
+test('full local preflight keeps tests despite build-only gates and never executes its marker', async () => {
+  const { localPlan } = await helpers;
+  const steps = localPlan(await workflow());
+  assert.match(steps.find(step => step.name === 'Record beta build-only mode').skip, /never enables beta build-only/);
+  for (const name of ['Real Claude CLI contract (offline)', 'Run unit and integration tests']) {
+    assert.equal(steps.find(step => step.name === name).skip, null);
+  }
+  assert.equal(steps.find(step => step.name === 'Run selected test files').skip.includes('full replica'), true);
+});
+
 test('local plan replays the Windows build followed by every desktop shard in matrix order', async () => {
   const { localPlan } = await helpers;
   const parsed = await workflow();
@@ -43,7 +53,7 @@ test('local plan replays the Windows build followed by every desktop shard in ma
   const ordered = [...parsed.jobs.windows.steps, ...desktop.strategy.matrix.include.flatMap(({ shard }) =>
     desktop.steps.filter(step => !step.if || step.if === 'always()' || step.if === 'contains(fromJSON(needs.windows.outputs.shards), matrix.shard)' || step.if.startsWith(`matrix.shard == '${shard}'`)))];
   assert.deepEqual(steps.map(step => step.name), ordered.map(step => step.name));
-  assert.equal(steps.length, 68);
+  assert.equal(steps.length, 69);
   assert.deepEqual(steps.map(step => step.number), Array.from({ length: steps.length }, (_, index) => index + 1));
   assert.equal(new Set(steps.map(step => step.key)).size, steps.length);
   const skipped = steps.filter(step => step.skip);

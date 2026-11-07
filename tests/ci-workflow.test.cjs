@@ -133,7 +133,8 @@ test('desktop shards consume the one Windows build with the same tools and envir
     const original = build.steps.find(step => step.name === name);
     const { if: gate, ...selected } = desktop.steps.find(step => step.name === name);
     assert.equal(gate, 'contains(fromJSON(needs.windows.outputs.shards), matrix.shard)');
-    assert.deepEqual(selected, original);
+    const { if: buildGate, ...originalStep } = original;
+    assert.deepEqual(selected, originalStep);
   }
   assert.equal(build.steps.filter(step => step.run === 'npm run dist').length, 1);
   assert.equal(build.steps.filter(step => step.run === 'npm test').length, 1);
@@ -177,13 +178,14 @@ test('each shard uploads screenshots under a unique name and workspace retains t
   assert.match(screenshots.with.path, /focus-motion-\*\/\*\.png/);
 });
 
-function evaluate(expression, { ref = 'refs/tags/v1.3.24', event = 'push', dryRun = false, fullMatrix = false, reused = false,
+function evaluate(expression, { ref = 'refs/tags/v1.3.24', event = 'push', dryRun = false, fullMatrix = false, buildOnly = false, reused = false,
   builds = {}, reuse = 'success', cancelled = false } = {}) {
   const needs = Object.fromEntries(['windows', 'windows-desktop', 'macos', 'linux', 'remote-linux'].map(id => [id, { result: builds[id] || 'success' }]));
-  const windowsOnly = !fullMatrix && ((ref.startsWith('refs/tags/v') && ref.includes('-beta.')) || ref === 'refs/heads/beta');
-  needs.reuse = { result: reuse, outputs: { 'run-id': reused ? '1234' : '', 'windows-only': String(windowsOnly) } };
-  return vm.runInNewContext(expression, {
-    github: { ref, event_name: event }, inputs: { release_dry_run: dryRun, full_matrix: fullMatrix }, needs,
+  const onlyBuild = event === 'workflow_dispatch' && ref === 'refs/heads/beta' && buildOnly;
+  const windowsOnly = onlyBuild || !fullMatrix && ((ref.startsWith('refs/tags/v') && ref.includes('-beta.')) || ref === 'refs/heads/beta');
+  needs.reuse = { result: reuse, outputs: { 'run-id': reused ? '1234' : '', 'windows-only': String(windowsOnly), 'build-only': String(onlyBuild) } };
+  return vm.runInNewContext(expression.replace(/^\$\{\{\s*|\s*\}\}$/g, ''), {
+    github: { ref, event_name: event }, inputs: { release_dry_run: dryRun, full_matrix: fullMatrix, build_only: buildOnly }, needs,
     env: { WINDOWS_ONLY: String(windowsOnly) }, contains: (value, part) => value.includes(part),
     startsWith: (value, prefix) => value.startsWith(prefix), always: () => true, cancelled: () => cancelled,
   });
@@ -234,7 +236,7 @@ test('dry runs cannot create, upload or edit a release, even when dispatched on 
 test('beta tags and default beta dispatches run Windows only; full_matrix restores all platforms', async () => {
   const { windowsBetaCondition } = await helpers;
   const parsed = await workflow();
-  assert.deepEqual(parsed.on.push.branches, ['main', 'beta']);
+  assert.deepEqual(parsed.on.push.branches, ['main']);
   assert.deepEqual(parsed.on.push.tags, ['v*']);
   assert.deepEqual(parsed.on.pull_request.branches, ['main']);
   assert.deepEqual(parsed.on.workflow_dispatch.inputs.full_matrix, {
@@ -243,7 +245,8 @@ test('beta tags and default beta dispatches run Windows only; full_matrix restor
   assert.equal(parsed.jobs.reuse.env.WINDOWS_ONLY, '${{ ' + windowsBetaCondition + ' }}');
   assert.equal(parsed.jobs.reuse.outputs['windows-only'], '${{ steps.policy.outputs.windows-only }}');
   const policy = parsed.jobs.reuse.steps.find(step => step.id === 'policy');
-  assert.equal(policy.run, 'echo "windows-only=$WINDOWS_ONLY" >> "$GITHUB_OUTPUT"');
+  assert.match(policy.run, /windows-only=\$WINDOWS_ONLY/);
+  assert.match(policy.run, /build-only=\$BUILD_ONLY/);
   const selection = parsed.jobs.reuse.steps.find(step => step.id === 'select');
   const required = selection.env.REQUIRED_JOBS.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
   for (const [context, windowsOnly] of [
@@ -301,12 +304,57 @@ test('reuse is queried only for main pushes, version tags and requested dry runs
   assert.equal(parsed.jobs.reuse.permissions.contents, 'read');
   for (const id of ['windows', 'windows-desktop', 'remote-linux', 'macos', 'linux']) {
     assert.equal(parsed.jobs[id].if, "needs.reuse.outputs['run-id'] == ''" +
-      (['remote-linux', 'macos', 'linux'].includes(id) ? " && needs.reuse.outputs['windows-only'] != 'true'" : ''));
+      (['remote-linux', 'macos', 'linux'].includes(id) ? " && needs.reuse.outputs['windows-only'] != 'true'" : id === 'windows-desktop' ? " && needs.reuse.outputs['build-only'] != 'true'" : ''));
     assert.equal(evaluate(parsed.jobs[id].if), true);
     assert.equal(evaluate(parsed.jobs[id].if, { reused: true }), false);
   }
   assert.equal(selection.run, 'node scripts/ci-select-build.mjs');
   assert.equal(parsed.jobs.reuse.outputs['artifact-ids'], '${{ steps.select.outputs.artifact-ids }}');
+});
+
+test('build-only is confined to beta dispatches and a beta tag can publish reuse with all build jobs skipped', async () => {
+  const parsed = await workflow(), { buildOnlyCondition } = await helpers;
+  assert.deepEqual(parsed.on.workflow_dispatch.inputs.build_only, {
+    description: 'Build Windows artifacts without tests on beta only', type: 'boolean', default: false,
+  });
+  assert.equal(parsed.jobs.reuse.env.BUILD_ONLY, '${{ ' + buildOnlyCondition + ' }}');
+  assert.equal(parsed.jobs.reuse.outputs['build-only'], '${{ steps.policy.outputs.build-only }}');
+  const beta = { ref: 'refs/heads/beta', event: 'workflow_dispatch', buildOnly: true };
+  assert.equal(evaluate(buildOnlyCondition, beta), true);
+  const required = parsed.jobs.reuse.steps.find(step => step.id === 'select').env;
+  for (const ref of ['refs/heads/main', 'refs/tags/v8.2.7', 'refs/tags/v8.2.7-beta.1', 'refs/heads/feature']) {
+    assert.equal(evaluate(buildOnlyCondition, { ...beta, ref }), false);
+  }
+  assert.equal(evaluate(buildOnlyCondition, { ...beta, event: 'push' }), false);
+  assert.equal(evaluate(buildOnlyCondition, { ...beta, buildOnly: false }), false);
+  for (const fullMatrix of [false, true]) {
+    for (const id of ['windows-desktop', 'remote-linux', 'macos', 'linux']) {
+      assert.equal(evaluate(parsed.jobs[id].if, { ...beta, fullMatrix }), false, id);
+    }
+    assert.equal(evaluate(parsed.jobs.windows.if, { ...beta, fullMatrix }), true);
+  }
+  const skipped = ['Install Codex CLI for offline startup checks', 'Select affected tests from a verified full beta baseline',
+    'Upload affected test evidence', 'Real Claude CLI contract (offline)', 'Run unit and integration tests',
+    'Run selected test files', 'Upload the desktop test build'];
+  for (const name of skipped) {
+    const step = parsed.jobs.windows.steps.find(step => step.name === name);
+    // Short-circuit before evaluating affected outputs, which do not exist in this mode.
+    assert.equal(evaluate(step.if, beta), false, name);
+  }
+  for (const name of ['Install locked dependencies', 'Build Windows installer', 'Verify installer and automatic update metadata',
+    'Verify voice packaging', 'Create checksum and build notes', 'Upload verified executable']) {
+    assert.equal(parsed.jobs.windows.steps.find(step => step.name === name).if, undefined, name);
+  }
+  const tag = { ref: 'refs/tags/v8.2.7-beta.1', reused: true,
+    builds: Object.fromEntries(parsed.jobs.release.needs.filter(id => id !== 'reuse').map(id => [id, 'skipped'])) };
+  assert.equal(evaluate(required.ALLOW_BUILD_ONLY, tag), true);
+  assert.equal(evaluate(required.ALLOW_BUILD_ONLY, { ref: 'refs/heads/main' }), false);
+  assert.equal(evaluate(required.ALLOW_BUILD_ONLY, { ref: 'refs/tags/v8.2.7' }), false);
+  assert.equal(evaluate(parsed.jobs.release.if, tag), true, 'always() permits the skipped needs after verified reuse');
+  assert.equal(evaluate(parsed.jobs.release.if, { ...tag, reused: false }), false);
+  assert.equal(evaluate(parsed.jobs.release.if, { ...tag, reuse: 'failure' }), false);
+  assert.equal(parsed.jobs.reuse.needs, undefined, 'reuse runs before the jobs it can skip');
+  assert.deepEqual(parsed.jobs.release.needs, ['reuse', 'windows', 'windows-desktop', 'macos', 'linux', 'remote-linux']);
 });
 
 test('release downloads the four pinned artifact IDs in one step and verifies their hashes and version', async () => {
