@@ -70,7 +70,7 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
   // The latest result shows its picture first with the words under it; anywhere else the words come first.
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
   return <div data-reading-entry={entry.id} className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
-      {named.length > 0 && <FileCards projectId={projectId} files={named} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
+      {named.length > 0 && <FileCards projectId={projectId} files={named} excludeImages={picture && entry.generated ? [entry.generated.path] : []} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
       {!result && picture}<QuoteOf entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} /></div>;
 }
 

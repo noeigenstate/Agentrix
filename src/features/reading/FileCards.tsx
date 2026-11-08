@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { FileHtml, FileText, FilmStrip, Image as ImageIcon } from '@phosphor-icons/react';
 import type { FileCard as Card } from '../../shared/types';
 import { t } from '../../shared/i18n';
@@ -9,23 +9,43 @@ import { pathTooltip } from './reading-paths';
 const PREVIEWED = /\.(?:md|markdown|mdx|html?|mp4|m4v|webm|ogv|ogg|mov|mkv|avi|png|jpe?g|gif|webp|bmp)$/i;
 export const previewable = (file: string) => PREVIEWED.test(file);
 const SHOWN = 4;
+// Main has resolved the file against its local/remote cwd. Windows paths are
+// case insensitive; POSIX paths (including SSH) retain their case.
+const imagePathKey = (file: string, remote = false) => remote || /^\/(?!\/)/.test(file) ? file : file.replace(/\\/g, '/').toLowerCase();
 
 // The documents, pages, videos and images a group of steps wrote (or a reply named), as small cards under it: a
 // Markdown file laid out, a picture of an HTML page, a video that plays where it is, the image itself. Nothing is read
 // until a card scrolls into view; a click shows the file in a popup over the conversation, never on the project's page.
 // quiet: a file that cannot be shown leaves no card (a reply may name a picture that is not there).
-export function FileCards({ projectId, files, renderMarkdown, onError, quiet = false }: {
-  projectId: string; files: string[]; renderMarkdown: (text: string) => ReactNode; onError: (message: string) => void; quiet?: boolean;
+export function FileCards({ projectId, files, renderMarkdown, onError, quiet = false, excludeImages = [] }: {
+  projectId: string; files: string[]; renderMarkdown: (text: string) => ReactNode; onError: (message: string) => void; quiet?: boolean; excludeImages?: string[];
 }) {
   const [all, setAll] = useState(false);
-  const shown = all ? files : files.slice(0, SHOWN);
+  const scope = JSON.stringify([projectId, files, excludeImages]), current = useRef(scope); current.current = scope;
+  const [resolved, setResolved] = useState<{ scope: string; paths: Record<string, string> }>({ scope, paths: {} });
+  const onResolved = useCallback((file: string, card: Card) => {
+    if (card.kind !== 'image') return;
+    const key = imagePathKey(card.path, card.remote);
+    setResolved(previous => {
+      if (current.current !== scope) return previous;
+      const paths = previous.scope === scope ? previous.paths : {};
+      return paths[file] === key ? previous : { scope, paths: { ...paths, [file]: key } };
+    });
+  }, [scope]);
+  const paths = resolved.scope === scope ? resolved.paths : {}, used = new Set(excludeImages.map(file => imagePathKey(file)));
+  const unique = files.filter(file => {
+    const key = paths[file]; if (!key) return true;
+    if (used.has(key)) return false;
+    used.add(key); return true;
+  });
+  const shown = all ? unique : unique.slice(0, SHOWN);
   return <div className="file-cards">
-    {shown.map(file => <FileCard key={file} projectId={projectId} file={file} renderMarkdown={renderMarkdown} onError={onError} quiet={quiet} />)}
-    {files.length > SHOWN && !all && <button type="button" className="text-button file-cards-more" onClick={() => setAll(true)}>{t('还有 {count} 个文件', { count: files.length - SHOWN })}</button>}
+    {shown.map(file => <FileCard key={file} projectId={projectId} file={file} renderMarkdown={renderMarkdown} onError={onError} quiet={quiet} onResolved={onResolved} />)}
+    {unique.length > SHOWN && !all && <button type="button" className="text-button file-cards-more" onClick={() => setAll(true)}>{t('还有 {count} 个文件', { count: unique.length - SHOWN })}</button>}
   </div>;
 }
 
-function FileCard({ projectId, file, renderMarkdown, onError, quiet }: { projectId: string; file: string; renderMarkdown: (text: string) => ReactNode; onError: (message: string) => void; quiet: boolean }) {
+function FileCard({ projectId, file, renderMarkdown, onError, quiet, onResolved }: { projectId: string; file: string; renderMarkdown: (text: string) => ReactNode; onError: (message: string) => void; quiet: boolean; onResolved: (file: string, card: Card) => void }) {
   const root = useRef<HTMLDivElement>(null), video = useRef<HTMLVideoElement>(null);
   // failed: why the card could not be made, shown again when it is clicked.
   const [card, setCard] = useState<Card | null>(null), [failed, setFailed] = useState<string | null>(null), [seen, setSeen] = useState(false);
@@ -43,9 +63,9 @@ function FileCard({ projectId, file, renderMarkdown, onError, quiet }: { project
     if (!seen) return;
     let live = true;
     setCard(null); setFailed(null);
-    void window.agentrix.fileCard(projectId, file).then(result => { if (!live) return; if (result.ok) setCard(result.value); else setFailed(result.error); }).catch(() => { if (live) setFailed('无法预览此文件。'); });
+    void window.agentrix.fileCard(projectId, file).then(result => { if (!live) return; if (result.ok) { setCard(result.value); onResolved(file, result.value); } else setFailed(result.error); }).catch(() => { if (live) setFailed('无法预览此文件。'); });
     return () => { live = false; };
-  }, [seen, projectId, file]);
+  }, [seen, projectId, file, onResolved]);
   const name = file.split(/[\\/]/).pop() || file;
   const kind = card?.kind ?? (/\.html?$/i.test(file) ? 'html' : /\.(?:md|markdown|mdx)$/i.test(file) ? 'markdown' : /\.(?:png|jpe?g|gif|webp|bmp)$/i.test(file) ? 'image' : 'video');
   const Icon = kind === 'html' ? FileHtml : kind === 'video' ? FilmStrip : kind === 'image' ? ImageIcon : FileText;
@@ -62,7 +82,7 @@ function FileCard({ projectId, file, renderMarkdown, onError, quiet }: { project
     if (failed) { onError(t(failed)); return; }
     try {
       const result = await window.agentrix.fileCard(projectId, file);
-      if (result.ok) { setCard(result.value); show(result.value); }
+      if (result.ok) { setCard(result.value); onResolved(file, result.value); show(result.value); }
       else onError(t(result.error));
     } catch { onError(t('无法预览此文件。')); }
   };

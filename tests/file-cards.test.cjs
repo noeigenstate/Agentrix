@@ -244,7 +244,7 @@ test('card and name clicks show only resolved paths in the popup, including earl
   let states = [], index = 0;
   const opened = [], errors = [], raw = path.join(os.tmpdir(), 'template.html');
   const originalRequire = mod.require.bind(mod);
-  mod.require = name => name === 'react' ? { useEffect: () => {}, useRef: () => ({ current: null }), useState: initial => [states[index++] ?? initial, () => {}] }
+  mod.require = name => name === 'react' ? { useCallback: fn => fn, useEffect: () => {}, useRef: () => ({ current: null }), useState: initial => [states[index++] ?? initial, () => {}] }
     : name === '@phosphor-icons/react' ? { FileHtml: () => null, FileText: () => null, FilmStrip: () => null, Image: () => null }
     : name.endsWith('/file-popup') ? { showPopup: target => opened.push(target) }
     : name === './reading-paths' ? { pathTooltip: () => 'Ctrl+click to show in File Explorer' }
