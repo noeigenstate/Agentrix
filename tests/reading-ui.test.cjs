@@ -60,6 +60,9 @@ function loadUI(name, overrides = {}) {
     if (key === './useVisibleTail') return loadUI('features/reading/useVisibleTail.ts', overrides);
     if (key === './PendingPromptEntries') return loadUI('features/reading/PendingPromptEntries.tsx', overrides);
     if (key === './ReadingQuote') return loadUI('features/reading/ReadingQuote.tsx', overrides);
+    if (key === './MessageMenu') return loadUI('features/reading/MessageMenu.tsx', overrides);
+    if (key === './message-menu') return require('../src/features/reading/message-menu.ts');
+    if (key === 'react-dom') return { createPortal: node => node };
     if (key === './message-quote') return require('../src/features/reading/message-quote.ts');
     // Its state is the point of it: every loaded view gets a fresh copy, so no test depends on another's terminals.
     if (key === './reading-ready') return loadUI('features/reading/reading-ready.ts');
@@ -2626,18 +2629,151 @@ for (const newer of [false, true]) test(`a failed paste returns the quote with t
   assert.equal(chip().props.quote.excerpt, newer ? 'newer' : 'first');
 });
 
-test('only a message with words of its own offers 引用, and the standalone feed offers none', t => {
+test('only a message with words of its own opens the 引用 / 复制 menu, no message carries a quote button, and the standalone feed offers none', t => {
   const { state, render, environment } = readingHarness(t, [
     readingEntry('u1', 'user', 10, { text: 'first prompt' }), readingTool('cmd', 11),
     readingEntry('a1', 'assistant', 12, { text: 'a reply' }), readingEntry('a2', 'assistant', 13, { text: 'too big', omitted: true }),
     readingEntry('a3', 'assistant', 14, { images: ['picture'] }),
   ]);
-  assert.equal((render().match(/class="icon-button reading-quote-action"/g) || []).length, 2);
-  state.terminal.codexActive = false;
-  assert.equal((render().match(/reading-quote-action"[^>]*disabled=""/g) || []).length, 2, 'unavailable composer: disabled, not hidden');
+  const html = render();
+  assert.equal((html.match(/<div[^>]*data-reading-entry[^>]*aria-haspopup="menu"/g) || []).length, 2, 'the owner message and the reply with words');
+  assert.equal((html.match(/<div[^>]*data-reading-entry="(?:u1|a1)"[^>]*tabindex="0"/g) || []).length, 2, 'focusable, so the menu key opens it');
+  assert.doesNotMatch(html, /reading-quote-action|aria-label="Quote this message"/, 'no quote button on any message');
+  assert.doesNotMatch(html, /role="menu"/, 'the menu is closed until the right click');
   const { ConversationFeed } = loadUI('features/reading/ConversationFeed.tsx', environment);
-  const html = renderToStaticMarkup(React.createElement(ConversationFeed, { entries: state.entries, agent: 'codex', projectId: 'project', live: false, onError() {} }));
-  assert.match(html, /a reply/); assert.doesNotMatch(html, /reading-quote-action/);
+  const standalone = renderToStaticMarkup(React.createElement(ConversationFeed, { entries: state.entries, agent: 'codex', projectId: 'project', live: false, onError() {} }));
+  assert.match(standalone, /a reply/); assert.doesNotMatch(standalone, /aria-haspopup|tabindex/);
+});
+
+// MessageCard and MessageMenu run here with stand-in hooks, so the handlers and the effect can be driven without a window.
+function messageMenuHarness(t, { selection = '', selectionInside = true } = {}) {
+  const previous = { window: globalThis.window, document: globalThis.document };
+  t.after(() => {
+    for (const name of ['window', 'document']) if (previous[name] === undefined) delete globalThis[name]; else globalThis[name] = previous[name];
+  });
+  const slots = [], listeners = {}, calls = [], focusLog = [];
+  let cursor = 0;
+  const node = { contains: n => n === 'inside' };
+  const hooks = {
+    useState: initial => { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], v => { slots[i] = v; }]; },
+    useRef: initial => { const i = cursor++; return slots[i] ??= { current: initial }; },
+    useEffect: callback => { hooks.effect = callback; },
+  };
+  globalThis.document = {
+    activeElement: { isConnected: true, focus: () => focusLog.push('restored') },
+    addEventListener: (type, fn, capture) => { (listeners[type] ??= []).push({ fn, capture }); },
+    removeEventListener: (type, fn) => { listeners[type] = (listeners[type] ?? []).filter(item => item.fn !== fn); },
+  };
+  globalThis.window = {
+    innerWidth: 1000, innerHeight: 800,
+    getSelection: () => ({ isCollapsed: !selection, anchorNode: selectionInside ? 'inside' : 'outside', focusNode: selectionInside ? 'inside' : 'outside', toString: () => `  ${selection}  ` }),
+    agentrix: { copy: async text => { calls.push(['copy', text]); return { ok: true }; } },
+  };
+  const { MessageCard, MessageMenu } = loadUI('features/reading/MessageMenu.tsx', { react: hooks });
+  const quote = { disabled: null, pick: (who, text) => calls.push(['quote', who, text]) };
+  const card = (props = {}) => {
+    cursor = 0; slots[1] = { current: node };
+    return MessageCard({ id: 'm1', className: 'reading-user', text: 'whole message', who: 'You', quote, onError() {}, children: 'x', ...props });
+  };
+  const event = (extra = {}) => ({ target: { closest: () => null }, clientX: 300, clientY: 200, prevented: false, preventDefault() { this.prevented = true; }, ...extra });
+  const menuItems = (place, props = {}) => {
+    cursor = 100; hooks.effect = null;
+    const element = MessageMenu({ place, text: 'whole message', who: 'You', quote, onCopy: text => calls.push(['copy', text]), onClose: () => calls.push(['close']), ...props });
+    const buttons = [];
+    (function walk(n) { if (n?.type === 'button') buttons.push(n); [].concat(n?.props?.children ?? []).forEach(walk); })(element);
+    return { element, buttons };
+  };
+  return { card, event, calls, slots, listeners, menuItems, hooks, focusLog };
+}
+
+test('right-clicking a message opens the menu at the pointer; a link, picture, code block or control keeps its own right click', t => {
+  const h = messageMenuHarness(t);
+  const tree = h.card();
+  assert.equal(tree.props.tabIndex, 0);
+  const plain = h.event(); tree.props.onContextMenu(plain);
+  assert.equal(plain.prevented, true);
+  assert.deepEqual(h.slots[0], { x: 300, y: 200, selected: '' });
+  for (const tag of ['a', 'img', 'pre', '.reading-code', 'button']) {
+    h.slots[0] = null;
+    const other = h.event({ target: { closest: selector => selector.split(', ').includes(tag) ? {} : null } });
+    h.card().props.onContextMenu(other);
+    assert.equal(other.prevented, false, `${tag} keeps its own right click`); assert.equal(h.slots[0], null);
+  }
+  h.card().props.onContextMenu(h.event({ clientX: 990, clientY: 790 }));
+  assert.deepEqual([h.slots[0].x, h.slots[0].y], [1000 - 182 - 8, 800 - 88 - 8], 'kept inside the window');
+});
+
+test('the menu key and Shift+F10 open the same menu from the message itself, and only from the message', t => {
+  const h = messageMenuHarness(t);
+  const tree = h.card();
+  const self = { getBoundingClientRect: () => ({ left: 100, top: 50 }) };
+  const key = (extra, target = self) => ({ key: 'x', shiftKey: false, ctrlKey: false, altKey: false, metaKey: false, target, currentTarget: self, prevented: false, preventDefault() { this.prevented = true; }, ...extra });
+  for (const extra of [{ key: 'ContextMenu' }, { key: 'F10', shiftKey: true }]) {
+    h.slots[0] = null; const press = key(extra); tree.props.onKeyDown(press);
+    assert.equal(press.prevented, true); assert.deepEqual(h.slots[0], { x: 116, y: 66, selected: '' });
+  }
+  for (const extra of [{ key: 'F10' }, { key: 'Enter' }, { key: 'F10', shiftKey: true, ctrlKey: true }]) {
+    h.slots[0] = null; const press = key(extra); tree.props.onKeyDown(press);
+    assert.equal(press.prevented, false); assert.equal(h.slots[0], null);
+  }
+  h.slots[0] = null; tree.props.onKeyDown(key({ key: 'ContextMenu' }, {}));
+  assert.equal(h.slots[0], null, 'a control inside keeps the key');
+});
+
+test('without a quote action, or a message with no words of its own, the card is plain', t => {
+  const h = messageMenuHarness(t);
+  for (const props of [{ quote: undefined }, { text: undefined }, { text: '' }]) {
+    const tree = h.card(props);
+    assert.equal(tree.props.tabIndex, undefined); assert.equal(tree.props.onContextMenu, undefined); assert.equal(tree.props['data-reading-entry'], 'm1');
+  }
+});
+
+test('the menu has 引用 and 复制 only; with words selected inside the message they act on those words, otherwise on the whole message', t => {
+  for (const [selection, expected] of [['picked words', 'picked words'], ['', 'whole message']]) {
+    const h = messageMenuHarness(t, { selection });
+    h.card().props.onContextMenu(h.event());
+    const place = h.slots[0]; assert.equal(place.selected, selection);
+    const { element, buttons } = h.menuItems(place);
+    assert.equal(element.props.role, 'menu'); assert.match(element.props.className, /\bdropdown\b/, 'the standard dropdown');
+    assert.deepEqual(buttons.map(button => button.props.role), ['menuitem', 'menuitem']);
+    assert.deepEqual(buttons.map(button => button.props.children.at(-1)), ['Quote', 'Copy']);
+    h.calls.length = 0; buttons[0].props.onClick();
+    assert.deepEqual(h.calls, [['close'], ['quote', 'You', expected]]);
+    h.calls.length = 0; buttons[1].props.onClick();
+    assert.deepEqual(h.calls, [['close'], ['copy', expected]]);
+  }
+});
+
+test('a selection that reaches outside the message is ignored, so the whole message is acted on', t => {
+  const h = messageMenuHarness(t, { selection: 'elsewhere', selectionInside: false });
+  h.card().props.onContextMenu(h.event());
+  assert.equal(h.slots[0].selected, '');
+});
+
+test('Copy writes plain text through the app clipboard and reports a failure; Quote is disabled with its reason while the composer is unavailable', async t => {
+  const h = messageMenuHarness(t), errors = [];
+  window.agentrix.copy = async text => { h.calls.push(['copy', text]); return { ok: false, error: 'no clipboard' }; };
+  h.card().props.onContextMenu(h.event());
+  const menu = h.card({ onError: error => errors.push(error) }).props.children[1];
+  menu.props.onCopy('plain words'); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(h.calls, [['copy', 'plain words']]); assert.deepEqual(errors, ['no clipboard']);
+  const blocked = h.menuItems({ x: 0, y: 0, selected: '' }, { quote: { disabled: 'busy', pick() { throw new Error('must not quote'); } } }).buttons[0];
+  assert.equal(blocked.props.disabled, true); assert.equal(blocked.props.title, 'busy');
+});
+
+test('Escape and a press outside close the menu, Escape alone (the composer Escape would stop the agent); focus returns', t => {
+  const h = messageMenuHarness(t);
+  h.menuItems({ x: 0, y: 0, selected: '' });
+  const cleanup = h.hooks.effect();
+  const key = h.listeners.keydown[0], down = h.listeners.pointerdown[0];
+  assert.equal(key.capture, true, 'capture phase, ahead of the composer');
+  h.calls.length = 0;
+  const other = { key: 'a', prevented: false, preventDefault() { this.prevented = true; }, stopPropagation() {} };
+  key.fn(other); assert.equal(other.prevented, false); assert.deepEqual(h.calls, []);
+  const escape = { key: 'Escape', prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
+  key.fn(escape); assert.deepEqual([escape.prevented, escape.stopped], [true, true]); assert.deepEqual(h.calls, [['close']]);
+  h.calls.length = 0; down.fn({ target: 'outside' }); assert.deepEqual(h.calls, [['close']]);
+  cleanup(); assert.deepEqual(h.focusLog, ['restored']); assert.equal(h.listeners.keydown.length, 0);
 });
 
 test('a sent message shows its quote as a block, in the timeline and while pending', t => {

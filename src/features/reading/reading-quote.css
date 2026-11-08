@@ -1,13 +1,10 @@
-/* The 引用 action sits in the corner of a message card, out of the text's way until the pointer or the keyboard is on it. It is the compact 28px icon button
-   with the standard hover fill, and its column is reserved on the card's right, so it never lies over the text. */
-.reading-user, .reading-assistant { position: relative; }
-.reading-user:has(> .reading-quote-action), .reading-assistant:has(> .reading-quote-action) { padding-right: 40px; }
-.reading-quote-action { position: absolute; top: 4px; right: 8px; width: 28px; height: 28px; opacity: 0; }
-.reading-quote-action:not(:disabled):hover { color: var(--text-1); background: var(--bg-selected); }
-.reading-user:hover > .reading-quote-action, .reading-assistant:hover > .reading-quote-action,
-.reading-quote-action:focus-visible { opacity: 1; }
-.reading-quote-action:disabled { color: var(--text-disabled); cursor: not-allowed; }
-.reading-quote-action:focus-visible, .reading-quote .icon-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* The right-click menu of a message (引用 / 复制) is the standard dropdown drawn on the page body, at the pointer. A message takes keyboard focus
+   to open it from the keyboard (the menu key, Shift+F10), with the standard focus ring. */
+.reading-message-menu { position: fixed; z-index: 130; width: 182px; }
+.reading-message-menu button:disabled { color: var(--text-disabled); cursor: not-allowed; }
+.reading-message-menu button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.reading-quote .icon-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.reading-user:focus-visible, .reading-assistant:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 /* The quote the next message will carry, above the message box, in the attachments row's column. */
 .reading-quote { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0 var(--reading-edge-right) 8px var(--reading-edge-left); padding: 4px 4px 4px 12px; border: 1px solid var(--divider); border-radius: 8px; font-size: calc(12px * var(--reading-text)); color: var(--text-2); }

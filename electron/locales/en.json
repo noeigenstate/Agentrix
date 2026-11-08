@@ -2207,6 +2207,8 @@
   "给它发消息": "Message it",
   "已结束，不能再发消息": "Finished, takes no more messages",
   "引用这条消息": "Quote this message",
+  "引用": "Quote",
+  "消息操作": "Message actions",
   "引用的消息": "Quoted message",
   "移除引用": "Remove the quote",
   "输入框暂时不可用，等它可用后再引用": "The message box is unavailable for now; quote once it is available",

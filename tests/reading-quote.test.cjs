@@ -66,13 +66,37 @@ test('the quote styles use theme tokens and the spacing scale only', () => {
   for (const value of spacing) assert.ok(scale.has(Math.abs(parseFloat(value))), `${value} is off the spacing scale`);
 });
 
-test('the 引用 button is a compact 28px icon button with the standard hover fill, and its column is reserved so it never lies over the text', () => {
+test('the message menu is the standard dropdown at the pointer; the old corner button and its reserved column are gone', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/features/reading/reading-quote.css'), 'utf8');
-  assert.match(css, /\.reading-quote-action \{[^}]*width: 28px; height: 28px;/);
-  assert.match(css, /\.reading-quote-action:not\(:disabled\):hover \{[^}]*background: var\(--bg-selected\);/, 'a visible fill and bounds when the pointer is on it');
-  assert.match(css, /\.reading-user:has\(> \.reading-quote-action\), \.reading-assistant:has\(> \.reading-quote-action\) \{ padding-right: 40px; \}/, '28px button + 4px gap + 8px edge: the text ends before it');
-  const right = Number(/\.reading-quote-action \{[^}]*right: (\d+)px/.exec(css)[1]);
-  assert.ok(right + 28 <= 40, 'the button lies inside the reserved column');
+  assert.doesNotMatch(css, /reading-quote-action/, 'no quote button styles');
+  assert.doesNotMatch(css, /padding-right: 40px/, 'no column reserved for a button');
+  assert.match(css, /\.reading-message-menu \{ position: fixed;/);
+  assert.match(css, /\.reading-user:focus-visible, \.reading-assistant:focus-visible \{ outline: 2px solid var\(--focus-ring\)/, 'a focused message shows the standard ring');
+  const source = name => fs.readFileSync(path.join(__dirname, '../src/features/reading', name), 'utf8');
+  assert.doesNotMatch(source('ReadingQuote.tsx'), /QuoteAction|reading-quote-action/);
+  assert.match(source('MessageMenu.tsx'), /className="dropdown reading-message-menu"/, 'the existing dropdown, no new menu component');
+});
+
+test('the message menu rules: the selection inside the message wins, links and controls keep their own menu, keys open it, it stays in the window', () => {
+  const { selectedWithin, menuText, keepsOwnMenu, opensMenu, menuPlace } = require('../src/features/reading/message-menu.ts');
+  const element = { contains: node => node === 'in' };
+  const selection = (text, anchor = 'in', focus = 'in', collapsed = false) => ({ isCollapsed: collapsed, anchorNode: anchor, focusNode: focus, toString: () => text });
+  assert.equal(selectedWithin(element, selection('  picked \n')), 'picked');
+  assert.equal(selectedWithin(element, selection('x', 'in', 'out')), '', 'reaching outside the message');
+  assert.equal(selectedWithin(element, selection('x', 'out', 'out')), '');
+  assert.equal(selectedWithin(element, selection('x', 'in', 'in', true)), '', 'a caret is no selection');
+  assert.equal(selectedWithin(element, selection('   ')), '', 'blank');
+  assert.equal(selectedWithin(element, null), '');
+  assert.equal(menuText('whole', 'part'), 'part'); assert.equal(menuText('whole', ''), 'whole');
+  assert.equal(keepsOwnMenu(null), false);
+  assert.equal(keepsOwnMenu({ closest: selector => selector.split(', ').includes('a') ? {} : null }), true);
+  assert.equal(keepsOwnMenu({ closest: () => null }), false);
+  const keys = { shiftKey: false, ctrlKey: false, altKey: false, metaKey: false };
+  assert.equal(opensMenu({ ...keys, key: 'ContextMenu' }), true);
+  assert.equal(opensMenu({ ...keys, key: 'F10', shiftKey: true }), true);
+  assert.equal(opensMenu({ ...keys, key: 'F10' }), false);
+  assert.deepEqual(menuPlace(5, 5, { width: 1000, height: 800 }), { x: 8, y: 8 });
+  assert.deepEqual(menuPlace(999, 799, { width: 1000, height: 800 }), { x: 810, y: 704 });
 });
 
 test('the chip shows the excerpt as one clean line: Markdown markers dropped, lists and lines joined', () => {
