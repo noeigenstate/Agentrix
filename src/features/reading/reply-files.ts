@@ -13,7 +13,7 @@ export function replyFiles(text: string): string[] {
   if (!MENTIONED.test(text)) return [];
   // Where each was named, so the cards come in the reply's order.
   const named: [number, string][] = [];
-  const link = /\]\(\s*(<[^>\n]+>|[^)\s]+)/g, code = /`([^`\n]+)`/g, url = /(file:\/\/[^\s<>"'`()（）]+)/gi;
+  const link = /!?\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^)\s]+)/g, code = /`([^`\n]+)`/g, url = /(file:\/\/[^\s<>"'`()（）]+)/gi;
   for (const pattern of [link, code, url]) for (const match of text.matchAll(pattern)) named.push([match.index, match[1]]);
   // What is left once those are blanked out: part of a path with a space in it is no path of its own.
   const blank = (match: string) => ' '.repeat(match.length);
@@ -23,7 +23,7 @@ export function replyFiles(text: string): string[] {
     let file = raw.trim().replace(/^<(.*)>$/, '$1').replace(/^file:\/\/(?:localhost)?\/?(?=[A-Za-z]:|\/)/i, '');
     if (/%[0-9a-f]{2}/i.test(file)) { try { file = decodeURI(file); } catch { /* kept as written */ } }
     if (!SHOWN.test(file) || /^[a-z][\w+.-]+:/i.test(file) || /[\\/]generated_images[\\/]/i.test(file)) continue;
-    const key = file.replace(/\\/g, '/').toLowerCase();
+    const key = /^(?:[a-z]:[\\/]|\\\\)/i.test(file) ? file.replace(/\\/g, '/').toLowerCase() : file;
     if (!found.has(key) && found.size < MAX) found.set(key, file);
   }
   return [...found.values()];
