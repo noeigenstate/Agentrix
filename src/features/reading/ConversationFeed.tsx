@@ -10,7 +10,7 @@ import { Markdown } from './Markdown';
 import { PathText } from './PathText';
 import { useReadingPaths } from './useReadingPaths';
 import { UserMessage, type MessageEntry } from './PendingPromptEntries';
-import { QuoteAction } from './ReadingQuote';
+import { MessageCard } from './MessageMenu';
 import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
 import { groupSummary, ImageProgress, StepState } from './ResultCard';
 import { latestResult, writtenBy } from './result-round';
@@ -21,7 +21,7 @@ import './reading.css';
 import './reading-flow.css';
 
 // The interactive reader supplies presentation slots; standalone feeds need no reader, terminal or composer.
-// quote: the reader's 引用 action (disabled holds the reason it cannot be used now); a feed without it offers none.
+// quote: the reader's 引用 action, offered in a message's right-click menu (disabled holds the reason it cannot be used now); a feed without it offers none.
 export const ConversationDecorations = createContext<{
   start: number; status: ReactNode; running: boolean; anchor?: string; beforeResult: ReactNode; afterResult: ReactNode;
   quote?: { disabled: string | null; pick: (who: string, text: string) => void };
@@ -56,10 +56,11 @@ function GeneratedImage({ src, path, prompt, result = false, children }: { src: 
   </figure>;
 }
 
-// A message with words of its own can be quoted; one that was left out for size, or holds only a picture, cannot.
-function QuoteOf({ entry, who }: { entry: ConversationEntry; who: string }) {
+// A message card with the right-click menu (引用 / 复制). A message with words of its own can be quoted; one that was left out
+// for size, or holds only a picture, has no menu.
+function Message({ entry, who, className, onError, children }: { entry: ConversationEntry; who: string; className: string; onError: (message: string) => void; children: ReactNode }) {
   const quote = useContext(ConversationDecorations)?.quote;
-  return quote && entry.text && !entry.omitted ? <QuoteAction who={who} text={entry.text} disabled={quote.disabled} onQuote={quote.pick} /> : null;
+  return <MessageCard id={entry.id} className={className} text={entry.omitted ? undefined : entry.text} who={who} quote={quote} onError={onError}>{children}</MessageCard>;
 }
 
 // A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
@@ -69,9 +70,9 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
   const words = entry.text ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : entry.text} /> : null;
   // The latest result shows its picture first with the words under it; anywhere else the words come first.
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
-  return <div data-reading-entry={entry.id} className={`reading-assistant is-${agent}`}>{result && picture}{!(result && picture) && words}
+  return <Message entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} onError={onError}>{result && picture}{!(result && picture) && words}
       {named.length > 0 && <FileCards projectId={projectId} files={named} excludeImages={picture && entry.generated ? [entry.generated.path] : []} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
-      {!result && picture}<QuoteOf entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} /></div>;
+      {!result && picture}</Message>;
 }
 
 // The native view hides what a tool printed: the step line stays, and a failed step keeps one short reason. A "!" line's card (shell:), a change's diff and the plan (native:) keep theirs.
@@ -146,8 +147,8 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
           const who = identified ? modelName(sender.model!) : planner ? t('主模型') : t('你');
           const mark = planner ? identified ? <AgentMark agent={sender.agent!} /> : <Robot size={18} /> : <UserAvatar />;
           return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={who} latest={index === latestUser} mark={mark}>
-            <div data-reading-entry={turn.entry.id} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`}>
-              {turn.entry.answer && <span className="reading-user-label">{planner ? t('{name} 回答了它的问题', { name: who }) : t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} /><QuoteOf entry={turn.entry} who={who} /></div>
+            <Message entry={turn.entry} who={who} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`} onError={onError}>
+              {turn.entry.answer && <span className="reading-user-label">{planner ? t('{name} 回答了它的问题', { name: who }) : t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} /></Message>
           </TimelineStep>;
         }
         const liveStatus = index === turns.length - 1 ? decorations?.status : null;

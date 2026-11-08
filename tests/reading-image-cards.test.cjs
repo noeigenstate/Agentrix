@@ -70,7 +70,7 @@ test('changing reply inputs or project invalidates resolutions and ignores late 
 test('the shared assistant reply passes its generated image path to the named cards for either provider', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/features/reading/ConversationFeed.tsx'), 'utf8');
   const functionSource = source.slice(source.indexOf('function AssistantReply('), source.indexOf('// The native view hides'));
-  const FileCards = () => null, context = { require, exports: {}, useMemo: fn => fn(), replyFiles, FileCards, Markdown: () => null, GeneratedImage: () => null, QuoteOf: () => null, t: value => value };
+  const FileCards = () => null, context = { require, exports: {}, useMemo: fn => fn(), replyFiles, FileCards, Markdown: () => null, GeneratedImage: () => null, Message: () => null, t: value => value };
   vm.runInNewContext(ts.transpileModule(functionSource + '\nexport { AssistantReply };', { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
   for (const agent of ['claude', 'codex']) for (const result of [false, true]) {
     const tree = context.exports.AssistantReply({ agent, result, projectId: 'p', onError: assert.fail, entry: { id: 'reply', text: '`eastern-dragon.png`', generated: { path: 'C:/project/eastern-dragon.png', prompt: '' }, images: ['data:image/png;base64,SMALL'] } });
