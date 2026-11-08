@@ -2845,5 +2845,21 @@
   "查看账号和额度": "Show account and quota",
   "已用 {value}%": "{value}% used",
   "上下文压缩失败。": "Context compaction failed. ",
-  "服务未能完成压缩。": "The service could not complete compaction."
+  "服务未能完成压缩。": "The service could not complete compaction.",
+  "步骤显示": "Step lines",
+  "原生模式里，工具步骤显示做了什么和对应的文件或命令，不再贴出输出内容；失败时附一行原因。": "In native mode a tool step shows what it did and the file or command, without the output; a failure adds one line saying why.",
+  "Codex 命令": "Codex commands",
+  "Codex 原生模式支持 /model、/effort、/fast、/new、/clear、/compact、/review、/status，也可以用 ! 运行命令。": "Codex in native mode takes /model, /effort, /fast, /new, /clear, /compact, /review and /status, and ! runs a command.",
+  "速率显示": "Token rate",
+  "原生模式下，活动栏会显示主模型的 token 速率。": "In native mode the activity pane shows the main model's token rate.",
+  "图片不重复": "One picture once",
+  "同一条回复里多次提到同一张图片时，只显示一次。": "A picture mentioned more than once in a reply is shown once.",
+  "右键引用": "Quote from the menu",
+  "在消息上点右键可以引用或复制，选中一段文字时只处理选中的部分。": "Right-click a message to quote or copy it; with text selected, only the selection is used.",
+  "去掉边框": "No click frame",
+  "点击窗口或分屏时不再出现边框。": "Clicking a window or split no longer draws a frame.",
+  "压缩原因": "Compaction errors",
+  "原生模式自动压缩上下文失败时，会说明原因。": "When native mode fails to compact the context, it says why.",
+  "命令标题": "Command titles",
+  "写文件的命令不再被标成「读取文件」。": "Commands that write a file are no longer labelled as reading one."
 }

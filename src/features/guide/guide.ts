@@ -2,10 +2,18 @@
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "原生运行", text: "Codex 在 Agentrix 中统一使用原生模式，在终端输入 codex 也会打开原生界面。", group: 'new' },
-  { title: "来源署名", text: "子 Agent 分屏会按真实来源标明消息发送者，区分你的插话与主模型的指令。", group: 'new' },
-  { title: "预算放宽", text: "Claude 原生模式不再限制每轮最多花费 5 美元，仍按你设置的月预算使用。", group: 'new' },
-  { title: "语音输入", text: "点输入框旁的麦克风，就能在 Claude 和 Codex 原生模式里用语音输入文字。", group: 'new' },
+  { title: "步骤显示", text: "原生模式里，工具步骤显示做了什么和对应的文件或命令，不再贴出输出内容；失败时附一行原因。", group: 'new' },
+  { title: "Codex 命令", text: "Codex 原生模式支持 /model、/effort、/fast、/new、/clear、/compact、/review、/status，也可以用 ! 运行命令。", group: 'new' },
+  { title: "速率显示", text: "原生模式下，活动栏会显示主模型的 token 速率。", group: 'new' },
+  { title: "图片不重复", text: "同一条回复里多次提到同一张图片时，只显示一次。", group: 'new' },
+  { title: "右键引用", text: "在消息上点右键可以引用或复制，选中一段文字时只处理选中的部分。", group: 'new' },
+  { title: "去掉边框", text: "点击窗口或分屏时不再出现边框。", group: 'new' },
+  { title: "压缩原因", text: "原生模式自动压缩上下文失败时，会说明原因。", group: 'new' },
+  { title: "命令标题", text: "写文件的命令不再被标成「读取文件」。", group: 'new' },
+  { title: "原生运行", text: "Codex 在 Agentrix 中统一使用原生模式，在终端输入 codex 也会打开原生界面。" },
+  { title: "来源署名", text: "子 Agent 分屏会按真实来源标明消息发送者，区分你的插话与主模型的指令。" },
+  { title: "预算放宽", text: "Claude 原生模式不再限制每轮最多花费 5 美元，仍按你设置的月预算使用。" },
+  { title: "语音输入", text: "点输入框旁的麦克风，就能在 Claude 和 Codex 原生模式里用语音输入文字。" },
   { title: "图片不再断任务", text: "生成细节多的大图或输出很长时，任务不再中断；实在放不下的结果只跳过那一条并说明。" },
   { title: "Codex 原生运行", text: "应用里的 Codex 全部使用原生模式；启动失败会写明原因，长对话也能接着恢复。" },
   { title: "原生模式命令", text: "Claude 的原生模式可以用 /clear、/new、/model、/effort，也可以用 ! 运行命令，输出会进入对话。" },
