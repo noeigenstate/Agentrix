@@ -160,6 +160,16 @@ function createClaudeSession(spec, emit, dependencies) {
         }
         if (message.isReplay === true) { normalize(message, { live: true }); continue; }
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
+        if (!message.parent_tool_use_id && !message.isSidechain) {
+          if (message.type === 'system' && message.subtype === 'status' && message.status === 'compacting') run.compactionStarted = true;
+          // The CLI's failed automatic compact is a synthetic error reply. The
+          // ordinary transcript filter omits those; retain its reason only for
+          // an explicitly observed compact followed by a failed final result.
+          if (run.compactionStarted && message.type === 'assistant' && message.error && message.message?.model === '<synthetic>') {
+            run.compactFailure = (Array.isArray(message.message.content) ? message.message.content : [])
+              .filter(block => block.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n').slice(0, 2000);
+          }
+        }
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
         unavailable(message, run);
@@ -215,6 +225,10 @@ function createClaudeSession(spec, emit, dependencies) {
         const budgetBlocked = message.terminal_reason === 'budget_exhausted' || message.subtype === 'error_max_budget_usd';
         const interrupted = run.interrupted;
         const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros, compacted: context?.compacted });
+        if (run.compactionStarted && !context?.compacted && outcome.status === 'failed' && message.local_command !== 'compact') {
+          outcome.error = outcome.message = run.compactFailure || '上下文压缩失败。' + outcome.message;
+          publish('error', { code: 'context_compaction_failed', message: outcome.message, retryable: false, willRetry: false, stage: 'turn' });
+        }
         // Raw SDK input can change the CLI model too. Carry only a successful,
         // identified local /model command into the next query. Its new init may
         // arrive on the next input; a reply's model is not a configuration choice.
@@ -231,6 +245,7 @@ function createClaudeSession(spec, emit, dependencies) {
         publish('turn.completed', outcome);
         run.turnInputs = []; run.shellInputs = null; run.modelReplied = false; run.executed = false; run.synthetic = false; run.quotaRejected = false;
         run.interrupted = false;
+        run.compactionStarted = false; run.compactFailure = null;
         rates.nativeEnd(); turnId = null; stream.turn(null);
         if (interrupted) unknownInput();
         if (budgetBlocked) {

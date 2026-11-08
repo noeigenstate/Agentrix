@@ -2841,5 +2841,7 @@
   "切换快速模式": "Toggle Fast mode",
   "审查当前改动": "Review current changes",
   "查看账号和额度": "Show account and quota",
-  "已用 {value}%": "{value}% used"
+  "已用 {value}%": "{value}% used",
+  "上下文压缩失败。": "Context compaction failed. ",
+  "服务未能完成压缩。": "The service could not complete compaction."
 }

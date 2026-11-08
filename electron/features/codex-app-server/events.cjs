@@ -47,9 +47,9 @@ function itemPayload(item, completed, renderImage = () => null, translate = valu
   return { kind, status, content };
 }
 
-function createEvents(spec, emit, now, renderImage, translate) {
+function createEvents(spec, emit, now, renderImage, translate = value => value) {
   const rates = new TokenRates('codex');
-  let sequence = 0, dropped = false;
+  let sequence = 0, dropped = false, compacting = false;
   const events = [], items = new Map(), itemEvents = new Map(), completed = new Set(), children = new Set();
   const binding = { connectionEpoch: randomUUID(), providerSessionId: null, turnId: null };
   let cumulative = spec.providerSessionId ? null : { input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0 }, baseline = cumulative;
@@ -73,6 +73,7 @@ function createEvents(spec, emit, now, renderImage, translate) {
       if (!item || typeof item.id !== 'string' || completed.has(item.id)) return;
       if (item.type === 'contextCompaction') {
         const done = method === 'item/completed';
+        compacting = !done;
         publish('context.compacting', { active: !done });
         if (done) {
           completed.add(item.id);
@@ -108,11 +109,26 @@ function createEvents(spec, emit, now, renderImage, translate) {
     else if (method === 'turn/plan/updated') publish('plan.updated', { explanation: bounded(params.explanation), steps: (params.plan || []).map(x => ({ step: x.step, status: x.status === 'inProgress' ? 'in-progress' : x.status })) });
     else if (method === 'thread/tokenUsage/updated') { const usage = tokenUsage(params.tokenUsage, baseline); cumulative = usage; publish('usage.updated', usage); }
     else if (method === 'model/rerouted') publish('routing.updated', { declared: { model: null, effort: null, fast: null }, effective: { model: params.toModel ?? null, effort: null, fast: null }, observed: { model: null, effort: null, fast: null }, reason: params.reason ?? null });
-    else if (method === 'error') { publish('context.compacting', { active: false }); publish('error', { code: 'provider_error', message: 'Codex 报告了错误', retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' }); }
+    else if (method === 'error') {
+      let message = 'Codex 报告了错误';
+      if (compacting) {
+        const info = params.error?.codexErrorInfo;
+        let code = typeof info === 'string' ? info : info && Object.keys(info)[0];
+        // Providers may put an API error object in message. Classify its type,
+        // never publish raw JSON, credentials, endpoints or arbitrary server text.
+        if ((!code || code === 'other') && typeof params.error?.message === 'string' && params.error.message.length <= 8192) {
+          try { code = ({ invalid_request_error: 'badRequest', authentication_error: 'unauthorized', rate_limit_error: 'rateLimitExceeded', api_error: 'internalServerError' })[JSON.parse(params.error.message)?.error?.type]; } catch { }
+        }
+        message = translate('上下文压缩失败。') + translate(Object.hasOwn(ERRORS, code) ? ERRORS[code] : '服务未能完成压缩。');
+      }
+      if (!compacting || !params.willRetry) { compacting = false; publish('context.compacting', { active: false }); }
+      publish('error', { code: 'provider_error', message, retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' });
+    }
     while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
   }
   return { binding, publish, notification, tokenRate: () => ({ ...rates.snapshot(), model: rates.model }),
     finishTurn(status = 'interrupted') {
+      compacting = false;
       publish('context.compacting', { active: false });
       for (const [itemId, payload] of items) if (['command', 'tool', 'file-change'].includes(payload.kind) && ['running', 'in-progress', 'pending'].includes(payload.status)
         && itemEvents.get(itemId)?.turnId === binding.turnId) {
@@ -122,7 +138,7 @@ function createEvents(spec, emit, now, renderImage, translate) {
         items.set(itemId, final); completed.add(itemId); publish('item.upsert', final, { itemId });
       }
     },
-    beginTurn() { dropped = false; baseline = cumulative; for (let i = events.length - 1; i >= 0; i--) if (['plan.updated', 'turn.diff'].includes(events[i].type)) events.splice(i, 1); },
+    beginTurn() { dropped = false; compacting = false; baseline = cumulative; for (let i = events.length - 1; i >= 0; i--) if (['plan.updated', 'turn.diff'].includes(events[i].type)) events.splice(i, 1); },
     activity: () => ({ known: true, count: children.size + [...items.values()].filter(item => ['command', 'tool'].includes(item.kind) && ['running', 'in-progress', 'pending'].includes(item.status)).length }),
     snapshot: () => ({ runtimeSessionId: spec.runtimeSessionId, lastSequence: sequence,
       events: [...events.filter(x => x.type !== 'item.upsert' && x.type !== 'item.delta'), ...[...items].map(([itemId, payload]) => ({ ...itemEvents.get(itemId), type: 'item.upsert', payload }))]
