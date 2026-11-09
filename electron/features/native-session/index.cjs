@@ -3,7 +3,9 @@ const { createSettings } = require('./settings.cjs');
 const { createRouter } = require('./router.cjs');
 const { registerIpc } = require('./ipc.cjs');
 const { choosePath } = require('./routing.cjs');
+const { accountChanged, retainConnection, retainLimits } = require('../agents/agent-usage.cjs');
 function createNativeSessions(options) {
+  const observations = new Map(), reads = new Map();
   const storedSettings = createSettings(path.join(options.directory, 'settings.json'));
   const settings = { ...storedSettings, set(patch) {
     const result = storedSettings.set(patch);
@@ -26,19 +28,40 @@ function createNativeSessions(options) {
     return { ...result, ...selection, reason: reason || selection.reason };
   }
   const facade = { ...router, testConnection,
+    async close() { observations.clear(); reads.clear(); await router.close(); },
     async usage(projectId) {
-      if (options.validateProject?.(projectId)?.kind === 'ssh') {
-        const usage = router.usage({}, projectId);
+      const remote = options.validateProject?.(projectId)?.kind === 'ssh';
+      const key = `${remote ? 'ssh' : 'local'}:${projectId || ''}`, revision = (reads.get(key) || 0) + 1;
+      reads.set(key, revision);
+      const inputs = remote ? {} : await Promise.resolve().then(() => options.usageInputs?.(projectId)).catch(() => undefined);
+      const usage = router.usage(inputs, projectId);
+      const connections = await Promise.resolve().then(() => options.connections?.(projectId)).catch(() => null);
+      const previous = observations.get(key);
+      if (reads.get(key) !== revision && previous) for (const agent of ['claude', 'codex']) {
+        usage.agents[agent] = { ...previous.agents[agent], limits: usage.agents[agent].limits };
+      }
+      for (const agent of ['claude', 'codex']) {
+        if (remote && agent === 'claude') continue;
+        const state = usage.agents[agent], held = previous?.agents[agent];
+        let incoming = connections?.[agent];
+        const account = inputs?.limits?.[agent]?.accountConnection;
+        if (!(incoming?.kind === 'api' && incoming.active) && Number.isFinite(account?.observedAt) &&
+          account.observedAt > (incoming?.observedAt ?? -Infinity)) incoming = { ...account, active: incoming?.active ?? false };
+        state.connection = retainConnection(held?.connection, incoming) || { kind: 'unknown', active: false, source: null, observedAt: null };
+        const changed = accountChanged(held?.connection, state.connection);
+        // A router may still hold the previous runtime's last limits. A newly
+        // observed account must not inherit that same old payload.
+        if (changed && state.limits?.scopeId === held?.limits?.scopeId &&
+          (state.limits?.observedAtMs ?? -Infinity) <= (held?.limits?.observedAtMs ?? -Infinity)) state.limits = null;
+        state.limits = retainLimits(changed ? null : held?.limits, state.limits) || null;
+        if (state.connection.kind === 'none' && Number.isFinite(state.connection.observedAt)) state.limits = null;
+      }
+      if (remote) {
         usage.agents.claude = { path: null, reason: null, next: { path: null, reason: null }, limits: null,
           connection: { kind: 'none', active: false, source: null, observedAt: null } };
-        const connections = await options.connections?.(projectId);
-        usage.agents.codex.next = { path: 'native', reason: null };
-        usage.agents.codex.connection = connections?.codex || { kind: 'none', active: false, source: null, observedAt: null };
-        return { ...usage, switches: { waiting: 0 } };
+        usage.agents.codex.next = { path: 'native', reason: null }; usage.switches = { waiting: 0 };
       }
-      const usage = router.usage(await options.usageInputs?.(projectId), projectId);
-      const connections = await options.connections?.(projectId);
-      for (const agent of ['claude', 'codex']) usage.agents[agent].connection = connections?.[agent] || { kind: 'none', active: false, source: null, observedAt: null };
+      observations.set(key, structuredClone(usage));
       return usage;
     },
   };

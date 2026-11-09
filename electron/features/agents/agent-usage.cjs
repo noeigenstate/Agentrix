@@ -1,10 +1,12 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { createHmac, randomBytes } = require('node:crypto');
 const { claudePrompt } = require('../../agent-actions.cjs');
 const { AgentCalls } = require('./agent-calls.cjs');
 const { TokenRates } = require('./token-rate.cjs');
 const { DIRECT_USAGE_FRESH_MS } = require('./claude-account-usage.cjs');
+const accountFingerprintKey = randomBytes(32);
 
 // What an agent spends, as its own records tell it, for the activity pane: the service its model is reached through,
 // how full the context window is, the tokens this round and this conversation took and, for Codex, how much of the
@@ -245,11 +247,15 @@ async function readClaudeAccountCache(env = process.env) {
     const state = JSON.parse(await handle.readFile('utf8'));
     // A quota cache alone does not identify how a CLI is signed in. Retain only
     // the explicit subscription billing kind; never expose account identifiers.
-    const kind = state?.oauthAccount?.billingType === 'stripe_subscription' ? 'subscription' : 'unknown';
-    return { ...claudeAccountFrom(state), connection: { kind, active: false, source: 'Claude Code cache', observedAt: Date.now() } };
+    const kind = state?.oauthAccount?.billingType === 'stripe_subscription' ? 'subscription'
+      : state && Object.hasOwn(state, 'oauthAccount') && state.oauthAccount === null ? 'none' : 'unknown';
+    const scopeId = state?.oauthAccount ? createHmac('sha256', accountFingerprintKey)
+      .update(JSON.stringify([file, state.oauthAccount.accountUuid, state.oauthAccount.organizationUuid, state.oauthAccount.emailAddress, state.oauthAccount.billingType])).digest('hex') : null;
+    return { ...claudeAccountFrom(state), connection: { kind, active: false, source: 'Claude Code cache', observedAt: Date.now(), scopeId } };
   } catch {
     return { connection: { kind: 'unknown', active: false, source: 'Claude Code cache', observedAt: null } };
   } finally { await handle?.close(); }
 }
 
-module.exports = { UsageMeter, claudeWindow, claudeProvider, claudeProviderName, codexProvider, codexProviderName, claudeAccount, claudeAccountFrom, claudeAccountFiles, codePulseLimits, selectClaudeAccount, readClaudeAccountCache };
+module.exports = { UsageMeter, claudeWindow, claudeProvider, claudeProviderName, codexProvider, codexProviderName, claudeAccount, claudeAccountFrom, claudeAccountFiles, codePulseLimits, selectClaudeAccount, readClaudeAccountCache,
+  ...require('./usage-observation.cjs') };

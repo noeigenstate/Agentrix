@@ -242,7 +242,7 @@ test("Claude's usage keeps plan limits, tokens and their source without reset co
   }
 });
 
-test('expired limits show an empty muted bar and waiting text without a stale percent or reset time', t => {
+test('expired limits retain observed percentages until an actual reset observation arrives', t => {
   const now = new Date(2030, 4, 5, 12).getTime(), past = now - 86400000;
   t.mock.timers.enable({ apis: ['Date'], now });
   const pastTime = new Date(past).toLocaleString([], { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -251,19 +251,19 @@ test('expired limits show an empty muted bar and waiting text without a stale pe
       const html = agentSection(usageMarkup(language, { agent, agentUsage: {
         limits: [{ minutes: 300, percent: 81.34, resetsAt: past }, { minutes: 10080, percent: 92.1, resetsAt: past }], limitsAt: now - 60000,
       } }), agent === 'claude' ? 'Claude' : 'Codex');
-      const limits = [...html.matchAll(/<div class="activity-metric activity-limit">([\s\S]*?)<\/div>/g)];
+      const limits = [...html.matchAll(/<div class="activity-metric(?: is-warn)? activity-limit">([\s\S]*?)<\/div>/g)];
       assert.equal(limits.length, 2);
       for (const [, limit] of limits) {
-        assert.ok(limit.includes(language === 'en' ? 'Reset, waiting for an update' : '已重置，等待更新'));
-        assert.match(limit, /class="activity-meter is-expired"/);
-        assert.doesNotMatch(limit, /<b|<i|%|aria-valuenow| 重置|Resets /);
+        assert.ok(limit.includes(language === 'en' ? 'Reset time reached; waiting for an update' : '已到重置时间，等待更新'));
+        assert.match(limit, /aria-valuenow="(?:81|92)"/);
+        assert.match(limit, /(?:81|92)%/);
         assert.ok(!limit.includes(pastTime));
       }
     }
   }
 });
 
-test('future limits stay current and expire when the app clock rerenders the same snapshot', t => {
+test('the app clock never replaces an observed percentage with a guessed reset', t => {
   const now = new Date(2030, 4, 5, 12).getTime(), resetsAt = now + 5000;
   t.mock.timers.enable({ apis: ['Date'], now });
   const terminal = { agentUsage: { limits: [{ minutes: 300, percent: 81.34, resetsAt }], limitsAt: now } };
@@ -274,8 +274,8 @@ test('future limits stay current and expire when the app clock rerenders the sam
   assert.doesNotMatch(before, /is-expired|waiting for an update/);
   t.mock.timers.tick(5000);
   const after = agentSection(usageMarkup('en', terminal), 'Claude');
-  assert.match(after, /Reset, waiting for an update/);
-  assert.doesNotMatch(after, /81%|81\.3%|aria-valuenow|Resets /);
+  assert.match(after, /Reset time reached; waiting for an update/);
+  assert.match(after, /81%/); assert.match(after, /aria-valuenow="81"/);
   assert.equal(terminal.agentUsage.limits[0].percent, 81.34);
 });
 

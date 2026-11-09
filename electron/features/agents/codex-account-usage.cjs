@@ -4,6 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn, execFile } = require('node:child_process');
 const { createHmac, randomBytes, randomUUID } = require('node:crypto');
+const { retainAccount } = require('./usage-observation.cjs');
 
 // Codex 0.163's generated GetAccountRateLimitsResponse/Params contract. This is an
 // owned stdio clients, never the person's PTY. Polls only read; the separate
@@ -188,7 +189,11 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
           const account = message.result?.account;
           connection = { kind: account === null ? 'none' : account?.type === 'apiKey' ? 'api'
             : ['chatgpt', 'chatgptAuthTokens'].includes(account?.type) ? 'subscription' : 'unknown',
-          active: false, source: 'codex-account-usage account/read', observedAt: Date.now() };
+          active: false, source: 'codex-account-usage account/read', observedAt: null };
+          if (connection.kind !== 'unknown') {
+            connection.observedAt = Date.now();
+            connection.scopeId = createHmac('sha256', fingerprintKey).update(JSON.stringify([account?.type, account?.id, account?.accountId, account?.email])).digest('hex');
+          }
           // API accounts have no subscription windows. An absent account is not logged in.
           if (connection.kind === 'none' || connection.kind === 'api') {
             finish({ ...unavailable('unsupported'), connection }); return;
@@ -462,7 +467,7 @@ class CodexAccountUsage {
     const scope = this.scopeFor(options); options = scope.options;
     if (scope.reason) { changed(unavailable(scope.reason)); return { dispose() {}, refresh() {}, output() {} }; }
     // A quick rebind must retain the old read and throttle, even after its last listener leaves.
-    for (const [key, entry] of this.entries) if (!entry.listeners.size && !entry.checks.size && !entry.pending &&
+    for (const [key, entry] of this.entries) if (!entry.retainCache && !entry.listeners.size && !entry.checks.size && !entry.pending &&
       Date.now() >= Math.max((entry.lastReadAt ?? entry.lastAttemptAt ?? 0) + 5000, entry.retryAt || 0, entry.retainCache ? entry.nextReadAt || 0 : 0)) this.entries.delete(key);
     let entry = this.entries.get(scope.key);
     if (!entry) {
@@ -473,7 +478,7 @@ class CodexAccountUsage {
     entry.retainCache ||= options.retainCache === true;
     listeners.add(changed);
     const fresh = entry.value && Date.now() < entry.nextReadAt;
-    if (fresh) changed(entry.value);
+    if (fresh || entry.value) changed(entry.value);
     else if (entry.pending) changed({ resets: null, resetQuery: { state: 'loading' } });
     if (!entry.pending) {
       if (fresh) {
@@ -520,8 +525,8 @@ class CodexAccountUsage {
     const generation = ++entry.generation;
     const abort = entry.abort = new AbortController();
     const publish = value => {
-      entry.value = value;
-      for (const listeners of [entry.listeners, entry.checks]) for (const changed of listeners) changed(value);
+      entry.value = retainAccount(entry.value, value);
+      for (const listeners of [entry.listeners, entry.checks]) for (const changed of listeners) changed(entry.value);
     };
     entry.pending = true; entry.queued = false; entry.lastAttemptAt = now;
     publish({ resets: null, resetQuery: { state: 'loading' } });

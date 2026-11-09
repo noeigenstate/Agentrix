@@ -1,5 +1,6 @@
 // Usage requests from the visible pane are the focus signal. Subscriptions live
 // only for that read: the existing account service owns cache, interval and backoff.
+const { retainAccount } = require('../agents/agent-usage.cjs');
 function createProjectAccounts({ codex, readClaude }) {
   let current, generation = 0, serial = Promise.resolve(), subscription, cancel, claudeCache;
   const empty = kind => ({ connection: { kind, active: false, source: null, observedAt: null } });
@@ -17,7 +18,8 @@ function createProjectAccounts({ codex, readClaude }) {
         if (token !== generation) return null;
         const home = JSON.stringify(Object.entries(options.env).filter(([name]) => /^(?:CLAUDE_CONFIG_DIR|HOME|USERPROFILE)$/i.test(name)).sort());
         if (options.cli.claude.status === 'ok' && (claudeCache?.home !== home || Date.now() >= claudeCache.nextReadAt)) {
-          claudeCache = { home, value: await readClaude(options.env), nextReadAt: Date.now() + codex.interval };
+          const value = await readClaude(options.env);
+          claudeCache = { home, value: retainAccount(claudeCache?.home === home ? claudeCache.value : null, value), nextReadAt: Date.now() + codex.interval };
         }
         const claude = options.cli.claude.status === 'ok' ? claudeCache.value : empty('none');
         if (token !== generation) return null;

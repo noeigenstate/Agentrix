@@ -4,6 +4,7 @@ const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
+const { retainLimits } = require('../agents/agent-usage.cjs');
 function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
@@ -89,8 +90,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     }
     if (event.type === 'limits.updated') {
       const limits = projectLimits.get(spec.projectId) || {};
-      limits[agent] = event.payload; projectLimits.set(spec.projectId, limits);
-      if (spec.kind !== 'ssh') agents[agent].limits = event.payload;
+      limits[agent] = retainLimits(limits[agent], event.payload); projectLimits.set(spec.projectId, limits);
+      if (spec.kind !== 'ssh') agents[agent].limits = limits[agent];
     }
     if (event.type === 'limits.updated' || event.type === 'usage.updated') reconcile();
     if (event.type === 'input.receipt') record.inputs.set(event.payload.clientMessageId, event.payload.status);
@@ -442,6 +443,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         }
         snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(config.monthlyBudgetUsd, projectId) : null, cli[agent]);
         snapshot[agent].limits ||= structuredClone(limits[agent] || null);
+        if (snapshot[agent].limits?.billingRoute === limits[agent]?.billingRoute &&
+          Number.isFinite(limits[agent]?.observedAtMs) && limits[agent].observedAtMs > (snapshot[agent].limits.observedAtMs ?? -Infinity)) {
+          snapshot[agent].limits = structuredClone(retainLimits(snapshot[agent].limits, limits[agent]));
+        }
       }
       return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, switches: { waiting: switches.waiting() } };
     },

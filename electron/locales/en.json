@@ -2861,5 +2861,6 @@
   "压缩原因": "Compaction errors",
   "原生模式自动压缩上下文失败时，会说明原因。": "When native mode fails to compact the context, it says why.",
   "命令标题": "Command titles",
-  "写文件的命令不再被标成「读取文件」。": "Commands that write a file are no longer labelled as reading one."
+  "写文件的命令不再被标成「读取文件」。": "Commands that write a file are no longer labelled as reading one.",
+  "已到重置时间，等待更新": "Reset time reached; waiting for an update"
 }

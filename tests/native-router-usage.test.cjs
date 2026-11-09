@@ -157,7 +157,8 @@ test('real main assembly reports terminal-only Claude subscription usage without
   assert.equal((await usage()).agents.claude.limits.limitsById.subscription.primary.usedPercent, 30, 'reads use the latest held observation');
   claudeAccounts.account = null; codexAccounts.entries.clear();
   value = await usage();
-  assert.equal(value.agents.claude.limits, null); assert.equal(value.agents.codex.limits, null);
+  assert.equal(value.agents.claude.limits.limitsById.subscription.primary.usedPercent, 30);
+  assert.equal(value.agents.codex.limits.limitsById.subscription.primary.usedPercent, 12);
   terminal.usage = { agent: 'claude', limits: [{ minutes: 300, percent: 33, resetsAt: reset }], limitsAt: at, limitsFrom: 'CodePulse' };
   value = await usage();
   assert.equal(value.agents.claude.limits.source, 'CodePulse'); assert.equal(value.agents.claude.limits.limitsById.subscription.primary.usedPercent, 33);

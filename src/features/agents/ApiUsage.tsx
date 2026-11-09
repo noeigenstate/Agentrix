@@ -25,6 +25,7 @@ import './activity-pane.css';
 const REFRESH_MS = 60_000, REVISION_DELAY_MS = 1000;
 const AGENTS = ['claude', 'codex'] as const;
 const NAMES: Record<NativeAgent, string> = { claude: 'Claude', codex: 'Codex' };
+const observations = new Map<string, { bridge: ReturnType<typeof nativeBridge>; usage: NativeUsage }>();
 
 const windowsOf = (limits: LimitsPayload) => Object.values(limits.limitsById ?? {}).flatMap(entry => [entry?.primary, entry?.secondary]);
 // That the provider says the limit is reached, with when it recovers; null when it does not say so. A notice of the provider's own (below) says it in
@@ -110,10 +111,10 @@ function QuotaMetrics({ limits, current, usage }: { limits: LimitsPayload | null
   return <>
     {windows.length ? windows.map(window => {
       const name = limitName(window.minutes), expired = window.resetsAt != null && window.resetsAt <= now, known = window.percent !== null;
-      const label = expired ? t('已重置，等待更新') : t('{name}已用 {percent}%', { name, percent: Math.round(window.percent ?? 0) });
-      return <Metric key={window.minutes ?? 'unknown'} className="activity-limit" label={name} percent={expired ? null : known ? window.percent : undefined} meterLabel={label}
-        value={expired ? undefined : known ? `${Math.round(window.percent!)}%` : t('未知')} valueTitle={known ? [`${window.percent!.toFixed(1)}%`, updated].filter(Boolean).join(' · ') : undefined}
-        note={expired ? label : window.resetsAt != null ? t('{time} 重置', { time: resetTime(window.resetsAt) }) : undefined} />;
+      const label = t('{name}已用 {percent}%', { name, percent: Math.round(window.percent ?? 0) });
+      return <Metric key={window.minutes ?? 'unknown'} className="activity-limit" label={name} percent={known ? window.percent : undefined} meterLabel={label}
+        value={known ? `${Math.round(window.percent!)}%` : t('未知')} valueTitle={known ? [`${window.percent!.toFixed(1)}%`, updated].filter(Boolean).join(' · ') : undefined}
+        note={expired ? t('已到重置时间，等待更新') : window.resetsAt != null ? t('{time} 重置', { time: resetTime(window.resetsAt) }) : undefined} />;
     }) : <Metric className="activity-tokens" label={t('额度')} note={limitLines(limits).join(' · ')} />}
     {notes.map(line => <Metric key={line} className="activity-tokens" label={t('额度')} note={line} />)}
   </>;
@@ -153,7 +154,7 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   return <section className="api-agent" aria-label={NAMES[agent]}>
     <h4 className="api-agent-title">{NAMES[agent]}</h4>
     <dl className="api-usage">
-      <Row label={t('连接')}><span title={connection.source ?? undefined}>{connection.text}</span></Row>
+      <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
       {channel && <Row label={t('通道')}><span>{channel}</span></Row>}
       {!shown && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
     </dl>
@@ -178,16 +179,20 @@ export const AgentSections = ({ usage, terminal, projectId }: { usage: NativeUsa
   {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} projectId={projectId} />)}
 </div>;
 
-export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
+export function ApiUsage(props: { terminal: ProjectTerminal; projectId?: string }) {
+  return <ScopedApiUsage key={props.projectId || ''} {...props} />;
+}
+function ScopedApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
   const bridge = nativeBridge(), revision = useUsageRevision();
-  const [usage, setUsage] = useState<NativeUsage | null>(null), [error, setError] = useState<string | null>(null);
+  const key = projectId || '';
+  const [usage, setUsage] = useState<NativeUsage | null>(() => observations.get(key)?.bridge === bridge ? observations.get(key)!.usage : null), [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!bridge) return;
     let active = true;
     const read = async () => {
       const result = await bridge.usage(projectId).catch((failure: unknown) => ({ ok: false as const, error: failure instanceof Error ? failure.message : String(failure) }));
       if (!active) return;
-      if (result.ok) { setUsage(result.value); setError(null); } else setError(result.error);
+      if (result.ok) { observations.set(key, { bridge, usage: result.value }); setUsage(result.value); setError(null); } else setError(result.error);
     };
     const first = setTimeout(() => void read(), revision === 0 ? 0 : REVISION_DELAY_MS), again = setInterval(() => void read(), REFRESH_MS);
     return () => { active = false; clearTimeout(first); clearInterval(again); };
