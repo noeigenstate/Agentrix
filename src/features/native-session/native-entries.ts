@@ -77,11 +77,11 @@ export function nativeEntries(model: NativeModel, images: Readonly<Record<string
     if (item.content.discarded === true) continue;
     if (item.kind === 'user-message') {
       const text = messageText(item), pictures = picturesOf(item) ?? images[idOf(item)], omitted = item.content.imagesOmitted === true && !pictures;
-      if (!held(model, item) && (text || pictures || omitted)) entries.push({ id: item.id, at, role: 'user', text, ...(pictures ? { images: pictures } : {}), ...(omitted ? { imagesOmitted: true } : {}) });
+      if (!held(model, item) && (text || pictures || omitted)) entries.push({ id: item.content.localCommand === 'status' ? `notice:local:${item.id}` : item.id, at, role: 'user', text, ...(pictures ? { images: pictures } : {}), ...(omitted ? { imagesOmitted: true } : {}) });
     } else if (item.kind === 'agent-message' || item.kind === 'plan') {
       const text = item.kind === 'plan' ? planText(item) : messageText(item), generated = generatedOf(item), pictures = picturesOf(item);
       // A drawn picture is drawn by the feed only with a picture to show; its words may be none.
-      if (text || generated && pictures) entries.push({ id: item.id, at, role: 'assistant', text, ...(generated && pictures ? { generated, images: pictures } : {}) });
+      if (text || generated && pictures) entries.push({ id: item.content.localCommand === 'status' ? `notice:local:${item.id}` : item.id, at, role: 'assistant', text, ...(generated && pictures ? { generated, images: pictures } : {}) });
     } else if (line) {
       entries.push({ id: item.id, at, role: 'assistant', text: line });
     } else {

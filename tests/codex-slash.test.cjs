@@ -38,8 +38,8 @@ function fixture(t, { remote = false, scope = 'host-a', home } = {}) {
           threads.set(id, result);
         }
         if (method === 'thread/turns/list') result = { data: [], nextCursor: null };
-        if (method === 'account/read') result = { account: null };
-        if (method === 'account/rateLimits/read') result = {};
+        if (method === 'account/read') result = { account: null, requiresOpenaiAuth: true };
+        if (method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: null, secondary: null }, rateLimitsByLimitId: {} };
         if (method === 'turn/start' || ['thread/compact/start', 'review/start', 'thread/shellCommand'].includes(method)) {
           if (drop) {
             if (drop === 'after-start') {
@@ -119,7 +119,7 @@ test('built-ins execute protocol controls, review root turns complete once, and 
     assert.equal(f.events.filter(row => row.type === 'context.compacted' && row.payload.trigger === 'manual').length, 1);
     const before = f.wire.length;
     await f.session.send({ clientMessageId: 'status', text: '/status' });
-    assert.ok(f.events.some(row => row.type === 'item.upsert' && /额度 未知/.test(row.payload.content?.text || '')));
+    assert.ok(f.events.some(row => row.type === 'item.upsert' && /5 小时额度：未知/.test(row.payload.content?.text || '')));
     assert.ok(f.wire.slice(before).every(row => !row.method.startsWith('turn/')));
     for (const text of ['/permissions', '/fork', '/reset', '/reviewing nope']) {
       if (text.startsWith('/reviewing')) continue;

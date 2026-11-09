@@ -67,6 +67,7 @@ function Message({ entry, who, className, onError, children }: { entry: Conversa
 // (the agents are told they can show one this way: reading-note.cjs).
 function AssistantReply({ entry, agent, projectId, result = false, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; onError: (message: string) => void }) {
   const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
+  if (entry.id.startsWith('notice:local:')) return <div className="reading-local-output" role="status"><b>{t('本地系统输出')}</b><pre>{entry.text}</pre></div>;
   const words = entry.text ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : entry.text} /> : null;
   // The latest result shows its picture first with the words under it; anywhere else the words come first.
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
@@ -166,10 +167,12 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
                   <AgentTurnItem at={at} showTime={showTime} kind="tools" state={state}>
                     <ToolGroup entries={block.entries} live={block === grouped.at(-1) && (live || decorations !== null)} projectId={projectId} hideToolOutput={hideToolOutput} onError={onError} />
                   </AgentTurnItem>
-                  {index === latestAgent && block.entries.some(entry => entry.id === decorations?.anchor) && <div className="result-block">{decorations?.beforeResult}{decorations?.afterResult}</div>}
+                  {block.entries.some(entry => entry.id === decorations?.anchor) && <div className="result-block">{decorations?.beforeResult}{decorations?.afterResult}</div>}
                 </Fragment>;
               }
-              const holdsResult = index === latestAgent && block.entry.id === (decorations ? decorations.anchor : result?.anchor);
+              // A local status query after a model answer is not another model
+              // round. Its unique anchor keeps that answer's result attached.
+              const holdsResult = block.entry.id === (decorations ? decorations.anchor : result?.anchor);
               // The status row says when the round ended: the result's own entry needs no stamp of its own.
               return <AgentTurnItem key={block.entry.id} at={at} showTime={showTime && !holdsResult} kind="message">
                 {holdsResult && decorations?.beforeResult}

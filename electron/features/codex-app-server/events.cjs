@@ -63,6 +63,10 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
       itemId: null, receivedAtMs: now(), occurredAtMs: null, replay: false, type, payload, ...extra };
     events.push(event);
     if (type === 'item.upsert' || type === 'item.delta') itemEvents.set(event.itemId, event);
+    // Host-generated items (local commands and notices) need the same snapshot
+    // retention as provider items; publication alone is not a durable upsert.
+    if (type === 'item.upsert' && event.itemId) items.set(event.itemId, payload);
+    while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
     if (events.length > 400) events.shift();
     emit(event); return event;
   }
@@ -124,7 +128,6 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
       if (!compacting || !params.willRetry) { compacting = false; publish('context.compacting', { active: false }); }
       publish('error', { code: 'provider_error', message, retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' });
     }
-    while (items.size > 400) { const id = items.keys().next().value; items.delete(id); completed.delete(id); itemEvents.delete(id); }
   }
   return { binding, publish, notification, tokenRate: () => ({ ...rates.snapshot(), model: rates.model }),
     finishTurn(status = 'interrupted') {

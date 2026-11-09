@@ -57,6 +57,28 @@ const elements = node => Array.isArray(node) ? node.flatMap(elements) : React.is
 const deep = node => Array.isArray(node) ? node.flatMap(deep) : React.isValidElement(node) ? (typeof node.type === 'function' ? deep(node.type(node.props)) : [node, ...deep(node.props.children)]) : [];
 const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 
+test('Codex local status is visible system output, not a model reply, result or file preview', () => {
+  const { nativeEntries, nativePending } = load('features/native-session/native-entries.ts');
+  const { fromSnapshot } = load('features/native-session/native-model.ts');
+  const { isNotice } = load('features/native-session/native-notices.ts');
+  const base = { schemaVersion: 1, connectionEpoch: 'epoch', provider: 'codex', transport: 'codex-app-server', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', providerSessionId: 'thread', turnId: null, runId: null, occurredAtMs: null, replay: true };
+  const items = [
+    { itemId: 'input', payload: { kind: 'user-message', status: 'completed', content: { text: '/status', clientMessageId: 'input', localCommand: 'status' } } },
+    { itemId: 'output', payload: { kind: 'agent-message', status: 'completed', content: { text: 'Codex 本地状态\n模型：offline\n工作目录：/offline/report.png\n5 小时额度：已用 25%', localCommand: 'status' } } },
+  ];
+  const model = fromSnapshot({ lastSequence: 2, events: items.map((item, index) => ({ ...base, ...item, eventId: 'e' + index, type: 'item.upsert', sequence: index + 1, receivedAtMs: index + 1 })) });
+  const entries = nativeEntries(model);
+  assert.ok(entries.every(isNotice), 'local commands do not become model result rounds');
+  assert.equal(nativePending(model, [{ id: 'input', text: '/status', at: 1 }]).prompts.length, 0);
+  const { ConversationFeed, ConversationDecorations } = load('features/reading/ConversationFeed.tsx');
+  const history = [{ id: 'old-input', at: 0, role: 'user', text: 'A previous task' }, { id: 'model-output', at: 1, role: 'assistant', text: 'A previous model answer' }, ...entries];
+  const html = renderToStaticMarkup(React.createElement(ConversationDecorations.Provider, { value: { start: 0, status: null, running: false, anchor: 'model-output', beforeResult: React.createElement('b', null, 'Previous model result'), afterResult: null } },
+    React.createElement(ConversationFeed, { entries: history, agent: 'codex', projectId: 'p', live: false, onError: assert.fail })));
+  assert.match(html, /本地系统输出/); assert.match(html, /模型：offline/); assert.match(html, /25%/);
+  assert.match(html, /Previous model result/);
+  assert.doesNotMatch(html, /file-cards|result-actions/);
+});
+
 test('a child user-side message shows its factual planner or owner avatar, with a neutral unknown planner', () => {
   const { ConversationFeed } = load('features/reading/ConversationFeed.tsx');
   const render = sender => renderToStaticMarkup(React.createElement(ConversationFeed, {

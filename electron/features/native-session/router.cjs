@@ -377,7 +377,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
-      record.ownerInput = true;
+      const observation = record.spec.agent === 'codex' && message.text.trim() === '/status';
+      if (!observation) record.ownerInput = true;
       if (busy.has(id)) throw new Error('会话正在切换，请稍后重试。');
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') return unsent(record, message, 'switch_in_progress');
@@ -388,8 +389,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         const selected = selection(record.spec, record.runtime, false, true);
         if (selected.path !== 'api') { reconcile(); return unsent(record, message, selected.reason || 'api_unavailable'); }
       }
-      switches.input(id, runtimeSessionId);
-      record.ownerStopped = false;
+      if (!observation) { switches.input(id, runtimeSessionId); record.ownerStopped = false; }
       try {
         const receipt = await record.runtime.send(message);
         return receipt.status === 'rejected' && !record.inputs.has(message.clientMessageId) ? unsent(record, message, 'input_rejected') : receipt;

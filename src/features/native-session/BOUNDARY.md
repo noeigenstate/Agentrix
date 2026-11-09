@@ -4,6 +4,8 @@ The view of an agent session that runs without a terminal — Claude through the
 
 The events' envelope and types are contract §1 (`src/shared/agent-events.ts`). Item `content`, request and plan payloads are read tolerantly by `native-model.ts` and `native-words.ts` (the field names each one reads are listed at the top of those files), and a field that is absent stays absent.
 
+Host status items carry `content.localCommand: 'status'`; native-entries gives their input and output notice:local identities. The input still acknowledges its clientMessageId, while the output is labelled local system text and neither item becomes a model result round.
+
 ## Owns
 - `src/features/native-session/**`
 

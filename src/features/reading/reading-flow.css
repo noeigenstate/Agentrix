@@ -119,3 +119,6 @@
 .reading-user-label { font-size: calc(12px * var(--reading-text)); font-weight: 600; color: var(--flow-muted); }
 /* The user's picture fills the whole node. */
 .reading-node > .user-avatar { width: 100%; height: 100%; }
+.reading-local-output { min-width: 0; }
+.reading-local-output > b { font-size: 12px; font-weight: 500; }
+.reading-local-output > pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 6px 0; }

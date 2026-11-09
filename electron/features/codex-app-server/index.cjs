@@ -11,6 +11,7 @@ const { mergeLimits, accountConnection, restrictedLimits } = require('./account.
 const { assertCompatible, probeCapabilities, commandName, builtinCommands, unsupported } = require('./compatibility.cjs');
 const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
+const { statusText } = require('./status.cjs');
 
 // Host-owned choices only, separate from CLI configuration and transcript files.
 // SSH choices are host metadata, keyed by the authenticated remote scope; remote
@@ -119,6 +120,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let wireCwd = spec.cwd, wireHome;
       let accountRead = null;
       let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null;
+      let configuredFast = typeof initialSpec.fast === 'boolean' ? initialSpec.fast : null;
       const connectionAbort = new AbortController();
       const assertOpen = () => { if (closed) throw Object.assign(new Error('session_closed'), { code: 'closed' }); };
       let executionSeen = false, resetting = null, resetRetry = null, lastReset = null;
@@ -286,7 +288,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const choiceScope = spec.kind === 'ssh' ? [child?.remoteScope || spec.projectId, wireCwd] : wireHome;
           const saved = resuming && spec.owner === 'gui' && spec.preserveRunOptions
             ? optionStore(spec, [spec.kind || 'local', choiceScope, threadId], optionsHome).read() : null;
-          if (saved) Object.assign(spec, saved);
+          if (saved) { Object.assign(spec, saved); configuredFast = saved.fast; }
           const context = wireCwd === spec.cwd ? spec.context : spec.context?.replaceAll(spec.cwd, wireCwd)
             .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
@@ -478,7 +480,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             if (patch.fast === true) throw new Error(translate('此模型不支持快速模式。'));
             next.fast = false;
           }
-          choicesStore.write(next); Object.assign(spec, next);
+          choicesStore.write(next); Object.assign(spec, next); configuredFast = next.fast;
           events.publish('routing.updated', { declared: { ...next }, effective: { model: threadResponse?.model ?? null, effort: null, fast: null }, observed: { model: null, effort: null, fast: null }, reason: null });
           return next;
         });
@@ -490,17 +492,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (['compact', 'status'].includes(name) && argument) throw new Error(translate('这个命令不接受参数。'));
         if (!name && !argument) throw new Error(translate('请输入要运行的命令。'));
         if (name === 'status') {
-          const account = await readAccount(); assertOpen();
-          const limit = scopes.get(spec.scopeId || spec.runtimeSessionId);
-          const options = optionsSnapshot();
-          const windows = Object.values(limit?.limitsById || {}).flatMap(bucket => [bucket.primary, bucket.secondary]).filter(window => window?.usedPercent != null);
-          const quota = limit?.notice?.message || (windows.length ? windows.map(window => translate('已用 {value}%').replace('{value}', String(window.usedPercent))).join(' / ')
-            : limit?.ordinaryUsageAllowed === true ? translate('可用') : translate('未知'));
-          const text = translate('Codex 状态：模型 {model}；思考强度 {effort}；快速模式 {fast}；账号 {account}；额度 {quota}。')
-            .replace('{model}', options.model || translate('未知')).replace('{effort}', options.effort || translate('未知'))
-            .replace('{fast}', translate(options.fast ? '开' : '关')).replace('{account}', translate(account.kind === 'api' ? 'API' : account.kind === 'subscription' ? '订阅' : '未知'))
-            .replace('{quota}', quota);
-          events.publish('item.upsert', { kind: 'agent-message', status: 'completed', content: { text } }, { itemId: randomUUID(), turnId: null });
+          events.publish('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId: id, localCommand: 'status' } }, { itemId: id, turnId: null });
+          const outputId = randomUUID();
+          const output = (text, status = 'completed') => events.publish('item.upsert', { kind: 'agent-message', status, content: { text, localCommand: 'status' } }, { itemId: outputId, turnId: null });
+          output(translate('正在读取 Codex 状态…'), 'in-progress');
+          const values = await Promise.allSettled([readAccount(true), readLimits()]); assertOpen();
+          const [account, limits] = values.map(value => value.status === 'fulfilled' ? value.value : null);
+          const errors = values.flatMap((value, index) => value.status === 'rejected' ? [[['account/read', 'account/rateLimits/read'][index], value.reason]] : []);
+          output(statusText({ options: { ...optionsSnapshot(), fast: configuredFast }, thread: threadResponse || {}, cwd: wireCwd, usage: currentUsage, account, limits, errors }, translate));
           inputReceipt(id, 'consumed'); return { clientMessageId: id, status: 'consumed' };
         }
         clientMessageId = id; origin = 'user'; manualCommand = name || 'shell';
@@ -550,16 +549,16 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         })();
         limitsRead = task.finally(() => { if (generation === accountGeneration) limitsRead = null; }); return limitsRead;
       }
-      function readAccount() {
+      function readAccount(strict = false) {
         if (closed || !rpc) return Promise.resolve({ kind: 'none', source: null, observedAt: null });
-        if (accountRead) return accountRead;
+        if (accountRead) return strict ? accountRead : accountRead.catch(() => ({ kind: 'unknown', source: 'codex-app-server account/read', observedAt: null }));
         const generation = accountGeneration;
         const task = rpc.request('account/read', { refreshToken: false }).then(value => {
           if (closed || generation !== accountGeneration) return { kind: 'unknown', source: null, observedAt: null };
           return accountConnection(value, now());
-        }).catch(() => ({ kind: 'unknown', source: 'codex-app-server account/read', observedAt: null }));
+        });
         accountRead = task.finally(() => { if (generation === accountGeneration) accountRead = null; });
-        return accountRead;
+        return strict ? accountRead : accountRead.catch(() => ({ kind: 'unknown', source: 'codex-app-server account/read', observedAt: null }));
       }
       async function commands() {
         if (closed || !rpc) return [];

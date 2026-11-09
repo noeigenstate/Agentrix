@@ -12,7 +12,7 @@ function restrictedLimits(previous, code, scopeId, now) {
 
 function mergeLimits(previous, update, scopeId, now = Date.now()) {
   const buckets = { ...previous?.limitsById };
-  const supplied = update.rateLimitsByLimitId || (update.rateLimits ? { [update.rateLimits.limitId || 'codex']: update.rateLimits } : {});
+  const supplied = Object.keys(update.rateLimitsByLimitId || {}).length ? update.rateLimitsByLimitId : (update.rateLimits ? { [update.rateLimits.limitId || 'codex']: update.rateLimits } : {});
   for (const [id, raw] of Object.entries(supplied)) {
     if (!raw || typeof raw !== 'object') continue;
     const bucket = { ...buckets[id] };
@@ -52,7 +52,7 @@ function tokenUsage(value, baseline = null) {
 
 function accountConnection(result, observedAt = Date.now()) {
   const type = result?.account?.type;
-  return { kind: type === 'apiKey' ? 'api' : ['chatgpt', 'chatgptAuthTokens'].includes(type) ? 'subscription' : 'unknown',
+  return { kind: result?.account === null ? 'none' : type === 'apiKey' ? 'api' : ['chatgpt', 'chatgptAuthTokens'].includes(type) ? 'subscription' : 'unknown',
     source: 'codex-app-server account/read', observedAt };
 }
 module.exports = { mergeLimits, tokenUsage, accountConnection, restrictedLimits };
