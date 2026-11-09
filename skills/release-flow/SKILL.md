@@ -19,6 +19,11 @@ agrees does it become the stable release.
 - **Beta version `X.Y.Z-beta.N`** (N starts at 1 and rises for each further beta of the same X.Y.Z):
   `npm version X.Y.Z-beta.N --no-git-tag-version`. Write the update notes (step 3) now. Leave the versions in
   `docs/usage.md` (step 2) alone until the stable bump.
+- **Packaging guards, every beta.** A build-only beta runs no tests remotely, so before pushing run
+  `node --test tests/boundary-dispatch.test.cjs tests/packaged-startup.test.cjs tests/trim-electron-pak.test.cjs`
+  whatever the change touched. They check that the dispatch helper's hand-kept `RUNTIME_FILES` list in
+  `integration/dispatch.cjs` carries every module it requires; 1.3.26-beta.9 shipped without two and the installed
+  helper could not start.
 - **Check, commit, build, tag.** Run the task-authorized local checks (step 4), commit (step 6), push `beta` (no
   automatic build), then dispatch `build-windows.yml` on `beta` with `build_only=true`. Wait for that exact commit's
   Windows build to succeed before `git tag vX.Y.Z-beta.N` and pushing the tag. The beta tag reuses the verified
