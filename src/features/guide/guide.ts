@@ -2,8 +2,9 @@
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "额度不再跳回", text: "活动栏会保留最后一次读到的连接和额度；临时读取失败不再显示成「未知」。到了重置时间还没读到新数据时，会注明正在等待更新。", group: 'new' },
-  { title: "Codex 状态", text: "Codex 原生模式输入 /status，会显示模型、推理强度、快速模式、审批和沙箱、工作目录、账号、token、上下文和额度；读取失败时会说明原因。", group: 'new' },
+  { title: "派发恢复", text: "修复 beta.9 中从安装版派发任务时启动失败的问题。", group: 'new' },
+  { title: "额度不再跳回", text: "活动栏会保留最后一次读到的连接和额度；临时读取失败不再显示成「未知」。到了重置时间还没读到新数据时，会注明正在等待更新。" },
+  { title: "Codex 状态", text: "Codex 原生模式输入 /status，会显示模型、推理强度、快速模式、审批和沙箱、工作目录、账号、token、上下文和额度；读取失败时会说明原因。" },
   { title: "步骤显示", text: "原生模式里，工具步骤显示做了什么和对应的文件或命令，不再贴出输出内容；失败时附一行原因。" },
   { title: "Codex 命令", text: "Codex 原生模式支持 /model、/effort、/fast、/new、/clear、/compact、/review、/status，也可以用 ! 运行命令。" },
   { title: "速率显示", text: "原生模式下，活动栏会显示主模型的 token 速率。" },
