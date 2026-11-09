@@ -2878,5 +2878,9 @@
   "模型服务来源": "Model provider",
   "细分审批": "Granular approvals",
   "审批": "Approval",
-  "沙箱": "Sandbox"
+  "沙箱": "Sandbox",
+  "额度不再跳回": "Quota stays put",
+  "活动栏会保留最后一次读到的连接和额度；临时读取失败不再显示成「未知」。到了重置时间还没读到新数据时，会注明正在等待更新。": "The activity pane keeps the last connection and quota it read; a failed read no longer shows unknown. Past the reset time it says it is waiting for an update.",
+  "Codex 状态": "Codex status",
+  "Codex 原生模式输入 /status，会显示模型、推理强度、快速模式、审批和沙箱、工作目录、账号、token、上下文和额度；读取失败时会说明原因。": "In Codex native mode, /status shows the model, effort, fast mode, approval and sandbox, folder, account, tokens, context and quota; a failed read says why."
 }
