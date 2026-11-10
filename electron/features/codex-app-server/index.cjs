@@ -158,10 +158,6 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (active && (method.startsWith('item/') && params.item?.type !== 'userMessage'
           || ['thread/tokenUsage/updated', 'turn/plan/updated', 'turn/diff/updated'].includes(method))) executionSeen = true;
         if (method === 'skills/changed') { ++skillsGeneration; skills = null; skillsRead = null; }
-        if (method === 'item/completed' && params.item?.type === 'userMessage') {
-          const id = params.item.clientId;
-          if (receipts.has(id)) inputReceipt(id, 'consumed');
-        }
         if (method === 'turn/started') started(params.turn);
         else if (method === 'turn/completed') {
           const turn = params.turn;
@@ -195,6 +191,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         } else {
           if (manualCommand === 'compact' && params.item?.type === 'contextCompaction') params = { ...params, item: { ...params.item, trigger: 'manual' } };
           events.notification(method, params);
+          // The receipt follows the message it names: the host matches a taken-up prompt by that item's text, and a
+          // receipt it cannot match leaves the prompt queued and the card working after the turn has ended.
+          if (method === 'item/completed' && params.item?.type === 'userMessage' && receipts.has(params.item.clientId)) inputReceipt(params.item.clientId, 'consumed');
         }
       }
       async function resetLimit(entry, failedTurnId) {

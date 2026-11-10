@@ -199,6 +199,34 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   assert.equal(next.codexActivity, 'complete'); assert.equal(h.alerts(), 2); assert.equal(project.unread, 1);
 });
 
+// The desktop stand-in reports a user message once, when it is complete; Codex 0.167 also sends item/started first.
+test('a native Codex message reported only when complete is taken up, so its turn completes the card once', async t => {
+  const h = await harness(t), { s, project } = h, events = [], lifetime = require('./fixtures/codex-app-server-lifecycle.cjs').resources(t);
+  // The peer runs in a folder of its own, removed after it has exited (the harness removes its folder first).
+  const cwd = await fs.mkdtemp(path.join(require('node:os').tmpdir(), 'agx-native-receipt-'));
+  lifetime.defer('remove the peer folder', () => fs.rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  Object.assign(s, { nativeStructured: true, nativeRuntimeSessionId: 'runtime', nativeMessages: new Map() });
+  Object.assign(h.context, { nativeSpecs: new Map([[s.terminalId, { agent: 'codex' }]]), quitting: false, nativeSessions: { tokenRate: () => null },
+    createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage });
+  const runtime = require('../electron/features/codex-app-server/index.cjs').createCodexRuntime({ resolveExecutable: async () => 'synthetic-only',
+    spawnProcess: (_file, args, options) => lifetime.child(require('node:child_process').spawn(process.execPath, [path.join(__dirname, 'fixtures/gui-codex-app-server.cjs'), ...args], options)) })
+    .create({ owner: 'gui', projectId: project.id, terminalId: s.terminalId, runtimeSessionId: 'runtime', cwd, env: { PATH: '', CODEX_HOME: path.join(cwd, 'codex-home') } },
+      event => { events.push(event); h.now(event.receivedAtMs); h.context.structuredEvent(s.terminalId, event); });
+  lifetime.defer('close runtime', () => runtime.close());
+  await runtime.start(); await runtime.send({ clientMessageId: 'only-completed', text: 'PG native prompt' });
+  for (let index = 0; index < 500 && !events.some(event => event.type === 'turn.completed'); index++) await new Promise(resolve => setTimeout(resolve, 10));
+  const message = events.findIndex(event => event.type === 'item.upsert' && event.payload.content.clientMessageId === 'only-completed');
+  assert.ok(message >= 0 && message < events.findIndex(event => event.type === 'input.receipt' && event.payload.status === 'consumed'), 'the receipt follows the message it names');
+  assert.equal(events.some(event => event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.status !== 'completed'), false, 'the message was never announced as started');
+  assert.deepEqual(s.promptQueue.list(), [], 'the prompt was taken up and ended with its turn; nothing stays queued');
+  assert.equal(s.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(project.unread, 1);
+  // The owner's rules hold: neither idle callbacks nor the same completion delivered again alert or rearm.
+  h.store.acknowledge(project.id);
+  const arms = h.armings(), completed = events.find(event => event.type === 'turn.completed');
+  for (const event of [completed, { ...completed, type: 'session.state', payload: { state: 'idle' } }]) h.context.structuredEvent(s.terminalId, event);
+  assert.equal(s.codexActivity, 'complete'); assert.deepEqual([h.alerts(), h.armings(), project.unread], [1, arms, 0]);
+});
+
 test('completion catch-up hides provisional completion without finishing prompts, notifying or rearming', async t => {
   const h = await harness(t), { s, project, store } = h;
   h.user('Actual human prompt', 2000);

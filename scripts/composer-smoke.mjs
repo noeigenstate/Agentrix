@@ -186,7 +186,10 @@ finally {
     try {
       await fs.writeFile(doneFile, 'done');
       if (page && !page.isClosed()) {
-        // The stand-in's prompt reports no shell, so each fixture shell is told to exit where it stands.
+        // The split's fixture loop ends on that file and reports its prompt. Keys sent while it still runs are lost:
+        // Ctrl+C breaks the loop, and the exit behind it reaches a prompt that is not yet reading keys. The stand-in's
+        // prompt reports no shell and is already waiting for input.
+        await waitFor(async () => (await state()).projects[0].terminals.every(terminal => terminal.id === projects[0].id || terminal.shellReady || terminal.status === 'exited'), 'the split returns to its shell');
         for (const terminal of (await state()).projects[0].terminals) await write(terminal.id, '\x03exit\r');
         await waitFor(async () => (await state()).projects[0].terminals.every(terminal => terminal.status === 'exited'), 'test shells exit');
       }
