@@ -568,6 +568,196 @@ async function panelCodexApp(output, stages, checks) {
   }
 }
 
+// Re-check of the result panel after the Esc-scope, scrim, reset-wording, unconfirmed-step and /status fixes. Two projects in one isolated profile, canned main answers
+// (as in panelStage), one run. Nothing here presses the copy button or Ctrl+C. Measures and screenshots: recheck-*.
+async function recheckApp(output, stages) {
+  const profile = path.join(output, 'recheck-profile'), home = path.join(output, 'recheck-home'), measures = {};
+  const projects = ['甲', '乙'].map(name => ({ id: randomUUID(), name: `项目${name}`, path: path.join(output, `recheck-project-${name}`), kind: 'local', restore: { terminal: false, codex: false } }));
+  for (const dir of [profile, home, ...projects.map(item => item.path)]) await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, fontSize: 14 } }));
+  const env = { ...isolatedEnvironment(home), ...displayEnvironment(), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+  let app;
+  try {
+    app = await stages.run('launch re-check application', async () => electron.launch({ executablePath: await executable(), args: packaged ? [] : [root], cwd: root, env, timeout: 25000 }), 30000);
+    stages.attach(app);
+    const page = await app.firstWindow();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
+    await page.waitForSelector('.project-panel');
+    const state = (await page.evaluate(() => window.agentrix.getState())).value.projects;
+    const ids = projects.map(item => state.find(project => project.id === item.id).terminals[0].id), [idA, idB] = ids;
+    const counters = [0, 0];
+    const event = (index, type, payload = {}, extra = {}) => ({ schemaVersion: 1, eventId: `re-${index}-${++counters[index]}`, sequence: counters[index], connectionEpoch: 'smoke', provider: 'claude', transport: 'claude-sdk', projectId: projects[index].id, terminalId: ids[index],
+      runtimeSessionId: `rs-re-${index}`, providerSessionId: null, runId: null, turnId: `turn-${index}`, itemId: null, receivedAtMs: Date.now(), occurredAtMs: Date.now(), replay: false, type, payload, ...extra });
+    const emit = events => app.evaluate(({ BrowserWindow }, list) => { for (const item of list) BrowserWindow.getAllWindows()[0].webContents.send('native:event', item); }, events);
+    const views = ids.map(id => page.locator(`[data-terminal-id="${id}"] .reading-view[data-native-session]`)), boxes = views.map(view => view.locator('textarea'));
+    const shot = async name => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(output, `recheck-${name}.png`) }); };
+    for (const index of [0, 1]) await emit([event(index, 'turn.started', { origin: 'user', clientMessageId: `c${index}` }),
+      event(index, 'item.upsert', { kind: 'user-message', status: 'completed', content: { text: '帮我看看这个项目的状态', clientMessageId: `c${index}` } }, { itemId: `u${index}` }),
+      event(index, 'item.delta', { channel: 'text', text: '好的，我先看一下目录结构，再告诉你结果。这一行是对话里的正文，用来量遮罩下面的文字对比度。' }, { itemId: `m${index}` }),
+      event(index, 'turn.completed', { status: 'completed', error: null }), event(index, 'session.state', { state: 'idle', reason: null })]);
+    for (const view of views) await view.waitFor({ timeout: 15000 });
+
+    // Main side: canned answers; the interrupts that reach main are counted per terminal.
+    await app.evaluate(({ ipcMain }) => {
+      globalThis.__re = { answers: {}, interrupts: [] };
+      for (const channel of ['native:send', 'native:interrupt']) ipcMain.removeHandler(channel);
+      ipcMain.handle('native:send', (_e, _t, _r, _i, text) => ({ ok: true, value: { status: 'consumed', local: globalThis.__re.answers[String(text).slice(1)] } }));
+      ipcMain.handle('native:interrupt', (_e, terminal) => { globalThis.__re.interrupts.push(terminal); return { ok: true, value: null }; });
+    });
+    const answers = value => app.evaluate((_e, list) => { globalThis.__re.answers = list; }, value);
+    const interrupts = () => app.evaluate(() => globalThis.__re.interrupts.slice());
+    const now = Date.now(), later = now + 3 * 86400000, soon = now + 10 * 60000;
+    const claudeUsage = (five, seven) => ({ command: 'usage', month: { spentMicros: 36520000, budgetUsd: 100 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
+      limits: [{ id: 'five_hour', usedPercent: 100, resetsAtMs: five }, { id: 'seven_day', usedPercent: 40, resetsAtMs: seven }] });
+    const freshStatus = { command: 'status', context: null, errors: [], account: { kind: 'unknown' }, session: { model: null, effort: null, cwd: null, sessionId: null, version: null, permission: null, mcp: [] } };
+    const open = async (index, command) => {
+      await boxes[index].click(); await boxes[index].fill(`/${command}`); await page.keyboard.press('Enter');
+      await views[index].locator('dialog.native-panel').waitFor({ timeout: 8000 });
+      await page.waitForFunction(() => !document.querySelector('dialog.native-panel .native-panel-skeleton'), null, { timeout: 8000 });
+    };
+    const panels = () => page.locator('dialog.native-panel').count();
+    const active = () => page.evaluate(() => ({ tag: document.activeElement?.tagName, cls: String(document.activeElement?.className ?? '').slice(0, 40), inView: !!document.activeElement?.closest?.('.reading-view') }));
+
+    // ---- 3. reset wording: today and another day; the alert line and the quota bar agree ----
+    const wording = async name => {
+      await page.waitForTimeout(400);
+      measures[name] = await page.evaluate(() => ({ alert: document.querySelector('dialog.native-panel .native-panel-alert')?.textContent, whens: [...document.querySelectorAll('dialog.native-panel .native-panel-when')].map(e => e.textContent) }));
+      await shot(name);
+    };
+    await answers({ usage: claudeUsage(soon, later) });
+    await open(0, 'usage'); await wording('reset-today');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+    await answers({ usage: claudeUsage(later, soon) });
+    await open(0, 'usage'); await wording('reset-otherday');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+
+    // ---- 5. Claude /status on a fresh session ----
+    await answers({ status: freshStatus }); await open(0, 'status'); await page.waitForTimeout(400);
+    measures.freshStatus = await page.evaluate(() => ({ text: document.querySelector('dialog.native-panel .native-panel-body').innerText, rows: [...document.querySelectorAll('dialog.native-panel dd')].map(e => e.textContent) }));
+    await shot('claude-status-fresh'); await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+
+    // ---- 2. scrim: dark and light, contrast of the conversation text behind it, and not over the composer ----
+    const scrimNumbers = () => page.evaluate(() => {
+      const parse = value => { const m = value.match(/[\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m[3] ?? 1 }; };
+      const lum = c => { const f = v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }; return .2126 * f(c.r) + .7152 * f(c.g) + .0722 * f(c.b); };
+      const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+      const over = (top, under) => ({ r: top.r * top.a + under.r * (1 - top.a), g: top.g * top.a + under.g * (1 - top.a), b: top.b * top.a + under.b * (1 - top.a), a: 1 });
+      const dialog = document.querySelector('dialog.native-panel'), scrim = dialog.parentElement, view = dialog.closest('.reading-view');
+      const text = view.querySelector('.reading-assistant p, .reading-assistant'), ink = parse(getComputedStyle(text).color);
+      let node = text, back = null;
+      while (node && !back) { const c = parse(getComputedStyle(node).backgroundColor); if (c.a > 0.99) back = c; node = node.parentElement; }
+      const cover = parse(getComputedStyle(scrim).backgroundColor), area = scrim.getBoundingClientRect(), box = view.querySelector('textarea').getBoundingClientRect();
+      const covered = !!document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('.native-panel-scrim');
+      return { scrimColour: getComputedStyle(scrim).backgroundColor, ink: getComputedStyle(text).color, back: `rgb(${back.r},${back.g},${back.b})`, contrastWithout: +ratio(ink, back).toFixed(2),
+        contrastBehindScrim: +ratio(over(cover, ink), over(cover, back)).toFixed(2), scrimBottom: area.bottom, composerTop: box.y, composerCovered: covered, theme: document.documentElement.dataset.theme };
+    });
+    await answers({ usage: claudeUsage(soon, later) }); await open(0, 'usage'); await page.waitForTimeout(400);
+    measures.scrimDark = await scrimNumbers(); await shot('scrim-dark');
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; }); await page.waitForTimeout(300);
+    measures.scrimLight = await scrimNumbers(); await shot('scrim-light');
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'mono'; });
+    await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+
+    // ---- 4. a step whose result is unknown ----
+    await emit([event(0, 'turn.started', { origin: 'user', clientMessageId: 'c-unknown' }),
+      event(0, 'item.upsert', { kind: 'user-message', status: 'completed', content: { text: '跑一下测试', clientMessageId: 'c-unknown' } }, { itemId: 'u-unknown' }),
+      event(0, 'item.upsert', { kind: 'command', status: 'unknown', content: { command: 'npm test', cwd: projects[0].path } }, { itemId: 'k-unknown' }),
+      event(0, 'item.delta', { channel: 'text', text: '测试已经跑完了。' }, { itemId: 'm-unknown' }), event(0, 'turn.completed', { status: 'completed', error: null }), event(0, 'session.state', { state: 'idle', reason: null })]);
+    await page.waitForTimeout(800);
+    measures.unknownStep = await page.evaluate(id => {
+      const view = document.querySelector(`[data-terminal-id="${id}"] .reading-view`), text = view.innerText;
+      return { hasUnconfirmedWords: text.includes('结果未能确认'), hasPassWord: /通过/.test(text), questionIcons: view.querySelectorAll('[data-icon="Question"]').length, checkCircles: view.querySelectorAll('[data-icon="CheckCircle"]').length,
+        resultItems: [...view.querySelectorAll('.result-list li')].map(li => ({ cls: li.className, text: li.innerText.replace(/\s+/g, ' ') })) };
+    }, idA);
+    await shot('unknown-step');
+    await views[0].locator('.reading-tools-head').first().click(); await page.waitForTimeout(500);
+    measures.unknownStepOpen = await page.evaluate(id => {
+      const view = document.querySelector(`[data-terminal-id="${id}"] .reading-view`), head = view.querySelector('.reading-tools-head'), icon = head.querySelector('svg');
+      const rows = [...view.querySelectorAll('.reading-tools-body, .reading-tool')].map(e => e.innerText.replace(/\s+/g, ' ')).slice(0, 4);
+      return { headText: head.innerText.replace(/\s+/g, ' '), headIcon: { cls: icon.getAttribute('class'), colour: getComputedStyle(icon).color, shape: icon.innerHTML.slice(0, 80) }, rows, wholeHasUnconfirmed: view.innerText.includes('结果未能确认'), wholeHasPassWord: /通过/.test(view.innerText), verifyLists: view.querySelectorAll('.result-list').length };
+    }, idA);
+    await shot('unknown-step-open');
+
+    // ---- 1. Esc scope ----
+    const run = index => emit([event(index, 'turn.started', { origin: 'user', clientMessageId: `run${index}` }), event(index, 'session.state', { state: 'running', reason: null })]);
+    await run(0); await run(1); await page.waitForTimeout(600);
+    await answers({ status: freshStatus });
+    // (a) Esc from the composer: the panel wins, the turn is not interrupted; the second Esc reaches the composer.
+    await open(0, 'status'); await boxes[0].click();
+    const beforeA = (await interrupts()).length;
+    await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+    measures.escA1 = { panelsLeft: await panels(), interruptsAdded: (await interrupts()).length - beforeA, focus: await active(), focusIsComposerA: await boxes[0].evaluate(el => el === document.activeElement) };
+    await shot('esc-a-after-first');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+    measures.escA2 = { interruptsAdded: (await interrupts()).length - beforeA, lastIsA: (await interrupts()).at(-1) === idA };
+    // (b) click on a row's text inside the panel, then Esc; and Esc with nothing focused.
+    await open(0, 'status'); await views[0].locator('dialog.native-panel dd').first().click();
+    measures.escBFocus = await active();
+    const beforeB = (await interrupts()).length;
+    await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    measures.escB = { panelsLeft: await panels(), interruptsAdded: (await interrupts()).length - beforeB };
+    await open(0, 'status'); await page.evaluate(() => document.activeElement?.blur());
+    measures.escB2Focus = await active();
+    const beforeB2 = (await interrupts()).length;
+    await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    measures.escB2 = { panelsLeft: await panels(), interruptsAdded: (await interrupts()).length - beforeB2 };
+    // (c) a panel in A; Esc in B's composer leaves it and reaches B; then B is expanded and A comes back.
+    await open(0, 'status'); await boxes[1].click();
+    const beforeC = (await interrupts()).length;
+    await page.keyboard.press('Escape'); await page.waitForTimeout(400);
+    const after = await interrupts();
+    measures.escC = { panelAStays: (await views[0].locator('dialog.native-panel').count()) === 1, interruptsAdded: after.length - beforeC, reachedB: after.at(-1) === idB };
+    await shot('esc-c-panel-a-open-esc-in-b');
+    await page.locator(`[data-project-id="${projects[1].id}"] .panel-name`).click(); await page.waitForTimeout(1200);
+    measures.escCExpanded = { panelsWhileBExpanded: await panels(), aVisible: await views[0].evaluate(el => el.checkVisibility({ visibilityProperty: true })).catch(() => null) };
+    await shot('esc-c-b-expanded');
+    await page.getByText('总览', { exact: true }).first().click(); await page.waitForTimeout(1200);
+    measures.escCBack = { panelsAfterReturn: await panels(), aVisible: await views[0].evaluate(el => el.checkVisibility({ visibilityProperty: true })).catch(() => null) };
+    await shot('esc-c-back-in-a');
+    // (d) a dialog above: Esc in Settings is not the panel's.
+    if (!await panels()) await open(0, 'status').catch(() => {});
+    measures.escDPanelBefore = await panels();
+    await chooseFromAppMenu(page, '设置');
+    const settings = page.locator('dialog.settings-dialog'); await settings.waitFor({ timeout: 5000 });
+    await page.keyboard.press('Escape'); await page.waitForTimeout(500);
+    measures.escD = { panelsLeft: await panels(), settingsOpen: await settings.count() };
+    await shot('esc-d-settings-esc');
+    if (await panels()) { await page.keyboard.press('Escape'); await page.waitForTimeout(200); }
+    // (e) two panels at once, nothing focused: the first Esc closes only the newer one, the second the other.
+    await open(0, 'status'); await open(1, 'status'); await page.evaluate(() => document.activeElement?.blur());
+    measures.escEBefore = { panels: await panels(), focus: await active() };
+    await shot('esc-e-two-panels');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    measures.escE1 = { panelA: await views[0].locator('dialog.native-panel').count(), panelB: await views[1].locator('dialog.native-panel').count(), focus: await active(), focusInB: await boxes[1].evaluate(el => el === document.activeElement) };
+    await shot('esc-e-after-first');
+    const beforeE2 = (await interrupts()).length;
+    await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    measures.escE2 = { panelA: await views[0].locator('dialog.native-panel').count(), panelB: await views[1].locator('dialog.native-panel').count(), interruptsAdded: (await interrupts()).length - beforeE2, lastIsB: (await interrupts()).at(-1) === idB };
+    await shot('esc-e-after-second');
+    await page.evaluate(() => document.activeElement?.blur()); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    measures.escE3 = { panelA: await views[0].locator('dialog.native-panel').count() };
+    // (f) a panel under Settings, nothing focused: the Esc belongs to Settings, the panel stays; the next one closes the panel.
+    await open(0, 'status');
+    await chooseFromAppMenu(page, '设置'); await settings.waitFor({ timeout: 5000 });
+    await page.evaluate(() => document.activeElement?.blur());
+    measures.escFFocus = await active();
+    measures.escFCovered = await page.evaluate(() => { const box = document.querySelector('dialog.native-panel').getBoundingClientRect(); return !document.querySelector('dialog.native-panel').contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)); });
+    await shot('esc-f-panel-under-settings');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(500);
+    measures.escF1 = { panels: await panels(), settingsOpen: await settings.count() };
+    await shot('esc-f-after-first');
+    await page.evaluate(() => document.activeElement?.blur()); await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    measures.escF2 = { panels: await panels() };
+  } catch (error) {
+    if (app) await stages.run('capture re-check failure', async () => { const page = await app.firstWindow(); await page.screenshot({ path: path.join(output, 'failure-recheck.png'), timeout: 2000 }); }, 3000).catch(() => {});
+    throw error;
+  } finally {
+    await fs.writeFile(path.join(output, 'recheck-measures.json'), JSON.stringify(measures, null, 2)).catch(() => {});
+    await closeSmokeApplication(app, stages);
+    for (const directory of [profile, home, ...projects.map(item => item.path)]) await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+}
+
 async function run(output, stages) {
   const profile = path.join(output, 'profile'), home = path.join(output, 'ui-home'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
   for (const dir of [profile, home, project.path]) await fs.mkdir(dir, { recursive: true });
@@ -575,6 +765,7 @@ async function run(output, stages) {
   const env = { ...isolatedEnvironment(home), ...displayEnvironment(), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], checks = [];
   let app;
+  if (process.argv.includes('--recheck')) { await recheckApp(output, stages); return; }
   await panelCodexApp(output, stages, checks);
   try {
     app = await stages.run('launch UI application', async () => electron.launch({ executablePath: await executable(), args: packaged ? [] : [root], cwd: root, env, timeout: 25000 }), 30000);
