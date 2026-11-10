@@ -1284,6 +1284,8 @@ async function usageHtml(bridge, terminal = quietTerminal, projectId = 'p1') {
   } finally { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
 }
 
+// The connection row of a connection observed at 1 (usageOf and the tests' own): what it says, with its source and when it was observed in the tooltip.
+const connectionRow = (source, text) => `<dt>连接</dt><dd><span title="${source} · ${load('features/agents/Metric.tsx').resetTime(1)} 更新">${text}</span></dd>`;
 const usageSection = (html, agent) => {
   const section = html.match(new RegExp(`<section class="api-agent" aria-label="${agent}">([\\s\\S]*?)</section>`));
   assert.ok(section, `${agent} has its own named section`);
@@ -1315,8 +1317,8 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.ok(claude.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'));
   assert.doesNotMatch(html, /最近切换/, 'the owner asked for no last-switch row, even after a switch');
   assert.doesNotMatch(html, /新会话/, 'the new-session row is gone, and so is the route it showed');
-  assert.ok(claude.includes('<dt>连接</dt><dd><span title="session init: ANTHROPIC_API_KEY">已连接 API</span></dd>'), 'the connection source stays in its tooltip');
-  assert.ok(codex.includes('<dt>连接</dt><dd><span title="account/read: ChatGPT login">ChatGPT 订阅</span></dd>'));
+  assert.ok(claude.includes(connectionRow('session init: ANTHROPIC_API_KEY', '已连接 API')), 'the connection source stays in its tooltip, with when it was observed');
+  assert.ok(codex.includes(connectionRow('account/read: ChatGPT login', 'ChatGPT 订阅')));
   // An API connection: the budget as a bar (a share of the month's spend) and the spend, never the subscription windows.
   assert.match(claude, /<span class="activity-metric-label">月预算<\/span><span class="activity-meter[^"]*" role="meter"[^>]*aria-valuenow="25"[^>]*>[\s\S]*?<b>25%<\/b><small>本月 \$12\.40 \/ \$50\.00<\/small>/);
   assert.match(claude, /<span class="activity-metric-label">API 花费<\/span><small>今日 \$1\.23 · 本月 \$12\.40 · 估算<\/small>/); assert.match(claude, /title="估算，按公开价格计算"/);
@@ -1383,11 +1385,12 @@ test('the allowance of each agent follows its connection: the current session’
   const main = usageOf({  }); main.agents.claude = { ...main.agents.claude, connection: sub, limits: { state: 'ready', observedAtMs: Date.now(), limitsById: { five: { primary: { usedPercent: 33, windowDurationMins: 300, resetsAtMs: future }, secondary: null } } } };
   const preferred = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: main }) }, current('claude', { limits: [{ minutes: 300, percent: 20, resetsAt: future }] })), 'Claude');
   assert.match(preferred, /aria-valuenow="33"/); assert.doesNotMatch(preferred, /aria-valuenow="20"/); assert.match(preferred, /额度来自 Claude，/);
-  // A window nobody measured says 未知 (never 0), and an expired one waits for its next reading.
+  // A window nobody measured says 未知 (never 0), and one past its reset time keeps the percent last observed while it waits for its next reading.
   const odd = usageOf({  }); odd.agents.codex.limits = { state: 'stale', limitsById: { a: { primary: { usedPercent: null, windowDurationMins: 300, resetsAtMs: null }, secondary: { usedPercent: 50, windowDurationMins: 10080, resetsAtMs: Date.now() - 1000 } } } };
   const staleHtml = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: odd }) }), 'Codex');
   assert.match(staleHtml, /<span class="activity-metric-label">5 小时额度<\/span><b[^>]*>未知<\/b>/); assert.doesNotMatch(staleHtml, /<b[^>]*>0%<\/b>/);
-  assert.match(staleHtml, /已重置，等待更新/); assert.match(staleHtml, /数据可能已过期/);
+  assert.match(staleHtml, /<span class="activity-metric-label">每周额度<\/span><span class="activity-meter" role="meter"[^>]*aria-valuenow="50"[^>]*>[\s\S]*?<b[^>]*>50%<\/b><small>已到重置时间，等待更新<\/small>/);
+  assert.doesNotMatch(staleHtml, /已重置，等待更新/, 'a reset time alone is no reset'); assert.match(staleHtml, /数据可能已过期/);
   // Not connected: the connection and 额度 未知 and nothing to measure, even for the session's own agent.
   const idle = usageOf({  }); idle.agents.codex = { ...idle.agents.codex, connection: { kind: 'none', source: null, observedAt: 1 }, limits: null };
   const none = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: idle }) }), 'Codex');
@@ -1404,8 +1407,8 @@ test('the connection in use reads in words per agent: Claude API / subscription 
   const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: {
     claude: { path: 'terminal', reason: null, next: { path: 'terminal', reason: 'set_terminal' }, limits: null, connection: c('subscription', 'terminal: Claude Code login') },
     codex: { path: 'terminal', reason: null, next: { path: 'terminal', reason: 'set_terminal' }, limits: null, connection: c('api', 'account/read: API key') } } }) }) });
-  assert.ok(usageSection(html, 'Claude').includes('<dt>连接</dt><dd><span title="terminal: Claude Code login">订阅（Claude Code 登录）</span></dd>'));
-  assert.ok(usageSection(html, 'Codex').includes('<dt>连接</dt><dd><span title="account/read: API key">API</span></dd>'));
+  assert.ok(usageSection(html, 'Claude').includes(connectionRow('terminal: Claude Code login', '订阅（Claude Code 登录）')));
+  assert.ok(usageSection(html, 'Codex').includes(connectionRow('account/read: API key', 'API')));
 });
 
 test('an account signed in while the agent has no main session names its plan and never claims 已连接; none and unknown never read as signed in; the bars and spend stay, the context and tokens are not made up', async () => {

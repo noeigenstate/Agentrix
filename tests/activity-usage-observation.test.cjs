@@ -28,8 +28,7 @@ test('the activity usage card retains observations on remount, isolates projects
   };
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   const mount = projectId => {
-    const leaf = mod.exports.ApiUsage({ terminal: {}, projectId });
-    hooks = { values: [], effects: [] }; leaf.type(leaf.props);
+    hooks = { values: [], effects: [] }; mod.exports.ApiUsage({ terminal: {}, projectId });
     const instance = hooks, cleanup = instance.effects.map(effect => effect());
     return { values: instance.values, close: () => cleanup.forEach(dispose => dispose?.()) };
   };
@@ -42,4 +41,9 @@ test('the activity usage card retains observations on remount, isolates projects
   const again = mount('a'); assert.equal(again.values[0], observed, 'cached data is available before the next read'); again.close();
   bridge = { usage: () => assert.fail('no read expected before the timer') };
   const otherBackend = mount('a'); assert.equal(otherBackend.values[0], null); otherBackend.close();
+  // No project removal reaches the card, so it holds only the projects read most recently.
+  bridge = { usage: async project => ({ ok: true, value: { agents: {}, project } }) };
+  for (let other = 0; other < 40; other++) { const pane = mount(`other-${other}`); t.mock.timers.tick(0); await flush(); pane.close(); }
+  const recent = mount('other-39'); assert.equal(recent.values[0].project, 'other-39'); recent.close();
+  const dropped = mount('other-0'); assert.equal(dropped.values[0], null, 'a project not read for many others is no longer held'); dropped.close();
 });

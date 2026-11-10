@@ -25,7 +25,13 @@ import './activity-pane.css';
 const REFRESH_MS = 60_000, REVISION_DELAY_MS = 1000;
 const AGENTS = ['claude', 'codex'] as const;
 const NAMES: Record<NativeAgent, string> = { claude: 'Claude', codex: 'Codex' };
+// The last usage read per project, shown at once when its pane opens again. Nothing tells this file that a project was removed, so it keeps the most recently read ones.
+const HELD_PROJECTS = 32;
 const observations = new Map<string, { bridge: ReturnType<typeof nativeBridge>; usage: NativeUsage }>();
+function observe(key: string, bridge: NonNullable<ReturnType<typeof nativeBridge>>, usage: NativeUsage) {
+  observations.delete(key); observations.set(key, { bridge, usage });
+  if (observations.size > HELD_PROJECTS) observations.delete(observations.keys().next().value!);
+}
 
 const windowsOf = (limits: LimitsPayload) => Object.values(limits.limitsById ?? {}).flatMap(entry => [entry?.primary, entry?.secondary]);
 // That the provider says the limit is reached, with when it recovers; null when it does not say so. A notice of the provider's own (below) says it in
@@ -179,10 +185,8 @@ export const AgentSections = ({ usage, terminal, projectId }: { usage: NativeUsa
   {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} projectId={projectId} />)}
 </div>;
 
-export function ApiUsage(props: { terminal: ProjectTerminal; projectId?: string }) {
-  return <ScopedApiUsage key={props.projectId || ''} {...props} />;
-}
-function ScopedApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
+// A pane belongs to one project for its whole life (the app keys each project's panel by its id), so the state below never changes project.
+export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
   const bridge = nativeBridge(), revision = useUsageRevision();
   const key = projectId || '';
   const [usage, setUsage] = useState<NativeUsage | null>(() => observations.get(key)?.bridge === bridge ? observations.get(key)!.usage : null), [error, setError] = useState<string | null>(null);
@@ -192,7 +196,7 @@ function ScopedApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; pr
     const read = async () => {
       const result = await bridge.usage(projectId).catch((failure: unknown) => ({ ok: false as const, error: failure instanceof Error ? failure.message : String(failure) }));
       if (!active) return;
-      if (result.ok) { observations.set(key, { bridge, usage: result.value }); setUsage(result.value); setError(null); } else setError(result.error);
+      if (result.ok) { observe(key, bridge, result.value); setUsage(result.value); setError(null); } else setError(result.error);
     };
     const first = setTimeout(() => void read(), revision === 0 ? 0 : REVISION_DELAY_MS), again = setInterval(() => void read(), REFRESH_MS);
     return () => { active = false; clearTimeout(first); clearInterval(again); };

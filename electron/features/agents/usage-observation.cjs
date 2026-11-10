@@ -11,7 +11,9 @@ function retainConnection(previous, next) {
     return previous ? { ...previous, ...(typeof next?.active === 'boolean' ? { active: next.active } : {}) }
       : next?.kind === 'none' ? { ...next, kind: 'unknown' } : next;
   }
-  return next;
+  // A reader that cannot name the account (a running session) does not unname it: the name last established stays
+  // with the same kind of login, so a later reader that can name it still sees a change.
+  return previous?.scopeId && next && !next.scopeId && next.kind === previous.kind ? { ...next, scopeId: previous.scopeId } : next;
 }
 function retainAccount(previous, next) {
   if (!next) return previous;
@@ -31,21 +33,32 @@ function retainAccount(previous, next) {
     at: newer && (next.limits?.length || Number.isSafeInteger(next.resets?.left)) ? next.at : previous.at,
     source: newer && next.limits?.length ? next.source : previous.source };
 }
+const measuredWindow = window => dated(window?.usedPercent);
+// accountScopeId: the account a payload was read for, when its reader could name it (subscriptionLimits).
 function retainLimits(previous, next) {
-  if (!next) return previous;
-  if (previous && next.billingRoute === 'unknown') return { ...previous, state: 'stale' };
-  if (dated(previous?.observedAtMs) && (!dated(next.observedAtMs) || next.observedAtMs < previous.observedAtMs)) return previous;
-  if (previous?.billingRoute !== next.billingRoute) return next;
-  const measured = Object.values(next.limitsById || {}).some(bucket => [bucket?.primary, bucket?.secondary].some(window => dated(window?.usedPercent)))
+  if (!previous || !next) return next || previous;
+  if (dated(previous.observedAtMs) && (!dated(next.observedAtMs) || next.observedAtMs < previous.observedAtMs)) return previous;
+  // Quota read for one account is never kept for another, nor merged into its reading.
+  if (previous.accountScopeId && next.accountScopeId && previous.accountScopeId !== next.accountScopeId) return next;
+  if (previous.billingRoute !== next.billingRoute) return next;
+  const measured = Object.values(next.limitsById || {}).some(bucket => measuredWindow(bucket?.primary) || measuredWindow(bucket?.secondary))
     || Number.isSafeInteger(next.resetCredits?.availableCount);
   const readable = measured || next.providerStatus != null || next.notice != null || typeof next.ordinaryUsageAllowed === 'boolean';
-  if (!readable && previous) return { ...previous, state: ['loading', 'error', 'unavailable'].includes(next.state) ? 'stale' : previous.state };
-  if (!previous) return next;
+  if (!readable) {
+    // Dated, with neither a billing route nor a quota: the provider's own word that the account changed (Codex
+    // account/updated). Whose quota the held one is can no longer be told, so it goes. Any other unreadable reply is a
+    // failed read and keeps it.
+    if (next.billingRoute === 'unknown' && next.state === 'unavailable' && dated(next.observedAtMs)) return next;
+    return { ...previous, state: ['loading', 'error', 'unavailable'].includes(next.state) ? 'stale' : previous.state };
+  }
+  // Another reader's or session's reading replaces the held one whole; only a reader's own sparse update is completed from it.
+  if (previous.scopeId !== next.scopeId) return next;
   const limitsById = structuredClone(previous.limitsById || {});
   for (const [id, bucket] of Object.entries(next.limitsById || {})) {
     const held = limitsById[id] ||= {};
-    for (const name of ['primary', 'secondary']) if (bucket?.[name]) {
-      held[name] = { ...held[name], ...Object.fromEntries(Object.entries(bucket[name]).filter(([, value]) => dated(value))) };
+    // A percent and its reset time are one reading: a newer percent takes its own reset time, known or not.
+    for (const name of ['primary', 'secondary']) if (measuredWindow(bucket?.[name])) {
+      held[name] = { ...bucket[name], windowDurationMins: bucket[name].windowDurationMins ?? held[name]?.windowDurationMins ?? null };
     }
   }
   return { ...next, limitsById, observedAtMs: measured ? next.observedAtMs : previous.observedAtMs,
