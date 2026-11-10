@@ -63,7 +63,8 @@ test('Claude hook event identities conservatively invalidate old approval action
 });
 
 test('working and complete clear waiting without disposing usage; actual agent/shell exits clean up', () => {
-  for (const event of [{ state: 'working', prompt: 'Actual task' }, { state: 'complete' }, { type: 'codex-exited', exitCode: 0 }, { type: 'shell-ready', cwd: '/project' }, { type: 'shell-prompt', cwd: '/project' }]) {
+  // Claude's wrappers name it in their exit report; Codex has no terminal run, so its wrappers send none.
+  for (const event of [{ state: 'working', prompt: 'Actual task' }, { state: 'complete' }, { type: 'codex-exited', agent: 'claude', exitCode: 0 }, { type: 'shell-ready', cwd: '/project' }, { type: 'shell-prompt', cwd: '/project' }]) {
     const { session, calls, send } = handlers();
     const account = session.usageAccount, bind = session.bindUsageAccount;
     send({ state: 'attention', message: 'Approve tool' });
@@ -80,6 +81,11 @@ test('working and complete clear waiting without disposing usage; actual agent/s
     assert.equal(session.usageAccount, event.state ? account : null);
     assert.equal(session.bindUsageAccount, event.state ? bind : null);
   }
+  // An exit report that names Codex is not this Claude session's: it ends nothing.
+  const { session, calls, send } = handlers();
+  send({ state: 'attention', message: 'Approve tool' }); send({ type: 'codex-exited', agent: 'codex', exitCode: 0 });
+  assert.equal(session.needsInput.message, 'Approve tool'); assert.equal(session.codexActive, true);
+  assert.deepEqual([calls.restore, calls.usageDispose, calls.broadcast], [0, 0, 1]);
 });
 
 test('only distinct Claude UserPromptSubmit events arm completion; attention and Stop callbacks never rearm it', () => {

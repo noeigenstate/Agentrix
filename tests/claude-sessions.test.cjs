@@ -484,7 +484,8 @@ test('SessionStart after clear/resume and process exit retire old background wor
   h.s.completionWork.start('cleared-worker', Date.now());
   await bind('resumed'); assert.equal(h.s.completionWork.tasks.size, 0);
   h.s.completionWork.start('resumed-worker', Date.now());
-  h.context.onEvent({ projectId: h.s.terminalId, sessionKey: h.s.sessionKey, type: 'codex-exited', exitCode: 0 });
+  // Claude's wrappers name it in their exit report; one that names Codex (which has no terminal run) is ignored.
+  h.context.onEvent({ projectId: h.s.terminalId, sessionKey: h.s.sessionKey, type: 'codex-exited', agent: 'claude', exitCode: 0 });
   assert.equal(h.s.completionWork.tasks.size, 0); assert.equal(h.s.codexActive, false); assert.equal(h.s.activitySnapshot, null);
   assert.deepEqual(changes, [false, false, false]);
 });
