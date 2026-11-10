@@ -15,10 +15,10 @@ const { agentCommand } = require('../electron/features/agents/agent-command.cjs'
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
 
 const user = content => ({ type: 'user', uuid: 'prompt', message: { content } });
-async function fixture(t) {
+async function fixture(t, cwd = 'E:\\不负芳华\\project') {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'pg-claude-sessions-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
-  const cwd = 'E:\\不负芳华\\project', folder = path.join(home, 'projects', encodeClaudeCwd(cwd));
+  const folder = path.join(home, 'projects', encodeClaudeCwd(cwd));
   await fs.mkdir(folder, { recursive: true });
   const write = async (id, records, when = 1000000) => {
     const file = path.join(folder, `${id}.jsonl`);
@@ -36,7 +36,9 @@ test('Claude cwd encoding replaces every separator, punctuation and Unicode char
 });
 
 test('session lookup prefers the encoded project and admits only verified legacy aliases', async t => {
-  const f = await fixture(t), known = await f.write('known', [{ ...user('hello'), cwd: f.cwd }]);
+  // An alias folder is admitted by the folder its records name, which is an absolute path of the system that wrote them.
+  const f = await fixture(t, process.platform === 'win32' ? undefined : '/srv/不负芳华/project');
+  const known = await f.write('known', [{ ...user('hello'), cwd: f.cwd }]);
   const other = path.join(f.home, 'projects', 'edge-encoding'); await fs.mkdir(other);
   await fs.writeFile(path.join(other, 'other.jsonl'), '{}\n');
   assert.equal(await findClaudeSession(f.cwd, 'known', f.home), known);

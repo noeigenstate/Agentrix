@@ -263,7 +263,7 @@ test('Node SessionStart writes one JSON context even without Agentrix; other hoo
   assert.equal(simultaneous.filter(result => result.stdout).length, 1, 'concurrent hook processes share the exclusive receipt');
 });
 
-test('Unix wrappers keep the startup note and manifest fallback on the command line, with skills only in SessionStart', { skip: process.platform === 'win32' }, async t => {
+test('Unix Claude wrapper keeps the startup note on the command line, with skills only in SessionStart; the shell never runs Codex', { skip: process.platform === 'win32' }, async t => {
   const terminalSession = '11111111-1111-4111-8111-111111111111';
   const f = await fixture(t), bin = path.join(f.root, 'bin'), home = path.join(f.root, 'home'), noteFile = path.join(f.root, `${terminalSession}-skills.txt`);
   fs.mkdirSync(bin); fs.mkdirSync(home); fs.writeFileSync(noteFile, f.note('unix'));
@@ -280,14 +280,15 @@ test('Unix wrappers keep the startup note and manifest fallback on the command l
     let errors = ''; child.stderr.on('data', bytes => { errors += bytes; }); child.once('error', reject);
     child.once('close', code => code === 0 ? resolve() : reject(new Error(errors)));
   });
-  const claude = JSON.parse(fs.readFileSync(path.join(f.root, 'claude.json'))), codex = JSON.parse(fs.readFileSync(path.join(f.root, 'codex.json')));
-  assert.equal(claude.note, noteFile); assert.equal(codex.note, noteFile);
+  const claude = JSON.parse(fs.readFileSync(path.join(f.root, 'claude.json')));
+  // Typing codex asks for a native session, whose start carries the note: the executable on PATH is never run.
+  assert.equal(fs.existsSync(path.join(f.root, 'codex.json')), false);
+  assert.equal(claude.note, noteFile);
   assert.equal(claude.args[2], '--append-system-prompt');
   assert.equal(claude.args[3], fs.readFileSync(noteFile, 'utf8').split(' Agentrix skill delivery: ')[0] + ' Agentrix delivers skill instructions through its SessionStart hook.');
   assert.match(claude.args[3], /^You run inside Agentrix/);
   assert.deepEqual(claude.args.slice(4), ['hello']);
   assert.ok(!JSON.stringify(claude.args).includes('中文说明'));
-  assert.ok(JSON.stringify(codex.args).includes('中文说明'));
   assert.ok(claude.settings.hooks.SessionStart[0].hooks[0].command.includes(noteFile));
   assert.equal(path.dirname(claude.args[1]), f.root);
   assert.ok(path.basename(claude.args[1]).startsWith(`${terminalSession}-claude-settings-`));

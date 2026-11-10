@@ -852,7 +852,10 @@ class Worker:
         def wait():
             code = child.wait()
             for thread in threads: thread.join(timeout=2)
-            for stream in (child.stdin, child.stdout, child.stderr): stream.close()
+            for stream in (child.stdin, child.stdout, child.stderr):
+                # Closing stdin flushes input the dead child never read (EPIPE): that must not cost the slot or the exit report.
+                try: stream.close()
+                except (OSError, ValueError): pass
             with self.lock: self.codex_processes.pop(process_id, None)
             self.emit({"type": "codex-exit", "processId": process_id, "code": code})
         threading.Thread(target=wait, daemon=True).start()

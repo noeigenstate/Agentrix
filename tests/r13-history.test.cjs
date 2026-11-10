@@ -29,7 +29,9 @@ test('R1 clicking continue defers unknown SSH history to router.start and retain
   await handler('t', 'codex', 'new'); assert.equal(options.resume, false);
 });
 for (const kind of ['local', 'ssh']) test(`N10 ${kind} history lookup resumes the listed thread without a model or account read`, async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-history-')), home = path.join(root, 'codex');
+  // A remote folder is compared as the host names it, and the stand-in server names its own by the physical path
+  // (macOS keeps its temporary folder behind a link).
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-history-'))), home = path.join(root, 'codex');
   fs.mkdirSync(path.join(home, 'sessions'), { recursive: true });
   const threadId = '11111111-1111-4111-8111-111111111111';
   fs.writeFileSync(path.join(home, 'sessions', 'rollout-' + threadId + '.jsonl'), JSON.stringify({ type: 'session_meta', payload: { id: threadId, cwd: root } }) + '\n');

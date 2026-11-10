@@ -91,7 +91,8 @@ class RemoteFilesTest(unittest.TestCase):
 
     def test_remote_close_can_reap_a_codex_that_stopped_reading_stdin(self):
         self.worker.agent_env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)
-        original, children = subprocess.Popen, []
+        original, children, events = subprocess.Popen, [], []
+        self.worker.emit = events.append
         def launch(argv, **options):
             child = original([sys.executable, "-c", "import time;time.sleep(60)"], **options)
             children.append(child)
@@ -112,6 +113,31 @@ class RemoteFilesTest(unittest.TestCase):
             if children[0].poll() is None: children[0].kill()
             children[0].wait(); writer.join(2); closer.join(2)
         self.assertFalse(writer.is_alive())
+        # The input it never read is still buffered when its pipes are closed: the host is told of the exit all the same.
+        exits = lambda: [event["processId"] for event in events if event.get("type") == "codex-exit"]
+        deadline = time.time() + 8
+        while not exits() and time.time() < deadline: time.sleep(0.02)
+        self.assertEqual(exits(), ["blocked"])
+        self.assertEqual(self.worker.codex_processes, {})
+
+    def test_a_codex_pipe_that_fails_to_close_still_reports_the_exit_and_frees_its_slot(self):
+        # What Linux does when stdin still holds input the dead child never read, made the same on every system.
+        class Unflushed:
+            def __init__(self, stream): self.stream = stream
+            def close(self): self.stream.close(); raise BrokenPipeError(32, "Broken pipe")
+        self.worker.agent_env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)
+        original, events = subprocess.Popen, []
+        self.worker.emit = events.append
+        def launch(argv, **options):
+            child = original([sys.executable, "-c", "pass"], **options)
+            child.stdin = Unflushed(child.stdin)
+            return child
+        with mock.patch.object(remote, "resolve_codex", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+            self.worker.codex_open("unflushed")
+        deadline = time.time() + 8
+        while not events and time.time() < deadline: time.sleep(0.02)
+        self.assertEqual(events, [{"type": "codex-exit", "processId": "unflushed", "code": 0}])
+        self.assertEqual(self.worker.codex_processes, {})
 
     def test_dispatch_events_use_the_same_authenticated_envelope_over_ssh(self):
         events = []
