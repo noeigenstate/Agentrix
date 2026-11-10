@@ -92,7 +92,7 @@ test('D1 D3 D5 real CLI shell then compact completes and notifies once through t
   const f = await real.harness(t, data => { bodies.push(data); return [real.opening(data), ...real.textBlock(0, 'UI BACKEND ACK'), ...real.finish('end_turn')]; });
   const h = await harness(t, 'local', 'claude'), events = [], runtimeId = require('node:crypto').randomUUID();
   Object.assign(h.s, { nativeStructured: true, nativeRuntimeSessionId: runtimeId, nativeMessages: new Map() });
-  Object.assign(h.context, { nativeSpecs: new Map([[h.s.terminalId, { agent: 'claude' }]]), quitting: false,
+  Object.assign(h.context, { nativeSpecs: new Map([[h.s.terminalId, { agent: 'claude' }]]), quitting: false, nativeSessions: { tokenRate: () => session.tokenRate() },
     createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage });
   const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.cwd, 'state'),
     loadSdk: async () => f.sdk, resolveExecutable: async () => process.env.AGENTRIX_REAL_CLAUDE,
@@ -128,10 +128,11 @@ test('D1 D3 D5 real CLI shell then compact completes and notifies once through t
   const arms = h.armings();
   for (let index = 0; index < 5; index++) h.context.structuredEvent(h.s.terminalId, { ...events.at(-1), type: 'session.state', payload: { state: 'idle' } });
   assert.equal(h.alerts(), 3); assert.equal(h.armings(), arms); assert.equal(h.project.unread, 0);
-  const contextStart = events.length;
-  await session.send({ clientMessageId: 'context-after-compact', text: '/context' }); await wait(4);
-  assert.ok(events.slice(contextStart).some(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message'));
-  assert.equal(h.alerts(), 4);
+  // /context is a read-only question: the real CLI's context usage comes back in the send receipt. It is no round, so nothing is published, completed or notified.
+  const contextStart = events.length, asked = bodies.length;
+  const receipt = await session.send({ clientMessageId: 'context-after-compact', text: '/context' });
+  assert.deepEqual([receipt.status, receipt.local.command, Number.isSafeInteger(receipt.local.context.tokens)], ['consumed', 'context', true]);
+  assert.deepEqual([events.length, bodies.length, h.alerts(), h.armings(), h.project.unread], [contextStart, asked, 3, arms, 0]);
 });
 
 for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind} shell cannot bind native input to the previous provider`, async t => {

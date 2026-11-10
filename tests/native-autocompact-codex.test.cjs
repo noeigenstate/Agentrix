@@ -51,5 +51,8 @@ for (const mode of ['configured', 'default', 'below-limit', 'post-turn-on', 'pos
     const calls = requests.length; await new Promise(resolve => setTimeout(resolve, 200)); assert.equal(requests.length, calls, 'no host retry loop after CLI failure'); }
   else { assert.equal(compact, ['below-limit', 'post-turn-off'].includes(mode) ? 0 : 1); assert.equal(boundaries.length, compact); if (compact) assert.equal(boundaries[0].payload.trigger, 'auto');
     await session.send({ clientMessageId: 'third', text: 'Offline input three' }); await wait(3); assert.equal(events.filter(row => row.type === 'context.compacted').length, compact); }
-  fs.writeFileSync(path.join(__dirname, `../.notes/native-autocompact-codex-${mode}.json`), JSON.stringify({ mode, requests, events: events.filter(row => !['item.upsert', 'item.delta'].includes(row.type)) }, null, 2));
+  // The run's events are too large for a diagnostic line: kept in the OS temp directory, never in the checkout (a clean one has no folder for them).
+  const evidence = path.join(os.tmpdir(), `agx-autocompact-codex-${mode}.json`);
+  fs.writeFileSync(evidence, JSON.stringify({ mode, requests, events: events.filter(row => !['item.upsert', 'item.delta'].includes(row.type)) }, null, 2));
+  t.diagnostic(`evidence: ${evidence}`);
 });

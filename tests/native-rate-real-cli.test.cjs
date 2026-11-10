@@ -51,8 +51,7 @@ test('real Claude streaming usage reaches the main native rate before the turn r
   assert.equal(usage.snapshot().rate.samples, 1, 'stream blocks and assistant snapshots replace one response');
   const final = usage.snapshot().rate;
   await new Promise(resolve => setTimeout(resolve, 40)); assert.deepEqual(usage.snapshot().rate, final, 'idle preserves completed-response rate');
-  fs.writeFileSync(path.join(__dirname, '../.notes/native-rate-claude-events.json'), JSON.stringify({ cli: '2.1.317', partial,
-    final: raw.filter(row => ['assistant', 'result'].includes(row.type)).map(row => ({ type: row.type, usage: row.message?.usage || row.usage, model: row.message?.model })) }, null, 2));
+  t.diagnostic(JSON.stringify({ final: raw.filter(row => ['assistant', 'result'].includes(row.type)).map(row => ({ type: row.type, usage: row.message?.usage || row.usage, model: row.message?.model })) }));
 });
 
 test('real Claude child usage and Agent tool wait never enter the main rate', {
@@ -87,7 +86,6 @@ test('real Claude child usage and Agent tool wait never enter the main rate', {
   const first = marks.find(row => row.output === 10), last = marks.find(row => row.output === 20), tool = marks.find(row => row.tool);
   assert.ok(tool.at - first.at >= 300);
   assert.equal(meter.snapshot().activeMs, first.at - began + last.at - tool.at);
-  fs.writeFileSync(path.join(__dirname, '../.notes/native-rate-claude-child-events.json'), JSON.stringify({ marks, shapes, total: result.usage, rate: meter.snapshot() }, null, 2));
 });
 
 test('real Codex 0.166 streaming notifications feed the native main rate without estimating text tokens', {
@@ -132,5 +130,5 @@ test('real Codex 0.166 streaming notifications feed the native main rate without
   assert.equal(usage.snapshot().model, 'gpt-6.1-sol');
   const observed = wire.filter(row => ['thread/tokenUsage/updated', 'item/agentMessage/delta'].includes(row.method));
   assert.ok(observed.some(row => row.params.tokenUsage?.last?.outputTokens === 20));
-  fs.writeFileSync(path.join(__dirname, '../.notes/native-rate-codex-events.json'), JSON.stringify({ cli: '0.166.0', observed, rate }, null, 2));
+  t.diagnostic(JSON.stringify({ observed, rate }));
 });

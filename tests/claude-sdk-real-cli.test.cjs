@@ -93,7 +93,7 @@ test('a finishing worker answers a late streamed intervention before control.fin
 });
 
 for (const [command, expected, marker] of [
-  ['/compact', null, null], ['/context', /Context Usage/, null],
+  ['/compact', null, null], ['/context', null, null],
   ['/offline-command ARG', /NATIVE SLASH ANSWER/, 'CUSTOM_COMMAND_MARKER ARG'],
   ['/offline-skill', /NATIVE SLASH ANSWER/, 'SKILL_COMMAND_MARKER'],
   ['/model', /Current model/, null], ['/model claude-haiku-4-5', null, null],
@@ -104,10 +104,19 @@ for (const [command, expected, marker] of [
   fs.mkdirSync(path.join(f.cwd, '.claude/skills/offline-skill'), { recursive: true });
   fs.writeFileSync(path.join(f.cwd, '.claude/commands/offline-command.md'), '---\ndescription: Offline command\n---\nCUSTOM_COMMAND_MARKER $ARGUMENTS');
   fs.writeFileSync(path.join(f.cwd, '.claude/skills/offline-skill/SKILL.md'), '---\nname: offline-skill\ndescription: Offline skill\n---\nSKILL_COMMAND_MARKER');
+  if (command === '/context') fs.writeFileSync(path.join(f.cwd, 'CLAUDE.md'), 'Offline project memory for the context reading.\n');
   f.env.AGENTRIX_DATA_DIR = path.join(f.cwd, 'profile');
   let queries = 0;
+  const contexts = [], inits = [];
   const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: path.join(f.cwd, 'state'),
-    loadSdk: async () => ({ ...f.sdk, query: options => { queries++; return f.sdk.query(options); } }), resolveExecutable: async () => cli,
+    // What the real CLI itself said, kept beside what the session makes of it: its context usage and the first message of its stream.
+    loadSdk: async () => ({ ...f.sdk, query: options => {
+      queries++;
+      const query = f.sdk.query(options), usage = query.getContextUsage.bind(query), iterate = query[Symbol.asyncIterator].bind(query);
+      query.getContextUsage = async () => { const raw = await usage(); contexts.push(raw); return raw; };
+      query[Symbol.asyncIterator] = async function* () { for await (const message of { [Symbol.asyncIterator]: iterate }) { if (message.type === 'system' && message.subtype === 'init') inits.push(message); yield message; } };
+      return query;
+    } }), resolveExecutable: async () => cli,
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
   });
   f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-native-slash-fixture');
@@ -131,13 +140,39 @@ for (const [command, expected, marker] of [
   assert.equal(listed.some(row => row.name === command.split(' ')[0]), true);
   assert.ok(!listed.some(row => ['/doctor', '/color', '/focus', '/reload-plugins'].includes(row.name)));
   const start = events.length, previousRequests = bodies.length;
+  if (command === '/context') {
+    // /context and /status are read-only questions: the session answers them in the send receipt from the real CLI's own getContextUsage() and the first
+    // message of its stream. They are no turn, no item and no request to the model. What the answer is read from is checked here against what the real CLI
+    // sent: a field the panel reads and the CLI no longer sends would otherwise be shown as 未知 with every other test still green.
+    const context = (await session.send({ clientMessageId: 'slash-command', text: command })).local, status = (await session.send({ clientMessageId: 'status', text: '/status' })).local;
+    const [raw] = contexts, [init] = inits, facts = context.context, count = value => Number.isSafeInteger(value) && value >= 0;
+    t.diagnostic(JSON.stringify({ context: { ...raw, gridRows: undefined, messageBreakdown: undefined }, init: { version: init.claude_code_version, permissionMode: init.permissionMode, mcp_servers: init.mcp_servers } }));
+    assert.deepEqual([context.agent, context.command, status.command, status.errors], ['claude', 'context', 'status', []]);
+    for (const key of ['totalTokens', 'maxTokens', 'rawMaxTokens', 'autoCompactThreshold']) assert.ok(count(raw[key]) && raw[key] > 0, `the CLI sends ${key} as a count`);
+    assert.deepEqual([typeof raw.model, typeof raw.isAutoCompactEnabled], ['string', 'boolean']);
+    assert.ok(raw.categories.every(row => typeof row.id === 'string' && typeof row.name === 'string' && count(row.tokens) && ['used', 'free', 'buffer', 'deferred'].includes(row.kind)), 'every category has an id, a name, a count and a kind the panel knows');
+    assert.deepEqual(['used', 'free'].map(kind => raw.categories.some(row => row.kind === kind && row.tokens > 0)), [true, true]);
+    const memory = raw.memoryFiles.find(row => path.basename(row.path) === 'CLAUDE.md'), skill = raw.skills.skillFrontmatter.find(row => row.name === 'offline-skill');
+    assert.ok(count(memory?.tokens) && memory.tokens > 0 && count(skill?.tokens) && Array.isArray(raw.mcpTools), 'memory files have a path and a count, skills a name and a count');
+    assert.deepEqual([facts.model, facts.tokens, facts.window, facts.autoCompact, facts.autoCompactThreshold], [raw.model, raw.totalTokens, raw.rawMaxTokens, raw.isAutoCompactEnabled, raw.autoCompactThreshold]);
+    const parts = rows => rows.map(row => [row.id, row.tokens, row.kind]).sort();
+    assert.deepEqual(parts(facts.categories), parts(raw.categories.filter(row => row.tokens > 0)), 'every category the CLI counted is carried with its id and kind');
+    assert.deepEqual(facts.memory, [{ name: 'CLAUDE.md', tokens: memory.tokens }]);
+    assert.ok(facts.skills.length > 0 && facts.skills.every(row => raw.skills.skillFrontmatter.some(found => found.name === row.name && found.tokens === row.tokens)));
+    assert.deepEqual([status.session.version, status.session.permission, status.session.mcp, status.session.sessionId, status.account],
+      [init.claude_code_version, init.permissionMode, init.mcp_servers.map(row => ({ name: row.name, status: row.status })), init.session_id, { kind: 'api' }]);
+    assert.match(status.session.version, /^\d+\.\d+\.\d+$/); assert.equal(typeof status.session.permission, 'string');
+    assert.deepEqual([events.length, bodies.length, queries], [start, previousRequests, 1], 'nothing was published, nothing was asked of the model and no second query was made');
+    await assert.rejects(session.send({ clientMessageId: 'clear-command', text: '/clear' }), /不支持/);
+    return;
+  }
   await session.send({ clientMessageId: 'slash-command', text: command }); await wait(2);
   const visible = events.slice(start).filter(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message').map(event => event.payload.content.text).join('\n');
   if (expected) assert.match(visible, expected);
   else assert.equal(visible, '', 'GUI mutations use their native acknowledgements instead of CLI local stdout');
   assert.doesNotMatch(visible, /local-command-stdout|system-reminder/);
   if (marker) assert.ok(JSON.stringify(bodies.slice(previousRequests)).includes(marker));
-  if (['/context', '/model'].includes(command)) assert.equal(bodies.length, previousRequests);
+  if (command === '/model') assert.equal(bodies.length, previousRequests);
   if (command.startsWith('/model ')) {
     await session.send({ clientMessageId: 'check-model', text: 'Check the chosen model' }); await wait(3);
     assert.equal(queries, 1, 'normal consumption keeps the same CLI query alive');

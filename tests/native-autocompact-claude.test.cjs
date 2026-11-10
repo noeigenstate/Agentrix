@@ -1,11 +1,14 @@
 require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs'), path = require('node:path');
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { harness, opening, textBlock, finish } = require('./fixtures/claude-real.cjs');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+// The evidence of a run is too large for a diagnostic line. It is kept in the OS temp directory and the run says where: nothing is written into the
+// checkout, and a clean one has no folder for it.
+const evidence = (t, name) => { const file = path.join(os.tmpdir(), name); t.diagnostic(`evidence: ${file}`); return file; };
 
 for (const [version, variable] of [['2.1.317', 'AGENTRIX_REAL_CLAUDE'], ['2.1.318', 'AGENTRIX_REAL_CLAUDE_318']]) {
   for (const mode of ['default', 'window', 'setting-window', 'pct', 'pct-control', 'disabled-setting', 'disabled-env', 'disabled-compact', 'reactive', 'failure']) test(`real Claude ${version} auto compact ${mode}`, {
@@ -53,11 +56,11 @@ for (const [version, variable] of [['2.1.317', 'AGENTRIX_REAL_CLAUDE'], ['2.1.31
     contexts.push(await query.getContextUsage());
     if (mode !== 'failure') { await session.send({ clientMessageId: 'three', text: 'Offline third turn' }); await wait(3); contexts.push(await query.getContextUsage()); }
     const boundaries = events.filter(row => row.type === 'context.compacted');
-    if (fs.existsSync(f.env.CLAUDE_CODE_DEBUG_LOG_FILE)) fs.copyFileSync(f.env.CLAUDE_CODE_DEBUG_LOG_FILE, path.join(__dirname, `../.notes/native-autocompact-debug-${version}-${mode}.log`));
+    if (fs.existsSync(f.env.CLAUDE_CODE_DEBUG_LOG_FILE)) fs.copyFileSync(f.env.CLAUDE_CODE_DEBUG_LOG_FILE, evidence(t, `agx-autocompact-claude-debug-${version}-${mode}.log`));
     t.diagnostic(JSON.stringify({ mode, compact, requests, contexts: contexts.map(row => ({ totalTokens: row.totalTokens, autoCompactThreshold: row.autoCompactThreshold, isAutoCompactEnabled: row.isAutoCompactEnabled })), boundaries }));
     const expected = ['window', 'setting-window', 'pct', 'reactive'].includes(mode);
     if (mode === 'failure') {
-      fs.writeFileSync(path.join(__dirname, `../.notes/native-autocompact-claude-failure-raw-${version}.json`), JSON.stringify({ raw, visible: events.filter(row => ['error', 'turn.completed', 'context.compacting', 'context.compacted'].includes(row.type)) }, null, 2));
+      fs.writeFileSync(evidence(t, `agx-autocompact-claude-failure-raw-${version}.json`), JSON.stringify({ raw, visible: events.filter(row => ['error', 'turn.completed', 'context.compacting', 'context.compacted'].includes(row.type)) }, null, 2));
       assert.equal(compact, 1);
       assert.match(events.map(row => row.payload.message || row.payload.content?.text || row.payload.error || '').join('\n'), /offline compact failure/);
       const count = requests.length; await new Promise(resolve => setTimeout(resolve, 200)); assert.equal(requests.length, count, 'failure never starts a host retry loop');
@@ -70,6 +73,6 @@ for (const [version, variable] of [['2.1.317', 'AGENTRIX_REAL_CLAUDE'], ['2.1.31
     // The paired 50k fixture proves the engine uses 40k only with pct=50.
     if (mode.startsWith('pct')) assert.equal(contexts[0].autoCompactThreshold, 67000);
     if (mode !== 'failure') { await session.send({ clientMessageId: 'four', text: 'Offline fourth turn' }); await wait(4); assert.equal(compact, expected ? 1 : 0, 'the CLI compact is not repeated by the host'); }
-    fs.writeFileSync(path.join(__dirname, `../.notes/native-autocompact-claude-${version}-${mode}.json`), JSON.stringify({ version, mode, requests, contexts, boundaries }, null, 2));
+    fs.writeFileSync(evidence(t, `agx-autocompact-claude-${version}-${mode}.json`), JSON.stringify({ version, mode, requests, contexts, boundaries }, null, 2));
   });
 }
