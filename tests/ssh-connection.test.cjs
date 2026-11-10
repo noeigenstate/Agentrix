@@ -390,7 +390,7 @@ test('Linux remote worker reads real files, enforces boundaries and hands a type
   await fs.writeFile(path.join(fixture.project, 'README.md'), '# SSH Markdown');
   // The host's Codex is only looked up, never run by the shell: running it would leave this file.
   const executed = path.join(fixture.home, 'bin', 'codex-executed');
-  await fs.writeFile(path.join(fixture.home, 'bin', 'codex'), '#!/bin/sh\n: > "$0-executed"\n', { mode: 0o755 });
+  await fs.writeFile(path.join(fixture.home, 'bin', 'codex'), '#!/bin/sh\nprintf \'%s\n\' "$@" > "$0-executed"\nexit 3\n', { mode: 0o755 });
   const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-linux-key', onEvent: event => events.push(event) });
   connection.onData(data => { output += data; });
   t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
@@ -442,6 +442,11 @@ test('Linux remote worker reads real files, enforces boundaries and hands a type
   assert.deepEqual(complete.records.map(record => record.payload.type), ['task_complete']);
   assert.equal(events.some(event => ['turn-complete', 'codex-exited'].includes(event.type)), false, 'no terminal Codex run and no completion made up for one');
   await assert.rejects(fs.stat(executed), { code: 'ENOENT' }, 'the shell never executes Codex');
+  // A management command is the CLI itself on that host, with its arguments and exit status and no request to this one.
+  connection.write('codex mcp add "中文 name" -- tool; echo "status=$?" > codex-status.txt\r');
+  await waitFor(async () => fs.readFile(path.join(fixture.project, 'codex-status.txt'), 'utf8').then(value => value.trim() === 'status=3', () => false), 'the management command to return its exit status');
+  assert.equal(await fs.readFile(executed, 'utf8'), 'mcp\nadd\n中文 name\n--\ntool\n');
+  assert.equal(events.filter(event => event.type === 'codex-started').length, 1, 'a management command asks for no native session');
   let clipboard = [];
   const operations = new FileOperations({ cacheRoot: path.join(fixture.directory, 'clipboard-cache'), remote: () => connection,
     clipboard: async (action, paths) => action === 'copy' ? (clipboard = paths) : clipboard, confirmDelete: async () => true,

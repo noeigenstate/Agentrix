@@ -54,7 +54,10 @@ await fs.writeFile(path.join(previewProject, 'assets', 'preview.mjs'), 'import {
 await fs.writeFile(path.join(previewProject, 'reports', 'preview.html'), '<!doctype html><html lang="zh-CN"><meta charset="UTF-8"><title>HTML preview fixture</title><link rel="stylesheet" href="../assets/preview.css"><main><h1>HTML 页面已渲染</h1><img src="../image-preview.png" alt="相对路径图片"><p id="script-status">Loading scripts</p><p id="data-status"></p><button id="increment">点击计数</button><output id="count">0</output></main><script type="module" src="../assets/preview.mjs"></script></html>');
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, closeToTray: true, fontSize: 12 } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')) };
+// The agent a terminal runs here is Claude Code's offline stand-in (tests/helpers/desktop-task-fixture.mjs); its
+// records live in this run's own Claude home, and nothing reads the owner's.
+const claudeHome = path.join(output, 'claude-home');
+const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')), CLAUDE_CONFIG_DIR: claudeHome };
 env.NO_COLOR = '1';
 env.NODE_DISABLE_COLORS = '1';
 env.FORCE_COLOR = '0';
@@ -184,24 +187,24 @@ try {
   await waitFor(async () => {
     return page.locator(`[data-project-id="${projects[0].id}"] .xterm-rows > div`).evaluateAll(rows => rows.some(row => row.textContent.trim() === 'AGENTRIX_STREAM_OK'));
   }, 'terminal output');
+  // Codex's management commands start no conversation: the wrapper runs the installed CLI in the terminal, which stays
+  // a terminal. (A conversation opens in native mode instead: cmd-smoke and session-smoke type one.)
+  const managed = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[1];
   await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex --version\r'), projects[1].id);
   await waitFor(async () => {
     const result = await page.evaluate(id => window.agentrix.attachTerminal(id), projects[1].id);
     return result.ok && result.value.data.includes('codex-cli');
   }, 'Codex wrapper returns version without a model request');
-  await waitFor(async () => {
-    const result = await page.evaluate(() => window.agentrix.getState());
-    return result.ok && result.value.projects[1].status === 'shell';
-  }, 'Codex process exit returns to shell');
-  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[1].unread, 0);
-  console.log('PASS: actual Codex CLI launches through the wrapper; command exit does not mean turn complete');
+  await waitFor(async () => { const project = await managed(); return project.status === 'shell' && project.shellReady; }, 'Codex process exit returns to shell');
+  assert.deepEqual([(await managed()).unread, (await managed()).codexActive, (await managed()).terminals[0].nativeMode], [0, false, null]);
+  console.log('PASS: actual Codex CLI runs its version command through the wrapper in the terminal; no session opens and nothing completes');
   await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex features list\r'), projects[1].id);
   await waitFor(async () => {
     const result = await page.evaluate(id => window.agentrix.attachTerminal(id), projects[1].id);
     return result.ok && result.value.data.includes('stable');
-  }, 'Codex parses notification config without losing Windows argument quotes');
-  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[1].shellReady, 'Codex config check returns prompt');
-  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[1].error, null);
+  }, 'a Codex management subcommand keeps its arguments and prints in the terminal');
+  await waitFor(async () => (await managed()).shellReady, 'Codex management subcommand returns prompt');
+  assert.deepEqual([(await managed()).error, (await managed()).codexActive, (await managed()).terminals[0].nativeMode], [null, false, null]);
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
 
@@ -213,9 +216,11 @@ try {
     const payload = JSON.stringify({ type: 'agent-turn-complete', 'thread-id': threadId, 'turn-id': turnId, cwd: projects[0].path, 'last-assistant-message': '验证完成 "quotes" 中文' });
     await exec(target.powershellPath, ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', target.notifyPath, '-PipeName', target.pipeName, '-ProjectId', target.projectId, '-SessionKey', target.sessionKey, '-Payload', payload], { windowsHide: true, timeout: 12000 });
   };
-  await runDesktopTask(page, projects[0], path.join(output, 'codex-home'), 'turn-1', waitFor);
+  // A round of the terminal agent ends and lights the card once. Codex's notify callback still reaches the pipe (an
+  // older Codex, or one of its child agents, may send it): it never completes anything by itself.
+  await runDesktopTask(page, projects[0], claudeHome, 'turn-1', waitFor);
   await complete('turn-1');
-  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread === 1, 'real notify.ps1 marks red');
+  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread === 1, 'the finished round marks the card red');
   await complete('turn-1');
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread, 1);
   const firstCompletedAt = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].lastCompletedAt;
@@ -233,7 +238,7 @@ try {
   assert.ok(animation.lit, 'a finished turn lights its card');
   assert.deepEqual(animation.lights.map(([name]) => name), ['signal-breathe', 'none'], 'a finished turn breathes its glow, never the dot');
   assert.deepEqual(animation.lights[0].slice(1), ['2.5s', 'infinite'], 'the breath is a 2.5 s loop');
-  console.log('PASS: parent lifecycle marks the card with the white needs-you glow; unrelated notify callbacks are ignored');
+  console.log('PASS: parent lifecycle marks the card with the white needs-you glow; a repeated Stop, an idle notification and unrelated notify callbacks are ignored');
 
   const projectOrder = () => page.locator('.agentrix > .project-slot > .project-panel').evaluateAll(panels => panels.map(panel => panel.dataset.projectId));
   const beginProjectDrag = async (sourceId, targetId) => {
@@ -558,7 +563,7 @@ try {
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].sessionId, sessionBefore);
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'SECOND_USER_INSTRUCTION'\r"), projects[0].id);
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].shellReady, 'new submitted instruction completes');
-  await runDesktopTask(page, projects[0], path.join(output, 'codex-home'), 'turn-2', waitFor);
+  await runDesktopTask(page, projects[0], claudeHome, 'turn-2', waitFor);
   await complete('turn-2');
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread === 1, 'second round red');
   console.log('PASS: red tile expands inside the window without native fullscreen, marks viewed, returns without restarting terminal, and next turn lights red');
@@ -573,7 +578,7 @@ try {
   const target = bootstraps.find(b => b.projectId === projects[2].id);
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'IDLE_ALERT_FIXTURE'\r"), projects[2].id);
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[2].shellReady, 'idle notification fixture command completes');
-  await runDesktopTask(page, projects[2], path.join(output, 'codex-home'), 'other-project-turn', waitFor);
+  await runDesktopTask(page, projects[2], claudeHome, 'other-project-turn', waitFor);
   await complete('other-project-turn', target);
   await page.keyboard.press('Control+Shift+F'); await page.getByRole('textbox', { name: '搜索项目' }).fill('不存在');
   await page.waitForSelector('.no-results');
@@ -608,7 +613,7 @@ try {
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[2].unread, 0, 'viewing a completed turn never rearms it');
   await page.evaluate(id => window.agentrix.writeTerminal(id, "Write-Output 'NEW_REQUEST_AFTER_IDLE'\r"), projects[2].id);
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[2].shellReady, 'new request after a quiet idle period');
-  await runDesktopTask(page, projects[2], path.join(output, 'codex-home'), 'actual-next-turn', waitFor);
+  await runDesktopTask(page, projects[2], claudeHome, 'actual-next-turn', waitFor);
   await complete('actual-next-turn', target);
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[2].unread, 1, 'newly submitted work can notify once again');
   console.log('PASS: idle callbacks with different IDs, focus reports and unsubmitted drafts stay quiet; only a new submission rearms the next alert');

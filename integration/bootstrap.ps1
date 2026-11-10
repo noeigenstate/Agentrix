@@ -63,6 +63,18 @@ function global:ConvertTo-AgentrixArgument {
     return $builder.ToString()
 }
 
+# Runs an executable in this terminal with exactly these arguments and returns its exit code.
+function global:Invoke-AgentrixExecutable {
+    param([string]$FileName, [string[]]$Arguments)
+    $startInfo = [Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $FileName
+    $startInfo.Arguments = ($Arguments | ForEach-Object { ConvertTo-AgentrixArgument $_ }) -join ' '
+    $startInfo.UseShellExecute = $false
+    $startInfo.WorkingDirectory = (Get-Location).Path
+    $process = [Diagnostics.Process]::Start($startInfo)
+    try { $process.WaitForExit(); return $process.ExitCode } finally { $process.Dispose() }
+}
+
 function global:Send-AgentrixEvent {
     param([string]$Type, [int]$ExitCode = 0, [string]$Agent = 'codex', [string]$Command = '', [string[]]$Arguments = @())
     $global:AgentrixEventSequence++
@@ -107,9 +119,21 @@ function global:Get-AgentrixCommand($arguments) {
     if ($first -cmatch '^-{0,2}[A-Za-z][A-Za-z-]{0,23}$') { $first } else { '' }
 }
 
-# Codex stays native inside Agentrix. The authenticated shell event requests
-# app-server on this terminal; only the host interprets the bounded argv.
+# Codex conversations stay native inside Agentrix: the authenticated shell event requests app-server on this
+# terminal and only the host interprets the bounded argv. The CLI's own management runs (codex --help, checked
+# against 0.167.0) start no conversation and run here, with the CLI's exit code; bash-integration.bash,
+# zsh-integration.zsh and remote-worker.py carry the same words. Piped input (an API key for codex login
+# --with-api-key) and npm's script shims run as PowerShell runs any command.
 function global:codex {
+    if ($args.Count -and [string]$args[0] -cin @('--version', '-V', '--help', '-h', 'help', 'login', 'logout', 'mcp', 'plugin', 'completion', 'update', 'features')) {
+        if (-not $global:AgentrixCodexCommand) {
+            Write-Host 'Codex CLI was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
+            $global:LASTEXITCODE = 127
+        } elseif ($MyInvocation.ExpectingInput) { $input | & $global:AgentrixCodexCommand @args }
+        elseif ([IO.Path]::GetExtension($global:AgentrixCodexCommand) -ne '.exe') { & $global:AgentrixCodexCommand @args }
+        else { $global:LASTEXITCODE = Invoke-AgentrixExecutable $global:AgentrixCodexCommand $args }
+        return
+    }
     Send-AgentrixEvent 'codex-started' -Arguments @($args)
     Write-Host '已请求在原生模式打开 Codex。'
     $global:LASTEXITCODE = 0
@@ -157,15 +181,8 @@ function global:claude {
     }
     $claudeExit = 0
     try {
-        $startInfo = [Diagnostics.ProcessStartInfo]::new()
-        $startInfo.FileName = $global:AgentrixClaudeExecutable
         # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
-        $startInfo.Arguments = ((@('--settings', $settingsFile) + $readingNote + @($args)) | ForEach-Object { ConvertTo-AgentrixArgument ([string]$_) }) -join ' '
-        $startInfo.UseShellExecute = $false
-        $startInfo.WorkingDirectory = (Get-Location).Path
-        $claudeProcess = [Diagnostics.Process]::Start($startInfo)
-        try { $claudeProcess.WaitForExit(); $claudeExit = $claudeProcess.ExitCode }
-        finally { $claudeProcess.Dispose() }
+        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable (@('--settings', $settingsFile) + $readingNote + @($args))
     } catch {
         Write-Error $_
         $claudeExit = 1

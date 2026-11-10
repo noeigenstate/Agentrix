@@ -179,6 +179,20 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   assert.deepEqual(started.args, [...(loginFiles ? ['--model', 'login-model'] : []), 'resume', '--last']);
   await waitEvent(event => event.type === 'shell-prompt' && event.sequence > started.sequence, 'the prompt after the native request');
   assert.equal(fs.existsSync(path.join(log, 'codex.json')), false, 'the shell never executes Codex');
+  // A management command is the CLI itself in this terminal, with its arguments and exit status and no request to the
+  // host. An alias that adds options is not one: its first word is the option.
+  type('codex mcp add "中文 name" -- tool; echo "status=$?" > "$PG_TEST_LOG/codex-status"');
+  const requests = () => events.filter(event => event.type === 'codex-started' && event.agent === 'codex').map(event => event.args);
+  if (loginFiles) {
+    await waitEvent(() => requests().length === 2, 'the aliased management words as a native request');
+    assert.deepEqual(requests()[1], ['--model', 'login-model', 'mcp', 'add', '中文 name', '--', 'tool']);
+    assert.equal(await readLog('codex-status'), 'status=0');
+    assert.equal(fs.existsSync(path.join(log, 'codex.json')), false);
+  } else {
+    assert.equal(await readLog('codex-status'), 'status=3');
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(log, 'codex.json'), 'utf8')), ['mcp', 'add', '中文 name', '--', 'tool']);
+    assert.equal(requests().length, 1, 'a management command asks for no native session');
+  }
   assert.equal(events.some(event => event.type === 'codex-exited'), false);
 
   // claude: the user's alias still applies, and the hooks it is given report each turn.

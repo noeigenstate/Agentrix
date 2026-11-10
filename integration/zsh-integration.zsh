@@ -105,13 +105,30 @@ __pg_command() {
   return 0
 }
 
-# Request the existing native session path; no Codex executable runs here.
+# Whether $1, the first word given to codex, is one of the CLI's own management runs (codex --help, checked against
+# 0.167.0). Those start no conversation and run in this terminal; everything else opens in native mode. bootstrap.ps1,
+# bash-integration.bash and remote-worker.py carry the same words.
+__pg_codex_terminal() {
+  emulate -L zsh
+  case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|completion|update|features) return 0;; esac
+  return 1
+}
+
+# A management run is the CLI itself, with the user's alias and its exit status. Any other codex requests the
+# existing native session path, and no Codex executable runs here.
 codex() {
   emulate -L zsh
   local -a reply
-  __pg_program codex || reply=(codex)
+  local found=true
+  __pg_program codex || { found=false; reply=(codex) }
+  local -a arguments=("${reply[@]:1}" "$@")
+  if __pg_codex_terminal "$arguments[1]"; then
+    if $found; then "${reply[@]}" "$@"; return; fi
+    print -P '%F{yellow}Codex CLI was not found in PATH. Install it, then restart this terminal.%f'
+    return 127
+  fi
   local word REPLY payload='[' separator=
-  for word in "${reply[@]:1}" "$@"; do
+  for word in "${arguments[@]}"; do
     __pg_json "$word"; payload+="$separator$REPLY"; separator=,
   done
   payload+=']'

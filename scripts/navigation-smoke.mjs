@@ -113,7 +113,8 @@ try {
   const agentId = (await page.evaluate(id => window.agentrix.addTerminal(id), local.id)).value;
   await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.shellReady, 'navigation agent shell ready');
   // Agent lifecycle alone no longer enables the composer: draw the CLI's positive idle-input evidence too.
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'codex'; Clear-Host; Write-Host '› Ask Codex to do anything'; Write-Host ''; Write-Host 'gpt-6.1-sol · high · 100% context left'; Start-Sleep 3600\r"), agentId);
+  // The agent a terminal runs is Claude Code (Codex opens in native mode), so the frame is Claude Code's input box.
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'claude'; Clear-Host; Write-Host '────'; Write-Host '❯ '; Write-Host '────'; Write-Host '  ⏸ manual mode on'; Start-Sleep 3600\r"), agentId);
   await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.codexActive, 'navigation fake agent session');
   const agent = first.locator(`[data-terminal-id="${agentId}"]`);
   await agent.locator('.reading-composer textarea').waitFor();

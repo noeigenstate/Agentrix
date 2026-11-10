@@ -1115,5 +1115,30 @@ class RemoteCodexShellNotifyTest(unittest.TestCase):
         self.assertNotIn("command", event)
         self.assertNotIn("exitCode", event)
 
+    @unittest.skipUnless(os.path.exists(os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash")), "needs Bash")
+    def test_typed_codex_runs_the_cli_for_management_commands_only(self):
+        """The shell function alone: a stand-in CLI beside the probe prints its arguments and exits with 7 (or the PATH
+        holds only the system folders, for a host without Codex); the emitter prints the request."""
+        wrapper = remote.BASH_SOURCE.split("__pg_codex_terminal() {", 1)[1].split("function claude {", 1)[0]
+        with tempfile.TemporaryDirectory() as folder:
+            cli = Path(folder, "codex")
+            cli.write_text('#!/bin/sh\nfor word in "$@"; do printf \'RAN=%s\n\' "$word"; done\nexit 7\n', encoding="utf-8", newline="\n")
+            cli.chmod(0o755)
+            probe = Path(folder, "probe.sh")
+            probe.write_text("__pg_codex_terminal() {" + wrapper + "__pg_emit() { printf 'REQUEST=%s\n' \"$4\"; }\n"
+                             + "PATH=${PROBE_INSTALLED:+$(cd -- \"$(dirname -- \"$0\")\" && pwd):}/usr/bin:/bin\ncodex \"$@\"\nprintf 'STATUS=%s\n' \"$?\"\n", encoding="utf-8", newline="\n")
+            def typed(args, installed=True):
+                env = dict(os.environ, AGENTRIX_PYTHON=sys.executable, PROBE_INSTALLED="1" if installed else "")
+                lines = subprocess.run([os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash"), "--noprofile", "--norc", probe.as_posix(), *args],
+                                       env=env, capture_output=True, encoding="utf-8", timeout=30).stdout.splitlines()
+                request = [json.loads(line[8:]) for line in lines if line.startswith("REQUEST=")]
+                return [line[4:] for line in lines if line.startswith("RAN=")], request, lines[-1]
+            for args in (["--version"], ["-h"], ["login", "--device-auth"], ["mcp", "add", "中文 name", "--env", 'A="b c"', ""], ["update"]):
+                self.assertEqual(typed(args), (args, [], "STATUS=7"), args)
+            for args in ([], ["resume", "--last"], ["exec", "task"], ["review"], ["修复登录页"], ["Login"], ["login logout"], ["-v"], ["--model", "fixture", "login"]):
+                self.assertEqual(typed(args), ([], [args], "STATUS=0"), args)
+            self.assertEqual(typed(["--version"], installed=False), ([], [], "STATUS=127"))
+            self.assertEqual(typed(["resume", "--last"], installed=False), ([], [["resume", "--last"]], "STATUS=0"))
+
 
 if __name__ == "__main__": unittest.main()

@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { setMode } from './mode-switch.mjs';
+import { terminalBootstrap, sendClaudeHook } from '../tests/helpers/desktop-task-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -16,7 +17,7 @@ const profile = path.join(output, 'profile'), home = path.join(output, 'codex-ho
 const names = ['界面开发', '文档整理', '本地工具', '服务接口', '数据处理', '工具项目'];
 const projects = names.map((name, index) => ({ id: randomUUID(), name, path: path.join(output, name), unread: index === 1 ? 1 : 0, lastCompletedAt: index === 1 ? Date.now() - 60000 : null, restore: { terminal: false, codex: false } }));
 const doneFile = path.join(projects[0].path, 'task.done');
-for (const directory of [profile, path.join(home, 'sessions'), ...projects.map(project => project.path)]) await fs.mkdir(directory, { recursive: true });
+for (const directory of [profile, home, ...projects.map(project => project.path)]) await fs.mkdir(directory, { recursive: true });
 await fs.writeFile(path.join(projects[0].path, 'README.md'), '# 清晰的工作区\n\n保留文字、代码和状态的层次。\n');
 // These checks read the terminal's rows as HTML, so the compatible (DOM) renderer draws them; gpu-terminal-smoke covers the GPU one.
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: { language: 'zh', uiZoom: 100, terminalRenderer: 'dom', notifications: false, sound: false, closeToTray: false, restoreSessions: false, fontSize: 14 } }));
@@ -86,17 +87,20 @@ try {
     await waitFor(async () => panel(index).locator('.xterm-rows').innerText().then(text => text.includes('ANSI colors and readable text')), 'readable terminal output');
   }
   assert.equal(await page.locator('.focus-mode').count(), 0, 'visual grid checks start in overview');
-  const thread = randomUUID(), transcript = path.join(home, 'sessions', `rollout-${thread}.jsonl`);
-  const record = (type, turn) => JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type, turn_id: turn } }) + '\n';
-  const submitted = message => JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type: 'user_message', message } }) + '\n';
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
   await setMode(page, names[0], 'reading');
-  // This blocking task restores shell events so cleanup can observe its return to PowerShell.
-  await write(0, `function global:prompt { Send-AgentrixEvent 'shell-prompt'; 'PS> ' }; Clear-Host; Write-Host 'Agentrix / 界面开发'; Write-Host ''; Write-Host '  正在处理：验证独立项目的任务状态' -ForegroundColor Cyan; Write-Host '  背景任务运行中，可操作其他窗口。'; Write-Host ''; Send-AgentrixEvent 'codex-started' -Agent 'codex'; for ($pgVisual=0; $pgVisual -lt 2400 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgVisual++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'codex-exited'\r`);
-  await waitFor(async () => { const project = (await state()).projects[0]; return project.codexActive && project.agent === 'codex'; }, 'offline task active');
+  // This blocking task restores shell events so cleanup can observe its return to PowerShell. It is a new run of the
+  // agent in this terminal, which the earlier fixture agent's start time tells apart.
+  const earlier = (await state()).projects[0].terminals[0].agentStartedAt;
+  await write(0, `function global:prompt { Send-AgentrixEvent 'shell-prompt'; 'PS> ' }; Clear-Host; Write-Host 'Agentrix / 界面开发'; Write-Host ''; Write-Host '  正在处理：验证独立项目的任务状态' -ForegroundColor Cyan; Write-Host '  背景任务运行中，可操作其他窗口。'; Write-Host ''; Send-AgentrixEvent 'codex-started' -Agent 'claude'; for ($pgVisual=0; $pgVisual -lt 2400 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgVisual++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'codex-exited' -Agent 'claude'\r`);
+  await waitFor(async () => { const project = (await state()).projects[0]; return project.codexActive && project.agent === 'claude' && project.terminals[0].agentStartedAt > earlier; }, 'offline task active');
+  // The agent a terminal runs is Claude Code. Its rounds are reported by its hooks, sent here by the real hook script
+  // while the stand-in occupies the shell: a submitted prompt starts a round and Stop ends it.
+  const bootstrap = await terminalBootstrap(profile, (await state()).projects[0].sessionId), session = randomUUID();
+  const hook = (kind, payload) => sendClaudeHook(bootstrap, kind, { session_id: session, ...payload });
   // The running agent's conversation shows as a document by default; these checks are about the terminal surface.
   await setMode(page, names[0], 'terminal');
-  await fs.writeFile(transcript, JSON.stringify({ type: 'session_meta', payload: { id: thread, cwd: projects[0].path, source: 'cli' } }) + '\n' + record('task_started', 'visual-turn') + submitted('验证独立项目的任务状态'));
+  await hook('start', { prompt: '验证独立项目的任务状态' });
   await waitFor(async () => panel(0).getAttribute('data-status').then(status => status === 'working'), 'working lifecycle reaches UI');
   await page.evaluate(() => document.activeElement?.blur()); await page.mouse.move(2, 2);
   assert.equal(await page.locator('.panel-edge-light').count(), 0, 'old decorative strips are removed');
@@ -168,7 +172,7 @@ try {
   await page.screenshot({ path: path.join(output, 'focused-explorer.png') });
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
-  await fs.appendFile(transcript, record('task_complete', 'visual-turn'));
+  await hook('stop');
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('attention-active')), 'a new completion lights its card');
   // A finished round not yet seen breathes a white glow (its opacity only), a soft vignette from the edge inward with no hard line, until it is viewed.
   assert.equal(await breathing(0), 1, 'a fresh finished round breathes its glow');
@@ -180,7 +184,7 @@ try {
   const completed = (await state()).projects[0].lastCompletedAt;
   await page.screenshot({ path: path.join(output, 'fresh-completion.png') });
   // Rerender via settings changes and repeated lifecycle callbacks must not restart an old alert.
-  await fs.appendFile(transcript, record('task_complete', 'visual-turn'));
+  await hook('stop'); await hook('notify', { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
   await page.evaluate(() => window.agentrix.settings({ fontSize: 16 }));
   assert.equal(await breathing(0), 1); assert.equal((await state()).projects[0].lastCompletedAt, completed);
   await page.evaluate(id => window.agentrix.acknowledge(id), projects[0].id);
@@ -191,10 +195,10 @@ try {
   await page.screenshot({ path: path.join(output, 'automatic-completion.png') });
   await panel(0).locator('.panel-terminal-area').click({ position: { x: 40, y: 50 } });
   assert.equal(await page.locator('.focus-mode').count(), 0, 'a finished card does not expand on terminal clicks');
-  await fs.appendFile(transcript, record('task_started', 'next-turn') + submitted('继续验证下一轮任务完成后的提醒'));
+  await hook('start', { prompt: '继续验证下一轮任务完成后的提醒' });
   await waitFor(async () => panel(0).getAttribute('data-status').then(status => status === 'working'), 'a new submitted turn is working');
   assert.equal(await breathing(0), 0, 'working again stays steady');
-  await fs.appendFile(transcript, record('task_complete', 'next-turn'));
+  await hook('stop');
   await waitFor(async () => panel(0).evaluate(node => node.classList.contains('attention-active')), 'the next finished turn lights its card');
   // A finished card not yet seen breathes its glow only with motion on; "off" and "system" under reduced motion keep it a still glow.
   const setMotion = async mode => { await page.evaluate(mode => window.agentrix.settings({ focusAnimation: mode }), mode); await page.waitForFunction(mode => document.documentElement.dataset.motion === mode, mode); };

@@ -41,3 +41,26 @@ test('profile guard accepts isolated and marked live scripts, and rejects missin
   assert.equal(isolatedOrLive(`${marker}\n${profile}`), true);
   assert.equal(isolatedOrLive('const env = { ...isolatedEnvironment(home), AGENTRIX_DATA_DIR: profile };'), true);
 });
+
+// Node reads a file with no extension by its folder's package.json: a `#!node` stand-in under this repository's
+// .test-output ("type": "module") was an ES module, died on its first require, and every POSIX hand-off to native
+// Codex failed with it.
+const shell = process.platform === 'win32' ? process.env.AGENTRIX_TEST_BASH || 'C:/Program Files/Git/bin/bash.exe' : '/bin/sh';
+test('the POSIX Codex stand-in answers the app-server protocol from a folder inside a module package', { skip: !fs.existsSync(shell), timeout: 20000 }, async t => {
+  const { posixCodexStandIn } = require('../scripts/gui-codex-env.mjs');
+  const { spawn } = require('node:child_process'), os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-stand-in-')), file = path.join(root, 'bin', 'codex');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.dirname(file));
+  fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
+  fs.writeFileSync(file, posixCodexStandIn(), { mode: 0o755 });
+  const child = spawn(...(process.platform === 'win32' ? [shell, [file.replaceAll('\\', '/'), 'app-server']] : [file, ['app-server']]),
+    { cwd: root, env: { ...process.env, CODEX_HOME: path.join(root, 'codex-home') }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  let output = '', errors = '';
+  child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { errors += data; });
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  // The stand-in ends with its input, as an app-server does; the whole answer has arrived by then.
+  child.stdin.end(JSON.stringify({ id: '1', method: 'initialize', params: {} }) + '\n');
+  assert.equal(await exited, 0, errors);
+  assert.match(JSON.parse(output.split('\n')[0]).result.userAgent, /^codex-cli\//);
+});
