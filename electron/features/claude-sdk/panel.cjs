@@ -79,8 +79,9 @@ const buckets = limits => Object.entries(object(limits?.limitsById)).flatMap(([i
   return [{ id: id.slice(0, 40), usedPercent: Number.isFinite(window.usedPercent) ? window.usedPercent : null, resetsAtMs: count(window.resetsAtMs) }];
 });
 
-// `read` fetches the SDK's context usage (only /context and /status need it); `session()` is what the session itself holds, read once the context is.
-async function answer(command, { read, tally, session, summary, budgetUsd, limits, connection, init }) {
+// `read` fetches the SDK's context usage (only /context and /status need it); `session()` is what the session itself holds, with its query's first reply
+// (`init`) and its connection, read once the context is.
+async function answer(command, { read, tally, session, summary, budgetUsd, limits }) {
   let context = null;
   const errors = [];
   if (read) {
@@ -99,7 +100,8 @@ async function answer(command, { read, tally, session, summary, budgetUsd, limit
     return { ...base, month, today: { spentMicros: count(summary.todayUsdMicros) }, tokens, limits: buckets(limits),
       notice: notice ? { code: text(notice.code, 40), resetsAtMs: count(notice.resetsAtMs) } : null };
   }
-  return { ...base, context, errors, session: { ...session(), version: init?.version ?? null, permission: init?.permission ?? null, mcp: init?.mcp ?? [] },
+  const { init, connection, ...held } = session();
+  return { ...base, context, errors, session: { ...held, version: init?.version ?? null, permission: init?.permission ?? null, mcp: init?.mcp ?? [] },
     account: { kind: connection?.kind ?? 'unknown' } };
 }
 

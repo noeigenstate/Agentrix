@@ -17,7 +17,7 @@ const HISTORY = [
   { id: 'stopped', status: 'interrupted', items: [{ id: 'command-stopped', type: 'commandExecution', command: 'npm run build', status: 'inProgress' }] },
   { id: 'done', status: 'completed', items: [{ id: 'command-done', type: 'commandExecution', command: 'git status', status: 'completed', exitCode: 0 }] },
 ];
-function server(cwd) {
+function server(cwd, running = false) {
   const child = new EventEmitter();
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
   child.kill = () => { child.exitCode = 0; child.emit('exit', 0); child.emit('close', 0); };
@@ -32,6 +32,8 @@ function server(cwd) {
         const result = request.method === 'initialize' ? { userAgent: 'codex/0.166.0' }
           : request.method === 'thread/start' ? thread('fresh-thread') : request.method === 'thread/resume' ? thread(p.threadId)
             : request.method === 'thread/turns/list' ? { data: HISTORY, nextCursor: null } : request.method === 'turn/start' ? { turn: { id: 'live', status: 'inProgress', items: [] } } : {};
+        // The provider may still be running the newest turn: its live item arrives while the history is being read.
+        if (running && request.method === 'thread/turns/list') send({ method: 'item/started', params: { threadId: p.threadId, turnId: 'crashed', item: HISTORY[0].items[0] } });
         send({ id: request.id, result });
       });
     }
@@ -71,6 +73,17 @@ test('a resumed thread’s unfinished history is not running work: a new convers
   peer.notify('item/completed', { turnId: 'live', item: { id: 'close', type: 'collabAgentToolCall', tool: 'closeAgent', receiverThreadIds: ['child-thread'], status: 'completed' } });
   await until(() => session.activity().count === 0);
   assert.notEqual((await router.newConversation('t', runtimeSessionId)).runtimeSessionId, runtimeSessionId);
+});
+
+test('an item this process saw live is not settled by its own copy in the replayed history', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-replay-live-')), seen = [];
+  const session = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: () => server(root, true).child })
+    .create({ terminalId: 't', projectId: 'p', owner: 'gui', cwd: root, env: { CODEX_HOME: root, PATH: '' } }, event => seen.push(event));
+  t.after(async () => { await session.close(); fs.rmSync(root, { force: true, recursive: true }); });
+  await session.resume({ providerSessionId: 'old-thread' });
+  const status = id => session.snapshot().items.find(item => item.itemId === id)?.status;
+  assert.deepEqual([status('command-crashed'), status('tool-crashed'), session.activity().count], ['in-progress', 'unknown', 1], 'the live command still runs; only what nobody saw live is unknown');
+  assert.deepEqual(seen.filter(event => event.itemId === 'command-crashed').map(event => [event.replay, event.payload.status]), [[false, 'in-progress']], 'and its replayed copy was not sent after it');
 });
 
 test('a replayed item published straight into the event store is settled before it is kept or sent', () => {

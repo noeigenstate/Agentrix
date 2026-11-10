@@ -63,7 +63,11 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
     if (type === 'turn.started') rates.nativeBegin(now());
     if (type === 'turn.completed') rates.nativeEnd();
     if (type === 'item.dropped') dropped = true;
-    if (type === 'item.upsert' && extra.replay) payload = settleReplayed(payload);
+    if (type === 'item.upsert' && extra.replay) {
+      // What this process saw live is newer than its own copy in the history read meanwhile.
+      if (itemEvents.get(extra.itemId)?.replay === false) return null;
+      payload = settleReplayed(payload);
+    }
     const event = { schemaVersion: 1, eventId: randomUUID(), sequence: ++sequence, ...binding, provider: 'codex', transport: 'codex-app-server',
       projectId: spec.projectId, terminalId: spec.terminalId, runtimeSessionId: spec.runtimeSessionId, runId: spec.runId ?? null,
       itemId: null, receivedAtMs: now(), occurredAtMs: null, replay: false, type, payload, ...extra };
