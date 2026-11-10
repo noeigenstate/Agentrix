@@ -2,7 +2,7 @@
 // remain provider input; only known built-ins without a mapping are refused.
 const descriptions = {
   model: '选择模型', effort: '选择思考强度', fast: '切换快速模式', new: '开始新的对话', clear: '开始新的对话',
-  compact: '压缩上下文', review: '审查当前改动', status: '查看账号和额度',
+  compact: '压缩上下文', review: '审查当前改动', status: '查看账号和额度', usage: '查看额度',
 };
 const unsupported = new Set(('presets ide permissions keymap vim setup-default-sandbox app init config recap plan voice goal experimental skills approve memories import hooks rename archive delete resume fork worktree agents agent side copy raw diff mention daemon warnings cd pwd title mcp export statusline theme pets tui logout login quit exit feedback ps personality debug undo reset approvals').split(' '));
 const commandName = text => /^\/([\w][\w:.-]*)(?:\s|$)/.exec(text.trim())?.[1] || null;

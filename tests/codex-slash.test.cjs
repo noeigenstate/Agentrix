@@ -118,8 +118,10 @@ test('built-ins execute protocol controls, review root turns complete once, and 
     assert.equal(f.events.filter(row => row.type === 'turn.started').length, 4);
     assert.equal(f.events.filter(row => row.type === 'context.compacted' && row.payload.trigger === 'manual').length, 1);
     const before = f.wire.length;
-    await f.session.send({ clientMessageId: 'status', text: '/status' });
-    assert.ok(f.events.some(row => row.type === 'item.upsert' && /5 小时额度：未知/.test(row.payload.content?.text || '')));
+    const itemsBefore = f.events.filter(row => row.type === 'item.upsert').length;
+    const status = await f.session.send({ clientMessageId: 'status', text: '/status' });
+    assert.deepEqual([status.status, status.local.command, status.local.account.kind, status.local.limits.map(row => row.usedPercent)], ['consumed', 'status', 'none', [null, null]], 'the answer is the receipt, with unread quota unknown');
+    assert.equal(f.events.filter(row => row.type === 'item.upsert').length, itemsBefore, 'and no item of the conversation');
     assert.ok(f.wire.slice(before).every(row => !row.method.startsWith('turn/')));
     for (const text of ['/permissions', '/fork', '/reset', '/reviewing nope']) {
       if (text.startsWith('/reviewing')) continue;
@@ -131,7 +133,7 @@ test('built-ins execute protocol controls, review root turns complete once, and 
     const sent = f.wire.filter(row => row.method === 'turn/start' && row.params.threadId).slice(turns);
     assert.equal(sent[0].params.input[0].text, '/prompts:mine ARG');
     assert.deepEqual(sent[1].params.input.at(-1), { type: 'skill', name: 'lookup', path: path.join(f.root, 'SKILL.md') });
-    assert.deepEqual(builtinCommands().map(row => row.name), ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status']);
+    assert.deepEqual(builtinCommands().map(row => row.name), ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status', '/usage']);
     assert.equal(unsupported.has('fork'), true);
   }
 });

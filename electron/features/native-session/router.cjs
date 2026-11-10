@@ -377,17 +377,26 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
-      const observation = record.spec.agent === 'codex' && message.text.trim() === '/status';
+      // A read-only popup query is not the owner's message: it keeps their stop and input flags, leaves no item in the conversation and, mid-switch, says so
+      // instead of leaving an unsent bubble behind.
+      const observation = (record.spec.agent === 'codex' ? ['/status', '/usage'] : ['/context', '/cost', '/status', '/usage']).includes(message.text.trim()) && record.spec.owner !== 'dispatch';
       if (!observation) record.ownerInput = true;
       if (busy.has(id)) throw new Error('会话正在切换，请稍后重试。');
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
-      if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') return unsent(record, message, 'switch_in_progress');
+      if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') {
+        if (observation) throw new Error('会话正在切换，请稍后重试。');
+        return unsent(record, message, 'switch_in_progress');
+      }
       if (record.spec.agent === 'claude') {
         // Settings are current, while a running query keeps its existing reservation until a safe input boundary.
         // The SDK's normal idle renewal then removes an old cap when the owner clears the monthly budget.
         if (record.spec.owner !== 'dispatch') record.spec.monthlyBudgetUsd = settings.get().monthlyBudgetUsd;
         const selected = selection(record.spec, record.runtime, false, true);
-        if (selected.path !== 'api') { reconcile(); return unsent(record, message, selected.reason || 'api_unavailable'); }
+        if (selected.path !== 'api') {
+          reconcile();
+          if (observation) throw new Error('Claude API 暂时不可用，不能读取。');
+          return unsent(record, message, selected.reason || 'api_unavailable');
+        }
       }
       if (!observation) { switches.input(id, runtimeSessionId); record.ownerStopped = false; }
       try {

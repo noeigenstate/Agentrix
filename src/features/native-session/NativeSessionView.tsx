@@ -21,6 +21,8 @@ import { MAX_PICTURES, readPictures } from './native-pictures.ts';
 import { dismissNative, nativeShown, resolveSwitch, useNativeEntries, type NativeEntry } from './native-store.ts';
 import { BillingLink } from './native-billing-link.ts';
 import { NativeRequestCard } from './NativeRequestCard';
+import { NativePanel } from './NativePanel';
+import { NativeToast } from './NativeToast';
 import { useComposerActions } from './useComposerActions.ts';
 import { useNativeCommands } from './useNativeCommands.ts';
 import { asksChoice, SwitchLine, SwitchQuestion } from './SwitchNotice';
@@ -54,7 +56,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   useLayoutEffect(() => () => { dictationSend.cancel(); }, [dictationSend, terminalId, sessionId, autoFocus]);
   useLayoutEffect(() => { if (caret.current !== null) { box.current?.setSelectionRange(caret.current, caret.current); caret.current = null; } });
   // Both providers use the same native controls; a new conversation shuts this binding's box until its replacement arrives.
-  const actions = useComposerActions({ terminalId, sessionId, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
+  const actions = useComposerActions({ terminalId, sessionId, agent: kind, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
   const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing, over = isOver(model), working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
   const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
   const pending = useMemo(() => nativePending(model, sent, discarded), [model, sent, discarded]);
@@ -215,11 +217,10 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const afterFeed = <>
     <PendingPromptEntries prompts={pending.prompts} queued={prompt => pending.queued.has(prompt.id)} undelivered={prompt => pending.lost.has(prompt.id)} onResend={prompt => void resend(prompt)} onDiscard={discard} />
     {status && !statusInTurn && <TimelineStep at={pending.prompts.at(-1)?.at ?? last?.at} kind="agent" who={agent} state={working ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}
-    {(switchLine(change) || errorLine || noticeLine || actions.told || checkNotice || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
+    {(switchLine(change) || errorLine || noticeLine || checkNotice || model.requests.length > 0 || asksChoice(change)) && <div className="native-tail">
       <SwitchLine state={change} />
       {errorLine && (stopped || unknown ? <p className="reading-status" role="status">{errorLine}</p> : <p className="form-error" role="alert">{errorLine}{retrying ? ` · ${t('正在重试')}` : ''}</p>)}
       {noticeLine && <p className="reading-status" role="status">{noticeLine}</p>}
-      {actions.told && <p className="reading-status" role="status">{actions.told}</p>}
       {checkNotice && <BillingLink projectId={projectId} />}
       {model.requests.map(request => <NativeRequestCard key={request.id} request={request} terminalId={terminalId} sessionId={sessionId} />)}
       <SwitchQuestion terminalId={terminalId} sessionId={sessionId} state={change} />
@@ -239,6 +240,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
         {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
       </div>}
+      {actions.panel ? <NativePanel state={actions.panel} onClose={() => { actions.closePanel(); box.current?.focus(); }} onRefresh={actions.refresh} />
+        : actions.told && <NativeToast text={actions.told} />}
     </div>
     {error && <p className="form-error native-error" role="alert">{error}</p>}
     {over && <div className="native-ended"><span>{reasonWords(model.session?.reason) ?? t('这个会话已经结束')}</span><button type="button" className="button secondary small" onClick={() => dismissNative(terminalId)}>{t('开始新的对话')}</button></div>}

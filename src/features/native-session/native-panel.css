@@ -1,0 +1,92 @@
+/* The result panel of /status, /usage, /context and /cost, and the short note after /model, /effort and /fast (the owner's approved sheet). It stands over the
+   conversation, centred above the message box: 520px wide (16px to spare each side in a narrow card), as high as the area allows down to 120px under its top,
+   its body scrolling. Colour is the existing tokens and what is mixed from them; the only two meanings are the usage bar and the danger of a quota used up.
+   Radii: panel 16, rows and buttons 8, pills and bars 999. Spacing is on a 4px grid. Surfaces that would sit on the menu colour take the selected step: in
+   the workbench the hover step is the menu colour itself. */
+.native-panel-scrim { position: absolute; inset: 0; z-index: 6; background: color-mix(in srgb, var(--bg-app) 40%, transparent); }
+.native-panel, .native-toast { box-shadow: 0 12px 32px rgb(0 0 0 / .35); }
+:root[data-theme="light"] :is(.native-panel, .native-toast) { box-shadow: 0 8px 24px rgb(from var(--text-1) r g b / .08); }
+.native-panel { --track: var(--bg-selected); --seg-1: var(--usage); --seg-2: color-mix(in srgb, var(--usage) 65%, var(--bg-menu)); --seg-3: color-mix(in srgb, var(--usage) 50%, var(--text-1)); --seg-4: var(--text-3);
+  position: absolute; left: 50%; bottom: 12px; display: flex; flex-direction: column; box-sizing: border-box; width: min(520px, calc(100% - 32px)); max-height: calc(100% - 132px); margin: 0; padding: 0; transform: translateX(-50%);
+  color: var(--text-1); background: var(--bg-menu); border: 1px solid var(--border); border-radius: 16px; font-size: 14px; line-height: 1.55; animation: native-panel-rise .16s ease-out; outline: none; }
+@keyframes native-panel-rise { from { opacity: 0; transform: translate(-50%, 8px); } }
+:root[data-motion="system"] .native-panel, :root[data-motion="system"] .native-toast { animation: none; }
+.native-panel button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.native-panel .icon-button:hover { background: var(--bg-selected); }
+.native-panel .num { font-variant-numeric: tabular-nums; }
+
+.native-panel-head { display: flex; align-items: center; gap: 10px; padding: 14px 12px 12px 18px; }
+.native-panel-mark { display: grid; place-items: center; flex: none; width: 22px; height: 22px; }
+.native-panel-mark svg { width: 22px; height: 22px; }
+.native-panel-title { font-size: 15px; font-weight: 600; }
+.native-panel-cmd { padding: 4px 8px; border-radius: 999px; background: var(--bg-selected); color: var(--text-2); font: 12px/1 var(--font-mono); }
+.native-panel-spacer { flex: 1; }
+.native-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px 6px; }
+.native-panel-foot { display: flex; align-items: center; gap: 8px; padding: 10px 12px 12px 18px; border-top: 1px solid var(--divider); color: var(--text-3); font-size: 12px; }
+.native-panel-foot kbd { padding: 2px 5px; border-bottom-width: 2px; color: var(--text-2); font-weight: 400; }
+
+/* The one number the command is about, with its bar. */
+.native-panel-hero { display: flex; align-items: flex-end; gap: 14px; padding: 4px 0 14px; }
+.native-panel-big { font-size: 30px; line-height: 1; font-weight: 600; letter-spacing: -.5px; }
+.native-panel-big small { margin-left: 4px; color: var(--text-2); font-size: 15px; font-weight: 400; letter-spacing: 0; }
+.native-panel-cap { padding-bottom: 3px; color: var(--text-2); font-size: 12px; }
+.native-panel-meter { display: flex; height: 6px; border-radius: 999px; background: var(--track); overflow: hidden; }
+.native-panel-meter > i { display: block; height: 100%; background: var(--usage); }
+.native-panel-meter > i + i { margin-left: 2px; }
+.native-panel-meter.is-stack { height: 10px; }
+.native-panel-meter > .is-seg-1 { background: var(--seg-1); }
+.native-panel-meter > .is-seg-2 { background: var(--seg-2); }
+.native-panel-meter > .is-seg-3 { background: var(--seg-3); }
+.native-panel-meter > .is-seg-4 { background: var(--seg-4); }
+.native-panel-hero-bar { padding-bottom: 14px; }
+
+.native-panel-alert { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; }
+.native-panel-alert svg { flex: none; color: var(--danger); }
+.native-panel-alert b { color: var(--danger); font-weight: 600; }
+
+.native-panel-group { padding: 12px 0; border-top: 1px solid var(--divider); }
+.native-panel-group:first-of-type { padding-top: 4px; border-top: 0; }
+.native-panel-group-title { margin: 0 0 6px; color: var(--text-3); font-size: 12px; font-weight: 400; letter-spacing: .2px; }
+.native-panel-rows { display: grid; grid-template-columns: 96px 1fr; gap: 6px 12px; align-items: baseline; margin: 0; }
+.native-panel-rows dt { color: var(--text-2); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-panel-rows dd { min-width: 0; margin: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.native-panel-note { margin-left: 6px; color: var(--text-3); }
+.native-panel-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.native-panel-chip { padding: 3px 10px; border-radius: 999px; background: var(--bg-selected); font-size: 12px; }
+.native-panel-chip.is-warn { border: 1px solid var(--border); background: none; color: var(--warning); }
+.native-panel-chip.is-warn i { display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: currentColor; vertical-align: 1px; }
+
+.native-panel-quotas { display: grid; gap: 12px; }
+.native-panel-quota-top { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; font-size: 13px; }
+.native-panel-quota-top > .native-panel-spacer { flex: 1; }
+.native-panel-state { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.native-panel-when { margin-top: 6px; color: var(--text-3); font-size: 12px; }
+.native-panel-quota.is-out :is(.native-panel-state, b) { color: var(--danger); }
+.native-panel-quota.is-out .native-panel-meter > i { background: var(--danger); }
+.native-panel-hero-bar.is-out .native-panel-meter > i { background: var(--danger); }
+
+.native-panel-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; margin: 10px 0 0; padding: 0; list-style: none; }
+.native-panel-legend li { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12.5px; }
+.native-panel-legend i { flex: none; width: 8px; height: 8px; border-radius: 2px; }
+.native-panel-legend i.is-seg-1 { background: var(--seg-1); }
+.native-panel-legend i.is-seg-2 { background: var(--seg-2); }
+.native-panel-legend i.is-seg-3 { background: var(--seg-3); }
+.native-panel-legend i.is-seg-4 { background: var(--seg-4); }
+.native-panel-legend span { flex: 1; min-width: 0; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.native-panel-suggest { display: grid; gap: 2px; margin: 8px 0 6px; }
+.native-panel-suggest button { display: flex; align-items: baseline; gap: 12px; padding: 7px 8px; border: 0; border-radius: 8px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.native-panel-suggest button:hover { background: var(--bg-selected); }
+.native-panel-suggest code { min-width: 72px; font: 12.5px var(--font-mono); }
+.native-panel-suggest span { color: var(--text-2); font-size: 13px; }
+
+.native-panel-skeleton { display: grid; gap: 10px; }
+.native-panel-skeleton > i { display: block; height: 12px; border-radius: 6px; background: linear-gradient(90deg, var(--bg-hover), var(--bg-selected), var(--bg-hover)) 0 0 / 200% 100%; animation: native-panel-shimmer 1.2s linear infinite; }
+.native-panel-skeleton > i.is-big { width: 140px; height: 28px; }
+@keyframes native-panel-shimmer { to { background-position: -200% 0; } }
+:root[data-motion="system"] .native-panel-skeleton > i { animation: none; }
+
+/* The note after a setting was changed: two seconds, in the place of the panel. */
+.native-toast { position: absolute; left: 50%; bottom: 12px; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 8px 14px 8px 12px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-menu); color: var(--text-1); font-size: 13px; transform: translateX(-50%); animation: native-panel-rise .16s ease-out; }
+.native-toast svg { flex: none; color: var(--success); }

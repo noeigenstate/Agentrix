@@ -27,6 +27,7 @@
 .result-list li > svg { color: var(--text-3); }
 .result-list li > svg.result-check { color: var(--success); }
 .result-list li.is-failed > svg.result-check { color: var(--danger); }
+.result-list li.is-unconfirmed > svg.result-check { color: var(--text-3); }
 .result-check-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-1); }
 .result-check-name small { margin-left: 8px; font-size: calc(12px * var(--reading-text)); color: var(--text-3); }
 .result-state-text { font-size: calc(12px * var(--reading-text)); color: var(--text-2); white-space: nowrap; }

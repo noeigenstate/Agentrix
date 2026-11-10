@@ -1,21 +1,26 @@
 // What a Claude session's message box does with words that are not a message, as the terminal's does: /clear, /new and /reset begin a new conversation,
-// /model, /effort and /fast change or pick what the session runs with, and a line that starts with "!" is a shell command. Pure: the words in, the action out.
+// /model, /effort and /fast change or pick what the session runs with, a line that starts with "!" is a shell command, and /status, /usage (and Claude's
+// /context and /cost) open a result window. Pure: the words in, the action out.
 import { t } from '../../shared/i18n';
 import type { AgentCommand, NativeModelOption, NativeRunOptions, NativeRunOptionsPatch } from '../../shared/types';
+import type { PanelCommand } from './native-panel.ts';
 
 export type ComposerOption = 'model' | 'effort' | 'fast';
-export type ComposerAction = { kind: 'new' } | { kind: 'shell'; command: string } | { kind: 'option'; option: ComposerOption; value: string };
+export type ComposerAction = { kind: 'new' } | { kind: 'shell'; command: string } | { kind: 'option'; option: ComposerOption; value: string } | { kind: 'panel'; command: PanelCommand };
 // One line the "/" list draws (the list's own `AgentCommand` without a view); `current` marks the value that is set now in a choice menu.
 export type ListLine = Pick<AgentCommand, 'name' | 'description' | 'source'> & { current?: boolean };
 export type Choice = ListLine & { source: 'builtin'; current: boolean };
 
-const NEW = /^\/(?:clear|new|reset)$/, OPTION = /^\/(model|effort|fast)(?:\s+([\s\S]*))?$/;
+const NEW = /^\/(?:clear|new|reset)$/, OPTION = /^\/(model|effort|fast)(?:\s+([\s\S]*))?$/, PANELS = { claude: /^\/(context|cost|status|usage)$/, codex: /^\/(status|usage)$/ };
 
 // The action the (trimmed) words ask for; null when they are an ordinary message. `value` is '' when the option is named without one (a menu); a "!" with
 // no command gives an empty command, which does nothing.
 export function composerAction(words: string, agent: 'claude' | 'codex' = 'claude'): ComposerAction | null {
   if ((agent === 'claude' ? NEW : /^\/(?:clear|new)$/).test(words)) return { kind: 'new' };
   if (words.startsWith('!')) return { kind: 'shell', command: words.slice(1).trim() };
+  // The information commands open a window (Codex has two, Claude four); they are no message and take no turn.
+  const panel = PANELS[agent].exec(words);
+  if (panel) return { kind: 'panel', command: panel[1] as PanelCommand };
   const option = OPTION.exec(words);
   return option ? { kind: 'option', option: option[1] as ComposerOption, value: option[2]?.trim() ?? '' } : null;
 }
