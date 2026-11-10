@@ -55,13 +55,18 @@ try {
   await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: terminalId, runtime: snapshot.value.runtimeSessionId });
   await page.evaluate(id => window.agentrix.restartTerminal(id), terminalId);
   await waitFor(async () => (await terminal()).shellReady, 'cmd ready for manual Codex');
-  shellSession = (await terminal()).sessionId;
+  // Codex has no terminal run: typed at the cmd prompt it asks the host for a native session, and its argument is the
+  // first prompt. The host starts Codex as an app-server; the shell never runs it with the typed words.
   await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex "中文参数"\r'), terminalId);
-  await waitFor(async () => (await receipt())?.args[0] !== 'app-server' && (await terminal()).codexActive, 'manual Codex started');
-  assert.deepEqual((await receipt()).args.slice(-1), ['中文参数'], 'manual cmd wrapper preserves the Chinese argument after its configuration flags');
-  // Leaving Codex returns to the cmd prompt, which reports itself through its invisible marker.
-  await page.evaluate(id => window.agentrix.writeTerminal(id, '\x03'), terminalId);
-  await waitFor(async () => { const state = await terminal(); return !state.codexActive && state.shellReady; }, 'back at the cmd prompt after Codex exits');
+  await waitFor(async () => (await receipt())?.input === '中文参数' && (await terminal()).nativeMode === 'codex-app-server', 'manual Codex opens in native mode with its Chinese argument');
+  assert.deepEqual((await receipt()).args, ['app-server', '--listen', 'stdio://']);
+  assert.notEqual((await receipt()).threadId, sessionId, 'a typed codex starts its own conversation');
+  // Stopping it and opening the terminal again brings the cmd prompt back, which reports itself through its invisible marker.
+  const manual = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+  await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: terminalId, runtime: manual.value.runtimeSessionId });
+  await page.evaluate(id => window.agentrix.restartTerminal(id), terminalId);
+  await waitFor(async () => { const state = await terminal(); return !state.codexActive && state.shellReady; }, 'back at the cmd prompt after Codex stops');
+  shellSession = (await terminal()).sessionId;
   assert.equal(await page.locator('.focus-mode').count(), 0, 'exiting Codex keeps the project in the grid');
   await shell.waitFor({ state: 'hidden' });
   await terminalsSettled(page);

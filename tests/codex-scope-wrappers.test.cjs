@@ -51,7 +51,9 @@ test('PowerShell and the cmd shim request native Codex, preserve argv, return to
       PATH: root + path.delimiter + process.env.PATH, PSModuleAnalysisCachePath: path.join(root, 'module-cache') };
     delete env.Path;
     const script = path.join(root, 'probe.ps1');
-    fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. '${integration.replace(/'/g, "''")}\\bootstrap.ps1'\n$values=ConvertFrom-Json $env:WRAPPER_ARGS\ncodex @values\nWrite-Output 'SHELL_RETURNED'\n`);
+    // WRAPPERS_LOADED tells a probe killed by its timeout apart: stopped while loading, or inside the request. Nothing is
+    // printed before the load, which is what sets the output encoding.
+    fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. '${integration.replace(/'/g, "''")}\\bootstrap.ps1'\nWrite-Output 'WRAPPERS_LOADED'\n$values=ConvertFrom-Json $env:WRAPPER_ARGS\ncodex @values\nWrite-Output 'SHELL_RETURNED'\n`);
     const shell = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
     for (const args of [[], argv, ['--profile', 'other']]) {
       const result = await exec(shell, ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
@@ -68,6 +70,30 @@ test('PowerShell and the cmd shim request native Codex, preserve argv, return to
     assert.equal(fs.existsSync(marker), false);
     await exec(process.env.ComSpec, ['/d', '/c', 'codex'], { cwd: root, env, windowsHide: true });
     assert.equal(fs.existsSync(marker), true, 'outside an injected shell the executable is unchanged');
+  });
+
+test('the PowerShell bootstrap finds an agent on PATH in PowerShell\'s order and never through Get-Command',
+  { skip: process.platform !== 'win32', timeout: 15000 * timeoutScale }, async t => {
+    const source = fs.readFileSync(path.join(integration, 'bootstrap.ps1'), 'utf8');
+    // For a name that is not installed, Get-Command goes on to analyse every installed module before it answers.
+    assert.doesNotMatch(source.split(/\r?\n/).filter(line => !line.trim().startsWith('#')).join('\n'), /Get-Command/);
+    const root = fixture(t), first = path.join(root, 'first'), second = path.join(root, 'second folder'), script = path.join(root, 'finder.ps1');
+    for (const [folder, names] of [[first, ['script.ps1', 'script.cmd', 'script', 'batch.cmd', 'batch', 'bare']], [second, ['batch.bat', 'late.exe']]]) {
+      fs.mkdirSync(folder); for (const name of names) fs.writeFileSync(path.join(folder, name), '');
+    }
+    const begin = source.indexOf('function global:Find-AgentrixProgram');
+    fs.writeFileSync(script, '﻿' + source.slice(begin, source.indexOf('$global:AgentrixCodexCommand', begin)) + `
+$env:PATHEXT = '.COM;.EXE;.BAT;.CMD'
+$env:Path = ';"' + $env:FINDER_FIRST + '";' + $env:FINDER_SECOND + '\\;'
+Write-Output (@('script', 'batch', 'bare', 'late', 'absent') | ForEach-Object { "$(Find-AgentrixProgram $_)" } | ConvertTo-Json -Compress)
+`);
+    const result = await exec(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+      { env: { ...isolatedEnvironment(root), FINDER_FIRST: first, FINDER_SECOND: second }, windowsHide: true, timeout: 8000 * timeoutScale });
+    assert.equal(result.stderr, '');
+    assert.deepEqual(JSON.parse(result.stdout).map(found => found.toLowerCase()),
+      [path.join(first, 'script.ps1'), path.join(first, 'batch.cmd'), path.join(first, 'bare'), path.join(second, 'late.exe'), ''].map(found => found.toLowerCase()),
+      'a script before PATHEXT before the bare name, an earlier folder before a later one, quoted and empty entries read');
   });
 
 for (const kind of ['bash', 'zsh']) {

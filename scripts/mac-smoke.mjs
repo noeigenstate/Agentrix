@@ -1,8 +1,9 @@
 import './clipboard-guard.mjs';
 // macOS desktop check: the app starts a Bash (the default) or zsh terminal through the integration, runs a command,
-// follows codex from start to finish (with a stand-in codex that calls the real notify command), keeps macOS window
-// buttons and copies terminal text with ⌘C. Runs with an isolated profile and its own HOME, so the user's start-up
-// files and agents are never touched. Usage: node scripts/mac-smoke.mjs [--packaged] [--shell zsh]
+// keeps macOS window buttons, copies terminal text with ⌘C, and hands a typed codex to native mode: the host starts the
+// user's Codex as an app-server (a stand-in that answers that protocol), sends the typed prompt and follows the turn to
+// its end. Runs with an isolated profile and its own HOME, so the user's start-up files and agents are never touched.
+// Usage: node scripts/mac-smoke.mjs [--packaged] [--shell zsh]
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -26,14 +27,9 @@ for (const folder of [dataDir, bin, project.path]) await fs.mkdir(folder, { recu
 await fs.writeFile(path.join(home, '.bash_profile'), 'export PATH="$HOME/bin:$PATH"\n');
 await fs.writeFile(path.join(home, '.bashrc'), 'export PG_BASHRC=read\n');
 await fs.writeFile(path.join(home, '.zprofile'), 'path=("$HOME/bin" $path)\n');
-// A stand-in for Codex: it stays a moment, then runs its notify command for one finished turn, as Codex does.
-await fs.writeFile(path.join(bin, 'codex'), `#!/bin/zsh
-while (( $# )); do [[ $1 == -c && $2 == notify=* ]] && notify=\${2#notify=}; shift; done
-sleep 2
-eval "command=($(print -r -- \${notify:1:-1} | sed 's/,/ /g'))"
-"\${command[@]}" '{"type":"agent-turn-complete","thread-id":"thread","turn-id":"turn"}'
-print -r -- "STAND_IN_CODEX_DONE"
-`, { mode: 0o755 });
+// A stand-in for Codex that answers the app-server protocol and leaves a receipt of how it was started and what it was sent.
+await fs.writeFile(path.join(bin, 'codex'), `#!${process.execPath}\nrequire(${JSON.stringify(path.join(root, 'tests/fixtures/gui-codex-app-server.cjs'))});\n`, { mode: 0o755 });
+const receipt = async () => { try { return JSON.parse(await fs.readFile(path.join(project.path, 'resume-receipt.json'), 'utf8')); } catch { return null; } };
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', ...(shellName === 'zsh' && { shell: 'zsh' }), terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: false } }));
 
 const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: await fs.mkdtemp(path.join(path.dirname(dataDir), 'codex-home-')), HOME: home, SHELL: '/bin/zsh' }; // The login shell is zsh on purpose: the default terminal is Bash whatever $SHELL says.
@@ -72,13 +68,6 @@ try {
   await page.keyboard.press('Enter');
   await waitFor(async () => new RegExp(`PG_MAC_42 \\S+\\.UTF-8 ${unset}`).test(await terminal.innerText()), `the command runs in a UTF-8 ${shellName} that starts nested shells normally`);
   assert.doesNotMatch(await terminal.innerText(), /default interactive shell is now zsh/, 'no deprecation banner');
-
-  await page.keyboard.type('codex');
-  await page.keyboard.press('Enter');
-  await waitFor(async () => (await state()).codexActive === true, 'codex is reported as started');
-  assert.equal((await state()).agent, 'codex');
-  await waitFor(async () => /STAND_IN_CODEX_DONE/.test(await terminal.innerText()), 'the stand-in codex ran its notify command');
-  await waitFor(async () => { const value = await state(); return !value.codexActive && value.terminals[0].shellReady; }, 'codex exit returns the terminal to its prompt');
   await page.screenshot({ path: path.join(output, 'terminal.png') });
 
   // ⌘A selects the terminal's text and ⌘C copies it; Control+C stays an interrupt.
@@ -96,8 +85,27 @@ try {
   await page.keyboard.press('Enter');
   await waitFor(async () => /\nAFTER_INTERRUPT/.test(await terminal.innerText()), 'Control+C interrupts the running command');
 
+  // Codex has no terminal run. Typing it gives this terminal's place to a native session: the host starts the user's
+  // Codex as an app-server, sends the typed prompt and follows the turn. The shell itself never runs the executable.
+  await page.keyboard.type("codex 'PG native prompt'");
+  await page.keyboard.press('Enter');
+  await waitFor(async () => { const value = await state(); return value.codexActive === true && value.terminals[0].nativeMode === 'codex-app-server'; }, 'typing codex opens Codex in native mode');
+  assert.equal((await state()).agent, 'codex');
+  await waitFor(async () => (await receipt())?.input === 'PG native prompt', 'the typed prompt reaches Codex through the host');
+  assert.deepEqual((await receipt()).args, ['app-server', '--listen', 'stdio://'], 'the host starts Codex as an app-server; the shell never runs it with the typed words');
+  assert.match((await receipt()).developerInstructions, /^You run inside Agentrix/, 'the startup note goes with the native start');
+  const terminalId = (await state()).terminals[0].id;
+  const native = async () => (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value;
+  await waitFor(async () => (await native())?.events.some(event => event.type === 'turn.completed' && event.payload.status === 'completed'), 'the turn is followed to its end');
+  assert.ok(JSON.stringify((await native()).events).includes('RESTORE_FIXTURE_REPLY'), 'the reply is in the native session');
+  await waitFor(async () => (await state()).codexActivity === 'complete', 'the project shows the finished turn');
+  assert.equal(await page.locator('.project-panel .xterm').count(), 0, "the native session takes the terminal's place");
+  await page.screenshot({ path: path.join(output, 'native-codex.png') });
+  await page.evaluate(({ id, runtime }) => window.agentrix.nativeSession.stop(id, runtime), { id: terminalId, runtime: (await native()).runtimeSessionId });
+  await waitFor(async () => (await state()).codexActive === false, 'stopping the native session ends Codex');
+
   assert.deepEqual(errors, []);
-  console.log(`PASS: macOS ${packaged ? 'packaged' : 'development'} app runs a ${shellName} terminal with codex reporting; screenshots: ${output}`);
+  console.log(`PASS: macOS ${packaged ? 'packaged' : 'development'} app runs a ${shellName} terminal and hands a typed codex to native mode; screenshots: ${output}`);
 } finally {
   if (application) {
     if (savedClipboard !== null) await application.evaluate(({ clipboard }, text) => clipboard.writeText(text), savedClipboard).catch(() => {});

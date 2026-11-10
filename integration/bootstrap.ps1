@@ -9,9 +9,24 @@ Remove-Item Env:AGENTRIX_ACCOUNT_BASELINE -ErrorAction SilentlyContinue
 # agent.ps1 (Command Prompt terminals) loads only the codex and claude wrappers below and keeps its own directory.
 $global:AgentrixAgentOnly = $env:AGENTRIX_AGENT_ONLY -eq '1'
 if (-not $global:AgentrixAgentOnly) { Set-Location -LiteralPath $global:AgentrixSession.projectPath }
-$global:AgentrixCodexCommand = Get-Command codex -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
-
-$global:AgentrixClaudeCommand = Get-Command claude -CommandType Application,ExternalScript -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+# An agent's CLI is the first file on PATH with its name, in PowerShell's own order within a folder: script, PATHEXT, bare
+# name. Get-Command is not asked: for a name that is not installed it goes on to analyse every installed PowerShell
+# module, which delays each terminal (and each codex or claude typed in Command Prompt) by seconds where many are installed.
+function global:Find-AgentrixProgram {
+    param([string]$Name)
+    $extensions = if ($env:PATHEXT) { $env:PATHEXT } else { '.COM;.EXE;.BAT;.CMD' }
+    $suffixes = @('.ps1') + @($extensions -split ';' | Where-Object { $_ }) + @('')
+    foreach ($folder in ($env:Path -split ';')) {
+        $folder = $folder.Trim().Trim('"')
+        if (-not $folder) { continue }
+        foreach ($suffix in $suffixes) {
+            $candidate = $folder.TrimEnd('\') + '\' + $Name + $suffix
+            if ([IO.File]::Exists($candidate)) { return $candidate }
+        }
+    }
+}
+$global:AgentrixCodexCommand = Find-AgentrixProgram codex
+$global:AgentrixClaudeCommand = Find-AgentrixProgram claude
 $global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand
 if ($global:AgentrixClaudeCommand -and [IO.Path]::GetExtension($global:AgentrixClaudeCommand) -in @('.ps1', '.cmd', '')) {
     $nativeClaude = Join-Path (Split-Path $global:AgentrixClaudeCommand -Parent) 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'
