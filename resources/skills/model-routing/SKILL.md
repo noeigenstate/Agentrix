@@ -65,13 +65,14 @@ Fable, where the account has it, takes the judgments that cost most when wrong, 
 | Orchestrator (briefs, integration, checking review findings, acceptance, failure attribution) | Fable |
 | Plan for a task that crosses modules or changes a protocol or contract | Fable |
 | Plan for a task inside one module | Opus |
-| Architecture review | Opus, always: the planner's model never reviews its own plan or code |
+| Architecture review | A fresh Opus instance that neither planned nor wrote the work |
 | Core engineer | GPT-6.1-Sol; Fable only by escalation |
 
 Escalate a core build to Fable only when one of these holds, and say which in the plan: the core engineer is unavailable
 (not installed, or its usage limit is spent), the same defect is being fixed a second time, or the change crosses three or
-more modules. Code Fable writes is reviewed by Opus. Without Fable, Opus takes these positions as before and a fresh Opus
-reviews.
+more modules. The reviewer is always a fresh instance that neither planned nor wrote the work, and a different model from
+the one that wrote the code wherever two exist: Opus reviews what Fable planned or wrote, and a fresh Opus reviews the
+build of a plan Opus made. Without Fable, Opus takes these positions as before and a fresh Opus reviews.
 
 ### Stages
 
@@ -354,7 +355,7 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 - The lead orchestrates and holds permissions; workers stay within their brief and never delegate further.
 - Route every change to a worker, however small; the lead never builds alone. A task too small for a roundtable skips it with a stated reason.
 - Route by difficulty and responsibility, not by renderer versus main-process location.
-- Fable orchestrates and plans cross-module work and writes code only by escalation; Opus reviews, and the planner's model never reviews its own work.
+- Fable orchestrates and plans cross-module work and writes code only by escalation; a fresh Opus instance reviews, never the instance that planned or wrote the work.
 - Hand searches, log reads and file reads to a Haiku subagent and keep the conclusion; read yourself only what you must judge exactly.
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
