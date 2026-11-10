@@ -2976,5 +2976,19 @@
   "Claude API 暂时不可用，不能读取。": "The Claude API is unavailable right now, so this cannot be read.",
   "无法读取上下文用量。": "The context usage could not be read.",
   "结果未能确认": "Result not confirmed",
-  "今天 {time}": "Today {time}"
+  "今天 {time}": "Today {time}",
+  "结果面板": "Result panel",
+  "原生模式里，/status、/usage、/context、/cost 的结果显示在输入框上方的面板里，不写进对话，也不发给模型；按 Esc 或点面板外面关闭。": "In native mode, /status, /usage, /context and /cost answer in a panel above the message box; nothing is written into the conversation or sent to the model. Esc or a click outside closes it.",
+  "设置提示": "Setting notes",
+  "用 /model、/effort、/fast 改完设置后，会出现一条两秒的提示，不再在对话里留一行。": "After /model, /effort or /fast changes a setting, a two-second note says so instead of a line in the conversation.",
+  "额度更准": "Truer quota",
+  "换账号后，活动栏显示的是新账号的额度；Codex 的额度会持续更新，不再停在第一次读到的数值。": "After you switch accounts the activity pane shows the new account's quota, and Codex quota keeps updating instead of staying at its first reading.",
+  "未确认步骤": "Unconfirmed steps",
+  "结果没能确认的步骤显示问号和「结果未能确认」，不再显示成已完成或测试通过。": "A step whose result could not be confirmed shows a question mark, no longer a check or a passed test.",
+  "历史步骤": "Old steps",
+  "恢复 Codex 会话后，上次没跑完的步骤不再被当作正在运行，可以正常开始新会话。": "After a Codex session is resumed, steps left unfinished earlier no longer count as running, so a new conversation can start.",
+  "会话更稳": "Steadier sessions",
+  "修复 Claude 原生会话偶尔在回复途中失败的问题；查看状态失败时不再影响会话本身。": "Fixed Claude native sessions that sometimes failed in the middle of a reply; a failed status lookup no longer affects the session.",
+  "模型编排": "Model routing",
+  "系统的模型路由加入 Fable：由它主控并规划跨模块的任务，Opus 负责审查。": "The built-in model routing adds Fable: it leads and plans work that crosses modules, and Opus reviews."
 }
