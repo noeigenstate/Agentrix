@@ -375,6 +375,199 @@ async function runtimeSmoke(output, stages) {
   }
 }
 
+// Result panel (information slash commands) acceptance: main's answers to `native:send` / `native:run-options` are replaced by canned `local` facts inside
+// this isolated application, the panel is opened by typing the command in the real message box, and every state is screenshotted and measured from the DOM.
+// Nothing here presses the panel's copy button or Ctrl+C (both write the system clipboard).
+async function panelStage({ app, page, view, box, emit, event, output, checks, agent }) {
+  const measures = {}, shot = async name => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(output, `panel-${name}.png`) }); };
+  const now = Date.now(), DAY = 86400000, HOUR = 3600000;
+  const codexFacts = (command, week = 100) => ({ command, session: { model: 'gpt-6.1-terra', effort: 'high', fast: true, approval: 'never', sandbox: 'dangerFullAccess', cwd: 'C:\\Users\\ylc\\Desktop\\a-rather-long-project-folder-name\\packages\\native-session-workbench' },
+    account: { provider: 'openai', kind: 'subscription' }, tokens: { total: 208228, input: 207377, output: 851, cachedInput: 141056, reasoning: 47, context: 32803, window: 475000 },
+    limits: [{ id: '5h', usedPercent: 0, resetsAtMs: now + 5 * HOUR }, { id: 'week', usedPercent: week, resetsAtMs: now + 3 * DAY }], errors: [] });
+  const claudeContext = { command: 'context', context: { model: 'claude-opus-5-5', tokens: 58400, window: 1000000, autoCompact: true, autoCompactThreshold: 830000,
+    categories: [{ id: 'free-space', name: 'Free space', tokens: 941600, kind: 'free' }, { id: 'messages', name: 'Messages', tokens: 25800, kind: 'used' }, { id: 'system-prompt', name: 'System prompt', tokens: 14200, kind: 'used' },
+      { id: 'system-tools', name: 'System tools', tokens: 12100, kind: 'used' }, { id: 'memory-files', name: 'Memory files', tokens: 6300, kind: 'used' }],
+    memory: [{ name: 'MEMORY.md', tokens: 3100 }], mcp: [{ name: 'playwright', tokens: 6800 }], skills: [{ name: 'model-routing', tokens: 2400 }] } };
+  const claudeCost = { command: 'cost', costUsdMicros: 1840000, durationMs: 1390000, apiDurationMs: 402000, month: { spentMicros: 36520000, budgetUsd: 100 },
+    models: [{ model: 'claude-opus-5-5', costUsdMicros: 1620000, input: 412000, output: 9800, cacheRead: null, cacheWrite: null }, { model: 'claude-haiku-5-5', costUsdMicros: 220000, input: 188000, output: 4100, cacheRead: null, cacheWrite: null }] };
+  const claudeUsage = { command: 'usage', month: { spentMicros: 36520000, budgetUsd: 100 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
+    limits: [{ id: 'five_hour', usedPercent: 100, resetsAtMs: now + 2 * HOUR }, { id: 'seven_day', usedPercent: 40, resetsAtMs: now + 2 * DAY }] };
+  const claudeStatus = { command: 'status', context: claudeContext.context, errors: [], account: { kind: 'api' }, session: { model: 'claude-opus-5-5', effort: 'high', cwd: 'C:\\work', sessionId: 'abc-123', version: '2.1.318', permission: 'default', mcp: [{ name: 'playwright', status: 'connected' }] } };
+
+  // Main side: canned answers; mode 'hold' keeps the next answer back until released so the loading state can be seen.
+  await app.evaluate(({ ipcMain }) => {
+    globalThis.__panel = { answers: {}, mode: 'ok', error: '' };
+    ipcMain.removeHandler('native:send'); ipcMain.removeHandler('native:run-options');
+    ipcMain.handle('native:send', (_event, _terminal, _runtime, _id, text) => {
+      const cfg = globalThis.__panel, result = cfg.mode === 'fail' ? { ok: false, error: cfg.error } : { ok: true, value: { status: 'consumed', local: cfg.answers[String(text).slice(1)] } };
+      return cfg.mode === 'hold' ? new Promise(resolve => { globalThis.__panelRelease = () => resolve(result); }) : result;
+    });
+    ipcMain.handle('native:run-options', (_event, _terminal, _runtime, patch) => ({ ok: true, value: { model: patch?.model ?? 'opus', effort: patch?.effort ?? 'high', fast: false } }));
+  });
+  const configure = (answers, mode = 'ok', error = '') => app.evaluate((_e, cfg) => { globalThis.__panel = cfg; }, { answers, mode, error });
+  // A terminal's native identity is fixed by its first event, so the Codex pass runs in an application of its own (panelCodexApp).
+  const provider = async () => {
+    if (agent === 'codex') await emit([event('session.state', { state: 'idle', reason: null }, { provider: 'codex', transport: 'codex-app-server', runtimeSessionId: 'rs-panel-codex' })]);
+    await view.waitFor({ timeout: 10000 });
+  };
+  const open = async command => { await box.click(); await box.fill(`/${command}`); await page.keyboard.press('Enter'); await page.locator('dialog.native-panel').waitFor({ timeout: 8000 }); };
+  const ready = () => page.waitForFunction(() => document.querySelector('dialog.native-panel') && !document.querySelector('dialog.native-panel .native-panel-skeleton'), null, { timeout: 8000 });
+  const close = async () => { await page.keyboard.press('Escape'); await page.locator('dialog.native-panel').waitFor({ state: 'detached', timeout: 3000 }); };
+
+  // All geometry and style in one read, so the report is numbers and not impressions.
+  const measure = () => page.evaluate(() => {
+    const d = document.querySelector('dialog.native-panel'); if (!d) return null;
+    const r = el => { const b = el.getBoundingClientRect(); return { x: +b.x.toFixed(1), y: +b.y.toFixed(1), w: +b.width.toFixed(1), h: +b.height.toFixed(1), r: +b.right.toFixed(1), b: +b.bottom.toFixed(1) }; };
+    const cs = (el, ...props) => { const c = getComputedStyle(el); return Object.fromEntries(props.map(p => [p, c[p]])); };
+    const q = sel => d.querySelector(sel), qa = sel => [...d.querySelectorAll(sel)];
+    const area = d.closest('.reading-scroll-area') ?? d.parentElement, scrim = d.parentElement, composer = d.closest('.reading-view').querySelector('textarea');
+    const panel = r(d), rel = e => +(r(e).x - panel.x).toFixed(1);
+    return {
+      panel, scrim: r(scrim), area: r(area), composer: composer ? r(composer) : null, viewport: { w: innerWidth, h: innerHeight },
+      centredOffset: +((panel.x + panel.w / 2) - (r(area).x + r(area).w / 2)).toFixed(1),
+      gapAboveComposer: composer ? +(r(composer).y - panel.b).toFixed(1) : null, overlapsComposer: composer ? panel.b > r(composer).y + 0.5 && panel.y < r(composer).b : null,
+      panelStyle: cs(d, 'borderRadius', 'borderTopWidth', 'maxHeight', 'backgroundColor', 'borderTopColor', 'boxShadow', 'fontSize'),
+      body: (b => b && { ...cs(b, 'overflowY', 'maxHeight'), scrollHeight: b.scrollHeight, clientHeight: b.clientHeight })(q('.native-panel-body')),
+      head: { title: (e => e && { ...cs(e, 'fontSize', 'fontWeight', 'color'), x: rel(e) })(q('.native-panel-title')), mark: (e => e && { x: rel(e), w: r(e).w })(q('.native-panel-mark')),
+        cmd: (e => e && cs(e, 'borderRadius', 'fontSize', 'backgroundColor', 'color'))(q('.native-panel-cmd')) },
+      buttons: qa('.native-panel-head .icon-button').map(b => ({ title: b.title, w: r(b).w, h: r(b).h, radius: getComputedStyle(b).borderRadius, disabled: b.disabled, icon: r(b.querySelector('svg')).w })),
+      hero: (e => e && { ...cs(e, 'fontSize', 'fontWeight', 'color'), x: rel(e) })(q('.native-panel-big')),
+      heroCap: (e => e && cs(e, 'fontSize', 'color'))(q('.native-panel-cap')),
+      heroBar: (e => e && { h: r(e).h, w: r(e).w, radius: getComputedStyle(e).borderRadius, fill: getComputedStyle(e.firstElementChild).backgroundColor, track: getComputedStyle(e).backgroundColor, x: rel(e) })(q('.native-panel-hero-bar .native-panel-meter')),
+      alert: (e => e && { h: r(e).h, x: rel(e), w: r(e).w, radius: getComputedStyle(e).borderRadius, border: getComputedStyle(e).borderTopColor, icon: getComputedStyle(e.querySelector('svg')).color, strong: getComputedStyle(e.querySelector('b')).color, bg: getComputedStyle(e).backgroundColor, size: getComputedStyle(e).fontSize })(q('.native-panel-alert')),
+      groupTitles: qa('.native-panel-group-title').map(e => ({ text: e.textContent, ...cs(e, 'fontSize', 'color'), x: rel(e) })),
+      groups: qa('.native-panel-group').map(e => ({ borderTop: getComputedStyle(e).borderTopWidth, pad: getComputedStyle(e).padding, h: r(e).h, x: rel(e), w: r(e).w })),
+      rows: qa('.native-panel-rows').map(g => ({ cols: getComputedStyle(g).gridTemplateColumns, gap: getComputedStyle(g).gap,
+        dt: [...g.querySelectorAll('dt')].map(e => ({ text: e.textContent, w: r(e).w, x: rel(e), fontSize: getComputedStyle(e).fontSize, color: getComputedStyle(e).color })),
+        dd: [...g.querySelectorAll('dd')].map(e => ({ text: e.textContent, x: rel(e), w: r(e).w, fontSize: getComputedStyle(e).fontSize, color: getComputedStyle(e).color, ellipsis: e.scrollWidth > e.clientWidth + 1, textOverflow: getComputedStyle(e).textOverflow, noteColor: e.querySelector('span') && getComputedStyle(e.querySelector('span')).color })) })),
+      chips: qa('.native-panel-chip').map(e => ({ text: e.textContent, radius: getComputedStyle(e).borderRadius, fontSize: getComputedStyle(e).fontSize, color: getComputedStyle(e).color, bg: getComputedStyle(e).backgroundColor, border: getComputedStyle(e).borderTopWidth + ' ' + getComputedStyle(e).borderTopColor, x: rel(e) })),
+      quotas: qa('.native-panel-quota').map(e => ({ out: e.classList.contains('is-out'), pct: getComputedStyle(e.querySelector('b')).color, fill: e.querySelector('.native-panel-meter > i') && getComputedStyle(e.querySelector('.native-panel-meter > i')).backgroundColor,
+        meterH: e.querySelector('.native-panel-meter') && r(e.querySelector('.native-panel-meter')).h, meterRadius: e.querySelector('.native-panel-meter') && getComputedStyle(e.querySelector('.native-panel-meter')).borderRadius,
+        when: e.querySelector('.native-panel-when') && cs(e.querySelector('.native-panel-when'), 'fontSize', 'color'), x: rel(e), nameSize: getComputedStyle(e.querySelector('.native-panel-quota-top')).fontSize })),
+      stack: (e => e && { h: r(e).h, radius: getComputedStyle(e).borderRadius, segs: [...e.children].map(i => ({ w: +r(i).w.toFixed(1), bg: getComputedStyle(i).backgroundColor })) })(q('.native-panel-meter.is-stack')),
+      legend: qa('.native-panel-legend li').map(li => ({ text: li.textContent, size: getComputedStyle(li).fontSize, sw: r(li.firstElementChild).w, swRadius: getComputedStyle(li.firstElementChild).borderRadius, nameColor: getComputedStyle(li.children[1]).color })),
+      foot: (e => e && { ...cs(e, 'fontSize', 'color', 'borderTopWidth', 'padding'), h: r(e).h })(q('.native-panel-foot')),
+      skeleton: qa('.native-panel-skeleton > i').length,
+      allText: [...new Set(qa('*').filter(e => [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())).map(e => getComputedStyle(e).color))],
+      allBg: [...new Set(qa('*').map(e => getComputedStyle(e).backgroundColor).filter(c => c !== 'rgba(0, 0, 0, 0)'))],
+      allBorder: [...new Set(qa('*').filter(e => parseFloat(getComputedStyle(e).borderTopWidth) > 0).map(e => getComputedStyle(e).borderTopColor))],
+      doubleBorders: qa('*').filter(e => parseFloat(getComputedStyle(e).borderTopWidth) > 0 && e.parentElement && Math.abs(r(e.parentElement).y - r(e).y) < 1 && parseFloat(getComputedStyle(e.parentElement).borderTopWidth) > 0).map(e => e.className),
+      tokens: Object.fromEntries(['--bg-menu', '--border', '--divider', '--text-1', '--text-2', '--text-3', '--usage', '--danger', '--warning', '--success', '--bg-selected', '--bg-hover', '--bg-app'].map(n => [n, getComputedStyle(document.documentElement).getPropertyValue(n).trim()])),
+      activeTag: document.activeElement && (document.activeElement.tagName + '.' + document.activeElement.className),
+    };
+  });
+  const record = async name => { await page.waitForTimeout(400); measures[name] = await measure(); await shot(name); };
+
+  const bubblesBefore = await view.locator('.reading-user').count();
+
+  await provider();
+  if (agent === 'codex') {
+  await configure({ status: codexFacts('status'), usage: codexFacts('usage') });
+  await open('status'); await ready();
+  await record('codex-status-dark');
+  // Keyboard: Tab visits the three header buttons and wraps.
+  const tabs = [];
+  for (let i = 0; i < 4; i++) { await page.keyboard.press('Tab'); tabs.push(await page.evaluate(() => document.activeElement?.title || document.activeElement?.tagName)); }
+  measures.tabOrder = tabs;
+  await shot('codex-status-dark-tab-focus');
+  // Grayscale: the hierarchy must survive without colour.
+  await page.evaluate(() => { document.documentElement.style.filter = 'grayscale(1)'; }); await shot('codex-status-dark-gray'); await page.evaluate(() => { document.documentElement.style.filter = ''; });
+  // Esc closes and the box has the cursor again.
+  await close();
+  measures.escFocus = await page.evaluate(() => document.activeElement?.tagName + ':' + (document.activeElement?.closest('.reading-view') ? 'in-reading-view' : 'elsewhere'));
+  // A press on the scrim closes.
+  await open('status'); await ready();
+  const corner = await page.locator('dialog.native-panel').evaluate(d => { const b = d.closest('.native-panel-scrim').getBoundingClientRect(); return { x: b.x + 6, y: b.y + 6 }; });
+  await page.mouse.click(corner.x, corner.y);
+  await page.waitForTimeout(300);
+  measures.scrimClosed = (await page.locator('dialog.native-panel').count()) === 0;
+  measures.scrimFocus = await page.evaluate(() => document.activeElement?.tagName);
+
+  await open('usage'); await ready(); await record('codex-usage-dark'); await close();
+
+  // Loading state, then a failed read.
+  await configure({ status: codexFacts('status') }, 'hold');
+  await open('status'); await page.locator('dialog.native-panel .native-panel-skeleton').first().waitFor({ timeout: 4000 }); await record('codex-loading-dark');
+  await app.evaluate(() => globalThis.__panelRelease()); await ready(); await close();
+  await configure({}, 'fail', '会话正在切换，请稍后重试。');
+  await open('status'); await page.locator('dialog.native-panel [role="alert"]').waitFor({ timeout: 4000 }); await record('codex-failed-dark'); await close();
+
+  // A quota below 100%: no alert line.
+  await configure({ status: codexFacts('status', 40) }); await open('status'); await ready(); await record('codex-status-dark-week40'); await close();
+
+  // Light theme and the narrow window for Codex /status.
+  await configure({ status: codexFacts('status') });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  await open('status'); await ready(); await record('codex-status-light'); await close();
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'mono'; });
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(820, 640)); await page.waitForTimeout(400);
+  await open('status'); await ready(); await record('codex-status-dark-narrow');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; }); await record('codex-status-light-narrow');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'mono'; }); await close();
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900)); await page.waitForTimeout(400);
+
+  } else {
+  await configure({ context: claudeContext, cost: claudeCost, usage: claudeUsage, status: claudeStatus });
+  await open('context'); await ready(); await record('claude-context-dark');
+  measures.bubblesBefore = bubblesBefore; measures.bubblesWhileOpen = await view.locator('.reading-user').count();
+  measures.thinkingRows = await page.locator('.reading-view[data-native-session] [class*="thinking"]').count();
+  await close();
+  await open('cost'); await ready(); await record('claude-cost-dark'); await close();
+  await open('usage'); await ready(); await record('claude-usage-dark'); await close();
+  await open('status'); await ready(); await record('claude-status-dark'); await close();
+
+  // The note after a setting change, timed.
+  await box.click(); await box.fill('/model opus'); await page.keyboard.press('Enter');
+  const toast = page.locator('.native-toast'); await toast.waitFor({ timeout: 4000 });
+  const shown = Date.now();
+  measures.toast = await page.evaluate(() => {
+    const t = document.querySelector('.native-toast'), b = t.getBoundingClientRect(), c = getComputedStyle(t), a = t.closest('.reading-scroll-area').getBoundingClientRect(), field = t.closest('.reading-view').querySelector('textarea').getBoundingClientRect();
+    return { w: b.width, h: b.height, centreOffset: (b.x + b.width / 2) - (a.x + a.width / 2), gapAboveComposer: field.y - b.bottom, radius: c.borderRadius, fontSize: c.fontSize, text: t.textContent, iconColor: getComputedStyle(t.querySelector('svg')).color, bg: c.backgroundColor, border: c.borderTopColor, shadow: c.boxShadow };
+  });
+  await page.waitForTimeout(300); await shot('claude-toast-dark');
+  await toast.waitFor({ state: 'detached', timeout: 4000 }); measures.toast.visibleMs = Date.now() - shown;
+  measures.toastBubbles = await view.locator('.reading-user').count();
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  await box.click(); await box.fill('/effort max'); await page.keyboard.press('Enter'); await toast.waitFor({ timeout: 4000 }); await page.waitForTimeout(300); await shot('claude-toast-light');
+  await toast.waitFor({ state: 'detached', timeout: 4000 }); await page.evaluate(() => { document.documentElement.dataset.theme = 'mono'; });
+
+  }
+  await fs.writeFile(path.join(output, `panel-measures-${agent}.json`), JSON.stringify(measures, null, 2));
+  checks.push('result panel: every command, loading, failure, toast, light and narrow captured and measured');
+}
+
+// The Codex pass of the result panel runs in its own isolated application: a terminal's native identity is fixed by its first event.
+async function panelCodexApp(output, stages, checks) {
+  const profile = path.join(output, 'panel-codex-profile'), home = path.join(output, 'panel-codex-home'), project = { id: randomUUID(), name: 'Codex 面板', path: path.join(output, 'panel-codex-project'), kind: 'local', restore: { terminal: false, codex: false } };
+  for (const dir of [profile, home, project.path]) await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, fontSize: 14 } }));
+  const env = { ...isolatedEnvironment(home), ...displayEnvironment(), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+  let app;
+  try {
+    app = await stages.run('launch Codex panel application', async () => electron.launch({ executablePath: await executable(), args: packaged ? [] : [root], cwd: root, env, timeout: 25000 }), 30000);
+    stages.attach(app);
+    const page = await app.firstWindow();
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1600, 900));
+    await page.waitForSelector('.project-panel');
+    const terminalId = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0].id;
+    let sequence = 0;
+    const event = (type, payload = {}, extra = {}) => ({ schemaVersion: 1, eventId: `panel-${++sequence}`, sequence, connectionEpoch: 'smoke', provider: 'codex', transport: 'codex-app-server', projectId: project.id, terminalId,
+      runtimeSessionId: 'rs-panel-codex', providerSessionId: null, runId: null, turnId: 'turn-1', itemId: null, receivedAtMs: Date.now(), occurredAtMs: Date.now(), replay: false, type, payload, ...extra });
+    const emit = events => app.evaluate(({ BrowserWindow }, list) => { for (const item of list) BrowserWindow.getAllWindows()[0].webContents.send('native:event', item); }, events);
+    const view = page.locator(`[data-terminal-id="${terminalId}"] .reading-view[data-native-session]`);
+    await emit([event('turn.started', { origin: 'user', clientMessageId: 'c1' }), event('item.upsert', { kind: 'user-message', status: 'completed', content: { text: '帮我把生成的图片再调亮一点', clientMessageId: 'c1' } }, { itemId: 'u1' }),
+      event('item.delta', { channel: 'text', text: '已经把亮度提高了 15%，新文件保存为 cover-bright.png。' }, { itemId: 'm1' }), event('turn.completed', { status: 'completed', error: null }), event('session.state', { state: 'idle', reason: null })]);
+    await view.waitFor({ timeout: 15000 });
+    await panelStage({ app, page, view, box: view.locator('textarea'), emit, event, output, checks, agent: 'codex' });
+  } catch (error) {
+    if (app) await stages.run('capture Codex panel failure', async () => { const page = await app.firstWindow(); await page.screenshot({ path: path.join(output, 'failure-codex-panel.png'), timeout: 2000 }); }, 3000).catch(() => {});
+    throw error;
+  } finally {
+    await closeSmokeApplication(app, stages);
+    for (const directory of [profile, home, project.path]) await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+}
+
 async function run(output, stages) {
   const profile = path.join(output, 'profile'), home = path.join(output, 'ui-home'), project = { id: randomUUID(), name: '原生会话', path: path.join(output, 'project'), kind: 'local', restore: { terminal: false, codex: false } };
   for (const dir of [profile, home, project.path]) await fs.mkdir(dir, { recursive: true });
@@ -382,6 +575,7 @@ async function run(output, stages) {
   const env = { ...isolatedEnvironment(home), ...displayEnvironment(), AGENTRIX_DATA_DIR: profile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
   const errors = [], checks = [];
   let app;
+  await panelCodexApp(output, stages, checks);
   try {
     app = await stages.run('launch UI application', async () => electron.launch({ executablePath: await executable(), args: packaged ? [] : [root], cwd: root, env, timeout: 25000 }), 30000);
     stages.attach(app);
@@ -409,7 +603,7 @@ async function run(output, stages) {
     await waitFor(async () => (await view.locator('.reading-user p').allInnerTexts()).includes('fix the test'), 'your message is drawn');
     await waitFor(async () => (await view.locator('.reading-assistant').allInnerTexts()).some(text => text.includes('it passes now')), 'the agent’s words are drawn');
     await view.locator('.reading-tools-head').first().click();
-    assert.match(await view.locator('.reading-tool-output').first().innerText(), /FAIL a\.test\.js/, 'an opened tool group shows command output');
+    assert.equal(await view.locator('.reading-tool-output').count(), 0, 'native steps keep action and path and hide the output box'); await view.getByText('npm test').first().waitFor();
     const request = view.locator('.native-request');
     await request.getByRole('button', { name: '允许本次', exact: true }).waitFor(); await request.getByRole('button', { name: '拒绝', exact: true }).waitFor();
     assert.equal(await box.isEnabled(), true, 'the message box stays usable while the agent works');
@@ -431,6 +625,8 @@ async function run(output, stages) {
     assert.equal(await view.locator('.reading-assistant').count(), assistantBefore, 'a replayed event adds nothing');
     assert.equal(await view.locator('button[title="中断（Esc）"]').count(), 0, 'no Stop once idle');
     checks.push('replay adds nothing; resolved request leaves; Stop only while working');
+
+    await panelStage({ app, page, view, box, emit, event, output, checks, agent: 'claude' });
 
     // Expanded: the activity pane shows the path and API usage card.
     await page.locator(`[data-project-id="${project.id}"] .panel-name`).click();
