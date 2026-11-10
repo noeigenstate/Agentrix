@@ -632,6 +632,7 @@ function createClaudeSession(spec, emit, dependencies) {
       preparing ||= createQuery(true).finally(() => { preparing = null; });
       await preparing;
       for (const message of history.slice(-1000)) normalize({ ...message, isReplay: true });
+      normalize.settleReplay();
       return { providerSessionId: providerId };
     },
     connection,

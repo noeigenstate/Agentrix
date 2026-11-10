@@ -23,7 +23,11 @@ function fixture(t) {
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save('sk-ant-offline-parity-fixture-only');
   t.after(async () => { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, fake, runtime };
+  // A query keeps the month's remaining allowance, with no per-round cap: only a changed allowance renews it at the
+  // next send. Another session's spend is such a change.
+  let spent = 0;
+  const renew = () => runtime.usage.record('other-session', { uuid: randomUUID(), total_cost_usd: ++spent, modelUsage: {} });
+  return { root, fake, runtime, renew };
 }
 
 test('run options read is lazy; acknowledged choices survive budget renewal', async t => {
@@ -36,12 +40,12 @@ test('run options read is lazy; acknowledged choices survive budget renewal', as
   await assert.rejects(session.runOptions({ fast: true }), /Claude Agent SDK 目前不支持快速模式/);
   assert.equal((await session.runOptions({})).fast, false);
   await session.runOptions({ model: 'fake-next', effort: 'low', fast: false });
-  await session.send({ clientMessageId: 'two', text: 'second' }); await tick();
+  f.renew(); await session.send({ clientMessageId: 'two', text: 'second' }); await tick();
   assert.equal(f.fake.calls.at(-1).options.model, 'fake-next'); assert.equal(f.fake.calls.at(-1).options.effort, 'low');
   assert.equal(JSON.parse(fs.readFileSync(f.fake.calls.at(-1).options.settings)).fastMode, false);
   assert.equal(f.fake.calls.at(-1).options.resume, f.fake.inputs[0].session_id || session.snapshot().events.find(event => event.providerSessionId)?.providerSessionId);
   assert.equal((await session.runOptions({ model: null })).model, 'fake-model');
-  await session.send({ clientMessageId: 'default', text: 'default model' }); await tick();
+  f.renew(); await session.send({ clientMessageId: 'default', text: 'default model' }); await tick();
   assert.equal(f.fake.calls.at(-1).options.model, undefined);
 });
 
@@ -51,7 +55,7 @@ test('rapid option updates serialize and a following send sees the last acknowle
   const values = await Promise.all(['first', 'second', 'last'].map(model => session.runOptions({ model })));
   assert.deepEqual(values.map(value => value.model), ['first', 'second', 'last']);
   await session.send({ clientMessageId: 'after-options', text: 'go' }); await tick();
-  await session.send({ clientMessageId: 'renew-options', text: 'continue' }); await tick();
+  f.renew(); await session.send({ clientMessageId: 'renew-options', text: 'continue' }); await tick();
   assert.equal(f.fake.calls.at(-1).options.model, 'last');
 });
 
@@ -88,17 +92,29 @@ test('new conversation activation failure keeps the old binding usable', async t
   assert.equal(native.snapshot('terminal').runtimeSessionId, first.runtimeSessionId);
 });
 
-test('native controls validate exact patches and cannot accept execution options', () => {
+test('native controls validate exact patches and cannot accept execution options', async t => {
   const handlers = new Map(), calls = [];
   const router = Object.fromEntries(['runOptions', 'models', 'newConversation', 'shell'].map(name => [name, (...args) => calls.push([name, ...args])]));
   require('../electron/features/native-session/ipc.cjs').registerIpc({ handle: (name, fn) => handlers.set(name, fn), router, settings: {}, claude: {} });
   const options = handlers.get('native:run-options');
-  for (const patch of [{ env: {} }, { model: 1 }, { effort: 'invented' }, { fast: 'yes' }, { cwd: '/other' }, []]) assert.throws(() => options('t', 'r', patch));
+  for (const patch of [{ env: {} }, { model: 1 }, { effort: 'not a level' }, { effort: 1 }, { fast: 'yes' }, { cwd: '/other' }, []]) assert.throws(() => options('t', 'r', patch));
   options('t', 'r', {}); assert.deepEqual(calls.at(-1), ['runOptions', 't', 'r', {}]);
   options('t', 'r', { model: null, effort: null, fast: false });
   const shell = handlers.get('native:shell');
   assert.throws(() => shell('t', 'r', 'id', { command: 'echo', env: {} }));
   shell('t', 'r', 'id', 'echo'); assert.deepEqual(calls.at(-1), ['shell', 't', 'r', 'id', 'echo']);
+  // Effort names are the provider's. The handler bounds the word; behind it the router refuses a level Claude does not
+  // have before any query exists, and Codex checks its model catalog (tests/codex-slash.test.cjs).
+  const f = fixture(t), bound = new Map();
+  const native = createNativeSessions({ directory: path.join(f.root, 'native'), claude: f.runtime, codex: {}, emit() {},
+    resolveSpec: id => ({ owner: 'gui', cwd: f.root, env: { PATH: '' }, terminalId: id, projectId: 'project', agent: 'claude' }),
+    activateNative() {}, terminal: () => assert.fail('no terminal'), saveSession() {} });
+  t.after(() => native.close());
+  native.register((name, fn) => bound.set(name, fn));
+  const started = await native.start('terminal', { agent: 'claude' });
+  await assert.rejects(async () => bound.get('native:run-options')('terminal', started.runtimeSessionId, { effort: 'invented' }), /无效的运行选项/);
+  assert.equal(f.fake.calls.length, 0, 'an invented level reaches no query');
+  assert.equal((await bound.get('native:run-options')('terminal', started.runtimeSessionId, { effort: 'low' })).effort, 'low');
 });
 
 test('both compaction lifecycles publish bounded events; every notice survives snapshot replay', () => {

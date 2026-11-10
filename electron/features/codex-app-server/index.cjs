@@ -5,7 +5,7 @@ const { spawn, execFile } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
 const { homedir } = require('node:os');
 const { createRpc } = require('./rpc.cjs');
-const { createEvents, itemPayload, turnCompletion } = require('./events.cjs');
+const { createEvents, itemPayload, settleReplayed, turnCompletion } = require('./events.cjs');
 const { createRequests } = require('./requests.cjs');
 const { mergeLimits, accountConnection, restrictedLimits } = require('./account.cjs');
 const { assertCompatible, probeCapabilities, commandName, builtinCommands, unsupported } = require('./compatibility.cjs');
@@ -366,7 +366,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           for (const turn of page.data) {
             ++turns;
             for (const item of [...(turn.items || [])].reverse()) {
-              const serialized = JSON.stringify({ payload: itemPayload(item, true, render, translate), itemId: item.id, turnId: turn.id });
+              const serialized = JSON.stringify({ payload: settleReplayed(itemPayload(item, true, render, translate), turn.status), itemId: item.id, turnId: turn.id });
               const size = Buffer.byteLength(serialized) + 1024;
               if (history.length >= 1000 || bytes + size > 4 * 1024 * 1024) { turns = 1000; break; }
               // Detach bounded text slices from the large provider frame before retaining them.
