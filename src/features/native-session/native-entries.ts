@@ -9,7 +9,7 @@ import { noticeText } from './native-notices.ts';
 import { commandOf, fieldOf, fileChanges, generatedOf, itemState, messageText, picturesOf, planText, shortPath, toolOf, type StepMark } from './native-words';
 
 // The reading view's tool step, with what the step printed (a command's output, a diff, a tool's result) for the opened group to show.
-type Step = AgentActionBrief & { failed: boolean; output?: string };
+type Step = AgentActionBrief & { failed: boolean; output?: string; unconfirmed?: boolean };
 const DONE_STEP = /^(completed|done)$/i;
 const idOf = (item: NativeItem) => (typeof item.content.clientMessageId === 'string' && item.content.clientMessageId ? item.content.clientMessageId : item.id);
 
@@ -19,7 +19,8 @@ const KINDS: [RegExp, AgentActionBrief['kind']][] = [[/^Read$/, 'read'], [/^(Gre
 const TARGET_FIELDS: Partial<Record<AgentActionBrief['kind'], string[]>> = { read: ['file_path', 'path'], search: ['pattern', 'query'], web: ['url', 'query'], agent: ['description', 'subagent_type'], skill: ['skill'] };
 
 // A step that ended without a result is cut off, not done: it is drawn as stopped (the cross) and says so.
-const marks = (state: StepMark) => ({ done: state !== 'running', failed: state === 'failed' || state === 'interrupted' });
+// A step whose end the provider could not confirm ("unknown") is not drawn as done: it is marked unconfirmed (the reading view draws a question and counts it as no pass).
+const marks = (state: StepMark) => ({ done: state !== 'running', failed: state === 'failed' || state === 'interrupted', ...(state === 'unknown' ? { unconfirmed: true } : {}) });
 
 function toolStep(item: NativeItem, state: StepMark): Step {
   const { name, server, fields, path, result } = toolOf(item);
@@ -59,7 +60,8 @@ function stepOf(item: NativeItem, settled: boolean): Step | null {
       default: return null;
     }
   })();
-  return step && state === 'interrupted' ? { ...step, detail: [step.detail, t('已中断')].filter(Boolean).join(' · ') } : step;
+  const said = state === 'interrupted' ? t('已中断') : state === 'unknown' ? t('结果未能确认') : '';
+  return step && said ? { ...step, detail: [step.detail, said].filter(Boolean).join(' · ') } : step;
 }
 
 // The messages not in the conversation yet: one the runtime refused (an item marked unsent, or a rejected receipt) or holds in its queue.
@@ -77,11 +79,11 @@ export function nativeEntries(model: NativeModel, images: Readonly<Record<string
     if (item.content.discarded === true) continue;
     if (item.kind === 'user-message') {
       const text = messageText(item), pictures = picturesOf(item) ?? images[idOf(item)], omitted = item.content.imagesOmitted === true && !pictures;
-      if (!held(model, item) && (text || pictures || omitted)) entries.push({ id: item.content.localCommand === 'status' ? `notice:local:${item.id}` : item.id, at, role: 'user', text, ...(pictures ? { images: pictures } : {}), ...(omitted ? { imagesOmitted: true } : {}) });
+      if (!held(model, item) && (text || pictures || omitted)) entries.push({ id: item.id, at, role: 'user', text, ...(pictures ? { images: pictures } : {}), ...(omitted ? { imagesOmitted: true } : {}) });
     } else if (item.kind === 'agent-message' || item.kind === 'plan') {
       const text = item.kind === 'plan' ? planText(item) : messageText(item), generated = generatedOf(item), pictures = picturesOf(item);
       // A drawn picture is drawn by the feed only with a picture to show; its words may be none.
-      if (text || generated && pictures) entries.push({ id: item.content.localCommand === 'status' ? `notice:local:${item.id}` : item.id, at, role: 'assistant', text, ...(generated && pictures ? { generated, images: pictures } : {}) });
+      if (text || generated && pictures) entries.push({ id: item.id, at, role: 'assistant', text, ...(generated && pictures ? { generated, images: pictures } : {}) });
     } else if (line) {
       entries.push({ id: item.id, at, role: 'assistant', text: line });
     } else {

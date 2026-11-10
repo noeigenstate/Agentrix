@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { t } from '../../shared/i18n';
 import type { Result } from '../../shared/types';
 import { nativeBridge } from './native-bridge.ts';
 import { effortChoices, fastChoices, modelChoices, optionPatch, optionTold, type Choice, type ComposerAction, type ComposerOption } from './native-composer.ts';
 import { nativeItem, refreshNativeSession } from './native-store.ts';
+import { readPanel } from './panel-read.ts';
+import type { PanelAgent, PanelCommand, PanelState } from './native-panel.ts';
 
 // An unavailable or failed main-process call reads as a refusal with its reason.
 function ask<T>(call: Promise<Result<T>> | undefined): Promise<Result<T>> {
@@ -13,10 +15,17 @@ function ask<T>(call: Promise<Result<T>> | undefined): Promise<Result<T>> {
 // The native controls of both providers: the main-process calls, shared choice menus,
 // and the line that says what was set. `clear` empties the box when the words are taken, `restore` puts them back if main refuses them (unless something new
 // was typed meanwhile), `onError` shows a refusal. A new conversation shuts the box until the card shows the new session: the view of this one goes with it.
-export function useComposerActions({ terminalId, sessionId, clear, restore, onError }: {
-  terminalId: string; sessionId: string; clear: () => void; restore: (words: string) => void; onError: (message: string | null) => void;
+export function useComposerActions({ terminalId, sessionId, agent, clear, restore, onError }: {
+  terminalId: string; sessionId: string; agent: PanelAgent; clear: () => void; restore: (words: string) => void; onError: (message: string | null) => void;
 }) {
   const [menu, setMenu] = useState<{ option: ComposerOption; items: Choice[] } | null>(null), [told, setTold] = useState<string | null>(null), [renewing, setRenewing] = useState(false);
+  const [panel, setPanel] = useState<PanelState | null>(null), asked = useRef(0);
+  // What was set is told for two seconds.
+  useEffect(() => {
+    if (!told) return;
+    const timer = setTimeout(() => setTold(null), 2000);
+    return () => clearTimeout(timer);
+  }, [told]);
   const fail = (words: string, message: string) => { restore(words); onError(message); };
 
   const apply = async (option: ComposerOption, value: string, words: string) => {
@@ -40,10 +49,26 @@ export function useComposerActions({ terminalId, sessionId, clear, restore, onEr
     setRenewing(false); fail(words, result.error);
   };
 
+  // /status, /usage, /context and /cost: the window opens at once on its loading state and fills with what main read. The query is no message of the
+  // conversation — it leaves no bubble and takes no turn — so the box is emptied for good, and the window shows a failure itself. Closing the window drops
+  // an answer still on its way; the refresh button asks the same again.
+  const query = async (command: PanelCommand, fromBox = true) => {
+    const mine = ++asked.current;
+    if (fromBox) clear();
+    setMenu(null); setPanel({ agent, command, state: 'loading' });
+    const result = await ask(nativeBridge()?.send(terminalId, sessionId, crypto.randomUUID(), `/${command}`));
+    if (mine !== asked.current) return;
+    const answer = result.ok ? readPanel(agent, result.value) : null;
+    setPanel(answer ? { agent, command, state: 'ready', panel: answer } : { agent, command, state: 'failed', error: result.ok ? t('这个会话没有返回状态') : result.error });
+  };
+  const closePanel = () => { asked.current++; setPanel(null); };
+  const refresh = () => { if (panel) void query(panel.command, false); };
+
   // `action` is what `composerAction` found in `words`.
   const run = async (action: ComposerAction, words: string) => {
     setTold(null); onError(null);
     if (action.kind === 'new') return renew(words);
+    if (action.kind === 'panel') return query(action.command);
     if (action.kind === 'shell') {
       if (!action.command) return;
       clear();
@@ -67,5 +92,5 @@ export function useComposerActions({ terminalId, sessionId, clear, restore, onEr
   };
   const forget = () => { setMenu(null); setTold(null); };
 
-  return { menu: menu?.items ?? null, told, renewing, run, choose, close: () => setMenu(null), forget };
+  return { menu: menu?.items ?? null, told, renewing, panel, closePanel, refresh, run, choose, close: () => setMenu(null), forget };
 }

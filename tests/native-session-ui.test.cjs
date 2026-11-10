@@ -57,26 +57,239 @@ const elements = node => Array.isArray(node) ? node.flatMap(elements) : React.is
 const deep = node => Array.isArray(node) ? node.flatMap(deep) : React.isValidElement(node) ? (typeof node.type === 'function' ? deep(node.type(node.props)) : [node, ...deep(node.props.children)]) : [];
 const fill = (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match);
 
-test('Codex local status is visible system output, not a model reply, result or file preview', () => {
-  const { nativeEntries, nativePending } = load('features/native-session/native-entries.ts');
-  const { fromSnapshot } = load('features/native-session/native-model.ts');
-  const { isNotice } = load('features/native-session/native-notices.ts');
-  const base = { schemaVersion: 1, connectionEpoch: 'epoch', provider: 'codex', transport: 'codex-app-server', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', providerSessionId: 'thread', turnId: null, runId: null, occurredAtMs: null, replay: true };
-  const items = [
-    { itemId: 'input', payload: { kind: 'user-message', status: 'completed', content: { text: '/status', clientMessageId: 'input', localCommand: 'status' } } },
-    { itemId: 'output', payload: { kind: 'agent-message', status: 'completed', content: { text: 'Codex 本地状态\n模型：offline\n工作目录：/offline/report.png\n5 小时额度：已用 25%', localCommand: 'status' } } },
-  ];
-  const model = fromSnapshot({ lastSequence: 2, events: items.map((item, index) => ({ ...base, ...item, eventId: 'e' + index, type: 'item.upsert', sequence: index + 1, receivedAtMs: index + 1 })) });
-  const entries = nativeEntries(model);
-  assert.ok(entries.every(isNotice), 'local commands do not become model result rounds');
-  assert.equal(nativePending(model, [{ id: 'input', text: '/status', at: 1 }]).prompts.length, 0);
-  const { ConversationFeed, ConversationDecorations } = load('features/reading/ConversationFeed.tsx');
-  const history = [{ id: 'old-input', at: 0, role: 'user', text: 'A previous task' }, { id: 'model-output', at: 1, role: 'assistant', text: 'A previous model answer' }, ...entries];
-  const html = renderToStaticMarkup(React.createElement(ConversationDecorations.Provider, { value: { start: 0, status: null, running: false, anchor: 'model-output', beforeResult: React.createElement('b', null, 'Previous model result'), afterResult: null } },
-    React.createElement(ConversationFeed, { entries: history, agent: 'codex', projectId: 'p', live: false, onError: assert.fail })));
-  assert.match(html, /本地系统输出/); assert.match(html, /模型：offline/); assert.match(html, /25%/);
-  assert.match(html, /Previous model result/);
-  assert.doesNotMatch(html, /file-cards|result-actions/);
+// What main answers a /status or /usage query with, in the send receipt's `local` field (never an item of the conversation).
+const statusLocal = (over = {}) => ({ command: 'status',
+  session: { model: 'gpt-6.1-sol', effort: 'high', fast: true, approval: 'never', sandbox: 'readOnly', cwd: '/offline/project' },
+  account: { provider: 'openai', kind: 'subscription' },
+  tokens: { total: 130, input: 100, output: 30, cachedInput: 20, reasoning: 10, context: 60000, window: 200000 },
+  limits: [{ id: '5h', usedPercent: 25, resetsAtMs: 2000000000000 }, { id: 'week', usedPercent: 100, resetsAtMs: 2000500000000 }], errors: [], ...over });
+const nothingKnown = { command: 'status', session: {}, account: {}, tokens: {}, limits: [], errors: [] };
+
+const NOW = 2000000000000;
+const rowsOf = group => group.rows.map(row => [row.label, row.value, row.note]);
+const readPanel = (agent, local) => load('features/native-session/panel-read.ts').readPanel(agent, { status: 'consumed', local }, NOW);
+
+test('the Codex panels read main’s facts: the quota used up is the alert, the groups are quota bars, rows and chips, and what is not known reads 未知', () => {
+  const { codexPanel } = load('features/native-session/panel-codex.ts'), panel = codexPanel(statusLocal(), NOW);
+  assert.deepEqual([panel.agent, panel.title, panel.command], ['codex', 'Codex 状态', '/status']);
+  assert.equal(panel.alert.strong, '每周额度已用完'); assert.match(panel.alert.text, /^，.+ 恢复$/);
+  assert.deepEqual([panel.hero.value, panel.hero.unit, panel.hero.caption, panel.hero.percent], ['60k', '/ 200k', '上下文已用 30%', 30]);
+  assert.deepEqual(panel.groups.map(group => [group.kind, group.title]), [['quota', '额度'], ['rows', '会话'], ['chips', '权限'], ['rows', '账号'], ['rows', '本会话 token']]);
+  const [quota, session, permissions, account, tokens] = panel.groups;
+  assert.deepEqual(quota.quotas.map(row => [row.name, row.used, row.full, row.percent]), [['5 小时', '25%', false, 25], ['每周', '100%', true, 100]]);
+  assert.match(quota.quotas[0].when, /^重置于 /); assert.match(quota.quotas[1].when, /^恢复于 /, 'a quota at 100% is used up and says when it recovers');
+  assert.deepEqual(rowsOf(session), [['模型', 'gpt-6.1-sol', undefined], ['思考强度', 'high', undefined], ['快速模式', '开', undefined], ['工作目录', '/offline/project', undefined]]);
+  assert.deepEqual(permissions.chips, [{ text: '审批：从不询问' }, { text: '沙箱：只读', warn: false }]);
+  assert.deepEqual(rowsOf(account), [['登录方式', 'ChatGPT 订阅', undefined], ['模型服务', 'OpenAI', undefined]]);
+  assert.deepEqual(rowsOf(tokens), [['合计', '130', undefined], ['输入', '100', '其中缓存 20'], ['输出', '30', '其中推理 10']]);
+  assert.deepEqual(codexPanel(statusLocal({ session: { ...statusLocal().session, sandbox: 'dangerFullAccess' } }), NOW).groups[2].chips[1], { text: '沙箱：完全访问', warn: true }, 'full access is the one chip that warns');
+
+  const blank = codexPanel(nothingKnown, NOW);
+  assert.deepEqual([blank.hero, blank.alert], [undefined, undefined]);
+  for (const group of blank.groups.filter(group => group.kind === 'rows')) for (const row of group.rows) assert.equal(row.value, '未知', row.label);
+  assert.deepEqual(blank.groups[2].chips.map(chip => chip.text), ['审批：未知', '沙箱：未知']);
+  assert.ok(blank.groups[0].quotas.every(row => row.used === '未知' && row.when === '' && !row.full && row.percent === null), 'no zero and no guess');
+  assert.equal(codexPanel({ command: 'compact' }, NOW), null); assert.equal(codexPanel(null, NOW), null);
+  assert.equal(codexPanel(statusLocal({ tokens: { total: -1, input: 1.5, output: '3' } }), NOW).groups[4].rows[0].value, '未知', 'a count that is not a count is not known');
+});
+
+test('Codex /usage puts the used-up window first and says what the session used; a failed read is the alert and gives its reason, never main’s private message', () => {
+  const { codexPanel } = load('features/native-session/panel-codex.ts'), usage = codexPanel(statusLocal({ command: 'usage' }), NOW);
+  assert.deepEqual([usage.title, usage.command, usage.hero], ['Codex 额度', '/usage', undefined]);
+  assert.deepEqual(usage.groups.map(group => group.title), ['额度', '本会话']);
+  assert.deepEqual(usage.groups[0].quotas.map(row => row.name), ['每周', '5 小时'], 'the window that is used up comes first');
+  assert.deepEqual(rowsOf(usage.groups[1]), [['合计', '130', undefined], ['上下文', '60k / 200k', '30%']]);
+  const failed = codexPanel(statusLocal({ account: { provider: 'openai', kind: 'unknown' }, limits: [], errors: [{ source: 'account', reason: 'RPC -32603' }, { source: 'limits', reason: '请求超时' }] }), NOW);
+  assert.deepEqual(failed.alert, { strong: '额度读取失败', text: '（请求超时）' });
+  assert.equal(rowsOf(failed.groups[3])[0][1], '读取失败（RPC -32603）'); assert.deepEqual(failed.groups[0].quotas.map(row => row.used), ['读取失败（请求超时）', '读取失败（请求超时）']);
+  assert.equal(codexPanel(statusLocal({ errors: [{ source: 'other', reason: 'x' }, { source: 'limits', reason: '' }] }), NOW).alert.strong, '每周额度已用完', 'a source or a reason that is none is dropped');
+});
+
+const contextLocal = { command: 'context', context: { model: 'claude-opus-5-5', tokens: 58400, window: 1000000, autoCompact: true, autoCompactThreshold: 830000,
+  // The SDK’s own shape: `kind` says what counts as used, `id` names a part; a name is only shown when there is no known id.
+  categories: [{ id: 'free-space', name: 'Free space', tokens: 941600, kind: 'free' }, { id: 'autocompact-buffer', name: 'Autocompact buffer', tokens: 33000, kind: 'buffer' }, { id: 'mcp-tools-deferred', name: 'MCP tools (deferred)', tokens: 5000, kind: 'deferred' },
+    { id: 'messages', name: 'Messages', tokens: 25800, kind: 'used' }, { id: 'system-prompt', name: 'System prompt', tokens: 14200, kind: 'used' }, { id: 'system-tools', name: 'System tools', tokens: 12100, kind: 'used' },
+    { id: 'memory-files', name: 'Memory files', tokens: 6300, kind: 'used' }, { name: 'Buffer files', tokens: 900, kind: 'used' }],
+  memory: [{ name: 'MEMORY.md', tokens: 3100 }], mcp: [{ name: 'playwright', tokens: 6800 }], skills: [{ name: 'model-routing', tokens: 2400 }] } };
+
+test('Claude /context: the number and its bar, the three biggest parts and the rest in a composition, and the biggest of each kind', () => {
+  const panel = readPanel('claude', contextLocal);
+  assert.deepEqual([panel.agent, panel.title, panel.command, panel.alert], ['claude', '上下文用量', '/context', undefined]);
+  assert.deepEqual([panel.hero.value, panel.hero.unit, panel.hero.caption, Math.round(panel.hero.percent * 10)], ['58.4k', '/ 1M', '已用 6% · 自动压缩在 83% 触发', 58]);
+  const [composition, biggest] = panel.groups;
+  assert.deepEqual([composition.kind, composition.title, biggest.title], ['composition', '已用部分的构成', '占用最多的']);
+  assert.deepEqual(composition.segments.map(part => [part.label, part.value]), [['对话消息', '25.8k'], ['系统提示', '14.2k'], ['工具定义', '12.1k'], ['其他', '7.2k']], 'only kind "used" is in the bar: free, buffer and deferred parts are not, and a used part whose name says "buffer" is');
+  const renamed = categories => readPanel('claude', { ...contextLocal, context: { ...contextLocal.context, categories } }).groups.find(group => group.kind === 'composition')?.segments.map(part => part.label) ?? [];
+  const used = (id, name, tokens) => ({ id, name, tokens, kind: 'used' });
+  assert.deepEqual(renamed([used('brand-new', 'Brand new', 30), used('System_Prompt', 'Whatever', 20), used(undefined, 'No id', 10)]), ['Brand new', '系统提示', 'No id'], 'by id: an id not known or missing shows the SDK’s own name, a known one the owner’s word whatever its name');
+  assert.deepEqual(renamed([{ id: 'messages', name: 'Messages', tokens: 30 }, { id: 'messages', name: 'Messages', tokens: 20, kind: 'free' }]), [], 'a part with no kind is not known to be used');
+  assert.ok(Math.abs(composition.segments.reduce((sum, part) => sum + part.share, 0) - 100) < 1e-9);
+  assert.deepEqual(rowsOf(biggest), [['MCP 工具', 'playwright', '6.8k'], ['记忆文件', 'MEMORY.md', '3.1k'], ['技能', 'model-routing', '2.4k']]);
+  assert.equal(readPanel('claude', { ...contextLocal, context: { ...contextLocal.context, autoCompact: false } }).hero.caption, '已用 6% · 自动压缩已关闭');
+  assert.equal(readPanel('claude', { ...contextLocal, context: { ...contextLocal.context, autoCompact: null } }).hero.caption, '已用 6%', 'a setting the SDK did not give is not told');
+  assert.equal(readPanel('claude', { command: 'context', context: {} }), null, 'no context from the SDK is a failure to tell, not a window of unknowns');
+});
+
+test('Claude /cost: the spend of the session with the month beside it, the time and the models; what is not there is 未知 or left out', () => {
+  const local = { command: 'cost', costUsdMicros: 1840000, durationMs: 1390000, apiDurationMs: 402000, month: { spentMicros: 36520000, budgetUsd: 100 },
+    models: [{ model: 'claude-opus-5-5', costUsdMicros: 1620000, input: 412000, output: 9800, cacheRead: null, cacheWrite: null }, { model: 'claude-haiku-5-5', costUsdMicros: 220000, input: 188000, output: 4100, cacheRead: null, cacheWrite: null }] };
+  const panel = readPanel('claude', local);
+  assert.deepEqual([panel.title, panel.command, panel.hero.value, panel.hero.caption, panel.hero.percent], ['本会话花费', '/cost', '$1.84', 'API 计费 · 本月已用 $36.52 / $100', 36.52]);
+  assert.deepEqual(panel.groups.map(group => group.title), ['用时（本次打开以来）', '按模型']);
+  assert.deepEqual(rowsOf(panel.groups[0]), [['总用时', '23 分 10 秒', undefined], ['API 用时', '6 分 42 秒', undefined]]);
+  assert.deepEqual(rowsOf(panel.groups[1]), [['claude-opus-5-5', '$1.62', '输入 412k · 输出 9.8k'], ['claude-haiku-5-5', '$0.22', '输入 188k · 输出 4.1k']]);
+  const bare = readPanel('claude', { command: 'cost', costUsdMicros: null, durationMs: null, apiDurationMs: null, models: [], month: { spentMicros: null, budgetUsd: null } });
+  assert.deepEqual([bare.hero.value, bare.hero.caption, bare.hero.percent, bare.groups], ['未知', 'API 计费', null, []], 'no spend is not $0.00, and nothing else is invented');
+  assert.equal(readPanel('claude', { ...local, costUsdMicros: 3000 }).hero.value, '<$0.01');
+});
+
+test('Claude /status and /usage: the session and account rows, the spend of the month with its quota windows, and a notice or a failed read as the alert', () => {
+  const status = readPanel('claude', { command: 'status', context: contextLocal.context, errors: [], account: { kind: 'api' },
+    session: { model: 'claude-opus-5-5', effort: 'high', cwd: '/work', sessionId: 'abc-123', version: '2.1.318', permission: 'default', mcp: [{ name: 'playwright', status: 'connected' }] } });
+  assert.deepEqual([status.title, status.command, status.alert, status.hero.value], ['Claude 状态', '/status', undefined, '58.4k']);
+  assert.deepEqual(status.groups.map(group => group.title), ['会话', '账号', 'MCP 服务']);
+  assert.deepEqual(rowsOf(status.groups[0]).map(row => row.slice(0, 2)), [['模型', 'claude-opus-5-5'], ['思考强度', 'high'], ['工作目录', '/work'], ['会话 ID', 'abc-123'], ['Claude Code 版本', '2.1.318'], ['权限模式', 'default']]);
+  assert.deepEqual([rowsOf(status.groups[1])[0].slice(0, 2), rowsOf(status.groups[2])[0].slice(0, 2)], [['登录方式', 'API 密钥'], ['playwright', 'connected']]);
+  const failed = readPanel('claude', { command: 'status', context: null, errors: [{ source: 'context', reason: '原因未知' }], account: { kind: 'unknown' }, session: { model: null, effort: null, cwd: null, sessionId: null, version: null, permission: null, mcp: [] } });
+  assert.deepEqual([failed.alert, failed.hero, failed.groups.map(group => group.title)], [{ strong: '上下文读取失败', text: '（原因未知）' }, undefined, ['会话', '账号']]);
+  assert.deepEqual(rowsOf(failed.groups[0]).map(row => row[1]), ['未知', '未知', '未知', '未知'], 'what the session does not know is not left out of the core rows, and the optional ones are');
+  assert.equal(rowsOf(failed.groups[1])[0][1], '未知');
+
+  const local = { command: 'usage', month: { spentMicros: 36520000, budgetUsd: 100 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
+    limits: [{ id: 'five_hour', usedPercent: 100, resetsAtMs: NOW }, { id: 'seven_day', usedPercent: 40, resetsAtMs: NOW + 3600000 }] };
+  const usage = readPanel('claude', local);
+  assert.deepEqual([usage.title, usage.command, usage.hero.value, usage.hero.unit, usage.hero.caption, usage.hero.percent], ['Claude 用量', '/usage', '$36.52', '/ $100', '本月 API 花费', 36.52]);
+  assert.equal(usage.alert.strong, '5 小时额度已用完');
+  assert.deepEqual(usage.groups.map(group => group.title), ['用量限额', '花费', '本会话 token']);
+  assert.deepEqual(usage.groups[0].quotas.map(row => [row.name, row.used, row.full]), [['5 小时', '100%', true], ['每周', '40%', false]]);
+  assert.deepEqual([rowsOf(usage.groups[1]).map(row => row.slice(0, 2)), rowsOf(usage.groups[2]).map(row => row.slice(0, 2))], [[['今天', '$1.84'], ['本月', '$36.52']], [['输入', '600,000'], ['输出', '13,900']]]);
+  assert.deepEqual(readPanel('claude', { ...local, limits: [], notice: { code: 'credits_required', resetsAtMs: null } }).alert, { strong: 'API 余额不足', text: '' }, 'the notice the SDK gave is told in our words');
+  const none = readPanel('claude', { command: 'usage', month: { spentMicros: null, budgetUsd: null }, today: { spentMicros: null }, tokens: {}, limits: [], notice: null });
+  assert.deepEqual([none.hero.value, none.hero.unit, none.hero.percent, none.alert, none.groups.map(group => group.title)], ['未知', undefined, null, undefined, ['花费']]);
+});
+
+test('a panel is also plain text for "copy all", and a receipt that answers nothing is no panel', () => {
+  const { panelText, localOf } = load('features/native-session/native-panel.ts'), panel = readPanel('codex', statusLocal());
+  const text = panelText(panel).split('\n');
+  assert.equal(text[0], 'Codex 状态 /status'); assert.match(text[1], /^每周额度已用完，.+ 恢复$/);
+  assert.ok(text.includes('模型  gpt-6.1-sol') && text.includes('输入  100 其中缓存 20') && text.includes('审批：从不询问 / 沙箱：只读'), 'rows, notes and chips each read as a line');
+  assert.match(text.at(-1), /^\d{2}:\d{2} 读取$/);
+  const { readPanel: read } = load('features/native-session/panel-read.ts');
+  assert.deepEqual([read('codex', { status: 'consumed' }), read('claude', { local: { command: 'compact' } }), read('claude', null), localOf({ local: { command: 'cost' } }).command], [null, null, null, 'cost']);
+});
+
+test('the panel is the approved sheet: mark, title, command and three buttons; alert, number and bar; the five kinds of group; the footer; skeleton bars while asking', () => {
+  const { NativePanel } = load('features/native-session/NativePanel.tsx');
+  const html = state => renderToStaticMarkup(React.createElement(NativePanel, { state, onClose() {}, onRefresh() {} }));
+  const ready = (agent, local) => html({ agent, command: local.command, state: 'ready', panel: readPanel(agent, local) });
+  const sheet = ready('codex', statusLocal());
+  assert.match(sheet, /<dialog open="" [^>]*class="native-panel"[^>]*aria-modal="true"[^>]*aria-label="Codex 状态"/);
+  assert.match(sheet, /native-panel-mark"><svg[^>]*agent-brand-codex/, 'the app’s own brand mark, not a drawing of its own');
+  assert.match(sheet, /<strong class="native-panel-title">Codex 状态<\/strong><code class="native-panel-cmd">\/status<\/code>/);
+  assert.deepEqual([...sheet.matchAll(/<button type="button" class="icon-button" title="([^"]*)"/g)].map(match => match[1]), ['重新读取', '复制全部', '关闭（Esc）'], 'refresh, copy all, close');
+  assert.match(sheet, /<div class="native-panel-alert" role="alert"><svg data-icon="WarningCircle"><\/svg><span><b>每周额度已用完<\/b>，[^<]+ 恢复<\/span>/);
+  assert.match(sheet, /native-panel-big num" title="60k">60k<small>\/ 200k<\/small>/); assert.match(sheet, /native-panel-cap">上下文已用 30%/);
+  assert.deepEqual([...sheet.matchAll(/<h3 class="native-panel-group-title">([^<]*)<\/h3>/g)].map(match => match[1]), ['额度', '会话', '权限', '账号', '本会话 token']);
+  assert.equal([...sheet.matchAll(/native-panel-quota is-out/g)].length, 1, 'only the window that is used up is marked');
+  assert.match(sheet, /native-panel-state"><svg data-icon="WarningCircle"><\/svg>已用完<\/span><b class="num">100%<\/b>/); assert.match(sheet, /native-panel-when">恢复于 /);
+  assert.equal([...sheet.matchAll(/role="progressbar"/g)].length, 3, 'the number’s bar and the two windows');
+  assert.match(sheet, /<dt title="模型">模型<\/dt><dd class="num" title="gpt-6\.1-sol">gpt-6\.1-sol<\/dd>/); assert.match(sheet, /native-panel-note">其中缓存 20/);
+  assert.match(sheet, /native-panel-chip">审批：从不询问<\/span>/); assert.doesNotMatch(sheet, /native-panel-chip is-warn/, 'a read-only sandbox does not warn');
+  assert.match(sheet, /<footer class="native-panel-foot"><span>\d{2}:\d{2} 读取<\/span><span class="native-panel-spacer"><\/span><span><kbd>Esc<\/kbd> 关闭<\/span><span><kbd>Ctrl<\/kbd> <kbd>C<\/kbd> 复制<\/span>/);
+  assert.doesNotMatch(sheet, /<pre|reading-local-output|本地系统输出|reading-terminal/, 'it is a sheet, not the terminal popup and not a message');
+
+  const context = ready('claude', contextLocal);
+  assert.match(context, /native-panel-mark"><svg/); assert.doesNotMatch(context, /agent-brand-codex/);
+  assert.match(context, /native-panel-meter is-stack" role="img"/); assert.deepEqual([...context.matchAll(/<i class="is-seg-(\d)"/g)].map(match => match[1]), ['1', '2', '3', '4', '1', '2', '3', '4'], 'a bar part and a legend swatch for each');
+  assert.match(context, /<ul class="native-panel-legend"><li><i class="is-seg-1"><\/i><span title="对话消息">对话消息<\/span><b class="num">25\.8k<\/b>/);
+  const warn = html({ agent: 'codex', command: 'status', state: 'ready', panel: readPanel('codex', statusLocal({ session: { ...statusLocal().session, sandbox: 'dangerFullAccess' } })) });
+  assert.match(warn, /native-panel-chip is-warn"><i><\/i>沙箱：完全访问/);
+  const suggest = html({ agent: 'codex', command: 'usage', state: 'ready', panel: { agent: 'codex', title: '无法识别的命令', command: '/usgae', groups: [{ kind: 'suggest', items: [{ command: '/usage', description: '查看额度' }] }], readAt: NOW } });
+  assert.match(suggest, /<div class="native-panel-suggest"><button type="button"><code>\/usage<\/code><span>查看额度<\/span><\/button><\/div>/, 'the panel can offer commands to pick; no command offers them yet');
+
+  const loading = html({ agent: 'claude', command: 'context', state: 'loading' });
+  assert.match(loading, /aria-label="上下文用量"/); assert.match(loading, /role="status" aria-label="正在读取…"/); assert.equal([...loading.matchAll(/<i /g)].length, 7, 'bars where the number and three groups will be');
+  assert.match(loading, /<button type="button" class="icon-button" title="重新读取"[^>]*disabled=""/); assert.match(loading, /title="复制全部"[^>]*disabled=""/);
+  assert.doesNotMatch(loading, /native-panel-group-title|native-panel-rows|Ctrl/, 'asking is not a half-filled window');
+  const failed = html({ agent: 'codex', command: 'status', state: 'failed', error: '会话正在切换，请稍后重试。' });
+  assert.match(failed, /role="alert"><svg data-icon="WarningCircle"><\/svg><span><b>读取失败<\/b>（会话正在切换，请稍后重试。）<\/span>/); assert.match(failed, /title="复制全部"[^>]*disabled=""/);
+  assert.doesNotMatch(failed, /title="重新读取"[^>]*disabled=""/, 'a failed read can be read again');
+});
+
+test('the panel’s style takes colours, radii and tokens from the app: no literal colour, the radii of the sheet, and every variable exists', () => {
+  const read = file => fs.readFileSync(path.join(src, file), 'utf8'), css = read('features/native-session/native-panel.css'), themes = read('shared/styles/themes.css'), base = read('shared/styles/styles.css') + read('shared/styles/typography.css');
+  assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /#[0-9a-f]{3,8}\b|\brgba?\((?!0 0 0 \/ \.35\)|from var\(--text-1\) r g b)|\b(hsl|oklch|lab)\(/i, 'only the shadow’s black and ink derived from --text-1');
+  const defined = new Set([...(themes + base + css).matchAll(/(--[\w-]+)\s*:/g)].map(match => match[1])), used = [...css.matchAll(/var\((--[\w-]+)/g)].map(match => match[1]);
+  assert.deepEqual([...new Set(used)].filter(name => !defined.has(name)), [], 'no variable that nothing defines');
+  assert.deepEqual([...new Set([...css.matchAll(/--(track|seg-\d)\s*:[^;]*;/g)].flatMap(match => match[0].match(/#[0-9a-f]{3,8}/gi) ?? []))], [], 'the track and the parts are mixed from existing tokens');
+  const rule = selector => css.match(new RegExp(`^${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\{([^}]*)\\}`, 'm'))?.[1] ?? '';
+  assert.match(rule('.native-panel'), /border-radius: 16px/); assert.match(rule('.native-panel'), /width: min\(520px, calc\(100% - 32px\)\)/); assert.match(rule('.native-panel'), /max-height: calc\(100% - 132px\)/);
+  for (const selector of ['.native-panel-cmd', '.native-panel-chip', '.native-toast']) assert.match(rule(selector), /border-radius: 999px/, selector);
+  assert.match(rule('.native-panel-meter'), /border-radius: 999px/); assert.match(rule('.native-panel-alert'), /border-radius: 8px/); assert.match(rule('.native-panel-suggest button'), /border-radius: 8px/);
+  assert.match(rule('.native-panel-rows'), /grid-template-columns: 96px 1fr/); assert.match(css, /animation: native-panel-rise \.16s ease-out/);
+  assert.match(rule('.native-panel-quota.is-out .native-panel-meter > i'), /var\(--danger\)/); assert.match(rule('.native-panel-meter > i'), /var\(--usage\)/);
+});
+
+// A window with the listeners and selection the panel needs; `close()` hands the globals back.
+function panelWindow() {
+  const listeners = [], clipboard = [], state = { selection: '' }, saved = ['window', 'navigator'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { addEventListener: (type, fn, capture) => listeners.push({ type, fn, capture }), removeEventListener: (type, fn) => listeners.splice(listeners.findIndex(row => row.fn === fn && row.type === type), 1), getSelection: () => ({ toString: () => state.selection }) } });
+  Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: { clipboard: { writeText: async text => { clipboard.push(text); } } } });
+  const key = init => { const calls = []; listeners[0].fn({ target: {}, preventDefault: () => calls.push('prevent'), stopPropagation: () => calls.push('stop'), ...init }); return calls; };
+  return { listeners, clipboard, state, key, close() { for (const [name, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name]; } };
+}
+
+test('the panel closes on Esc before the message box sees it, on a press of the backdrop and on its button; Tab stays among its buttons, Ctrl+C copies it all and refresh reads again', async () => {
+  const closed = [], refreshed = [], win = panelWindow(), previousActive = document.activeElement;
+  const harness = hookHarness('src/features/native-session/NativePanel.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './feed-parts': { AgentMark() {} },
+    './native-panel.ts': load('features/native-session/native-panel.ts'), './native-panel.css': {} });
+  try {
+    const props = { state: { agent: 'codex', command: 'status', state: 'ready', panel: readPanel('codex', statusLocal()) }, onClose: () => closed.push(true), onRefresh: () => refreshed.push(true) };
+    const tree = () => harness.render('NativePanel', props).result, root = tree();
+    assert.deepEqual(win.listeners.map(row => [row.type, row.capture]), [['keydown', true]], 'captured, so the box’s own Esc (which stops a running agent) never fires');
+    assert.deepEqual(win.key({ key: 'a' }), []); assert.equal(closed.length, 0);
+    assert.deepEqual(win.key({ key: 'Escape' }), ['prevent', 'stop']); assert.equal(closed.length, 1);
+    const press = (target, button = 0) => { const calls = []; root.props.onMouseDown({ button, target, currentTarget: root, preventDefault: () => calls.push('prevent') }); return calls; };
+    assert.deepEqual(press({}), []); assert.deepEqual(press(root, 2), []); assert.equal(closed.length, 1, 'a press inside, or with another button, does not close');
+    assert.deepEqual(press(root), ['prevent']); assert.equal(closed.length, 2);
+    const buttons = () => elements(root).filter(node => node.type === 'button'), [refresh, copy, close] = buttons();
+    close.props.onClick(); assert.equal(closed.length, 3); refresh.props.onClick(); assert.equal(refreshed.length, 1);
+
+    // Tab and Ctrl+C count only inside the dialog, which here is a stand-in node holding three buttons.
+    const nodes = [0, 1, 2].map(at => ({ at, focus() { document.activeElement = this; } })), dialog = elements(root).find(node => node.type === 'dialog');
+    dialog.props.ref.current = { focus() {}, contains: node => node === inside, querySelectorAll: () => nodes };
+    const inside = {};
+    assert.deepEqual(win.key({ key: 'Tab', target: {} }), [], 'outside the dialog Tab is the page’s');
+    document.activeElement = nodes[2]; assert.deepEqual(win.key({ key: 'Tab', target: inside }), ['prevent']); assert.equal(document.activeElement, nodes[0], 'after the last button comes the first');
+    win.key({ key: 'Tab', target: inside }); assert.equal(document.activeElement, nodes[1]);
+    document.activeElement = nodes[0]; win.key({ key: 'Tab', shiftKey: true, target: inside }); assert.equal(document.activeElement, nodes[2], 'before the first comes the last');
+    document.activeElement = {}; win.key({ key: 'Tab', target: inside }); assert.equal(document.activeElement, nodes[0], 'from the dialog itself it enters at the first');
+    assert.deepEqual(win.key({ key: 'c', ctrlKey: true, target: {} }), []); await settle(); assert.deepEqual(win.clipboard, [], 'outside the dialog Ctrl+C is the page’s');
+    win.state.selection = 'some text'; assert.deepEqual(win.key({ key: 'c', ctrlKey: true, target: inside }), []); await settle(); assert.deepEqual(win.clipboard, [], 'a selection is copied as it is');
+    win.state.selection = ''; assert.deepEqual(win.key({ key: 'C', ctrlKey: true, target: inside }), ['prevent']); await settle();
+    assert.equal(win.clipboard.length, 1); assert.equal(win.clipboard[0], load('features/native-session/native-panel.ts').panelText(props.state.panel), 'the whole panel as plain text');
+    copy.props.onClick(); await settle(); assert.equal(win.clipboard.length, 2);
+    const done = tree(); assert.equal(elements(done).filter(node => node.type === 'button')[1].props.title, '已复制', 'the button says it was copied');
+    harness.dispose(); assert.equal(win.listeners.length, 0, 'the listener goes with the window');
+  } finally { document.activeElement = previousActive; win.close(); }
+});
+
+test('the panel keeps refresh and copy shut while it asks and copy shut when it failed', () => {
+  const win = panelWindow(), harness = hookHarness('src/features/native-session/NativePanel.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './feed-parts': { AgentMark() {} },
+    './native-panel.ts': load('features/native-session/native-panel.ts'), './native-panel.css': {} });
+  try {
+    const disabled = state => elements(harness.render('NativePanel', { state, onClose() {}, onRefresh() {} }).result).filter(node => node.type === 'button').map(node => !!node.props.disabled);
+    assert.deepEqual(disabled({ agent: 'claude', command: 'cost', state: 'loading' }), [true, true, false]);
+    assert.deepEqual(disabled({ agent: 'claude', command: 'cost', state: 'failed', error: 'x' }), [false, true, false]);
+    assert.deepEqual(disabled({ agent: 'claude', command: 'context', state: 'ready', panel: readPanel('claude', contextLocal) }), [false, false, false]);
+  } finally { harness.dispose(); win.close(); }
+});
+
+test('the window opens for Codex /status and /usage and for Claude /context, /cost, /status and /usage; arguments and other words stay messages', () => {
+  const { composerAction } = load('features/native-session/native-composer.ts');
+  for (const agent of ['codex', 'claude']) for (const command of ['status', 'usage']) assert.deepEqual(composerAction(`/${command}`, agent), { kind: 'panel', command });
+  for (const command of ['context', 'cost']) assert.deepEqual([composerAction(`/${command}`, 'claude'), composerAction(`/${command}`, 'codex')], [{ kind: 'panel', command }, null], `${command} is Claude’s`);
+  for (const agent of ['codex', 'claude']) for (const words of ['/status now', '/usage?', '/statuses', 'explain /status', '/prompts:mine', '/context now', '/cost x']) assert.equal(composerAction(words, agent), null, `${agent}: ${words}`);
 });
 
 test('a child user-side message shows its factual planner or owner avatar, with a neutral unknown planner', () => {
@@ -619,7 +832,7 @@ test('a finished session says why and offers a new conversation; a Codex session
 function sessionView(events, bridge, base = {}) {
   const model = require('../src/features/native-session/native-model.ts'), ev = stream(base), dismissed = [], refreshed = [], handoff = handoffStub(), toBottom = [];
   let change = null, voice = null;
-  const VoiceButton = () => null;
+  const VoiceButton = () => null, NativePanel = function NativePanel() {}, NativeToast = function NativeToast() {};
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
   const build = list => ({ model: model.applyEvents(model.emptyModel(), list).model, dismissed: null, noteDismissed: false, handoff: null });
@@ -637,7 +850,7 @@ function sessionView(events, bridge, base = {}) {
   const harness = hookHarness('src/features/native-session/NativeSessionView.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
-    './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
+    './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './NativePanel': { NativePanel }, './NativeToast': { NativeToast }, './panel-read.ts': load('features/native-session/panel-read.ts'), './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
     './native-store.ts': { dismissNative: id => dismissed.push(id), refreshNativeSession: id => refreshed.push(id), nativeItem: (terminal, id) => entry.model.items[id], nativeShown: () => true, useNativeEntries: () => new Map(), resolveSwitch: terminal => terminal },
     './native-composer.ts': load('features/native-session/native-composer.ts'),
     './native-notices.ts': load('features/native-session/native-notices.ts'),
@@ -653,6 +866,8 @@ function sessionView(events, bridge, base = {}) {
   const find = predicate => elements(tree()).find(predicate), box = () => find(node => node.type === 'textarea');
   return {
     ev, find, box, tree, dismissed, refreshed, handoff, parts, toBottom, show(list) { entry = build(list); }, switching(state) { change = state; },
+    // The result window the view shows (props: state, onClose, onRefresh) and the note after a setting was changed.
+    panel: () => find(node => node.type === NativePanel)?.props, toasts: () => elements(tree()).filter(node => node.type === NativeToast).map(node => node.props.text),
     voice: () => { tree(); return voice; }, voiceButton: () => find(node => node.type === VoiceButton)?.props,
     prompts: () => find(node => node.type === parts.PendingPromptEntries).props, decorations: () => find(node => node.props?.value?.frame).props.value, feed: () => find(node => node.type === feed.ConversationFeed).props,
     type: value => box().props.onChange({ target: { value } }),
@@ -2132,7 +2347,8 @@ test('a switch that worked with a warning, one restored and one stopped tell the
 // ---- the Claude commands of the box (round r13) ---------------------------------------------------------------------------------------
 const CODEX = { provider: 'codex', transport: 'codex-app-server' };
 const alertOf = view => view.find(node => node.props?.role === 'alert')?.props.children;
-const statuses = view => elements(view.tree()).filter(node => node.props?.role === 'status' && node.props.className === 'reading-status').map(node => node.props.children);
+// What was set is told by the short note (NativeToast), one at a time.
+const statuses = view => view.toasts();
 const ok = value => async () => ({ ok: true, value });
 
 test('a compaction and a dropped result are lines of the conversation, and the compaction under way is told on the working line', async () => {
@@ -2348,4 +2564,112 @@ test('the sentence that ends a session is told above the box once: not again in 
     const entry = { model: applyEvents(emptyModel(), failedWith(ev)).model, dismissed: null, noteDismissed: false, handoff: null };
     assert.deepEqual([nativeTells(entry, words), nativeTells(entry, '另一句话'), nativeTells(undefined, words), nativeTells({ ...entry, dismissed: 'rs1' }, words)], [true, false, false, false], 'a bar elsewhere leaves out what the view tells, and says anything else');
   } finally { view.done(); other.done(); }
+});
+
+test('a step its provider could not settle (a tool left open by a lost frame, a "!" command of uncertain result) is a question: no check, 结果未能确认, and no pass in the checks', () => {
+  const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), { nativeEntries } = load('features/native-session/native-entries.ts'), { latestResult } = load('features/reading/result-round.ts'), ev = stream();
+  const command = (id, status, extra = {}) => ev('item.upsert', { kind: 'command', status, content: { command: 'npm test', phrase: '运行测试', output: null, exitCode: null, ...extra } }, { itemId: id });
+  const entries = nativeEntries(applyEvents(emptyModel(), [...idle(ev), userMessage(ev, 'c1', 'test it'),
+    command('lost-frame', 'unknown'), command('shell:s1', 'unknown', { modelDelivery: 'unknown' }), command('known', 'completed', { exitCode: 0, output: 'ok' }), command('broken', 'failed', { exitCode: 1, output: 'no' }),
+    ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'Done.' } }, { itemId: 'a1' })]).model);
+  const steps = entries.filter(entry => entry.tool);
+  assert.deepEqual(steps.map(entry => [entry.id, entry.tool.done, entry.tool.failed, entry.tool.unconfirmed]), [['lost-frame', true, false, true], ['shell:s1', true, false, true], ['known', true, false, undefined], ['broken', true, true, undefined]],
+    'unknown is neither done-and-fine nor failed; the flag is on those two only');
+  assert.ok(steps.slice(0, 2).every(entry => /结果未能确认/.test(entry.tool.detail)), 'each says so on its own line'); assert.doesNotMatch(steps[2].tool.detail, /结果未能确认/);
+  const result = latestResult(entries, { idle: true, interrupted: false });
+  assert.deepEqual(result.checks.map(check => [check.id, check.failed, check.unconfirmed]), [['lost-frame', false, true], ['shell:s1', false, true], ['known', false, undefined], ['broken', true, undefined]]);
+  assert.deepEqual(result.checks.filter(check => !check.failed && !check.unconfirmed).map(check => check.id), ['known'], 'only the command whose end was confirmed passes');
+  const { ResultChecks } = load('features/reading/ResultCard.tsx'), rows = renderToStaticMarkup(React.createElement(ResultChecks, { result }));
+  assert.deepEqual([rows.match(/is-unconfirmed/g)?.length, rows.match(/is-passed/g)?.length, rows.match(/is-failed/g)?.length, rows.match(/>结果未能确认</g)?.length, rows.match(/>通过</g)?.length], [2, 1, 1, 2, 1]);
+  assert.deepEqual([rows.match(/data-icon="Question"/g)?.length, rows.match(/data-icon="CheckCircle"/g)?.length], [2, 1], 'a question for each, the check for the one that passed');
+  const { ConversationFeed } = load('features/reading/ConversationFeed.tsx');
+  const group = list => renderToStaticMarkup(React.createElement(ConversationFeed, { entries: list, agent: 'claude', projectId: 'p', live: false, hideToolOutput: true, onError() {} }));
+  const only = (...ids) => group(entries.filter(entry => entry.role === 'user' || ids.includes(entry.id))), unsettled = only('lost-frame', 'shell:s1');
+  assert.deepEqual([unsettled.match(/data-icon="Question"/g)?.length, /data-icon="CheckCircle"/.test(unsettled)], [1, false], 'a group of nothing but unsettled steps shows the question in its head, not the check');
+  assert.match(only('known'), /data-icon="CheckCircle"/);
+  assert.doesNotMatch(only('broken', 'lost-frame'), /data-icon="Question"/, 'a failure in the group is the group’s mark');
+});
+
+const costLocal = { command: 'cost', costUsdMicros: 1840000, durationMs: 60000, apiDurationMs: 30000, models: [], month: { spentMicros: null, budgetUsd: null } };
+const answerOf = (agent, command) => agent === 'codex' ? statusLocal({ command }) : { context: contextLocal, cost: costLocal, status: { command: 'status', context: null, errors: [], account: { kind: 'api' }, session: {} },
+  usage: { command: 'usage', month: { spentMicros: 0, budgetUsd: null }, today: { spentMicros: 0 }, tokens: {}, limits: [], notice: null } }[command];
+
+const windowFlow = async (agent, commands) => {
+  const sends = [], answers = [];
+  const bridge = { send: async (...args) => { sends.push(args); return answers.shift() ?? { ok: true, value: { status: 'consumed', local: answerOf(agent, args[3].slice(1)) } }; } };
+  const view = sessionView(idle, bridge, { provider: agent });
+  try {
+    const node = voiceBox(view, `/${commands[0]}`);
+    view.press(); const loading = view.panel();
+    assert.equal(view.box().props.value, '', 'the words are not kept: the query is no message'); assert.deepEqual([loading.state.state, loading.state.agent, loading.state.command], ['loading', agent, commands[0]]);
+    await settle(); view.tree();
+    assert.deepEqual([sends.length, sends[0][0], sends[0][3], sends[0][4]], [1, 't1', `/${commands[0]}`, undefined]);
+    assert.deepEqual([view.panel().state.state, view.panel().state.panel.agent, view.panel().state.panel.command], ['ready', agent, `/${commands[0]}`]);
+    assert.equal(view.prompts().prompts.length, 0, 'no sent bubble, so no thinking line and no retry for it');
+    for (const command of commands.slice(1)) { view.type(`/${command}`); view.press(); await settle(); view.tree(); assert.deepEqual([sends.at(-1)[3], view.panel().state.command, view.panel().state.state], [`/${command}`, command, 'ready']); }
+    answers.push({ ok: false, error: '会话正在切换，请稍后重试。' });
+    view.type('/status'); view.press(); await settle(); view.tree();
+    assert.deepEqual([view.panel().state.state, view.panel().state.error, view.box().props.value], ['failed', '会话正在切换，请稍后重试。', ''], 'the window tells the refusal; the words are not put back');
+    answers.push({ ok: true, value: { status: 'consumed' } });
+    view.type('/status'); view.press(); await settle(); view.tree();
+    assert.deepEqual([view.panel().state.state, view.panel().state.error], ['failed', '这个会话没有返回状态'], 'an answer without facts is not a window of unknowns');
+
+    // Refresh asks the same again and leaves what was typed meanwhile; closing gives the box its focus back.
+    const before = sends.length; view.type('typed meanwhile'); view.panel().onRefresh(); view.tree();
+    assert.deepEqual([view.panel().state.state, view.box().props.value], ['loading', 'typed meanwhile'], 'the window reads again, the box is left alone'); await settle(); view.tree();
+    assert.deepEqual([sends.length - before, sends.at(-1)[3], view.panel().state.state], [1, '/status', 'ready']);
+    document.activeElement = null; view.panel().onClose(); view.tree();
+    assert.deepEqual([view.panel(), document.activeElement === node], [undefined, true], 'closing removes it and the cursor is back in the box');
+    assert.equal(view.prompts().prompts.length, 0);
+  } finally { document.activeElement = null; view.done(); }
+};
+test('codex: /status, /usage empty the box, open the window at once and fill it with the answer; no bubble, a refusal in the window, Esc gives the box its focus back', () => windowFlow('codex', ['status', 'usage']));
+test('claude: /context, /cost, /status, /usage empty the box, open the window at once and fill it with the answer; no bubble, a refusal in the window, Esc gives the box its focus back', () => windowFlow('claude', ['context', 'cost', 'status', 'usage']));
+
+test('closing the window drops an answer still on its way, and a newer query wins over an older one', async () => {
+  const pending = [];
+  const view = sessionView(idle, { send: (...args) => new Promise(resolve => pending.push({ args, resolve })) }, { provider: 'codex' });
+  const answer = (row, command) => row.resolve({ ok: true, value: { status: 'consumed', local: statusLocal({ command }) } });
+  try {
+    voiceBox(view, '/status'); view.press(); view.tree();
+    view.panel().onClose(); view.tree(); assert.equal(view.panel(), undefined);
+    answer(pending[0], 'status'); await settle(); view.tree();
+    assert.equal(view.panel(), undefined, 'a late answer does not open it again');
+    view.type('/status'); view.press(); view.tree(); view.type('/usage'); view.press(); view.tree();
+    answer(pending[2], 'usage'); await settle(); view.tree();
+    answer(pending[1], 'status'); await settle(); view.tree();
+    assert.deepEqual([view.panel().state.command, view.panel().state.state], ['usage', 'ready'], 'the older answer does not replace the newer window');
+  } finally { document.activeElement = null; view.done(); }
+});
+
+test('words that are not exactly a window command stay messages: Codex with an argument, and Claude’s /context, /cost with one', async () => {
+  for (const [provider, words] of [['codex', '/status now'], ['codex', '/context'], ['claude', '/context now'], ['claude', '/cost please']]) {
+    const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: { status: 'delivered' } }; } }, { provider });
+    try {
+      voiceBox(view, words); view.press(); await settle(); view.tree();
+      assert.equal(sends.length, 1, `${provider} ${words}`); assert.equal(sends[0][3], words);
+      assert.equal(view.panel(), undefined, `${provider} ${words}`);
+      assert.equal(view.prompts().prompts.length, 1, 'it is a message of the conversation');
+    } finally { document.activeElement = null; view.done(); }
+  }
+});
+
+test('what a setting was changed to is a note of two seconds in the place of the panel, never a line of the conversation; a panel in its place shows no note', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const bridge = { runOptions: async (...args) => ({ ok: true, value: { model: args[2].model ?? 'sonnet', effort: args[2].effort ?? 'high', fast: false } }), send: async () => ({ ok: true, value: { status: 'consumed', local: contextLocal } }) };
+  const view = sessionView(idle, bridge);
+  try {
+    await typeIn(view, '/model opus'); keyIn(view, 'Enter'); await settle(); view.tree();
+    assert.deepEqual([view.toasts(), statusLines(view)], [['模型已设为 opus'], []], 'told by the note, in no <p> of the tail');
+    t.mock.timers.tick(1999); view.tree(); assert.deepEqual(view.toasts(), ['模型已设为 opus'], 'still there just before two seconds');
+    t.mock.timers.tick(1); view.tree(); assert.deepEqual(view.toasts(), [], 'gone at two seconds');
+    await typeIn(view, '/effort max'); keyIn(view, 'Enter'); await settle(); view.tree(); t.mock.timers.tick(1000);
+    await typeIn(view, '/effort low'); keyIn(view, 'Enter'); await settle(); view.tree();
+    assert.deepEqual(view.toasts(), ['思考强度已设为 low'], 'a newer note replaces the older');
+    t.mock.timers.tick(1000); view.tree(); assert.deepEqual(view.toasts(), ['思考强度已设为 low'], 'and has its own two seconds');
+    view.type('x'); assert.deepEqual(view.toasts(), [], 'the owner typing again clears it');
+    await typeIn(view, '/effort max'); keyIn(view, 'Enter'); await settle(); view.tree(); assert.equal(view.toasts().length, 1);
+    view.type('/context'); view.press(); await settle(); view.tree();
+    assert.deepEqual([view.toasts(), view.panel().state.state], [[], 'ready'], 'a panel and a note are never both there');
+  } finally { view.done(); }
 });

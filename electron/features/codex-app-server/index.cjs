@@ -11,7 +11,7 @@ const { mergeLimits, accountConnection, restrictedLimits } = require('./account.
 const { assertCompatible, probeCapabilities, commandName, builtinCommands, unsupported } = require('./compatibility.cjs');
 const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
-const { statusText } = require('./status.cjs');
+const { statusPanel } = require('./status.cjs');
 
 // Host-owned choices only, separate from CLI configuration and transcript files.
 // SSH choices are host metadata, keyed by the authenticated remote scope; remote
@@ -398,7 +398,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const name = commandName(input.text);
           if (unsupported.has(name)) throw new Error(translate('原生模式暂不支持这个命令'));
           if (['model', 'effort', 'fast', 'new', 'clear'].includes(name)) throw new Error(translate('请使用原生输入框的命令菜单。'));
-          if (['compact', 'review', 'status'].includes(name) || input.text.trim().startsWith('!')) {
+          if (['compact', 'review', 'status', 'usage'].includes(name) || input.text.trim().startsWith('!')) {
             if (input.images?.length) throw new Error(translate('命令不能附带图片。'));
             return localCommand(clientId, input.text.trim(), name);
           }
@@ -488,19 +488,18 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       async function localCommand(id, text, name) {
         const argument = name ? text.slice(name.length + 1).trim() : text.slice(1).trim();
-        if (name !== 'status' && state !== 'idle') throw new Error(translate('请等待当前任务结束后再运行命令。'));
-        if (['compact', 'status'].includes(name) && argument) throw new Error(translate('这个命令不接受参数。'));
+        const panel = name === 'status' || name === 'usage';
+        if (!panel && state !== 'idle') throw new Error(translate('请等待当前任务结束后再运行命令。'));
+        if (['compact', 'status', 'usage'].includes(name) && argument) throw new Error(translate('这个命令不接受参数。'));
         if (!name && !argument) throw new Error(translate('请输入要运行的命令。'));
-        if (name === 'status') {
-          events.publish('item.upsert', { kind: 'user-message', status: 'completed', content: { text, clientMessageId: id, localCommand: 'status' } }, { itemId: id, turnId: null });
-          const outputId = randomUUID();
-          const output = (text, status = 'completed') => events.publish('item.upsert', { kind: 'agent-message', status, content: { text, localCommand: 'status' } }, { itemId: outputId, turnId: null });
-          output(translate('正在读取 Codex 状态…'), 'in-progress');
+        if (panel) {
+          // A read-only observation for the owner's popup: no conversation item, no input receipt event and no turn. The answer travels in the return value
+          // only, so neither the snapshot nor a replay can show it again, and the receipt entry is released so repeated queries never fill the input limit.
           const values = await Promise.allSettled([readAccount(true), readLimits()]); assertOpen();
           const [account, limits] = values.map(value => value.status === 'fulfilled' ? value.value : null);
           const errors = values.flatMap((value, index) => value.status === 'rejected' ? [[['account/read', 'account/rateLimits/read'][index], value.reason]] : []);
-          output(statusText({ options: { ...optionsSnapshot(), fast: configuredFast }, thread: threadResponse || {}, cwd: wireCwd, usage: currentUsage, account, limits, errors }, translate));
-          inputReceipt(id, 'consumed'); return { clientMessageId: id, status: 'consumed' };
+          receipts.delete(id);
+          return { clientMessageId: id, status: 'consumed', local: { command: name, ...statusPanel({ options: { ...optionsSnapshot(), fast: configuredFast }, thread: threadResponse || {}, cwd: wireCwd, usage: currentUsage, account, limits, errors }, translate) } };
         }
         clientMessageId = id; origin = 'user'; manualCommand = name || 'shell';
         const previousTurn = events.binding.turnId;

@@ -11,6 +11,7 @@ const { rateLimits } = require('./limits.cjs');
 const { claudeCommands } = require('./commands.cjs');
 const { runShell } = require('./shell.cjs');
 const { sessionHistory } = require('./history.cjs');
+const { panelCommand, answer: panelAnswer, createTally, initFacts } = require('./panel.cjs');
 
 async function waitWithin(task, milliseconds) {
   let timer;
@@ -41,7 +42,7 @@ function createClaudeSession(spec, emit, dependencies) {
     for (const key of secrets) text = text.replaceAll(key, '<secret>');
     return text;
   }
-  const rates = new TokenRates('claude');
+  const rates = new TokenRates('claude'), tally = createTally();
   let rateUsage = { input: null, cachedInput: null, cacheWrite: null, output: null, reasoning: null, contextWindow: null, costUsdMicros: null, costEstimated: null };
   const publish = (type, payload, extra) => {
     if (type === 'usage.updated') rateUsage = payload;
@@ -141,7 +142,7 @@ function createClaudeSession(spec, emit, dependencies) {
         }
         if (message.type === 'system' && message.subtype === 'init' && !message.parent_tool_use_id) {
           if (message.apiKeySource !== 'ANTHROPIC_API_KEY') throw billingIdentityError(message.apiKeySource);
-          run.initialized = true; providerId = message.session_id; stream.provider(providerId);
+          run.initialized = true; run.init = initFacts(message); providerId = message.session_id; stream.provider(providerId);
           apiObservedAt = now();
           usage.bind?.(run.reservation?.id, providerId); onSession(providerId);
           run.model = run.resetModel || message.model || null;
@@ -213,6 +214,7 @@ function createClaudeSession(spec, emit, dependencies) {
         if (spec.owner !== 'dispatch' && !message.is_error && !run.quotaRejected && Object.values(tokensOf(message.usage) || {}).some(value => value > 0)) dependencies.onSuccess?.(run.generation);
         const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation?.id, rejected });
         resultCost = message.total_cost_usd;
+        tally.result(message);
         run.billingRejected = false;
         if (entry.deltaUsdMicros > 0) run.remainingBudgetUsd = Math.max(0, Math.round(run.remainingBudgetUsd * 1e6 - entry.deltaUsdMicros) / 1e6);
         const lastUsage = run.lastUsage;
@@ -375,7 +377,28 @@ function createClaudeSession(spec, emit, dependencies) {
     void run.task.catch(() => { try { if (!closed) setState('failed', 'accounting_unavailable'); } catch { } });
     return run;
   }
+  const connection = () => !active || closed || ['stopped', 'failed', 'disconnected'].includes(state)
+    ? { kind: 'none', source: null, observedAt: null }
+    : { kind: active.initialized ? 'api' : 'unknown', source: active.initialized ? 'claude-sdk init: ANTHROPIC_API_KEY' : null,
+      observedAt: active.initialized ? apiObservedAt : null };
+  // /context, /cost, /status and /usage are read-only questions for the owner's window: they are no input of the model, leave no receipt or item and take no turn.
+  async function panel(command, images, clientMessageId) {
+    if (images.length) throw new Error('命令不能附带图片。');
+    if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
+    if (changingOptions) { try { await changingOptions; } catch { } }
+    const read = command === 'context' || command === 'status' ? async () => {
+      const context = await (await optionsQuery()).query.getContextUsage();
+      if (typeof context?.model === 'string') observedModel = context.model;
+      return context;
+    } : null;
+    const local = await panelAnswer(command, { read, tally, summary: usage.summary?.() ?? {}, budgetUsd: spec.monthlyBudgetUsd, limits, connection: connection(), init: active?.init,
+      session: () => ({ model: observedModel, effort: spec.effort || null, cwd: spec.cwd || null, sessionId: providerId }) });
+    if (closed || stopping) throw new Error('会话已停止。');
+    return { clientMessageId, status: 'consumed', local: JSON.parse(clean(JSON.stringify(local))) };
+  }
   async function send({ clientMessageId, text, images = [] }, shellContent) {
+    const command = !shellContent && spec.owner !== 'dispatch' && typeof text === 'string' ? panelCommand(text) : null;
+    if (command) return panel(command, images, clientMessageId);
     if (shellAbort && !shellContent) throw new Error('命令仍在运行，请等待结束。');
     if (changingOptions) await changingOptions;
     if (typeof text !== 'string' || !text.trim() && !images.length) throw new Error('无效的消息。');
@@ -611,10 +634,7 @@ function createClaudeSession(spec, emit, dependencies) {
       for (const message of history.slice(-1000)) normalize({ ...message, isReplay: true });
       return { providerSessionId: providerId };
     },
-    connection: () => !active || closed || ['stopped', 'failed', 'disconnected'].includes(state)
-      ? { kind: 'none', source: null, observedAt: null }
-      : { kind: active.initialized ? 'api' : 'unknown', source: active.initialized ? 'claude-sdk init: ANTHROPIC_API_KEY' : null,
-        observedAt: active.initialized ? apiObservedAt : null },
+    connection,
     async interrupt() {
       await stopShells(true);
       requests.cancel();

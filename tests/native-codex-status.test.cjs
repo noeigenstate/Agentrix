@@ -49,19 +49,18 @@ async function fixture(t, tier = 'fast') {
   const started = await router.start('t', { agent: 'codex' });
   return { ...fake, root, events, router, providerSnapshot: () => session.snapshot(), id: started.runtimeSessionId };
 }
-test('Codex /status twice publishes visible local output in the router and provider snapshots, without a turn', async t => {
+// A query is answered by the send receipt alone: it is no item, no input receipt event and no turn, in the renderer's events, in either snapshot or on the wire.
+const conversational = row => row.type === 'item.upsert' || row.type === 'item.delta' || row.type === 'input.receipt' || row.type.startsWith('turn.');
+test('Codex /status and /usage answer in the receipt only: no item, receipt event, turn or snapshot entry', async t => {
   const f = await fixture(t);
-  for (let n = 0; n < 2; n++) await f.router.send('t', f.id, { clientMessageId: 'status-' + n, text: '/status' });
-  const outputs = f.router.snapshot('t').events.filter(row => row.type === 'item.upsert' && row.payload.kind === 'agent-message');
-  assert.equal(outputs.length, 2);
-  assert.ok(outputs.every(row => /Codex/.test(row.payload.content.text)));
+  const count = () => [f.events, f.router.snapshot('t').events, f.providerSnapshot().events].map(list => list.filter(conversational).length), before = count(), answers = [];
+  for (const [n, text] of ['/status', '/usage', '/status'].entries()) answers.push(await f.router.send('t', f.id, { clientMessageId: 'query-' + n, text }));
+  assert.deepEqual(answers.map(row => [row.status, row.clientMessageId, row.local.command]), [['consumed', 'query-0', 'status'], ['consumed', 'query-1', 'usage'], ['consumed', 'query-2', 'status']]);
   assert.equal(f.wire.filter(row => row.method === 'turn/start' && row.params.threadId).length, 0);
-  assert.equal(f.events.filter(row => row.type.startsWith('turn.')).length, 0);
-  assert.equal(f.providerSnapshot().events.filter(row => row.type === 'item.upsert' && row.payload.content.localCommand === 'status').length, 4);
-  const model = ui('native-model.ts').fromSnapshot(f.router.snapshot('t'));
-  const { nativeEntries, nativePending } = ui('native-entries.ts');
-  assert.equal(nativeEntries(model).filter(row => row.role === 'assistant').length, 2);
-  assert.equal(nativePending(model, [{ id: 'status-0', text: '/status', at: 1 }, { id: 'status-1', text: '/status', at: 2 }]).prompts.length, 0);
+  assert.deepEqual(count(), before, 'nothing was published to the window, and a reload or a replay cannot show it again');
+  assert.ok(!JSON.stringify([f.router.snapshot('t'), f.providerSnapshot()]).includes('query-'), 'and the ids are nowhere in either snapshot');
+  const { nativeEntries, nativePending } = ui('native-entries.ts'), model = ui('native-model.ts').fromSnapshot(f.router.snapshot('t'));
+  assert.deepEqual([nativeEntries(model).length, nativePending(model, []).prompts.length], [0, 0], 'the conversation stays empty');
 });
 
 const loaded = new Map();
@@ -80,36 +79,47 @@ function ui(file) {
 test('Codex /status reports provider data, both quota windows and safe failures, never a model request', async t => {
   const f = await fixture(t);
   f.notify('thread/tokenUsage/updated', { turnId: 'offline-turn', tokenUsage: { total: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 30, reasoningOutputTokens: 10, totalTokens: 130 }, last: { inputTokens: 50, cachedInputTokens: 0, outputTokens: 10, reasoningOutputTokens: 0, totalTokens: 60 }, modelContextWindow: 200000 } });
-  await f.router.send('t', f.id, { clientMessageId: 'known', text: '/status' });
-  const text = f.router.snapshot('t').events.findLast(row => row.payload.content?.localCommand === 'status').payload.content.text;
-  for (const value of ['gpt-6.1-sol', 'high', 'readOnly', 'never', '25%', '70%', '2033-', '本会话 token：130', '上下文：60 / 200000']) assert.ok(text.includes(value), value);
-  assert.doesNotMatch(text, /private@|planType|email/);
-  fs.writeFileSync(path.join(__dirname, '../.notes/codex-status-output.txt'), text);
+  const { local } = await f.router.send('t', f.id, { clientMessageId: 'known', text: '/status' });
+  assert.deepEqual(local.session, { model: 'gpt-6.1-sol', effort: 'high', fast: true, cwd: local.session.cwd, sandbox: 'readOnly', approval: 'never' });
+  assert.equal(typeof local.session.cwd, 'string');
+  assert.deepEqual(local.account, { provider: 'openai', kind: 'subscription' });
+  assert.deepEqual(local.tokens, { total: 130, input: 100, output: 30, cachedInput: 20, reasoning: 10, context: 60, window: 200000 });
+  assert.deepEqual(local.limits.map(row => [row.id, row.usedPercent]), [['5h', 25], ['week', 70]]);
+  assert.ok(local.limits.every(row => Number.isSafeInteger(row.resetsAtMs) && new Date(row.resetsAtMs).getFullYear() === 2033), 'reset times are the provider’s, in milliseconds');
+  assert.deepEqual(local.errors, []);
+  assert.doesNotMatch(JSON.stringify(local), /private@|planType|email/, 'the account’s address and plan are not carried');
   f.failures.add('account/read'); f.failures.add('account/rateLimits/read');
-  await f.router.send('t', f.id, { clientMessageId: 'failure', text: '/status' });
-  const error = f.router.snapshot('t').events.findLast(row => row.payload.content?.localCommand === 'status').payload.content.text;
-  assert.match(error, /account\/read：读取失败（RPC -32603）/); assert.match(error, /account\/rateLimits\/read：读取失败/);
-  assert.doesNotMatch(error, /private server message/);
-  assert.match(error, /5 小时额度：未知/);
+  const failed = (await f.router.send('t', f.id, { clientMessageId: 'failure', text: '/usage' })).local;
+  assert.equal(failed.command, 'usage');
+  assert.deepEqual(failed.errors, [{ source: 'account', reason: 'RPC -32603' }, { source: 'limits', reason: 'RPC -32603' }]);
+  assert.doesNotMatch(JSON.stringify(failed), /private server message/, 'a failure gives its code, not the server’s own words');
+  assert.deepEqual(failed.limits.map(row => [row.usedPercent, row.resetsAtMs]), [[null, null], [null, null]]);
+  assert.equal(failed.account.kind, 'unknown');
 });
 
 test('a refused local command cannot poison the queue for the next /status', async t => {
   const f = await fixture(t);
   await assert.rejects(f.router.send('t', f.id, { clientMessageId: 'bad', text: '/status unexpected' }));
+  await assert.rejects(f.router.send('t', f.id, { clientMessageId: 'bad-usage', text: '/usage unexpected' }));
   assert.equal((await f.router.send('t', f.id, { clientMessageId: 'good', text: '/status' })).status, 'consumed');
 });
 
-test('unknown /status values stay unknown, including Fast and tokens', () => {
-  const { statusText } = require('../electron/features/codex-app-server/status.cjs');
-  const text = statusText({ options: { model: null, effort: null, fast: null }, thread: {}, cwd: null, usage: null, account: null, limits: null, errors: [] });
-  for (const line of ['快速模式：未知', '本会话 token：未知', '上下文：未知 / 未知', '审批：未知', '沙箱：未知']) assert.ok(text.includes(line));
-  assert.doesNotMatch(text, /：0|快速模式：关/);
+test('unknown values stay unknown (null), including Fast, approval, sandbox, tokens and the account', () => {
+  const { statusPanel } = require('../electron/features/codex-app-server/status.cjs');
+  const panel = statusPanel({ options: { model: null, effort: null, fast: null }, thread: {}, cwd: null, usage: null, account: null, limits: null, errors: [] });
+  assert.deepEqual(panel.session, { model: null, effort: null, fast: null, cwd: null, sandbox: null, approval: null });
+  assert.deepEqual(Object.values(panel.tokens), [null, null, null, null, null, null, null]);
+  assert.deepEqual(panel.limits, [{ id: '5h', usedPercent: null, resetsAtMs: null }, { id: 'week', usedPercent: null, resetsAtMs: null }]);
+  assert.deepEqual([panel.account, panel.errors], [{ provider: null, kind: 'unknown' }, []]);
+  assert.equal(statusPanel({ options: { fast: null }, thread: {}, usage: { input: 1.5, output: 2 }, errors: [] }).tokens.total, null, 'a count that is not a count is not summed');
+  const granular = statusPanel({ options: { fast: null }, thread: { approvalPolicy: { granular: {} }, serviceTier: 'default' }, cwd: null, usage: { input: 3, output: 4 }, account: { kind: 'none' }, limits: null, errors: [['account/read', { code: 'timeout' }]] }, value => value);
+  assert.deepEqual([granular.session.approval, granular.session.fast, granular.tokens.total, granular.account.kind, granular.errors], ['granular', false, 7, 'none', [{ source: 'account', reason: '请求超时' }]]);
 });
 
 test('/status does not turn an unreported service tier into Fast off', async t => {
   const f = await fixture(t, null);
-  await f.router.send('t', f.id, { clientMessageId: 'unknown-fast', text: '/status' });
-  assert.match(f.router.snapshot('t').events.findLast(row => row.payload.content?.localCommand === 'status').payload.content.text, /快速模式：未知/);
+  const { local } = await f.router.send('t', f.id, { clientMessageId: 'unknown-fast', text: '/status' });
+  assert.equal(local.session.fast, null);
 });
 
 test('read-only /status does not clear an owner stop when a late interrupted turn arrives', async t => {

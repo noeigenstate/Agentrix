@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, PencilSimple, TerminalWindow, XCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, ArrowsOutSimple, CheckCircle, ChatCircle, CopySimple, DotsThree, DownloadSimple, FileText, PencilSimple, Question, TerminalWindow, XCircle } from '@phosphor-icons/react';
 import type { ConversationEntry } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import './result-card.css';
@@ -88,10 +88,10 @@ export function ResultChecks({ result }: { result: LatestResult }) {
   if (!result.checks.length) return null;
   return <div className="result-evidence">
     <div><p className="result-list-head">{t('验证')}</p>
-      <ul className="result-list">{result.checks.map(check => <li key={check.id} className={check.failed ? 'is-failed' : 'is-passed'}>
-        {check.failed ? <XCircle size={16} className="result-check" aria-hidden="true" /> : <CheckCircle size={16} className="result-check" aria-hidden="true" />}
+      <ul className="result-list">{result.checks.map(check => <li key={check.id} className={check.failed ? 'is-failed' : check.unconfirmed ? 'is-unconfirmed' : 'is-passed'}>
+        {check.failed ? <XCircle size={16} className="result-check" aria-hidden="true" /> : check.unconfirmed ? <Question size={16} className="result-check" aria-hidden="true" /> : <CheckCircle size={16} className="result-check" aria-hidden="true" />}
         <span className="result-check-name">{t(check.phrase)}<small><PathText text={check.target} /></small></span>
-        <span className="result-state-text">{check.failed ? t('失败') : t('通过')}</span>
+        <span className="result-state-text">{check.failed ? t('失败') : check.unconfirmed ? t('结果未能确认') : t('通过')}</span>
       </li>)}</ul>
     </div>
   </div>;
@@ -154,9 +154,10 @@ export function ImageProgress({ step }: { step: string }) {
 }
 
 // A step's state: a dot sending out a soft ring while it runs (as its node on the line does), a check when it is done,
-// a cross when it failed.
-export function StepState({ running, failed, filled = false }: { running: boolean; failed: boolean; filled?: boolean }) {
+// a cross when it failed, a grey question when its source could not confirm how it ended.
+export function StepState({ running, failed, filled = false, unconfirmed = false }: { running: boolean; failed: boolean; filled?: boolean; unconfirmed?: boolean }) {
   if (running) return <span className="reading-step-state is-running" role="img" aria-label={t('进行中')} />;
+  if (unconfirmed && !failed) return <Question size={17} weight={filled ? 'fill' : 'regular'} className="reading-step-state is-unknown" aria-label={t('结果未能确认')} />;
   return failed ? <XCircle size={17} weight="fill" className="reading-step-state is-failed" aria-label={t('失败')} />
     : <CheckCircle size={17} weight={filled ? 'fill' : 'regular'} className="reading-step-state" aria-label={t('已完成')} />;
 }

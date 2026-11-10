@@ -56,9 +56,11 @@ export function toolOf(item: NativeItem) {
 
 // The mark on a step: running turns, done ticks, failed crosses; a status the item does not give (or one we do not know) has no mark. A step that was
 // cut off (the provider says interrupted), or that still runs when its turn is over (settled), is interrupted: it is never drawn as done.
-export type StepMark = 'running' | 'done' | 'failed' | 'interrupted' | null;
+// A step the provider settled as "unknown" (a frame was lost, or a "!" command's result is not certain) is neither done nor failed: its mark is a question.
+export type StepMark = 'running' | 'done' | 'failed' | 'interrupted' | 'unknown' | null;
 export function itemState(item: NativeItem, settled = false): StepMark {
   const status = item.status?.toLowerCase() ?? '';
+  if (status === 'unknown') return 'unknown';
   if (/^(running|in[_ -]?progress|started|pending|active)$/.test(status)) return settled ? 'interrupted' : 'running';
   if (/^(completed?|done|success|succeeded)$/.test(status)) return 'done';
   if (/^(interrupted|cancell?ed|aborted)$/.test(status)) return 'interrupted';

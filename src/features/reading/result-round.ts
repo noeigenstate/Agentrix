@@ -13,7 +13,10 @@ function startOf(entries: readonly ConversationEntry[]) {
   for (let index = entries.length - 1; index >= 0; index--) if (entries[index].role === 'user' && !entries[index].answer && !entries[index].queued) return index;
   return -1;
 }
-export const writtenBy = (round: readonly ConversationEntry[]) => [...new Set(round.flatMap(entry => entry.tool?.done && !entry.tool.failed ? entry.tool.written ?? [] : []))];
+// A step whose end its source could not confirm (a native session's "unknown": a lost frame, a "!" command of uncertain result) is neither done nor failed.
+// The flag is set only by that source; a failed step is a failure whatever else it says.
+export const unconfirmed = (tool?: ConversationEntry['tool']) => !!tool && !tool.failed && (tool as { unconfirmed?: boolean }).unconfirmed === true;
+export const writtenBy = (round: readonly ConversationEntry[]) => [...new Set(round.flatMap(entry => entry.tool?.done && !entry.tool.failed && !unconfirmed(entry.tool) ? entry.tool.written ?? [] : []))];
 const replyOf = (round: readonly ConversationEntry[]) => lastWhere(round, entry => entry.role === 'assistant' && entry.text);
 
 // What the round did, from the agent's own conversation: the last thing you asked, the answer it ended on, and the
@@ -29,7 +32,7 @@ export const changeLabel = (change: Pick<GitChange, 'untracked' | 'index' | 'wor
   change.untracked ? STATE['?'] : STATE[(change.worktree.trim() || change.index.trim())[0]] ?? change.worktree;
 
 export type ResultKind = 'picture' | 'code' | 'text' | 'failed';
-export type RoundCheck = { id: string; phrase: string; target: string; done: boolean; failed: boolean };
+export type RoundCheck = { id: string; phrase: string; target: string; done: boolean; failed: boolean; unconfirmed?: boolean };
 // What the source of a round said about how it ended, in the words the row shows (a native session's turn.completed; a terminal session has none):
 // how long the round took in milliseconds, the spend and the tokens as text, and the sentence for a round that did not complete. A fact the source did
 // not give is absent, never zero.
@@ -60,7 +63,7 @@ export function latestResult(entries: readonly ConversationEntry[], { idle, inte
   const base = {
     request: entries[start].text ?? '', startedAt: entries[start].at, endedAt: last.at, reply: reply?.text ?? '', written: writtenBy(round),
     checks: tools.filter(entry => entry.tool!.kind === 'command' && entry.tool!.phrase && CHECKS.has(entry.tool!.phrase))
-      .map(({ id, tool }) => ({ id, phrase: tool!.phrase!, target: tool!.target, done: tool!.done, failed: tool!.failed })),
+      .map(({ id, tool }) => ({ id, phrase: tool!.phrase!, target: tool!.target, done: tool!.done, failed: tool!.failed, ...(unconfirmed(tool) ? { unconfirmed: true } : {}) })),
     ...(facts ? { facts } : {}),
   };
   const failure = stopped ? '' : last.tool?.failed ? last.tool.target : reported;
