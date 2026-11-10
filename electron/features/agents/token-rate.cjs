@@ -117,7 +117,8 @@ class TokenRates {
     if (message.type === 'stream_event' && event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') state.tools.add(event.content_block.id);
     if (message.type !== 'assistant' || !modelOf(message.message?.model)) return false;
     const value = message.message;
-    if (state.response?.id !== value.id) {
+    // A reply without an id opens a response too (one nativeUsage never samples), as it does after an identified reply.
+    if (!state.response || state.response.id !== value.id) {
       state.response = this.replies.get(value.id) || { id: value.id, model: modelOf(value.model), start: state.tools.size ? null : state.boundary };
       state.boundary = null;
     }

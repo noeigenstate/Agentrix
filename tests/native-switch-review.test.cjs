@@ -171,9 +171,14 @@ test('F4 waiting for background never uses the legacy destructive fallback and r
   assert.ok(f.events.some(event => event.type === 'input.receipt' && event.payload.clientMessageId === 'unsent' && event.payload.status === 'rejected'));
 });
 
-test('F5 actual main project validation permits read-only SSH usage with none connections and no path', async t => {
+test('F5 actual main project validation permits read-only SSH usage with no path and no observed connection', async t => {
   const f = await fixture(t, { ssh: true }); const usage = await f.facade.usage('p');
-  for (const agent of ['claude', 'codex']) { assert.equal(usage.agents[agent].path, null); assert.equal(usage.agents[agent].connection.kind, 'none'); }
+  // SSH has no Claude at all. Codex's account there was never read, which is not known rather than signed out.
+  for (const [agent, kind] of [['claude', 'none'], ['codex', 'unknown']]) {
+    assert.equal(usage.agents[agent].path, null);
+    assert.deepEqual(usage.agents[agent].connection, { kind, active: false, source: null, observedAt: null });
+    assert.equal(usage.agents[agent].limits, null);
+  }
 });
 
 test('F6 clearing an api-only key blocks running sends and retires at the turn boundary', async t => {

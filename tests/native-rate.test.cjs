@@ -53,6 +53,10 @@ test('native response counters never estimate from text, replay, absent usage, s
   const meter = new TokenRates('claude'); meter.nativeBegin(1000); meter.nativeClaude(start('r'), 1100); meter.nativeClaude(delta(10), 2000);
   for (const message of [{ ...delta(900), isSidechain: true }, { ...delta(900), isReplay: true }, delta(5)]) meter.nativeClaude(message, 3000);
   assert.equal(meter.snapshot().outputTokens, 10);
+  // The first reply of a turn may carry no id: it is no sample, and it must not end the session that reads it.
+  const unnamed = new TokenRates('claude'); unnamed.nativeBegin(1000);
+  assert.equal(unnamed.nativeClaude({ type: 'assistant', message: { model: 'claude-opus-5-5', content: [], usage: { output_tokens: 10 } } }, 2000), false);
+  assert.equal(unnamed.snapshot().samples, 0);
 });
 
 test('native Codex counts provider output including reasoning once, ending responses before tool waits', () => {

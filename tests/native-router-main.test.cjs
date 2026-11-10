@@ -8,7 +8,9 @@ function host() {
   const queued = [];
   const terminal = { nativeStructured: true, nativeRuntimeSessionId: 'runtime', promptQueue: { enqueue: text => queued.push(text), start() {} }, completionWork: { begin() {} }, nativeMessages: new Map() };
   const starts = [], activity = [], restored = [], sessions = new Map([['t', terminal]]);
+  // A usage update reads the bound runtime's token rate from the router; this host's runtime has no meter.
   const context = { createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage, quitting: false, nativeSpecs: new Map([['t', { agent: 'claude' }]]), sessions, scheduleState() {}, t: text => text,
+    nativeSessions: { tokenRate(id, runtimeSessionId) { assert.deepEqual([id, runtimeSessionId], ['t', 'runtime']); return null; } },
     store: { findTerminal: () => ({ project: { id: 'p' } }), expectCompletion: id => starts.push(id), setRestore: (id, patch) => restored.push({ id, patch }) },
     applyActivity: (_project, _session, snapshot) => activity.push(snapshot) };
   vm.createContext(context);
@@ -83,7 +85,8 @@ test('M5 failed native initialization keeps terminal starts and safe settings av
   context.registerUnavailableNative((name, handler) => handlers.set(name, handler));
   assert.equal(handlers.get('native:settings-get')().claudePath, 'terminal-only');
   assert.equal((await handlers.get('native:usage')()).agents.codex.path, null);
-  assert.throws(() => handlers.get('native:start')('t', { agent: 'codex' }), /Codex app-server/);
+  assert.throws(() => handlers.get('native:start')('t', { agent: 'codex' }), /^Error: Codex 原生模式连接失败，请重试。$/);
+  assert.equal(starts.length, 0, 'Codex has no terminal start to fall back to');
   assert.equal(handlers.get('native:start')('t', { agent: 'claude', resume: true }).runtimeSessionId, 'fallback-runtime');
   assert.equal(plans.get('t').threadId, '11111111-1111-4111-8111-111111111111');
   assert.equal(starts.length, 1);

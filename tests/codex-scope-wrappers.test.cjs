@@ -18,10 +18,13 @@ test('PowerShell native wrapper preserves empty and quoted argv and returns with
     const root = fixture(t), script = path.join(root, 'wrapper.ps1');
     const source = fs.readFileSync(path.join(integration, 'bootstrap.ps1'), 'utf8');
     const begin = source.indexOf('function global:codex {');
+    // Windows PowerShell writes stdout in the console's code page (437 on an English system, 936 on a Chinese one), which
+    // cannot carry every argument: the request leaves as base64 of its UTF-8 JSON.
     fs.writeFileSync(script, '\ufeff' + source.slice(begin, source.indexOf('\n# Claude Code reports each turn', begin)) + `
 function global:Send-AgentrixEvent {
     param($Type, [string[]]$Arguments)
-    Write-Output ('REQUEST=' + (@{ type=$Type; args=@($Arguments) } | ConvertTo-Json -Compress))
+    $request = @{ type=$Type; args=@($Arguments) } | ConvertTo-Json -Compress
+    Write-Output ('REQUEST=' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($request)))
 }
 $values=ConvertFrom-Json $env:WRAPPER_ARGS
 codex @values
@@ -32,8 +35,8 @@ Write-Output 'SHELL_RETURNED'
         ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
         { env: { ...isolatedEnvironment(root), WRAPPER_ARGS: JSON.stringify(args) }, windowsHide: true, timeout: 5000 * timeoutScale });
       assert.equal(result.stderr, ''); assert.match(result.stdout, /SHELL_RETURNED/);
-      const event = JSON.parse(result.stdout.split(/\r?\n/).find(line => line.startsWith('REQUEST=')).slice(8));
-      assert.deepEqual(event, { type: 'codex-started', args });
+      const request = result.stdout.split(/\r?\n/).find(line => line.startsWith('REQUEST=')).slice(8);
+      assert.deepEqual(JSON.parse(Buffer.from(request, 'base64').toString()), { type: 'codex-started', args });
     }
   });
 

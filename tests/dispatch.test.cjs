@@ -385,13 +385,15 @@ test('a thread id alone cannot confirm a start and an exiting worker still leave
 });
 
 test('a worker that exits right after its records is confirmed from them; without them it still failed to start', async t => {
-  for (const [agent, lines] of [['codex', codex], ['claude', claude.map(record => ({ record }))]]) {
+  // Claude's stream carries its brief as a user record: the helper reports it as the planner's input, after the start.
+  for (const [agent, lines, inputs] of [['codex', codex, []], ['claude', claude.map(record => ({ record })), ['u:fixture-prompt']]]) {
     const f = await fixture(t, lines, { agent, hold: 0 }), result = await f.finished;
     assert.equal(result.code, 0, agent);
     assert.match(result.stdout, /\[dispatch\] started \S+ \w+ model .* · routing ok · pid \d+ session /, agent);
     assert.match(result.stdout, / exit 0 reason exit · out /, agent);
-    assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end'], agent);
-    assert.equal(f.events[0].unconfirmed, undefined, agent); assert.equal(f.events[1].reason, 'exit', agent);
+    assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', ...inputs.map(() => 'dispatch-input'), 'dispatch-end'], agent);
+    assert.deepEqual(f.events.slice(1, -1).map(event => [event.entryId, event.origin, event.id]), inputs.map(entry => [entry, 'planner', f.events[0].id]), agent);
+    assert.equal(f.events[0].unconfirmed, undefined, agent); assert.equal(f.events.at(-1).reason, 'exit', agent);
   }
   // A session file without its turn context proves no start, however quickly or cleanly the worker ends.
   const f = await fixture(t, [codex[0], { rollout: rollout[0] }], { hold: 0 }), result = await f.finished;
