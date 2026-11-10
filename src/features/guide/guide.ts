@@ -2,7 +2,14 @@
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "派发恢复", text: "修复 beta.9 中从安装版派发任务时启动失败的问题。", group: 'new' },
+  { title: "结果面板", text: "原生模式里，/status、/usage、/context、/cost 的结果显示在输入框上方的面板里，不写进对话，也不发给模型；按 Esc 或点面板外面关闭。", group: 'new' },
+  { title: "设置提示", text: "用 /model、/effort、/fast 改完设置后，会出现一条两秒的提示，不再在对话里留一行。", group: 'new' },
+  { title: "额度更准", text: "换账号后，活动栏显示的是新账号的额度；Codex 的额度会持续更新，不再停在第一次读到的数值。", group: 'new' },
+  { title: "未确认步骤", text: "结果没能确认的步骤显示问号和「结果未能确认」，不再显示成已完成或测试通过。", group: 'new' },
+  { title: "历史步骤", text: "恢复 Codex 会话后，上次没跑完的步骤不再被当作正在运行，可以正常开始新会话。", group: 'new' },
+  { title: "会话更稳", text: "修复 Claude 原生会话偶尔在回复途中失败的问题；查看状态失败时不再影响会话本身。", group: 'new' },
+  { title: "模型编排", text: "系统的模型路由加入 Fable：由它主控并规划跨模块的任务，Opus 负责审查。", group: 'new' },
+  { title: "派发恢复", text: "修复 beta.9 中从安装版派发任务时启动失败的问题。" },
   { title: "额度不再跳回", text: "活动栏会保留最后一次读到的连接和额度；临时读取失败不再显示成「未知」。到了重置时间还没读到新数据时，会注明正在等待更新。" },
   { title: "Codex 状态", text: "Codex 原生模式输入 /status，会显示模型、推理强度、快速模式、审批和沙箱、工作目录、账号、token、上下文和额度；读取失败时会说明原因。" },
   { title: "步骤显示", text: "原生模式里，工具步骤显示做了什么和对应的文件或命令，不再贴出输出内容；失败时附一行原因。" },
