@@ -32,6 +32,7 @@ function server(cwd, tier = 'fast') {
         else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 2000000000 }, secondary: { usedPercent: 70, windowDurationMins: 10080, resetsAt: 2000500000 } }, rateLimitsByLimitId: {} };
         else if (request.method === 'turn/start') result = { turn: { id: 'offline-turn', status: 'inProgress', items: [] } };
         else if (request.method === 'turn/steer') result = { turnId: 'offline-turn' };
+        else if (request.method === 'skills/list') result = { data: [{ cwd, skills: [{ name: 'deploy', enabled: true, path: path.join(cwd, 'deploy', 'SKILL.md'), description: 'Offline skill' }] }] };
         else result = {};
         // A held method answers only when the test releases it: a read that is still on its way.
         if (held.has(request.method)) held.get(request.method).push(() => send({ id: request.id, result })); else send({ id: request.id, result });
@@ -117,13 +118,20 @@ test('a dispatched worker’s text is never a command: a leading / or ! goes to 
   t.after(async () => { await worker.close(); fs.rmSync(root, { force: true, recursive: true }); });
   await worker.start();
   // The window's questions, the local commands, the menu's settings, a shell line and a built-in the native mode refuses: every family the owner's session reads.
-  const briefs = ['/status of the build: say whether it passes', '/usage', '/compact', '/review the diff before you answer', '/model gpt-6.1-sol', '/effort high', '/fast', '/new', '/clear', '!npm test', '/vim'];
+  const briefs = ['/status of the build: say whether it passes', '/usage', '/compact', '/review the diff before you answer', '/model gpt-6.1-sol', '/effort high', '/fast', '/new', '/clear', '!npm test', '/vim', '/deploy the build'];
   for (const [at, text] of briefs.entries()) {
     const receipt = await worker.send({ clientMessageId: `brief-${at}`, text });
     assert.deepEqual([receipt.status, receipt.local], ['delivered', undefined], text);
   }
-  assert.deepEqual(fake.wire.filter(row => ['turn/start', 'turn/steer'].includes(row.method) && row.params.threadId).map(row => row.params.input[0].text), briefs);
-  assert.deepEqual(fake.wire.filter(row => ['thread/compact/start', 'review/start', 'thread/shellCommand', 'model/list', 'account/read'].includes(row.method)).map(row => row.method), [], 'nothing was run or read in the worker’s name');
+  const sent = fake.wire.filter(row => ['turn/start', 'turn/steer'].includes(row.method) && row.params.threadId).map(row => row.params.input);
+  assert.deepEqual(sent.map(input => input.map(part => [part.type, part.text])), briefs.map(text => [['text', text]]), 'each is one piece of text: no skill of the same name rides along');
+  assert.deepEqual(fake.wire.filter(row => ['thread/compact/start', 'review/start', 'thread/shellCommand', 'model/list', 'account/read', 'skills/list'].includes(row.method)).map(row => row.method), [], 'nothing was run or read in the worker’s name');
+});
+
+test('the owner’s own /name still attaches the enabled skill of that name', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.router.send('t', f.id, { clientMessageId: 'skill', text: '/deploy the build' })).status, 'delivered');
+  assert.deepEqual(f.wire.find(row => row.method === 'turn/start' && row.params.threadId).params.input.map(part => part.type), ['text', 'skill']);
 });
 
 test('a refused local command cannot poison the queue for the next /status', async t => {
