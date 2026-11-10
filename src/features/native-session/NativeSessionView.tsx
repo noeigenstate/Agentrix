@@ -240,7 +240,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
         {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
       </div>}
-      {actions.panel ? <NativePanel state={actions.panel} onClose={() => { actions.closePanel(); box.current?.focus(); }} onRefresh={actions.refresh} />
+      {actions.panel ? <NativePanel state={actions.panel} onClose={refocus => { actions.closePanel(); if (refocus) box.current?.focus(); }} onRefresh={actions.refresh} />
         : actions.told && <NativeToast text={actions.told} />}
     </div>
     {error && <p className="form-error native-error" role="alert">{error}</p>}

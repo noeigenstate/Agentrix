@@ -16,9 +16,10 @@ const onTop = (node: HTMLElement | null) => {
   return node.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
 };
 
-// A key pressed in the window's own session view (the window, its message box or its conversation) is that window's. With nothing focused (a press on a
-// window's text leaves the page itself as the target) it belongs to the newest window the owner can see, if nothing lies over it.
-export function takesEscape(panel: Shown, target: EventTarget | null) {
-  if (target !== document.body && target !== document.documentElement && target !== document) return !!panel.current?.closest('[data-native-session]')?.contains(target as Node | null);
-  return shown.filter(other => onTop(other.current)).at(-1) === panel;
+// Where the Esc this window takes was pressed, or null when the key is not its. A key pressed in the window's own session view (the window, its message
+// box or its conversation) is that window's. With nothing focused (a press on a window's text leaves the page itself as the target) it belongs to the
+// newest window the owner can see, if nothing lies over it.
+export function escapeFrom(panel: Shown, target: EventTarget | null): 'view' | 'page' | null {
+  if (target !== document.body && target !== document.documentElement && target !== document) return panel.current?.closest('[data-native-session]')?.contains(target as Node | null) ? 'view' : null;
+  return shown.filter(other => onTop(other.current)).at(-1) === panel ? 'page' : null;
 }

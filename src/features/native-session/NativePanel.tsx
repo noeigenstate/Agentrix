@@ -3,7 +3,7 @@ import { ArrowClockwise, Check, Copy, WarningCircle, X } from '@phosphor-icons/r
 import { t } from '../../shared/i18n';
 import { AgentMark } from '../reading/feed-parts';
 import { panelText, panelTitle, readTime, type Panel, type PanelGroup, type PanelState, type Quota } from './native-panel.ts';
-import { showPanel, takesEscape } from './panel-keys.ts';
+import { escapeFrom, showPanel } from './panel-keys.ts';
 import './native-panel.css';
 
 function Meter({ percent, label, className = '' }: { percent: number; label: string; className?: string }) {
@@ -62,10 +62,12 @@ function Body({ panel, onPick }: { panel: Panel; onPick?: (command: string) => v
 // close it. Esc is its own only when pressed in its session view (the window, the message box or the conversation): there it is caught on `window`
 // before the message box sees it (which would stop a running agent); an Esc aimed at another project, a terminal or anything else passes untouched.
 // With nothing focused (a press on the window's text leaves the page itself as the key's target) Esc closes the newest window nothing lies over, and
-// only that one (`panel-keys.ts`).
+// only that one (`panel-keys.ts`). `onClose` is told whether the close came from inside the view (its own Esc, the button, the backdrop): only then does
+// the cursor go back to the message box. A window closed from the page, or with its hidden project, moves the focus nowhere, so the next Esc is not a
+// message box's (where it would stop a running agent).
 // A hidden project keeps its views mounted, so the window goes with its view instead of waiting behind it. Tab stays among its buttons and Ctrl+C
 // copies the whole panel unless some text is selected. Nothing in it is part of the conversation.
-export function NativePanel({ state, onClose, onRefresh, onPick }: { state: PanelState; onClose: () => void; onRefresh: () => void; onPick?: (command: string) => void }) {
+export function NativePanel({ state, onClose, onRefresh, onPick }: { state: PanelState; onClose: (refocus: boolean) => void; onRefresh: () => void; onPick?: (command: string) => void }) {
   const dialog = useRef<HTMLDialogElement>(null), close = useRef(onClose), copyAll = useRef(() => {});
   const [copied, setCopied] = useState(false), ready = state.state === 'ready' ? state.panel : null, title = ready?.title ?? panelTitle(state.agent, state.command);
   close.current = onClose;
@@ -80,7 +82,8 @@ export function NativePanel({ state, onClose, onRefresh, onPick }: { state: Pane
     const keys = (event: KeyboardEvent) => {
       const target = event.target as Node | null;
       if (event.key === 'Escape') {
-        if (takesEscape(dialog, target)) { event.preventDefault(); event.stopPropagation(); close.current(); }
+        const from = escapeFrom(dialog, target);
+        if (from) { event.preventDefault(); event.stopPropagation(); close.current(from === 'view'); }
         return;
       }
       if (!dialog.current?.contains(target)) return;
@@ -93,13 +96,13 @@ export function NativePanel({ state, onClose, onRefresh, onPick }: { state: Pane
     window.addEventListener('keydown', keys, true);
     const forget = showPanel(dialog);
     // A view that is not drawn (its project slot is hidden) has no box.
-    const hidden = new ResizeObserver(() => { if (!dialog.current?.getClientRects().length) close.current(); });
+    const hidden = new ResizeObserver(() => { if (!dialog.current?.getClientRects().length) close.current(false); });
     if (dialog.current) hidden.observe(dialog.current);
     return () => { window.removeEventListener('keydown', keys, true); hidden.disconnect(); forget(); };
   }, []);
   return <div className="native-panel-scrim" onMouseDown={event => {
     // The press would otherwise focus what lies under the backdrop once it is gone.
-    if (event.button === 0 && event.target === event.currentTarget) { event.preventDefault(); onClose(); }
+    if (event.button === 0 && event.target === event.currentTarget) { event.preventDefault(); onClose(true); }
   }}>
     <dialog open ref={dialog} tabIndex={-1} className="native-panel" aria-modal="true" aria-label={title} onCancel={event => event.preventDefault()}>
       <header className="native-panel-head">
@@ -109,7 +112,7 @@ export function NativePanel({ state, onClose, onRefresh, onPick }: { state: Pane
         <span className="native-panel-spacer" />
         <button type="button" className="icon-button" title={t('重新读取')} aria-label={t('重新读取')} disabled={state.state === 'loading'} onClick={onRefresh}><ArrowClockwise size={16} /></button>
         <button type="button" className="icon-button" title={copied ? t('已复制') : t('复制全部')} aria-label={t('复制全部')} disabled={!ready} onClick={() => copyAll.current()}>{copied ? <Check size={16} /> : <Copy size={16} />}</button>
-        <button type="button" className="icon-button" title={t('关闭（Esc）')} aria-label={t('关闭')} onClick={onClose}><X size={16} /></button>
+        <button type="button" className="icon-button" title={t('关闭（Esc）')} aria-label={t('关闭')} onClick={() => onClose(true)}><X size={16} /></button>
       </header>
       <div className="native-panel-body">
         {state.state === 'loading' && <Skeleton />}
