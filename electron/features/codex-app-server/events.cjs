@@ -7,6 +7,11 @@ const { TokenRates } = require('../agents/token-rate.cjs');
 const KINDS = { userMessage: 'user-message', agentMessage: 'agent-message', reasoning: 'reasoning-summary', commandExecution: 'command',
   fileChange: 'file-change', mcpToolCall: 'tool', dynamicToolCall: 'tool', plan: 'plan', webSearch: 'web', imageGeneration: 'agent-message' };
 const bounded = value => typeof value === 'string' ? value.slice(0, 256 * 1024) : null;
+const UNFINISHED = ['running', 'in-progress', 'pending'];
+// History replays into an idle thread: an item it left unfinished ran in an earlier process and is no work of this one.
+// Only a turn recorded as interrupted proves the outcome; any other result is unknown, never running and never done.
+const settleReplayed = (payload, turnStatus) => UNFINISHED.includes(payload.status)
+  ? { ...payload, status: turnStatus === 'interrupted' ? 'interrupted' : 'unknown' } : payload;
 const ERRORS = {
   contextWindowExceeded: '输入超过上下文长度，本轮未能完成。', sessionBudgetExceeded: 'Codex 本轮预算已用完。',
   usageLimitExceeded: 'Codex 用量已达上限。', rateLimitExceeded: 'Codex 请求受到限流。', unauthorized: 'Codex 身份验证失败。',
@@ -58,6 +63,7 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
     if (type === 'turn.started') rates.nativeBegin(now());
     if (type === 'turn.completed') rates.nativeEnd();
     if (type === 'item.dropped') dropped = true;
+    if (type === 'item.upsert' && extra.replay) payload = settleReplayed(payload);
     const event = { schemaVersion: 1, eventId: randomUUID(), sequence: ++sequence, ...binding, provider: 'codex', transport: 'codex-app-server',
       projectId: spec.projectId, terminalId: spec.terminalId, runtimeSessionId: spec.runtimeSessionId, runId: spec.runId ?? null,
       itemId: null, receivedAtMs: now(), occurredAtMs: null, replay: false, type, payload, ...extra };
@@ -133,7 +139,7 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
     finishTurn(status = 'interrupted') {
       compacting = false;
       publish('context.compacting', { active: false });
-      for (const [itemId, payload] of items) if (['command', 'tool', 'file-change'].includes(payload.kind) && ['running', 'in-progress', 'pending'].includes(payload.status)
+      for (const [itemId, payload] of items) if (['command', 'tool', 'file-change'].includes(payload.kind) && UNFINISHED.includes(payload.status)
         && itemEvents.get(itemId)?.turnId === binding.turnId) {
         // The drained frame has no trustworthy nested item identity. Missing tool results
         // stay unknown even if the turn failed elsewhere; actual interruption retains its meaning.
@@ -142,7 +148,7 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
       }
     },
     beginTurn() { dropped = false; compacting = false; baseline = cumulative; for (let i = events.length - 1; i >= 0; i--) if (['plan.updated', 'turn.diff'].includes(events[i].type)) events.splice(i, 1); },
-    activity: () => ({ known: true, count: children.size + [...items.values()].filter(item => ['command', 'tool'].includes(item.kind) && ['running', 'in-progress', 'pending'].includes(item.status)).length }),
+    activity: () => ({ known: true, count: children.size + [...items.values()].filter(item => ['command', 'tool'].includes(item.kind) && UNFINISHED.includes(item.status)).length }),
     snapshot: () => ({ runtimeSessionId: spec.runtimeSessionId, lastSequence: sequence,
       events: [...events.filter(x => x.type !== 'item.upsert' && x.type !== 'item.delta'), ...[...items].map(([itemId, payload]) => ({ ...itemEvents.get(itemId), type: 'item.upsert', payload }))]
         .sort((a, b) => a.sequence - b.sequence).map(x => ({ ...x, replay: true })),
@@ -150,4 +156,4 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
   };
 }
 
-module.exports = { createEvents, itemPayload, turnCompletion };
+module.exports = { createEvents, itemPayload, settleReplayed, turnCompletion };

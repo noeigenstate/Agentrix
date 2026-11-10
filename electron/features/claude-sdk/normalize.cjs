@@ -19,7 +19,7 @@ function createNormalizer(emit, clean = value => value) {
       kind: block.type === 'thinking' ? 'reasoning-summary' : 'agent-message', status: 'interrupted', content: { text: '', discarded: true },
     }, { itemId: `${message.id}:${index}` });
   }
-  return message => {
+  const normalize = message => {
     // Task lifecycle records are counted by the session before normalization. Child content has its own feed.
     if (message.parent_tool_use_id || message.isSidechain) return;
     // CLI command identity, never its translated output. The GUI already acknowledges these mutations.
@@ -137,5 +137,12 @@ function createNormalizer(emit, clean = value => value) {
       }
     }
   };
+  // History is replayed into a query with no turn running: a tool call it left without a result ran in an earlier
+  // process. Its result is unknown, never running and never done, and a later turn's end must not claim it.
+  normalize.settleReplay = () => {
+    for (const [itemId, payload] of tools) emit('item.upsert', { ...payload, status: 'unknown' }, { itemId, replay: true });
+    tools.clear();
+  };
+  return normalize;
 }
 module.exports = { createNormalizer };
