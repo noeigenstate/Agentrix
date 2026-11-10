@@ -128,14 +128,25 @@ try {
   for (const project of [...projects.slice(0, 2), ...claudeProjects]) await fs.unlink(path.join(project.path, 'resume-receipt.json'));
   await launch(); await verifyResume();
   console.log('PASS: real application restart retains and restores coding state');
-  // Explicit owner input keeps the ordinary terminal path.
-  const native = (await page.evaluate(() => window.agentrix.getState())).value.projects[0];
-  const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), native.id);
-  await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: native.id, runtime: snapshot.value.runtimeSessionId });
-  await page.evaluate(id => window.agentrix.restartTerminal(id), projects[0].id);
-  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].shellReady, 'manual shell ready');
-  await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex\r'), projects[0].id);
-  await waitFor(async () => (await receipt(projects[0]))?.args[0] !== 'app-server', 'manually typed Codex');
+  // Explicit owner input. The restored native session ends and the terminal comes back as a shell.
+  const first = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0];
+  const backToShell = async label => {
+    const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), projects[0].id);
+    await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: projects[0].id, runtime: snapshot.value.runtimeSessionId });
+    await page.evaluate(id => window.agentrix.restartTerminal(id), projects[0].id);
+    await waitFor(async () => { const project = await first(); return project.shellReady && !project.codexActive; }, label);
+  };
+  await backToShell('manual shell ready');
+  // Codex has no terminal run: typed at the prompt it asks the host for a native session of its own, and its argument
+  // is the first prompt. The shell never runs it with the typed words.
+  await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex "中文参数"\r'), projects[0].id);
+  await waitFor(async () => (await receipt(projects[0]))?.input === '中文参数' && (await first()).terminals[0].nativeMode === 'codex-app-server', 'manually typed Codex opens in native mode with its Chinese argument');
+  assert.deepEqual((await receipt(projects[0])).args, ['app-server', '--listen', 'stdio://']);
+  assert.notEqual((await receipt(projects[0])).threadId, projects[0].sessionId, 'a typed codex starts its own conversation');
+  await backToShell('shell ready for the terminal agent');
+  // The agent a typed command runs in the terminal itself is Claude Code (its offline stand-in records how it was started).
+  await page.evaluate(id => window.agentrix.writeTerminal(id, 'claude\r'), projects[0].id);
+  await waitFor(async () => (await receipt(projects[0]))?.args[0] === '--settings' && (await first()).agent === 'claude', 'manually typed Claude Code');
   const panel = page.locator(`[data-project-id="${projects[0].id}"]`);
   // A running agent's conversation shows as a document by default; the title-bar switch shows the terminal itself.
   await panel.locator('.reading-view').waitFor();

@@ -33,7 +33,6 @@ const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[
 const packaged = process.argv.includes('--packaged');
 let application, page, clipboardOwner = null;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0];
-const record = (type, turn) => JSON.stringify({ type: 'event_msg', timestamp: new Date().toISOString(), payload: { type, turn_id: turn } }) + '\n';
 async function launch() {
   application = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });
   page = await application.firstWindow();
@@ -202,11 +201,19 @@ try {
 
   for (const id of ids) await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex\r'), id);
   assert.equal(await page.getByRole('button', { name: '启动 Codex', exact: true }).count(), 0, 'no launch button: agents start from the prompt');
-  await waitFor(async () => { const saved = await readSaved(); return !!saved.restore.threadId && !!saved.terminals[0].restore.threadId; }, 'distinct native terminal titles');
+  // Codex has no terminal run: each typed codex gives its split to a native session of its own (the app-server stand-in).
+  await waitFor(async () => (await state()).terminals.every(item => item.codexActive && item.nativeMode === 'codex-app-server'), 'each typed codex opens in native mode');
+  await waitFor(async () => { const saved = await readSaved(); return !!saved.restore.threadId && !!saved.terminals[0].restore.threadId; }, 'distinct native conversations');
   const saved = await readSaved(), threads = [saved.restore.threadId, saved.terminals[0].restore.threadId];
   assert.notEqual(threads[0], threads[1]);
-  await fs.appendFile(path.join(codexHome, 'sessions', `rollout-${threads[0]}.jsonl`), record('task_started', 'left-working'));
-  await fs.appendFile(path.join(codexHome, 'sessions', `rollout-${threads[1]}.jsonl`), record('task_started', 'right-done') + record('task_complete', 'right-done'));
+  // The stand-in keeps the turn of 继续 open and ends any other at once, so the two splits differ.
+  for (const [index, text] of ['继续', 'right-done'].entries()) {
+    const read = () => page.evaluate(id => window.agentrix.nativeSession.snapshot(id), ids[index]);
+    await waitFor(async () => (await read()).value?.state === 'idle', 'native Codex is ready');
+    const snapshot = await read();
+    const sent = await page.evaluate(p => window.agentrix.nativeSession.send(p.id, p.runtime, p.message, p.text), { id: ids[index], runtime: snapshot.value.runtimeSessionId, message: randomUUID(), text });
+    assert.equal(sent.ok, true, JSON.stringify(sent));
+  }
   await waitFor(async () => { const value = await state(); return value.terminals[0].codexActivity === 'working' && value.terminals[1].codexActivity === 'complete'; }, 'independent Codex status');
   assert.equal((await state()).codexActivity, 'working');
   await restoreClipboard(); await application.close(); application = null;

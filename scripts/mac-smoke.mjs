@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { posixCodexStandIn } from './gui-codex-env.mjs';
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,7 +29,7 @@ await fs.writeFile(path.join(home, '.bash_profile'), 'export PATH="$HOME/bin:$PA
 await fs.writeFile(path.join(home, '.bashrc'), 'export PG_BASHRC=read\n');
 await fs.writeFile(path.join(home, '.zprofile'), 'path=("$HOME/bin" $path)\n');
 // A stand-in for Codex that answers the app-server protocol and leaves a receipt of how it was started and what it was sent.
-await fs.writeFile(path.join(bin, 'codex'), `#!${process.execPath}\nrequire(${JSON.stringify(path.join(root, 'tests/fixtures/gui-codex-app-server.cjs'))});\n`, { mode: 0o755 });
+await fs.writeFile(path.join(bin, 'codex'), posixCodexStandIn(), { mode: 0o755 });
 const receipt = async () => { try { return JSON.parse(await fs.readFile(path.join(project.path, 'resume-receipt.json'), 'utf8')); } catch { return null; } };
 await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', ...(shellName === 'zsh' && { shell: 'zsh' }), terminalRenderer: 'dom', autoSave: false, notifications: false, sound: false, announce: false, closeToTray: false, restoreSessions: false } }));
 

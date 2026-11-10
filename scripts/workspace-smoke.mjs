@@ -222,8 +222,10 @@ try {
   assert.equal(await panel.locator('.terminal-split:visible').count(), 0, 'an agent exit hides its shell');
   await panel.getByRole('button', { name: '2 个终端运行中 · 点击展开', exact: true }).waitFor();
   await expand();
-  await agent.locator('.xterm-helper-textarea').focus(); await page.keyboard.type('codex'); await page.keyboard.press('Enter');
-  await waitFor(async () => (await projectState()).terminals.find(terminal => terminal.id === agentId).codexActive, 'typing codex uses the existing wrapper detection');
+  // An agent typed at the prompt of a hidden shell shows that terminal again. Claude Code is the agent that runs in a
+  // terminal; a typed codex opens in native mode instead (session-smoke and cmd-smoke type one).
+  await agent.locator('.xterm-helper-textarea').focus(); await page.keyboard.type('claude'); await page.keyboard.press('Enter');
+  await waitFor(async () => { const terminal = (await projectState()).terminals.find(terminal => terminal.id === agentId); return terminal.codexActive && terminal.agent === 'claude' && !terminal.nativeMode; }, 'typing claude uses the existing wrapper detection');
   await grid();
   assert.equal(await panel.locator('.terminal-split:visible').count(), 1);
   assert.equal(await agent.isVisible(), true);

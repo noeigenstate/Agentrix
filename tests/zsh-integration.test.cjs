@@ -151,6 +151,11 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   assert.deepEqual(started.args, ['resume', '--last']);
   await waitEvent(event => event.type === 'shell-prompt' && event.sequence > started.sequence, 'the prompt after the native request');
   assert.equal(fs.existsSync(path.join(log, 'codex.json')), false, 'the shell never executes Codex');
+  // A management command is the CLI itself in this terminal, with its arguments and exit status and no request to the host.
+  type('codex mcp add "中文 name" -- tool; print -r -- "status=$?" > "$PG_TEST_LOG/codex-status"');
+  assert.equal(await eventually(() => { try { return fs.readFileSync(path.join(log, 'codex-status'), 'utf8').trim(); } catch { return null; } }, 'the management command to return'), 'status=3');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(log, 'codex.json'), 'utf8')), ['mcp', 'add', '中文 name', '--', 'tool']);
+  assert.equal(events.filter(event => event.type === 'codex-started' && event.agent === 'codex').length, 1, 'a management command asks for no native session');
   assert.equal(events.some(event => event.type === 'codex-exited'), false);
 
   // claude: the user's alias still applies, and the hooks it is given report each turn.

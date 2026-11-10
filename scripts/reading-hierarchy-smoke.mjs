@@ -35,12 +35,9 @@ const entries = [
   tool('c3', 'command', 'npm run build', true, false, 120000),
   message('a3', 'assistant', '**核对完成。** 技能和运行命令现在都属于这轮机器人回复。', 180000),
 ];
-// A shell prompt is now an unknown CLI screen and must open the terminal. These timeline fixtures draw real idle evidence.
-const fixturePrompt = agent => {
-  const rows = agent === 'claude' ? ['────', '❯ ', '────', '  ⏸ manual mode on']
-    : ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
-  return `function global:prompt { Clear-Host; ${rows.map(row => `Write-Host '${row}'`).join('; ')}; ' ' }; `;
-};
+// A shell prompt is now an unknown CLI screen and must open the terminal. These timeline fixtures draw real idle
+// evidence: the input box of Claude Code, the agent a terminal runs (Codex opens in native mode).
+const fixturePrompt = `function global:prompt { Clear-Host; ${['────', '❯ ', '────', '  ⏸ manual mode on'].map(row => `Write-Host '${row}'`).join('; ')}; ' ' }; `;
 let app, page;
 const errors = [];
 try {
@@ -57,8 +54,8 @@ try {
   await card.getByRole('button', { name: '只打开终端', exact: true }).click();
   const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0];
   await waitFor(async () => (await state()).shellReady, 'isolated shell ready');
-  await page.evaluate(({ id, prompt }) => window.agentrix.writeTerminal(id, prompt + "Send-AgentrixEvent 'codex-started'\r"), { id: project.id, prompt: fixturePrompt('codex') });
-  await waitFor(async () => (await state()).codexActive, 'fixture agent active');
+  await page.evaluate(({ id, prompt }) => window.agentrix.writeTerminal(id, prompt + "Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), { id: project.id, prompt: fixturePrompt });
+  await waitFor(async () => (await state()).codexActive && (await state()).agent === 'claude', 'fixture agent active');
   if (!await page.locator('.focus-mode').count()) await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   if (!await card.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
@@ -114,16 +111,17 @@ try {
   await reader.evaluate(node => { node.scrollTop = 0; });
   await reader.screenshot({ path: path.join(output, 'compact.png') });
   assert.equal(await page.locator('.focus-mode').count(), 0, 'tool interaction preserves compact mode');
-  // The intercepted conversation endpoint must model the new agent's empty transcript too.
-  // Otherwise its first refresh immediately reloads the previous provider's fixture.
+  // The agent starts again in the same terminal, with a new conversation. The intercepted conversation endpoint must
+  // model its empty transcript too. Otherwise its first refresh immediately reloads the previous run's fixture.
   await app.evaluate(() => { globalThis.hierarchyEntries = []; });
-  await page.evaluate(({ id, prompt }) => window.agentrix.writeTerminal(id, prompt + "Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), { id: project.id, prompt: fixturePrompt('claude') });
-  await waitFor(async () => (await state()).agent === 'claude', 'Claude fixture active');
+  const earlier = (await state()).agentStartedAt;
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), project.id);
+  await waitFor(async () => (await state()).agent === 'claude' && (await state()).agentStartedAt > earlier, 'Claude fixture starts again');
   await page.waitForFunction(() => document.querySelector('.reading-composer textarea')?.disabled === false);
   // The main log is empty in this injected fixture, so its no-op reset emits no packet. Model the
-  // new provider's reset explicitly and await the real renderer buffer before publishing its entries.
+  // new run's reset explicitly and await the real renderer buffer before publishing its entries.
   await publish([]);
-  await waitFor(async () => await reader.locator('.reading-assistant').count() === 0, 'new provider fixture reset reaches the reader');
+  await waitFor(async () => await reader.locator('.reading-assistant').count() === 0, 'new agent run reset reaches the reader');
   await publish(entries);
   await reader.getByText('核对完成。', { exact: true }).waitFor();
   await reader.locator('.reading-content > .reading-step.is-agent.is-claude').waitFor();
@@ -205,7 +203,7 @@ try {
   assert.equal(await editor.inputValue(), 'edit B during a slow save');
   await page.locator('.file-preview').screenshot({ path: path.join(output, 'autosave-latest.png') });
   assert.deepEqual(errors, []);
-  console.log(`PASS reading hierarchy and file regressions: leading skills, command branches, expansion across 400-entry eviction, queued transcript messages, popup pagination, latest autosave, both agents, Catalina and compact cards. Screenshots: ${output}`);
+  console.log(`PASS reading hierarchy and file regressions: leading skills, command branches, expansion across 400-entry eviction, queued transcript messages, popup pagination, latest autosave, an agent started again in the same terminal, Catalina and compact cards. Screenshots: ${output}`);
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => {});
   throw error;

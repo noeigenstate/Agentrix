@@ -29,7 +29,12 @@ test('product Codex command builders cannot restore exec or terminal input', () 
   assert.equal(fs.existsSync(path.join(root, 'electron/features/terminal/native-session.cjs')), false);
 });
 
-test('Agentrix injected shells never start a Codex TUI, including manually typed commands', () => {
+test('Agentrix injected shells never start a Codex TUI: a typed codex runs the CLI only for its management commands', () => {
+  const { TERMINAL_COMMANDS, wrapperCommands } = require('./fixtures/codex-terminal-commands.cjs');
+  // Whatever starts or serves a conversation, as `codex --help` of 0.167.0 lists it, with the options that take a prompt.
+  const conversational = ['exec', 'e', 'review', 'resume', 'fork', 'agents', 'queue', 'cloud', 'apply', 'a', 'app', 'app-server', 'mcp-server',
+    'exec-server', 'remote-control', 'debug', 'sandbox', 'doctor', '-m', '--model', '-c', '--config', '-p', '--profile', '-i', '--image'];
+  assert.deepEqual(TERMINAL_COMMANDS.filter(word => conversational.includes(word)), []);
   for (const [file, start, end] of [
     ['bootstrap.ps1', 'function global:codex {', '# Claude Code reports each turn'],
     ['bash-integration.bash', 'codex() {', '# Claude Code reports each turn'],
@@ -39,9 +44,15 @@ test('Agentrix injected shells never start a Codex TUI, including manually typed
     const source = fs.readFileSync(path.join(__dirname, '../integration', file), 'utf8');
     const begin = source.indexOf(start), wrapper = source.slice(begin, source.indexOf(end, begin));
     assert.ok(begin >= 0 && wrapper.length > start.length, file);
+    assert.deepEqual(wrapperCommands(file), TERMINAL_COMMANDS, file + ' runs the CLI for exactly the management commands');
     assert.match(wrapper, /codex-started/, file + ' uses the existing authenticated shell event');
     assert.match(wrapper, /原生模式/, file + ' tells the owner where Codex opens');
-    assert.doesNotMatch(wrapper, /Process\]::Start|\$executable|\$\{program|notify=|tui\.terminal_title|codex-exited/, file + ' has no manual terminal exception');
+    // The CLI is started in one place, behind the management check and before the native request; it is given no
+    // notify hook or terminal title and reports no agent run, which is what a terminal conversation needed.
+    const runs = [...wrapper.matchAll(/Invoke-AgentrixExecutable|& \$global:AgentrixCodexCommand|"\$\{(?:__pg_words|reply)\[@\]\}" "\$@"|"\$executable" "\$@"/g)];
+    assert.ok(runs.length, file + ' runs the CLI for a management command');
+    assert.ok(runs.every(run => run.index > wrapper.search(/-cin @\(|__pg_codex_terminal "/) && run.index < wrapper.indexOf('codex-started')), file + ' runs the CLI only behind the management check');
+    assert.doesNotMatch(wrapper, /Process\]::Start|\$\{program|notify=|tui\.terminal_title|codex-exited/, file + ' has no terminal conversation');
   }
 });
 

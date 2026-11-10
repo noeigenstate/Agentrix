@@ -310,8 +310,17 @@ __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
 # The first word given to an agent when it is a subcommand or an option (update, --version): Agentrix tells such a run
 # from a conversation by it. Anything else is not sent.
 __pg_command() { local pattern='^-{0,2}[A-Za-z][A-Za-z-]{0,23}$'; [[ ${1-} =~ $pattern ]] && printf '%s' "$1"; return 0; }
+# The Codex CLI's own management runs (codex --help, checked against 0.167.0) start no conversation and run in this
+# terminal; everything else opens in native mode. The local shell integrations carry the same words.
+__pg_codex_terminal() { case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|completion|update|features) return 0;; esac; return 1; }
 function codex {
-    local arguments
+    local executable arguments
+    if __pg_codex_terminal "${1-}"; then
+        executable=$(type -P codex)
+        if [ -z "$executable" ]; then printf 'Codex CLI was not found on this SSH host.\n'; return 127; fi
+        "$executable" "$@"
+        return
+    fi
     arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
     __pg_emit codex-started '' codex "$arguments"
     printf '%s\n' '已请求在原生模式打开 Codex。'

@@ -9,6 +9,8 @@ import net from 'node:net';
 import { _electron as electron } from 'playwright-core';
 import { waitFor, terminalsSettled } from './wait.mjs';
 import { setMode } from './mode-switch.mjs';
+import { guiCodexEnvironment, windowsCodexStandIn } from './gui-codex-env.mjs';
+import { claudeHook } from '../tests/helpers/desktop-task-fixture.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
@@ -36,7 +38,10 @@ for (const window of Object.values(cachedUsage.cachedUsageUtilization.utilizatio
 await fs.writeFile(usageFile, JSON.stringify(cachedUsage));
 await fs.writeFile(path.join(project.path, '.claude/commands/fix-issue.md'), '---\ndescription: 修复问题\n---\nFix issue $ARGUMENTS.\n');
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
-const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
+// The codex typed at the end of this check is the app-server stand-in, first on PATH.
+const bin = path.join(output, 'bin'), pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path');
+await fs.mkdir(bin); await windowsCodexStandIn(bin); env[pathKey] = bin + path.delimiter + env[pathKey];
 const packaged = process.argv.includes('--packaged'), errors = [], checks = [], commandTargets = [];
 let app, page, terminalId = project.id, failure;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(terminal => terminal.id === terminalId);
@@ -45,7 +50,7 @@ const physicalRows = () => page.locator(`[data-terminal-id="${terminalId}"] .xte
 // xterm reports focus separately when the card switches views, and answers the CLI's cursor queries when the popup refits it.
 const writes = () => app.evaluate(() => globalThis.voicePastes.filter(item => !['\x1b[I', '\x1b[O'].includes(item.data) && !/^\x1b\[\d+;\d+R$/.test(item.data)));
 const resetWrites = () => app.evaluate(() => { globalThis.voicePastes = []; });
-const hook = (kind, payload) => `'${JSON.stringify(payload)}' | & $global:AgentrixSession.powershellPath -NoProfile -ExecutionPolicy Bypass -File $global:AgentrixSession.claudeHookPath -PipeName $global:AgentrixSession.pipeName -ProjectId $global:AgentrixSession.projectId -SessionKey $global:AgentrixSession.sessionKey -Kind ${kind}\r`;
+const hook = (kind, payload) => claudeHook(kind, payload) + '\r';
 async function backgroundHook(kind, payload) {
   const runtime = (await fs.readdir(profile)).find(name => name.startsWith('runtime-'));
   const bootstrap = JSON.parse(await fs.readFile(path.join(profile, runtime, `${(await state()).sessionId}.json`), 'utf8'));
@@ -401,20 +406,12 @@ try {
   } finally {
     await app.evaluate(({ shell }) => { shell.showItemInFolder = globalThis.originalReadingShowItem; shell.openPath = globalThis.originalReadingOpenPath; });
   }
-  // Switching providers must switch its input frame too: a Claude box cannot enable a Codex composer.
-  await write("function global:Show-ReadingFixtureInput { Write-Host '› '; Write-Host ''; Write-Host 'gpt-6.1-sol · high · 100% context left'; $global:ReadingFixtureInputRow = [Console]::CursorTop - 3 }; Send-AgentrixEvent 'codex-started' -Agent 'codex'\r");
-  await waitFor(async () => (await state()).agent === 'codex', 'fixture agent changes');
-  await renderIdle('Codex idle input', 'codex');
-  assert.equal(await popup.count(), 0, 'a provider redraw is not a confirmation');
-  await composer.fill('/a'); await composer.fill('/');
-  await palette.getByRole('option').filter({ has: page.getByText('/plan', { exact: true }) }).waitFor();
-  assert.equal(await palette.getByRole('option').filter({ hasText: '/fix-issue' }).count(), 0, 'agent change reloads commands');
-  assert.equal(await palette.getByRole('option').filter({ hasText: '/security-review' }).count(), 0);
-  checks.push('command list reloads when the terminal agent changes');
   // A card that comes while someone writes in the box never takes the keyboard: the Enter meant for the message must not
-  // answer it (here, approve a command). The fixture prints Codex's approval prompt and keeps its own prompt away.
+  // answer it (here, approve a command). The fixture prints Claude Code's permission prompt, with no hook to announce
+  // it, and keeps its own prompt away.
+  await renderIdle('idle before typing');
   await composer.fill(''); await composer.click(); await page.keyboard.type('先别批准', { delay: 40 });
-  await write("Clear-Host; Write-Host '  Would you like to run the following command?'; Write-Host ''; Write-Host '  $ npm test'; Write-Host ''; Write-Host '› 1. Yes, proceed (y)'; Write-Host '  2. No, and tell Codex what to do differently (esc)'; Write-Host ''; Write-Host '  Press enter to confirm or esc to cancel'; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 4\r");
+  await write('Clear-Host; ' + permissionRows.map(row => "Write-Host '" + row.replace(/'/g, "''") + "'").join('; ') + '; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 4\r');
   await popup.waitFor({ timeout: 10000 });
   assert.equal(await popup.evaluate(node => node.contains(document.activeElement)), false, 'automatic terminal mounting preserves typing ownership');
   assert.equal(await composer.isDisabled(), false);
@@ -424,9 +421,29 @@ try {
   await terminal.locator('.reading-outbox').waitFor();
   await write(idle);
   await popup.waitFor({ state: 'detached', timeout: 10000 });
-  await waitFor(async () => (await writes()).some(item => item.data === '\r'), 'Codex queued instruction delivered');
+  await waitFor(async () => (await writes()).some(item => item.data === '\r'), 'queued instruction delivered after the confirmation typed over');
   await terminal.locator('.reading-outbox').waitFor({ state: 'detached' });
+  await renderIdle('typed-over confirmation ended'); await composer.fill('');
   checks.push('a confirmation arriving while typing opens a terminal without focusing it or answering; input return drains its queue');
+  // Switching providers switches the whole input. Codex has no terminal run: typed once Claude Code has left the shell
+  // (a terminal with a running agent refuses another), it takes this terminal's place as a native session (the
+  // app-server stand-in), whose box is no terminal frame and whose commands are Codex's own.
+  await composer.fill('/'); await palette.getByRole('option').filter({ hasText: '/fix-issue' }).waitFor(); await composer.fill('');
+  await write("Send-AgentrixEvent 'codex-exited' -Agent 'claude'; codex\r");
+  await waitFor(async () => { const now = await state(); return now.agent === 'codex' && now.nativeMode === 'codex-app-server' && now.codexActive; }, 'typed codex opens Codex in native mode');
+  await waitFor(async () => (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value?.state === 'idle', 'native Codex is ready');
+  await waitFor(async () => !await composer.isDisabled(), 'the native box takes messages');
+  assert.equal(await terminal.locator('.xterm').count(), 0, "the native session takes the terminal's place");
+  assert.equal(await popup.count(), 0, 'a provider change is not a confirmation');
+  await composer.fill('/');
+  await palette.getByRole('option').filter({ has: page.getByText('/compact', { exact: true }) }).waitFor();
+  assert.equal(await palette.getByRole('option').filter({ hasText: '/fix-issue' }).count(), 0, 'agent change reloads commands');
+  assert.equal(await palette.getByRole('option').filter({ hasText: '/security-review' }).count(), 0);
+  await composer.fill('');
+  const native = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
+  await page.evaluate(({ id, runtime }) => window.agentrix.nativeSession.stop(id, runtime), { id: terminalId, runtime: native.value.runtimeSessionId });
+  await waitFor(async () => !(await state()).codexActive, 'stopping the native session ends Codex');
+  checks.push('command list reloads when the terminal agent changes: a typed codex opens natively with its own commands');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, checks, errors, targeting: { plainTerminalId: project.id, plainSession, agentTerminalId: terminalId, commandTargets } }, null, 2));
   console.log(`PASS: reading palette, typed slash/shell commands, CLI keys, history and permission handoff. Evidence: ${output}`);
