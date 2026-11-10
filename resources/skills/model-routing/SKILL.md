@@ -5,7 +5,7 @@ trigger: auto
 when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算
 requires: any-agent
 title: 模型路由
-summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 high + fast，Claude 默认 high。
+summary: Fable 主控并规划跨模块任务，Opus 规划单模块并审架构，Sol 写核心代码，Sonnet 做常规功能和界面。GPT 默认 high + fast，Claude 默认 high。
 ---
 
 # Routing work between models
@@ -56,6 +56,23 @@ Pick by the task, not by the side of the code: a hard cross-module change goes t
 a routine tweak or a doc edit to the execution engineer, a one-line fix or a screenshot check to the visual engineer.
 Review is cross-model where two models exist and never by the author: a fresh worker reviews.
 
+### Where Fable fits
+
+Fable, where the account has it, takes the judgments that cost most when wrong, not the volume of implementation:
+
+| Position | Model |
+| --- | --- |
+| Orchestrator (briefs, integration, checking review findings, acceptance, failure attribution) | Fable |
+| Plan for a task that crosses modules or changes a protocol or contract | Fable |
+| Plan for a task inside one module | Opus |
+| Architecture review | Opus, always: the planner's model never reviews its own plan or code |
+| Core engineer | GPT-6.1-Sol; Fable only by escalation |
+
+Escalate a core build to Fable only when one of these holds, and say which in the plan: the core engineer is unavailable
+(not installed, or its usage limit is spent), the same defect is being fixed a second time, or the change crosses three or
+more modules. Code Fable writes is reviewed by Opus. Without Fable, Opus takes these positions as before and a fresh Opus
+reviews.
+
 ### Stages
 
 Every task goes through these; skip a stage only when the task has nothing for it (a back-end-only fix has no front-end
@@ -83,7 +100,7 @@ and a one-line fix, skips it with a recorded reason).
 ### Model settings
 
 - **GPT models** (Sol and any other `gpt-*`): default `model_reasoning_effort=high` and `service_tier="fast"`.
-- **Claude models** (Opus, Sonnet, Haiku): default effort `high` (`effort: "high"` on an Agent call, `--effort high` for a command-line Claude worker).
+- **Claude models** (Fable, Opus, Sonnet, Haiku): default effort `high` (`effort: "high"` on an Agent call, `--effort high` for a command-line Claude worker).
 - **Whenever Codex is installed**, before the first task of a project, ask the user with options, not an open question
   (the AskUserQuestion tool in Claude Code, a numbered list in Codex):
   1. high + fast (default, recommended): quick, spends more of the plan's limits
@@ -95,7 +112,7 @@ and a one-line fix, skips it with a recorded reason).
 - **The user can change these at any time in conversation** ("Sol on high", "turn fast off", "Sonnet on max"): apply the
   change from the next worker on, per model or per family, and state the settings in use when you launch a worker.
   Without an instruction the defaults hold.
-- A model missing from the account: use the next one down in the same family for that role (Opus to Sonnet)
+- A model missing from the account: use the next one down in the same family for that role (Fable to Opus, Opus to Sonnet)
   and say so in the plan.
 
 ### Which setup you are in
@@ -106,9 +123,10 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 
 | Role | Model |
 | --- | --- |
-| Orchestrator | The lead Claude session |
-| Architect and architecture review | Opus (the lead, or a fresh `opus` subagent for the review) |
-| Core engineer | GPT-6.1-Sol, a Codex worker (see Launching workers) |
+| Orchestrator | The lead Claude session (Fable where the account has it) |
+| Architect | Fable for a cross-module or protocol plan, Opus for a single-module plan (see Where Fable fits) |
+| Architecture review | A fresh `opus` subagent |
+| Core engineer | GPT-6.1-Sol, a Codex worker (see Launching workers); Fable by escalation |
 | Execution engineer | Sonnet subagent |
 | Visual and verification, small tasks | A fresh Sonnet subagent that reads screenshots |
 
@@ -150,8 +168,8 @@ Every worker is an Agent call with `model` set and `effort: "high"`; worktrees t
 
 | Role | Model |
 | --- | --- |
-| Orchestrator, architect | The lead Claude session (Opus) |
-| Core engineer (complex code, refactors, debugging) | Opus subagent |
+| Orchestrator, architect | The lead Claude session (Fable where the account has it, otherwise Opus) |
+| Core engineer (complex code, refactors, debugging) | Opus subagent; Fable by escalation |
 | Execution engineer (routine work, front end, tests, docs) | Sonnet subagent |
 | Visual and verification | Sonnet subagent that reads screenshots |
 | Small quick tasks | Haiku subagent |
@@ -336,6 +354,7 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 - The lead orchestrates and holds permissions; workers stay within their brief and never delegate further.
 - Route every change to a worker, however small; the lead never builds alone. A task too small for a roundtable skips it with a stated reason.
 - Route by difficulty and responsibility, not by renderer versus main-process location.
+- Fable orchestrates and plans cross-module work and writes code only by escalation; Opus reviews, and the planner's model never reviews its own work.
 - Hand searches, log reads and file reads to a Haiku subagent and keep the conclusion; read yourself only what you must judge exactly.
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.

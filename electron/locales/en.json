@@ -1707,7 +1707,7 @@
   "主模型卡片在还没开始任何一轮时不再显示「等待下一步」。": "The main model card no longer shows \"Waiting for the next step\" before its first round.",
   "每个任务开始前生效；在项目里第一次运行时先审查现有代码并提出接入计划": "Applies before every task; on its first run in a project it first reviews the existing code and proposes an adoption plan.",
   "新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算": "Applies when adding or changing a feature, debugging or fixing a bug, changing the interface, planning, reviewing or releasing, however small the change.",
-  "任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 high + fast，Claude 默认 high。": "Opus plans and reviews architecture, Sol handles core code, and Sonnet handles routine work, the front end and interface checks. GPT defaults to high + fast, Claude to high.",
+  "Fable 主控并规划跨模块任务，Opus 规划单模块并审架构，Sol 写核心代码，Sonnet 做常规功能和界面。GPT 默认 high + fast，Claude 默认 high。": "Fable leads and plans cross-module work, Opus plans single-module work and reviews architecture, Sol writes core code, and Sonnet handles routine features, front end and UI checks. GPT defaults to high + fast, Claude to high.",
   "界面规范": "UI standard",
   "设计、新增或修改、调试、改版或审查界面时生效，小改动也算；项目已有自己的界面规范时以项目为准": "Applies when designing, adding, changing, debugging, restyling or reviewing an interface, small changes included; the project's own UI standard takes precedence.",
   "界面开发超出小修时先出可点击设计稿，按五个量化问题和灰度清单验收，颜色克制、间距成刻度；截图由另一个模型验收，没有时由用户验收。": "Before UI development beyond a small fix, show a clickable mockup; use five measured questions and a grayscale checklist, restrained colour and a spacing scale. Another model accepts the screenshots; if no second model is available, the user does.",
