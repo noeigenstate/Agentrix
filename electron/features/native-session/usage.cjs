@@ -32,7 +32,9 @@ function subscriptionLimits(account, scopeId, staleAfterMs, now = Date.now()) {
   const readable = !signedOut && (windows.length > 0 || Number.isSafeInteger(left) && left >= 0);
   const state = readable ? observedAtMs !== null && now - observedAtMs > staleAfterMs ? 'stale' : 'ready'
     : ['loading', 'error', 'unavailable'].includes(account.resetQuery?.state) ? account.resetQuery.state : 'unavailable';
-  const result = { scopeId: connection?.scopeId ? `${scopeId}:${connection.scopeId}` : scopeId, billingRoute: 'subscription', observedAtMs, state,
+  // accountScopeId names the account these numbers were read for, so they are never kept for or merged into another's.
+  const result = { scopeId: connection?.scopeId ? `${scopeId}:${connection.scopeId}` : scopeId, accountScopeId: connection?.scopeId || null,
+    billingRoute: 'subscription', observedAtMs, state,
     limitsById: windows.length ? { subscription: bucket } : {},
     resetCredits: !signedOut && Number.isSafeInteger(left) && left >= 0 ? { availableCount: left } : null,
     ordinaryUsageAllowed: null, source: account.source || scopeId };

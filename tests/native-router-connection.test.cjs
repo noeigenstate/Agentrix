@@ -14,14 +14,22 @@ for (const [mode, status, cli, expected] of [
 ]) test(`connection routing follows ${mode}, key ${status}, CLI ${cli}`, async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-conn-route-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: null }));
-  let tests = 0; const handlers = new Map();
+  let tests = 0, codex; const handlers = new Map();
   const native = createNativeSessions({ directory, claude: { testConnection: async () => { tests++; return { checkedAt: 1, key: { status, detail: null, latencyMs: 1 }, models: null, cli: { status: cli, version: null, required: '2.1.317' }, billing: { status: 'ok', source: 'ANTHROPIC_API_KEY' } }; },
     apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) } },
-    connections: async () => ({ claude: { kind: 'api', source: 'init', observedAt: 1 } }) });
+    connections: async () => ({ claude: { kind: 'api', source: 'init', observedAt: 1 }, ...(codex ? { codex } : {}) }) });
   native.register((name, handler) => handlers.set(name, handler)); assert.equal(tests, 0);
   assert.throws(() => handlers.get('native:test-connection')({ key: 'renderer-injection' }));
   const result = await handlers.get('native:test-connection')(); assert.equal(result.path, expected); assert.equal(tests, 1);
-  const usage = await native.usage(); assert.equal(usage.agents.claude.connection.kind, 'api'); assert.equal(usage.agents.codex.connection.kind, 'none');
+  // 未知 and 未连接 are told apart by evidence: what main said nothing of, or only a placeholder for, is 未知; an absence it observed is 未连接.
+  const usage = await native.usage(); assert.equal(usage.agents.claude.connection.kind, 'api');
+  assert.equal(usage.agents.codex.connection.kind, 'unknown', 'main said nothing of Codex: not known, and never signed in');
+  codex = { kind: 'none', active: false, source: null, observedAt: null };
+  assert.equal((await native.usage()).agents.codex.connection.kind, 'unknown', 'an undated none is a placeholder, not an observation');
+  codex = { ...codex, observedAt: 2 };
+  assert.equal((await native.usage()).agents.codex.connection.kind, 'none', 'an observed absence of any login reads 未连接');
+  codex = { ...codex, observedAt: null };
+  assert.equal((await native.usage()).agents.codex.connection.kind, 'none', 'and a later placeholder does not turn it back to 未知');
 });
 
 for (const mode of ['api-only', 'api-then-terminal', 'terminal-only']) for (const billingStatus of ['ok', 'mismatch', 'unknown']) {

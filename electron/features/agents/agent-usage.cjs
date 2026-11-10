@@ -247,10 +247,15 @@ async function readClaudeAccountCache(env = process.env) {
     const state = JSON.parse(await handle.readFile('utf8'));
     // A quota cache alone does not identify how a CLI is signed in. Retain only
     // the explicit subscription billing kind; never expose account identifiers.
-    const kind = state?.oauthAccount?.billingType === 'stripe_subscription' ? 'subscription'
-      : state && Object.hasOwn(state, 'oauthAccount') && state.oauthAccount === null ? 'none' : 'unknown';
-    const scopeId = state?.oauthAccount ? createHmac('sha256', accountFingerprintKey)
-      .update(JSON.stringify([file, state.oauthAccount.accountUuid, state.oauthAccount.organizationUuid, state.oauthAccount.emailAddress, state.oauthAccount.billingType])).digest('hex') : null;
+    const account = state?.oauthAccount;
+    const kind = account?.billingType === 'stripe_subscription' ? 'subscription'
+      : state && Object.hasOwn(state, 'oauthAccount') && account === null ? 'none' : 'unknown';
+    // Signing out may remove the account's key instead of nulling it. A config that holds other state and no account
+    // is whole (a half-written one never parses, an empty one says nothing) and has a name of its own, so the account
+    // that was there is seen to be gone. It stays 'unknown': a CLI that never signed in, or uses an API key, reads the same.
+    const whole = state && typeof state === 'object' && !Array.isArray(state) && Object.keys(state).length > 0;
+    const scopeId = account || whole ? createHmac('sha256', accountFingerprintKey)
+      .update(JSON.stringify([file, account?.accountUuid, account?.organizationUuid, account?.emailAddress, account?.billingType])).digest('hex') : null;
     return { ...claudeAccountFrom(state), connection: { kind, active: false, source: 'Claude Code cache', observedAt: Date.now(), scopeId } };
   } catch {
     return { connection: { kind: 'unknown', active: false, source: 'Claude Code cache', observedAt: null } };

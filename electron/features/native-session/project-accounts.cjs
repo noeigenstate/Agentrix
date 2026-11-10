@@ -3,10 +3,18 @@
 const { retainAccount } = require('../agents/agent-usage.cjs');
 function createProjectAccounts({ codex, readClaude }) {
   let current, generation = 0, serial = Promise.resolve(), subscription, cancel, claudeCache;
+  // The Codex scope each project's reads retain, until the project is removed or reads another.
+  const scopes = new Map();
   const empty = kind => ({ connection: { kind, active: false, source: null, observedAt: null } });
+  const release = id => {
+    const key = scopes.get(id);
+    scopes.delete(id);
+    if (key && ![...scopes.values()].includes(key)) codex.releaseCache(key);
+  };
   return {
     snapshot(id) { return current?.id === id ? current.value : null; },
     close(id) {
+      if (id) release(id);
       if (id && current?.id !== id) return;
       ++generation; subscription?.dispose(); cancel?.(); subscription = null; current = null;
     },
@@ -31,6 +39,7 @@ function createProjectAccounts({ codex, readClaude }) {
               accountLaunch: 'project-open-v1', retainCache: true }, value => {
               if (value.resetQuery?.state !== 'loading') resolve(value);
             });
+            if (subscription.key && scopes.get(project.id) !== subscription.key) { release(project.id); scopes.set(project.id, subscription.key); }
           });
           const pending = codex.entries.get(subscription?.key)?.readPromise;
           subscription?.dispose(); subscription = null; cancel = null;

@@ -11,6 +11,7 @@ const { retainAccount } = require('./usage-observation.cjs');
 // consumeCodexResetCredit path is admitted only after an owner hits a limit.
 const MAX_OUTPUT = 256 * 1024;
 const unavailable = reason => ({ resets: null, resetQuery: { state: 'unavailable', reason } });
+const loading = () => ({ resets: null, resetQuery: { state: 'loading' } });
 const fingerprintKey = randomBytes(32);
 const SCOPE_ENVIRONMENT = new Set(['HOME', 'USERPROFILE', 'HOMEDRIVE', 'HOMEPATH', 'APPDATA', 'LOCALAPPDATA',
   'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'PROGRAMDATA', 'PATH', 'PATHEXT',
@@ -29,6 +30,10 @@ function environmentFingerprint(env) {
     .sort(([a], [b]) => a.localeCompare(b));
   return createHmac('sha256', fingerprintKey).update(JSON.stringify(values)).digest('hex');
 }
+
+// An account's opaque name, the same for every reader of account/read in this process; the identifiers never leave it.
+const accountScopeId = account => createHmac('sha256', fingerprintKey)
+  .update(JSON.stringify([account?.type, account?.id, account?.accountId, account?.email])).digest('hex');
 
 function accountResult(result, at = Date.now()) {
   const left = result?.rateLimitResetCredits?.availableCount;
@@ -192,7 +197,7 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
           active: false, source: 'codex-account-usage account/read', observedAt: null };
           if (connection.kind !== 'unknown') {
             connection.observedAt = Date.now();
-            connection.scopeId = createHmac('sha256', fingerprintKey).update(JSON.stringify([account?.type, account?.id, account?.accountId, account?.email])).digest('hex');
+            connection.scopeId = accountScopeId(account);
           }
           // API accounts have no subscription windows. An absent account is not logged in.
           if (connection.kind === 'none' || connection.kind === 'api') {
@@ -398,10 +403,8 @@ class CodexAccountUsage {
       }
       if (result.limits) {
         const value = accountResult(result.limits, this.now());
-        for (const [key, entry] of this.entries) if (key === scope.key) {
-          entry.value = value; entry.nextReadAt = this.now() + this.interval;
-          for (const changed of [...entry.listeners, ...entry.checks]) changed(value);
-        }
+        const entry = this.entries.get(scope.key);
+        if (entry) { entry.nextReadAt = this.now() + this.interval; this.#publish(entry, value); }
       }
       return result;
     }).finally(() => { this.resetPending.delete(scope.key); this.resetAborts.delete(abort); });
@@ -468,18 +471,24 @@ class CodexAccountUsage {
     if (scope.reason) { changed(unavailable(scope.reason)); return { dispose() {}, refresh() {}, output() {} }; }
     // A quick rebind must retain the old read and throttle, even after its last listener leaves.
     for (const [key, entry] of this.entries) if (!entry.retainCache && !entry.listeners.size && !entry.checks.size && !entry.pending &&
-      Date.now() >= Math.max((entry.lastReadAt ?? entry.lastAttemptAt ?? 0) + 5000, entry.retryAt || 0, entry.retainCache ? entry.nextReadAt || 0 : 0)) this.entries.delete(key);
+      Date.now() >= Math.max((entry.lastReadAt ?? entry.lastAttemptAt ?? 0) + 5000, entry.retryAt || 0)) this.entries.delete(key);
     let entry = this.entries.get(scope.key);
     if (!entry) {
-      entry = { options: { ...options, codexHome: scope.home, cwd: scope.cwd }, listeners: new Set(), checks: new Set(), failures: 0, generation: 0 };
+      entry = { options: { ...options, codexHome: scope.home, cwd: scope.cwd }, listeners: new Map(), checks: new Map(), failures: 0, generation: 0 };
       this.entries.set(scope.key, entry);
     }
-    const listeners = projectCheck ? entry.checks : entry.listeners;
-    entry.retainCache ||= options.retainCache === true;
-    listeners.add(changed);
+    // Every watcher keeps the last dated observation through loading and failed reads. A session's watcher keeps only
+    // what it was given, so an expired answer never shows in a new session; the pane's focused reads (retainCache)
+    // live for one read each and share the entry's, which outlives them. Listeners map to which of the two they take.
+    const listeners = projectCheck ? entry.checks : entry.listeners, retain = options.retainCache === true;
+    let seen;
+    const deliver = retain ? changed : value => changed(seen = retainAccount(seen, value));
+    entry.retainCache ||= retain;
+    listeners.set(deliver, retain);
+    // An expired value is not replayed: the refresh below answers, so a read past the interval is that refresh.
     const fresh = entry.value && Date.now() < entry.nextReadAt;
-    if (fresh || entry.value) changed(entry.value);
-    else if (entry.pending) changed({ resets: null, resetQuery: { state: 'loading' } });
+    if (fresh) deliver(retain ? entry.retained : entry.value);
+    else if (entry.pending) deliver(retain ? retainAccount(entry.retained, loading()) : loading());
     if (!entry.pending) {
       if (fresh) {
         if (!projectCheck && !entry.timer) this.schedule(entry, entry.nextReadAt);
@@ -501,14 +510,28 @@ class CodexAccountUsage {
         }
       },
       dispose: () => {
-        listeners.delete(changed);
+        listeners.delete(deliver);
         if (entry.listeners.size) return;
         clearTimeout(entry.timer); entry.timer = null; entry.queued = false;
         if (entry.checks.size) return;
-        if (!entry.retainCache) entry.value = null;
+        if (!entry.retainCache) entry.value = entry.retained = null;
         if (entry.pending) { entry.invalidated = true; entry.abort?.abort(); }
       },
     };
+  }
+  // A removed project's scope is no longer retained: once idle it is dropped like any other.
+  releaseCache(key) {
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    entry.retainCache = false;
+    if (!entry.listeners.size && !entry.checks.size) entry.value = entry.retained = null;
+  }
+  #publish(entry, value) {
+    // Only a settled read becomes the entry's retained observation: an aborted one must not leave it loading.
+    const retained = retainAccount(entry.retained, value);
+    if (value.resetQuery.state !== 'loading') entry.retained = retained;
+    entry.value = value;
+    for (const [deliver, retain] of [...entry.listeners, ...entry.checks]) deliver(retain ? retained : value);
   }
   schedule(entry, at) {
     clearTimeout(entry.timer);
@@ -524,12 +547,8 @@ class CodexAccountUsage {
     clearTimeout(entry.timer); entry.timer = null;
     const generation = ++entry.generation;
     const abort = entry.abort = new AbortController();
-    const publish = value => {
-      entry.value = retainAccount(entry.value, value);
-      for (const listeners of [entry.listeners, entry.checks]) for (const changed of listeners) changed(entry.value);
-    };
     entry.pending = true; entry.queued = false; entry.lastAttemptAt = now;
-    publish({ resets: null, resetQuery: { state: 'loading' } });
+    this.#publish(entry, loading());
     entry.readPromise = Promise.resolve().then(async () => {
       const reason = await this.scope(entry.options);
       if (abort.signal.aborted) return null;
@@ -555,7 +574,7 @@ class CodexAccountUsage {
       const delay = failed ? Math.min(300000, this.interval * 2 ** Math.min(entry.failures, 4)) : this.interval;
       entry.retryAt = failed ? Date.now() + delay : 0;
       entry.nextReadAt = Date.now() + delay;
-      publish(value);
+      this.#publish(entry, value);
       if (entry.queued) this.refresh(entry, true);
       else if (entry.listeners.size) this.schedule(entry, entry.nextReadAt);
     });
@@ -570,4 +589,4 @@ class CodexAccountUsage {
   }
 }
 
-module.exports = { CodexAccountUsage, readCodexAccount, consumeCodexResetCredit, usageAtLimit, resetCreditMessage, accountResult, usageScope, codexExecutable, configScope, accountConfigScope, scopePathKey };
+module.exports = { CodexAccountUsage, readCodexAccount, accountScopeId, consumeCodexResetCredit, usageAtLimit, resetCreditMessage, accountResult, usageScope, codexExecutable, configScope, accountConfigScope, scopePathKey };
