@@ -1509,22 +1509,22 @@ async function completionPasteHarness(t) {
   };
   t.after(() => { for (const [key, descriptor] of globals) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; } });
   const { thumbnail } = require('../src/shared/image-thumbnail.ts');
-  const h = imageComposerHarness(t, 'codex', { platform: 'win32', pasteMode: 'ignore', decode: thumbnail }), errors = [];
+  const h = imageComposerHarness(t, 'claude', { platform: 'win32', pasteMode: 'ignore', decode: thumbnail }), errors = [];
   h.props.onError = error => errors.push(error);
   return { h, file, errors, decoding: () => ({ decodeCalls, fallbackCalls }) };
 }
 
-test('completion smoke: the original key-only Codex fixture drops the exact four-byte PNG before a paste key', async t => {
+test('completion smoke: the original key-only stand-in fixture drops the exact four-byte PNG before a paste key', async t => {
   const { h, file, errors } = await completionPasteHarness(t);
   h.setScreen(completionFixtureRows(false)); await h.paste(1, file); await h.tick(0);
   assert.deepEqual(h.written, []); assert.equal(h.previews().length, 0);
   assert.equal(errors.length, 1); assert.match(errors[0], /could not be attached and was removed/);
 });
 
-test('completion smoke: a live Codex input forwards the exact four-byte PNG and announces it pending despite decode failure', async t => {
+test('completion smoke: a live Claude input forwards the exact four-byte PNG and announces it pending despite decode failure', async t => {
   const { h, file, errors, decoding } = await completionPasteHarness(t);
   h.setScreen(completionFixtureRows(true)); await h.paste(1, file); await h.tick(0);
-  assert.deepEqual(h.written.map(item => item.text), ['\x16']);
+  assert.deepEqual(h.written.map(item => item.text), [PASTE_KEYS.claude.win32]);
   assert.deepEqual(h.previews(), ['data:image/png;base64,iVBORw==']);
   assert.deepEqual(decoding(), { decodeCalls: 1, fallbackCalls: 1 });
   assert.deepEqual(errors, []);
@@ -1532,7 +1532,7 @@ test('completion smoke: a live Codex input forwards the exact four-byte PNG and 
   assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []);
   h.edit('describe this'); h.press('Enter'); await h.tick(0);
   for (let attempt = 0; attempt < 12; attempt++) await h.tick(80);
-  assert.deepEqual(h.written.map(item => item.text), ['\x16']);
+  assert.deepEqual(h.written.map(item => item.text), [PASTE_KEYS.claude.win32]);
   assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []); assert.equal(h.previews().length, 1);
   assert.equal(errors.length, 1); assert.match(errors[0], /picture was not sent/);
   h.remove(0); await h.tick(0); assert.equal(h.previews().length, 0);

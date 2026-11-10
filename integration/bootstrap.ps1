@@ -125,7 +125,7 @@ function global:Get-AgentrixCommand($arguments) {
 # zsh-integration.zsh and remote-worker.py carry the same words. Piped input (an API key for codex login
 # --with-api-key) and npm's script shims run as PowerShell runs any command.
 function global:codex {
-    if ($args.Count -and [string]$args[0] -cin @('--version', '-V', '--help', '-h', 'help', 'login', 'logout', 'mcp', 'plugin', 'completion', 'update', 'features')) {
+    if ($args.Count -and [string]$args[0] -cin @('--version', '-V', '--help', '-h', 'help', 'login', 'logout', 'mcp', 'plugin', 'app-server', 'remote-control', 'app', 'completion', 'update', 'doctor', 'sandbox', 'debug', 'apply', 'a', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'exec-server', 'features')) {
         if (-not $global:AgentrixCodexCommand) {
             Write-Host 'Codex CLI was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
             $global:LASTEXITCODE = 127

@@ -14,6 +14,7 @@ test('manual Codex argv maps only supported native semantics, including exact re
     { resume: true, latest: true, cwd: '../sub', model: 'fixture', effort: 'high' });
   for (const args of [['login'], ['review'], ['app'], ['exec', 'task'], ['resume'], ['resume', 'not-a-thread'], ['--profile', 'other'],
     ['--sandbox', 'danger-full-access'], ['-c', 'model_provider="other"'], ['-m'], ['-m', 'a', '-m', 'b'],
+    ...['agents', 'queue', 'fork', 'cloud', 'exec', 'e', 'review', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'exec-server', 'remote-control', 'doctor', 'plugin', 'help'].map(word => [word]),
     ['one', 'two'], ['--help'], ['--unknown'], ['x'.repeat(32769)], [null]]) {
     assert.throws(() => codexLaunch(args), /Agentrix.*原生模式/, JSON.stringify(args));
   }

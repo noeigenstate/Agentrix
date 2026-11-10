@@ -26,7 +26,8 @@ class RestoreCodexFixture {
         }
         Console.OutputEncoding = new UTF8Encoding(false);
         var receipt = new { cwd = Directory.GetCurrentDirectory(), args = args };
-        File.WriteAllText(Path.Combine(Directory.GetCurrentDirectory(), "resume-receipt.json"), new JavaScriptSerializer().Serialize(receipt), new UTF8Encoding(false));
+        // A version probe (the host runs it from wherever it starts) is not a launch; only a launch leaves a receipt in its project.
+        if (!(args.Length > 0 && (args[0] == "--version" || args[0] == "-V"))) File.WriteAllText(Path.Combine(Directory.GetCurrentDirectory(), "resume-receipt.json"), new JavaScriptSerializer().Serialize(receipt), new UTF8Encoding(false));
         Console.WriteLine("COPY_SAMPLE_START");
         for (int i = 0; i < 150; i++) Console.WriteLine("scrollback line " + i);
         Console.WriteLine("COPY_SAMPLE_END 中文可复制");

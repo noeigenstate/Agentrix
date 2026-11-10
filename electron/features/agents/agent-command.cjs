@@ -20,7 +20,7 @@ function codexLaunch(args) {
   if (!Array.isArray(args) || args.length > 64 || args.some(value => typeof value !== 'string' || value.includes('\0')) || JSON.stringify(args).length > 32768) fail();
   const result = { resume: false }, seen = new Set();
   const set = (key, value) => { if (seen.has(key) || !value) fail(); seen.add(key); result[key] = value; };
-  const commands = new Set(['update', 'upgrade', 'login', 'logout', 'mcp', 'mcp-server', 'app-server', 'app', 'completion', 'debug', 'apply', 'a', 'exec', 'e', 'review', 'sandbox', 'cloud', 'features', 'doctor', 'help', 'fork']);
+  const commands = new Set(['update', 'upgrade', 'login', 'logout', 'mcp', 'mcp-server', 'app-server', 'app', 'completion', 'debug', 'apply', 'a', 'exec', 'e', 'review', 'sandbox', 'cloud', 'features', 'doctor', 'help', 'fork', 'agents', 'queue', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'exec-server', 'remote-control', 'plugin']);
   for (let i = 0; i < args.length; i++) {
     const word = args[i], equals = word.indexOf('='), option = equals < 0 ? word : word.slice(0, equals);
     const value = () => equals < 0 ? args[++i] : word.slice(equals + 1);

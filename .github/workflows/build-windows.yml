@@ -414,7 +414,7 @@ jobs:
         if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'material')
         run: node scripts/retry.mjs npm run test:material -- --packaged
 
-      - name: Verify transparent real Codex input and bright text without model requests
+      - name: Verify transparent composer input and bright text on the Claude stand-in without model requests
         if: matrix.shard == 'reading' && contains(fromJSON(needs.windows.outputs.gui), 'composer')
         run: node scripts/retry.mjs npm run test:composer -- --packaged
 

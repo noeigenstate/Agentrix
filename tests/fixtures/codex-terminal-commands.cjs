@@ -3,7 +3,7 @@
 // own language; wrapperCommands reads them back from its source.
 const fs = require('node:fs'), path = require('node:path');
 
-const TERMINAL_COMMANDS = ['--version', '-V', '--help', '-h', 'help', 'login', 'logout', 'mcp', 'plugin', 'completion', 'update', 'features'];
+const TERMINAL_COMMANDS = ['--version', '-V', '--help', '-h', 'help', 'login', 'logout', 'mcp', 'plugin', 'app-server', 'remote-control', 'app', 'completion', 'update', 'doctor', 'sandbox', 'debug', 'apply', 'a', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'exec-server', 'features'];
 const SHELL_LIST = /__pg_codex_terminal\(\) \{[^}]*?case \$\{1-\} in ([^)]+)\) return 0;;/;
 const WRAPPERS = {
   'bootstrap.ps1': /\$args\[0\] -cin @\(([^)]+)\)/,
