@@ -3,6 +3,12 @@ const METHODS = {
   'item/commandExecution/requestApproval': 'command', 'item/fileChange/requestApproval': 'file-change',
   'item/permissions/requestApproval': 'permissions', 'item/tool/requestUserInput': 'question', 'mcpServer/elicitation/request': 'elicitation',
 };
+// The protocol's refusal for each kind (Codex 0.166 response schemas). A cancelled approval also interrupts its turn; a
+// question has no decline or cancel, only an answer map, so it is refused with an empty one.
+const CANCELLED = {
+  command: { decision: 'cancel' }, 'file-change': { decision: 'cancel' }, permissions: { permissions: {}, scope: 'turn' },
+  elicitation: { action: 'cancel', content: null, _meta: null }, question: { answers: {} },
+};
 
 function createRequests(rpc, events, state) {
   const pending = new Map();
@@ -14,14 +20,7 @@ function createRequests(rpc, events, state) {
     events.publish('request.resolved', { requestId, resolution, reason: null });
     if (!pending.size) state('running');
   }
-  function cancel(requestId) {
-    const task = pending.get(requestId);
-    if (!task) return;
-    if (task.kind === 'command' || task.kind === 'file-change') resolve(requestId, { decision: 'cancel' }, 'cancelled');
-    else if (task.kind === 'permissions') resolve(requestId, { permissions: {}, scope: 'turn' }, 'cancelled');
-    else if (task.kind === 'elicitation') resolve(requestId, { action: 'cancel', content: null, _meta: null }, 'cancelled');
-    else { pending.delete(requestId); rpc.reject(task.id, -32000); events.publish('request.resolved', { requestId, resolution: 'cancelled', reason: null }); }
-  }
+  const cancel = requestId => resolve(requestId, CANCELLED[pending.get(requestId)?.kind], 'cancelled');
   return {
     open(message) {
       const kind = METHODS[message.method], params = message.params || {};
@@ -83,6 +82,7 @@ function createRequests(rpc, events, state) {
       }
       if (!pending.size) state('running');
     },
+    cancel,
     cancelAll() { for (const id of [...pending.keys()]) { try { cancel(id); } catch { pending.delete(id); } } },
     snapshot: () => [...pending.values()].map(x => x.payload),
   };

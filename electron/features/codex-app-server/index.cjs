@@ -599,7 +599,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         skillsRead = task; return task;
       }
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
-        answer: (id, answer) => requests.answer(id, answer), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
+        answer: (id, answer) => requests.answer(id, answer), cancel: id => requests.cancel(id), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
         readLimits, readAccount, commands, models, runOptions, activity: events.activity, tokenRate: events.tokenRate,
         shell: async (id, command) => {
           try { await send({ clientMessageId: id, text: '!' + command }); return { exitCode: null }; }

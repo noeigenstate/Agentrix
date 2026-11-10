@@ -352,7 +352,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "0596b8d9450ac387185305a30799415df12fe4b1e2318b58804847ec75d7674c",
+      "digest": "257e75dc6f534ac888c606e366dc7a663c71c83d36f4c2c32bc38dbb5f7be288",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",

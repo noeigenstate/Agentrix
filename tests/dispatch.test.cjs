@@ -52,7 +52,7 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, hold, timeout = 30000, extra = [], setup, isolated = false, environment = () => ({}) } = {}) {
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, hold, timeout = 30000, requestTimeout, extra = [], setup, isolated = false, environment = () => ({}) } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -73,7 +73,7 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
   await fs.writeFile(runner, `const {run}=require(${JSON.stringify(helper)});
 process.on('message', signal => process.emit(signal));
-run(process.argv.slice(2), {startTimeout:${timeout}, resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
+run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTimeout}, resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', declaredModel || (agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5'), '--effort', agent === 'codex' ? 'max' : 'high',
     '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan']),
@@ -353,6 +353,28 @@ test('Codex app-server structured failures retain capacity/error reasons and fai
     assert.equal(result.code, 1); assert.equal(f.events.at(-1).reason, reason);
     assert.match(result.stdout, new RegExp(`exit 1 reason ${reason}`));
   }
+});
+
+test('a blocking worker request is declined after the timeout and the worker finishes', async t => {
+  // Each waits its whole timeout, then gets the protocol's refusal for its kind: never an approval, and none that interrupts the turn.
+  const requests = [
+    ['item/tool/requestUserInput', { itemId: 'ask', isBlocking: true, questions: [{ id: 'q', header: 'Synthetic', question: 'Which synthetic option?' }] },
+      'question opened: Which synthetic option?', 'cancelled', { answers: {} }],
+    ['mcpServer/elicitation/request', { mode: 'form', message: 'Synthetic form', requestedSchema: { type: 'object', properties: { pick: { type: 'string' } } } },
+      'elicitation opened: Synthetic form', 'cancelled', { action: 'cancel', content: null, _meta: null }],
+    ['item/commandExecution/requestApproval', { itemId: 'command', approvalId: 'a', command: 'echo synthetic' },
+      'command opened: echo synthetic', 'denied', { decision: 'decline' }],
+  ];
+  const began = Date.now(), answer = 'Synthetic answer after the refusals.';
+  const f = await fixture(t, [...codex, ...requests.map(([method, params]) => ({ request: { method, params } })), { write: 'answer.md', text: answer }], { requestTimeout: 200 });
+  const result = await f.finished;
+  assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason exit/);
+  assert.ok(Date.now() - began >= requests.length * 200, 'no request is refused before its timeout');
+  assert.deepEqual(result.stdout.split('\n').flatMap(line => /^\[dispatch\] request [\w-]+ [\w-]+ (.+)$/.exec(line)?.[1] ?? []),
+    requests.flatMap(([, , opened, resolution]) => [opened, 'unanswered for 0.2 s; declining', resolution]));
+  const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
+  assert.deepEqual(capture.requests.filter(request => !request.method), requests.map((request, index) => ({ id: `request-${index}`, result: request.at(-1) })));
+  assert.equal(await fs.readFile(f.out, 'utf8'), answer);
 });
 
 test('no session, timeout and spawn failure print failed-start once and end unconfirmed', async t => {

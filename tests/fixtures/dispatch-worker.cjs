@@ -32,11 +32,12 @@ async function main() {
 }
 function appServer(fixture) {
   const send = message => process.stdout.write(JSON.stringify(message) + '\n');
-  const requests = [], threadId = fixture.sessionId, turnId = 'fixture-turn';
+  const requests = [], replies = new Map(), threadId = fixture.sessionId, turnId = 'fixture-turn';
   const notify = (method, params) => send({ method, params: { threadId, ...params } });
   require('node:readline').createInterface({ input: process.stdin }).on('line', async line => {
     const request = JSON.parse(line), params = request.params || {};
     requests.push(request);
+    if (!request.method) replies.get(request.id)?.();
     if (!request.method || request.id === undefined) return;
     if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(request.method) && !params.threadId)
       return send({ id: request.id, error: { code: -32600, message: 'Invalid request: missing field `threadId`' } });
@@ -46,12 +47,20 @@ function appServer(fixture) {
       sandbox: { type: params.sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' } };
     if (request.method === 'turn/start') {
       const brief = params.input.filter(item => item.type === 'text').map(item => item.text).join('\n');
-      fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid, requests }));
+      const capture = () => fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid, requests }));
+      capture();
       let replied = false, failed = null;
       for (const entry of fixture.lines || []) {
         if (entry.delay) await delay(entry.delay);
         if (entry.mark) { fs.writeFileSync(entry.mark, String(Date.now())); continue; }
         if (entry.write) { fs.mkdirSync(path.dirname(path.resolve(entry.write)), { recursive: true }); fs.writeFileSync(path.resolve(entry.write), entry.text || ''); continue; }
+        // The worker's own request (a question, a form, an approval): it waits for the reply, which joins the captured requests.
+        if (entry.request) {
+          const id = `request-${replies.size}`, answered = new Promise(resolve => replies.set(id, resolve));
+          send({ id, method: entry.request.method, params: { threadId, turnId, ...entry.request.params } });
+          await answered; capture();
+          continue;
+        }
         if (entry.rollout || entry.rolloutRaw) {
           const folder = path.join(process.env.CODEX_HOME, 'sessions/2026/01/01'); fs.mkdirSync(folder, { recursive: true });
           fs.appendFileSync(path.join(folder, `rollout-fixture-${entry.rolloutSession || threadId}.jsonl`), entry.rolloutRaw || JSON.stringify(entry.rollout) + '\n');

@@ -38,6 +38,8 @@ const runtimeFiles = () => {
 
 const START_TIMEOUT = 30000;
 const RATE_INTERVAL = 5000;
+// How long a Codex worker's blocking request (a question, a form, an approval) waits for an answer before it is declined.
+const REQUEST_TIMEOUT = 600000;
 // How often a Codex worker's session file is read until its start is confirmed, and how long a worker's last output may
 // take to arrive after it exits before the helper decides from what it has.
 const POLL_INTERVAL = 250, EXIT_SETTLE = 500;
@@ -480,7 +482,7 @@ function workerInput(event, controls, resumeIds, resumeInputId) {
   return { entryId: `u:${event.itemId}`, inputId, origin: direct ? 'owner' : 'planner', ownerMessageIds };
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL } = {}) {
+async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
@@ -499,7 +501,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let controlFailure = 'bootstrap/missing_environment', transportFallback = false, lastControlFailure;
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
-  const controlReceipts = new Map();
+  const controlReceipts = new Map(), requestTimers = new Map();
   const controlInputs = new Map(), retriedControls = new Set(), unreadControls = new Set();
   const deferredControlIds = [];
   let resumeControlIds = [], resumeInputId;
@@ -868,6 +870,17 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       }
     }
     await openControl();
+    // Nobody answers a dispatched worker's request, and the app-server waits for ever: a blocking one is declined so the run goes on.
+    function requestOpened({ requestId, kind, blocking, preview, questions }) {
+      const text = (preview || questions?.[0]?.question || '').slice(0, 160);
+      signal(`request ${id} ${requestId} ${kind} opened${text ? ': ' + JSON.stringify(text).slice(1, -1) : ''}`);
+      requestTimers.set(requestId, blocking ? setTimeout(() => {
+        signal(`request ${id} ${requestId} unanswered for ${requestTimeout / 1000} s; declining`);
+        // A declined approval lets its turn continue, where cancelling it interrupts the turn; the other kinds have only the cancel form.
+        try { if (['command', 'file-change'].includes(kind)) activeRuntime?.answer(requestId, { decision: 'deny' }); else activeRuntime?.cancel(requestId); }
+        catch (error) { signal(`request ${id} ${requestId} not declined: ${error.message}`); }
+      }, requestTimeout) : null);
+    }
     function acceptNative(event) {
       if (event.providerSessionId) output.sessionId = event.providerSessionId;
       if (event.type === 'turn.started') {
@@ -898,6 +911,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         settleNative?.({ code: 1, killedBy: null });
       } else if (event.type === 'path.changed' && event.payload.selected === 'terminal' && !nativeTurn) {
         nativeFallback = event.payload.reason || 'terminal_selected';
+      } else if (event.type === 'request.opened' && options.agent === 'codex') requestOpened(event.payload);
+      else if (event.type === 'request.resolved' && requestTimers.has(event.payload.requestId)) {
+        clearTimeout(requestTimers.get(event.payload.requestId)); requestTimers.delete(event.payload.requestId);
+        signal(`request ${id} ${event.payload.requestId} ${event.payload.resolution}`);
       }
       if (event.providerSessionId && output.confirmed && options.agent !== 'codex') confirm();
       log.write(JSON.stringify(event) + '\n');
@@ -1138,6 +1155,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     boardWatch?.close();
     clearTimeout(startTimer);
     clearInterval(pollTimer); clearInterval(rateTimer); clearInterval(inboxTimer);
+    for (const timer of requestTimers.values()) clearTimeout(timer);
     await inboxRead; await treeStop;
     await rejectDeferredControls().catch(() => { signal('deferred control receipts unavailable'); });
     await receiptTail; clearTimeout(forceTimer);

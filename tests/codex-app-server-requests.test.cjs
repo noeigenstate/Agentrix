@@ -56,8 +56,24 @@ test('server resolution and stop expire tickets and unknown tool requests fail i
   assert.throws(() => f.api.answer(request.requestId, { decision: 'allow' }), /expired/);
   f.open('item/permissions/requestApproval', {}, 6); f.open('item/tool/requestUserInput', { questions: [] }, 7);
   f.api.cancelAll(); assert.deepEqual(f.api.snapshot(), []);
-  assert.deepEqual(f.writes[0].result, { permissions: {}, scope: 'turn' }); assert.equal(f.writes[1].code, -32000);
+  assert.deepEqual(f.writes[0].result, { permissions: {}, scope: 'turn' }); assert.deepEqual(f.writes[1].result, { answers: {} });
   f.open('item/tool/call', {}, 8); assert.equal(f.writes.at(-1).code, -32601);
+});
+
+test('cancel sends the protocol refusal of each kind once and never an approval', () => {
+  const f = fixture();
+  const refusals = [['item/commandExecution/requestApproval', { decision: 'cancel' }], ['item/fileChange/requestApproval', { decision: 'cancel' }],
+    ['item/permissions/requestApproval', { permissions: {}, scope: 'turn' }], ['mcpServer/elicitation/request', { action: 'cancel', content: null, _meta: null }],
+    ['item/tool/requestUserInput', { answers: {} }]];
+  for (const [id, [method, result]] of refusals.entries()) {
+    f.open(method, { permissions: { network: { enabled: true } }, questions: [{ id: 'q', question: 'Synthetic question' }] }, id);
+    const { requestId } = f.api.snapshot()[0];
+    f.api.cancel(requestId);
+    assert.deepEqual(f.writes.at(-1), { id, result });
+    assert.throws(() => f.api.cancel(requestId), /expired/);
+  }
+  assert.equal(f.writes.length, refusals.length);
+  assert.deepEqual(f.events.filter(event => event.type === 'request.resolved').map(event => event.payload.resolution), refusals.map(() => 'cancelled'));
 });
 
 test('compatibility accepts unknown CLI versions for capability probing, never a nonexistent protocol version', () => {
