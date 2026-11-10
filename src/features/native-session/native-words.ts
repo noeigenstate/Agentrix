@@ -92,6 +92,7 @@ const REASON_WORDS: Record<string, string> = {
   budget_exhausted: '本月 API 预算已用完', credits_exhausted: 'API 额度已用完', rate_limited: 'API 被限流', no_key: '还没有保存 API key',
   native_cli_required: '未找到原生 Claude Code，无法通过 API 运行', settings: '按设置运行', user: '你选择了终端',
   codex_cli_required: '未找到 Codex 命令行，无法使用原生模式', unsupported_codex_version: '这个 Codex 版本不支持原生模式', terminal_selected: '按设置使用终端',
+  terminal_agent_exited: 'Claude Code 在终端里启动后就退出了', terminal_start_failed: '终端里的 Claude Code 没有启动成功',
 };
 
 // A folder for a single line: short ones whole, long ones as … and their last two parts (the whole path goes in a tooltip).
@@ -120,12 +121,13 @@ export function switchLine(state: SwitchState | null | undefined) {
 }
 
 // What a change that has ended tells, by the outcome main gives (never by whether it left a reason): a failed one leaves the session where it was and
-// says so with main's reason; one that switched may still carry a warning (the old process did not exit cleanly), and a restored or stopped one says its
+// says so with main's reason and, when main names what stopped it, that cause (in words when we know the code, else the code itself, so a failure can
+// be told apart and reported); one that switched may still carry a warning (the old process did not exit cleanly), and a restored or stopped one says its
 // reason. A change still under way (but rolling back) is failing; an ended one that gives no outcome says nothing. null when there is nothing to tell.
 export function switchNote(state: SwitchState | null | undefined) {
   if (!state) return null;
   const outcome = state.phase === 'rolling-back' ? state.outcome ?? 'failed' : state.phase === 'stable' ? state.outcome : undefined, reason = reasonWords(state.reason);
-  if (outcome === 'failed') return [t('没有切换成功，仍使用 {path}', { path: routeWord(state.current) }), reason].filter(Boolean).join(' · ');
+  if (outcome === 'failed') return [t('没有切换成功，仍使用 {path}', { path: routeWord(state.current) }), reason, reasonWords(state.cause) ?? state.cause].filter(Boolean).join(' · ');
   return outcome === 'switched' || outcome === 'restored' || outcome === 'stopped' ? reason : null;
 }
 

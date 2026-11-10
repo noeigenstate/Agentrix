@@ -111,7 +111,11 @@ async function runtimeSmoke(output, stages) {
       settings: { language: 'zh', restoreSessions: false, closeToTray: false, notifications: false } }));
     await fs.mkdir(path.join(profile, 'native-session'), { recursive: true });
     await fs.writeFile(path.join(profile, 'native-session/usage.json'), '{broken-offline-fixture');
-    const env = { ...isolatedEnvironment(runtime), ...displayEnvironment(), PATH: bin, AGENTRIX_DATA_DIR: profile,
+    // The terminal's shell finds only the stand-ins and what its wrapper runs. PowerShell runs nothing from PATH and macOS
+    // Bash adds the system folders from /etc/profile; Linux Bash keeps the PATH it is given, and Agentrix's claude wrapper
+    // runs cat, mktemp and rm, so they follow the stand-ins there.
+    const searchPath = process.platform === 'linux' ? [bin, '/usr/bin', '/bin'].join(path.delimiter) : bin;
+    const env = { ...isolatedEnvironment(runtime), ...displayEnvironment(), PATH: searchPath, AGENTRIX_DATA_DIR: profile,
       AGENTRIX_FAKE_NODE: await fs.realpath(process.execPath), AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: runtime };
     if (coldStart) env.PSModuleAnalysisCachePath = path.join(runtime, 'cold-module-cache');
     delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
@@ -139,7 +143,7 @@ async function runtimeSmoke(output, stages) {
       const resources = await app.evaluate(() => process.resourcesPath);
       const entry = packaged ? path.join(resources, 'app.asar.unpacked/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs') : require.resolve('@anthropic-ai/claude-agent-sdk');
       await fs.access(entry); console.log(`[native-smoke] SDK entry=${entry} bytes=${(await fs.stat(entry)).size}`);
-      await app.evaluate((_electron, bin) => { process.env.PATH = bin; }, bin);
+      await app.evaluate((_electron, searchPath) => { process.env.PATH = searchPath; }, searchPath);
       if (process.env.NODE_PATH) await app.evaluate((_electron, modules) => {
         process.env.NODE_PATH = modules; process.getBuiltinModule('module').Module._initPaths();
       }, process.env.NODE_PATH);
@@ -311,6 +315,7 @@ async function runtimeSmoke(output, stages) {
           }, 'failed terminal switched back to API', 20000);
           const kept = (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value;
           id = kept.runtimeSessionId; assert.equal(kept.switchState.current, 'api');
+          assert.match(kept.switchState.cause, /^terminal_(start_failed|agent_exited)$/, 'the failure names what stopped it beside the general sentence');
           const messageId = randomUUID();
           const receipt = await page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, 'AFTER_FAILED_SWITCH'), { terminalId, id, messageId });
           assert.equal(receipt.ok, true); assert.notEqual(receipt.value.status, 'rejected');

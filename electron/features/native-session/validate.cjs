@@ -19,7 +19,8 @@ function validEvent(event) {
     && ['api', 'native', 'terminal'].includes(value.target) && ['stable', 'waiting-turn', 'awaiting-choice', 'waiting-background', 'preparing', 'switching', 'rolling-back'].includes(value.phase)
     && object(value.background) && typeof value.background.known === 'boolean' && nullableCount(value.background.count)
     && (value.requestId === null || id(value.requestId)) && (value.reason === null || text(value.reason))
-    && (value.outcome === undefined || ['switched', 'failed', 'restored', 'stopped'].includes(value.outcome));
+    && (value.outcome === undefined || ['switched', 'failed', 'restored', 'stopped'].includes(value.outcome))
+    && (value.cause === undefined || text(value.cause, 200));
   if (event.type === 'usage.updated') return ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning', 'contextWindow', 'costUsdMicros'].every(key => nullableCount(value[key])) && (value.costEstimated === null || typeof value.costEstimated === 'boolean')
     && (value.contextTokens === undefined || nullableCount(value.contextTokens))
     && (value.round == null || ['input', 'cachedInput', 'cacheWrite', 'output', 'reasoning'].every(key => nullableCount(value.round[key])));

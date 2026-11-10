@@ -1,5 +1,10 @@
 const { randomUUID } = require('node:crypto');
 
+// The owner's sentence for a failure that brings none of its own, with what stopped the change beside it for the note and
+// for a test: the failure's code, or its message when it has no code, as one bounded line.
+const unnamed = error => ({ reason: '运行方式切换失败，已保留原会话。',
+  cause: String(error?.code || error?.message || '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'unknown' });
+
 // Owns change identity and ordering only. Transport preparation must leave the old input surface alive.
 function createSwitches({ list, choose, observe, prepare, publish, retire = async () => {}, retryMs = 1000, maxRetries = 4, handoffTimeoutMs = 15000 }) {
   const entries = new Map();
@@ -29,9 +34,9 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
   function kick(entry) {
     if (entry.cancelled) return;
     if (closed || entry.task) { entry.again = true; return; }
-    entry.task = Promise.resolve().then(() => advance(entry)).catch(() => {
+    entry.task = Promise.resolve().then(() => advance(entry)).catch(error => {
       entry.failed = entry.state.changeId;
-      update(entry, { phase: 'stable', requestId: null, reason: '运行方式切换失败，已保留原会话。', outcome: 'failed' });
+      update(entry, { phase: 'stable', requestId: null, ...unnamed(error), outcome: 'failed' });
     }).finally(() => {
       entry.task = null;
       if (entry.again && !closed) { entry.again = false; kick(entry); }
@@ -116,7 +121,7 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
         clearTimeout(entry.retry); entry.retry = setTimeout(() => kick(entry), retryMs * 2 ** (entry.retries - 1)); entry.retry.unref?.(); return;
       }
       entry.failed = version;
-      update(entry, { phase: 'stable', requestId: null, reason: error?.beforeInput === true ? error.message : '运行方式切换失败，已保留原会话。', outcome: 'failed' });
+      update(entry, { phase: 'stable', requestId: null, ...(error?.beforeInput === true ? { reason: error.message } : unnamed(error)), outcome: 'failed' });
     }
   }
   function recover(entry) {
@@ -145,7 +150,7 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
         if (!retry && entry.state.target === (target.path || session.path) && entry.unavailable === (target.path ? null : target.reason)) { entry.session = session; kick(entry); continue; }
         clearTimers(entry); entry.unavailable = target.path ? null : target.reason;
         entry.choice = entry.recovery ? 'now' : null; entry.handoff = null; entry.session = session;
-        entry.state = { ...entry.state, changeId: ++changeId, target: target.path || entry.state.current, requestId: null, reason: target.path ? null : target.reason, outcome: undefined };
+        entry.state = { ...entry.state, changeId: ++changeId, target: target.path || entry.state.current, requestId: null, reason: target.path ? null : target.reason, outcome: undefined, cause: undefined };
       }
       kick(entry);
     }

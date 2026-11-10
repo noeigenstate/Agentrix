@@ -2630,6 +2630,8 @@
   "运行方式与额度": "Run mode and limits",
   "输入框里有未发送的文字": "There is unsent text in the input box",
   "运行方式切换失败，已保留原会话。": "Could not switch run modes. The original session has been kept.",
+  "Claude Code 在终端里启动后就退出了": "Claude Code exited right after starting in the terminal",
+  "终端里的 Claude Code 没有启动成功": "Claude Code did not start in the terminal",
   "旧会话未能完全退出，已保留新会话。": "The previous session could not fully exit. The new session has been kept.",
   "在 Agent 标签点一个子代理，对话旁会显示它正在做什么，一次只显示一个，点另一个就替换；派发的工作者可以直接在这里收到你的提示。": "Click a subagent in the Agent tab to see what it is doing beside the conversation. One shows at a time, and clicking another replaces it. Dispatched workers can take your notes right there.",
   "运行方式立刻生效": "Run mode applies at once",

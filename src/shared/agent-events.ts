@@ -7,6 +7,8 @@ export type SwitchState = {
   phase: 'stable' | 'waiting-turn' | 'awaiting-choice' | 'waiting-background' | 'preparing' | 'switching' | 'rolling-back';
   background: { count: number | null; known: boolean }; requestId: string | null; reason: string | null;
   outcome?: 'switched' | 'failed' | 'restored' | 'stopped';
+  // What stopped a failed change whose reason is only main's general sentence: the failure's code, or its message when it had none.
+  cause?: string;
 };
 export type NativePendingInput = { clientMessageId: string; text: string; images?: string[] };
 export type NativeDraft = { version: number; text: string; images: string[]; undelivered: NativePendingInput[] };

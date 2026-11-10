@@ -148,6 +148,12 @@ test('late startup events cannot overwrite prompt-ready or newer Codex events', 
   assert.equal(acceptShellEvent({}, { type: 'shell-ready', sequence: 1 }), true);
 });
 
+test('a native host takes no shell report, whatever its sequence', () => {
+  const host = { nativeStructured: true };
+  for (const type of ['shell-ready', 'shell-prompt', 'codex-started', 'codex-exited']) assert.equal(acceptShellEvent(host, { type, sequence: 5 }), false, type);
+  assert.equal(host.lastShellEventSequence, undefined);
+});
+
 test('completion is rearmed by submitted input, not typing, empty Enter or terminal reports', () => {
   const tracker = new SubmissionTracker();
   for (const input of ['', '\r', '   \r', '\x1b[I', '\x1b[O', '\x1b[8;24;80t', '\x1b[?1;2c', '\x1b[1;1R', '\x1b]10;rgb:ffff/ffff/ffff\x07', '\x1b[<0;14;9M', '\x1b[Mabc', '\x1bOP', '\r']) assert.equal(tracker.write(input), false, JSON.stringify(input));

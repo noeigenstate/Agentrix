@@ -1826,6 +1826,10 @@ test('switch words: the header says where a change goes and when, a failure says
   const settled = patch => words.switchNote(switchState({ phase: 'stable', ...patch }));
   assert.equal(settled({ outcome: 'failed', reason: '终端没有启动' }), '没有切换成功，仍使用 API · 终端没有启动', 'only the outcome failed says the switch failed');
   assert.equal(settled({ reason: '终端没有启动' }), null, 'a reason alone is not a failure: an ended change that gives no outcome says nothing');
+  const kept = '运行方式切换失败，已保留原会话。';
+  assert.equal(settled({ outcome: 'failed', reason: kept, cause: 'terminal_agent_exited' }), `没有切换成功，仍使用 API · ${kept} · Claude Code 在终端里启动后就退出了`, 'a cause we know is told in words after the reason');
+  assert.equal(settled({ outcome: 'failed', reason: kept, cause: 'ENOENT' }), `没有切换成功，仍使用 API · ${kept} · ENOENT`, 'one we do not know is shown as it is, so the failure can be told apart');
+  assert.equal(settled({ outcome: 'switched', reason: '旧进程没有正常退出', cause: 'ENOENT' }), '旧进程没有正常退出', 'only a failure tells a cause');
   assert.equal(settled({ outcome: 'switched', reason: '旧进程没有正常退出' }), '旧进程没有正常退出', 'switched with a reason is a switch that worked, told as the warning it is');
   assert.deepEqual([settled({ outcome: 'switched' }), settled({ outcome: 'restored' }), settled({ outcome: 'stopped' })], [null, null, null], 'no reason, nothing to tell');
   assert.deepEqual([settled({ outcome: 'restored', reason: '已恢复到原来的会话' }), settled({ outcome: 'stopped', reason: '会话已停止，没有切换' })], ['已恢复到原来的会话', '会话已停止，没有切换'], 'a restore or a stop says its reason, not that it failed');

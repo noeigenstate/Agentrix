@@ -71,6 +71,11 @@ test('I4: preparation failure retains the old path with a readable reason and ne
   assert.equal(f.commits.length, 0); assert.equal(f.live()[0].path, 'terminal');
   assert.equal(f.switches.state('t').phase, 'stable'); assert.match(f.switches.state('t').reason, /已保留原会话/);
   f.switches.observe('t'); await settle(); assert.equal(f.preparations.length, 1);
+  const failed = f.events.at(-1).payload;
+  assert.equal(failed.cause, 'Synthetic failure before any input', 'what stopped the change stays beside the general sentence');
+  assert.ok(validEvent(createEventStream({ projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, () => {}, () => 1).publish('switch.updated', failed)));
+  f.switches.reconcile(true); await settle();
+  assert.equal(f.switches.state('t').phase, 'preparing'); assert.equal(f.switches.state('t').cause, undefined, 'a retry starts without the last cause');
 });
 
 test('I4: failure during commit restores the source, retrying temporary restore failures without losing a newer draft', async t => {
@@ -180,6 +185,9 @@ test('IPC accepts bounded frozen switch/handoff shapes and rejects extra options
   assert.equal(validSwitchAnswer({ switch: { changeId: 1, requestId: 'request', action: 'now', cwd: '/escape' } }), false);
   const stream = createEventStream({ projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, () => {}, () => 1);
   assert.ok(validEvent(stream.publish('switch.updated', { changeId: 1, current: 'api', target: 'terminal', phase: 'awaiting-choice', background: { count: null, known: false }, requestId: 'request', reason: null })));
+  const failed = { changeId: 1, current: 'api', target: 'terminal', phase: 'stable', background: { count: 0, known: true }, requestId: null, reason: 'kept', outcome: 'failed' };
+  assert.ok(validEvent(stream.publish('switch.updated', { ...failed, cause: 'terminal_agent_exited' })));
+  for (const cause of [7, '', 'x'.repeat(201)]) assert.equal(validEvent({ ...stream.publish('switch.updated', failed), payload: { ...failed, cause } }), false);
 });
 
 test('I1: router freezes new input, preserves receipts, and never hands delivered or unknown messages back as unsent', async t => {

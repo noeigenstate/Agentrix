@@ -122,6 +122,19 @@ test('a confirmed shell prompt after the launched CLI exits fails immediately in
   await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true), /terminal_agent_exited/);
   assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0);
 });
+test('after a failed switch the late exit and prompt reports of the staged terminal leave the restored native host as it was', async () => {
+  const f = fixture(), start = f.context.startTerminal;
+  f.context.startTerminal = (...args) => { start(...args); f.sessions.get('t').error = 'the CLI exited'; };
+  await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true), /terminal_start_failed/);
+  const main = { sessions: f.sessions, store: { projects: [{ id: 'p' }] }, acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent };
+  vm.createContext(main);
+  vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('const launchPlans = new Map();')), main);
+  f.old.status = 'codex';
+  // The staged shell reports under the key the host keeps: its CLI's exit, then its next prompt.
+  main.onEvent({ projectId: 't', sessionKey: 'same-key', type: 'codex-exited', agent: 'claude', sequence: 4, exitCode: 2 });
+  main.onEvent({ projectId: 't', sessionKey: 'same-key', type: 'shell-prompt', sequence: 5 });
+  assert.equal(f.sessions.get('t'), f.old); assert.equal(f.old.status, 'codex'); assert.equal(f.old.codexActive, true); assert.equal(f.old.error, undefined);
+});
 test('terminal text blocks switching, but an arrow/history key alone is not proof of a draft', () => {
   const f = fixture();
   const host = { sessionId: 'pty', cliState: { sessionId: 'pty', state: 'idle' }, submissions: { hasText: true, history: false }, promptQueue: { list: () => [] } };
