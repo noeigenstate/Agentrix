@@ -71,7 +71,7 @@ Fable, where the account has it, takes the judgments that cost most when wrong, 
 Escalate a core build to Fable only when one of these holds, and say which in the plan: the core engineer is unavailable
 (not installed, or its usage limit is spent), the same defect is being fixed a second time, or the change crosses three or
 more modules. The reviewer is always a fresh instance that neither planned nor wrote the work, and a different model from
-the one that wrote the code wherever two exist: Opus reviews what Fable planned or wrote, and a fresh Opus reviews the
+the one that wrote the code wherever the account has another at least as strong: Opus reviews what Fable planned or wrote, and a fresh Opus reviews the
 build of a plan Opus made. Without Fable, Opus takes these positions as before and a fresh Opus reviews.
 
 ### Stages
@@ -87,7 +87,7 @@ and a one-line fix, skips it with a recorded reason).
 | 3A Core build | Core engineer in worktree A | Complex logic, refactors, debugging, failing-test fixes |
 | 3B Routine build | Execution engineer in worktree B | Routine features, front end, tests, docs |
 | 4a Integrate and test | Orchestrator merges the branches in dependency order, runs build and tests | A green merged tree |
-| 4b Cross review | Architecture review by the architect; UI and interaction acceptance by the visual engineer | Findings with file, line and failure |
+| 4b Cross review | Architecture review by a fresh instance of the architect's model that neither planned nor wrote the work; UI and interaction acceptance by the visual engineer | Findings with file, line and failure |
 | 5 Consolidate | Orchestrator writes the round's results and architecture changes into the shared project memory and adjusts the module boundaries | The next round starts from them |
 | Final acceptance | Tests pass, every finding is fixed or dismissed with a reason, the user has seen the key changes | Done |
 
@@ -174,7 +174,8 @@ Every worker is an Agent call with `model` set and `effort: "high"`; worktrees t
 | Execution engineer (routine work, front end, tests, docs) | Sonnet subagent |
 | Visual and verification | Sonnet subagent that reads screenshots |
 | Small quick tasks | Haiku subagent |
-| Architecture review, UI acceptance | A fresh Opus or Sonnet subagent that did not build it |
+| Architecture review | A fresh subagent that did not build it: Opus for what Fable or Sonnet wrote; Fable, or a fresh Opus without Fable, for what Opus wrote |
+| UI acceptance | A fresh Sonnet subagent that did not build it |
 
 #### 4. Codex only
 
