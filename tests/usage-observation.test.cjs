@@ -322,3 +322,60 @@ test('retained observations are bounded: a removed project releases its Codex ca
   for (let other = 0; other < 80; other++) await f.native.usage(`other-${other}`);
   assert.equal((await f.native.usage('first')).agents.codex.limits, null, 'a project not read for many others is no longer held');
 });
+
+// A connection main reads from a running session or terminal that cannot name its account.
+const unnamedSession = (at, active = true) => ({ kind: 'subscription', source: 'codex-account-usage', observedAt: at, active });
+// The account reader's answer: the account named at one time, its quota read just after.
+const read = (scopeId, at, percent) => subscriptionLimits({ ...account(at, percent, scopeId), connection: connection(at - 1, scopeId) }, 'codex-account', 120000, at);
+const shown = async (f, project) => { const codex = (await f.native.usage(project)).agents.codex; return [codex.connection.scopeId, codex.limits?.limitsById.subscription?.primary.usedPercent]; };
+
+test('a connection that cannot name its account never outranks one that does: a sign-in to another account shows that account’s quota', async t => {
+  const f = facade(t);
+  // The reader names account A; then the owner signs into B while a terminal Codex runs, whose connection is dated at or after the reader’s.
+  f.set({ codex: connection(999, 'account-a') }, { codex: read('account-a', 1000, 80) });
+  assert.deepEqual(await shown(f, 'p'), ['account-a', 80]);
+  f.set({ codex: unnamedSession(2000) }, { codex: read('account-b', 2000, 10) });
+  assert.deepEqual(await shown(f, 'p'), ['account-b', 10], 'account B is named and its own quota shows, not account A’s 80%');
+  assert.equal((await f.native.usage('p')).agents.codex.connection.active, true, 'the running session still says it is in use');
+  // The unnamed connection was already seen under A, dated after the reader’s later naming of B.
+  f.set({ codex: unnamedSession(1700) }, { codex: read('account-a', 1000, 80) });
+  assert.deepEqual(await shown(f, 'q'), ['account-a', 80]);
+  f.set({ codex: unnamedSession(1800) }, { codex: read('account-b', 1600, 10) });
+  assert.deepEqual(await shown(f, 'q'), ['account-b', 10], 'an unnamed connection’s later date does not make the name it was shown under newer');
+  // With no reader to name the account, the unnamed connection changes nothing that was named.
+  f.set({ codex: unnamedSession(5000) }, { codex: read('account-b', 1600, 10) });
+  assert.deepEqual(await shown(f, 'q'), ['account-b', 10]);
+  f.set({ codex: unnamedSession(6000, false) });
+  const idle = (await f.native.usage('q')).agents.codex;
+  assert.equal(idle.connection.scopeId, 'account-b'); assert.equal(idle.connection.active, false); assert.equal(idle.limits.limitsById.subscription.primary.usedPercent, 10);
+});
+
+test('after Codex says the account changed, the reader’s newer reading replaces the session’s empty placeholder', async t => {
+  const { createEventStream } = require('../electron/features/native-session/events.cjs');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-usage-placeholder-'));
+  let stream, limits = {}, codex = connection(999, 'account-a');
+  const runtime = { apiState: () => ({ status: 'no_key' }), usage: { summary: () => ({}) }, create(spec, emit) {
+    stream = createEventStream(spec, emit); return { start: async () => {}, close: async () => {}, snapshot: () => ({ state: 'idle' }) };
+  } };
+  const native = createNativeSessions({ directory, claude: runtime, codex: runtime, resolveSpec: () => ({ projectId: 'p', terminalId: 't' }), emit() {},
+    connections: async () => ({ codex }), usageInputs: async () => ({ cli, limits }) });
+  t.after(async () => { await native.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  await native.start('t', { agent: 'codex' });
+  const session = (at, percent) => ({ scopeId: 'session-1', billingRoute: 'unknown', observedAtMs: at, state: 'ready', resetCredits: null, ordinaryUsageAllowed: null, source: 'codex-app-server',
+    limitsById: { codex: { primary: { usedPercent: percent, windowDurationMins: 300, resetsAtMs: 9000 } } } });
+  const percent = async () => { const value = (await native.usage('p')).agents.codex.limits; return [value?.state, Object.values(value?.limitsById || {})[0]?.primary.usedPercent]; };
+  stream.publish('limits.updated', session(1000, 42));
+  assert.deepEqual(await percent(), ['ready', 42]);
+  // account/updated: the session’s dated placeholder with neither a billing route nor a quota.
+  stream.publish('limits.updated', { ...session(2000), state: 'unavailable', limitsById: {} });
+  limits = { codex: read('account-a', 1500, 40) };
+  assert.deepEqual(await percent(), ['unavailable', undefined], 'a reading from before the change is not put back');
+  limits = { codex: read('account-a', 3000, 10) };
+  assert.deepEqual(await percent(), ['ready', 10], 'the reader’s reading after the change shows without waiting for the session’s next turn');
+  assert.deepEqual(await percent(), ['ready', 10]);
+  // The session’s own reading leads again once it has one, and a reader’s newer one on another route does not displace it.
+  stream.publish('limits.updated', session(4000, 12));
+  assert.deepEqual(await percent(), ['ready', 12]);
+  limits = { codex: read('account-a', 5000, 11) };
+  assert.deepEqual(await percent(), ['ready', 12]);
+});

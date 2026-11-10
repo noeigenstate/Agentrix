@@ -7,13 +7,15 @@ function accountChanged(previous, next) {
     || known(next) && next.kind !== previous.kind && previous.kind !== 'unknown');
 }
 function retainConnection(previous, next) {
-  if (!known(next) && !accountChanged(previous, next) || dated(previous?.observedAt) && (!dated(next?.observedAt) || next.observedAt < previous.observedAt)) {
+  // A reader that cannot name the account (a terminal login, a running session) never replaces one that named it for the
+  // same kind of login, whatever its date: the named observation stays with its own time, so the next reader to name
+  // an account is compared with it and a change is seen.
+  const unnamed = !!previous?.scopeId && !next?.scopeId && next?.kind === previous.kind;
+  if (unnamed || !known(next) && !accountChanged(previous, next) || dated(previous?.observedAt) && (!dated(next?.observedAt) || next.observedAt < previous.observedAt)) {
     return previous ? { ...previous, ...(typeof next?.active === 'boolean' ? { active: next.active } : {}) }
       : next?.kind === 'none' ? { ...next, kind: 'unknown' } : next;
   }
-  // A reader that cannot name the account (a running session) does not unname it: the name last established stays
-  // with the same kind of login, so a later reader that can name it still sees a change.
-  return previous?.scopeId && next && !next.scopeId && next.kind === previous.kind ? { ...next, scopeId: previous.scopeId } : next;
+  return next;
 }
 function retainAccount(previous, next) {
   if (!next) return previous;
@@ -34,6 +36,10 @@ function retainAccount(previous, next) {
     source: newer && next.limits?.length ? next.source : previous.source };
 }
 const measuredWindow = window => dated(window?.usedPercent);
+const quotaMeasured = limits => Object.values(limits.limitsById || {}).some(bucket => measuredWindow(bucket?.primary) || measuredWindow(bucket?.secondary))
+  || Number.isSafeInteger(limits.resetCredits?.availableCount);
+// Whether a payload says anything of the quota. One that does not is a failed read, a placeholder or an account-change signal.
+const quotaRead = limits => quotaMeasured(limits) || limits.providerStatus != null || limits.notice != null || typeof limits.ordinaryUsageAllowed === 'boolean';
 // accountScopeId: the account a payload was read for, when its reader could name it (subscriptionLimits).
 function retainLimits(previous, next) {
   if (!previous || !next) return next || previous;
@@ -41,10 +47,7 @@ function retainLimits(previous, next) {
   // Quota read for one account is never kept for another, nor merged into its reading.
   if (previous.accountScopeId && next.accountScopeId && previous.accountScopeId !== next.accountScopeId) return next;
   if (previous.billingRoute !== next.billingRoute) return next;
-  const measured = Object.values(next.limitsById || {}).some(bucket => measuredWindow(bucket?.primary) || measuredWindow(bucket?.secondary))
-    || Number.isSafeInteger(next.resetCredits?.availableCount);
-  const readable = measured || next.providerStatus != null || next.notice != null || typeof next.ordinaryUsageAllowed === 'boolean';
-  if (!readable) {
+  if (!quotaRead(next)) {
     // Dated, with neither a billing route nor a quota: the provider's own word that the account changed (Codex
     // account/updated). Whose quota the held one is can no longer be told, so it goes. Any other unreadable reply is a
     // failed read and keeps it.
@@ -61,7 +64,7 @@ function retainLimits(previous, next) {
       held[name] = { ...bucket[name], windowDurationMins: bucket[name].windowDurationMins ?? held[name]?.windowDurationMins ?? null };
     }
   }
-  return { ...next, limitsById, observedAtMs: measured ? next.observedAtMs : previous.observedAtMs,
+  return { ...next, limitsById, observedAtMs: quotaMeasured(next) ? next.observedAtMs : previous.observedAtMs,
     resetCredits: Number.isSafeInteger(next.resetCredits?.availableCount) ? next.resetCredits : previous.resetCredits };
 }
-module.exports = { accountChanged, retainConnection, retainAccount, retainLimits };
+module.exports = { accountChanged, retainConnection, retainAccount, retainLimits, quotaRead };

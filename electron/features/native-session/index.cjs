@@ -48,11 +48,13 @@ function createNativeSessions(options) {
       for (const agent of ['claude', 'codex']) {
         if (remote && agent === 'claude') continue;
         const state = usage.agents[agent], held = previous?.agents[agent];
-        let incoming = connections?.[agent];
-        const account = inputs?.limits?.[agent]?.accountConnection;
-        if (!(incoming?.kind === 'api' && incoming.active) && Number.isFinite(account?.observedAt) &&
-          account.observedAt > (incoming?.observedAt ?? -Infinity)) incoming = { ...account, active: incoming?.active ?? false };
-        state.connection = retainConnection(held?.connection, incoming) || { kind: 'unknown', active: false, source: null, observedAt: null };
+        // What the account reader named and what main read from the session, oldest first: each is an observation of its
+        // own, so the session's (which may name no account) does not hide the reader's by being the later of the two.
+        const session = connections?.[agent], account = inputs?.limits?.[agent]?.accountConnection;
+        const observed = (session?.kind === 'api' && session.active) || !Number.isFinite(account?.observedAt) ? [session]
+          : [{ ...account, active: session?.active ?? false }, session].sort((a, b) => (a?.observedAt ?? -Infinity) - (b?.observedAt ?? -Infinity));
+        state.connection = observed.reduce((connection, next) => retainConnection(connection, next), held?.connection)
+          || { kind: 'unknown', active: false, source: null, observedAt: null };
         const changed = accountChanged(held?.connection, state.connection);
         // Quota is shown only for the account now observed. A reading that names its account must name this one. One
         // that names none (a session's, which the router may hold from before the change) must be newer than the change
