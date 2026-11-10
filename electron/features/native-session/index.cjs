@@ -3,7 +3,7 @@ const { createSettings } = require('./settings.cjs');
 const { createRouter } = require('./router.cjs');
 const { registerIpc } = require('./ipc.cjs');
 const { choosePath } = require('./routing.cjs');
-const { accountChanged, retainConnection, retainLimits } = require('../agents/agent-usage.cjs');
+const { accountChanged, retainConnection, retainLimits, quotaRead } = require('../agents/agent-usage.cjs');
 // Nothing tells this module that a project was removed, so it holds the last usage of the most recently read ones.
 const HELD_PROJECTS = 64;
 function createNativeSessions(options) {
@@ -63,7 +63,14 @@ function createNativeSessions(options) {
         const floor = project.floor[agent];
         const own = limits => limits && (limits.accountScopeId && state.connection.scopeId ? limits.accountScopeId === state.connection.scopeId
           : floor == null || limits.observedAtMs > floor) ? limits : null;
-        state.limits = retainLimits(changed ? null : held?.limits, own(state.limits) || own(inputs?.limits?.[agent])) || null;
+        const routed = own(state.limits), read = own(inputs?.limits?.[agent]);
+        // The session's reading leads. Only an empty one that names no billing route (Codex said the account changed)
+        // gives way, and only to the reader's newer reading of this subscription account's quota: an API connection
+        // keeps its own payload.
+        const standIn = routed?.billingRoute === 'unknown' && !quotaRead(routed) && state.connection.kind === 'subscription'
+          && !!read?.accountScopeId && read.accountScopeId === state.connection.scopeId && quotaRead(read)
+          && read.observedAtMs > (routed.observedAtMs ?? -Infinity);
+        state.limits = retainLimits(changed ? null : held?.limits, standIn ? read : routed || read) || null;
         if (state.connection.kind === 'none' && Number.isFinite(state.connection.observedAt)) state.limits = null;
       }
       if (remote) {

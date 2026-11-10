@@ -4,7 +4,7 @@ const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
-const { retainLimits, quotaRead } = require('../agents/agent-usage.cjs');
+const { retainLimits } = require('../agents/agent-usage.cjs');
 function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
@@ -451,12 +451,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           snapshot[agent].reason = running?.record?.stream.snapshot().events.findLast(event => event.type === 'path.changed')?.payload.reason || null;
         }
         snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(config.monthlyBudgetUsd, projectId) : null, cli[agent]);
-        const held = snapshot[agent].limits ||= structuredClone(limits[agent] || null), read = limits[agent];
-        // The session's reading leads. The reader's newer one completes it on the same billing route, and stands in for a
-        // payload that names neither a route nor a quota (the account changed) until the session reads again.
-        if (read && Number.isFinite(read.observedAtMs) && read.observedAtMs > (held.observedAtMs ?? -Infinity) &&
-          (held.billingRoute === read.billingRoute || held.billingRoute === 'unknown' && !quotaRead(held))) {
-          snapshot[agent].limits = structuredClone(retainLimits(held, read));
+        snapshot[agent].limits ||= structuredClone(limits[agent] || null);
+        if (snapshot[agent].limits?.billingRoute === limits[agent]?.billingRoute &&
+          Number.isFinite(limits[agent]?.observedAtMs) && limits[agent].observedAtMs > (snapshot[agent].limits.observedAtMs ?? -Infinity)) {
+          snapshot[agent].limits = structuredClone(retainLimits(snapshot[agent].limits, limits[agent]));
         }
       }
       return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, switches: { waiting: switches.waiting() } };

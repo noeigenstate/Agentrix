@@ -350,32 +350,64 @@ test('a connection that cannot name its account never outranks one that does: a 
   assert.equal(idle.connection.scopeId, 'account-b'); assert.equal(idle.connection.active, false); assert.equal(idle.limits.limitsById.subscription.primary.usedPercent, 10);
 });
 
-test('after Codex says the account changed, the reader’s newer reading replaces the session’s empty placeholder', async t => {
+// A running Codex session behind the real router: what main reads of its connection, what its events say of the quota, what the account reader holds.
+async function liveCodex(t) {
   const { createEventStream } = require('../electron/features/native-session/events.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-usage-placeholder-'));
-  let stream, limits = {}, codex = connection(999, 'account-a');
+  const live = { limits: {}, codex: connection(999, 'account-a') };
   const runtime = { apiState: () => ({ status: 'no_key' }), usage: { summary: () => ({}) }, create(spec, emit) {
-    stream = createEventStream(spec, emit); return { start: async () => {}, close: async () => {}, snapshot: () => ({ state: 'idle' }) };
+    const stream = createEventStream(spec, emit); live.publish = payload => stream.publish('limits.updated', payload);
+    return { start: async () => {}, close: async () => {}, snapshot: () => ({ state: 'idle' }) };
   } };
   const native = createNativeSessions({ directory, claude: runtime, codex: runtime, resolveSpec: () => ({ projectId: 'p', terminalId: 't' }), emit() {},
-    connections: async () => ({ codex }), usageInputs: async () => ({ cli, limits }) });
+    connections: async () => ({ codex: live.codex }), usageInputs: async () => ({ cli, limits: live.limits }) });
   t.after(async () => { await native.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   await native.start('t', { agent: 'codex' });
-  const session = (at, percent) => ({ scopeId: 'session-1', billingRoute: 'unknown', observedAtMs: at, state: 'ready', resetCredits: null, ordinaryUsageAllowed: null, source: 'codex-app-server',
-    limitsById: { codex: { primary: { usedPercent: percent, windowDurationMins: 300, resetsAtMs: 9000 } } } });
-  const percent = async () => { const value = (await native.usage('p')).agents.codex.limits; return [value?.state, Object.values(value?.limitsById || {})[0]?.primary.usedPercent]; };
-  stream.publish('limits.updated', session(1000, 42));
-  assert.deepEqual(await percent(), ['ready', 42]);
+  live.shown = async () => (await native.usage('p')).agents.codex.limits;
+  live.percent = async () => { const value = await live.shown(); return [value?.state, Object.values(value?.limitsById || {})[0]?.primary.usedPercent]; };
+  return live;
+}
+const sessionLimits = (at, percent) => ({ scopeId: 'session-1', billingRoute: 'unknown', observedAtMs: at, state: 'ready', resetCredits: null, ordinaryUsageAllowed: null, source: 'codex-app-server',
+  limitsById: percent == null ? {} : { codex: { primary: { usedPercent: percent, windowDurationMins: 300, resetsAtMs: 9000 } } } });
+
+test('after Codex says the account changed, the reader’s newer reading replaces the session’s empty placeholder', async t => {
+  const live = await liveCodex(t);
+  live.publish(sessionLimits(1000, 42));
+  assert.deepEqual(await live.percent(), ['ready', 42]);
   // account/updated: the session’s dated placeholder with neither a billing route nor a quota.
-  stream.publish('limits.updated', { ...session(2000), state: 'unavailable', limitsById: {} });
-  limits = { codex: read('account-a', 1500, 40) };
-  assert.deepEqual(await percent(), ['unavailable', undefined], 'a reading from before the change is not put back');
-  limits = { codex: read('account-a', 3000, 10) };
-  assert.deepEqual(await percent(), ['ready', 10], 'the reader’s reading after the change shows without waiting for the session’s next turn');
-  assert.deepEqual(await percent(), ['ready', 10]);
+  live.publish({ ...sessionLimits(2000), state: 'unavailable' });
+  live.limits = { codex: read('account-a', 1500, 40) };
+  assert.deepEqual(await live.percent(), ['unavailable', undefined], 'a reading from before the change is not put back');
+  live.limits = { codex: read('account-a', 3000, 10) };
+  assert.deepEqual(await live.percent(), ['ready', 10], 'the reader’s reading after the change shows without waiting for the session’s next turn');
+  assert.deepEqual(await live.percent(), ['ready', 10]);
   // The session’s own reading leads again once it has one, and a reader’s newer one on another route does not displace it.
-  stream.publish('limits.updated', session(4000, 12));
-  assert.deepEqual(await percent(), ['ready', 12]);
-  limits = { codex: read('account-a', 5000, 11) };
-  assert.deepEqual(await percent(), ['ready', 12]);
+  live.publish(sessionLimits(4000, 12));
+  assert.deepEqual(await live.percent(), ['ready', 12]);
+  live.limits = { codex: read('account-a', 5000, 11) };
+  assert.deepEqual(await live.percent(), ['ready', 12]);
+});
+
+test('a session’s empty quota payload keeps its own route unless the reader read this subscription account’s quota', async t => {
+  const route = async live => { const value = await live.shown(); return [value.billingRoute, value.source]; };
+  // An API-key session has no plan windows; the reader’s answer for that account has none either and is no subscription reading.
+  const api = await liveCodex(t), key = at => ({ kind: 'api', observedAt: at, scopeId: 'key-account', source: 'codex-app-server account/read', active: true });
+  api.codex = key(900); api.publish(sessionLimits(1000));
+  api.limits = { codex: subscriptionLimits({ resets: null, resetQuery: { state: 'unavailable', reason: 'unsupported' }, connection: key(2000) }, 'codex-account', 120000, 2001) };
+  assert.equal(api.limits.codex.billingRoute, 'subscription');
+  assert.deepEqual(await route(api), ['unknown', 'codex-app-server'], 'an API-key session is not labelled as the subscription route');
+  api.limits = { codex: read('key-account', 3000, 10) };
+  assert.deepEqual(await route(api), ['unknown', 'codex-app-server'], 'whatever the reader holds, an API connection keeps its own payload');
+  // A subscription session: the reader’s failed read, or its reading of another account, does not stand in either.
+  const plan = await liveCodex(t);
+  plan.publish({ ...sessionLimits(2000), state: 'unavailable' });
+  plan.limits = { codex: subscriptionLimits({ ...failedRead, connection: connection(3000, 'account-a') }, 'codex-account', 120000, 3001) };
+  assert.deepEqual(await route(plan), ['unknown', 'codex-app-server'], 'a reader’s failed read is no reading');
+  plan.codex = { ...connection(4000, 'account-a'), active: true }; plan.limits = { codex: read('account-b', 3500, 10) };
+  assert.deepEqual(await route(plan), ['unknown', 'codex-app-server'], 'another account’s reading is not this session’s');
+  // A payload that says the quota is refused is a reading of its own.
+  const refused = await liveCodex(t);
+  refused.publish({ ...sessionLimits(2000), state: 'unavailable', ordinaryUsageAllowed: false, providerStatus: 'rejected', notice: { code: 'rate_limited', resetsAtMs: null, message: 'Codex 请求受到限流。' } });
+  refused.limits = { codex: read('account-a', 3000, 10) };
+  assert.deepEqual(await route(refused), ['unknown', 'codex-app-server']);
 });
