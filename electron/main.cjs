@@ -1328,8 +1328,10 @@ async function readNativeConnections(projectId) {
     else {
       // The existing terminal reader may have no login-mode evidence. Quota alone proves neither billing path.
       const connection = host.terminalAccount?.connection;
-      result[agent] = { kind: ['api', 'subscription'].includes(connection?.kind) ? connection.kind : 'unknown',
-        source: 'codex-account-usage', observedAt: host.terminalAccount?.at || null };
+      // The reader names the account it read; the name goes with the kind it was read for.
+      const kind = ['api', 'subscription'].includes(connection?.kind) ? connection.kind : 'unknown';
+      result[agent] = { kind, source: 'codex-account-usage', observedAt: host.terminalAccount?.at || null,
+        ...(kind !== 'unknown' && connection.scopeId ? { scopeId: connection.scopeId } : {}) };
     }
   }
   for (const agent of observed.keys()) result[agent] = { ...result[agent], active: true };

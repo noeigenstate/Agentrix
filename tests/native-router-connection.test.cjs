@@ -75,7 +75,12 @@ test('main connections use init and account evidence and discard a late result a
   for (const kind of ['api', 'subscription']) {
     codex.terminalAccount = { connection: { kind }, at: 3 };
     assert.equal((await context.readNativeConnections()).codex.kind, kind);
+    // The terminal's reader named the account: the connection carries that name, so the pane can tell an account change.
+    codex.terminalAccount = { connection: { kind, scopeId: 'fixture-name' }, at: 3 };
+    assert.deepEqual(JSON.parse(JSON.stringify((await context.readNativeConnections()).codex)), { kind, source: 'codex-account-usage', observedAt: 3, scopeId: 'fixture-name', active: true });
   }
+  codex.terminalAccount = { connection: { kind: 'none', scopeId: 'fixture-name' }, at: 3 };
+  assert.equal(Object.hasOwn((await context.readNativeConnections()).codex, 'scopeId'), false, 'a name is not attached to a kind the terminal cannot vouch for');
   claude.nativeStructured = false; assert.equal((await context.readNativeConnections()).claude.kind, 'subscription');
   claude.codexActive = false; assert.equal((await context.readNativeConnections()).claude.kind, 'none');
 });
