@@ -1,3 +1,4 @@
+const { accountScopeId } = require('../agents/codex-account-usage.cjs');
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const time = value => count(value) !== null && Number.isSafeInteger(value * 1000) ? value * 1000 : null;
 
@@ -50,9 +51,11 @@ function tokenUsage(value, baseline = null) {
     contextTokens: count(value?.last?.totalTokens), round };
 }
 
+// A known account carries the same opaque name the account reader gives it, so a switch between two accounts of one
+// kind is seen without waiting for account/updated.
 function accountConnection(result, observedAt = Date.now()) {
   const type = result?.account?.type;
-  return { kind: result?.account === null ? 'none' : type === 'apiKey' ? 'api' : ['chatgpt', 'chatgptAuthTokens'].includes(type) ? 'subscription' : 'unknown',
-    source: 'codex-app-server account/read', observedAt };
+  const kind = result?.account === null ? 'none' : type === 'apiKey' ? 'api' : ['chatgpt', 'chatgptAuthTokens'].includes(type) ? 'subscription' : 'unknown';
+  return { kind, source: 'codex-app-server account/read', observedAt, ...(kind === 'unknown' ? {} : { scopeId: accountScopeId(result.account) }) };
 }
 module.exports = { mergeLimits, tokenUsage, accountConnection, restrictedLimits };
