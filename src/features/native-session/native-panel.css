@@ -3,7 +3,10 @@
    its body scrolling. Colour is the existing tokens and what is mixed from them; the only two meanings are the usage bar and the danger of a quota used up.
    Radii: panel 16, rows and buttons 8, pills and bars 999. Spacing is on a 4px grid. Surfaces that would sit on the menu colour take the selected step: in
    the workbench the hover step is the menu colour itself. */
-.native-panel-scrim { position: absolute; inset: 0; z-index: 6; background: color-mix(in srgb, var(--bg-app) 40%, transparent); }
+/* The scrim is the app's own: the page colour over the conversation (as the reading view's terminal overlay does, 70%), which pushes the text behind it back; the light
+   theme keeps it very light (35%). It covers the conversation's area only, never the message box. */
+.native-panel-scrim { position: absolute; inset: 0; z-index: 6; background: color-mix(in srgb, var(--bg-app) 70%, transparent); }
+:root[data-theme="light"] .native-panel-scrim { background: color-mix(in srgb, var(--bg-app) 35%, transparent); }
 .native-panel, .native-toast { box-shadow: 0 12px 32px rgb(0 0 0 / .35); }
 :root[data-theme="light"] :is(.native-panel, .native-toast) { box-shadow: 0 8px 24px rgb(from var(--text-1) r g b / .08); }
 .native-panel { --track: var(--bg-selected); --seg-1: var(--usage); --seg-2: color-mix(in srgb, var(--usage) 65%, var(--bg-menu)); --seg-3: color-mix(in srgb, var(--usage) 50%, var(--text-1)); --seg-4: var(--text-3);

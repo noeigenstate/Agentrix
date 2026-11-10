@@ -178,6 +178,19 @@ test('a panel is also plain text for "copy all", and a receipt that answers noth
   assert.deepEqual([read('codex', { status: 'consumed' }), read('claude', { local: { command: 'compact' } }), read('claude', null), localOf({ local: { command: 'cost' } }).command], [null, null, null, 'cost']);
 });
 
+test('a reset or recovery time reads 今天 HH:MM today and 11月13日 周四 16:26 on another day, in the alert and on the quota bar alike; English says Thu, Nov 13, 16:26', () => {
+  const { resetWords } = load('features/native-session/native-panel.ts'), { codexPanel } = load('features/native-session/panel-codex.ts'), i18n = load('shared/i18n.ts');
+  const now = new Date(2025, 10, 10, 9, 0).getTime(), today = new Date(2025, 10, 10, 19, 22).getTime(), thursday = new Date(2025, 10, 13, 16, 26).getTime(), tomorrow = new Date(2025, 10, 11, 0, 5).getTime();
+  assert.deepEqual([resetWords(today, now), resetWords(thursday, now), resetWords(tomorrow, now)], ['今天 19:22', '11月13日 周四 16:26', '11月11日 周二 00:05']);
+  const panel = codexPanel(statusLocal({ limits: [{ id: '5h', usedPercent: 0, resetsAtMs: today }, { id: 'week', usedPercent: 100, resetsAtMs: thursday }] }), now);
+  assert.deepEqual([panel.alert.text, panel.groups[0].quotas.map(row => row.when)], ['，11月13日 周四 16:26 恢复', ['重置于 今天 19:22', '恢复于 11月13日 周四 16:26']], 'the alert and the bar say it the same way');
+  i18n.applyLanguage('en');
+  try {
+    assert.deepEqual([resetWords(today, now), resetWords(thursday, now)], ['Today 19:22', 'Thu, Nov 13, 16:26']);
+    assert.equal(codexPanel(statusLocal({ limits: [{ id: '5h', usedPercent: 0, resetsAtMs: today }, { id: 'week', usedPercent: 100, resetsAtMs: thursday }] }), now).alert.text, ', recovers Thu, Nov 13, 16:26');
+  } finally { i18n.applyLanguage('zh'); }
+});
+
 test('the panel is the approved sheet: mark, title, command and three buttons; alert, number and bar; the five kinds of group; the footer; skeleton bars while asking', () => {
   const { NativePanel } = load('features/native-session/NativePanel.tsx');
   const html = state => renderToStaticMarkup(React.createElement(NativePanel, { state, onClose() {}, onRefresh() {} }));
@@ -227,6 +240,7 @@ test('the panel’s style takes colours, radii and tokens from the app: no liter
   for (const selector of ['.native-panel-cmd', '.native-panel-chip', '.native-toast']) assert.match(rule(selector), /border-radius: 999px/, selector);
   assert.match(rule('.native-panel-meter'), /border-radius: 999px/); assert.match(rule('.native-panel-alert'), /border-radius: 8px/); assert.match(rule('.native-panel-suggest button'), /border-radius: 8px/);
   assert.match(rule('.native-panel-rows'), /grid-template-columns: 96px 1fr/); assert.match(css, /animation: native-panel-rise \.16s ease-out/);
+  assert.match(rule('.native-panel-scrim'), /color-mix\(in srgb, var\(--bg-app\) 70%, transparent\)/, 'the page colour at the strength the reading view’s own overlay uses'); assert.match(rule(':root[data-theme="light"] .native-panel-scrim'), /var\(--bg-app\) 35%/, 'and very light in the light theme');
   assert.match(rule('.native-panel-quota.is-out .native-panel-meter > i'), /var\(--danger\)/); assert.match(rule('.native-panel-meter > i'), /var\(--usage\)/);
 });
 

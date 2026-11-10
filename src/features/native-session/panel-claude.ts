@@ -1,8 +1,7 @@
 // Claude's /context, /cost, /status and /usage as result panels. The facts are what the SDK and this session already hold, in the send receipt's `local` field;
 // a value that is not there reads 未知 or is left out — nothing here is estimated. Pure: facts in, panel out.
 import { t } from '../../shared/i18n';
-import { clockWords } from './native-words';
-import { array, compact, dollars, duration, grouped, number, object, panelTitle, percentWords, share, unknown, word, type Panel, type PanelCommand, type PanelGroup, type Quota, type Row, type Segment } from './native-panel.ts';
+import { array, compact, dollars, duration, grouped, number, object, panelTitle, percentWords, resetWords, share, unknown, word, type Panel, type PanelCommand, type PanelGroup, type Quota, type Row, type Segment } from './native-panel.ts';
 
 type Tokens = { name: string; tokens: number };
 const named = (value: unknown): Tokens[] => array(value).map(object).flatMap(row => word(row.name) && number(row.tokens) !== null ? [{ name: row.name as string, tokens: row.tokens as number }] : []);
@@ -77,13 +76,13 @@ function usage(local: Record<string, unknown>, now: number): { hero: Panel['hero
   const month = object(local.month), spent = money(month.spentMicros), budget = typeof month.budgetUsd === 'number' ? month.budgetUsd : null, notice = object(local.notice);
   const windows = array(local.limits).map(object).flatMap((row): (Quota & { resetsAtMs: number | null })[] => {
     const raw = typeof row.usedPercent === 'number' && Number.isFinite(row.usedPercent) ? row.usedPercent : null, percent = raw === null ? null : Math.min(100, Math.max(0, raw)), full = percent === 100;
-    const at = number(row.resetsAtMs), time = at === null ? null : clockWords(at, now);
+    const at = number(row.resetsAtMs), time = at === null ? null : resetWords(at, now);
     return word(row.id) ? [{ name: windowName(row.id as string), percent, full, resetsAtMs: at, used: percent === null ? unknown() : percentWords(Math.round(percent * 10) / 10),
       when: time === null ? '' : full ? t('恢复于 {time}', { time }) : t('重置于 {time}', { time }) }] : [];
   });
   const blocked = windows.filter(row => row.full).sort((a, b) => (b.resetsAtMs ?? Infinity) - (a.resetsAtMs ?? Infinity))[0], told = NOTICES[word(notice.code) ?? '']?.(), at = number(notice.resetsAtMs);
-  const alert = told ? { strong: told, text: at === null ? '' : t('，{time} 恢复', { time: clockWords(at, now) }) }
-    : blocked ? { strong: t('{name}额度已用完', { name: blocked.name }), text: blocked.resetsAtMs === null ? t('，恢复时间未知') : t('，{time} 恢复', { time: clockWords(blocked.resetsAtMs, now) }) } : undefined;
+  const alert = told ? { strong: told, text: at === null ? '' : t('，{time} 恢复', { time: resetWords(at, now) }) }
+    : blocked ? { strong: t('{name}额度已用完', { name: blocked.name }), text: blocked.resetsAtMs === null ? t('，恢复时间未知') : t('，{time} 恢复', { time: resetWords(blocked.resetsAtMs, now) }) } : undefined;
   const tokens = object(local.tokens), counts = [[t('输入'), tokens.input], [t('输出'), tokens.output], [t('缓存读取'), tokens.cacheRead], [t('缓存写入'), tokens.cacheWrite]] as const;
   const used = counts.flatMap(([label, value]): Row[] => number(value) === null ? [] : [{ label, value: grouped(number(value)) }]);
   return { alert, hero: { value: dollars(spent), unit: budget === null ? undefined : `/ $${budget}`, caption: t('本月 API 花费'), percent: share(spent, budget === null ? null : budget * 1e6) }, groups: [

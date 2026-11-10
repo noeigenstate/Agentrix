@@ -1,8 +1,7 @@
 // Codex's /status and /usage as result panels. The app-server's facts arrive in the send receipt's `local` field; a value main did not know is null and reads
 // 未知 here. Pure: facts in, panel out.
 import { t } from '../../shared/i18n';
-import { clockWords } from './native-words';
-import { array, compact, grouped, number, object, panelTitle, percentWords, readFailed, share, unknown, word, type Panel, type PanelGroup, type Quota, type Row } from './native-panel.ts';
+import { array, compact, grouped, number, object, panelTitle, percentWords, readFailed, resetWords, share, unknown, word, type Panel, type PanelGroup, type Quota, type Row } from './native-panel.ts';
 
 export type CodexFacts = {
   command: 'status' | 'usage';
@@ -41,7 +40,7 @@ function windows(facts: CodexFacts, now: number): Window[] {
   const failed = failure(facts, 'limits');
   return facts.limits.map(window => {
     const percent = window.usedPercent === null ? null : Math.min(100, Math.max(0, window.usedPercent)), full = percent === 100;
-    const time = window.resetsAtMs === null ? null : clockWords(window.resetsAtMs, now);
+    const time = window.resetsAtMs === null ? null : resetWords(window.resetsAtMs, now);
     const when = time === null ? percent === null ? '' : full ? t('恢复时间未知') : t('重置时间未知') : full ? t('恢复于 {time}', { time }) : t('重置于 {time}', { time });
     return { id: window.id, resetsAtMs: window.resetsAtMs, name: window.id === '5h' ? t('5 小时') : t('每周'), percent, full, when,
       used: percent !== null ? percentWords(Math.round(percent * 10) / 10) : failed ? readFailed(failed) : unknown() };
@@ -51,7 +50,7 @@ function windows(facts: CodexFacts, now: number): Window[] {
 // The first thing to know: the quota that is used up (the one that recovers last holds everything up), else a read that failed.
 function alertOf(facts: CodexFacts, list: Window[], now: number): Panel['alert'] {
   const blocked = list.filter(window => window.full).sort((a, b) => (b.resetsAtMs ?? Infinity) - (a.resetsAtMs ?? Infinity))[0];
-  if (blocked) return { strong: t('{name}额度已用完', { name: blocked.name }), text: blocked.resetsAtMs === null ? t('，恢复时间未知') : t('，{time} 恢复', { time: clockWords(blocked.resetsAtMs, now) }) };
+  if (blocked) return { strong: t('{name}额度已用完', { name: blocked.name }), text: blocked.resetsAtMs === null ? t('，恢复时间未知') : t('，{time} 恢复', { time: resetWords(blocked.resetsAtMs, now) }) };
   const limits = failure(facts, 'limits'), account = failure(facts, 'account');
   if (limits) return { strong: t('额度读取失败'), text: `（${limits}）` };
   return account ? { strong: t('账号读取失败'), text: `（${account}）` } : undefined;

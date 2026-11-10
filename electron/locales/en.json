@@ -2975,5 +2975,6 @@
   "关闭（Esc）": "Close (Esc)",
   "Claude API 暂时不可用，不能读取。": "The Claude API is unavailable right now, so this cannot be read.",
   "无法读取上下文用量。": "The context usage could not be read.",
-  "结果未能确认": "Result not confirmed"
+  "结果未能确认": "Result not confirmed",
+  "今天 {time}": "Today {time}"
 }

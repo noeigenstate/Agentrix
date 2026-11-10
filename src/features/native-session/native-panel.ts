@@ -1,7 +1,7 @@
 // The result panel of a command that only shows information (/status, /usage, /context, /cost): one structure the window draws, whatever the command or
 // the provider. A command supplies facts and a builder turns them into groups of five kinds; nothing here is a message of the conversation. A value main did
 // not know is 未知 in the window — never zero, never a guess. Pure: facts in, structure and plain text out.
-import { t } from '../../shared/i18n';
+import { currentLanguage, t } from '../../shared/i18n';
 
 export type PanelAgent = 'claude' | 'codex';
 export type PanelCommand = 'status' | 'usage' | 'context' | 'cost';
@@ -54,7 +54,18 @@ export function duration(ms: number | null) {
 // The share of a total as a percent of a bar, kept inside 0..100.
 export const share = (part: number | null, total: number | null) => part === null || !total ? null : Math.min(100, Math.max(0, part * 100 / total));
 
-export const readTime = (at: number) => t('{time} 读取', { time: new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) });
+// When a quota resets or recovers: "今天 19:22" for today, else "11月13日 周四 16:26" (English "Thu, Nov 13, 16:26"). The parts come from Intl in the
+// interface language, so no month or weekday table is kept here; only the order differs by language.
+export function resetWords(at: number, now = Date.now()) {
+  const english = currentLanguage() === 'en', date = new Date(at);
+  const part = (options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat(english ? 'en-US' : 'zh-CN', options).format(date);
+  const time = part({ hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+  if (date.toDateString() === new Date(now).toDateString()) return t('今天 {time}', { time });
+  const day = part({ month: 'short', day: 'numeric' }), weekday = part({ weekday: 'short' });
+  return english ? `${weekday}, ${day}, ${time}` : `${day} ${weekday} ${time}`;
+}
+
+export const readTime =(at: number) => t('{time} 读取', { time: new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) });
 
 // The panel as plain text, for "copy all": a title line, the alert, the hero, then each group under its title, one "label  value" row per line.
 export function panelText(panel: Panel): string {
