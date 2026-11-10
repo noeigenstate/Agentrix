@@ -27,10 +27,11 @@ async function copyHelper(helper, directory) {
       "path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron')",
       "path.join(__dirname, 'electron')",
     );
-    const settings = "const settings = ['-m', options.model,";
-    if (!instrumented.includes(settings)) throw new Error('The dispatch helper cannot select the shared credential store.');
-    instrumented = instrumented.replace(settings,
-      "const settings = ['-c', 'cli_auth_credentials_store=\"file\"', '-m', options.model,");
+    // The lab links the owner's auth file into the run's Codex home; a keyring is out of the sandbox's reach.
+    const codex = "return ['app-server', '--listen', 'stdio://'];";
+    if (!instrumented.includes(codex)) throw new Error('The dispatch helper cannot select the shared credential store.');
+    instrumented = instrumented.replace(codex,
+      "return ['-c', 'cli_auth_credentials_store=\"file\"', 'app-server', '--listen', 'stdio://'];");
     const root = await fs.stat(path.join(path.dirname(helper), 'electron')).catch(() => null)
       ? path.join(path.dirname(helper), 'electron') : path.resolve(path.dirname(helper), '../electron');
     for (const [, file] of runtime[1].matchAll(/'([^']+)'/g)) {

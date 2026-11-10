@@ -379,7 +379,7 @@ hook("Stop")
   assert.ok(events.some(event => event.type === 'codex-started' && event.command === '--version' && event.agent === 'claude'));
 });
 
-test('Linux remote worker reads real files, enforces boundaries and emits Codex completion', { timeout: 40000, skip: process.platform === 'win32' }, async t => {
+test('Linux remote worker reads real files, enforces boundaries and hands a typed codex to the native host', { timeout: 40000, skip: process.platform === 'win32' }, async t => {
   const fixture = await fixtureFor(t, { nativeWorker: true });
   const auth = await new SSHAuthServer().start();
   const project = { id: randomUUID(), kind: 'ssh', path: fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
@@ -388,8 +388,9 @@ test('Linux remote worker reads real files, enforces boundaries and emits Codex 
   await fs.copyFile(path.join(__dirname, '..', 'assets', 'icon.png'), path.join(fixture.project, 'image.png'));
   await fs.writeFile(path.join(fixture.project, 'page.html'), '<h1>Remote preview</h1>');
   await fs.writeFile(path.join(fixture.project, 'README.md'), '# SSH Markdown');
-  const stub = '#!/usr/bin/env python3\nimport json,subprocess,sys\ncommand=json.loads(sys.argv[2][7:])\nsubprocess.run(command+[json.dumps({"type":"agent-turn-complete","thread-id":"test","turn-id":"1"})])\nprint("REMOTE_CODEX_DONE")\n';
-  await fs.writeFile(path.join(fixture.home, 'bin', 'codex'), stub, { mode: 0o755 });
+  // The host's Codex is only looked up, never run by the shell: running it would leave this file.
+  const executed = path.join(fixture.home, 'bin', 'codex-executed');
+  await fs.writeFile(path.join(fixture.home, 'bin', 'codex'), '#!/bin/sh\n: > "$0-executed"\n', { mode: 0o755 });
   const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-linux-key', onEvent: event => events.push(event) });
   connection.onData(data => { output += data; });
   t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
@@ -414,8 +415,15 @@ test('Linux remote worker reads real files, enforces boundaries and emits Codex 
   connection.write('\r');
   await waitFor(async () => fs.readFile(path.join(fixture.project, 'shift-second.txt'), 'utf8').then(value => value === 'SECOND', () => false));
   assert.equal(await fs.readFile(path.join(fixture.project, 'shift-first.txt'), 'utf8'), 'FIRST');
-  connection.write('codex\r');
-  await waitFor(() => events.some(event => event.type === 'turn-complete'));
+  // Codex has no terminal run: typing it asks the host for a native session (over app-server, whose turns report
+  // completion) and returns to the prompt.
+  connection.write('codex resume --last\r');
+  await waitFor(() => events.some(event => event.type === 'codex-started'), 'the native Codex request');
+  const started = events.find(event => event.type === 'codex-started');
+  assert.equal(started.agent, 'codex'); assert.deepEqual(started.args, ['resume', '--last']);
+  assert.equal(started.cwd, await fs.realpath(fixture.project));
+  await waitFor(() => events.some(event => event.type === 'shell-prompt' && event.sequence > started.sequence), 'the prompt after the native request');
+  await waitFor(() => output.includes('已请求在原生模式打开 Codex。'), 'the shell to say where Codex opens');
   const activityThread = randomUUID(), activitySince = Date.now();
   const sessions = path.join(fixture.home, '.codex', 'sessions');
   await fs.mkdir(sessions, { recursive: true });
@@ -432,8 +440,8 @@ test('Linux remote worker reads real files, enforces boundaries and emits Codex 
   assert.equal(complete.snapshot.state, 'complete');
   assert.equal(complete.reset, false);
   assert.deepEqual(complete.records.map(record => record.payload.type), ['task_complete']);
-  await waitFor(() => events.some(event => event.type === 'codex-exited'));
-  assert.ok(output.includes('REMOTE_CODEX_DONE'));
+  assert.equal(events.some(event => ['turn-complete', 'codex-exited'].includes(event.type)), false, 'no terminal Codex run and no completion made up for one');
+  await assert.rejects(fs.stat(executed), { code: 'ENOENT' }, 'the shell never executes Codex');
   let clipboard = [];
   const operations = new FileOperations({ cacheRoot: path.join(fixture.directory, 'clipboard-cache'), remote: () => connection,
     clipboard: async (action, paths) => action === 'copy' ? (clipboard = paths) : clipboard, confirmDelete: async () => true,

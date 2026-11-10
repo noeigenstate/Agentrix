@@ -9,6 +9,8 @@ const terminal = /^(?:write|writeTerminal|terminalWrite|afterPrompt|input|sendTo
 function calls(source, file = 'sample.cjs') {
   if (file.endsWith('.py')) {
     python ||= findPython();
+    // ast.dump's wording follows the interpreter (newer ones leave out empty lists and Load contexts), so an id made from it
+    // names the Python that wrote the list. dump() below writes the tree the way that list was written, on any version.
     const result = spawnSync(python.command, [...python.args, '-c', `import ast,json,sys,re
 s=sys.stdin.read(); t=ast.parse(s)
 names=set(('Popen','run','call','check_call','check_output','system','execv','execve','spawnv'))
@@ -26,7 +28,12 @@ def launch(n):
   receiver=ast.get_source_segment(s,f.value)
   return f.attr=='write' and (receiver=='os' or re.search(r'(terminal|pty|gate)$',receiver,re.I) or re.search(r'codex|--remote|resume',text))
  return isinstance(f,ast.Name) and f.id in names
-print(json.dumps([[ast.get_source_segment(s,n),ast.dump(n,include_attributes=False)] for n in ast.walk(t) if launch(n)]))
+def dump(n):
+ if isinstance(n,list): return '[%s]'%', '.join(dump(v) for v in n)
+ if not isinstance(n,ast.AST): return repr(n)
+ literal=isinstance(n,(ast.Constant,ast.MatchSingleton))
+ return '%s(%s)'%(type(n).__name__,', '.join('%s=%s'%(k,dump(v)) for k,v in ast.iter_fields(n) if v is not None or literal and k=='value'))
+print(json.dumps([[ast.get_source_segment(s,n),dump(n)] for n in ast.walk(t) if launch(n)]))
 `], { input: source, encoding: 'utf8', env: { ...process.env, PYTHONUTF8: '1' } });
     if (result.status !== 0) throw new Error(result.stderr);
     return JSON.parse(result.stdout).map(([text, syntax]) => ({ text, id: file + ':' + hash(syntax) }));

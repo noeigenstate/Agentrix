@@ -18,7 +18,7 @@ const { experimentInput, sampleRequest, taskPasses, estimateExperiment, armEstim
 const { testResult, reviewResult, restoreTests } = require('../electron/features/lab/grading.cjs');
 const { dispatch, workerArguments, taskBrief } = require('../electron/features/lab/dispatch.cjs');
 const { phaseEvidence, LabUsage } = require('../electron/features/lab/usage.cjs');
-const { LabSession, recoverRuns } = require('../electron/features/lab/session.cjs');
+const { LabSession, recoverRuns, copyHelper } = require('../electron/features/lab/session.cjs');
 const { ownerState } = require('../electron/features/lab/workspace.cjs');
 const { markedPids, killMarked } = require('../electron/features/lab/process.cjs');
 const { sandboxProfile, cleanEnvironment } = require('../electron/features/lab/sandbox.cjs');
@@ -966,4 +966,22 @@ isolatedTest('the real dispatch helper can load its private bundled runtime with
     const result = await session.root(['codex', '--help'], { cwd: workspaceRoot });
     assert.equal(result.code, 0, result.stderr); assert.match(result.stdout, /Usage: node dispatch/);
   } finally { await session.close(); }
+});
+
+// Runs everywhere: the lab rewrites the helper's own text, so a helper that changed shape must fail here, not only on macOS.
+test('the lab copy of the real dispatch helper starts Codex on the file credential store and meters through the lab', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-helper-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const helper = path.join(__dirname, '../integration/dispatch.cjs');
+  const modules = JSON.parse(await fs.readFile(await copyHelper(helper, directory), 'utf8')), source = modules['dispatch.cjs'];
+  const start = source.indexOf('function commandOf(options) {');
+  const commandOf = require('node:vm').runInNewContext(`(${source.slice(start, source.indexOf('\n}', start) + 2)})`);
+  assert.deepEqual([...commandOf({ agent: 'codex' })], ['-c', 'cli_auth_credentials_store="file"', 'app-server', '--listen', 'stdio://']);
+  assert.equal(commandOf({ agent: 'claude', model: 'm', effort: 'high', permission: 'plan' }).includes('-c'), false);
+  assert.deepEqual(require(helper).commandOf({ agent: 'codex' }), ['app-server', '--listen', 'stdio://'], 'only the lab copy is rewritten');
+  assert.match(source, /send = globalThis\.__AGENTRIX_LAB_SINK;/); assert.doesNotMatch(source, /send = eventSink\(/);
+  assert.match(source, /\.\.\.lastRate, \.\.\.output\.usage\(\) \}\);/);
+  assert.match(source, /const runtime = path\.join\(__dirname, 'electron'\);/);
+  assert.deepEqual(Object.keys(modules).filter(name => name !== 'dispatch.cjs').sort(),
+    Object.keys(require(helper).runtimeFiles()).filter(name => name !== 'features/native-session/routing.cjs').map(name => 'electron/' + name).sort());
 });
