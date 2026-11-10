@@ -5,7 +5,7 @@ trigger: auto
 when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算
 requires: any-agent
 title: 模型路由
-summary: Fable 主控并规划跨模块任务，Opus 规划单模块并审架构，Sol 写核心代码，Sonnet 做常规功能和界面。GPT 默认 high + fast，Claude 默认 high。
+summary: Fable 主控、规划跨模块任务，Opus 规划单模块并审架构，Sol 写核心代码，Sonnet 做常规功能和界面。GPT 默认 high + fast，Claude high。
 ---
 
 # Routing work between models
