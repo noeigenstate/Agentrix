@@ -407,7 +407,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           inputReceipt(clientId, 'queued');
           const userInput = [...(input.text.trim() ? [{ type: 'text', text: input.text, text_elements: [] }] : []), ...(input.images || []).map(value => value.startsWith('data:') ? { type: 'image', url: value } : { type: 'localImage', path: value })];
           try {
-            const command = /^\/([\w][\w:.-]{0,159})(?:\s|$)/.exec(input.text.trim());
+            const command = owned && /^\/([\w][\w:.-]{0,159})(?:\s|$)/.exec(input.text.trim());
             if (command) {
               await commands();
               const skill = skills?.get(command[1]);
