@@ -90,7 +90,7 @@ __pg_command() {
 # 0.167.0). Those start no conversation and run in this terminal; everything else opens in native mode. bootstrap.ps1,
 # zsh-integration.zsh and remote-worker.py carry the same words.
 __pg_codex_terminal() {
-  case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|completion|update|features) return 0;; esac
+  case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|archive|delete|unarchive|migrate-rollouts|migrate-nfs-db|exec-server|features) return 0;; esac
   return 1
 }
 

@@ -312,7 +312,7 @@ __pg_emit() { "$AGENTRIX_PYTHON" "$AGENTRIX_NOTIFY_FILE" "$@" >/dev/null 2>&1; }
 __pg_command() { local pattern='^-{0,2}[A-Za-z][A-Za-z-]{0,23}$'; [[ ${1-} =~ $pattern ]] && printf '%s' "$1"; return 0; }
 # The Codex CLI's own management runs (codex --help, checked against 0.167.0) start no conversation and run in this
 # terminal; everything else opens in native mode. The local shell integrations carry the same words.
-__pg_codex_terminal() { case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|completion|update|features) return 0;; esac; return 1; }
+__pg_codex_terminal() { case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|archive|delete|unarchive|migrate-rollouts|migrate-nfs-db|exec-server|features) return 0;; esac; return 1; }
 function codex {
     local executable arguments
     if __pg_codex_terminal "${1-}"; then

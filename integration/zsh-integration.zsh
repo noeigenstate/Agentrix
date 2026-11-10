@@ -110,7 +110,7 @@ __pg_command() {
 # bash-integration.bash and remote-worker.py carry the same words.
 __pg_codex_terminal() {
   emulate -L zsh
-  case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|completion|update|features) return 0;; esac
+  case ${1-} in --version|-V|--help|-h|help|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|doctor|sandbox|debug|apply|a|archive|delete|unarchive|migrate-rollouts|migrate-nfs-db|exec-server|features) return 0;; esac
   return 1
 }
 

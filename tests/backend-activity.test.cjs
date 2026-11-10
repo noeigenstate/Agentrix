@@ -1169,36 +1169,55 @@ test('two SSH Claude terminals restore their own recorded conversations through 
 
 test('desktop task fixture emits a fresh received prompt that completes through the real reader and store, and releases its shell', async t => {
   const { runDesktopTask } = await import('./helpers/desktop-task-fixture.mjs');
-  const { CodexActivityReader } = require('../electron/codex-activity.cjs');
   for (const observationFails of [false, true]) {
-    const h = await harness(t), home = path.join(h.project.path, 'codex-home'), records = [], waits = [];
+    const h = await harness(t, 'local', 'claude'), home = path.join(h.project.path, 'claude-home'), waits = [], records = [];
+    const startedAt = Date.now();
     h.s.codexActive = false;
+    let script, session;
+    const hook = (state, id, extra = {}) => h.context.claudeActivity(h.project, h.s, { state, sessionId: session, eventId: `${session}:${id}`, ...extra });
     const page = { evaluate: async (_callback, args) => {
       if (args) {
         assert.equal(args.id, h.project.id);
-        assert.ok(args.command.includes("Send-AgentrixEvent 'codex-started'"));
-        assert.ok(args.command.includes("Send-AgentrixEvent 'codex-exited'"));
-        assert.ok(args.command.includes('Test-Path -LiteralPath'));
-        // Simulate only shell startup, leaving notification arming to the real rollout/input path below.
+        const file = /^& '(.+)'\r$/.exec(args.command)?.[1];
+        assert.ok(file, 'the terminal runs the fixture script');
+        script = await fs.readFile(file, 'utf8'); session = path.basename(file, '.ps1');
+        // The script reports the shell as the wrapper does, then sends each hook through the real hook script.
+        assert.ok(script.includes("Send-AgentrixEvent 'codex-started' -Agent 'claude'"));
+        assert.ok(script.includes("Send-AgentrixEvent 'codex-exited' -Agent 'claude'"));
+        assert.ok(script.includes('Test-Path -LiteralPath'));
+        assert.deepEqual([...script.matchAll(/-Kind (\w+)/g)].map(match => match[1]), ['start', 'stop', 'stop', 'notify']);
+        assert.ok(script.includes('"prompt":"Run desktop test task fixture-input-turn."'));
+        // Simulate only shell startup, leaving notification arming to the real hook and store path below.
         h.s.codexActive = true; h.s.activitySince = Date.now(); h.now(h.s.activitySince);
         return;
       }
-      return { value: { projects: [{ ...h.project, codexActive: h.s.codexActive, shellReady: !h.s.codexActive }] } };
+      return { value: { projects: [{ ...h.project, agent: h.s.agent, codexActive: h.s.codexActive, codexActivity: h.s.codexActivity, shellReady: !h.s.codexActive }] } };
     } };
     const waitFor = async (predicate, label) => {
       waits.push(label);
+      if (label === 'offline task starts with its prompt') {
+        h.now(h.s.activitySince + 100);
+        hook('working', 'start', { prompt: 'Run desktop test task fixture-input-turn.' });
+        assert.equal(h.project.completionArmed, true, 'the received prompt arms the round');
+      }
       if (label === 'interactive parent task completion') {
-        const reader = new CodexActivityReader(h.project.path, home, h.s.activitySince, {
-          onRecord: record => { records.push(record); codexConversation(h.s.conversation, record, h.project.path); },
-        });
-        const snapshot = await reader.read();
-        assert.equal(snapshot.state, 'complete');
-        h.context.applyActivity(h.project, h.s, snapshot);
+        // The round's records are read by the real transcript reader from the file the fixture wrote.
+        const { TranscriptTail } = require('../electron/agent-actions.cjs');
+        await new TranscriptTail(path.join(home, 'projects', 'desktop-task', session + '.jsonl')).read(record => records.push(record));
+        h.now(h.s.activitySince + 200);
+        hook('complete', 'stop');
         if (observationFails) throw new Error('completion observation failed');
       }
+      if (label === 'the repeated Stop and the idle notification are sent') {
+        h.now(h.s.activitySince + 300);
+        hook('complete', 'stop-again');
+        // claude-hook.ps1 sends nothing for an idle_prompt notification, so the host sees only the repeated Stop.
+        assert.match(await fs.readFile(path.join(__dirname, '../integration/claude-hook.ps1'), 'utf8'), /-notin @\('permission_prompt'/);
+        assert.ok(script.includes('idle_prompt'));
+        await fs.writeFile(path.join(home, 'projects', 'desktop-task', session + '.quiet'), 'sent');
+      }
       if (label === 'offline task returns to shell') {
-        const release = (await fs.readdir(h.project.path)).find(name => name.startsWith('.task-'));
-        assert.equal(await fs.readFile(path.join(h.project.path, release), 'utf8'), 'done');
+        assert.equal(await fs.readFile(path.join(home, 'projects', 'desktop-task', session + '.done'), 'utf8'), '');
         h.s.codexActive = false;
       }
       assert.equal(await predicate(), true, label);
@@ -1206,65 +1225,54 @@ test('desktop task fixture emits a fresh received prompt that completes through 
     const running = runDesktopTask(page, h.project, home, 'fixture-input-turn', waitFor);
     if (observationFails) await assert.rejects(running, /completion observation failed/);
     else await running;
-    assert.deepEqual(records.map(record => record.type === 'event_msg' ? record.payload.type : record.type),
-      ['session_meta', 'task_started', 'user_message', 'task_complete']);
-    const [meta, started, prompt, completed] = records;
-    assert.match(meta.payload.id, /^[a-f\d-]{36}$/i);
-    assert.equal(meta.payload.source, 'cli'); assert.equal(meta.payload.cwd, h.project.path);
-    assert.equal(started.payload.turn_id, 'fixture-input-turn'); assert.equal(completed.payload.turn_id, started.payload.turn_id);
-    assert.equal(prompt.payload.message, 'Run desktop test task fixture-input-turn.');
-    assert.ok(Date.parse(prompt.timestamp) >= h.s.activitySince, 'received input is newer than shell startup');
-    assert.ok(Date.parse(started.timestamp) <= Date.parse(prompt.timestamp) && Date.parse(prompt.timestamp) <= Date.parse(completed.timestamp));
+    assert.deepEqual(records.map(record => record.type + ':' + (record.message.stop_reason || '')), ['user:', 'assistant:end_turn']);
+    const [prompt, reply] = records;
+    assert.equal(prompt.message.content, 'Run desktop test task fixture-input-turn.');
+    assert.equal(prompt.sessionId, session); assert.equal(prompt.cwd, h.project.path);
+    assert.ok(Date.parse(prompt.timestamp) >= startedAt && Date.parse(prompt.timestamp) <= Date.parse(reply.timestamp), 'the received prompt is fresh and precedes the reply');
+    // One completion: the repeated Stop and the idle notification neither notify again nor arm.
     assert.equal(h.project.unread, 1); assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 1);
-    assert.equal(h.project.lastCompletedAt, Date.parse(completed.timestamp));
-    assert.equal(await fs.readFile(path.join(h.project.path, `.task-${meta.payload.id}.done`), 'utf8'), 'done', 'finally releases the occupied shell on success or failure');
-    assert.deepEqual(waits, ['offline task starts', 'interactive parent task completion', ...(observationFails ? [] : ['offline task returns to shell'])]);
+    assert.equal(h.project.lastCompletedAt, h.s.activitySince + 200);
+    assert.equal(h.s.codexActivity, 'complete');
+    assert.equal(await fs.readFile(path.join(home, 'projects', 'desktop-task', session + '.done'), 'utf8'), '', 'finally releases the occupied shell on success or failure');
+    assert.deepEqual(waits, ['offline task starts with its prompt', 'interactive parent task completion',
+      ...(observationFails ? [] : ['the repeated Stop and the idle notification are sent', 'offline task returns to shell'])]);
   }
 });
 
 test('visual smoke fixture records arm only its two fresh submissions, while duplicate completion and reopened history stay quiet', async t => {
-  const { CodexActivityReader } = require('../electron/codex-activity.cjs');
-  const h = await harness(t), home = path.join(h.project.path, 'visual-home');
-  await fs.mkdir(path.join(home, 'sessions'), { recursive: true });
-  const thread = '00000000-0000-4000-8000-000000000003';
-  const transcript = path.join(home, 'sessions', `rollout-${thread}.jsonl`);
-  // Execute just the real fixture's record builders and file writes, without importing its GUI runner.
+  const h = await harness(t, 'local', 'claude'), session = '00000000-0000-4000-8000-000000000003';
+  // Take just the real smoke's hook calls, in order, without importing its GUI runner.
   const source = await fs.readFile(path.join(__dirname, '../scripts/visual-smoke.mjs'), 'utf8');
-  const lines = source.split(/\r?\n/);
-  const builders = lines.filter(line => /^\s*const (record|submitted) =/.test(line));
-  const writes = lines.filter(line => /^\s*await fs\.(writeFile|appendFile)\(transcript,/.test(line));
-  assert.equal(builders.length, 2); assert.equal(writes.length, 5);
-  Object.assign(h.context, { fs, thread, transcript, projects: [h.project] });
-  const Clock = h.context.Date;
-  h.context.Date = class extends Clock { constructor(...args) { super(...(args.length ? args : [Clock.now()])); } };
-  vm.runInContext(builders.join('\n'), h.context);
-  const records = [];
-  const reader = new CodexActivityReader(h.project.path, home, h.s.activitySince, {
-    onRecord: record => { records.push(record); codexConversation(h.s.conversation, record, h.project.path); },
-  });
-  for (let index = 0; index < writes.length; index++) {
+  const calls = [...source.matchAll(/await hook\('(\w+)'(?:, (\{[^\n]*?\}))?\);/g)].map(match => ({ kind: match[1], payload: match[2] ? new Function(`return ${match[2]};`)() : {} }));
+  assert.deepEqual(calls.map(call => call.kind), ['start', 'stop', 'stop', 'notify', 'start', 'stop']);
+  assert.equal(calls[3].payload.notification_type, 'idle_prompt');
+  // claude-hook.ps1 turns start/stop into working/complete and drops an idle_prompt notification before it reaches the host.
+  const hookScript = await fs.readFile(path.join(__dirname, '../integration/claude-hook.ps1'), 'utf8');
+  assert.match(hookScript, /\$Kind -eq 'notify' -and \$hook\.notification_type -notin @\('permission_prompt'[^)]*\)\) \{ exit 0 \}/);
+  const states = { start: 'working', stop: 'complete' }, prompts = [];
+  for (let index = 0; index < calls.length; index++) {
+    const { kind, payload } = calls[index];
     h.now(2000 + index * 100);
-    await vm.runInContext(`(async () => { ${writes[index]} })()`, h.context);
-    h.context.applyActivity(h.project, h.s, await reader.read());
-    if (index === 0 || index === 3) {
+    if (kind !== 'notify') {
+      if (kind === 'start') prompts.push(payload.prompt);
+      h.context.claudeActivity(h.project, h.s, { state: states[kind], sessionId: session, eventId: `${session}:${index}`, prompt: payload.prompt });
+    }
+    // 0 and 4 are the two fresh submissions; every other call is a completion, a repeat or the dropped idle notification.
+    if (index === 0 || index === 4) {
       assert.equal(h.s.codexActivity, 'working'); assert.equal(h.project.completionArmed, true);
     } else {
       assert.equal(h.s.codexActivity, 'complete'); assert.equal(h.project.completionArmed, false);
     }
-    assert.equal(h.alerts(), index === 0 ? 0 : index < 4 ? 1 : 2);
+    assert.equal(h.alerts(), index === 0 ? 0 : index < 5 ? 1 : 2);
     if (index === 1) h.store.acknowledge(h.project.id);
-    if (index === 2 || index === 3) assert.equal(h.project.unread, 0, 'duplicate completion cannot rearm the acknowledged result');
+    if (index >= 2 && index <= 3) assert.equal(h.project.unread, 0, 'duplicate completion cannot rearm the acknowledged result');
   }
-  assert.equal(records[0].payload.id, thread); assert.equal(records[0].payload.cwd, h.project.path);
-  const prompts = records.filter(record => record.payload.type === 'user_message');
-  assert.deepEqual(prompts.map(record => record.payload.message), ['验证独立项目的任务状态', '继续验证下一轮任务完成后的提醒']);
-  assert.deepEqual(prompts.map(record => Date.parse(record.timestamp)), [2000, 2300]);
-  assert.equal(h.project.unread, 1); assert.equal(h.project.lastCompletedAt, 2400);
+  assert.deepEqual(prompts, ['验证独立项目的任务状态', '继续验证下一轮任务完成后的提醒']);
+  assert.equal(h.project.unread, 1); assert.equal(h.project.lastCompletedAt, 2500);
   h.store.acknowledge(h.project.id);
-  h.s.activitySince = 2500; h.s.activityPromptAt = 0;
-  const reopened = new CodexActivityReader(h.project.path, home, h.s.activitySince, {
-    onRecord: record => codexConversation(h.s.conversation, record, h.project.path),
-  });
-  h.context.applyActivity(h.project, h.s, await reopened.read());
+  // Reopened history: the earlier round's Stop, replayed after the terminal reopened, is older than it and never completes.
+  h.s.activitySince = 2600; h.s.activityPromptAt = 0; h.now(2700);
+  h.context.claudeActivity(h.project, h.s, { state: 'complete', sessionId: session, eventId: `${session}:replayed`, sentAt: 2500 });
   assert.equal(h.alerts(), 2); assert.equal(h.project.unread, 0); assert.equal(h.project.completionArmed, false);
 });

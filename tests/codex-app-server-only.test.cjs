@@ -31,9 +31,9 @@ test('product Codex command builders cannot restore exec or terminal input', () 
 
 test('Agentrix injected shells never start a Codex TUI: a typed codex runs the CLI only for its management commands', () => {
   const { TERMINAL_COMMANDS, wrapperCommands } = require('./fixtures/codex-terminal-commands.cjs');
-  // Whatever starts or serves a conversation, as `codex --help` of 0.167.0 lists it, with the options that take a prompt.
-  const conversational = ['exec', 'e', 'review', 'resume', 'fork', 'agents', 'queue', 'cloud', 'apply', 'a', 'app', 'app-server', 'mcp-server',
-    'exec-server', 'remote-control', 'debug', 'sandbox', 'doctor', '-m', '--model', '-c', '--config', '-p', '--profile', '-i', '--image'];
+  // Whatever starts or continues a conversation, as `codex --help` of 0.167.0 lists it, with the options that take a prompt.
+  const conversational = ['exec', 'e', 'review', 'resume', 'fork', 'agents', 'queue', 'cloud', 'mcp-server',
+    '-m', '--model', '-c', '--config', '-p', '--profile', '-i', '--image'];
   assert.deepEqual(TERMINAL_COMMANDS.filter(word => conversational.includes(word)), []);
   for (const [file, start, end] of [
     ['bootstrap.ps1', 'function global:codex {', '# Claude Code reports each turn'],

@@ -10,7 +10,7 @@ const exec = promisify(execFile), integration = path.resolve(__dirname, '../inte
 const argv = ['resume', '11111111-1111-4111-8111-111111111111', '-m', 'fixture', '中文 "quotes" \\ end'];
 // What starts a conversation, or is not known to start none: these ask the host and never reach the CLI.
 const conversations = [[], argv, ['--profile', 'other'], ['exec', 'task'], ['review'], ['fork', '--last'], ['修复登录页'],
-  ['Login'], ['login logout'], ['-v'], ['--model', 'fixture', 'login'], ['app-server'], ['doctor']];
+  ['Login'], ['login logout'], ['-v'], ['--model', 'fixture', 'login'], ['e', 'task'], ['agents'], ['queue'], ['cloud'], ['unknown-word']];
 // Management runs with arguments a shell could damage: spaces, quotes, a trailing backslash, an empty word.
 const managed = [...TERMINAL_COMMANDS.map(word => [word]), ['mcp', 'add', 'name with space', '--env', 'A="b c"', '中文 \\ end\\', '']];
 function fixture(t) {

@@ -77,7 +77,7 @@ const originalDesktopSteps = [
     "run": "node scripts/retry.mjs npm run test:material -- --packaged"
   },
   {
-    "name": "Verify transparent real Codex input and bright text without model requests",
+    "name": "Verify transparent composer input and bright text on the Claude stand-in without model requests",
     "run": "node scripts/retry.mjs npm run test:composer -- --packaged"
   },
   {
