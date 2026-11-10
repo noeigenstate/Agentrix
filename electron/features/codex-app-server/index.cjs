@@ -388,6 +388,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       function send(input) {
         const imageValid = value => typeof value === 'string' && (spec.owner === 'dispatch' && path.isAbsolute(value) || /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value));
         if (!input || typeof input.clientMessageId !== 'string' || !/^[\w:.-]{1,160}$/.test(input.clientMessageId) || typeof input.text !== 'string' || !input.text.trim() && !input.images?.length || input.text.length > 1024 * 1024 || input.images && (!Array.isArray(input.images) || input.images.length > 8 || input.images.some(x => !imageValid(x)))) return Promise.reject(new Error('invalid_input'));
+        // Only the owner's own session reads a leading "/" or "!" as a command. A dispatched worker's text is never one: it goes to the model as written.
+        const owned = spec.owner !== 'dispatch', name = owned ? commandName(input.text) : null;
+        if (['status', 'usage'].includes(name)) return observe(input, name);
         const fingerprint = createHash('sha256').update(JSON.stringify([input.text, input.images || []])).digest('hex'), prior = receipts.get(input.clientMessageId);
         if (prior) return prior.fingerprint === fingerprint ? prior.promise : Promise.reject(new Error('message_id_conflict'));
         if (receipts.size >= 2000) return Promise.reject(new Error('input_limit'));
@@ -395,10 +398,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           await changingOptions;
           if (!rpc || closed || !['idle', 'running', 'waiting'].includes(state)) throw new Error('session_unavailable');
           const clientId = input.clientMessageId;
-          const name = commandName(input.text);
           if (unsupported.has(name)) throw new Error(translate('原生模式暂不支持这个命令'));
           if (['model', 'effort', 'fast', 'new', 'clear'].includes(name)) throw new Error(translate('请使用原生输入框的命令菜单。'));
-          if (['compact', 'review', 'status', 'usage'].includes(name) || input.text.trim().startsWith('!')) {
+          if (['compact', 'review'].includes(name) || owned && input.text.trim().startsWith('!')) {
             if (input.images?.length) throw new Error(translate('命令不能附带图片。'));
             return localCommand(clientId, input.text.trim(), name);
           }
@@ -486,21 +488,24 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         });
         changingOptions = task.then(() => {}, () => {}); return task;
       }
+      // /status and /usage are read-only observations for the owner's popup: no conversation item, no input receipt, no turn and no place in the send
+      // queue, so a message sent right after never waits for these reads. The answer travels in the return value only: neither the snapshot nor a
+      // replay can show it again, and repeated queries never fill the input limit.
+      async function observe(input, name) {
+        await changingOptions;
+        if (!rpc || closed || !['idle', 'running', 'waiting'].includes(state)) throw new Error('session_unavailable');
+        if (input.images?.length) throw new Error(translate('命令不能附带图片。'));
+        if (input.text.trim().slice(name.length + 1).trim()) throw new Error(translate('这个命令不接受参数。'));
+        const values = await Promise.allSettled([readAccount(true), readLimits()]); assertOpen();
+        const [account, limits] = values.map(value => value.status === 'fulfilled' ? value.value : null);
+        const errors = values.flatMap((value, index) => value.status === 'rejected' ? [[['account/read', 'account/rateLimits/read'][index], value.reason]] : []);
+        return { clientMessageId: input.clientMessageId, status: 'consumed', local: { command: name, ...statusPanel({ options: { ...optionsSnapshot(), fast: configuredFast }, thread: threadResponse || {}, cwd: wireCwd, usage: currentUsage, account, limits, errors }, translate) } };
+      }
       async function localCommand(id, text, name) {
         const argument = name ? text.slice(name.length + 1).trim() : text.slice(1).trim();
-        const panel = name === 'status' || name === 'usage';
-        if (!panel && state !== 'idle') throw new Error(translate('请等待当前任务结束后再运行命令。'));
-        if (['compact', 'status', 'usage'].includes(name) && argument) throw new Error(translate('这个命令不接受参数。'));
+        if (state !== 'idle') throw new Error(translate('请等待当前任务结束后再运行命令。'));
+        if (name === 'compact' && argument) throw new Error(translate('这个命令不接受参数。'));
         if (!name && !argument) throw new Error(translate('请输入要运行的命令。'));
-        if (panel) {
-          // A read-only observation for the owner's popup: no conversation item, no input receipt event and no turn. The answer travels in the return value
-          // only, so neither the snapshot nor a replay can show it again, and the receipt entry is released so repeated queries never fill the input limit.
-          const values = await Promise.allSettled([readAccount(true), readLimits()]); assertOpen();
-          const [account, limits] = values.map(value => value.status === 'fulfilled' ? value.value : null);
-          const errors = values.flatMap((value, index) => value.status === 'rejected' ? [[['account/read', 'account/rateLimits/read'][index], value.reason]] : []);
-          receipts.delete(id);
-          return { clientMessageId: id, status: 'consumed', local: { command: name, ...statusPanel({ options: { ...optionsSnapshot(), fast: configuredFast }, thread: threadResponse || {}, cwd: wireCwd, usage: currentUsage, account, limits, errors }, translate) } };
-        }
         clientMessageId = id; origin = 'user'; manualCommand = name || 'shell';
         const previousTurn = events.binding.turnId;
         try {

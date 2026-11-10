@@ -17,14 +17,14 @@ const CONTEXT = { model: 'fake-model', totalTokens: 58400, maxTokens: 167000, ra
   mcpTools: [{ name: 'browser_click', serverName: 'playwright', tokens: 3000 }, { name: 'browser_type', serverName: 'playwright', tokens: 3800 }, { name: 'ping', serverName: 'other', tokens: 100 }],
   skills: { totalSkills: 2, includedSkills: 2, tokens: 3000, skillFrontmatter: [{ name: 'model-routing', source: 'project', tokens: 2400 }, { name: 'tiny', source: 'user', tokens: 600 }] } };
 
-function fixture(t, context = async () => CONTEXT) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-panel-')), fake = fakeSdk({ uniqueSessions: true }), query = fake.sdk.query;
+function fixture(t, context = async () => CONTEXT, sdkOptions = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-panel-')), fake = fakeSdk({ uniqueSessions: true, ...sdkOptions }), query = fake.sdk.query;
   fake.sdk.query = spec => ({ ...query(spec), getContextUsage: context, setModel: async () => {}, applyFlagSettings: async () => {} });
   const runtime = createClaudeRuntime({ directory: path.join(root, 'state'), loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save('sk-ant-offline-panel-fixture-only');
   t.after(async () => { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, fake, runtime, session: () => runtime.create({ owner: 'gui', cwd: root, env: { PATH: '' }, runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10, effort: 'high' }, () => {}) };
+  return { root, fake, runtime, session: (emit = () => {}) => runtime.create({ owner: 'gui', cwd: root, env: { PATH: '' }, runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10, effort: 'high' }, emit) };
 }
 
 test('only the four exact words are panel commands', () => {
@@ -85,6 +85,31 @@ test('/status without context usage still answers and says what it could not rea
   assert.deepEqual([status.context, status.errors], [null, [{ source: 'context', reason: '原因未知' }]], 'no reason from the SDK is repeated');
   assert.equal(status.session.model, 'fake-model', 'the model the session already saw is still told');
   await assert.rejects(session.send({ clientMessageId: 'p3', text: '/context' }), error => error.message === '无法读取上下文用量。' && !/sk-ant/.test(error.message));
+});
+
+test('/status on a session with no query yet reads the connection after the query exists: unknown, never not connected', async t => {
+  const f = fixture(t), session = f.session();
+  await session.start(); assert.equal(session.connection().kind, 'none', 'a lazy session has no query before the first question');
+  const fresh = (await session.send({ clientMessageId: 's0', text: '/status' })).local;
+  assert.deepEqual([fresh.account, fresh.errors, fresh.context.tokens], [{ kind: 'unknown' }, [], 58400], 'the query is there; what its first reply will tell is not known yet');
+  assert.deepEqual([fresh.session.version, fresh.session.permission, fresh.session.mcp], [null, null, []]);
+  await session.send({ clientMessageId: 'one', text: 'first' }); await settle();
+  f.fake.emit({ type: 'system', subtype: 'init', session_id: f.fake.inputs[0].session_id || session.snapshot().events.find(event => event.providerSessionId).providerSessionId,
+    apiKeySource: 'ANTHROPIC_API_KEY', model: 'fake-model', claude_code_version: '2.1.318', permissionMode: 'default', mcp_servers: [{ name: 'files', status: 'connected' }] }); await settle();
+  const told = (await session.send({ clientMessageId: 's1', text: '/status' })).local;
+  assert.deepEqual([told.account, told.session.version, told.session.permission, told.session.mcp], [{ kind: 'api' }, '2.1.318', 'default', [{ name: 'files', status: 'connected' }]]);
+});
+
+test('a read-only question whose query cannot start says so and leaves the session and its route as they were; a message still fails it', async t => {
+  const events = [], f = fixture(t, undefined, { preflightSource: 'user' }), session = f.session(event => events.push(event));
+  await session.start();
+  const before = events.length, status = (await session.send({ clientMessageId: 's0', text: '/status' })).local;
+  assert.deepEqual([status.context, status.errors, status.account], [null, [{ source: 'context', reason: '原因未知' }], { kind: 'unknown' }]);
+  await assert.rejects(session.send({ clientMessageId: 'c0', text: '/context' }), /无法读取上下文用量/);
+  assert.deepEqual([session.snapshot().state, events.length, f.runtime.apiState(10).status], ['idle', before, 'ready'], 'no failed session, no error event, no route marked unavailable');
+  await assert.rejects(session.send({ clientMessageId: 'one', text: 'first' }));
+  assert.deepEqual([session.snapshot().state, events.some(event => event.type === 'error' && event.payload.code === 'billing_identity_mismatch'), f.runtime.apiState(10).status],
+    ['failed', true, 'billing_identity_mismatch'], 'the same failure is recorded once something is really sent');
 });
 
 test('/cost and /usage come from the results the session saw and from the usage ledger; a read needs no query', async t => {

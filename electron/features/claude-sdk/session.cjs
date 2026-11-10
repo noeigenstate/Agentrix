@@ -368,6 +368,7 @@ function createClaudeSession(spec, emit, dependencies) {
       if (stopping || closed) throw new Error('会话已停止。');
       if (error.code === 'budget_exhausted') throw error;
       const failure = startupFailure(error);
+      if (observing) throw failure;
       onFailure(failure.code, failure, run.generation);
       publish('error', { code: failure.code, message: failure.message, retryable: false, willRetry: false, stage: 'startup' });
       setState('failed', failure.code);
@@ -376,6 +377,13 @@ function createClaudeSession(spec, emit, dependencies) {
     active = run; run.task = pump(run);
     void run.task.catch(() => { try { if (!closed) setState('failed', 'accounting_unavailable'); } catch { } });
     return run;
+  }
+  // One query is prepared at a time and shared by whoever asked for it. While only read-only questions (/context, /status) wait, its failure is theirs
+  // to tell: no session is marked failed and no route unavailable. Anything that joins to use the query makes a failure count as it always did.
+  let observing = false;
+  function prepare(prepareOnly, observation = false) {
+    observing = preparing ? observing && observation : observation;
+    return preparing ||= createQuery(prepareOnly).finally(() => { preparing = null; });
   }
   const connection = () => !active || closed || ['stopped', 'failed', 'disconnected'].includes(state)
     ? { kind: 'none', source: null, observedAt: null }
@@ -387,12 +395,14 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
     if (changingOptions) { try { await changingOptions; } catch { } }
     const read = command === 'context' || command === 'status' ? async () => {
-      const context = await (await optionsQuery()).query.getContextUsage();
+      const context = await (await optionsQuery(true)).query.getContextUsage();
       if (typeof context?.model === 'string') observedModel = context.model;
       return context;
     } : null;
-    const local = await panelAnswer(command, { read, tally, summary: usage.summary?.() ?? {}, budgetUsd: spec.monthlyBudgetUsd, limits, connection: connection(), init: active?.init,
-      session: () => ({ model: observedModel, effort: spec.effort || null, cwd: spec.cwd || null, sessionId: providerId }) });
+    // The question itself may be what creates the query, so what the query tells is read after it: a session with no query is lazy, not disconnected.
+    const local = await panelAnswer(command, { read, tally, summary: usage.summary?.() ?? {}, budgetUsd: spec.monthlyBudgetUsd, limits,
+      session: () => ({ model: observedModel, effort: spec.effort || null, cwd: spec.cwd || null, sessionId: providerId, init: active?.init,
+        connection: active ? connection() : { kind: 'unknown' } }) });
     if (closed || stopping) throw new Error('会话已停止。');
     return { clientMessageId, status: 'consumed', local: JSON.parse(clean(JSON.stringify(local))) };
   }
@@ -425,10 +435,7 @@ function createClaudeSession(spec, emit, dependencies) {
         cancelQuery(active, 'budget'); await active.task;
       }
     }
-    if (!active) {
-      preparing ||= createQuery().finally(() => { preparing = null; });
-      await preparing;
-    }
+    if (!active) await prepare(false);
     if (closed || stopping) throw new Error('会话已停止。');
     if (!canContinue()) return { status: 'rejected' };
     // No input has been queued yet; a key replaced during initialization must initialize again before delivery.
@@ -497,10 +504,10 @@ function createClaudeSession(spec, emit, dependencies) {
     } finally { clearTimeout(timer); }
   }
   const optionsSnapshot = () => ({ model: observedModel, effort: spec.effort || 'high', fast: spec.fast === true });
-  async function optionsQuery() {
+  async function optionsQuery(observation = false) {
     if (closed || stopping || !started) throw new Error('会话已停止。');
     if (active?.closing) await active.task;
-    if (!active) { preparing ||= createQuery(true).finally(() => { preparing = null; }); await preparing; }
+    if (!active) await prepare(true, observation);
     return active;
   }
   async function models() {
@@ -629,8 +636,7 @@ function createClaudeSession(spec, emit, dependencies) {
       const history = providerId ? await sessionHistory(sdk, spec, providerId) : [];
       if (!history || !history.length && !allowFresh || history.some(message => message.session_id !== providerId)) throw new Error('resume_history_unavailable');
       if (!history.length) { providerId = null; stream.provider(null); }
-      preparing ||= createQuery(true).finally(() => { preparing = null; });
-      await preparing;
+      await prepare(true);
       for (const message of history.slice(-1000)) normalize({ ...message, isReplay: true });
       normalize.settleReplay();
       return { providerSessionId: providerId };

@@ -57,9 +57,12 @@ function Body({ panel, onPick }: { panel: Panel; onPick?: (command: string) => v
   </>;
 }
 
-// The window an information command opens over the conversation, centred above the message box. Esc is caught on `window` before the message box sees it
-// (there it would stop a running agent); a press on the backdrop, the close button and Esc all close it. Tab stays among its buttons and Ctrl+C copies the
-// whole panel unless some text is selected. Nothing in it is part of the conversation.
+// The window an information command opens over the conversation, centred above the message box. A press on the backdrop, the close button and Esc all
+// close it. Esc is its own only when pressed in its session view (the window, the message box or the conversation): there it is caught on `window`
+// before the message box sees it (which would stop a running agent); an Esc aimed at another project, a terminal or anything else passes untouched.
+// With nothing focused (a press on the window's text leaves the page itself as the key's target) Esc belongs to a window the owner can see.
+// A hidden project keeps its views mounted, so the window goes with its view instead of waiting behind it. Tab stays among its buttons and Ctrl+C
+// copies the whole panel unless some text is selected. Nothing in it is part of the conversation.
 export function NativePanel({ state, onClose, onRefresh, onPick }: { state: PanelState; onClose: () => void; onRefresh: () => void; onPick?: (command: string) => void }) {
   const dialog = useRef<HTMLDialogElement>(null), close = useRef(onClose), copyAll = useRef(() => {});
   const [copied, setCopied] = useState(false), ready = state.state === 'ready' ? state.panel : null, title = ready?.title ?? panelTitle(state.agent, state.command);
@@ -73,8 +76,13 @@ export function NativePanel({ state, onClose, onRefresh, onPick }: { state: Pane
   useEffect(() => {
     dialog.current?.focus({ preventScroll: true });
     const keys = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close.current(); return; }
-      if (!dialog.current?.contains(event.target as Node | null)) return;
+      const target = event.target as Node | null;
+      if (event.key === 'Escape') {
+        const nowhere = target === document.body || target === document.documentElement || target === document;
+        if (!(nowhere ? dialog.current?.checkVisibility({ visibilityProperty: true }) : dialog.current?.closest('[data-native-session]')?.contains(target))) return;
+        event.preventDefault(); event.stopPropagation(); close.current(); return;
+      }
+      if (!dialog.current?.contains(target)) return;
       if (event.key === 'Tab') {
         const buttons = [...dialog.current.querySelectorAll<HTMLElement>('button:not(:disabled)')], at = buttons.indexOf(document.activeElement as HTMLElement);
         event.preventDefault();
@@ -82,7 +90,10 @@ export function NativePanel({ state, onClose, onRefresh, onPick }: { state: Pane
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c' && !window.getSelection()?.toString()) { event.preventDefault(); copyAll.current(); }
     };
     window.addEventListener('keydown', keys, true);
-    return () => window.removeEventListener('keydown', keys, true);
+    // A view that is not drawn (its project slot is hidden) has no box.
+    const hidden = new ResizeObserver(() => { if (!dialog.current?.getClientRects().length) close.current(); });
+    if (dialog.current) hidden.observe(dialog.current);
+    return () => { window.removeEventListener('keydown', keys, true); hidden.disconnect(); };
   }, []);
   return <div className="native-panel-scrim" onMouseDown={event => {
     // The press would otherwise focus what lies under the backdrop once it is gone.

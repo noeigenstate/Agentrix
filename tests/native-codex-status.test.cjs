@@ -12,7 +12,7 @@ const { createRouter } = require('../electron/features/native-session/router.cjs
 // No executable, account directory, network request or credential store is used.
 function server(cwd, tier = 'fast') {
   const child = new EventEmitter(), wire = [];
-  const failures = new Set();
+  const failures = new Set(), held = new Map();
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
   child.kill = () => { child.exitCode = 0; child.emit('exit', 0); child.emit('close', 0); };
   const send = message => child.stdout.write(JSON.stringify(message) + '\n');
@@ -30,13 +30,16 @@ function server(cwd, tier = 'fast') {
         cwd, model: 'gpt-6.1-sol', modelProvider: 'openai', reasoningEffort: 'high', serviceTier: tier, approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: { type: 'readOnly' } };
         else if (request.method === 'account/read') result = { account: { type: 'chatgpt', email: 'private@example.invalid', planType: 'pro' }, requiresOpenaiAuth: true };
         else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 2000000000 }, secondary: { usedPercent: 70, windowDurationMins: 10080, resetsAt: 2000500000 } }, rateLimitsByLimitId: {} };
+        else if (request.method === 'turn/start') result = { turn: { id: 'offline-turn', status: 'inProgress', items: [] } };
+        else if (request.method === 'turn/steer') result = { turnId: 'offline-turn' };
         else result = {};
-        send({ id: request.id, result });
+        // A held method answers only when the test releases it: a read that is still on its way.
+        if (held.has(request.method)) held.get(request.method).push(() => send({ id: request.id, result })); else send({ id: request.id, result });
       });
     }
     done();
   } });
-  return { child, wire, failures, notify: (method, params) => send({ method, params: { threadId: 'offline-thread', ...params } }) };
+  return { child, wire, failures, hold: method => held.set(method, []), release(method) { for (const answer of held.get(method)) answer(); held.delete(method); }, notify: (method, params) => send({ method, params: { threadId: 'offline-thread', ...params } }) };
 }
 async function fixture(t, tier = 'fast') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-status-offline-')), fake = server(root, tier), events = [];
@@ -95,6 +98,32 @@ test('Codex /status reports provider data, both quota windows and safe failures,
   assert.doesNotMatch(JSON.stringify(failed), /private server message/, 'a failure gives its code, not the server’s own words');
   assert.deepEqual(failed.limits.map(row => [row.usedPercent, row.resetsAtMs]), [[null, null], [null, null]]);
   assert.equal(failed.account.kind, 'unknown');
+});
+
+test('a /status still reading keeps no message waiting behind it', async t => {
+  const f = await fixture(t);
+  f.hold('account/read');
+  const status = f.router.send('t', f.id, { clientMessageId: 'slow', text: '/status' });
+  const message = await Promise.race([f.router.send('t', f.id, { clientMessageId: 'after', text: 'go on' }), new Promise(resolve => setTimeout(resolve, 500, 'waited behind the read'))]);
+  assert.equal(message.status, 'delivered');
+  f.release('account/read');
+  assert.deepEqual([(await status).status, (await status).local.errors], ['consumed', []]);
+});
+
+test('a dispatched worker’s text is never a command: a leading / or ! goes to the model as written', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-status-worker-')), fake = server(root);
+  const worker = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: () => fake.child })
+    .create({ terminalId: 't', projectId: 'p', owner: 'dispatch', readOnly: true, cwd: root, env: { CODEX_HOME: root, PATH: '' } }, () => {});
+  t.after(async () => { await worker.close(); fs.rmSync(root, { force: true, recursive: true }); });
+  await worker.start();
+  // The window's questions, the local commands, the menu's settings, a shell line and a built-in the native mode refuses: every family the owner's session reads.
+  const briefs = ['/status of the build: say whether it passes', '/usage', '/compact', '/review the diff before you answer', '/model gpt-6.1-sol', '/effort high', '/fast', '/new', '/clear', '!npm test', '/vim'];
+  for (const [at, text] of briefs.entries()) {
+    const receipt = await worker.send({ clientMessageId: `brief-${at}`, text });
+    assert.deepEqual([receipt.status, receipt.local], ['delivered', undefined], text);
+  }
+  assert.deepEqual(fake.wire.filter(row => ['turn/start', 'turn/steer'].includes(row.method) && row.params.threadId).map(row => row.params.input[0].text), briefs);
+  assert.deepEqual(fake.wire.filter(row => ['thread/compact/start', 'review/start', 'thread/shellCommand', 'model/list', 'account/read'].includes(row.method)).map(row => row.method), [], 'nothing was run or read in the worker’s name');
 });
 
 test('a refused local command cannot poison the queue for the next /status', async t => {

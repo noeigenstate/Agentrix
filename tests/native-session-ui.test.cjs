@@ -244,16 +244,30 @@ test('the panel’s style takes colours, radii and tokens from the app: no liter
   assert.match(rule('.native-panel-quota.is-out .native-panel-meter > i'), /var\(--danger\)/); assert.match(rule('.native-panel-meter > i'), /var\(--usage\)/);
 });
 
-// A window with the listeners and selection the panel needs; `close()` hands the globals back.
+// A window with the listeners, selection and size observers the panel needs; `close()` hands the globals back. A key goes to every listener in turn, as on
+// the real window, until one stops it. `resized(at)` tells the panel made at that place that its box changed size (to nothing, when its node says so).
 function panelWindow() {
-  const listeners = [], clipboard = [], state = { selection: '' }, saved = ['window', 'navigator'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
+  const listeners = [], observers = [], clipboard = [], state = { selection: '' }, saved = ['window', 'navigator', 'ResizeObserver'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, writable: true, value: class { constructor(run) { this.run = run; observers.push(this); } observe() {} disconnect() { observers.splice(observers.indexOf(this), 1); } } });
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { addEventListener: (type, fn, capture) => listeners.push({ type, fn, capture }), removeEventListener: (type, fn) => listeners.splice(listeners.findIndex(row => row.fn === fn && row.type === type), 1), getSelection: () => ({ toString: () => state.selection }) } });
   Object.defineProperty(globalThis, 'navigator', { configurable: true, writable: true, value: { clipboard: { writeText: async text => { clipboard.push(text); } } } });
-  const key = init => { const calls = []; listeners[0].fn({ target: {}, preventDefault: () => calls.push('prevent'), stopPropagation: () => calls.push('stop'), ...init }); return calls; };
-  return { listeners, clipboard, state, key, close() { for (const [name, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name]; } };
+  const key = init => {
+    const calls = []; let stopped = false;
+    for (const row of [...listeners]) if (!stopped) row.fn({ target: {}, preventDefault: () => calls.push('prevent'), stopPropagation: () => { stopped = true; calls.push('stop'); }, ...init });
+    return calls;
+  };
+  return { listeners, observers, clipboard, state, key, resized: at => observers[at].run(), close() { for (const [name, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name]; } };
 }
 
-test('the panel closes on Esc before the message box sees it, on a press of the backdrop and on its button; Tab stays among its buttons, Ctrl+C copies it all and refresh reads again', async () => {
+// The panel's nodes, stood in: its dialog, inside the session view that holds it (with that view's message box), drawn or not.
+function panelNodes(buttons = []) {
+  const inside = {}, box = {}, view = { contains: node => node === inside || node === box || node === dialog };
+  const dialog = { drawn: true, focus() {}, contains: node => node === inside, querySelectorAll: () => buttons, closest: selector => selector === '[data-native-session]' ? view : null, getClientRects: () => dialog.drawn ? [{}] : [],
+    checkVisibility: options => { assert.deepEqual(options, { visibilityProperty: true }); return dialog.drawn; } };
+  return { dialog, inside, box };
+}
+
+test('the panel closes on an Esc pressed in its own session view before the message box sees it, on a press of the backdrop and on its button; Tab stays among its buttons, Ctrl+C copies it all and refresh reads again', async () => {
   const closed = [], refreshed = [], win = panelWindow(), previousActive = document.activeElement;
   const harness = hookHarness('src/features/native-session/NativePanel.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './feed-parts': { AgentMark() {} },
     './native-panel.ts': load('features/native-session/native-panel.ts'), './native-panel.css': {} });
@@ -261,8 +275,13 @@ test('the panel closes on Esc before the message box sees it, on a press of the 
     const props = { state: { agent: 'codex', command: 'status', state: 'ready', panel: readPanel('codex', statusLocal()) }, onClose: () => closed.push(true), onRefresh: () => refreshed.push(true) };
     const tree = () => harness.render('NativePanel', props).result, root = tree();
     assert.deepEqual(win.listeners.map(row => [row.type, row.capture]), [['keydown', true]], 'captured, so the box’s own Esc (which stops a running agent) never fires');
-    assert.deepEqual(win.key({ key: 'a' }), []); assert.equal(closed.length, 0);
-    assert.deepEqual(win.key({ key: 'Escape' }), ['prevent', 'stop']); assert.equal(closed.length, 1);
+    const nodes = [0, 1, 2].map(at => ({ at, focus() { document.activeElement = this; } })), dialog = elements(root).find(node => node.type === 'dialog'), { inside, box, dialog: node } = panelNodes(nodes);
+    dialog.props.ref.current = node;
+    assert.deepEqual(win.key({ key: 'a', target: box }), []); assert.equal(closed.length, 0);
+    for (const [target, where] of [[{}, 'another project’s box or a terminal'], [null, 'nothing at all']]) { assert.deepEqual(win.key({ key: 'Escape', target }), [], 'an Esc aimed at ' + where + ' is not the panel’s'); assert.equal(closed.length, 0); }
+    assert.deepEqual(win.key({ key: 'Escape', target: box }), ['prevent', 'stop'], 'in its own view’s message box it comes first: the agent is not stopped'); assert.equal(closed.length, 1);
+    assert.deepEqual(win.key({ key: 'Escape', target: inside }), ['prevent', 'stop']); assert.equal(closed.length, 2);
+    closed.length = 1;
     const press = (target, button = 0) => { const calls = []; root.props.onMouseDown({ button, target, currentTarget: root, preventDefault: () => calls.push('prevent') }); return calls; };
     assert.deepEqual(press({}), []); assert.deepEqual(press(root, 2), []); assert.equal(closed.length, 1, 'a press inside, or with another button, does not close');
     assert.deepEqual(press(root), ['prevent']); assert.equal(closed.length, 2);
@@ -270,10 +289,7 @@ test('the panel closes on Esc before the message box sees it, on a press of the 
     close.props.onClick(); assert.equal(closed.length, 3); refresh.props.onClick(); assert.equal(refreshed.length, 1);
 
     // Tab and Ctrl+C count only inside the dialog, which here is a stand-in node holding three buttons.
-    const nodes = [0, 1, 2].map(at => ({ at, focus() { document.activeElement = this; } })), dialog = elements(root).find(node => node.type === 'dialog');
-    dialog.props.ref.current = { focus() {}, contains: node => node === inside, querySelectorAll: () => nodes };
-    const inside = {};
-    assert.deepEqual(win.key({ key: 'Tab', target: {} }), [], 'outside the dialog Tab is the page’s');
+    assert.deepEqual(win.key({ key: 'Tab', target: box }), [], 'outside the dialog Tab is the page’s');
     document.activeElement = nodes[2]; assert.deepEqual(win.key({ key: 'Tab', target: inside }), ['prevent']); assert.equal(document.activeElement, nodes[0], 'after the last button comes the first');
     win.key({ key: 'Tab', target: inside }); assert.equal(document.activeElement, nodes[1]);
     document.activeElement = nodes[0]; win.key({ key: 'Tab', shiftKey: true, target: inside }); assert.equal(document.activeElement, nodes[2], 'before the first comes the last');
@@ -284,8 +300,50 @@ test('the panel closes on Esc before the message box sees it, on a press of the 
     assert.equal(win.clipboard.length, 1); assert.equal(win.clipboard[0], load('features/native-session/native-panel.ts').panelText(props.state.panel), 'the whole panel as plain text');
     copy.props.onClick(); await settle(); assert.equal(win.clipboard.length, 2);
     const done = tree(); assert.equal(elements(done).filter(node => node.type === 'button')[1].props.title, '已复制', 'the button says it was copied');
-    harness.dispose(); assert.equal(win.listeners.length, 0, 'the listener goes with the window');
+    harness.dispose(); assert.deepEqual([win.listeners.length, win.observers.length], [0, 0], 'the listener and the observer go with the window');
   } finally { document.activeElement = previousActive; win.close(); }
+});
+
+test('a panel left open in one project never takes the Esc pressed in another, and goes when its own project is hidden', () => {
+  const win = panelWindow(), closed = { a: 0, b: 0 }, views = {};
+  const open = name => {
+    const harness = hookHarness('src/features/native-session/NativePanel.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './feed-parts': { AgentMark() {} },
+      './native-panel.ts': load('features/native-session/native-panel.ts'), './native-panel.css': {} });
+    const root = harness.render('NativePanel', { state: { agent: 'claude', command: 'cost', state: 'loading' }, onClose: () => closed[name]++, onRefresh() {} }).result;
+    views[name] = panelNodes(); elements(root).find(node => node.type === 'dialog').props.ref.current = views[name].dialog;
+    return harness;
+  };
+  const harnesses = [open('a'), open('b')];
+  try {
+    assert.deepEqual(win.key({ key: 'Escape', target: views.b.box }), ['prevent', 'stop']); assert.deepEqual(closed, { a: 0, b: 1 }, 'the Esc pressed in B closes B’s panel only, though A’s was opened first');
+    assert.deepEqual(win.key({ key: 'Escape', target: {} }), []); assert.deepEqual(closed, { a: 0, b: 1 }, 'a terminal’s Esc reaches the terminal');
+    win.resized(0); assert.equal(closed.a, 0, 'a resize of a panel that is drawn closes nothing');
+    views.a.dialog.drawn = false; win.resized(0); assert.deepEqual(closed, { a: 1, b: 1 }, 'hiding A’s project closes the panel left open in it');
+  } finally { for (const harness of harnesses) harness.dispose(); win.close(); }
+});
+
+test('with nothing focused (after a press on the panel’s text) Esc closes a panel that is visible, one at a time, and never one that is not', () => {
+  const win = panelWindow(), closed = { a: 0, b: 0 }, views = {}, hadBody = Object.hasOwn(document, 'body'), previousBody = document.body;
+  document.body = {};
+  const open = name => {
+    const harness = hookHarness('src/features/native-session/NativePanel.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './feed-parts': { AgentMark() {} },
+      './native-panel.ts': load('features/native-session/native-panel.ts'), './native-panel.css': {} });
+    const root = harness.render('NativePanel', { state: { agent: 'codex', command: 'usage', state: 'loading' }, onClose: () => { closed[name]++; views[name].dialog.drawn = false; }, onRefresh() {} }).result;
+    views[name] = panelNodes(); elements(root).find(node => node.type === 'dialog').props.ref.current = views[name].dialog;
+    return harness;
+  };
+  const harnesses = [open('a'), open('b')];
+  try {
+    views.a.dialog.drawn = false;
+    assert.deepEqual(win.key({ key: 'Escape', target: document.body }), ['prevent', 'stop']); assert.deepEqual(closed, { a: 0, b: 1 }, 'the hidden project’s panel is passed over; the visible one closes');
+    assert.deepEqual(win.key({ key: 'Escape', target: document.body }), []); assert.deepEqual(closed, { a: 0, b: 1 }, 'with no visible panel left the key is the page’s');
+    views.a.dialog.drawn = views.b.dialog.drawn = true;
+    for (const target of [document.documentElement, document]) assert.deepEqual(win.key({ key: 'Escape', target }), ['prevent', 'stop']);
+    assert.deepEqual(closed, { a: 1, b: 2 }, 'two visible panels close one press at a time');
+    views.a.dialog.drawn = true;
+    assert.deepEqual(win.key({ key: 'a', target: document.body }), []); assert.deepEqual(win.key({ key: 'Escape', target: {} }), [], 'a key pressed in something else is still never the panel’s');
+    assert.deepEqual(closed, { a: 1, b: 2 });
+  } finally { for (const harness of harnesses) harness.dispose(); if (hadBody) document.body = previousBody; else delete document.body; win.close(); }
 });
 
 test('the panel keeps refresh and copy shut while it asks and copy shut when it failed', () => {
