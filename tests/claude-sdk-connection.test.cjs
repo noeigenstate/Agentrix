@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { pathToFileURL } = require('node:url');
-const { createConnectionTest, listModels, probeBillingIdentity } = require('../electron/features/claude-sdk/connection.cjs');
+const { createConnectionTest, listModels, netRequest, probeBillingIdentity } = require('../electron/features/claude-sdk/connection.cjs');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
@@ -192,3 +192,174 @@ for (const [source, status] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'm
     assert.equal(JSON.stringify(result).includes(key), false);
   });
 }
+// A fake API that answers each route with its own status and body, and records what was sent.
+function api(routes) {
+  const calls = [];
+  return { calls, request(url, options, callback) {
+    const call = { url, options, body: null }; calls.push(call);
+    const [statusCode, body] = routes[new URL(url).pathname] || [500, {}];
+    const request = new EventEmitter(); request.destroy = () => {}; request.end = payload => queueMicrotask(() => {
+      call.body = payload === undefined ? null : JSON.parse(payload);
+      const response = new PassThrough(); response.statusCode = statusCode; callback(response); response.end(typeof body === 'string' ? body : JSON.stringify(body));
+    }); return request;
+  } };
+}
+const refusal = message => ({ type: 'error', error: { type: 'permission_error', message } });
+const keyCheck = (routes, inspectCli = cli, options = {}) => {
+  const fake = api(routes);
+  return { fake, check: createConnectionTest({ credentials: { read: () => key }, inspectCli, request: fake.request, ...options }) };
+};
+
+test('a key refused the model list is checked with a free token count, and its answer makes the key usable', async () => {
+  const { fake, check } = keyCheck({ '/v1/models': [403, refusal('Your API key does not have permission to list models.')], '/v1/messages/count_tokens': [200, { input_tokens: 8 }] });
+  const value = await check();
+  assert.equal(value.key.status, 'ok'); assert.equal(value.key.error, null); assert.equal(value.models, null);
+  assert.equal(value.modelsForbidden, true); assert.equal(value.modelsError, 'permission_error: Your API key does not have permission to list models.');
+  assert.equal(fake.calls.length, 2); assert.equal(fake.calls[1].url, 'https://api.anthropic.com/v1/messages/count_tokens');
+  assert.equal(fake.calls[1].options.method, 'POST'); assert.equal(fake.calls[1].options.headers['x-api-key'], key);
+  assert.equal(fake.calls[1].options.headers['content-type'], 'application/json');
+  assert.deepEqual(fake.calls[1].body, { model: 'claude-opus-5-5', messages: [{ role: 'user', content: 'ping' }] }, 'no model set: the stand-in default');
+  assert.equal(value.cli.status, 'ok');
+});
+
+test('the token count asks about the model a new session sets, and a model the key may not use still leaves the key working', async () => {
+  const routes = { '/v1/models': [403, refusal('list refused')], '/v1/messages/count_tokens': [404, { type: 'error', error: { type: 'not_found_error', message: 'model: claude-x-1' } }] };
+  const configs = [];
+  const { fake, check } = keyCheck(routes, cli, { sessionModel: config => { configs.push(config); return 'claude-x-1'; } });
+  const value = await check({ projectId: 'p' });
+  assert.deepEqual(configs, [{ projectId: 'p' }]); assert.equal(fake.calls[1].body.model, 'claude-x-1');
+  assert.equal(value.key.status, 'ok'); assert.equal(value.modelsForbidden, true); assert.equal(value.unavailableModel, 'claude-x-1');
+  for (const sessionModel of [() => 'opus', () => null, () => { throw new Error('ssh project'); }]) {
+    const other = keyCheck(routes, cli, { sessionModel });
+    await other.check(); assert.equal(other.fake.calls[1].body.model, 'claude-opus-5-5');
+  }
+  const unknown = await keyCheck({ ...routes, '/v1/messages/count_tokens': [404, { type: 'error', error: { type: 'other_error', message: 'gone' } }] }).check();
+  assert.equal(unknown.key.status, 'error', 'only a model the API could not find means the key was accepted');
+});
+
+test('a model list that answers (ok, invalid or rate limited) is the verdict, with no token count', async () => {
+  for (const [code, status] of [[200, 'ok'], [401, 'invalid'], [429, 'rate_limited']]) {
+    const { fake, check } = keyCheck({ '/v1/models': [code, code === 200 ? { data: [{ id: 'claude-x' }] } : refusal('no')], '/v1/messages/count_tokens': [200, {}] });
+    assert.equal((await check()).key.status, status); assert.equal(fake.calls.length, 1);
+  }
+});
+
+test('the latency of a key checked twice is that of the request that decided', async () => {
+  let time = 0;
+  const fake = api({ '/v1/models': [403, refusal('list refused')], '/v1/messages/count_tokens': [200, {}] });
+  const check = createConnectionTest({ credentials: { read: () => key }, inspectCli: cli, now: () => time,
+    request: (url, ...rest) => { time += url.includes('count_tokens') ? 30 : 400; return fake.request(url, ...rest); } });
+  assert.equal((await check()).key.latencyMs, 30);
+});
+
+test('requests through Electron net keep the https.request shape and let net set the body length', async () => {
+  const made = [];
+  const net = { request(options) {
+    const request = new EventEmitter(); made.push({ options, request, aborted: 0, ended: [] });
+    request.end = (...args) => { made.at(-1).ended.push(args); queueMicrotask(() => {
+      const response = new PassThrough(); response.statusCode = 200; request.emit('response', response); response.end(JSON.stringify({ input_tokens: 1 }));
+    }); };
+    request.abort = () => { made.at(-1).aborted++; }; return request;
+  } };
+  const value = await keyCheck({}, cli, { request: netRequest(net) }).check();
+  assert.equal(value.key.status, 'error', 'a token count body is not a model list');
+  assert.equal(made[0].options.url, 'https://api.anthropic.com/v1/models?limit=100'); assert.equal(made[0].options.method, 'GET');
+  assert.equal(made[0].options.headers['x-api-key'], key); assert.deepEqual(made[0].ended, [[]]); assert.equal(made[0].aborted, 1);
+  const post = netRequest(net)('https://api.anthropic.com/v1/messages/count_tokens', { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': 2 } }, () => {});
+  assert.equal(post.on('error', () => {}), post); post.end('{}');
+  assert.deepEqual(made[1].options.headers, { 'content-type': 'application/json' }); assert.deepEqual(made[1].ended, [['{}']]);
+});
+
+test('a key refused both the list and the token count is not usable, with Anthropic\'s reason and never the key', async () => {
+  for (const [code, status] of [[403, 'forbidden'], [401, 'invalid']]) {
+    const { check } = keyCheck({ '/v1/models': [403, refusal('list refused')],
+      '/v1/messages/count_tokens': [code, refusal(`Key ${key} cannot use this organization.`)] });
+    const value = await check();
+    assert.equal(value.key.status, status); assert.equal(value.models, null); assert.equal(value.modelsForbidden, undefined);
+    assert.equal(value.key.error, 'permission_error: Key … cannot use this organization.');
+    assert.ok(!JSON.stringify(value).includes(key));
+  }
+  const { fake, check } = keyCheck({ '/v1/models': [403, refusal('list refused')] });
+  const unanswered = await check();
+  assert.equal(fake.calls.length, 2); assert.equal(unanswered.key.status, 'error'); assert.equal(unanswered.key.error, 'permission_error: list refused');
+});
+
+test('the reason in a refusal is kept short, without control characters or anything shaped like a key', async () => {
+  const { check } = keyCheck({ '/v1/models': [401, refusal(`bad\u0000 sk-ant-api03-other-key\n${'x'.repeat(500)}`)] });
+  const value = await check();
+  assert.equal(value.key.status, 'invalid'); assert.equal(value.key.error.length, 300);
+  assert.match(value.key.error, /^permission_error: bad … x+$/); assert.doesNotMatch(value.key.error, /sk-ant/);
+  for (const body of [{}, 'not json', { error: { message: key } }]) {
+    const { check: other } = keyCheck({ '/v1/models': [401, body] });
+    assert.equal((await other()).key.error, null);
+  }
+});
+
+test('the new-session path follows the token count: a refused list alone keeps the API, a refused key moves to the terminal', async t => {
+  for (const [count, route, reason] of [[200, 'api', null], [403, 'terminal', 'API 密钥没有调用权限。']]) {
+    const root = directory(t), fake = fakeSdk(), directoryPath = path.join(root, 'data');
+    const factory = createClaudeRuntime({ directory: directoryPath, safeStorage, inspectCli: cli, loadSdk: async () => fake.sdk,
+      request: api({ '/v1/models': [403, refusal('list refused')], '/v1/messages/count_tokens': [count, refusal('use refused')] }).request,
+      resolveExecutable: async () => 'synthetic-only', connectionSpec: () => specOf(root) });
+    t.after(() => factory.close()); factory.credentials.save(key);
+    fs.writeFileSync(path.join(directoryPath, 'settings.json'), JSON.stringify({ claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: 10 }));
+    const result = await createNativeSessions({ directory: directoryPath, claude: factory }).testConnection();
+    assert.equal(result.path, route); assert.equal(result.reason, reason);
+    assert.equal(result.key.status, count === 200 ? 'ok' : 'forbidden'); assert.equal(result.models, null);
+    assert.deepEqual(result.billing, { status: 'ok', source: 'ANTHROPIC_API_KEY' }, 'the CLI still reports its billing source');
+  }
+});
+
+test('a CLI check that failed says how, and only in fields of a known shape', async () => {
+  const found = 'C:\\Users\\someone\\.local\\bin\\claude.exe', missing = { status: 'missing', version: null, required: '2.1.317' };
+  const cliOf = async value => (await keyCheck({ '/v1/models': [200, { data: [] }] }, async () => value).check()).cli;
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'timeout', found }), { ...missing, reason: 'timeout', found });
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'timeout', found, elapsedMs: 11500 }), { ...missing, reason: 'timeout', found, elapsedMs: 11500 });
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'timeout', found, elapsedMs: -1 }), { ...missing, reason: 'timeout', found });
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'failed', found, error: 'EPERM' }), { ...missing, reason: 'failed', found, error: 'EPERM' });
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'unreadable', found, error: '<script>' }), { ...missing, reason: 'unreadable', found });
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'odd', found }), { ...missing, reason: 'not_found' });
+  assert.deepEqual(await cliOf({ status: 'missing', version: null }), { ...missing, reason: 'not_found' });
+  assert.deepEqual(await cliOf({ status: 'ok', version: '2.1.320', reason: 'timeout', found }), { status: 'ok', version: '2.1.320', required: '2.1.317' });
+});
+
+test('an inspection that throws, also inside the runtime\'s CLI observer, is a failed check that routes as unverified, not a missing CLI', async t => {
+  const failed = { status: 'missing', version: null, required: '2.1.317', reason: 'failed' };
+  const check = createConnectionTest({ credentials: { read: () => null, status: () => ({ saved: false }) },
+    request: () => assert.fail('no HTTP without a key'), inspectCli: async () => { throw new Error('inspection broke'); } });
+  assert.deepEqual((await check()).cli, failed);
+  // The runtime observes every inspection before the test reads it; an inspection without a result makes the observer throw.
+  const root = directory(t), directoryPath = path.join(root, 'data');
+  const factory = createClaudeRuntime({ directory: directoryPath, safeStorage, inspectCli: async () => undefined,
+    request: api({ '/v1/models': [200, { data: [] }] }).request, loadSdk: async () => assert.fail('no SDK without a CLI'), connectionSpec: () => specOf(root) });
+  t.after(() => factory.close()); factory.credentials.save(key);
+  const result = await createNativeSessions({ directory: directoryPath, claude: factory }).testConnection();
+  assert.equal(result.key.status, 'ok'); assert.deepEqual(result.cli, failed);
+  assert.equal(result.reason, 'native_cli_unverified'); assert.equal(result.path, 'terminal');
+});
+test('a CLI check that comes back after a later one was seen is stale: the later result stands and availability is not reset', async t => {
+  const root = directory(t);
+  const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, inspectCli: cli,
+    request: () => assert.fail('no HTTP'), loadSdk: async () => assert.fail('no SDK'), connectionSpec: () => specOf(root) });
+  t.after(() => factory.close());
+  let resets = 0; factory.onAvailabilityChange(() => { resets++; });
+  let finishOld; const first = factory.trackCli(new Promise(resolve => { finishOld = resolve; }));
+  const newer = { status: 'ok', version: '2.1.322', required: '2.1.317', file: 'C:\\new\\claude.exe' };
+  assert.deepEqual(await factory.trackCli(Promise.resolve(newer)), newer);
+  finishOld({ status: 'missing', version: null, required: '2.1.317', file: null, reason: 'timeout', found: 'C:\\old\\claude.exe' });
+  assert.deepEqual(await first, newer, 'the stale check answers with the newer result'); assert.equal(resets, 0);
+  await factory.trackCli(Promise.resolve({ ...newer, version: '2.1.323' }));
+  assert.equal(resets, 1, 'a newer check that differs still resets availability');
+});
+
+test('in the app the token count asks about the stand-in model: main\'s connection spec names none', async t => {
+  const models = [];
+  for (const spec of [{ agent: 'claude', owner: 'gui', cwd: '.', effort: 'high', fast: true }, { agent: 'claude', model: 'claude-sonnet-5-5' }]) {
+    const root = directory(t), fake = api({ '/v1/models': [403, refusal('list refused')], '/v1/messages/count_tokens': [200, {}] });
+    const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, inspectCli: async () => ({ status: 'missing', version: null }),
+      request: fake.request, loadSdk: async () => assert.fail('no SDK without a CLI'), connectionSpec: () => spec });
+    t.after(() => factory.close()); factory.credentials.save(key);
+    assert.equal((await factory.testConnection()).key.status, 'ok'); models.push(fake.calls[1].body.model);
+  }
+  assert.deepEqual(models, ['claude-opus-5-5', 'claude-sonnet-5-5']);
+});

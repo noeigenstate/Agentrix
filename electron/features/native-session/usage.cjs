@@ -1,13 +1,15 @@
 const { choosePath } = require('./routing.cjs');
 
+// A CLI found but not verified (its check timed out, failed or printed no version) is not called missing.
+const cliReason = cli => cli.status === 'too_old' ? 'cli_too_old' : cli.reason && cli.reason !== 'not_found' ? 'native_cli_unverified' : 'cli_missing';
 function nextPath(agent, config, apiState, cli) {
   if (agent === 'codex') {
-    return ['missing', 'too_old'].includes(cli?.status) ? { path: null, reason: cli.status === 'missing' ? 'cli_missing' : 'cli_too_old' } : choosePath({ agent });
+    return ['missing', 'too_old'].includes(cli?.status) ? { path: null, reason: cliReason(cli) } : choosePath({ agent });
   }
   if (config.claudePath === 'terminal-only') return { path: 'terminal', reason: 'set_terminal' };
   const selection = choosePath({ agent, ...config, apiState });
   if (selection.path === 'api' && ['missing', 'too_old'].includes(cli?.status)) {
-    return choosePath({ agent, ...config, apiState: { reason: cli.status === 'missing' ? 'cli_missing' : 'cli_too_old' } });
+    return choosePath({ agent, ...config, apiState: { reason: cliReason(cli) } });
   }
   if (selection.reason === 'native_cli_required') selection.reason = 'cli_missing';
   if (selection.path === 'api' && config.claudePath === 'api-only') selection.reason = 'set_api';

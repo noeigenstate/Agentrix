@@ -3,7 +3,7 @@ const { randomUUID } = require('node:crypto');
 const { createCredentials } = require('./credentials.cjs');
 const { createSdkLoader } = require('./runtime.cjs');
 const { resolveClaudeExecutable, inspectClaudeExecutable } = require('./executable.cjs');
-const { createConnectionTest, probeBillingIdentity } = require('./connection.cjs');
+const { createConnectionTest, probeBillingIdentity, netRequest } = require('./connection.cjs');
 const { createUsage } = require('./usage.cjs');
 const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
@@ -23,12 +23,22 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   const owners = readJson(ownerFile, []);
   const ownerSessions = new Map((Array.isArray(owners) ? owners.slice(-10000) : []).filter(row => row && typeof row.id === 'string' && /^[\w-]{1,100}$/.test(row.id) && typeof row.cwd === 'string').map(row => [row.id, row.cwd]));
   for (const [id, cwd] of ownerSessions) rememberClaudeSource(id, 'gui', cwd);
-  function observeCli(value) {
+  // CLI checks are numbered as they start. One that comes back after a later one was seen is stale: it changes nothing,
+  // and its caller gets the newer result instead.
+  let cliIssued = 0, cliSeen = 0, cliLatest;
+  function observeCli(value, ticket = ++cliIssued) {
+    if (ticket < cliSeen) return false;
+    cliSeen = ticket; cliLatest = value;
     const identity = JSON.stringify([value.status, value.version || null, value.file || null]);
     if (cliIdentity !== null && cliIdentity !== identity) resetAvailability();
     cliIdentity = identity;
+    return true;
   }
-  async function checkedCli() { const value = await inspectCli(); observeCli(value); return value; }
+  async function trackCli(check) {
+    const ticket = ++cliIssued, value = await check;
+    return observeCli(value, ticket) ? value : cliLatest;
+  }
+  const checkedCli = () => trackCli(inspectCli());
   function refreshAvailability() {
     if (![...unavailable.values()].some(value => value.reason === 'billing_identity_mismatch')) return Promise.resolve();
     return refreshing ||= checkedCli().catch(() => {}).finally(() => { refreshing = null; });
@@ -58,9 +68,10 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     writeJson(path.join(directory, 'policy-audit.json'), next); decisions = next;
   });
   const runtimeApi = {
-    credentials, usage, observeCli, refreshAvailability,
+    credentials, usage, observeCli, trackCli, refreshAvailability,
     onAvailabilityChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     testConnection: createConnectionTest({ credentials, inspectCli: checkedCli, request, now, availabilityGeneration,
+      sessionModel: (config = {}) => connectionSpec(config.projectId).model,
       probeBilling: async (key, config = {}, observedGeneration) => {
         const scope = config.projectId || '';
         const result = await probeBillingIdentity({ key, spec: connectionSpec(config.projectId), loadSdk, resolveExecutable,
@@ -138,4 +149,4 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   };
   return runtimeApi;
 }
-module.exports = { createClaudeRuntime };
+module.exports = { createClaudeRuntime, netRequest };
