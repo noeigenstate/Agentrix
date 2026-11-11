@@ -59,3 +59,23 @@ test('dispatch tests start workers only through an injected fake CLI', () => {
   }
   assert.ok(runs > 0 && entrypoints > 0, 'the guard found the helper runs it checks');
 });
+
+// The SSH worker drops the helper when it or its runtime modules pass its limits; 1.4.0 outgrew the old limits and
+// failed every SSH session, so growth must show up here long before it reaches them.
+test('the helper and its runtime modules fit the SSH worker limits with a quarter to spare, and the open message fits its line', () => {
+  const worker = read('integration/remote-worker.py');
+  const limit = name => {
+    const match = worker.match(new RegExp(String.raw`^${name} = ([\d* ]+)\r?$`, 'm'));
+    assert.ok(match, `integration/remote-worker.py defines ${name}`);
+    return match[1].split('*').reduce((product, factor) => product * Number(factor), 1);
+  };
+  const carried = runtimeFiles(), count = Object.keys(carried).length;
+  const bytes = Object.values(carried).reduce((sum, text) => sum + Buffer.byteLength(text), 0);
+  const helper = Buffer.byteLength(read('integration/dispatch.cjs'));
+  assert.ok(count <= limit('DISPATCH_MODULE_COUNT') * 0.75, `${count} runtime modules leave under 25% of DISPATCH_MODULE_COUNT`);
+  assert.ok(bytes <= limit('DISPATCH_MODULE_BYTES') * 0.75, `${bytes} bytes of runtime modules leave under 25% of DISPATCH_MODULE_BYTES`);
+  assert.ok(helper <= limit('DISPATCH_HELPER_BYTES') * 0.75, `the ${helper}-byte helper leaves under 25% of DISPATCH_HELPER_BYTES`);
+  const { MAX_SSH_BUNDLE_BYTES } = require('../electron/features/skills/store.cjs');
+  assert.ok(limit('DISPATCH_HELPER_BYTES') + limit('DISPATCH_MODULE_BYTES') + MAX_SSH_BUNDLE_BYTES <= limit('MAX_MESSAGE') * 0.75,
+    'the helper, its modules and the skills bundle leave a quarter of MAX_MESSAGE for escaping and the envelope');
+});

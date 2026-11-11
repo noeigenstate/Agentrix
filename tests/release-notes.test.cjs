@@ -42,19 +42,20 @@ test('the guide card never outgrows the window: it clips, the buttons never shri
   assert.match(read('src/features/settings/settings.css'), /\.about-page \.release-groups, \.about-page \.release-notes \{ max-width: \d+px; \}/, 'the About change log has a comfortable line length');
 });
 
-test('a beta groups its new notes ahead of the rest under their own headings; a stable release lists every note ungrouped', () => {
+test('a stable release lists every note ungrouped; a beta lists them ungrouped too, or splits new notes ahead of earlier ones under two headings', () => {
   const marked = WHATS_NEW.map(note => note.group === 'new');
-  if (JSON.parse(read('package.json')).version.includes('-beta.')) {
-    assert.ok(marked.some(Boolean) && marked.some(flag => !flag), 'both groups are present');
+  if (!JSON.parse(read('package.json')).version.includes('-beta.')) assert.ok(!marked.some(Boolean), 'a stable release shows one list, so no note carries a group');
+  else if (marked.some(Boolean)) {
+    assert.ok(marked.some(flag => !flag), 'both groups are present');
     assert.deepEqual(marked, [...marked].sort((a, b) => Number(b) - Number(a)), 'the new notes are a prefix, so the release body keeps its order');
-  } else assert.ok(!marked.some(Boolean), 'a stable release shows one list, so no note carries a group');
+  } // else: the first beta of a version has no earlier betas, so it shows a single list
   assert.ok(WHATS_NEW.every(note => note.group === undefined || note.group === 'new'));
   const component = read('src/features/guide/ReleaseNotes.tsx'), css = read('src/features/guide/release-notes.css');
-  for (const heading of ['本次测试版新增', '1.3.26 的其他更新']) {
+  for (const heading of ['本次测试版新增', '此前测试版的更新']) {
     assert.match(component, new RegExp(`<h4>\\{t\\('${heading}'\\)\\}</h4>`));
     assert.ok(en[heading], `${heading}: translated`);
   }
-  assert.equal(en['本次测试版新增'], 'New in this beta'); assert.equal(en['1.3.26 的其他更新'], 'Also in 1.3.26');
+  assert.equal(en['本次测试版新增'], 'New in this beta'); assert.equal(en['此前测试版的更新'], 'Earlier betas of this version');
   assert.match(component, /!added\.length \|\| !earlier\.length\) return <NoteList notes=\{WHATS_NEW\} \/>/, 'with one kind of note there are no headings');
   assert.match(css, /\.release-groups h4 \{[^}]*font-size: 12px;[^}]*color: var\(--text-2\)/);
 });

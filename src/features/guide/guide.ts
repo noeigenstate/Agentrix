@@ -1,36 +1,7 @@
 // What the usage guide and the About page list for this release; the guide opens on it after an update.
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
-// A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "also in". A stable release carries no group.
+// A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
+// The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "原生模式", text: "Claude 和 Codex 都可以在原生模式下运行，命令、改动和计划都直接显示，需要你回答的提问和策略要求的确认也在这里处理；Claude 也可以在设置里改回终端界面。" },
-  { title: "Codex 原生运行", text: "应用里的 Codex 全部使用原生模式，在终端输入 codex 开启对话也会打开原生界面；codex --version、login、mcp 等不开启对话的命令仍在终端里直接运行。" },
-  { title: "运行方式", text: "设置里可以保存 API 密钥、测试连接、设定月预算；Claude 默认走 API，额度用完自动转到订阅登录的终端，接着同一段对话。" },
-  { title: "运行方式立刻生效", text: "改运行方式或保存、清除密钥后，正在运行的会话也会切过去，不用重开，对话接着走：空闲的马上切，工作中的等本轮结束，有后台任务的先问你。" },
-  { title: "计费检查", text: "测试连接会确认 Claude Code 报告的计费来源是 API 密钥，不是的话新会话转到终端并说明原因；运行方式切换失败时，提示里也会附上具体原因。" },
-  { title: "连接与额度", text: "活动栏显示 Claude、Codex 当前走 API 还是订阅，以及上下文长度和额度：走 API 显示月预算，走订阅显示 5 小时和每周额度；换账号后显示新账号的额度，临时读取失败时保留最后一次读数。" },
-  { title: "速率显示", text: "原生模式下，活动栏会显示主模型的 token 速率。" },
-  { title: "原生命令", text: "原生模式里可以用 /model、/effort、/new、/clear、/compact 等斜杠命令，也可以用 ! 运行命令；改完设置会出现一条两秒的提示，不在对话里留一行。" },
-  { title: "结果面板", text: "原生模式里，/status、/usage、/context、/cost 的结果显示在输入框上方的面板里，不写进对话，也不发给模型；按 Esc 或点面板外面关闭。" },
-  { title: "步骤显示", text: "原生模式里，工具步骤显示做了什么和对应的文件或命令，不贴出输出内容；失败时附一行原因，结果没能确认的标上问号。" },
-  { title: "压缩提示", text: "压缩上下文时会显示进度，完成或失败都有一行说明。" },
-  { title: "处理中也能输入", text: "Claude Code 或 Codex 工作时也能继续输入和发送，消息排在当前步骤之后；停止按钮和 Esc 随时可用。" },
-  { title: "语音输入", text: "点输入框旁的麦克风，就能在 Claude 和 Codex 原生模式里用语音输入文字。" },
-  { title: "右键引用", text: "在消息上点右键可以引用或复制，选中一段文字时只处理选中的部分。" },
-  { title: "Agent 标签", text: "调用的模型挪到左栏，和文件、Git 并列，打开项目时默认显示。" },
-  { title: "子代理分屏", text: "在 Agent 标签点一个子代理，对话旁会显示它正在做什么，一次只显示一个，点另一个就替换；派发的工作者可以直接在这里收到你的提示。" },
-  { title: "插话直达", text: "给子代理的话直接送到它那里（Claude 中途接收，Codex 在当前一步后接收），不再转给主会话，分屏里显示送达状态。" },
-  { title: "来源署名", text: "子 Agent 分屏会按真实来源标明消息发送者，区分你的插话与主模型的指令。" },
-  { title: "任务书渲染", text: "主控模型发给工作者的任务书和追加指示按 Markdown 显示；你自己的消息仍是纯文本。" },
-  { title: "提问不卡住", text: "派发出去的 Codex 工作者提问后无人回答时，10 分钟后自动拒绝，任务继续完成，不再一直卡住。" },
-  { title: "子代理读项目设置", text: "Claude 子代理和终端一样读取 CLAUDE.md、技能和项目设置。" },
-  { title: "结束的记录自动离开", text: "调用的模型里，结束的记录自动消失，失败的保留 30 秒，分屏开着时不消失。" },
-  { title: "实时状态", text: "终端里的状态实时同步到阅读视图和活动栏，处理完立即可以继续；遇到终端里的确认时，你打的消息先排队，处理完再发出。" },
-  { title: "确认在终端", text: "终端界面里需要你确认或选择时，以及输入任何斜杠命令时，都会直接弹出终端；你正在输入时弹出的终端不会抢走焦点。" },
-  { title: "更新通道", text: "设置的「关于」页可以选择稳定版或测试版；切到测试版前需同意测试协议，随时可以切回稳定版，不会被降级。" },
-  { title: "数据看板", text: "改用彩色图表，各模型的用时、费用和通过率一眼可比，数据每分钟自动更新。" },
-  { title: "虚拟实验室", text: "本项目历史、知名开源项目和 AA 测试三种任务来源可以多选，各自独立运行再汇总比较；实验里的模型连不到本机的 Docker，也改不了评分环境。" },
-  { title: "系统技能", text: "始终以系统自带的为准：项目里同名的副本会被自动移到恢复文件夹；想扩展，请把技能命名为「系统技能名-标识」。" },
-  { title: "技能即时更新", text: "技能改动后，正在运行的 Claude Code 会话在下一次压缩或清空对话时就会拿到新版本。" },
-  { title: "浅色终端", text: "白色主题下，为深色终端设计的文字会自动换成深色，正文和次要文字都清楚可读。" },
-  { title: "去掉边框", text: "点击窗口或分屏时不再出现边框。" },
+  { title: "SSH 连接", text: "修复 1.4.0 打开 SSH 项目时提示 Invalid dispatch modules、会话无法启动的问题。" },
 ];

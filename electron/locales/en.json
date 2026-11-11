@@ -3011,5 +3011,8 @@
   "测试连接会确认 Claude Code 报告的计费来源是 API 密钥，不是的话新会话转到终端并说明原因；运行方式切换失败时，提示里也会附上具体原因。": "Testing the connection confirms Claude Code reports the API key as its billing source; if not, new sessions move to the terminal with the reason, and a failed run-mode switch names its cause in the notice.",
   "活动栏显示 Claude、Codex 当前走 API 还是订阅，以及上下文长度和额度：走 API 显示月预算，走订阅显示 5 小时和每周额度；换账号后显示新账号的额度，临时读取失败时保留最后一次读数。": "The activity pane shows whether Claude and Codex run on the API or a subscription, plus context length and quota: the monthly budget on the API, the 5-hour and weekly limits on a subscription; after an account switch it shows the new account's quota, and a temporary read failure keeps the last reading.",
   "原生模式里可以用 /model、/effort、/new、/clear、/compact 等斜杠命令，也可以用 ! 运行命令；改完设置会出现一条两秒的提示，不在对话里留一行。": "In native mode you can use slash commands such as /model, /effort, /new, /clear and /compact, and run commands with !; a changed setting shows a two-second notice instead of leaving a line in the conversation.",
-  "原生模式里，工具步骤显示做了什么和对应的文件或命令，不贴出输出内容；失败时附一行原因，结果没能确认的标上问号。": "In native mode, tool steps show what was done and the file or command involved, without pasting the output; a failure adds one line with the reason, and a step whose result could not be confirmed is marked with a question mark."
+  "原生模式里，工具步骤显示做了什么和对应的文件或命令，不贴出输出内容；失败时附一行原因，结果没能确认的标上问号。": "In native mode, tool steps show what was done and the file or command involved, without pasting the output; a failure adds one line with the reason, and a step whose result could not be confirmed is marked with a question mark.",
+  "SSH 连接": "SSH connection",
+  "修复 1.4.0 打开 SSH 项目时提示 Invalid dispatch modules、会话无法启动的问题。": "Fixed the Invalid dispatch modules error that kept sessions from starting when opening an SSH project in 1.4.0.",
+  "此前测试版的更新": "Earlier betas of this version"
 }

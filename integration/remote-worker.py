@@ -27,6 +27,12 @@ from contextlib import contextmanager
 PAGE_BYTES = 256 * 1024
 MAX_READ = 256 * 1024
 MAX_MESSAGE = 2 * 1024 * 1024
+# The open message carries the dispatch helper, its runtime modules and the skills bundle (at most 512 KiB, see
+# MAX_SSH_BUNDLE_BYTES in electron/features/skills/store.cjs); together they stay within three quarters of MAX_MESSAGE,
+# leaving the rest for JSON escaping and the envelope. tests/boundary-dispatch.test.cjs reads these names.
+DISPATCH_HELPER_BYTES = 256 * 1024
+DISPATCH_MODULE_COUNT = 64
+DISPATCH_MODULE_BYTES = 768 * 1024
 PREFIX = "PGW1 "
 SKILL_STATE_LOCK = threading.Lock()
 SKILL_LEASE_SECONDS = 10 * 60
@@ -796,6 +802,13 @@ def resolve_codex(env):
     raise error
 
 
+def valid_dispatch_modules(modules):
+    """Relative .cjs names under the runtime folder with text bodies, within the open message's share for them."""
+    return isinstance(modules, dict) and len(modules) <= DISPATCH_MODULE_COUNT and all(
+        isinstance(name, str) and re.fullmatch(r"[\w-]+(?:/[\w-]+)*\.cjs", name) and isinstance(text, str)
+        for name, text in modules.items()) and sum(len(text.encode("utf-8")) for text in modules.values()) <= DISPATCH_MODULE_BYTES
+
+
 class Worker:
     def __init__(self, emit, accounts=None):
         self.emit = emit
@@ -1322,17 +1335,16 @@ class Worker:
 
     def install_dispatch(self):
         if self.dispatch_note is not None: return self.dispatch_note
-        source = self.dispatch_source
-        if not shutil.which("node") or not isinstance(source, str) or not source or len(source.encode("utf-8")) > 256 * 1024:
-            self.dispatch_note = "Dispatch helper: unavailable over SSH (remote Node.js or helper missing); command-line workers run unseen in Agentrix."
+        source, modules = self.dispatch_source, getattr(self, "dispatch_modules", {})
+        unavailable = "Dispatch helper: unavailable over SSH (%s); command-line workers run unseen in Agentrix."
+        # Without the helper the session still starts; only command-line workers lose their Agentrix cards.
+        if not shutil.which("node") or not isinstance(source, str) or not source or len(source.encode("utf-8")) > DISPATCH_HELPER_BYTES:
+            self.dispatch_note = unavailable % "remote Node.js or helper missing"
+            return self.dispatch_note
+        if not valid_dispatch_modules(modules):
+            self.dispatch_note = unavailable % "helper modules too large or invalid"
             return self.dispatch_note
         filename = os.path.join(self.temp, "dispatch.cjs")
-        modules = getattr(self, "dispatch_modules", {})
-        if not isinstance(modules, dict) or len(modules) > 32 or any(
-                not isinstance(name, str) or not re.fullmatch(r"[\w-]+(?:/[\w-]+)*\.cjs", name)
-                or not isinstance(text, str) for name, text in modules.items()) or sum(
-                len(text.encode("utf-8")) for text in modules.values()) > 256 * 1024:
-            raise ValueError("Invalid dispatch modules.")
         for name, text in modules.items():
             target = os.path.join(self.temp, "electron", *name.split("/"))
             os.makedirs(os.path.dirname(target), exist_ok=True)

@@ -13,6 +13,6 @@ export function ReleaseNotes() {
   if (!added.length || !earlier.length) return <NoteList notes={WHATS_NEW} />;
   return <div className="release-groups">
     <section><h4>{t('本次测试版新增')}</h4><NoteList notes={added} /></section>
-    <section><h4>{t('1.3.26 的其他更新')}</h4><NoteList notes={earlier} /></section>
+    <section><h4>{t('此前测试版的更新')}</h4><NoteList notes={earlier} /></section>
   </div>;
 }

@@ -179,15 +179,29 @@ class RemoteFilesTest(unittest.TestCase):
             self.assertEqual(os.stat(Path(self.worker.temp) / "dispatch.json").st_mode & 0o777, 0o600)
             self.assertEqual(os.stat(meter).st_mode & 0o777, 0o600)
 
-    def test_dispatch_modules_are_bounded_and_cannot_escape_the_runtime_folder(self):
+    def test_invalid_or_oversized_dispatch_modules_leave_the_helper_unavailable_without_failing(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.worker.dispatch_source = "// synthetic dispatch helper\n"
-        for modules in ({"../escape.cjs": "bad"}, {"/absolute.cjs": "bad"}, {"module.cjs": None},
-                        {"module.cjs": "x" * (256 * 1024 + 1)}, []):
-            self.worker.dispatch_modules = modules
-            with mock.patch.object(remote.shutil, "which", return_value="/bin/node"), self.assertRaises(ValueError):
-                self.worker.install_dispatch()
+        many = {"m%d.cjs" % index: "" for index in range(remote.DISPATCH_MODULE_COUNT + 1)}
+        for modules in ({"../escape.cjs": "bad"}, {"/absolute.cjs": "bad"}, {"module.cjs": None}, {1: "bad"},
+                        {"module.cjs": "x" * (remote.DISPATCH_MODULE_BYTES + 1)}, many, []):
+            self.worker.dispatch_modules, self.worker.dispatch_note = modules, None
+            with mock.patch.object(remote.shutil, "which", return_value="/bin/node"):
+                note = self.worker.install_dispatch()
+            self.assertIn("unavailable over SSH (helper modules too large or invalid)", note)
             self.assertFalse((Path(self.worker.temp) / "dispatch.cjs").exists())
+            self.assertFalse((Path(self.worker.temp) / "electron").exists())
+
+    def test_dispatch_modules_the_size_of_release_1_4_0_install(self):
+        # 1.4.0 carried 29 modules of about 280 KB; the old 256 KiB limit failed every SSH session it opened.
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.worker.dispatch_source = "// synthetic dispatch helper\n"
+        self.worker.dispatch_modules = {"features/m%d.cjs" % index: "x" * 9700 for index in range(29)}
+        self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
+        with mock.patch.object(remote.shutil, "which", return_value="/bin/node"):
+            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
+        self.assertIn("Dispatch helper: node ", note)
+        self.assertEqual(len(list((Path(self.worker.temp) / "electron/features").iterdir())), 29)
 
     def test_each_agent_launch_gets_a_fresh_note_and_stale_launches_cannot_replace_it(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
