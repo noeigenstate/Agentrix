@@ -165,19 +165,9 @@ async function runtimeSmoke(output, stages) {
       assert.equal((await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey)).ok, true);
       assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only', monthlyBudgetUsd: 10 }))).ok, true);
     });
-    await stage('stub model-list HTTP in this isolated application', () => app.evaluate(() => {
-      const https = process.getBuiltinModule('https');
-      const { EventEmitter } = process.getBuiltinModule('events'), { PassThrough } = process.getBuiltinModule('stream');
-      https.request = (url, _options, callback) => {
-        if (url !== 'https://api.anthropic.com/v1/models?limit=100') throw new Error('Unexpected offline connection request');
-        const req = new EventEmitter(); req.destroy = () => {};
-        req.end = () => queueMicrotask(() => {
-          const response = new PassThrough(); response.statusCode = 200; callback(response);
-          response.end('{"data":[{"id":"fake-claude"}]}');
-        });
-        return req;
-      };
-    }));
+    // The stub replaces the channel main gives the connection test (Electron net); a unit test keeps the two in step.
+    const { stubModelListNet } = require('../tests/fixtures/connection-net-stub.cjs');
+    await stage('stub model-list HTTP in this isolated application', () => app.evaluate(stubModelListNet));
     await stage('check billing without input and cache competing token sources', async () => {
       const testConnection = () => page.evaluate(id => window.agentrix.nativeSession.testConnection(id), projectId);
       const good = await testConnection();
