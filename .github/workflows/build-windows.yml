@@ -97,20 +97,27 @@ jobs:
         run: node scripts/claude-sdk-pack.cjs --clean
       - name: Test remote files and recovery state
         run: python3 -m unittest discover -s tests -p 'remote_worker_test.py' -v
+      - name: Test real SSH and Linux PTY integration
+        run: |
+          node scripts/build-ssh-askpass.cjs
+          node --test tests/ssh-config.test.cjs tests/ssh-connection.test.cjs tests/session-restore.test.cjs
+      # Last, so a failing check never skips the real SSH tests. vermin 1.6.0 needs a Python that still has ast.Str
+      # (removed in 3.14), so it runs on a pinned 3.12, set up only here: the tests above keep the runner's own python3.
+      - name: Set up Python for the remote worker check
+        id: vermin-python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
       - name: Check the remote worker runs on Python 3.6
         # The SSH host needs only Python 3.6 (docs/usage.md); a 3.7+ call there once stopped every SSH Codex start.
         # vermin is the authority here; tests/remote_worker_test.py keeps an offline syntax-tree check beside it.
         # The hashes are PyPI's for the 1.6.0 wheel and sdist; vermin has no dependencies.
         shell: bash
         run: |
-          python3 -m venv "$RUNNER_TEMP/vermin"
+          "${{ steps.vermin-python.outputs.python-path }}" -m venv "$RUNNER_TEMP/vermin"
           printf '%s\n' 'vermin==1.6.0 --hash=sha256:f1fa9ee40f59983dc40e0477eb2b1fa8061a3df4c3b2bcf349add462a5610efb --hash=sha256:6266ca02f55d1c2aa189a610017c132eb2d1934f09e72a955b1eb3820ee6d4ef' > "$RUNNER_TEMP/vermin.txt"
           "$RUNNER_TEMP/vermin/bin/pip" install --disable-pip-version-check --no-input --require-hashes -r "$RUNNER_TEMP/vermin.txt"
           "$RUNNER_TEMP/vermin/bin/vermin" --target=3.6- --violations --eval-annotations --no-tips integration/remote-worker.py
-      - name: Test real SSH and Linux PTY integration
-        run: |
-          node scripts/build-ssh-askpass.cjs
-          node --test tests/ssh-config.test.cjs tests/ssh-connection.test.cjs tests/session-restore.test.cjs
   windows:
     name: Windows x64 build
     needs: reuse
