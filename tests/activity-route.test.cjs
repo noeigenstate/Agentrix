@@ -25,6 +25,9 @@ function compileFile(filename, language) {
   mod.require = name => {
     if (name.endsWith('.css')) return {};
     if (name === '../../shared/i18n') return { t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
+    if (name === '../../shared/call-model-name') return compileFile(path.join(__dirname, '../src/shared/call-model-name.ts'), language);
+    if (name === './i18n') return { t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
+    if (name === './model-name') return require('../src/shared/model-name.ts');
     if (name === '../../shared/model-name') return require('../src/shared/model-name.ts');
     if (name === '../../shared/useNow') return require('../src/shared/useNow.ts');
     if (name === '../terminal/terminal-screen') return { readScreen: () => null, subscribeScreen: () => () => {} };

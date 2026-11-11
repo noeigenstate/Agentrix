@@ -7,7 +7,7 @@ function liveRuns(running) {
     const rate = run.rate;
     const speed = nonnegative(rate?.outputTokens) && rate.activeMs > 0 && nonnegative(rate.activeMs) && rate.samples > 0
       ? rate.outputTokens * 1000 / rate.activeMs : null;
-    const row = { id: text(run.id), project: text(run.project) || null, agent: text(run.agent, 32), model: modelOf(run.model),
+    const row = { id: text(run.id), project: text(run.project) || null, agent: text(run.agent, 32), model: modelOf(run.model), ...(run.modelUnconfirmed === true && { modelUnconfirmed: true }),
       title: text(run.title, 240), role: text(run.role, 32), startedAt: nonnegative(run.startedAt) ? run.startedAt : null,
       tokensPerSecond: nonnegative(speed) ? speed : null };
     unique.set(keyOf(row.project, row.id), row);

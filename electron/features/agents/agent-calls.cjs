@@ -46,7 +46,7 @@ class AgentCalls {
   dispose() { this.reset(); this.finishedIds.clear(); }
   running() {
     return [...this.calls.values()].filter(call => !call.done && !call.reviewed).map(call => ({
-      id: call.id, agent: call.agent, model: call.model, title: call.title, role: call.role,
+      id: call.id, agent: call.agent, ...shownModel(call), title: call.title, role: call.role,
       startedAt: time(call.startedAt), rate: call.rate ? { ...call.rate } : null,
     }));
   }

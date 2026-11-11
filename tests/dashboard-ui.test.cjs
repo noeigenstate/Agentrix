@@ -522,13 +522,33 @@ test('the live strip lists the running workers with their elapsed time and speed
   assert.match(view({ now: at(10, 31, 14) + 61_000 }), /已运行 <span>1:01:01<\/span>/, 'the clock moves with the page clock');
 }));
 
+test('a live run that has not reported its model reads 模型未确认, or the requested model marked 未确认', () => zh(() => {
+  const html = view({ summary: fixture({ live: { running: [live('dispatch:u', 'unreported', { title: 'Plain' }), live('dispatch:r', 'gpt-6.1-sol', { modelUnconfirmed: true, title: 'Asked' })], at: at(10, 31, 14) } }) });
+  const strip = html.slice(html.indexOf('class="live-list"'), html.indexOf('class="live-list"') + 2200);
+  assert.match(strip, /<span title="模型未确认">模型未确认<\/span>/); assert.match(strip, /<span title="GPT-6.1-Sol（未确认）">GPT-6.1-Sol（未确认）<\/span>/);
+  assert.doesNotMatch(html, /unreported/);
+}));
+
+test('records stored without a model form one 模型未确认 bucket in the key, table, history chart and task list', () => zh(() => {
+  const old = fixture({ models: [...fixture().models, row('unreported', 'codex', { runs: 3 })],
+    daily: [...fixture().daily, { day: '2026-10-30', model: 'unreported', runs: 2, firstPass: 1, costUsd: null, activeMs: null }],
+    speed: [...fixture().speed, { day: '2026-10-30', model: 'unreported', tokensPerSecond: 50 }],
+    kinds: [...fixture().kinds, { kind: 'core', model: 'unreported', runs: 2, firstPassRate: 0.5 }],
+    modelRuns: [...fixture().modelRuns, task('unreported', 'Old task')] });
+  for (const tab of ['models', 'rounds']) assert.doesNotMatch(view({ summary: old, tab }), /unreported/, tab);
+  const html = view({ summary: old, tab: 'models' });
+  assert.equal([...html.matchAll(/class="button"[^>]*title="模型未确认"/g)].length, 1, 'one key chip');
+  assert.match(html, /模型未确认/);
+}));
+
 test('a running worker named by an alias reads and looks like the same model in the key', () => zh(() => {
   const html = view({ summary: fixture({ live: { running: [live('agent:b', 'sonnet', { title: 'Plan it', role: '规划' }), live('agent:c', 'unreported')], at: at(10, 31, 14) } }) });
   const strip = html.slice(html.indexOf('class="live-list"'), html.indexOf('class="live-list"') + 1700), key = html.slice(html.indexOf('class="keybar"'), html.indexOf('class="keybar"') + 1500);
   assert.match(strip, /<span title="Sonnet">Sonnet<\/span>/, 'the model name, not the lowercase alias');
   const fillBefore = (text, word) => [...text.slice(0, text.indexOf(word)).matchAll(/class="mk"[^>]*fill="([^"]+)"/g)].at(-1)[1];
   assert.equal(fillBefore(strip, '</svg><span title="Sonnet">'), fillBefore(key, '</svg>Sonnet'), 'the same colour as the key chip');
-  assert.match(strip, /<svg class="mk"[^>]*fill="var\(--text-3\)"[^>]*><circle[^]*?unreported/, 'unreported is a neutral grey, not a model colour');
+  assert.match(strip, /<svg class="mk"[^>]*fill="var\(--text-3\)"[^>]*><circle[^]*?模型未确认/, 'an unnamed model is a neutral grey, not a model colour');
+  assert.doesNotMatch(html, /unreported/, 'the placeholder never reaches the page: not in the live strip, the key, the tables or the charts');
   const picked = view({ summary: fixture({ live: { running: [live('agent:b', 'sonnet')], at: at(10, 31, 14) } }) });
   assert.match(picked, /class="live-item "/, 'with nothing picked nothing is dim');
 }));

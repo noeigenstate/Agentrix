@@ -1,6 +1,7 @@
 import { CheckCircle, Circle, CircleNotch, Record as RecordDot, WarningCircle } from '@phosphor-icons/react';
 import type { AgentCall, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
+import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
@@ -22,10 +23,6 @@ function Rate({ rate }: { rate: TokenRate | null | undefined }) {
   if (rate) return <span className="activity-row-end activity-rate" title={t('还没有完成一条回复，暂时没有速率。') + partial}>{t('等待中')}</span>;
   return <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
 }
-
-// A call's model in words. Before a dispatched worker reports its model: the one the lead asked for, marked unconfirmed, or 模型未确认.
-export const callModelName = ({ model, modelUnconfirmed }: Pick<AgentCall, 'model' | 'modelUnconfirmed'>) =>
-  model === null ? t('模型未确认') : modelUnconfirmed ? t('{model}（未确认）', { model: modelName(model) }) : modelName(model);
 
 // A head row: the name, recorded effort and speed, any non-default service (which gives way first), and a fixed rate column.
 export function ModelHead({ agent, name, effort, fast, provider, title, rate }: { agent: AgentCall['agent']; name: string; effort?: string | null; fast?: boolean | null; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined }) {
