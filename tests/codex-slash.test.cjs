@@ -14,7 +14,7 @@ const catalog = [
 function fixture(t, { remote = false, scope = 'host-a', home } = {}) {
   const root = home || fs.mkdtempSync(path.join(os.tmpdir(), 'agx-slash-unit-'));
   if (!home) t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const wire = [], events = [], threads = new Map(); let serial = 0, turn = 0, drop = false;
+  const wire = [], events = [], threads = new Map(), held = []; let serial = 0, turn = 0, drop = false, holding = false;
   function peer() {
     const child = new EventEmitter(); Object.assign(child, { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), remote: true, remoteScope: scope, exitCode: null, signalCode: null });
     child.kill = () => { child.exitCode = 0; queueMicrotask(() => { child.emit('exit', 0); child.emit('close', 0); }); };
@@ -36,6 +36,7 @@ function fixture(t, { remote = false, scope = 'host-a', home } = {}) {
           const id = p.threadId || 'thread-' + ++serial;
           result = { ...threads.get(id), thread: { id, status: { type: 'idle' } }, model: p.model || 'model-a', reasoningEffort: p.config?.model_reasoning_effort || 'high', serviceTier: p.serviceTier || null, sandbox: { type: 'readOnly' } };
           threads.set(id, result);
+          if (holding) { held.push(() => write({ id: message.id, result })); continue; }
         }
         if (method === 'thread/turns/list') result = { data: [], nextCursor: null };
         if (method === 'account/read') result = { account: null, requiresOpenaiAuth: true };
@@ -69,7 +70,8 @@ function fixture(t, { remote = false, scope = 'host-a', home } = {}) {
     launchRemote: async () => ({ child: peer(), cwd: root }) });
   const spec = { owner: 'gui', projectId: 'p', terminalId: 't', cwd: root, env: { CODEX_HOME: root }, ...(remote ? { kind: 'ssh' } : {}) };
   const session = factory.create(spec, event => events.push(event)); t.after(() => session.close());
-  return { root, factory, spec, session, events, wire, drop: (kind = true) => { drop = kind; } };
+  return { root, factory, spec, session, events, wire, drop: (kind = true) => { drop = kind; },
+    holdThread: () => { holding = true; return () => { holding = false; for (const reply of held.splice(0)) reply(); }; } };
 }
 
 test('Codex choices validate against the real catalog shape, persist before a turn, and stay bound to the remote scope', async t => {
@@ -104,6 +106,32 @@ test('Codex choices validate against the real catalog shape, persist before a tu
       await separate.resume(); assert.equal((await separate.runOptions({})).fast, false, 'another authenticated host cannot inherit the choice');
     }
   }
+});
+
+// A choice made in a native Codex window that is still starting threw "Cannot read properties of null (reading 'write')"
+// once the RPC existed, or session_unavailable before: the choice was lost either way.
+test('a Codex choice made while the session starts waits for its thread, then applies, persists and is announced', async t => {
+  const f = fixture(t), release = f.holdThread(), started = f.session.start();
+  const early = f.session.runOptions({ effort: 'ultra' });
+  while (!f.wire.some(row => row.method === 'thread/start')) await tick();
+  const late = f.session.runOptions({ fast: true });
+  await tick(); release(); await started;
+  assert.deepEqual(await early, { model: 'model-a', effort: 'ultra', fast: false });
+  assert.deepEqual(await late, { model: 'model-a', effort: 'ultra', fast: true });
+  assert.deepEqual(f.events.findLast(event => event.type === 'routing.updated').payload.declared, { model: 'model-a', effort: 'ultra', fast: true });
+  await f.session.send({ clientMessageId: 'first', text: 'First turn' }); await tick();
+  const params = f.wire.findLast(row => row.method === 'turn/start').params;
+  assert.deepEqual([params.model, params.effort, params.serviceTier], ['model-a', 'ultra', 'fast']);
+  const id = f.session.snapshot().events.find(row => row.providerSessionId).providerSessionId;
+  await f.session.close();
+  const resumed = f.factory.create({ ...f.spec, providerSessionId: id, preserveRunOptions: true }, () => {}); t.after(() => resumed.close());
+  await resumed.resume(); assert.deepEqual(await resumed.runOptions({}), { model: 'model-a', effort: 'ultra', fast: true }, 'the held choice persisted with its thread');
+  // A session that closes before its thread exists refuses the held choice instead of leaving it waiting.
+  const closing = fixture(t); closing.holdThread();
+  const failed = closing.session.start().catch(error => error);
+  const waiting = closing.session.runOptions({ effort: 'ultra' });
+  await closing.session.close();
+  await assert.rejects(waiting, /session_closed/); await failed;
 });
 
 test('built-ins execute protocol controls, review root turns complete once, and unsupported names never become prompts', async t => {

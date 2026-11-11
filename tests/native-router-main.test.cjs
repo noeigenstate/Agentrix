@@ -123,3 +123,38 @@ test('local Codex and every SSH native session read history through the app-serv
     assert.deepEqual([main.lookups[0].kind, main.lookups[0].cwd, main.lookups[0].terminalId], [kind, '/project/sub', 't']);
   }
 });
+
+// 1.4.0-beta.2: codex typed in a new terminal hands it to a native session, and the raw view it leaves reports its focus
+// going (ConPTY turns focus reports on) to a host that has no PTY and no prompt tracker: the toast read "Cannot read
+// properties of undefined (reading 'write')". Main's own host record, terminal wiring and IPC adapter run here.
+test('the raw view a native session replaced reaches no PTY: its replies are dropped and its keys refused, before and after the host exists', () => {
+  const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs'), { createIpcAdapter } = require('../electron/shared/ipc.cjs');
+  const sessions = new Map(), nativeSpecs = new Map([['t', { agent: 'codex', sessionId: 'native', sessionKey: 'key', env: {} }]]);
+  let wiring;
+  const context = { sessions, nativeSpecs, quitting: false, scheduleState() {}, t: text => text, nativeSessions: {},
+    store: { findTerminal: () => ({ project: { id: 'p' } }) }, registerTerminalIpc: value => { wiring = value; },
+    createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage,
+    PromptQueue: require('../electron/prompt-queue.cjs').PromptQueue, CompletionWork: require('../electron/completion-work.cjs').CompletionWork,
+    ActionLog: require('../electron/agent-actions.cjs').ActionLog, ConversationLog: require('../electron/conversation.cjs').ConversationLog };
+  for (const name of ['handle', 'listen', 'findProject', 'startTerminal', 'confirmTerminalClose', 'disposeTerminal', 'broadcast', 'applyActivity', 'pollAfterSubmission', 'send']) context[name] = () => assert.fail(name);
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
+  const registration = source.indexOf('terminalInput = registerTerminalIpc(');
+  vm.runInContext(source.slice(registration, source.indexOf('registerClipboardIpc(', registration)), context);
+  const reports = [], listeners = new Map(), webContents = { mainFrame: { url: 'agentrix://app/index.html' } };
+  registerTerminalIpc({ ...wiring, ...createIpcAdapter({ ipcMain: { handle() {}, on: (name, run) => listeners.set(name, run) },
+    getWindow: () => ({ webContents }), t: text => text, report: error => reports.push(String(error?.message || error)) }) });
+  const write = calls => {
+    reports.length = 0;
+    for (const args of calls) listeners.get('terminal:write')({ sender: webContents, senderFrame: webContents.mainFrame }, 't', ...args);
+    return [...reports];
+  };
+  const replies = [['\x1b[O'], ['\x1b[I'], ['\x1b[1;1R'], ['\x1b[?1;2c']], keys = [['codex'], ['\r'], ['sign-in code', true]];
+  const refused = keys.map(() => '请使用原生会话输入框。');
+  // The native start has disposed the PTY and its host is not reported yet.
+  assert.deepEqual(write(replies), []); assert.deepEqual(write(keys), refused);
+  context.structuredEvent('t', event('session.state', { state: 'starting' }));
+  assert.equal(sessions.get('t').nativeStructured, true);
+  assert.deepEqual(write(replies), [], 'protocol replies of the replaced terminal have no PTY to reach');
+  assert.deepEqual(write(keys), refused, 'keys typed into the replaced terminal are refused with a reason');
+});

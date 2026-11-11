@@ -1,7 +1,8 @@
 const { isLocalCommand, isTerminalResponse } = require('../../terminal-input.cjs');
 const { approvalStamp } = require('./approval-guard.cjs');
 
-function registerTerminalIpc({ handle, listen, findProject, getSession, hasSession, startTerminal, addTerminal, removeTerminal, confirmTerminalClose, forgetRestorePlan, disposeTerminal, clearStartupError, broadcast, getProjectById, acknowledgeProject, expectCompletion, scheduleState, applyActivity, pollAfterSubmission, send, getActiveTerminal, setActiveTerminal, setActiveFileTree, now = () => Date.now(), platform = process.platform }) {
+// nativeHost: whether a native session holds the terminal or is starting on it, its PTY already gone.
+function registerTerminalIpc({ handle, listen, findProject, getSession, hasSession, nativeHost = () => false, startTerminal, addTerminal, removeTerminal, confirmTerminalClose, forgetRestorePlan, disposeTerminal, clearStartupError, broadcast, getProjectById, acknowledgeProject, expectCompletion, scheduleState, applyActivity, pollAfterSubmission, send, getActiveTerminal, setActiveTerminal, setActiveFileTree, now = () => Date.now(), platform = process.platform }) {
   handle('terminal:start', startTerminal);
   handle('terminal:add', (id, start = true) => {
     if (typeof start !== 'boolean') throw new Error('无效的终端启动选项。');
@@ -36,9 +37,14 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
   // reach it as typed, but are never a prompt: no round starts, nothing is queued and the text is shown nowhere.
   function writeTerminal(id, data, answer = false) {
     if (typeof data !== 'string' || data.length > 1024 * 1024) return;
-    const s = getSession(id);
+    const s = getSession(id), response = isTerminalResponse(data);
+    // A native session has no PTY to write to. The terminal view it replaced can still report focus or answer a query
+    // on its way out (ConPTY turns focus reports on): those replies have nobody to reach. Keys typed there are refused.
+    if (s ? s.nativeStructured : nativeHost(id)) {
+      if (response) return;
+      throw new Error('请使用原生会话输入框。');
+    }
     if (!s) return;
-    const response = isTerminalResponse(data);
     if (!response) s.approval?.invalidate();
     if (s.status === 'exited') return;
     // Native Codex reports accepted user items itself. Raw TUI answers (including secret free text)
