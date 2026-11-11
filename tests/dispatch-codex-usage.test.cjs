@@ -81,6 +81,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
     app: { getPath: () => directory, isPackaged: false }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex',
+    netRequest: () => forbidden, electronNet: {},
     generatedPreview: forbidden, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     broadcast() {}, callsOf: () => calls, acceptShellEvent: () => false, rememberClaudeSource() {},
     require: name => {
