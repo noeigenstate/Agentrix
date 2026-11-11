@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
 const { projectTeam } = require('../team/team.cjs');
+const { accountKey: processAccountKey } = require('./codex-account-usage.cjs');
 
 /**
  * @typedef {{operation:'read'|'edit'|'command'|'network'|'other', toolName:string, cwd:string|null,
@@ -46,7 +47,9 @@ function frames(socket, receive, disconnected) {
   return send;
 }
 
-function createDispatchControl({ resolveRun, now = Date.now }) {
+// accountKey: this process's key for naming Codex accounts (accountScopeId). Only a run main's resolver marks local
+// receives it, so a local helper names a worker's account as main does; an SSH host's account keeps its own channel.
+function createDispatchControl({ resolveRun, accountKey = processAccountKey, now = Date.now }) {
   const clients = new Map(), handlers = new Map(), sockets = new Set(), receipts = new Map();
   let server, address;
   function accept(socket, registration) {
@@ -66,7 +69,7 @@ function createDispatchControl({ resolveRun, now = Date.now }) {
         if (clients.has(run.runId)) return socket.destroy();
         client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
-        send({ type: 'registered', runId: run.runId }); return;
+        send({ type: 'registered', runId: run.runId, ...(accountKey && verified.local === true ? { accountKey } : {}) }); return;
       }
       if (value.type === 'receipt' && validId(value.messageId) && status(value.status)) {
         const task = client.pending.get(value.messageId);
@@ -152,7 +155,11 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
     socket.once('error', error => { failure = unavailable(['ENOENT', 'ECONNREFUSED', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'socket_error'); });
     const timer = setTimeout(() => { failure = unavailable('timeout'); socket.destroy(); reject(failure); }, timeout);
     const send = frames(socket, value => {
-      if (value.type === 'registered' && value.runId === runId) { registered = true; clearTimeout(timer); resolve(client); }
+      if (value.type === 'registered' && value.runId === runId) {
+        registered = true; clearTimeout(timer);
+        if (typeof value.accountKey === 'string' && /^[a-f\d]{64}$/.test(value.accountKey)) client.accountKey = value.accountKey;
+        resolve(client);
+      }
       else if (registered && value.type === 'control.push') {
         serial = serial.catch(() => {}).then(async () => {
           let receipt;
@@ -173,6 +180,7 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
       pending.clear();
     });
     const client = {
+      accountKey: null,
       get connected() { return registered && !socket.destroyed; },
       request(method, payload) {
         return new Promise((resolve, reject) => {

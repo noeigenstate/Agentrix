@@ -59,7 +59,8 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
     const main = path.join(root, 'main'); await fs.mkdir(main); await setup(main);
     execFileSync('git', ['worktree', 'add', '-qb', 'worker', directory], { cwd: main, stdio: 'ignore', windowsHide: true });
   } else if (setup) await setup(directory);
-  const events = [], server = await createEventServer(event => events.push({ ...event, receivedAt: Date.now() }));
+  // A Codex worker's account reports have their own tests (dispatch-codex-usage); these follow a call's start, routing and end.
+  const events = [], server = await createEventServer(event => { if (event.type !== 'dispatch-account') events.push({ ...event, receivedAt: Date.now() }); });
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
   const input = path.join(directory, 'fixture.json'), capture = path.join(directory, 'capture.json'), config = path.join(directory, 'bootstrap.json');
   await fs.writeFile(brief, '# A worker brief\nKeep Unicode: 执行.\n');

@@ -52,10 +52,10 @@ function tokenUsage(value, baseline = null) {
 }
 
 // A known account carries the same opaque name the account reader gives it, so a switch between two accounts of one
-// kind is seen without waiting for account/updated.
-function accountConnection(result, observedAt = Date.now()) {
+// kind is seen without waiting for account/updated. A dispatch helper passes main's account key (accountKey).
+function accountConnection(result, observedAt = Date.now(), accountKey) {
   const type = result?.account?.type;
   const kind = result?.account === null ? 'none' : type === 'apiKey' ? 'api' : ['chatgpt', 'chatgptAuthTokens'].includes(type) ? 'subscription' : 'unknown';
-  return { kind, source: 'codex-app-server account/read', observedAt, ...(kind === 'unknown' ? {} : { scopeId: accountScopeId(result.account) }) };
+  return { kind, source: 'codex-app-server account/read', observedAt, ...(kind === 'unknown' ? {} : { scopeId: accountScopeId(result.account, accountKey) }) };
 }
 module.exports = { mergeLimits, tokenUsage, accountConnection, restrictedLimits };

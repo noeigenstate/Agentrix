@@ -59,7 +59,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome, accountKey } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -561,7 +561,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         const generation = accountGeneration;
         const task = rpc.request('account/read', { refreshToken: false }).then(value => {
           if (closed || generation !== accountGeneration) return { kind: 'unknown', source: null, observedAt: null };
-          return accountConnection(value, now());
+          return accountConnection(value, now(), accountKey);
         });
         accountRead = task.finally(() => { if (generation === accountGeneration) accountRead = null; });
         return strict ? accountRead : accountRead.catch(() => ({ kind: 'unknown', source: 'codex-app-server account/read', observedAt: null }));
