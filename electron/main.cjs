@@ -1265,7 +1265,7 @@ function structuredEvent(id, event) {
       activitySince: Date.now(), codexActivity: 'unknown', error: null, nativeMessages: new Map(), usageEnv: spec.env,
       recordRun: (call, value) => dashboard.run(project, call, value),
       terminal: { kill: () => { void nativeSessions.stop(id, event.runtimeSessionId).catch(report); }, resize() {} },
-      gate: { dispose() {}, write() { throw new Error('请使用原生会话输入框。'); } },
+      gate: { dispose() {} },
       promptQueue: new PromptQueue(() => scheduleState()), completionWork: new CompletionWork(),
       actions: new ActionLog(() => {}), conversation: new ConversationLog(() => {}) };
     if (spec.switchHost) { retainAgentState(s, spec.switchHost); delete spec.switchHost; }
@@ -1979,7 +1979,7 @@ function registerIpc() {
     startTerminal(id, null, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });
-  terminalInput = registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), startTerminal,
+  terminalInput = registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), nativeHost: id => nativeSpecs.has(id), startTerminal,
     addTerminal: id => store.addTerminal(id), removeTerminal: id => { store.removeTerminal(id); fs.promises.rm(handoffFile(id), { force: true }).catch(() => {}); }, confirmTerminalClose, forgetRestorePlan: id => restorePlans.delete(id),
     disposeTerminal, clearStartupError: id => startupErrors.delete(id), broadcast, getProjectById: id => store.projects.find(p => p.id === id),
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState, applyActivity, pollAfterSubmission, send,

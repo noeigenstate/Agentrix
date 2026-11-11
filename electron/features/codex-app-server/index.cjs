@@ -120,6 +120,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let wireCwd = spec.cwd, wireHome;
       let accountRead = null;
       let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null;
+      // Run options belong to a thread: a change made while the session starts waits until the thread exists (or the session closes).
+      let threadKnown; const threadReady = new Promise(resolve => { threadKnown = resolve; });
       let configuredFast = typeof initialSpec.fast === 'boolean' ? initialSpec.fast : null;
       const connectionAbort = new AbortController();
       const assertOpen = () => { if (closed) throw Object.assign(new Error('session_closed'), { code: 'closed' }); };
@@ -332,6 +334,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             spec.effort = result.reasoningEffort ?? spec.effort ?? null;
             spec.fast = ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : spec.preserveRunOptions ? false : spec.fast;
           }
+          threadKnown();
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
             effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast: ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : null }, observed: { model: null, effort: null, fast: null }, reason: null });
           // Dispatch needs the resumed model context, not a copy of its historical output.
@@ -469,7 +472,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (!Object.keys(patch).length) { await changingOptions; assertOpen(); return optionsSnapshot(); }
         const previous = changingOptions;
         const task = previous.catch(() => {}).then(async () => {
-          await models(); assertOpen();
+          await threadReady; await models(); assertOpen();
           const next = { ...optionsSnapshot(), ...patch };
           const model = catalog.find(row => row.model === (next.model || catalog.find(value => value.isDefault)?.model));
           if (!model) throw new Error(translate('没有可用的模型。'));
@@ -532,7 +535,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       async function close() {
         if (closed) return;
-        closed = true; connectionAbort.abort(); setState('stopping'); requests?.cancelAll();
+        closed = true; threadKnown(); connectionAbort.abort(); setState('stopping'); requests?.cancelAll();
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
         rpc?.close();
         try { await stopProcess(child); }
