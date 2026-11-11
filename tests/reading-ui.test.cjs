@@ -61,6 +61,7 @@ function loadUI(name, overrides = {}) {
     if (key === './PendingPromptEntries') return loadUI('features/reading/PendingPromptEntries.tsx', overrides);
     if (key === './ReadingQuote') return loadUI('features/reading/ReadingQuote.tsx', overrides);
     if (key === './MessageMenu') return loadUI('features/reading/MessageMenu.tsx', overrides);
+    if (key === './NativeToast') return loadUI('features/native-session/NativeToast.tsx', overrides);
     if (key === './message-menu') return require('../src/features/reading/message-menu.ts');
     if (key === 'react-dom') return { createPortal: node => node };
     if (key === './message-quote') return require('../src/features/reading/message-quote.ts');
@@ -2741,6 +2742,38 @@ test('the menu has 引用 and 复制 only; with words selected inside the messag
     h.calls.length = 0; buttons[1].props.onClick();
     assert.deepEqual(h.calls, [['close'], ['copy', expected]]);
   }
+});
+
+test('a reply file link opens the message menu with 复制路径, 复制图片路径 for a picture, and nothing more for a link the click refuses', async t => {
+  const h = messageMenuHarness(t), settle = () => new Promise(resolve => setImmediate(resolve));
+  const on = readingPath => h.event({ target: { closest: selector => selector === '.reading-markdown a[data-reading-path]' ? { dataset: { readingPath } } : selector.split(', ').includes('a') ? {} : null } });
+  const paths = { 'docs/notes.md': 'C:\\work\\docs\\notes.md', 'shot.png': '/srv/project/shot.png', 'outside.png': null };
+  const pathOf = async target => { h.calls.push(['path of', target]); return paths[target]; };
+  for (const [link, label] of [['docs/notes.md', 'Copy path'], ['shot.png', 'Copy picture path'], ['outside.png', null]]) {
+    h.calls.length = 0; h.slots[0] = null;
+    const event = on(link);
+    h.card({ text: 'reply', pathOf }).props.onContextMenu(event);
+    assert.equal(event.prevented, true, 'the browser menu does not open on the link');
+    await settle();
+    const place = h.slots[0], { buttons } = h.menuItems(place);
+    assert.deepEqual(buttons.map(button => [].concat(button.props.children).at(-1)), label ? ['Quote', 'Copy', label] : ['Quote', 'Copy']);
+    if (!label) continue;
+    h.calls.length = 0;
+    const { buttons: [, , copyPath] } = h.menuItems(place, { onCopy: (text, isPath) => h.calls.push(['copy', text, isPath]) });
+    copyPath.props.onClick();
+    assert.deepEqual(h.calls, [['close'], ['copy', paths[link], true]]);
+  }
+  // Copying a path writes it to the app clipboard and tells 已复制; a plain Copy tells nothing.
+  h.calls.length = 0; h.slots[0] = null;
+  h.card({ text: 'reply', pathOf }).props.onContextMenu(on('shot.png')); await settle();
+  const copy = h.card({ text: 'reply', pathOf }).props.children[1].props.onCopy;
+  copy('/srv/project/shot.png', true); await settle();
+  assert.deepEqual(h.calls.filter(call => call[0] === 'copy'), [['copy', '/srv/project/shot.png']]);
+  assert.equal(h.slots[2], 'Copied');
+  // Without pathOf (a user's message, a feed without the reader) a link keeps its own right click.
+  const plain = on('docs/notes.md');
+  h.card({ text: 'reply' }).props.onContextMenu(plain);
+  assert.equal(plain.prevented, false);
 });
 
 test('a selection that reaches outside the message is ignored, so the whole message is acted on', t => {

@@ -213,6 +213,24 @@ test('a plain click on a reply path shows it in the open project file tree; a ge
   assert.deepEqual(opened, ['docs/b.md'], 'on a small card anything else opens as before'); assert.deepEqual(links, [], 'and nothing is located in a tree that is not shown');
 });
 
+test('a reply link copies the path of the file a plain click shows: a generated picture by its copy, a project file where it is, nothing outside', async t => {
+  const previous = globalThis.window, asked = [];
+  const found = { 'docs/a.md': 'C:\\work\\docs\\a.md', 'generated-images/猪.png': 'C:\\work\\generated-images\\猪.png', 'src/b.png': '/srv/project/src/b.png' };
+  globalThis.window = { agentrix: { linkPath: async (projectId, target) => { asked.push([projectId, target]); return target in found ? { ok: true, value: found[target] } : { ok: false, error: '该链接指向远程项目目录之外。' }; } } };
+  t.after(() => { if (previous === undefined) delete globalThis.window; else globalThis.window = previous; });
+  const stubs = { '../files/file-popup.ts': { showPopup() {} }, '../files/tree-reveal.ts': { revealInTree: () => false, treeShown: () => false } };
+  const { replyLinkPath, generatedCopies } = load('reply-links.ts', undefined, stubs);
+  const generated = 'C:\\Users\\me\\.codex\\generated_images\\t\\猪.png', remote = '/home/me/.codex/generated_images/t/鼠.png';
+  const copies = generatedCopies([{ id: 'g', role: 'assistant', at: 1, generated: { path: generated, prompt: '', copied: 'generated-images/猪.png' } }]);
+  assert.equal(await replyLinkPath('p', 'docs/a.md', copies), 'C:\\work\\docs\\a.md', 'a local project file');
+  assert.equal(await replyLinkPath('p', 'src/b.png', copies), '/srv/project/src/b.png', 'an SSH project file, its path on that computer');
+  assert.equal(await replyLinkPath('p', generated, copies), 'C:\\work\\generated-images\\猪.png', 'a generated picture with a copy: the copy');
+  assert.equal(await replyLinkPath('p', remote, copies), remote, 'a generated picture without a copy: the picture itself');
+  assert.equal(await replyLinkPath('p', '/etc/hosts', copies), null, 'a link the click refuses has no path to copy');
+  assert.equal(await replyLinkPath('p', 'https://example.com/a.png', copies), null);
+  assert.deepEqual(asked, [['p', 'docs/a.md'], ['p', 'src/b.png'], ['p', 'generated-images/猪.png'], ['p', '/etc/hosts']]);
+});
+
 test('modifier styling follows keyboard, pointer and blur events without rerendering or leaving listeners behind', t => {
   const handlers = new Map(), previous = [globalThis.addEventListener, globalThis.removeEventListener];
   globalThis.addEventListener = (name, fn) => handlers.set(name, fn);

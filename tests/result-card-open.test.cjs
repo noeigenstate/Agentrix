@@ -69,7 +69,7 @@ function filesBridge(project, options = {}) {
     try { return { ok: true, value: await handlers.get(name)(...args) }; }
     catch (error) { return { ok: false, error: error.message }; }
   };
-  return { openLink: (...args) => invoke('project:open-link', ...args), readFile: (...args) => invoke('project:file', ...args) };
+  return { openLink: (...args) => invoke('project:open-link', ...args), readFile: (...args) => invoke('project:file', ...args), linkPath: (...args) => invoke('project:link-path', ...args) };
 }
 
 test('opening the first written file resolves absolute and relative paths through the main process', async t => {
@@ -142,4 +142,17 @@ test('opening reports a rejected bridge request through the card error handler',
   h.button('打开文件').props.onClick(); await h.settle();
   assert.deepEqual(h.popups, []);
   assert.deepEqual(h.errors, ['Error: connection closed']);
+});
+
+test('the path of a reply link is the full path of the file it opens, on this computer or the SSH one, and a link outside the project has none', async () => {
+  const root = path.resolve(__dirname, '..'), local = filesBridge({ id: 'project', kind: 'local', path: root });
+  assert.deepEqual(await local.linkPath('project', 'src/features/reading/ResultCard.tsx'), { ok: true, value: path.join(root, 'src/features/reading/ResultCard.tsx') });
+  assert.deepEqual(await local.linkPath('project', 'src/features'), { ok: true, value: path.join(root, 'src/features') }, 'a folder, opened nowhere');
+  assert.deepEqual(await local.linkPath('project', 'https://example.com/a.png'), { ok: true, value: null });
+  assert.equal((await local.linkPath('project', path.join(root, '..', 'outside.png'))).ok, false);
+  const remote = { ready: Promise.resolve(), info: { root: '/remote/project' }, request: async (method, args) => args.path === 'src' ? { directory: true, realPath: 'src' } : { directory: false } };
+  const ssh = filesBridge({ id: 'project', kind: 'ssh', path: '/remote/project' }, { remoteFor: () => remote });
+  assert.deepEqual(await ssh.linkPath('project', 'generated-images/a.png'), { ok: true, value: '/remote/project/generated-images/a.png' });
+  assert.deepEqual(await ssh.linkPath('project', '/remote/project/src'), { ok: true, value: '/remote/project/src' });
+  assert.deepEqual(await ssh.linkPath('project', '/home/me/a.png'), { ok: false, error: '该链接指向远程项目目录之外。' });
 });

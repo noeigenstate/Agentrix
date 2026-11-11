@@ -3049,5 +3049,6 @@
   "没有写入项目文件夹的权限。": "No permission to write in the project folder.",
   "项目所在的磁盘是只读的。": "The project's disk is read-only.",
   "磁盘空间不足。": "The disk is full.",
-  "复制到项目失败（{code}）。": "Copying into the project failed ({code})."
+  "复制到项目失败（{code}）。": "Copying into the project failed ({code}).",
+  "复制路径": "Copy path"
 }

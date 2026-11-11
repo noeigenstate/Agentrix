@@ -276,6 +276,8 @@ type Bridge = {
   editorCloseResult(id: string, accepted: boolean): void;
   closePreview(id: string): Promise<Result<void>>;
   openLink(id: string, target: string): Promise<Result<ProjectLocation>>;
+  // The full path of the file or folder a link in the project names (an SSH project's on that computer); null for a web address.
+  linkPath(id: string, target: string): Promise<Result<string | null>>;
   openVideo(id: string, relativePath: string): Promise<Result<void>>;
   revealProject(id: string): Promise<Result<ProjectLocation>>;
   startTerminal(id: string): Promise<Result<void>>;
