@@ -23,6 +23,10 @@ function Rate({ rate }: { rate: TokenRate | null | undefined }) {
   return <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
 }
 
+// A call's model in words. Before a dispatched worker reports its model: the one the lead asked for, marked unconfirmed, or 模型未确认.
+export const callModelName = ({ model, modelUnconfirmed }: Pick<AgentCall, 'model' | 'modelUnconfirmed'>) =>
+  model === null ? t('模型未确认') : modelUnconfirmed ? t('{model}（未确认）', { model: modelName(model) }) : modelName(model);
+
 // A head row: the name, recorded effort and speed, any non-default service (which gives way first), and a fixed rate column.
 export function ModelHead({ agent, name, effort, fast, provider, title, rate }: { agent: AgentCall['agent']; name: string; effort?: string | null; fast?: boolean | null; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined }) {
   const Mark = agent === 'Codex' ? CodexLogo : ClaudeLogo;
@@ -64,8 +68,8 @@ export function CallsCard({ calls, terminalId }: { calls: AgentCall[]; terminalI
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     <ul className="activity-call-groups">
       {groups.map(({ call, items }) => {
-        const name = modelName(call.model);
-        return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
+        const name = callModelName(call);
+        return <li key={JSON.stringify([call.agent, call.provider, call.model, call.modelUnconfirmed, call.effort, call.fast])}>
           <ul className="activity-call-rows">
             <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
             {items.slice(0, MAX_CALL_ITEMS).map(item => {

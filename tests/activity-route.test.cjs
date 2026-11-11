@@ -674,6 +674,21 @@ test('every group of called models has its own rate and inline effort, its calls
   assert.doesNotMatch(css, /activity-call-tag/);
 });
 
+test('a dispatched worker that has not reported its model shows the requested one as unconfirmed, or 模型未确认, never the placeholder, until it reports', t => {
+  const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.reset());
+  const start = (id, extra = {}) => ({ type: 'dispatch-start', id, agent: 'codex', role: '执行', title: `Task ${id}`, model: 'unreported', effort: null, fast: null,
+    sessionId: `thread-${id}`, startedAt: 1000, ...extra });
+  calls.dispatch(start('asked', { requestedModel: 'gpt-6.1-sol' })); calls.dispatch(start('unasked'));
+  const heads = html => [...html.matchAll(/<li class="activity-call-head" title="([^"]*)">[\s\S]*?<b>([^<]*)<\/b>/g)].map(match => [match[2], match[1]]);
+  assert.deepEqual(heads(callsMarkup(calls.snapshot())), [['GPT-6.1-Sol（未确认）', 'Codex / GPT-6.1-Sol（未确认）'], ['模型未确认', 'Codex / 模型未确认']]);
+  assert.deepEqual(heads(callsMarkup(calls.snapshot(), 'en')).map(([name]) => name), ['GPT-6.1-Sol (unconfirmed)', 'Model unconfirmed']);
+  for (const language of ['zh', 'en']) assert.doesNotMatch(callsMarkup(calls.snapshot(), language), /unreported/);
+  // The worker's report replaces the placeholder in its own group.
+  assert.equal(calls.dispatch({ type: 'dispatch-routing', id: 'asked', model: 'gpt-6.1-sol', effort: 'max', fast: true }), true);
+  assert.deepEqual(heads(callsMarkup(calls.snapshot())), [['GPT-6.1-Sol', 'Codex / GPT-6.1-Sol\nmax · 快速'], ['模型未确认', 'Codex / 模型未确认']]);
+});
+
 test('an agent’s sections follow the connection: a session that reports plan windows is on a plan even when the connection is unknown; otherwise unknown and not connected say 额度 未知 and measure nothing', () => {
   const future = Date.now() + 3600000, own = { limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Codex' };
   // Unknown connection, but the session's own windows: the bars and their source show, and no 额度 未知 row.

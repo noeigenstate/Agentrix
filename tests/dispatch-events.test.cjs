@@ -29,6 +29,7 @@ const start = (id = randomUUID(), extra = {}) => ({ type: 'dispatch-start', proj
 const end = (id, extra = {}) => ({ type: 'dispatch-end', projectId: 'terminal', sessionKey: 'test-key', id, ...routing,
   exitCode: 0, reason: 'exit', outputTokens: 100, activeMs: 2000, endedAt: 5000, ...extra });
 const rate = (id, extra = {}) => ({ type: 'dispatch-rate', projectId: 'terminal', sessionKey: 'test-key', id, outputTokens: 50, activeMs: 1000, ...extra });
+const reroute = (id, extra = {}) => ({ type: 'dispatch-routing', projectId: 'terminal', sessionKey: 'test-key', id, ...routing, ...extra });
 const record = (type, at, content) => ({ type, timestamp: new Date(at).toISOString(), message: { content } });
 const stop = at => ({ type: 'system', subtype: 'stop_hook_summary', timestamp: new Date(at).toISOString() });
 const notification = '<task-notification><task-id>background-task</task-id><status>failed</status></task-notification>';
@@ -134,12 +135,17 @@ test('bad keys, projects, unknown ids, malformed fields and oversized payloads a
   for (const event of [start(undefined, { sessionKey: 'wrong' }), start(undefined, { projectId: 'other' }), start(undefined, { id: 'not-a-uuid' }),
     start(undefined, { title: 'x'.repeat(1025) }), start(undefined, { model: 'x\ny' }), start(undefined, { fast: 'true' }), start(undefined, { declared: {} }),
     start(undefined, { cwd: 'x'.repeat(4097) }), start(undefined, { extra: 'x'.repeat(17000) }), start(undefined, { sessionId: null }),
-    end(randomUUID()), rate(randomUUID()), rate(randomUUID(), { activeMs: -1 }), rate(randomUUID(), { outputTokens: Infinity })]) assert.equal(f.send(event), false);
+    start(undefined, { requestedModel: 'x'.repeat(161) }), end(randomUUID()), rate(randomUUID()), rate(randomUUID(), { activeMs: -1 }), rate(randomUUID(), { outputTokens: Infinity }),
+    reroute(randomUUID())]) assert.equal(f.send(event), false);
   assert.deepEqual(f.calls.snapshot(), []);
   f.send(launch);
   for (const event of [end(launch.id, { reason: 'unknown' }), end(launch.id, { outputTokens: -1 }), end(launch.id, { activeMs: Infinity }),
-    rate(launch.id, { activeMs: 0 }), rate(launch.id, { outputTokens: 0.5 })]) assert.equal(f.send(event), false);
+    rate(launch.id, { activeMs: 0 }), rate(launch.id, { outputTokens: 0.5 }), reroute(launch.id, { model: '' }), reroute(launch.id, { model: 'x\ny' }),
+    reroute(launch.id, { fast: 'on' }), reroute(launch.id, { effort: 'x'.repeat(33) })]) assert.equal(f.send(event), false);
   assert.equal(f.calls.snapshot()[0].running, 1);
+  assert.equal(f.send(reroute(launch.id, { model: 'gpt-6.1-terra' })), true);
+  assert.equal(f.calls.snapshot()[0].model, 'gpt-6.1-terra', 'a well-formed report for a known worker updates its row');
+  f.send(end(launch.id)); assert.equal(f.send(reroute(launch.id)), false, 'an ended worker takes no later report');
   assert.equal(validDispatch(start()), true);
 });
 

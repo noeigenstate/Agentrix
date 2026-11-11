@@ -52,7 +52,7 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, hold, timeout = 30000, requestTimeout, extra = [], setup, isolated = false, environment = () => ({}) } = {}) {
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, hold, timeout = 30000, requestTimeout, extra = [], setup, isolated = false, environment = () => ({}), thread } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -67,7 +67,7 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
   // hold of its own stays until the helper has printed its start (or failed-start) line, so no runner is too slow for it.
   // Outside the worker's folder: the scope check reports any file that appears there.
   const release = hold === undefined ? path.join(os.tmpdir(), `agentrix-dispatch-release-${randomUUID()}`) : null;
-  await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold: hold ?? 150, release, sessionId: session }));
+  await fs.writeFile(input, JSON.stringify({ lines, exitCode, hold: hold ?? 150, release, sessionId: session, thread }));
   await fs.mkdir(path.join(directory, 'codex'));
   await fs.writeFile(path.join(directory, 'codex/config.toml'), 'service_tier = "flex"\n');
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
@@ -250,6 +250,39 @@ test('an unreported model leaves routing unverified unless a reported value mism
   const mixedResult = await mixed.finished;
   assert.match(mixedResult.stdout, /model unreported effort high fast on · routing MISMATCH \(declared gpt-6\.1-sol max fast on\) \(model unverified\)/);
   assert.deepEqual(mixed.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
+});
+
+test('a model app-server reports after the start reaches the called-models row and replaces the placeholder', async t => {
+  const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+  const { acceptDispatch } = require('../electron/features/agents/dispatch-events.cjs');
+  const terminal = { sessionKey: 'secret-for-test', terminalId: 'project', agent: 'claude', usage: { rates: { model: 'claude-opus-5-5' } } };
+  const shown = calls => (({ model, modelUnconfirmed, effort, fast }) => ({ model, modelUnconfirmed, effort, fast }))(calls.snapshot()[0]);
+  // The turn starts before its session file names the model (as the owner's beta.2 run did): the start goes out without one.
+  const late = await fixture(t, [{ turnStarted: true }, { delay: 300 }, ...rollout.map(record => ({ rollout: record }))]);
+  assert.match((await late.finished).stdout, /started [\w-]+ codex model unreported /);
+  const [start, ...rest] = late.events, routes = rest.filter(event => event.type === 'dispatch-routing');
+  assert.equal(start.model, 'unreported'); assert.equal(start.requestedModel, 'gpt-6.1-sol');
+  assert.ok(routes.length > 0, 'the model the session file names afterwards is sent on while the worker runs');
+  assert.ok(routes.every(route => route.model !== 'unreported'), 'an unknown model is never sent as an update');
+  assert.ok(late.events.indexOf(routes[0]) < late.events.findIndex(event => event.type === 'dispatch-end'));
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.reset());
+  assert.equal(acceptDispatch(terminal, start, calls), true);
+  assert.deepEqual(shown(calls), { model: 'gpt-6.1-sol', modelUnconfirmed: true, effort: null, fast: null }, 'the row shows the requested model, unconfirmed');
+  assert.deepEqual((({ model, modelUnconfirmed }) => ({ model, modelUnconfirmed }))(calls.feeds.entries.get(`dispatch:${start.id}`).snapshot),
+    { model: 'gpt-6.1-sol', modelUnconfirmed: true }, 'and so does its view');
+  for (const route of routes) assert.equal(acceptDispatch(terminal, route, calls), true);
+  assert.deepEqual(shown(calls), { model: 'gpt-6.1-sol', modelUnconfirmed: undefined, effort: 'max', fast: true });
+  assert.equal(calls.feeds.entries.get(`dispatch:${start.id}`).snapshot.model, 'gpt-6.1-sol');
+
+  // The runtime names the model at thread start, so the start carries it; a configured model other than the declared one is a
+  // mismatch, and a reroute while the worker runs updates the row.
+  const reroute = { notify: { method: 'model/rerouted', params: { fromModel: 'gpt-6.1-terra', toModel: 'gpt-6.1-mini', reason: 'highRiskCyberActivity' } } };
+  const named = await fixture(t, [{ turnStarted: true }, { delay: 300 }, reroute, { delay: 300 }], { thread: { model: 'gpt-6.1-terra' } });
+  assert.match((await named.finished).stdout, /started [\w-]+ codex model gpt-6\.1-terra effort unreported fast unreported · routing MISMATCH \(declared gpt-6\.1-sol max fast on\)/);
+  assert.deepEqual(named.events.map(event => [event.type, event.model]), [['dispatch-start', 'gpt-6.1-terra'], ['dispatch-routing', 'gpt-6.1-mini'], ['dispatch-end', 'gpt-6.1-mini']]);
+  assert.deepEqual(named.events[0].declared, { model: 'gpt-6.1-sol', effort: 'max', fast: true });
+  for (const event of named.events.slice(0, 2)) assert.equal(acceptDispatch(terminal, event, calls), true);
+  assert.equal(calls.snapshot().find(group => group.model === 'gpt-6.1-mini')?.modelUnconfirmed, undefined);
 });
 
 test('N4: an alias resolving to its full model does not trigger the lab routing alarm, but a different model does', async t => {

@@ -655,6 +655,14 @@ test('two splits of one model are told apart by their task: it leads the header 
   assert.match(paneMarkup(ok({ title: '' })), /aria-label="GPT-6\.1-Sol 的输出，只读"/, 'a task with no title is named by its model, as before');
 }));
 
+test('a worker that has not reported its model is named by the requested one as unconfirmed, or 模型未确认 without one', () => zh(() => {
+  const asked = paneMarkup(ok({ id: 'dispatch:a', modelUnconfirmed: true })), unasked = paneMarkup(ok({ id: 'dispatch:a', model: null, modelUnconfirmed: true }));
+  assert.match(asked, /<div class="subagent-meta"[^>]*>执行 · GPT-6\.1-Sol（未确认） · max/);
+  assert.match(asked, /aria-label="Refactor the grid · GPT-6\.1-Sol（未确认） 的输出，只读"/);
+  assert.match(unasked, /<div class="subagent-meta" title="执行 · 模型未确认 · max · 快速 · 94 token\/s">/, 'no raw model id to add to the hover');
+  for (const html of [asked, unasked]) assert.doesNotMatch(html, /unreported/);
+}));
+
 test('the task keeps the header’s width: only the state, the clock and the close button share its row, who it is goes on one quiet line under it, and the header stays above the feed', () => zh(() => {
   const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
   const row = paneMarkup(ok({})).match(/<div class="subagent-head-row">(.*?)<\/div>/)[1];

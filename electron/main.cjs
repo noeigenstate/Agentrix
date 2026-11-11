@@ -957,7 +957,7 @@ function onEvent(event) {
   if (!s || event.sessionKey !== s.sessionKey) return;
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
-  if (['dispatch-start', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'].includes(event.type)) {
+  if (['dispatch-start', 'dispatch-routing', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'].includes(event.type)) {
     if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project))) {
       if (event.type === 'dispatch-start' && event.agent === 'claude' && event.unconfirmed !== true) rememberClaudeSource(event.sessionId, 'dispatch');
       broadcast();

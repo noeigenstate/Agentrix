@@ -33,7 +33,8 @@ export type AgentTokens = { input: number; cached: number; output: number };
 // AgentUsage.model is the main session's model as its latest reply records it, and its rate is that model's.
 export type TokenRate = { outputTokens: number; activeMs: number; samples: number; updatedAt: number; partial: boolean };
 // done: a dispatched worker that ended cleanly — shown as 已完成 and removed 3 s later; a failure stays until the lead's next round.
-export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string; effort: string | null; fast: boolean | null; preparing: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
+// modelUnconfirmed: the worker has not reported its model yet; model is then the one the lead asked for, or null.
+export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null; preparing: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
   // A dispatched worker that ended badly or never confirmed (skills/agent-dispatch): shown in words instead of a plain state.
   failure?: { reason: 'unconfirmed' | 'capacity' | 'killed' | 'error' | 'scope'; exitCode: number | null;
     // scope: files the worker changed outside the paths it was allowed (skills/agent-dispatch, --allow).
@@ -91,7 +92,7 @@ export type ConversationPacket = { id: string; sessionId?: string; historyKey?: 
 export type ReadingHistoryScope = { key: string; agent: 'codex' | 'claude'; threadId: string };
 export type ConversationPage = { key: string; entries: ConversationEntry[]; beforeCursor: string | null };
 // Full snapshots, newest 400 entries; omitted on the first entry means earlier steps were dropped.
-export type SubagentFeed = { id: string; agent: AgentCall['agent']; model: string; effort: string | null; fast: boolean | null;
+export type SubagentFeed = { id: string; agent: AgentCall['agent']; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null;
   title: string; role: string; state: AgentCall['items'][number]['state']; failure?: AgentCall['items'][number]['failure'];
   startedAt: number | null; endedAt: number | null; rate: TokenRate | null; entries: ConversationEntry[]; revision: number;
   controlReceipts?: { id: string; status: AgentIntervention['status']; reason?: string }[] };
