@@ -156,7 +156,7 @@ class RemoteConnection {
   send(message) {
     if (!this.closed) this.link.send({ ...message, channel: this.channel });
   }
-  async request(op, data = {}, { signal, timeout = 30000 } = {}) {
+  async request(op, data = {}, { signal, timeout = 30000, timeoutMessage = '读取远程文件超时，请重试。' } = {}) {
     await this.ready;
     if (signal?.aborted) throw new Error('Remote request cancelled');
     if (this.closed) throw new Error('SSH 连接已断开，请重新连接。');
@@ -168,7 +168,7 @@ class RemoteConnection {
         clearTimeout(timer); signal?.removeEventListener('abort', cancel); callback(value);
       };
       const cancel = () => finish(reject, new Error('Remote request cancelled'));
-      const timer = setTimeout(() => finish(reject, new Error('读取远程文件超时，请重试。')), timeout);
+      const timer = setTimeout(() => finish(reject, new Error(timeoutMessage)), timeout);
       timer.unref?.(); this.pending.set(id, { resolve: value => finish(resolve, value), reject: error => finish(reject, error), timer });
       signal?.addEventListener('abort', cancel, { once: true });
       this.send({ ...data, op, id });

@@ -15,6 +15,8 @@ const { PreviewResources, resourceResponse } = require('../electron/preview-reso
 const { FileOperations } = require('../electron/file-operations.cjs');
 const { createSSHFixture, SSHWorker } = require('./helpers/ssh-fixture.cjs');
 const { ProjectGit, gitEnvironment } = require('../electron/project-git.cjs');
+const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
+const { createRemoteCodexProcess } = require('../electron/features/ssh/codex-process.cjs');
 const execGit = require('node:util').promisify(require('node:child_process').execFile);
 
 const integrationDir = path.resolve(__dirname, '..', 'integration');
@@ -464,4 +466,40 @@ test('Linux remote worker reads real files, enforces boundaries and hands a type
   await operations.remove(project, ['上传目录']);
   await assert.rejects(fs.stat(path.join(fixture.project, '上传目录')));
   assert.deepEqual(await fs.readFile(source), payload);
+});
+
+test('Linux SSH Codex app-server initializes, starts a thread and answers a turn through the real worker on the login PATH; a failed start states its cause',
+  { timeout: 40000, skip: process.platform !== 'linux' }, async t => {
+  const fixture = await fixtureFor(t, { nativeWorker: true });
+  const auth = await new SSHAuthServer().start();
+  t.after(() => auth.close());
+  // An npm Codex is a "#!/usr/bin/env node" script. Here, as with nvm, its interpreter is on the login shell's PATH only.
+  const loginOnly = path.join(fixture.home, 'login-only'), codex = path.join(fixture.home, 'bin', 'codex');
+  await fs.mkdir(loginOnly);
+  await fs.symlink(process.execPath, path.join(loginOnly, 'agentrix-node'));
+  await fs.writeFile(path.join(fixture.home, '.profile'), 'export PATH="$HOME/bin:$HOME/login-only:$PATH"\n');
+  await fs.writeFile(codex, `#!/usr/bin/env agentrix-node\nrequire(${JSON.stringify(path.join(__dirname, 'fixtures/codex-app-server.cjs'))});\n`, { mode: 0o755 });
+  const project = { id: randomUUID(), kind: 'ssh', path: fixture.project, ssh: { host: 'fixture', configFile: fixture.configFile } };
+  // The same launch main.cjs gives the runtime: a native channel of its own, then the app-server's bytes over it.
+  const factory = createCodexRuntime({ resolveExecutable: () => assert.fail('no local Codex lookup'), spawnProcess: () => assert.fail('no local Codex process'),
+    launchRemote: async spec => {
+      const remote = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: randomUUID(), codingPath: spec.cwd, native: true });
+      try { const info = await remote.ready; return { cwd: info.cwd, context: info.context, child: createRemoteCodexProcess(remote) }; }
+      catch (error) { remote.close(); throw error; }
+    } });
+  const create = (terminalId, emit = () => {}) => {
+    const runtime = factory.create({ kind: 'ssh', owner: 'gui', projectId: project.id, terminalId, cwd: fixture.project }, emit);
+    t.after(() => runtime.close());
+    return runtime;
+  };
+  const events = [], runtime = create('ssh-codex', event => events.push(event));
+  assert.equal((await runtime.start()).providerSessionId, 'synthetic-thread');
+  assert.equal((await runtime.send({ clientMessageId: 'over-ssh', text: '通过 SSH 你好' })).status, 'delivered');
+  await waitFor(() => events.some(event => event.type === 'turn.completed'), 'the turn over SSH');
+  assert.equal(runtime.snapshot().items.find(item => item.kind === 'agent-message')?.content.text, 'final answer');
+  await runtime.close();
+  // A Codex that cannot start: the owner is told the exit and the host's own words, not only that the connection failed.
+  await fs.writeFile(codex, '#!/bin/sh\necho "codex: failed to load config.toml: expected a table" >&2\nexit 3\n', { mode: 0o755 });
+  const error = await create('ssh-codex-failing').start().then(() => assert.fail('the start must fail'), error => error);
+  assert.match(error.detail, /^initialize: \w+ \(exit 3\) · stderr: codex: failed to load config\.toml: expected a table$/);
 });

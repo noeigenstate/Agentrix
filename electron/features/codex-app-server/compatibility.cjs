@@ -23,7 +23,7 @@ async function probeCapabilities(rpc) {
       // Required identifiers are deliberately absent: the server can validate the method without executing a turn.
       if (error.code === -32602 || error.code === -32600 && error.missingThreadId === true) continue;
       throw Object.assign(new Error('unsupported_codex_capabilities'), { code: 'unsupported_codex_capabilities',
-        stage: 'capability_probe', method, category: Number.isInteger(error.code) ? `rpc_${error.code}` : 'request_failed' });
+        stage: 'capability_probe', method, category: Number.isInteger(error.code) ? `rpc_${error.code}` : 'request_failed', serverMessage: error.serverMessage ?? null });
     }
     // Success means this server defaults missing mandatory identifiers. It is unsafe to probe further.
     throw Object.assign(new Error('unsupported_codex_capabilities'), { code: 'unsupported_codex_capabilities',

@@ -71,6 +71,7 @@ test('remote process IDs isolate output; a lost SSH channel fails once without l
   const child = createRemoteCodexProcess(connection), output = [];
   child.stdout.on('data', bytes => output.push(bytes.toString()));
   const id = calls[0][1].processId;
+  assert.deepEqual(calls[0][2], { timeout: 30000, timeoutMessage: '远端启动 Codex 超时，请重试。' }, 'a slow remote start is not told as a file read');
   events.emit('codex-process', { type: 'codex-data', processId: 'other', data: Buffer.from('foreign').toString('base64') });
   events.emit('codex-process', { type: 'codex-data', processId: id, data: Buffer.from('bound').toString('base64') });
   const closed = once(child, 'close'); events.emit('exit'); events.emit('exit');

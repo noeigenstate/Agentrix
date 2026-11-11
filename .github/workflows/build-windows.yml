@@ -97,6 +97,16 @@ jobs:
         run: node scripts/claude-sdk-pack.cjs --clean
       - name: Test remote files and recovery state
         run: python3 -m unittest discover -s tests -p 'remote_worker_test.py' -v
+      - name: Check the remote worker runs on Python 3.6
+        # The SSH host needs only Python 3.6 (docs/usage.md); a 3.7+ call there once stopped every SSH Codex start.
+        # vermin is the authority here; tests/remote_worker_test.py keeps an offline syntax-tree check beside it.
+        # The hashes are PyPI's for the 1.6.0 wheel and sdist; vermin has no dependencies.
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/vermin"
+          printf '%s\n' 'vermin==1.6.0 --hash=sha256:f1fa9ee40f59983dc40e0477eb2b1fa8061a3df4c3b2bcf349add462a5610efb --hash=sha256:6266ca02f55d1c2aa189a610017c132eb2d1934f09e72a955b1eb3820ee6d4ef' > "$RUNNER_TEMP/vermin.txt"
+          "$RUNNER_TEMP/vermin/bin/pip" install --disable-pip-version-check --no-input --require-hashes -r "$RUNNER_TEMP/vermin.txt"
+          "$RUNNER_TEMP/vermin/bin/vermin" --target=3.6- --violations --eval-annotations --no-tips integration/remote-worker.py
       - name: Test real SSH and Linux PTY integration
         run: |
           node scripts/build-ssh-askpass.cjs

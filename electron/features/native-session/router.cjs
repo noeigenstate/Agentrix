@@ -151,7 +151,9 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
             : ['codex_cli_required', 'ENOENT'].includes(reason) ? spec.kind === 'ssh'
               ? '远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。'
               : '未找到 Codex 程序，请在设置中安装。'
-            : reason === 'unsupported_codex_version' ? 'Codex 版本过低，请升级后重试。' : 'Codex app-server 连接失败，请重试。';
+            : reason === 'unsupported_codex_version' ? 'Codex 版本过低，请升级后重试。'
+              // The general sentence names no cause: the runtime's redacted reason goes with it.
+              : 'Codex app-server 连接失败，请重试。' + (error.detail ? `原因：${error.detail}` : '');
           record.stream.publish('error', { code: typeof error.code === 'string' ? error.code : 'codex_start_failed', message, retryable: true, willRetry: false, stage: 'startup' });
           record.stream.publish('session.state', { state: 'failed', reason: message });
           throw Object.assign(new Error(message), { code: error.code || 'codex_start_failed' });

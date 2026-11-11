@@ -1,11 +1,12 @@
 const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
 const HISTORY_READS = new Set(['thread/turns/list', 'thread/items/list']);
 const keyOf = id => `${typeof id}:${id}`;
+const STDERR_TAIL = 4096;
 
 // A write accepted by the stream is never retried, including after backpressure or timeout.
 function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onDisconnect = () => {}, onDropped = () => {}, timeout = 8000 } = {}) {
   const pending = new Map();
-  let counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0;
+  let counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0, stderrTail = '', processError = null;
   function fail(code = 'disconnected') {
     if (closed) return;
     closed = true;
@@ -41,6 +42,7 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
         if (!task) return;
         pending.delete(key); clearTimeout(task.timer);
         if (message.error) task.reject(Object.assign(new Error('rpc_rejected'), { code: message.error.code, uncertain: false,
+          serverMessage: typeof message.error.message === 'string' ? message.error.message.slice(0, 1000) : null,
           // 0.166 reports parameter deserialization failures as Invalid Request. Keep only this static classification.
           missingThreadId: message.error.code === -32600 && message.error.message === 'Invalid request: missing field `threadId`',
           missingThread: message.error.code === -32600 && /^no rollout found for thread id [a-f\d-]{36}$/i.test(message.error.message) }));
@@ -65,10 +67,11 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
   child.stdout.on('end', () => { read.end(); fail('disconnected'); });
   child.stdin.on('drain', () => { blocked = false; flush(); });
   child.stdin.on('error', error => fail(error.code === 'codex_cli_required' ? error.code : 'write_failed'));
-  child.on('error', error => fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required'].includes(error.code) ? error.code : 'process_failed'));
+  child.on('error', error => { processError ||= error; fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required'].includes(error.code) ? error.code : 'process_failed'); });
   child.once('exit', () => fail('process_exited'));
-  // Drain diagnostics without forwarding provider stderr or credentials to any consumer.
-  child.stderr?.on('data', () => {});
+  // Only a bounded tail is kept, for a failed start's redacted reason (failure.cjs); stderr is never forwarded as events.
+  child.stderr?.setEncoding?.('utf8');
+  child.stderr?.on('data', text => { stderrTail = (stderrTail + text).slice(-STDERR_TAIL); });
   return {
     request(method, params, deadline = timeout) {
       return new Promise((resolve, reject) => {
@@ -84,6 +87,18 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     respond: (id, result) => write({ id, result }),
     reject: (id, code = -32601) => write({ id, error: { code, message: 'Unsupported request' } }),
     close() { fail('closed'); read.clear(); try { child.stdin.end(); } catch {} },
+    // Its stdout can end before the exit is known, and the exit come before the last stderr: give both a moment.
+    async diagnostics() {
+      const stream = child.stderr;
+      const settled = () => (child.exitCode != null || child.signalCode != null) && (!stream || stream.readableEnded || stream.destroyed);
+      if (!settled()) await new Promise(resolve => {
+        const done = () => { clearTimeout(timer); child.off('exit', check); stream?.off('end', check); resolve(); };
+        const check = () => { if (settled()) done(); };
+        // A remote exit crosses the SSH channel after the host has drained the process's pipes.
+        const timer = setTimeout(done, child.remote ? 1000 : 250); child.on('exit', check); stream?.on('end', check);
+      });
+      return { stderr: stderrTail, processError: processError?.message || null, exitCode: child.exitCode ?? null, signal: child.signalCode ?? null };
+    },
   };
 }
 

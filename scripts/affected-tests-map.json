@@ -334,7 +334,7 @@
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "aa07a06a501c6c0d71fc1e2128305ddfbd1a3ea0c958f9bc0003f4b2464f6082",
+      "digest": "1d6c70e30dc638a26f1d1def661ae2eac28e8705b2a7450cdea7d0fba1d80a95",
       "targets": [
         "integration/dispatch.cjs"
       ],
@@ -353,7 +353,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "64d6fc4253ab60ba78424d7b951a64f072d27de46ffdf968217bd3a06652c4b7",
+      "digest": "1639abb0d27721763f23035f3942c3d03606ab9455f409611d4647dc0f09762a",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",

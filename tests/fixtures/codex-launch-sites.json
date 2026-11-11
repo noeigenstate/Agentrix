@@ -384,12 +384,12 @@
     "id": "integration/dispatch.cjs:0c6d7608de831ab448c261b4"
   },
   {
-    "text": "subprocess.run([\"/bin/bash\", \"-lic\", \"type -P codex\"], env=dict(env),\n        stdin=subprocess.DEVNULL, start_new_session=True,\n        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)",
-    "id": "integration/remote-worker.py:33bbb560fbcc96da8f3a8a46"
+    "text": "subprocess.run([\"/bin/bash\", \"-lic\", CODEX_LOOKUP], env=dict(env),\n        stdin=subprocess.DEVNULL, start_new_session=True,\n        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)",
+    "id": "integration/remote-worker.py:8957a654aeab9fd26546b64a"
   },
   {
-    "text": "subprocess.Popen([executable, \"app-server\", \"--listen\", \"stdio://\"], cwd=self.coding_root,\n                env=dict(self.agent_env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n                start_new_session=os.name == \"posix\")",
-    "id": "integration/remote-worker.py:48e12babdf759288674b676d"
+    "text": "subprocess.Popen([executable, \"app-server\", \"--listen\", \"stdio://\"], cwd=self.coding_root,\n                env=dict(self.agent_env, **login), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,\n                start_new_session=os.name == \"posix\")",
+    "id": "integration/remote-worker.py:1a8d3d328426de1084e6f45c"
   },
   {
     "text": "subprocess.run([\"git\", \"rev-parse\", \"--abbrev-ref\", \"HEAD\"], cwd=self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3)",

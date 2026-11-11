@@ -64,9 +64,14 @@ for (const [code, words] of [['codex_cli_required', '未找到 Codex'], ['unsupp
     const router = createRouter({ claude: { apiState: () => ({ status: 'no_key' }) }, settings: { get: () => ({}) },
       resolveSpec: id => ({ owner: 'gui', projectId: 'p', terminalId: id, agent: 'codex' }), terminal: () => assert.fail('no TUI fallback'), emit() {},
       codex: { create(spec, emit) { const stream = createEventStream(spec, emit); let state = 'stopped';
-        return { snapshot: () => ({ ...stream.snapshot(), state }), async start() { if (failed) throw Object.assign(new Error(code), { code });
+        return { snapshot: () => ({ ...stream.snapshot(), state }), async start() { if (failed) throw Object.assign(new Error(code), { code, detail: `initialize: ${code}` });
           state = 'idle'; stream.publish('session.state', { state, reason: null }); }, close() { closes++; state = 'stopped'; } }; } } });
-    t.after(() => router.close()); await assert.rejects(router.start('t', { agent: 'codex' }), new RegExp(words));
+    t.after(() => router.close());
+    const error = await router.start('t', { agent: 'codex' }).then(() => assert.fail('the start must fail'), error => error);
+    assert.match(error.message, new RegExp(words));
+    // Only the general sentence names no cause, so only it carries the runtime's reason; the specific ones already say it.
+    assert.equal(error.message.endsWith(`原因：initialize: ${code}`), code === 'rpc_timeout');
+    assert.equal(router.snapshot('t').events.findLast(event => event.type === 'session.state').payload.reason, error.message);
     assert.equal(router.snapshot('t').state, 'failed'); assert.ok(closes > 0); assert.equal(router.switchState('t'), null);
     failed = false; await router.start('t', { agent: 'codex' }); assert.equal(router.snapshot('t').state, 'idle');
   });

@@ -12,6 +12,7 @@ const { assertCompatible, probeCapabilities, commandName, builtinCommands, unsup
 const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
+const { startupDetail } = require('./failure.cjs');
 
 // Host-owned choices only, separate from CLI configuration and transcript files.
 // SSH choices are host metadata, keyed by the authenticated remote scope; remote
@@ -80,6 +81,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           child = spawnProcess(file, ['app-server', '--listen', 'stdio://'], { cwd, env, windowsHide: true, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
         }
         check(); rpc = createRpc(child);
+        await child.opened;
         assertCompatible(await rpc.request('initialize', { clientInfo: { name: 'agentrix-history', version: '1.0.0' }, capabilities: { experimentalApi: true } }));
         rpc.notify('initialized');
         const rows = new Map();
@@ -237,12 +239,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       async function open(resuming, override) {
         if (rpc || closed) throw new Error('session_already_started');
         Object.assign(spec, override || {}); setState('starting'); origin = resuming ? 'resume' : 'user';
-        let stage = 'resolve_executable';
+        let stage = 'resolve_executable', hosts = [];
         try {
           if (spec.kind === 'ssh') {
             stage = 'ssh_connect';
             if (!launchRemote) throw new Error('remote_transport_required');
             const remote = await launchRemote(spec, { signal: connectionAbort.signal });
+            hosts = remote.hosts || [];
             spec.cwd = remote.cwd; spec.env = {}; spec.context = remote.context || '';
             child = remote.child;
             if (closed) { try { await stopProcess(child); } finally { child.dispose?.(); child = null; } assertOpen(); }
@@ -270,6 +273,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
                 requests?.cancelAll(); setState('disconnected', reason);
               } });
             requests = createRequests(rpc, events, setState);
+            // An SSH host finds Codex in a login shell first (seconds on a busy host): the handshake deadline starts after.
+            await child.opened;
             stage = 'initialize';
             const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
             assertOpen();
@@ -345,6 +350,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId, reason: compatibility.reason };
         } catch (error) {
           error.stage ||= stage;
+          // The reason is only added: working it out must never replace the error or skip the close below.
+          try { error.detail ||= startupDetail(error, await rpc?.diagnostics(), { hosts }); } catch { }
           if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
           await close(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
         }

@@ -179,3 +179,38 @@ test('snapshot reconstructs an item after more than one event window of deltas',
   const snapshot = events.snapshot(); assert.equal(snapshot.lastSequence, 500);
   assert.equal(snapshot.events.length, 1); assert.equal(snapshot.events[0].payload.content.text.length, 500);
 });
+
+test('a failed start carries its stage, exit code and redacted stderr tail, and a protocol error its code and message', async t => {
+  const lifetime = resources(t), events = [];
+  const stderr = 'early line one\nearly line two\n\x1b[31mERROR\x1b[0m config: token=abcdefsecret123 Authorization: Bearer sk-proj-abcdefghijklmn\n'
+    + "/usr/bin/env: 'node': No such file or directory\n";
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only',
+    spawnProcess: (_file, _args, options) => lifetime.child(spawn(process.execPath, ['-e', `process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 127;`],
+      { ...options, detached: false })) });
+  const runtime = factory.create({ projectId: 'project', terminalId: 'terminal', runtimeSessionId: 'runtime', cwd: os.tmpdir(), env: { PATH: '' } }, event => events.push(event));
+  lifetime.defer('close runtime', () => runtime.close());
+  const error = await runtime.start().then(() => assert.fail('the start must fail'), error => error);
+  assert.match(error.detail, /^initialize: (?:disconnected|process_exited) \(exit 127\) · stderr: /, 'stdout may end before the exit is seen');
+  assert.match(error.detail, /No such file or directory$/, 'the last stderr line, the one that names the cause, is kept');
+  assert.doesNotMatch(error.detail, /early line one|abcdefsecret123|sk-proj-abcdefghijklmn|\x1b/, 'three lines at most, secrets and colours removed');
+  assert.ok(!events.some(event => JSON.stringify(event).includes('No such file')), 'stderr is never published as an event');
+  const { startupDetail } = require('../electron/features/codex-app-server/failure.cjs');
+  assert.equal(startupDetail(Object.assign(new Error('rpc_rejected'), { code: -32600, serverMessage: 'Invalid request: unknown variant `fast`', stage: 'thread_start' })),
+    'thread_start: rpc -32600, Invalid request: unknown variant `fast`');
+  // A newer server words a missing field differently: the probe's refusal keeps what the server said.
+  const { probeCapabilities } = require('../electron/features/codex-app-server/compatibility.cjs');
+  const reworded = await probeCapabilities({ request: async () => { throw Object.assign(new Error('rpc_rejected'), { code: -32600, serverMessage: 'Invalid request: missing field `threadId` at line 1 column 2' }); } })
+    .then(() => assert.fail('the probe must refuse'), error => Object.assign(error, { stage: 'capability_probe' }));
+  assert.equal(startupDetail(reworded), 'capability_probe: unsupported_codex_capabilities, thread/resume rpc_-32600, Invalid request: missing field `threadId` at line 1 column 2');
+  const long = startupDetail(Object.assign(new Error('process_exited'), { stage: 'initialize' }), { stderr: 'x'.repeat(2000) + ' the end', exitCode: 1 });
+  assert.ok(long.length <= 300 && long.endsWith(' the end'), 'a long tail is cut from its start');
+  const { username, homedir } = os.userInfo();
+  const secrets = startupDetail(Object.assign(new Error('process_exited'), { stage: 'initialize' }), { stderr: [
+    'GET https://api.example.invalid/v1?model=x&key=AIzaQUERYSECRET1 failed; Authorization: Basic dXNlcjpCQVNJQ1NFQ1JFVA==', 'x-api-key: HEADERSECRET123',
+    `\x1b]8;;https://link.example.invalid/?token=LINKSECRET\x1b\\open\x1b]8;;\x1b\\ \x1b]0;title\x07ssh test_ssh failed for ${username} in ${homedir}`].join('\n') },
+    { hosts: ['test_ssh', 'vm.example.invalid'] });
+  for (const hidden of ['AIzaQUERYSECRET1', 'dXNlcjpCQVNJQ1NFQ1JFVA', 'HEADERSECRET123', 'LINKSECRET', 'link.example.invalid', 'title', '\x1b', 'test_ssh', username, homedir])
+    assert.ok(!secrets.includes(hidden), `${hidden} is redacted: ${secrets}`);
+  assert.match(secrets, /&key=<secret> failed; Authorization: Basic <secret> \/ x-api-key: <secret> \//);
+  assert.match(secrets, /open ssh <host> failed for <user> in <home>$/, 'a hyperlink keeps its text; host, user and home are named only by kind');
+});
