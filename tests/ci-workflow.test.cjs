@@ -416,8 +416,8 @@ test('the release shell verifies and lists Windows-only beta assets and keeps st
         'SHA256SUMS.txt': [installer, `${installer}.blockmap`, 'latest.yml'],
         ...(!beta && {
           'SHA256SUMS-mac.txt': [image, archive],
-          'SHA256SUMS-linux-x64.txt': [`Agentrix-${version}-linux-x86_64.AppImage`, `Agentrix-${version}-linux-x64.tar.xz`],
-          'SHA256SUMS-linux-arm64.txt': [`Agentrix-${version}-linux-arm64.AppImage`, `Agentrix-${version}-linux-arm64.tar.xz`],
+          'SHA256SUMS-linux-x64.txt': [`Agentrix-${version}-x86_64.AppImage`, `Agentrix-${version}-x86_64.AppImage.zsync`, `Agentrix-${version}-linux-x64.tar.xz`],
+          'SHA256SUMS-linux-arm64.txt': [`Agentrix-${version}-arm64.AppImage`, `Agentrix-${version}-arm64.AppImage.zsync`, `Agentrix-${version}-linux-arm64.tar.xz`],
         }),
       };
       for (const [manifest, files] of Object.entries(groups)) {
@@ -445,8 +445,8 @@ test('the release shell verifies and lists Windows-only beta assets and keeps st
       } else {
         assert.match(notes, /^The Windows x64 installer of Agentrix, a macOS edition for Apple silicon, and Linux editions for x64 and arm64\./);
         assert.match(notes, /install-macos\.sh \| bash/);
-        assert.match(notes, /\*\*Linux \(x64 and arm64\):\*\*/);
-        assert.equal(list.length, 14);
+        assert.match(notes, /\*\*Linux \(x64 and arm64\):\*\*.*\*\*Agentrix-8\.2\.7-x86_64\.AppImage\*\* or \*\*Agentrix-8\.2\.7-arm64\.AppImage\*\*.*AppImageUpdate/);
+        assert.equal(list.length, 16);
       }
       // Every platform's manifest is actually checked, including Windows in the beta branch.
       for (const files of Object.values(groups)) {
@@ -459,6 +459,41 @@ test('the release shell verifies and lists Windows-only beta assets and keeps st
       assert.notEqual(run().status, 0, 'Reject artifacts from a different commit.');
     });
   }
+});
+
+test('Linux AppImages are named without "linux", carry update information and ship a checked .zsync', async () => {
+  const { build } = require('../package.json');
+  assert.equal(build.appImage.artifactName, 'Agentrix-${version}-${arch}.${ext}');
+  assert.equal(build.linux.artifactName, 'Agentrix-${version}-linux-${arch}.${ext}', 'the tar.xz keeps its name');
+  const steps = (await workflow()).jobs.linux.steps;
+  const index = name => {
+    const at = steps.findIndex(step => step.name === name);
+    assert.ok(at >= 0, name);
+    return at;
+  };
+  const version = steps.find(step => step.id === 'version').run;
+  assert.ok(version.includes('echo "image=Agentrix-$version-$image_arch.AppImage"'));
+  assert.ok(version.includes('echo "update=gh-releases-zsync|noeigenstate|Agentrix|latest|Agentrix-*-$image_arch.AppImage.zsync"'));
+  const embed = steps[index('Embed update information and create the zsync file')];
+  for (const name of ['APPIMAGETOOL_SHA256', 'RUNTIME_SHA256']) {
+    assert.match(embed.env[name], /^\$\{\{ matrix\.arch == 'x64' && '[0-9a-f]{64}' \|\| '[0-9a-f]{64}' \}\}$/, `${name} is pinned for both processors`);
+  }
+  assert.ok(embed.run.includes('https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$TOOL_ARCH.AppImage'));
+  assert.ok(embed.run.includes('https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-$TOOL_ARCH'));
+  assert.ok(embed.run.indexOf('sha256sum --check --strict') < embed.run.indexOf('chmod +x "$tools/appimagetool"'), 'downloads are verified before they run');
+  assert.match(embed.run, /appimagetool" --runtime-file "\$tools\/runtime" -u "\$UPDATE_INFORMATION"/);
+  const extract = embed.run.indexOf('--appimage-extract'), remove = embed.run.indexOf('rm -f "$IMAGE"');
+  assert.ok(extract < remove && remove < embed.run.indexOf('$tools/appimagetool" --runtime-file'), 'the old image is removed after unpacking, before packing');
+  assert.ok(embed.run.includes('test -s "$IMAGE.zsync"'));
+  assert.ok(embed.run.includes('--appimage-updateinformation) == "$UPDATE_INFORMATION"'));
+  // The image is final before anything tests, checksums or uploads it.
+  const at = index('Embed update information and create the zsync file');
+  assert.ok(index('Build the AppImage and tar.xz') < at);
+  for (const name of ['Verify the AppImage starts and keeps its environment out of terminals', 'Create checksums and build notes', 'Upload verified app']) {
+    assert.ok(at < index(name), name);
+  }
+  assert.ok(steps[index('Create checksums and build notes')].run.includes('"${{ steps.version.outputs.image }}.zsync"'));
+  assert.ok(steps[index('Upload verified app')].with.path.includes('release/${{ steps.version.outputs.image }}.zsync'));
 });
 
 test('release commit verification accepts Windows CRLF build notes and rejects a different commit', { skip: process.platform === 'win32' }, async () => {

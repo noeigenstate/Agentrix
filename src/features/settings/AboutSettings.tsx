@@ -20,7 +20,7 @@ function updateBlock(updates: AppUpdateState): { line: string; progress?: boolea
   if (!updates.supported) {
     if (updates.distribution === 'development') return { line: t('这是开发版，随源码更新，不会自动检查更新。') };
     if (updates.distribution === 'macos') return { line: t('macOS 版不会自动更新。再次运行安装命令，即可更新到最新版本。'), download: t('打开下载页面') };
-    if (updates.distribution === 'linux') return { line: t('Linux 版不会自动更新。在下载页面获取新版本的 AppImage 或压缩包。'), download: t('打开下载页面') };
+    if (updates.distribution === 'linux') return { line: t('Linux 版不会自动更新。AppImage 可以用 AppImageUpdate 等工具更新；压缩包请在下载页面获取新版本。'), download: t('打开下载页面') };
     return { line: t('便携版不会自动更新。下载 Windows 安装版后，即可自动检查和下载更新。'), download: t('下载 Windows 安装版') };
   }
   switch (updates.status) {

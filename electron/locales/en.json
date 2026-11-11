@@ -378,7 +378,6 @@
   "请先启动终端，连接 SSH 服务器。": "Start the terminal to connect to the SSH server first.",
   "⌘ + 点按打开链接": "⌘ + click to open the link",
   "macOS 版不会自动更新。再次运行安装命令，即可更新到最新版本。": "The macOS edition does not update itself. Run the install command again to update to the latest version.",
-  "Linux 版不会自动更新。在下载页面获取新版本的 AppImage 或压缩包。": "The Linux edition does not update itself. Get the new AppImage or archive from the download page.",
   "zsh（未安装）": "zsh (not installed)",
   "麦克风访问被拒绝，请在系统的隐私或声音设置中允许 Agentrix 使用麦克风。": "Microphone access was denied. Allow Agentrix to use the microphone in your system's privacy or sound settings.",
   "打开下载页面": "Open the download page",
@@ -3014,5 +3013,6 @@
   "原生模式里，工具步骤显示做了什么和对应的文件或命令，不贴出输出内容；失败时附一行原因，结果没能确认的标上问号。": "In native mode, tool steps show what was done and the file or command involved, without pasting the output; a failure adds one line with the reason, and a step whose result could not be confirmed is marked with a question mark.",
   "SSH 连接": "SSH connection",
   "修复 1.4.0 打开 SSH 项目时提示 Invalid dispatch modules、会话无法启动的问题。": "Fixed the Invalid dispatch modules error that kept sessions from starting when opening an SSH project in 1.4.0.",
-  "此前测试版的更新": "Earlier betas of this version"
+  "此前测试版的更新": "Earlier betas of this version",
+  "Linux 版不会自动更新。AppImage 可以用 AppImageUpdate 等工具更新；压缩包请在下载页面获取新版本。": "The Linux edition does not update itself. Update the AppImage with AppImageUpdate or a similar tool; get a new archive from the download page."
 }

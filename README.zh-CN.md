@@ -1,3 +1,5 @@
+<h1 align="center">Agentrix</h1>
+
 <p align="center">
   <a href="https://github.com/noeigenstate/Agentrix/releases/latest"><img src="docs/images/hero.svg" alt="Agentrix：一张网格上并行工作的 AI 助手" width="100%" /></a>
 </p>
@@ -178,8 +180,8 @@ Codex 的**重置额度**行在同一行显示剩余次数或查询状态。点�
 | --- | --- | --- |
 | **Windows x64** | `Agentrix-Setup-<version>-x64.exe` | 安装版检查并下载稳定版更新，下载完成后由你选择重启安装 |
 | **macOS arm64** | `Agentrix-<version>-mac-arm64.dmg` / `Agentrix-<version>-mac-arm64.zip`，或下面的安装命令 | 临时签名，未经 Apple 公证；再次运行命令即可更新 |
-| **Linux x64** | `Agentrix-<version>-linux-x86_64.AppImage` / `Agentrix-<version>-linux-x64.tar.xz` | 给 AppImage 添加执行权限，或解压后运行 `./agentrix`；手动更新 |
-| **Linux arm64** | `Agentrix-<version>-linux-arm64.AppImage` / `Agentrix-<version>-linux-arm64.tar.xz` | 使用步骤与 Linux x64 相同；手动更新 |
+| **Linux x64** | `Agentrix-<version>-x86_64.AppImage` / `Agentrix-<version>-linux-x64.tar.xz` | 给 AppImage 添加执行权限，或解压后运行 `./agentrix`；从 1.4.1 起 AppImage 可用 AppImageUpdate 更新，压缩包手动更新 |
+| **Linux arm64** | `Agentrix-<version>-arm64.AppImage` / `Agentrix-<version>-linux-arm64.tar.xz` | 使用步骤与 Linux x64 相同 |
 
 Windows 便携目录和开发版不会自动更新；设置会识别分发形式并说明可用的更新方式。Windows 只发布安装程序，没有独立的便携版可执行文件。
 
