@@ -105,7 +105,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }), netRequest: () => forbidden, electronNet: {},
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
-    generatedPreview: forbidden, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
+    generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     require: name => {
       if (name === 'electron') return { safeStorage };
       if (name === './features/team/team.cjs') return { projectTeam: forbidden };

@@ -87,6 +87,7 @@ const { createTerminalEnvironment } = require('./terminal-env.cjs');
 const { adoptSystemProxy } = require('./system-proxy.cjs');
 const { PreviewResources } = require('./preview-resources.cjs');
 const { createFileCards, documentText } = require('./features/files/file-cards.cjs');
+const { createGeneratedImages, remoteImage } = require('./features/generated-images/generated-images.cjs');
 const { UpdateManager, isInstalledBuild, distributionOf } = require('./updates.cjs');
 const { getSSHInfo } = require('./ssh-config.cjs');
 const { SSHAuthServer } = require('./ssh-auth.cjs');
@@ -175,7 +176,9 @@ async function projectImageCandidates(folder, candidates = 6, theme = 'mono') {
 setThumbnailer(pictureOf, url => thumbnail(nativeImage.createFromDataURL(url)) || url);
 setGeneratedPreview(item => generatedPreview(item, { projectId: null, cwd: path.dirname(item.savedPath) }));
 const capturePage = require('./features/files/capture-page.cjs').createPageCapture(BrowserWindow);
-const fileCard = createFileCards({ previews: previewResources, capture: capturePage, shrink: pictureOf, shrinkBytes: bytes => small(nativeImage.createFromBuffer(bytes)) });
+const shrinkBytes = bytes => small(nativeImage.createFromBuffer(bytes));
+const fileCard = createFileCards({ previews: previewResources, capture: capturePage, shrink: pictureOf, shrinkBytes });
+const generatedImages = createGeneratedImages({ findProject, remoteFor, preview: generatedPreview, shrinkBytes, translate: t });
 let stateTimer;
 let runtimeDir;
 let nativeSessions, claudeRuntime, dispatchControl, controlAddress, terminalInput;
@@ -1530,7 +1533,7 @@ async function initializeNativeSessions() {
   });
   // The first look at the CLI only seeds what later looks compare with; the window does not wait for it.
   claudeRuntime.trackCli(inspectClaudeExecutable()).catch(() => {});
-  const codexFactory = createCodexRuntime({ renderImage: (item, spec) => spec.kind === 'ssh' ? null : generatedPreview(item, spec), translate: t,
+  const codexFactory = createCodexRuntime({ renderImage: generatedImages.render, settleImage: generatedImages.settle, translate: t,
     launchRemote: async (spec, { signal, readOnly = false }) => {
       const project = findProject(spec.terminalId);
       const delivery = readOnly ? null : skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
@@ -1959,15 +1962,18 @@ function registerIpc() {
   registerEditorIpc({ handle, listen });
   // A new project's card offers Claude Code and Codex, fresh or continuing this folder's latest conversation.
   handle('project:card', (id, file) => fileCard(findProject(id), file, folderOf(id)));
-  registerImageIpc({ handle, app, findProject, getSession: id => sessions.get(id), clipboard, nativeImage, isGeneratedImage });
-  // The result card's 「保存图片」: a copy of the picture Codex generated on this computer, to where the reader picks. Null when the
-  // dialog is dismissed. A picture an SSH project's agent drew stays on that computer; the card does not offer this for it.
-  handle('agent:saveImageAs', async file => {
-    if (!isGeneratedImage(file) || !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error('只能保存本机上生成的图片。');
+  const remoteProjectImage = (id, file) => remoteImage(remoteFor(id), file);
+  registerImageIpc({ handle, app, findProject, getSession: id => sessions.get(id), clipboard, nativeImage, isGeneratedImage, remoteImage: remoteProjectImage });
+  // The result card's 「保存图片」: a copy of the picture Codex generated, to where the reader picks. Null when the dialog is
+  // dismissed. A picture an SSH project's agent drew is read back over its connection first, as for showing it.
+  handle('agent:saveImageAs', async (file, projectId) => {
+    const remote = typeof projectId === 'string' && findProject(projectId).kind === 'ssh';
+    if (!isGeneratedImage(file) || !remote && !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw new Error('只能保存 Codex 生成的图片。');
+    const bytes = remote ? await remoteProjectImage(projectId, file) : null;
     const picked = await dialog.showSaveDialog(window, saveDialogOptions(file, app.getPath('pictures'), t('图片')));
     if (picked.canceled || !picked.filePath) return null;
     const target = saveTarget(picked.filePath, file);
-    await fs.promises.copyFile(file, target);
+    await (bytes ? fs.promises.writeFile(target, bytes) : fs.promises.copyFile(file, target));
     return target;
   });
   // A Markdown file an agent wrote outside the project (its memory, a note in a temporary folder), whole, for its popup:

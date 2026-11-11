@@ -7,7 +7,7 @@ Resolves local and remote file cards, serves tokenized read-only preview resourc
 
 ## Interface
 - `registerFilesIpc` (`electron/features/files/ipc.cjs`) — file operations and preview IPC registration
-- `createFileCards` (`electron/features/files/file-cards.cjs`) — document/page/video/image cards; also exports cardKind, isImageFile, inside and documentText
+- `createFileCards` (`electron/features/files/file-cards.cjs`) — document/page/video/image cards; also exports cardKind, isImageFile, inside, documentText and remoteImageBytes (a remote image read in pages, refused above REMOTE_IMAGE_BYTES)
 - `createPageCapture` (`electron/features/files/capture-page.cjs`) — sandboxed HTML capture with a private offline session for outside pages
 - `createEditorGuard` (`electron/features/files/editor-guard.cjs`) — coordinates confirmation before edits close
 - `previewLocation` (`electron/features/files/preview-location.cjs`) — canonical preview location, folder grant policy and local path validation

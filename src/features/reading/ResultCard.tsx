@@ -105,19 +105,19 @@ const ACTIONS: Record<ResultAction, { icon: ReactNode; label: string }> = {
 };
 
 // Level 3, under the result: quiet secondary buttons, icon-only (with a tooltip) when the row is narrow.
-export function ResultActions({ result, projectId, remote, canSend, onContinue, onRetry, onError }: {
-  result: LatestResult; projectId: string; remote: boolean; canSend: boolean; onContinue: (prefill?: string) => void; onRetry: () => void; onError: (message: string) => void;
+export function ResultActions({ result, projectId, canSend, onContinue, onRetry, onError }: {
+  result: LatestResult; projectId: string; canSend: boolean; onContinue: (prefill?: string) => void; onRetry: () => void; onError: (message: string) => void;
 }) {
   const copied = (text: string) => void window.agentrix.copy(text).then(done => { if (!done.ok) onError(done.error); });
   const run: Record<ResultAction, () => void> = {
-    enlarge: () => showPopup({ kind: 'image', path: result.picture!.path }),
-    save: () => void window.agentrix.saveImageAs(result.picture!.path).then(saved => { if (!saved.ok) onError(saved.error); }),
+    enlarge: () => showPopup({ kind: 'image', projectId, path: result.picture!.path }),
+    save: () => void window.agentrix.saveImageAs(result.picture!.path, projectId).then(saved => { if (!saved.ok) onError(saved.error); }),
     open: () => void openLinkInPopup(projectId, result.written[0], onError),
     continue: () => onContinue(result.kind === 'picture' ? t('在这张图的基础上：') : undefined),
     ask: () => onContinue(), copy: () => copied(result.reply), retry: onRetry,
   };
-  const why = (id: ResultAction) => id === 'save' ? t('远程项目的图片留在远程电脑上，不能在这里保存') : id === 'retry' ? t('只有代理停在输入处时才能重试') : '';
-  const actions = resultActions(result, { remote, canSend });
+  const why = (id: ResultAction) => id === 'retry' ? t('只有代理停在输入处时才能重试') : '';
+  const actions = resultActions(result, { canSend });
   return <div className="result-actions" data-count={actions.length}>{actions.map(({ id, disabled }) => {
     const label = t(ACTIONS[id].label);
     return <button key={id} type="button" className="result-button" disabled={disabled} title={disabled ? why(id) || label : label} aria-label={label} onClick={run[id]}>{ACTIONS[id].icon}<span>{label}</span></button>;

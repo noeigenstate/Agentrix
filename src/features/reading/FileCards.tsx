@@ -90,11 +90,11 @@ function FileCard({ projectId, file, renderMarkdown, onError, quiet, onResolved 
   return <div ref={root} className={`file-card is-${kind}`}>
     {card?.kind === 'video'
       ? <video ref={video} src={card.url} preload="metadata" controls playsInline />
-      : <button type="button" className="file-card-view" data-reading-path={file} title={`${t('打开 {name}', { name })}\n${pathTooltip()}`} aria-label={t('打开 {name}', { name })} onClick={open}>
+      : <button type="button" className="file-card-view" data-reading-path={file} title={`${t('打开 {name}', { name })}\n${pathTooltip(file)}`} aria-label={t('打开 {name}', { name })} onClick={open}>
         {card?.kind === 'markdown' ? <div className="file-card-doc" aria-hidden="true">{renderMarkdown(card.excerpt)}</div>
           : (card?.kind === 'html' || card?.kind === 'image') && card.picture ? <img src={card.picture} alt={card.kind === 'image' ? name : ''} />
           : <span className="file-card-empty"><Icon size={26} weight="light" />{failed ? t('无法预览') : card ? t('没有可显示的画面') : null}</span>}
       </button>}
-    <button type="button" className="file-card-name" data-reading-path={file} title={`${file}\n${pathTooltip()}`} onClick={open}><Icon size={13} />{name}</button>
+    <button type="button" className="file-card-name" data-reading-path={file} title={`${file}\n${pathTooltip(file)}`} onClick={open}><Icon size={13} />{name}</button>
   </div>;
 }

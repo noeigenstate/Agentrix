@@ -82,7 +82,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex',
     netRequest: () => forbidden, electronNet: {},
-    generatedPreview: forbidden, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
+    generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     broadcast() {}, callsOf: () => calls, acceptShellEvent: () => false, rememberClaudeSource() {},
     require: name => {
       if (name === 'electron') return { safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: forbidden } };

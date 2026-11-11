@@ -48,6 +48,9 @@
 .reading-markdown :not(pre) > code { padding: 1px 6px; border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: 500 .88em var(--font-mono); white-space: break-spaces; }
 .reading-markdown strong { color: var(--text-1); font-weight: 700; }
 .reading-markdown a { color: var(--text-1); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+/* A link's focus ring is the app's own and shows for the keyboard only (the browser's default is an orange ring). */
+.reading-markdown a:focus { outline: none; }
+.reading-markdown a:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 4px; }
 :is(.reading-view, .conversation-feed) [data-reading-path] { user-select: text; }
 :is(.reading-view, .conversation-feed)[data-reveal-modifier] [data-reading-path]:hover { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 .reading-markdown blockquote { margin: 8px 0; padding: 2px 12px; border-left: 2px solid var(--border); color: var(--text-2); }
@@ -186,6 +189,11 @@
 .reading-generated figcaption.is-expanded { display: block; overflow: visible; white-space: pre-wrap; }
 .reading-generated-toggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 0; border: 0; border-radius: 4px; background: none; font: 600 calc(12px * var(--reading-text))/1.5 var(--font-ui); color: var(--text-3); cursor: pointer; }
 .reading-generated-toggle:hover { color: var(--text-1); }
+/* Under a generated picture: where its copy in the project is (a path a click shows in the file tree), or a line on that copy. */
+.reading-generated-copy { display: block; margin-top: 4px; font-size: calc(12px * var(--reading-text)); line-height: 1.5; color: var(--text-3); overflow-wrap: anywhere; }
+.reading-generated-copy button { padding: 0; border: 0; border-radius: 4px; background: none; font: inherit; color: var(--text-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+.reading-generated-copy button:hover { color: var(--text-1); }
+.reading-generated-copy button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 /* A picture on its way: an indeterminate bar, the seconds so far and how long it usually takes. */
 .reading-generating { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 12px; row-gap: 4px; width: min(100%, 520px); margin: 8px 0 12px; padding: 16px; border-radius: 12px; background: var(--bg-card); font-size: calc(13px * var(--reading-text)); color: var(--text-1); }

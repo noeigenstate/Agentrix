@@ -87,7 +87,11 @@ export type AgentAction = AgentActionBrief & { id: string; at: number; descripti
 // clientMessageId: a child feed's main-confirmed owner control identity, never a text match.
 // Main-owned channel provenance for child messages. Missing planner identity stays unknown; text never identifies a sender.
 export type ConversationSender = { kind: 'owner' } | { kind: 'planner'; agent: 'claude' | 'codex' | null; model: string | null };
-export type ConversationEntry = { clientMessageId?: string; sender?: ConversationSender; timeline?: { turn: { id: string; at: number; user?: string }; tools?: { id: string; at: number } }; id: string; at: number; receivedAt?: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string; answer?: boolean; queued?: boolean; cancelled?: boolean; omitted?: boolean; images?: string[]; generated?: { path: string; prompt: string }; tool?: AgentActionBrief & { failed: boolean } };
+// A picture Codex generated: where it was saved, its prompt, and its copy in the project (copied, a path from the project's
+// folder) or a line on that copy (copyNote: being made, or why it could not be). deferred: not read back yet; the reader
+// asks for it (an older picture of a resumed SSH conversation).
+export type GeneratedPicture = { path: string; prompt: string; copied?: string; copyNote?: string; deferred?: boolean };
+export type ConversationEntry = { clientMessageId?: string; sender?: ConversationSender; timeline?: { turn: { id: string; at: number; user?: string }; tools?: { id: string; at: number } }; id: string; at: number; receivedAt?: number; role: 'user' | 'assistant' | 'tool'; text?: string; original?: string; answer?: boolean; queued?: boolean; cancelled?: boolean; omitted?: boolean; images?: string[]; generated?: GeneratedPicture; tool?: AgentActionBrief & { failed: boolean } };
 export type ConversationPacket = { id: string; sessionId?: string; historyKey?: string; list?: ConversationEntry[]; changes?: ConversationEntry[] };
 export type ReadingHistoryScope = { key: string; agent: 'codex' | 'claude'; threadId: string };
 export type ConversationPage = { key: string; entries: ConversationEntry[]; beforeCursor: string | null };
@@ -280,9 +284,10 @@ type Bridge = {
   restartTerminal(id: string): Promise<Result<boolean>>;
   attachTerminal(id: string): Promise<Result<TerminalSnapshot>>;
   terminalCommands(id: string): Promise<Result<AgentCommand[]>>;
-  agentImage(file: string): Promise<Result<{ url: string; width: number; height: number }>>;
+  // projectId: where a relative name starts and, for an SSH project, the computer the picture is read back from.
+  agentImage(file: string, projectId?: string): Promise<Result<{ url: string; width: number; height: number }>>;
   // A copy of a generated picture to where the reader picks in a save dialog: the path written, null when dismissed.
-  saveImageAs(file: string): Promise<Result<string | null>>;
+  saveImageAs(file: string, projectId?: string): Promise<Result<string | null>>;
   agentDocument(projectId: string, file: string): Promise<Result<{ content: string; truncated: boolean }>>;
   saveImage(terminalId: string, bytes: ArrayBuffer, type: string): Promise<Result<string>>;
   clipboardImage(terminalId: string): Promise<Result<string | null>>;

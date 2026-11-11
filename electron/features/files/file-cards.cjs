@@ -11,6 +11,14 @@ const pictureValues = require('../../picture-values.json');
 // scroll into view.
 // A remote image travels over the SSH connection in pieces the size the remote worker reads at once.
 const EXCERPT = 8 * 1024, REMOTE_IMAGE_BYTES = 16 * 1024 * 1024, REMOTE_CHUNK = 256 * 1024, DOCUMENT_BYTES = 2 * 1024 * 1024;
+// A remote image's bytes, read in the pieces the worker reads at once (read(offset, length) gives one as base64), and
+// refused before any is read when it is larger than a remote image card reads.
+async function remoteImageBytes(size, read) {
+  if (size > REMOTE_IMAGE_BYTES) throw new Error('图片太大，无法预览。');
+  const parts = [];
+  for (let offset = 0; offset < size; offset += REMOTE_CHUNK) parts.push(Buffer.from(await read(offset, Math.min(REMOTE_CHUNK, size - offset)), 'base64'));
+  return Buffer.concat(parts);
+}
 // Text read from the start of a file, without the half of a character its last bytes may cut.
 const utf8 = buffer => buffer.toString('utf8').replace(/�+$/, '');
 
@@ -90,17 +98,13 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
       return null;
     });
     if (!stat?.file) throw new Error(kind === 'image' ? '找不到这张图片。' : '这个文件没有预览卡片。');
-    const read = async (length, offset = 0) => Buffer.from(await connection.request('read', { path: relative, offset, length }), 'base64');
-    if (kind === 'markdown') return { kind, path: relative, excerpt: utf8(await read(Math.min(EXCERPT, stat.size))) };
+    const read = (offset, length) => connection.request('read', { path: relative, offset, length });
+    if (kind === 'markdown') return { kind, path: relative, excerpt: utf8(Buffer.from(await read(0, Math.min(EXCERPT, stat.size)), 'base64')) };
     if (kind === 'video') return { kind, path: relative, url: previews.open(project, relative, 'video', VIDEO_TYPES[path.extname(relative).toLowerCase()]).url };
     const key = `${project.id}|${relative}|${stat.modifiedAt}|${stat.size}`;
     if (kind === 'html') return { kind, path: relative, picture: await picture(key, project, relative) };
     if (stat.size > REMOTE_IMAGE_BYTES) throw new Error('图片太大，无法预览。');
-    return { kind, path: relative, remote: true, picture: await thumbnail(`image|${key}`, async () => {
-      const parts = [];
-      for (let offset = 0; offset < stat.size; offset += REMOTE_CHUNK) parts.push(await read(Math.min(REMOTE_CHUNK, stat.size - offset), offset));
-      return shrinkBytes(Buffer.concat(parts));
-    }) };
+    return { kind, path: relative, remote: true, picture: await thumbnail(`image|${key}`, async () => shrinkBytes(await remoteImageBytes(stat.size, read))) };
   }
   return async function card(project, file, cwd) {
     const kind = cardKind(file);
@@ -134,4 +138,4 @@ function createFileCards({ previews, capture, shrink = () => null, shrinkBytes =
   };
 }
 
-module.exports = { createFileCards, cardKind, inside, isImageFile, documentText };
+module.exports = { createFileCards, cardKind, inside, isImageFile, documentText, remoteImageBytes, REMOTE_IMAGE_BYTES };

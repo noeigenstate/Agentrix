@@ -3,9 +3,10 @@ import { useSyncExternalStore } from 'react';
 // A file shown over whatever is on screen: a page, a document, a picture or a video an agent wrote or named. Opening
 // one never moves to the project's page; only its header or a shortcut goes there.
 // file and folder: a path inside the project, read as its preview and file list do. image: a picture anywhere on this
-// computer. document: a Markdown file outside the project (an agent's memory or notes), read where the project is.
+// computer, or, with its project, one a reply names (from the project's folder) or one an SSH project's agent generated,
+// read back over the connection. document: a Markdown file outside the project (an agent's memory or notes), read where the project is.
 // picture: one already in the window (a picture sent in a message), shown larger.
-export type PopupTarget = { kind: 'file' | 'folder' | 'document'; projectId: string; path: string } | { kind: 'image'; path: string } | { kind: 'picture'; src: string; path: string };
+export type PopupTarget = { kind: 'file' | 'folder' | 'document'; projectId: string; path: string } | { kind: 'image'; path: string; projectId?: string } | { kind: 'picture'; src: string; path: string };
 
 let current: PopupTarget | null = null;
 const listeners = new Set<() => void>();

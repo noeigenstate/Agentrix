@@ -2,6 +2,7 @@
 import base64
 import calendar
 import concurrent.futures
+import errno
 import glob
 import hashlib
 import json
@@ -38,6 +39,12 @@ SKILL_STATE_LOCK = threading.Lock()
 SKILL_LEASE_SECONDS = 10 * 60
 SKILL_RETENTION_SECONDS = 30 * 24 * 60 * 60
 IMAGE_TYPES = {".png": "image/png", ".apng": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jpe": "image/jpeg", ".jfif": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".avif": "image/avif", ".svg": "image/svg+xml", ".ico": "image/x-icon"}
+# The form of a picture Codex generated, as electron/generated-image-path.cjs gives it.
+GENERATED_IMAGE = re.compile(r"/generated_images/[^/]+/[^/]+\.(?:png|jpe?g|webp)$", re.I)
+# A copy into the project: at most the size the app reads back over SSH (electron/features/files/file-cards.cjs), and the
+# reasons a file system refuses it, said without the path.
+GENERATED_BYTES = 16 * 1024 * 1024
+COPY_ERRORS = {errno.EACCES: "没有写入项目文件夹的权限。", errno.EPERM: "没有写入项目文件夹的权限。", errno.EROFS: "项目所在的磁盘是只读的。", errno.ENOSPC: "磁盘空间不足。"}
 VIDEO_TYPES = {".mp4": "video/mp4", ".m4v": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg", ".ogg": "video/ogg", ".mov": "video/quicktime", ".mkv": "video/x-matroska", ".avi": "video/x-msvideo"}
 
 # Presence of a route override is enough to reject the official-account query. Values never leave the CLI host.
@@ -379,6 +386,52 @@ bind -m emacs-standard '"\e[13;2u":"\C-v\C-j"' 2>/dev/null || true
 bind -m vi-insertion '"\e[13;2u":"\C-v\C-j"' 2>/dev/null || true
 printf '\033[36m  AGENTRIX / SSH\033[0m\n  Type codex or claude to start, codex resume --last or claude --resume to continue.\n\n'
 '''
+
+def open_regular(name, folder=None):
+    """A regular file opened for reading without following a final link or waiting on a pipe (name is within folder, a
+    descriptor, when given)."""
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder)
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        os.close(descriptor)
+        raise ValueError("只能读取普通文件。")
+    return os.fdopen(descriptor, "rb")
+
+
+def file_digest(source):
+    """An open file's size and SHA-256, read a mebibyte at a time."""
+    digest, size = hashlib.sha256(), 0
+    for block in iter(lambda: source.read(1 << 20), b""): digest.update(block); size += len(block)
+    return size, digest.hexdigest()
+
+
+def write_new(name, folder, data):
+    """A file of that name created in folder (a descriptor) and written whole, or removed again; FileExistsError, with
+    nothing written, when the name is taken."""
+    descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644, dir_fd=folder)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data); output.flush(); os.fsync(output.fileno())
+    except BaseException:
+        os.unlink(name, dir_fd=folder)
+        raise
+
+
+def install_file(folder, name, data):
+    """A new file of that name in folder (a descriptor), never replacing one: False when the name was taken meanwhile.
+    As in finish_upload, a hard link installs the whole file at once; a file system without hard links (EPERM,
+    EOPNOTSUPP) gets it written under its name directly."""
+    temporary = ".agentrix-copy-" + os.urandom(6).hex()
+    write_new(temporary, folder, data)
+    try:
+        os.link(temporary, name, src_dir_fd=folder, dst_dir_fd=folder)
+        return True
+    except FileExistsError: return False
+    except OSError as error:
+        if error.errno not in (errno.EPERM, errno.EOPNOTSUPP): raise
+    finally: os.unlink(temporary, dir_fd=folder)
+    try: write_new(name, folder, data)
+    except FileExistsError: return False
+    return True
 
 def image_type(data):
     if data.startswith(b"\x89PNG\r\n\x1a\n"): return "image/png"
@@ -1174,6 +1227,70 @@ class Worker:
             data = source.read(min(length, 2 * 1024 * 1024))
         return {"size": info.st_size, "modifiedAt": int(info.st_mtime * 1000), "data": base64.b64encode(data).decode("ascii")}
 
+    def generated_source(self, filename):
+        """A picture the app-server saved: under this worker's Codex home (codex_home, the CODEX_HOME the app-server
+        starts with, else ~/.codex) /generated_images once every link is followed, named as electron/generated-image-path.cjs
+        names one."""
+        if not isinstance(filename, str) or len(filename) > 4096 or "\0" in filename or not filename.startswith("/") or filename.startswith("//") or not GENERATED_IMAGE.search(filename):
+            raise ValueError("只能读取 Codex 生成的图片。")
+        folder = os.path.realpath(os.path.join(self.codex_home, "generated_images"))
+        real = os.path.realpath(filename)
+        if real == folder or os.path.commonpath([folder, real]) != folder or not GENERATED_IMAGE.search(real): raise ValueError("这张图片不在远端 Codex 的生成目录里。")
+        return real
+
+    def generated_image(self, filename, offset, length):
+        """A page of such a picture, with its size: length 0 asks the size alone."""
+        if type(offset) is not int or offset < 0 or type(length) is not int or not 0 <= length <= MAX_READ: raise ValueError("无效的文件读取范围。")
+        with open_regular(self.generated_source(filename)) as source:
+            info = os.fstat(source.fileno())
+            source.seek(offset)
+            data = source.read(length)
+        return {"size": info.st_size, "modifiedAt": int(info.st_mtime * 1000), "data": base64.b64encode(data).decode("ascii")}
+
+    def generated_copy(self, filename, write):
+        """The project's copy of such a picture (at most GENERATED_BYTES) in its generated-images folder: the file of its
+        name, or of a numbered form of it (name-2.png...), with the same size and SHA-256. With write, one is made under
+        the first free name when none is there; nothing else is written and no file is replaced. None when there is no
+        copy and none was asked for. A file system error is told by its kind, never by the path it names."""
+        source = self.generated_source(filename)
+        try:
+            with open_regular(source) as reader: data = reader.read(GENERATED_BYTES + 1)
+            if len(data) > GENERATED_BYTES: raise ValueError("图片太大，不复制到项目。")
+            return {"path": self.place_copy(os.path.basename(filename), data, write)}
+        except OSError as error:
+            raise ValueError(COPY_ERRORS.get(error.errno) or "复制到项目失败（%s）。" % errno.errorcode.get(error.errno, error.errno))
+
+    def place_copy(self, name, data, write):
+        # The folder is opened once without following a link, and every name is looked up, read and created through
+        # that descriptor: a generated-images swapped for a link meanwhile cannot redirect a write out of the project.
+        path = os.path.join(self.root, "generated-images")
+        if write:
+            try: os.mkdir(path)
+            except FileExistsError: pass
+        try:
+            if not stat.S_ISDIR(os.lstat(path).st_mode): raise ValueError("项目里的 generated-images 不是普通文件夹。")
+            folder = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except FileNotFoundError: return None
+        except OSError as error:
+            if error.errno in (errno.ELOOP, errno.ENOTDIR): raise ValueError("项目里的 generated-images 不是普通文件夹。")
+            raise
+        try:
+            wanted = len(data), hashlib.sha256(data).hexdigest()
+            stem, extension = os.path.splitext(name)
+            for number in range(1, 1001):
+                candidate = stem + extension if number == 1 else "%s-%d%s" % (stem, number, extension)
+                try: info = os.stat(candidate, dir_fd=folder, follow_symlinks=False)
+                except FileNotFoundError: info = None
+                if info is not None:
+                    if stat.S_ISREG(info.st_mode):
+                        with open_regular(candidate, folder) as existing:
+                            if file_digest(existing) == wanted: return "generated-images/" + candidate
+                    continue
+                if not write: return None
+                if install_file(folder, candidate, data): return "generated-images/" + candidate
+            raise ValueError("generated-images 里同名的文件太多。")
+        finally: os.close(folder)
+
     def preview(self, relative, page_index):
         if type(page_index) is not int or page_index < 0: raise ValueError("无效的文件页码。")
         meta = self.metadata(relative)
@@ -1571,6 +1688,8 @@ class Channel:
             elif op == "stat": value = worker.metadata(message["path"])
             elif op == "read": value = worker.read(message["path"], message["offset"], message["length"])
             elif op == "document": value = worker.document(message.get("path"), message.get("length", 8192))
+            elif op == "generated-image": value = worker.generated_image(message.get("path"), message.get("offset"), message.get("length"))
+            elif op == "generated-copy": value = worker.generated_copy(message.get("path"), message.get("write") is True)
             elif op == "preview": value = worker.preview(message["path"], message.get("page", 0))
             elif op == "save-file": value = worker.save_file(message["path"], message.get("page", 0), message.get("revision"), message["data"])
             elif op == "codex-status": value = worker.codex_status(message.get("since"), message.get("threadId"))

@@ -32,6 +32,14 @@ function turnCompletion(turn, usage) {
     costUsdMicros: null, costEstimated: null, tokens: usage?.round || null };
 }
 
+// A generated picture's content: what the host shows of it (shown: images, else a note, deferred while it waits for the
+// reader to ask for it, and the project copy's copied or copyNote), or the host notice when it shows nothing.
+function imageContent(item, shown, translate) {
+  const images = shown?.images || [];
+  return { text: images.length ? '' : shown?.note || translate('图片已保存，请在运行 Codex 的主机查看。'),
+    generated: { path: item.savedPath, prompt: bounded(item.revisedPrompt) || '', ...shown?.copy, ...(shown?.deferred && !images.length ? { deferred: true } : {}) }, images };
+}
+
 function itemPayload(item, completed, renderImage = () => null, translate = value => value) {
   const kind = KINDS[item.type] || 'other';
   let content;
@@ -41,18 +49,17 @@ function itemPayload(item, completed, renderImage = () => null, translate = valu
   else if (item.type === 'commandExecution') content = { command: bounded(item.command), phrase: commandPhrase(item.command).phrase, cwd: item.cwd ?? null, output: bounded(item.aggregatedOutput), exitCode: item.exitCode ?? null, durationMs: item.durationMs ?? null };
   else if (item.type === 'fileChange') content = { changes: (item.changes || []).slice(0, 100).map(x => ({ path: x.path, kind: x.kind, diff: bounded(x.diff) })) };
   else if (kind === 'tool') content = { tool: item.tool, server: item.server ?? null, output: bounded((item.result?.content || item.contentItems || []).filter(block => block.type === 'text').map(block => block.text).join('\n') || (typeof item.result === 'string' ? item.result : '')) };
-  else if (item.type === 'imageGeneration' && completed && isGeneratedImage(item.savedPath)) {
-    const images = renderImage(item)?.images || [];
-    content = { text: images.length ? '' : translate('图片已保存，请在运行 Codex 的主机查看。'),
-      generated: { path: item.savedPath, prompt: bounded(item.revisedPrompt) || '' }, images };
-  }
+  else if (item.type === 'imageGeneration' && completed && isGeneratedImage(item.savedPath)) content = imageContent(item, renderImage(item), translate);
   else content = { text: bounded(item.text), providerType: item.type };
   const status = { inProgress: 'in-progress', pending: 'pending', completed: 'completed', failed: 'failed', declined: 'failed', interrupted: 'interrupted' }[item.status]
     || (completed ? 'completed' : 'running');
   return { kind, status, content };
 }
 
-function createEvents(spec, emit, now, renderImage, translate = value => value) {
+// renderImage(item, mode) gives what is shown of a generated picture at once; settleImage(item, mode), when given,
+// resolves to what is known later (shown's fields), published under the same item. mode is 'live' for a picture
+// generated in this process; history replayed on resume says 'history' or 'later' (features/generated-images).
+function createEvents(spec, emit, now, renderImage, translate = value => value, settleImage = null) {
   const rates = new TokenRates('codex');
   let sequence = 0, dropped = false, compacting = false;
   const events = [], items = new Map(), itemEvents = new Map(), completed = new Set(), children = new Set();
@@ -80,6 +87,17 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
     if (events.length > 400) events.shift();
     emit(event); return event;
   }
+  // A generated picture's later facts replace its first content, unless a newer copy of the item came meanwhile.
+  function settle(itemId, mode) {
+    const first = items.get(itemId), generated = first?.content.generated;
+    if (!settleImage || !generated) return;
+    const item = { savedPath: generated.path, revisedPrompt: generated.prompt };
+    Promise.resolve().then(() => settleImage(item, mode)).then(later => {
+      if (!later || items.get(itemId) !== first) return;
+      const { turnId, replay } = itemEvents.get(itemId);
+      publish('item.upsert', { ...first, content: imageContent(item, { images: first.content.images, ...later }, translate) }, { itemId, turnId, replay });
+    }, () => {});
+  }
   function notification(method, params) {
     if (!params.turnId || params.turnId === binding.turnId) rates.nativeCodex(method, params, now());
     if (method === 'item/started' || method === 'item/completed') {
@@ -102,9 +120,10 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
         if (item.tool === 'closeAgent' || ['completed', 'failed', 'shutdown', 'notFound'].includes(status)) children.delete(id);
         else if (['spawnAgent', 'sendInput', 'resumeAgent'].includes(item.tool)) children.add(id);
       }
-      const payload = itemPayload(item, method === 'item/completed', renderImage, translate); items.set(item.id, payload);
-      if (method === 'item/completed') completed.add(item.id);
-      publish('item.upsert', payload, { itemId: item.id, turnId: params.turnId ?? binding.turnId });
+      const live = method === 'item/completed';
+      const payload = itemPayload(item, live, image => renderImage?.(image, 'live'), translate); items.set(item.id, payload);
+      if (live) completed.add(item.id);
+      if (publish('item.upsert', payload, { itemId: item.id, turnId: params.turnId ?? binding.turnId }) && live) settle(item.id, 'live');
     } else if (['item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/plan/delta'].includes(method)) {
       if (completed.has(params.itemId) || typeof params.delta !== 'string') return;
       const channel = method.includes('outputDelta') ? 'output' : method.includes('reasoning') ? 'reasoning-summary' : method.includes('plan') ? 'plan' : 'text';
@@ -139,7 +158,7 @@ function createEvents(spec, emit, now, renderImage, translate = value => value) 
       publish('error', { code: 'provider_error', message, retryable: !!params.willRetry, willRetry: !!params.willRetry, stage: 'turn' });
     }
   }
-  return { binding, publish, notification, tokenRate: () => ({ ...rates.snapshot(), model: rates.model }),
+  return { binding, publish, notification, settle, tokenRate: () => ({ ...rates.snapshot(), model: rates.model }),
     finishTurn(status = 'interrupted') {
       compacting = false;
       publish('context.compacting', { active: false });

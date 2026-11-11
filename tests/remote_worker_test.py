@@ -846,6 +846,72 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         (note.parent / "folder.md").mkdir()
         with self.assertRaises((ValueError, OSError)): self.worker.document(str(note.parent / "folder.md"), 10)
 
+    @unittest.skipUnless(os.name == "posix", "the remote side runs on Linux and macOS")
+    def test_generated_pictures_are_read_under_codex_home_and_copied_only_into_generated_images(self):
+        home = Path(self.temp.name) / "codex"
+        picture = home / "generated_images" / "thread" / "猪追老鼠.png"
+        picture.parent.mkdir(parents=True)
+        picture.write_bytes(b"\x89PNG" + b"a" * 300000)
+        # The worker's Codex home: the CODEX_HOME its app-server starts with.
+        self.worker.codex_home = str(home)
+        self.assertEqual(self.worker.generated_image(str(picture), 0, 0)["size"], picture.stat().st_size)
+        self.assertEqual(base64.b64decode(self.worker.generated_image(str(picture), 4, 6)["data"]), b"aaaaaa")
+        with self.assertRaises(ValueError): self.worker.generated_image(str(picture), 0, remote.MAX_READ + 1)
+        stray = Path(self.temp.name) / "other" / "generated_images" / "thread" / "x.png"
+        stray.parent.mkdir(parents=True)
+        stray.write_bytes(b"secret")
+        (picture.parent / "link.png").symlink_to(stray)
+        (picture.parent / "folder.png").mkdir()
+        for wrong in (str(stray), str(picture.parent / "link.png"), str(picture.parent / ".." / ".." / ".." / "other" / "generated_images" / "thread" / "x.png"),
+                      "generated_images/thread/x.png", str(picture.with_suffix(".txt")), "/" + str(picture), str(picture.parent / "folder.png")):
+            with self.assertRaises(ValueError, msg=wrong): self.worker.generated_image(wrong, 0, 0)
+            with self.assertRaises(ValueError, msg=wrong): self.worker.generated_copy(wrong, True)
+
+        folder = self.root / "generated-images"
+        self.assertEqual(self.worker.generated_copy(str(picture), False), {"path": None})
+        self.assertFalse(folder.exists(), "looking for a copy writes nothing")
+        self.assertEqual(self.worker.generated_copy(str(picture), True), {"path": "generated-images/猪追老鼠.png"})
+        self.assertEqual((folder / "猪追老鼠.png").read_bytes(), picture.read_bytes())
+        self.assertEqual(self.worker.generated_copy(str(picture), True), {"path": "generated-images/猪追老鼠.png"}, "the same picture is copied once")
+        # Another picture of that name gets the next free number; the copy already there is kept.
+        second = home / "generated_images" / "later" / "猪追老鼠.png"
+        second.parent.mkdir()
+        second.write_bytes(b"\x89PNG" + b"b" * 10)
+        self.assertEqual(self.worker.generated_copy(str(second), False), {"path": None})
+        self.assertEqual(self.worker.generated_copy(str(second), True), {"path": "generated-images/猪追老鼠-2.png"})
+        self.assertEqual(self.worker.generated_copy(str(second), False), {"path": "generated-images/猪追老鼠-2.png"})
+        self.assertEqual((folder / "猪追老鼠.png").read_bytes(), picture.read_bytes())
+        self.assertEqual(sorted(os.listdir(str(folder))), ["猪追老鼠-2.png", "猪追老鼠.png"], "no temporary file is left")
+        # Without hard links the copy is written under its name directly; a refusal names its kind, never the path.
+        third = home / "generated_images" / "third" / "猪追老鼠.png"
+        third.parent.mkdir()
+        third.write_bytes(b"\x89PNG" + b"c" * 10)
+        with mock.patch.object(remote.os, "link", side_effect=OSError(remote.errno.EPERM, "Operation not permitted")):
+            self.assertEqual(self.worker.generated_copy(str(third), True), {"path": "generated-images/猪追老鼠-3.png"})
+        self.assertEqual((folder / "猪追老鼠-3.png").read_bytes(), third.read_bytes())
+        fresh = home / "generated_images" / "fresh" / "新.png"
+        fresh.parent.mkdir()
+        fresh.write_bytes(b"\x89PNG")
+        for code, words in ((remote.errno.ENOSPC, "磁盘空间不足。"), (remote.errno.EROFS, "项目所在的磁盘是只读的。"), (remote.errno.EACCES, "没有写入项目文件夹的权限。")):
+            with mock.patch.object(remote, "install_file", side_effect=OSError(code, "refused", "/secret/place")):
+                with self.assertRaises(ValueError) as refused: self.worker.generated_copy(str(fresh), True)
+            self.assertEqual(str(refused.exception), words)
+        huge = home / "generated_images" / "huge" / "big.png"
+        huge.parent.mkdir()
+        with open(str(huge), "wb") as target: target.truncate(remote.GENERATED_BYTES + 1)
+        with self.assertRaises(ValueError): self.worker.generated_copy(str(huge), True)
+        self.assertFalse((folder / "big.png").exists(), "a picture over the limit is not copied")
+        self.assertEqual(sorted(os.listdir(str(folder))), ["猪追老鼠-2.png", "猪追老鼠-3.png", "猪追老鼠.png"])
+        # A generated-images that links out of the project is never written through.
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        for name in os.listdir(str(folder)): (folder / name).unlink()
+        folder.rmdir()
+        folder.symlink_to(outside)
+        for write in (False, True):
+            with self.assertRaises(ValueError): self.worker.generated_copy(str(picture), write)
+        self.assertEqual(os.listdir(str(outside)), [])
+
     @unittest.skipUnless(hasattr(os, "getuid"), "the remote side runs on Linux and macOS")
     def test_history_and_handoff_carry_the_folders_earlier_work(self):
         codex_home, claude_home = Path(self.temp.name) / "codex-h", Path(self.temp.name) / "claude-h"

@@ -34,7 +34,7 @@ export function FilePopup({ target, onError }: { target: PopupTarget; onError: (
         read = Promise.resolve({ kind: 'picture', url: target.src });
         break;
       case 'image':
-        read = window.agentrix.agentImage(target.path).then(result => result.ok ? { kind: 'picture', url: result.value.url } : { kind: 'error', message: result.error });
+        read = window.agentrix.agentImage(target.path, target.projectId).then(result => result.ok ? { kind: 'picture', url: result.value.url } : { kind: 'error', message: result.error });
         break;
       case 'folder':
         read = window.agentrix.listDirectory(target.projectId, target.path).then(result => result.ok ? { kind: 'folder', listing: result.value } : { kind: 'error', message: result.error });

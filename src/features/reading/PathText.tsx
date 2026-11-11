@@ -7,7 +7,7 @@ export function PathText({ text, literal = false }: { text: string; literal?: bo
   let offset = 0;
   const parts = findPathCandidates(text, literal).map(link => {
     const before = text.slice(offset, link.start); offset = link.end;
-    return <Fragment key={link.start}>{before}<span data-reading-path={link.target} title={pathTooltip()}>{text.slice(link.start, link.end)}</span></Fragment>;
+    return <Fragment key={link.start}>{before}<span data-reading-path={link.target} title={pathTooltip(link.target)}>{text.slice(link.start, link.end)}</span></Fragment>;
   });
   return <>{parts}{text.slice(offset)}</>;
 }
