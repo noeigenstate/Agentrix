@@ -93,3 +93,33 @@ test('M5 failed native initialization keeps terminal starts and safe settings av
   assert.throws(() => handlers.get('native:start')('t', { agent: 'claude', cwd: '/renderer-injected' }));
   assert.throws(() => handlers.get('native:send')(), /原生会话暂不可用/);
 });
+
+// The router's readHistory runs in main's module scope: here it sees only what that scope really declares (findProject, folderOf),
+// so a name that lives inside another function fails as it would in the app.
+function historyReader({ project, spec, restore = {} }) {
+  const start = source.indexOf('    readHistory: '), end = source.indexOf('    readCommands:', start), folders = [], lookups = [];
+  const context = { nativeSpecs: new Map(spec ? [['t', spec]] : []), randomUUID: () => 'fixture', t: text => text,
+    store: { findTerminal: id => id === 't' ? { project, record: { restore } } : null },
+    folderHistory: async folder => { folders.push(folder); return { claude: { id: 'claude-latest' }, codex: null }; },
+    codexFactory: { history: async lookup => { lookups.push(lookup); return { id: 'codex-latest' }; } } };
+  vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('function findProject('), source.indexOf('function publicState(')), context);
+  return { read: vm.runInContext(`(${source.slice(start, end).trim().replace(/^readHistory: /, '').replace(/,$/, '')})`, context), folders, lookups };
+}
+test('a local Claude native session reads its folder history: the restored cwd, else the project folder', async () => {
+  const project = { kind: 'local', id: 'p', path: '/project' };
+  for (const [spec, restore, folder] of [[{ agent: 'claude' }, { cwd: '/project/restored' }, '/project/restored'], [{ agent: 'claude' }, {}, '/project'], [null, {}, '/project']]) {
+    const main = historyReader({ project, spec, restore });
+    assert.equal((await main.read('t')).claude.id, 'claude-latest');
+    assert.deepEqual(main.folders, [folder]); assert.deepEqual(main.lookups, []);
+  }
+});
+test('local Codex and every SSH native session read history through the app-server, never the folder', async () => {
+  for (const [kind, agent] of [['local', 'codex'], ['ssh', 'codex'], ['ssh', 'claude']]) {
+    const main = historyReader({ project: { kind, id: 'p', path: '/project' }, spec: { agent, cwd: '/project/sub' }, restore: { cwd: '/previous' } });
+    const history = await main.read('t');
+    assert.equal(history.claude, null); assert.equal(history.codex.id, 'codex-latest');
+    assert.deepEqual(main.folders, []); assert.equal(main.lookups.length, 1);
+    assert.deepEqual([main.lookups[0].kind, main.lookups[0].cwd, main.lookups[0].terminalId], [kind, '/project/sub', 't']);
+  }
+});

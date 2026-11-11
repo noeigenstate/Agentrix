@@ -201,6 +201,8 @@ function findProject(id) {
   if (!project) throw new Error('项目不存在。');
   return project;
 }
+// The folder a terminal's conversations belong to: where its restored session ran, else its project's folder.
+function folderOf(id) { return store.findTerminal(id)?.record.restore?.cwd || findProject(id).path; }
 function publicState() {
   return {
     projects: store.projects.map(p => {
@@ -1923,7 +1925,6 @@ function registerIpc() {
   registerVoiceIpc({ handle, voiceManager });
   registerEditorIpc({ handle, listen });
   // A new project's card offers Claude Code and Codex, fresh or continuing this folder's latest conversation.
-  const folderOf = id => store.findTerminal(id)?.record.restore?.cwd || findProject(id).path;
   handle('project:card', (id, file) => fileCard(findProject(id), file, folderOf(id)));
   registerImageIpc({ handle, app, findProject, getSession: id => sessions.get(id), clipboard, nativeImage, isGeneratedImage });
   // The result card's 「保存图片」: a copy of the picture Codex generated on this computer, to where the reader picks. Null when the

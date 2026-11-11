@@ -74,6 +74,7 @@
     "tests/terminal-cleanup.test.cjs",
     "tests/terminal-reveal.test.cjs",
     "tests/test-output.test.cjs",
+    "tests/undeclared-names.test.cjs",
     "tests/updates-ipc.test.cjs",
     "tests/updates-provider.test.cjs",
     "tests/updates-release.test.cjs",
