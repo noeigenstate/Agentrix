@@ -280,10 +280,10 @@ test('the picture popup refuses a network path before it touches the file system
   registerImageIpc({ handle: (name, handler) => { handlers[name] = handler; }, app: {}, findProject: () => ({ kind: 'local', path: project }), getSession() {}, clipboard: {}, isGeneratedImage,
     nativeImage: { createFromPath: () => assert.fail('nothing is decoded'), createFromBuffer: () => assert.fail('nothing is decoded') }, remoteImage: () => assert.fail('a local project is not read over SSH') });
   const stat = t.mock.method(fs, 'statSync'), read = t.mock.method(fs.promises, 'readFile');
-  // Windows reads //host as a share too; elsewhere it is an ordinary folder and only its backslash form is a share.
-  const shares = ['\\\\host\\share\\a.png', '\\\\?\\UNC\\host\\share\\a.png', '\\\\.\\pipe\\a.png', '\\\\host\\share\\generated_images\\t\\a.png', '//host/share/generated_images/t/a.png'];
-  for (const file of shares) for (const projectId of ['local', undefined]) await assert.rejects(handlers['agent:image'](file, projectId), /只能显示图片文件|无效的链接/, file);
-  if (process.platform === 'win32') await assert.rejects(handlers['agent:image']('//host/share/a.png', 'local'), /只能显示图片文件/);
+  // A name that starts with two slashes is refused as written on every system: on Windows these are shares, pipes and
+  // device paths; on POSIX //host/share would resolve to /host/share and be read there.
+  const shares = ['\\\\host\\share\\a.png', '\\\\?\\UNC\\host\\share\\a.png', '\\\\.\\pipe\\a.png', '\\\\host\\share\\generated_images\\t\\a.png', '//host/share/generated_images/t/a.png', '//host/share/a.png'];
+  for (const file of shares) for (const projectId of ['local', undefined]) await assert.rejects(handlers['agent:image'](file, projectId), /只能显示图片文件/, file);
   assert.deepEqual(stat.mock.calls.map(call => call.arguments[0]), [], 'no network path is stat-ed');
   assert.equal(read.mock.callCount(), 0);
 });

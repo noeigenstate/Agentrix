@@ -113,8 +113,10 @@ function registerImageIpc({ handle, app, findProject, getSession, clipboard, nat
     if (project?.kind === 'ssh') image = nativeImage.createFromBuffer(bytes = await remoteImage(projectId, file));
     else {
       // The path is judged before the file system is touched: a network path (\\host\share) is refused unread, so a
-      // link in a reply cannot make this computer authenticate to another.
-      const local = project && !isGeneratedImage(file) ? resolveRevealPathText(project.path, file) : file;
+      // link in a reply cannot make this computer authenticate to another. A name that starts with two slashes of either
+      // kind is refused as written, on every system: POSIX would otherwise resolve //host/share to /host/share.
+      if (/^[\\/]{2}/.test(file)) throw new Error('只能显示图片文件。');
+      const local =project && !isGeneratedImage(file) ? resolveRevealPathText(project.path, file) : file;
       if (!(isGeneratedImage(local) || isImageFile(local) && path.isAbsolute(local))) throw new Error('只能显示图片文件。');
       const stat = fs.statSync(local, { throwIfNoEntry: false });
       if (!stat?.isFile()) throw new Error('只能显示图片文件。');
