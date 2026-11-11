@@ -28,6 +28,7 @@ the latest round, and the switch between reading and the raw terminal.
 - `src/features/agents/action-text.ts`
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/files/file-popup.ts`
+- `src/features/files/tree-reveal.ts` (a reply's link shows its file in the open project's file tree)
 - `src/features/voice/voice-input.ts`
 - `src/features/voice/VoiceButton.tsx`
 - `src/features/terminal/terminal-*.ts`

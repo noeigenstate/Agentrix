@@ -201,7 +201,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   // A round a "!" line drove has no message to send again, so it offers no retry (nor any other action under it).
   const resultActions = result && !shellRound(entries) && <>
     {result.kind === 'code' && <ResultChecks result={result} />}
-    <ResultActions result={result} projectId={projectId} remote={false} canSend={open} onContinue={continueWith} onRetry={() => void post(result.request, NO_PICTURES)} onError={setError} />
+    <ResultActions result={result} projectId={projectId} canSend={open} onContinue={continueWith} onRetry={() => void post(result.request, NO_PICTURES)} onError={setError} />
   </>;
   const last = entries.at(-1), statusInTurn = !!last && last.role !== 'user' && pending.prompts.every(prompt => pending.queued.has(prompt.id));
   // An error the result card does not carry (the round is still going, or left nothing to show) is a line of its own.

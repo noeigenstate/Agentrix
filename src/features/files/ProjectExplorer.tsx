@@ -8,6 +8,7 @@ import type { DirectoryListing, FileEntry, Project } from '../../shared/types';
 import { fileIcon, folderIcon } from './file-icons';
 import { isCache, isQuiet } from './entry-noise';
 import { useExplorerFileActions } from './ExplorerFileActions';
+import { useTreeReveal } from './tree-reveal.ts';
 import { GitBadge, GitPanel, type GitOpenMode } from '../git/GitPanel';
 import { gitDecorations, gitMark, type GitDecoration } from '../git/git-status';
 import { useGitStatus } from '../git/useGitStatus';
@@ -50,16 +51,24 @@ const indent = (depth: number) => 8 + depth * 14;
 // Long paths keep their informative end: "…\projects\界面开发".
 const shortPath = (value: string) => value.length > 34 ? `…${value.slice(-33)}` : value;
 
+// A file or folder being shown in the tree (tree-reveal.ts): found once its row is drawn and scrolled to. The folder
+// holding it judges only a listing read since the request (revision), and loads more pages until it is listed, at
+// most this many.
+type Reveal = { path: string; found: boolean; revision: number };
+const REVEAL_PAGES = 10;
+const parentOf = (path: string) => path.split('/').slice(0, -1).join('/');
+
 type NodeProps = {
   projectId: string; entry: FileEntry; depth: number; expanded: Set<string>;
   revision: number; enabled: boolean; selectedFile: string | null; hideNoise: boolean;
   onToggle: (path: string) => void; onSelect: (path: string) => void;
   selected: Set<string>; choose: (entry: FileEntry, event: MouseEvent) => boolean; contextMenu: (entry: FileEntry, event: MouseEvent) => void;
   decorations: Map<string, GitDecoration>;
+  reveal: Reveal | null; onRevealed: () => void;
 };
 
 function TreeNode(props: NodeProps) {
-  const { projectId, entry, depth, expanded, revision, enabled, selectedFile, hideNoise, onToggle, onSelect, selected, choose, contextMenu } = props;
+  const { projectId, entry, depth, expanded, revision, enabled, selectedFile, hideNoise, onToggle, onSelect, selected, choose, contextMenu, reveal } = props;
   const isDirectory = entry.kind === 'directory';
   const root = depth < 0;
   const open = isDirectory && (root || expanded.has(entry.path));
@@ -69,7 +78,15 @@ function TreeNode(props: NodeProps) {
   const [pages, setPages] = useState(1);
   const decoration = props.decorations.get(entry.path);
   const requestRefresh = useRef<(() => void) | null>(null);
-  const lastRevision = useRef(revision);
+  const lastRevision = useRef(revision), currentRevision = useRef(revision);
+  currentRevision.current = revision;
+  const [listedAt, setListedAt] = useState(-1);
+  const row = useRef<HTMLButtonElement>(null);
+  const revealed = reveal?.path === entry.path;
+  const seeking = !!reveal && !reveal.found && open && parentOf(reveal.path) === entry.path && !!listing && listedAt >= reveal.revision
+    && !listing.entries.some(child => child.path === reveal.path);
+  useEffect(() => { if (revealed && !reveal.found) { row.current?.scrollIntoView({ block: 'center' }); props.onRevealed(); } }, [revealed, reveal?.found]);
+  useEffect(() => { if (seeking && !loading && listing!.nextOffset !== null && pages < REVEAL_PAGES) setPages(value => value + 1); }, [seeking, loading, listing, pages]);
 
   useEffect(() => {
     if (!open || !enabled) return;
@@ -78,6 +95,7 @@ function TreeNode(props: NodeProps) {
       if (!active) return;
       if (running) { queued = true; return; }
       running = true; setLoading(true);
+      const asked = currentRevision.current;
       try {
         const entries: FileEntry[] = [];
         let offset: number | null = 0;
@@ -91,7 +109,7 @@ function TreeNode(props: NodeProps) {
           if (result.nextOffset !== null && result.nextOffset <= offset) throw new Error(t('目录分页未前进，请刷新重试。'));
           offset = result.nextOffset;
         }
-        if (active && result) { setListing({ ...result, entries }); setError(''); }
+        if (active && result) { setListing({ ...result, entries }); setListedAt(asked); setError(''); }
       } catch (err) { if (active) setError(String(err instanceof Error ? err.message : err)); }
       finally {
         running = false;
@@ -103,11 +121,14 @@ function TreeNode(props: NodeProps) {
     return () => { active = false; requestRefresh.current = null; };
   }, [projectId, entry.path, open, enabled, pages]);
   // Hiding leaves out caches only: never one that holds a Git change or the open file, so nothing in use disappears.
-  const hidden = (child: FileEntry) => hideNoise && isCache(child) && !props.decorations.has(child.path) && !(selectedFile === child.path || selectedFile?.startsWith(`${child.path}/`));
+  const holds = (child: FileEntry, path?: string | null) => path === child.path || !!path?.startsWith(`${child.path}/`);
+  const hidden = (child: FileEntry) => hideNoise && isCache(child) && !props.decorations.has(child.path) && !holds(child, selectedFile) && !holds(child, reveal?.path);
+  const unseen = seeking && !loading && listing && (listing.nextOffset === null ? t('这个文件夹里没有 {name}。', { name: reveal.path.split('/').at(-1)! })
+    : pages >= REVEAL_PAGES ? t('前 {count} 页里没有 {name}，可继续加载更多。', { count: REVEAL_PAGES, name: reveal.path.split('/').at(-1)! }) : '');
   useEffect(() => { if (lastRevision.current !== revision) { lastRevision.current = revision; requestRefresh.current?.(); } }, [revision]);
 
   return <div className="tree-node" data-directory-path={isDirectory ? entry.path : undefined}>
-    {!root && <button className={`tree-row ${selected.has(entry.path) || !selected.size && !isDirectory && selectedFile === entry.path ? 'file-selected' : ''} ${isQuiet(entry) ? 'is-quiet' : ''}`}
+    {!root && <button ref={row} className={`tree-row ${selected.has(entry.path) || !selected.size && !isDirectory && selectedFile === entry.path ? 'file-selected' : ''} ${isQuiet(entry) ? 'is-quiet' : ''}${revealed && reveal.found ? ' is-revealed' : ''}`}
       role="treeitem" aria-expanded={isDirectory ? open : undefined} aria-selected={selected.has(entry.path)}
       aria-level={depth + 1} aria-label={entry.name} title={`${entry.path || entry.name}${decoration ? ` · ${gitTitle(decoration.title)}` : ''}`} data-node-path={entry.path} data-node-kind={entry.kind} data-git-tone={decoration ? gitMark(decoration.code).tone : undefined}
       style={{ paddingLeft: indent(depth) }}
@@ -125,6 +146,7 @@ function TreeNode(props: NodeProps) {
         {listing?.entries.filter(child => !hidden(child)).map(child => <TreeNode key={child.path} {...props} entry={child} depth={depth + 1} />)}
         {listing && !listing.entries.length && <div className="tree-placeholder" style={{ paddingLeft: indent(depth + 1) + 36 }}>{t('空文件夹')}</div>}
         {!listing && !loading && <div className="tree-placeholder" style={{ paddingLeft: indent(depth + 1) + 36 }}>{t('正在读取目录…')}</div>}
+        {unseen && <div className="tree-placeholder" role="status" style={{ paddingLeft: indent(depth + 1) + 36 }}>{unseen}</div>}
         {listing?.nextOffset != null && <button className="tree-load-more" disabled={loading} onClick={() => setPages(p => p + 1)} style={{ marginLeft: indent(depth + 1) + 18 }}>{t('加载更多（{shown} / {total}）', { shown: listing.entries.length, total: listing.total })}</button>}
       </>}
     </div>}
@@ -148,6 +170,7 @@ export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, 
   const [revision, setRevision] = useState(0);
   const [moreOpen, setMoreOpen] = useState(false), more = useRef<HTMLDivElement>(null);
   const [tab, setTab] = useState<Tab>('agent'), [gitRevision, setGitRevision] = useState(0);
+  const [reveal, setReveal] = useState<Reveal | null>(null);
   const git = useGitStatus(project.id, !collapsed, revision);
   const decorations = useMemo(() => gitDecorations(git.status), [git.status]);
   const location = project.kind === 'ssh' ? `${project.ssh?.host}:${project.path}` : project.path;
@@ -168,6 +191,19 @@ export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, 
     document.addEventListener('pointerdown', dismiss); document.addEventListener('keydown', dismiss);
     return () => { document.removeEventListener('pointerdown', dismiss); document.removeEventListener('keydown', dismiss); };
   }, [moreOpen]);
+  // A path shown from elsewhere (a link in a reply): the Files tab, its folders opened and read again; the row is lit
+  // for a moment once found, and a path not found clears after a while. Nothing is opened or selected.
+  useTreeReveal(project.id, path => {
+    const parts = path.split('/').filter(Boolean);
+    onExpandedChange([...new Set([...expandedPaths, '', ...parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join('/'))])]);
+    setTab('files'); if (collapsed) onCollapse();
+    setRevision(revision + 1); setReveal({ path: parts.join('/'), found: false, revision: revision + 1 });
+  });
+  useEffect(() => {
+    if (!reveal) return;
+    const timer = setTimeout(() => setReveal(null), reveal.found ? 2600 : 10_000);
+    return () => clearTimeout(timer);
+  }, [reveal]);
   const toggle = (folder: string) => { const next = new Set(expanded); if (next.has(folder)) next.delete(folder); else next.add(folder); onExpandedChange([...next]); };
 
   const openTab = (next: Tab) => { window.agentrix.fileTreeFocus(project.id, false); setTab(next); if (collapsed) onCollapse(); };
@@ -212,7 +248,8 @@ export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, 
       </div>
       <div ref={files.tree} className="file-tree" hidden={!filesOpen} role="tree" tabIndex={0} aria-multiselectable="true" aria-label={t('{name} 的文件目录', { name: project.name })} onKeyDownCapture={files.onKeyDown} onClick={files.onBackgroundClick} onContextMenu={files.onBackgroundContextMenu}
         onFocusCapture={() => window.agentrix.fileTreeFocus(project.id, true)} onBlurCapture={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) window.agentrix.fileTreeFocus(project.id, false); }}>
-        <TreeNode projectId={project.id} entry={{ name: project.name, path: '', kind: 'directory' }} depth={-1} expanded={expanded} revision={revision} enabled={!collapsed && filesOpen} selectedFile={selectedFile} hideNoise={hideNoise} onToggle={toggle} onSelect={onSelectFile} selected={files.selected} choose={files.choose} contextMenu={files.contextMenu} decorations={decorations} />
+        <TreeNode projectId={project.id} entry={{ name: project.name, path: '', kind: 'directory' }} depth={-1} expanded={expanded} revision={revision} enabled={!collapsed && filesOpen} selectedFile={selectedFile} hideNoise={hideNoise} onToggle={toggle} onSelect={onSelectFile} selected={files.selected} choose={files.choose} contextMenu={files.contextMenu} decorations={decorations}
+          reveal={reveal} onRevealed={() => setReveal(value => value && { ...value, found: true })} />
       </div>
       {tab === 'agent' && !collapsed && <div className="explorer-agent">{agentPanel}</div>}
       {gitOpen && !collapsed && <GitPanel projectId={project.id} status={git.status} error={git.error} loading={git.loading} revision={gitRevision} onRefresh={() => { git.refresh(); setGitRevision(value => value + 1); }} onOpen={(path, mode) => mode === 'file' ? onSelectFile(path) : onOpenChange(path, mode)} />}

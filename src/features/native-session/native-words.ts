@@ -4,7 +4,7 @@
 // The item content fields read here: messages and plans `text` (a string, or blocks with `text`);
 // the owner's message `clientMessageId` and `images`; commands `command` (string or list), `phrase` (main's few words for it), `cwd`, `exitCode`, `durationMs`, `output`;
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `path`, `output` (or `result`), and `input` or `arguments`
-// only to name a step by (never shown); an assistant picture `generated { path, prompt }` and `images`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
+// only to name a step by (never shown); an assistant picture `generated { path, prompt, copied, copyNote, deferred }` and `images`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
 import type { ResultFacts } from '../reading/feed-parts';
 import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
@@ -30,10 +30,11 @@ export function picturesOf(item: NativeItem) {
   const found = Array.isArray(item.content.images) ? item.content.images.filter((image): image is string => typeof image === 'string' && image !== '') : [];
   return found.length ? found : undefined;
 }
-// The picture the agent drew: its file and the prompt behind it; absent unless both are given as text.
+// The picture the agent drew: its file, the prompt behind it and its copy in the project; absent without its file.
 export function generatedOf(item: NativeItem) {
-  const { path, prompt } = (item.content.generated ?? {}) as Payload;
-  return str(path) ? { path: str(path)!, prompt: str(prompt) ?? '' } : null;
+  const { path, prompt, copied, copyNote, deferred } = (item.content.generated ?? {}) as Payload;
+  if (!str(path)) return null;
+  return { path: str(path)!, prompt: str(prompt) ?? '', ...(str(copied) ? { copied: str(copied)! } : {}), ...(str(copyNote) ? { copyNote: str(copyNote)! } : {}), ...(deferred === true ? { deferred: true } : {}) };
 }
 
 export function commandOf(item: NativeItem) {

@@ -2270,17 +2270,16 @@ test('only your last message starts the round: an answer to a question and a que
   assert.equal(lastRound(entries).goal, 'build it');
 });
 
-test('the buttons under a result depend on its kind, a remote picture and whether the agent can be sent to', () => {
+test('the buttons under a result depend on its kind and whether the agent can be sent to; a remote picture can be saved too', () => {
   const ask = readingEntry('u', 'user', 1, { text: 'draw' });
   const ids = (result, options) => resultActions(result, options).map(action => `${action.id}${action.disabled ? '!' : ''}`);
   const picture = latestResult([ask, roundPicture('g', 2)], idle);
-  assert.deepEqual(ids(picture, { remote: false, canSend: true }), ['enlarge', 'save', 'continue']);
-  assert.deepEqual(ids(picture, { remote: true, canSend: true }), ['enlarge', 'save!', 'continue'], 'a picture on another computer cannot be saved here');
-  assert.deepEqual(ids(latestResult([ask, roundEdit('e', 2), readingEntry('z', 'assistant', 3, { text: 'ok' })], idle), { remote: false, canSend: true }), ['open', 'continue']);
-  assert.deepEqual(ids(latestResult([ask, readingEntry('z', 'assistant', 3, { text: 'ok' })], idle), { remote: false, canSend: true }), ['ask', 'copy']);
+  assert.deepEqual(ids(picture, { canSend: true }), ['enlarge', 'save', 'continue']);
+  assert.deepEqual(ids(latestResult([ask, roundEdit('e', 2), readingEntry('z', 'assistant', 3, { text: 'ok' })], idle), { canSend: true }), ['open', 'continue']);
+  assert.deepEqual(ids(latestResult([ask, readingEntry('z', 'assistant', 3, { text: 'ok' })], idle), { canSend: true }), ['ask', 'copy']);
   const failed = latestResult([ask, readingTool('npm test', 2, { failed: true })], idle);
-  assert.deepEqual(ids(failed, { remote: false, canSend: true }), ['retry', 'continue']);
-  assert.deepEqual(ids(failed, { remote: false, canSend: false }), ['retry!', 'continue'], 'a retry waits for the agent to sit at its input');
+  assert.deepEqual(ids(failed, { canSend: true }), ['retry', 'continue']);
+  assert.deepEqual(ids(failed, { canSend: false }), ['retry!', 'continue'], 'a retry waits for the agent to sit at its input');
 });
 
 test('the title and the duration of a round come from data it already has', () => {
@@ -2453,9 +2452,9 @@ test('the reading view keeps two vertical lines: the avatars and the reply text 
 
 test('the save-as channel is registered in the main process, the preload and the types', () => {
   const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
-  assert.match(read('electron/main.cjs'), /handle\('agent:saveImageAs'[\s\S]*isGeneratedImage\(file\)[\s\S]*showSaveDialog[\s\S]*copyFile/);
-  assert.match(read('electron/preload.cjs'), /saveImageAs: file => ipcRenderer\.invoke\('agent:saveImageAs', file\)/);
-  assert.match(read('src/shared/types.ts'), /saveImageAs\(file: string\): Promise<Result<string \| null>>/);
+  assert.match(read('electron/main.cjs'), /handle\('agent:saveImageAs'[\s\S]*isGeneratedImage\(file\)[\s\S]*remoteProjectImage\(projectId, file\)[\s\S]*showSaveDialog[\s\S]*writeFile\(target, bytes\) : fs\.promises\.copyFile/);
+  assert.match(read('electron/preload.cjs'), /saveImageAs: \(file, projectId\) => ipcRenderer\.invoke\('agent:saveImageAs', file, projectId\)/);
+  assert.match(read('src/shared/types.ts'), /saveImageAs\(file: string, projectId\?: string\): Promise<Result<string \| null>>/);
   for (const text of ['保存图片', '继续修改', '继续追问', '重试', '查看大图', '{time} 完成', '继续修改，或描述下一步…']) assert.ok(text in en, `${text} has an English translation`);
 });
 

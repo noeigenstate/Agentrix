@@ -615,7 +615,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const resultStatus = result && <ResultStatus result={result} taskTitle={terminal.taskTitle} onShowTerminal={onShowTerminal} onError={onError} />;
   const resultActions = result && <>
     {result.kind === 'code' && <ResultChecks result={result} />}
-    <ResultActions result={result} projectId={projectId} remote={remote} canSend={!inputBlocked && !!terminal.sessionId} onContinue={continueWith} onRetry={() => void send(result.request, false)} onError={onError} />
+    <ResultActions result={result} projectId={projectId} canSend={!inputBlocked && !!terminal.sessionId} onContinue={continueWith} onRetry={() => void send(result.request, false)} onError={onError} />
   </>;
   const lastBlock = grouped.at(-1);
   const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);

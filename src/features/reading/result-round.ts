@@ -78,12 +78,12 @@ export function latestResult(entries: readonly ConversationEntry[], { idle, inte
 export const FALLBACK_TITLES: Record<ResultKind, string> = { picture: '生成图片', code: '修改代码', text: '回答问题', failed: '执行任务' };
 
 export type ResultAction = 'enlarge' | 'save' | 'open' | 'continue' | 'ask' | 'copy' | 'retry';
-// The buttons under a result, in order, and which of them can act now. A picture an SSH agent drew stays on that
-// computer (no save); a retry sends the request again, so only while the agent sits at its input.
-export function resultActions(result: LatestResult, { remote, canSend }: { remote: boolean; canSend: boolean }): { id: ResultAction; disabled: boolean }[] {
+// The buttons under a result, in order, and which of them can act now. A picture an SSH agent drew is saved after it is
+// read back over the connection; a retry sends the request again, so only while the agent sits at its input.
+export function resultActions(result: LatestResult, { canSend }: { canSend: boolean }): { id: ResultAction; disabled: boolean }[] {
   const action = (id: ResultAction, disabled = false) => ({ id, disabled });
   switch (result.kind) {
-    case 'picture': return [action('enlarge'), action('save', remote), action('continue')];
+    case 'picture': return [action('enlarge'), action('save'), action('continue')];
     case 'code': return [action('open', !result.written.length), action('continue')];
     case 'text': return [action('ask'), action('copy')];
     case 'failed': return [action('retry', !canSend || !result.request), action('continue')];

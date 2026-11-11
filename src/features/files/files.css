@@ -39,6 +39,14 @@
 .tree-row:hover { background: var(--bg-hover); }
 .tree-row:focus-visible { outline-offset: -2px; }
 .tree-row.file-selected { background: var(--bg-selected); }
+/* A row a reply's link showed (tree-reveal.ts): the product's selected-row bar at its left, held and then faded over the
+   2.6 s the row keeps the class; the row keeps its own fill, selected or hovered. Without motion the bar stays for that
+   time and goes at once. */
+.tree-row.is-revealed { position: relative; }
+.tree-row.is-revealed::before { content: ''; position: absolute; top: 8px; bottom: 8px; left: 0; width: 2px; background: var(--select-bar); animation: tree-reveal 2.6s ease-out both; }
+@keyframes tree-reveal { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+:root[data-motion="off"] .tree-row.is-revealed::before { animation: none; }
+@media (prefers-reduced-motion: reduce) { :root[data-motion="system"] .tree-row.is-revealed::before { animation: none; } }
 /* Caches, tool state, temp files and lock files recede: dimmed icon, tertiary name (entry-noise.ts). */
 .tree-row.is-quiet .file-icon { opacity: .5; }
 .tree-row.is-quiet .tree-filename { color: var(--text-3); }

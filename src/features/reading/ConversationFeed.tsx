@@ -1,14 +1,16 @@
 import { createContext, Fragment, useContext, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 import { CaretDown, CaretUp, Robot } from '@phosphor-icons/react';
-import type { ConversationEntry } from '../../shared/types';
+import type { ConversationEntry, GeneratedPicture } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { modelName } from '../../shared/model-name.ts';
 import { stepVerb } from '../agents/action-text';
-import { showPopup } from '../files/file-popup';
+import { showPopup } from '../files/file-popup.ts';
 import { Markdown } from './Markdown';
 import { PathText } from './PathText';
 import { useReadingPaths } from './useReadingPaths';
+import { generatedCopies, openReplyLink } from './reply-links.ts';
+import { pathTooltip } from './reading-paths';
 import { UserMessage, type MessageEntry } from './PendingPromptEntries';
 import { MessageCard } from './MessageMenu';
 import { AgentMark, AgentTurnItem, stepTime, TimelineStep } from './Timeline';
@@ -28,11 +30,22 @@ export const ConversationDecorations = createContext<{
   frame?: { ref: RefObject<HTMLDivElement | null>; style: CSSProperties; before: ReactNode };
 } | null>(null);
 
-// A picture the agent generated, shown where it answered; a click shows it full size in a popup. Its prompt is a two-line summary
-// under it; when the summary is cut off, a text toggle shows the whole prompt (not remembered). The latest result's picture
-// is larger and carries the agent's one-sentence reply (children) between itself and its prompt.
-function GeneratedImage({ src, path, prompt, result = false, children }: { src: string; path: string; prompt: string; result?: boolean; children?: ReactNode }) {
-  const open = () => showPopup({ kind: 'image', path });
+// Where a generated picture's copy in the project is, as a path a click shows in the file tree (a modifier click previews
+// it), or the line on that copy: being made, or why it could not be.
+function GeneratedCopy({ picture, projectId, onError }: { picture: GeneratedPicture; projectId: string; onError: (message: string) => void }) {
+  const { copied, copyNote } = picture;
+  if (copied) return <p className="reading-generated-copy">{t('已复制到项目：')}<button type="button" data-reading-path={copied} title={pathTooltip(copied)}
+    onClick={() => void openReplyLink(projectId, copied, new Map(), undefined, onError)}>{copied}</button></p>;
+  return copyNote ? <p className="reading-generated-copy" role="status">{copyNote}</p> : null;
+}
+
+// A picture the agent generated, shown where it answered; a click shows it full size in a popup (read where the project is).
+// Its prompt is a two-line summary under it; when the summary is cut off, a text toggle shows the whole prompt (not
+// remembered); its copy in the project is named last. The latest result's picture is larger and carries the agent's
+// one-sentence reply (children) between itself and its prompt.
+function GeneratedImage({ src, picture, projectId, result = false, onError, children }: { src: string; picture: GeneratedPicture; projectId: string; result?: boolean; onError: (message: string) => void; children?: ReactNode }) {
+  const { path, prompt } = picture;
+  const open = () => showPopup({ kind: 'image', projectId, path });
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
   const caption = useRef<HTMLElement>(null);
@@ -53,7 +66,24 @@ function GeneratedImage({ src, path, prompt, result = false, children }: { src: 
     {prompt && (clipped || expanded) && <button type="button" className="reading-generated-toggle" aria-expanded={expanded} aria-controls={captionId} onClick={() => setExpanded(!expanded)}>
       {expanded ? t('收起') : t('展开提示词')}{expanded ? <CaretUp size={12} aria-hidden="true" /> : <CaretDown size={12} aria-hidden="true" />}
     </button>}
+    <GeneratedCopy picture={picture} projectId={projectId} onError={onError} />
   </figure>;
+}
+
+// A picture from the older part of a resumed SSH conversation: read back over the connection only when asked
+// (features/generated-images), then shown as any generated picture is.
+function DeferredPicture({ picture, projectId, result, onError }: { picture: GeneratedPicture; projectId: string; result: boolean; onError: (message: string) => void }) {
+  const [src, setSrc] = useState<string | null>(null), [loading, setLoading] = useState(false);
+  if (src) return <GeneratedImage src={src} picture={picture} projectId={projectId} result={result} onError={onError} />;
+  const load = () => {
+    setLoading(true);
+    void window.agentrix.agentImage(picture.path, projectId).then(found => { if (found.ok) setSrc(found.value.url); else onError(found.error); })
+      .catch(error => onError(String(error))).finally(() => setLoading(false));
+  };
+  return <>
+    <p className="reading-generated-copy"><button type="button" disabled={loading} onClick={load}>{t(loading ? '正在取回图片…' : '点击加载图片')}</button></p>
+    <GeneratedCopy picture={picture} projectId={projectId} onError={onError} />
+  </>;
 }
 
 // A message card with the right-click menu (引用 / 复制). A message with words of its own can be quoted; one that was left out
@@ -68,9 +98,13 @@ function Message({ entry, who, className, onError, children }: { entry: Conversa
 function AssistantReply({ entry, agent, projectId, result = false, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; onError: (message: string) => void }) {
   const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
   const words = entry.text ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : entry.text} /> : null;
-  // The latest result shows its picture first with the words under it; anywhere else the words come first.
-  const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} {...entry.generated} result={result}>{result && words}</GeneratedImage> : null;
-  return <Message entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} onError={onError}>{result && picture}{!(result && picture) && words}
+  // The latest result shows its picture first with the words under it; anywhere else the words come first. A picture
+  // waiting to be read back shows its button in place of the words that say so.
+  const deferred = !entry.images?.[0] && entry.generated?.deferred;
+  const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} picture={entry.generated} projectId={projectId} result={result} onError={onError}>{result && words}</GeneratedImage>
+    : deferred ? <DeferredPicture picture={entry.generated!} projectId={projectId} result={result} onError={onError} /> : null;
+  return <Message entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} onError={onError}>{result && picture}{!(result && picture) && !deferred && words}
+      {entry.generated && !picture && <GeneratedCopy picture={entry.generated} projectId={projectId} onError={onError} />}
       {named.length > 0 && <FileCards projectId={projectId} files={named} excludeImages={picture && entry.generated ? [entry.generated.path] : []} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
       {!result && picture}</Message>;
 }
@@ -123,6 +157,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
   const grouped = useMemo(() => blocks(entries), [entries]);
   const turns = useMemo(() => conversationTurns(grouped, decorations?.start ?? 0), [grouped, decorations?.start]);
   const result = useMemo(() => latestResult(entries, { idle: !live, interrupted: false }), [entries, live]);
+  const copies = useMemo(() => generatedCopies(entries), [entries]);
   const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
   // The newest round is the one after your last message; earlier ones keep their words but speak more quietly.
   let latestUser = -1, latestAgent = -1;
@@ -137,7 +172,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
     if (toggle) { const source = toggle.closest('.reading-code')!.classList.toggle('is-source'); toggle.textContent = t(source ? '预览' : '源码'); return; }
     if (button) { const code = button.closest('.reading-code')?.querySelector(':scope > pre')?.textContent || ''; void window.agentrix.copy(code).then(result => { if (result.ok) { button.textContent = t('已复制'); setTimeout(() => { button.textContent = t('复制'); }, 1400); } else onError(result.error); }); return; }
     const link = (event.target as Element).closest<HTMLAnchorElement>('.reading-markdown a');
-    if (link) { event.preventDefault(); const href = link.getAttribute('href') || ''; if (href) onOpenLink?.(href); }
+    if (link) { event.preventDefault(); const href = link.getAttribute('data-reading-path') || link.getAttribute('href') || ''; if (href) void openReplyLink(projectId, href, copies, onOpenLink, onError); }
   }}>
       {decorations?.frame?.before}
       {turns.map((turn, index) => {

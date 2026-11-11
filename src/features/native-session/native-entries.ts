@@ -82,8 +82,9 @@ export function nativeEntries(model: NativeModel, images: Readonly<Record<string
       if (!held(model, item) && (text || pictures || omitted)) entries.push({ id: item.id, at, role: 'user', text, ...(pictures ? { images: pictures } : {}), ...(omitted ? { imagesOmitted: true } : {}) });
     } else if (item.kind === 'agent-message' || item.kind === 'plan') {
       const text = item.kind === 'plan' ? planText(item) : messageText(item), generated = generatedOf(item), pictures = picturesOf(item);
-      // A drawn picture is drawn by the feed only with a picture to show; its words may be none.
-      if (text || generated && pictures) entries.push({ id: item.id, at, role: 'assistant', text, ...(generated && pictures ? { generated, images: pictures } : {}) });
+      // A drawn picture is drawn by the feed only with a picture to show; its words may be none. Its project copy's line
+      // shows with or without the picture.
+      if (text || generated && pictures) entries.push({ id: item.id, at, role: 'assistant', text, ...(generated ? { generated, ...(pictures ? { images: pictures } : {}) } : {}) });
     } else if (line) {
       entries.push({ id: item.id, at, role: 'assistant', text: line });
     } else {

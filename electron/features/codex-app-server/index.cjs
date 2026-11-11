@@ -13,6 +13,8 @@ const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = requ
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
 const { startupDetail } = require('./failure.cjs');
+// A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
+const RECENT_PICTURES = 6;
 
 // Host-owned choices only, separate from CLI configuration and transcript files.
 // SSH choices are host metadata, keyed by the authenticated remote scope; remote
@@ -60,7 +62,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome, accountKey } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome, accountKey } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -113,9 +115,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
     },
     create(initialSpec, emit) {
       const spec = { ...initialSpec, runtimeSessionId: initialSpec.runtimeSessionId || randomUUID() };
-      const render = item => renderImage?.(item, spec);
+      const render = (item, mode) => renderImage?.(item, spec, mode);
+      // What a picture's later read and copy find reaches a session that is still open only.
+      const settle = settleImage && (async (item, mode) => { const later = await settleImage(item, spec, mode); return closed ? null : later; });
       let currentUsage = null;
-      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, render, translate), receipts = new Map(), finished = new Set();
+      const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, render, translate, settle), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
       let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
@@ -358,7 +362,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       async function replayHistory() {
         const history = [], cursors = new Set();
-        let cursor = null, limit = 50, bytes = 0, turns = 0;
+        let cursor = null, limit = 50, bytes = 0, turns = 0, pictures = 0;
         while (history.length < 1000 && turns < 1000) {
           let page;
           try {
@@ -375,7 +379,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           for (const turn of page.data) {
             ++turns;
             for (const item of [...(turn.items || [])].reverse()) {
-              const serialized = JSON.stringify({ payload: settleReplayed(itemPayload(item, true, render, translate), turn.status), itemId: item.id, turnId: turn.id });
+              // History comes newest first: its newest generated pictures are read back now, older ones when asked.
+              let mode = null;
+              const picture = image => render(image, mode = pictures++ < RECENT_PICTURES ? 'history' : 'later');
+              const serialized = JSON.stringify({ payload: settleReplayed(itemPayload(item, true, picture, translate), turn.status), itemId: item.id, turnId: turn.id, mode });
               const size = Buffer.byteLength(serialized) + 1024;
               if (history.length >= 1000 || bytes + size > 4 * 1024 * 1024) { turns = 1000; break; }
               // Detach bounded text slices from the large provider frame before retaining them.
@@ -386,7 +393,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (!page.nextCursor || cursors.has(page.nextCursor)) break;
           cursors.add(page.nextCursor); cursor = page.nextCursor;
         }
-        for (const item of history.reverse()) events.publish('item.upsert', item.payload, { itemId: item.itemId, turnId: item.turnId, replay: true });
+        for (const item of history.reverse()) if (events.publish('item.upsert', item.payload, { itemId: item.itemId, turnId: item.turnId, replay: true }) && item.mode) events.settle(item.itemId, item.mode);
       }
       function inputReceipt(id, status) {
         const entry = receipts.get(id);

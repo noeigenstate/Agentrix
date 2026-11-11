@@ -13,14 +13,16 @@ const { translate } = require('../electron/i18n.cjs');
 const { resolveRevealPathText } = require('../electron/terminal-links.cjs');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 
-function load(name, platform = { isMac: false, isWindows: true }) {
+function load(name, platform = { isMac: false, isWindows: true }, stubs = {}) {
   const filename = path.join(__dirname, '../src/features/reading', name), mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
   mod.require = specifier => {
     if (specifier === '../../shared/platform') return platform;
     if (specifier === '../../shared/i18n') return { t: text => translate('en', text) };
-    if (specifier === './reading-paths') return load('reading-paths.ts', platform);
+    if (Object.hasOwn(stubs, specifier)) return stubs[specifier];
+    if (specifier === './reading-paths') return load('reading-paths.ts', platform, stubs);
+    if (specifier === './reply-links.ts') return load('reply-links.ts', platform, stubs);
     if (specifier.startsWith('../terminal/terminal-links')) return require('../src/features/terminal/terminal-links.ts');
     return original(specifier);
   };
@@ -164,6 +166,51 @@ test('modifier capture reveals paths, preserves plain click and selection, and r
   revealPathClick(event({ ctrlKey: true }), 'project', message => errors.push(message));
   await new Promise(setImmediate);
   assert.equal(errors.at(-1), 'Could not show this path in the file manager.');
+});
+
+test('a picture path previews with the modifier, in the picture popup and read where the project is; its tooltip says so', t => {
+  const previous = globalThis.window, popups = [], reveals = [];
+  globalThis.window = { agentrix: { revealPath: async (...args) => { reveals.push(args); return { ok: true }; } } };
+  t.after(() => { if (previous === undefined) delete globalThis.window; else globalThis.window = previous; });
+  const stubs = { '../files/file-popup.ts': { showPopup: target => popups.push(target) }, '../files/tree-reveal.ts': { revealInTree: () => false, treeShown: () => false } };
+  const paths = load('reading-paths.ts', { isMac: false, isWindows: true }, stubs);
+  const click = readingPath => ({ button: 0, ctrlKey: true, metaKey: false, target: { closest: () => ({ dataset: { readingPath } }) }, preventDefault() {}, stopPropagation() {} });
+  for (const file of ['docs/猪追老鼠.png', '/home/me/.codex/generated_images/thread/猪追老鼠.png', 'C:\\Users\\me\\shot.JPG:3']) paths.revealPathClick(click(file), 'project', assert.fail);
+  paths.revealPathClick(click('src/App.tsx'), 'project', assert.fail);
+  assert.deepEqual(popups, [{ kind: 'image', projectId: 'project', path: 'docs/猪追老鼠.png' }, { kind: 'image', projectId: 'project', path: '/home/me/.codex/generated_images/thread/猪追老鼠.png' },
+    { kind: 'image', projectId: 'project', path: 'C:\\Users\\me\\shot.JPG:3' }]);
+  assert.deepEqual(reveals, [['project', 'src/App.tsx']], 'any other file is still shown in the file manager');
+  assert.equal(paths.pathTooltip('docs/a.png'), 'Ctrl+click to preview the picture');
+  assert.equal(load('reading-paths.ts', { isMac: true, isWindows: false }, stubs).pathTooltip('docs/a.png'), '⌘+click to preview the picture');
+  assert.equal(paths.pathTooltip('docs/a.md'), 'Ctrl+click to show in File Explorer');
+});
+
+test('a plain click on a reply path shows it in the open project file tree; a generated picture by its project copy; a small card previews pictures and expands nothing', async t => {
+  const previous = globalThis.window, popups = [], reveals = [], opened = [], errors = [], links = [];
+  let shown = true, located = { ok: true, value: { kind: 'file', path: 'docs/a.md' } };
+  globalThis.window = { agentrix: { openLink: async (...args) => { links.push(args); return located; } } };
+  t.after(() => { if (previous === undefined) delete globalThis.window; else globalThis.window = previous; });
+  const stubs = { '../files/file-popup.ts': { showPopup: target => popups.push(target) },
+    '../files/tree-reveal.ts': { treeShown: () => shown, revealInTree: (projectId, path) => { if (shown) reveals.push([projectId, path]); return shown; } } };
+  const { openReplyLink, generatedCopies } = load('reply-links.ts', undefined, stubs);
+  const generated = 'C:\\Users\\me\\.codex\\generated_images\\t\\猪追老鼠.png', unsaved = '/home/me/.codex/generated_images/t/other.png';
+  const copies = generatedCopies([{ id: 'g', role: 'assistant', at: 1, generated: { path: generated, prompt: '', copied: 'generated-images/猪追老鼠.png' } }, { id: 'h', role: 'assistant', at: 2, generated: { path: unsaved, prompt: '' } }]);
+  const open = target => openReplyLink('project', target, copies, value => opened.push(value), message => errors.push(message));
+  await open('docs/a.md');
+  await open('file:///C:/Users/me/.codex/generated_images/t/%E7%8C%AA%E8%BF%BD%E8%80%81%E9%BC%A0.png');
+  await open(unsaved);
+  await open('https://example.com/a.png');
+  assert.deepEqual(links, [['project', 'docs/a.md']]);
+  assert.deepEqual(reveals, [['project', 'docs/a.md'], ['project', 'generated-images/猪追老鼠.png']], 'the copy is shown, not the picture outside the project');
+  assert.deepEqual(popups, [{ kind: 'image', projectId: 'project', path: unsaved }], 'a picture with no copy yet opens in the popup');
+  assert.deepEqual(opened, ['https://example.com/a.png'], 'a web address opens as before');
+  located = { ok: false, error: '该链接指向远程项目目录之外。' };
+  await open('/etc/hosts');
+  assert.deepEqual(errors, ['该链接指向远程项目目录之外。'], 'other links outside the project stay refused');
+  shown = false; popups.length = 0; opened.length = 0; links.length = 0;
+  await open(generated); await open('docs/b.png'); await open('docs/b.md');
+  assert.deepEqual(popups, [{ kind: 'image', projectId: 'project', path: generated }, { kind: 'image', projectId: 'project', path: 'docs/b.png' }]);
+  assert.deepEqual(opened, ['docs/b.md'], 'on a small card anything else opens as before'); assert.deepEqual(links, [], 'and nothing is located in a tree that is not shown');
 });
 
 test('modifier styling follows keyboard, pointer and blur events without rerendering or leaving listeners behind', t => {
