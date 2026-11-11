@@ -108,6 +108,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   editorCloseResult: (id, accepted) => ipcRenderer.send('editor:close-result', id, accepted),
   closePreview: id => ipcRenderer.invoke('project:preview-close', id),
   openLink: (id, target) => ipcRenderer.invoke('project:open-link', id, target),
+  linkPath: (id, target) => ipcRenderer.invoke('project:link-path', id, target),
   openVideo: (id, relativePath) => ipcRenderer.invoke('project:open-video', id, relativePath),
   revealProject: id => ipcRenderer.invoke('project:reveal', id),
   startTerminal: id => ipcRenderer.invoke('terminal:start', id),

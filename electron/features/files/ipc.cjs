@@ -71,7 +71,9 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
     const error = await shell.openPath(filename);
     if (error) throw new Error(error);
   }
-  async function openProjectLink(id, target) {
+  // What a link in a project names, opening nothing: a web address, or a file or folder of the project (an SSH project's
+  // on that computer) with its full path there (absolute).
+  async function locateLink(id, target) {
     const project = findProject(id);
     if (project.kind === 'ssh' && !/^(https?:\/\/|www\.)/i.test(target)) {
       const remote = remoteFor(id); await remote.ready;
@@ -84,17 +86,23 @@ function registerFilesIpc({ handle, listen, findProject, remoteFor, fileOperatio
         if (relative === '..' || relative.startsWith('../')) throw new Error('该链接指向远程项目目录之外。');
         try {
           const stat = await remote.request('stat', { path: relative });
-          if (stat.directory) return { kind: 'directory', path: stat.realPath === '.' ? '' : stat.realPath };
-          return { kind: 'file', path: relative };
+          const found = stat.directory ? (stat.realPath === '.' ? '' : stat.realPath) : relative;
+          return { kind: stat.directory ? 'directory' : 'file', path: found, absolute: path.posix.join(remote.info.root, found) };
         } catch (error) { if (candidate === withoutPosition) throw error; }
       }
     }
     const link = await resolveTerminalLink(project, target);
+    return link.kind === 'file' ? { ...link, absolute: path.resolve(project.path, link.path) } : link.kind === 'directory' ? { ...link, absolute: link.path, local: true } : link;
+  }
+  async function openProjectLink(id, target) {
+    const { absolute, local, ...link } = await locateLink(id, target);
     if (link.kind === 'external') { await shell.openExternal(link.url); return { kind: 'external' }; }
-    if (link.kind === 'directory') { await openPath(link.path); return { kind: 'external' }; }
+    if (local) { await openPath(absolute); return { kind: 'external' }; }
     return link;
   }
   handle('project:open-link', openProjectLink);
+  // The full path of the file or folder a link names, for a reply link's 复制路径; null for a web address.
+  handle('project:link-path', async (id, target) => (await locateLink(id, target)).absolute ?? null);
   async function openVideo(id, relativePath) {
     const project = findProject(id);
     if (project.kind === 'ssh') throw new Error('远程视频请使用内置播放器，或先下载到本机再用系统播放器打开。');

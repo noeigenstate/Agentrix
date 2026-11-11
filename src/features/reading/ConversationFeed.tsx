@@ -9,7 +9,7 @@ import { showPopup } from '../files/file-popup.ts';
 import { Markdown } from './Markdown';
 import { PathText } from './PathText';
 import { useReadingPaths } from './useReadingPaths';
-import { generatedCopies, openReplyLink } from './reply-links.ts';
+import { generatedCopies, openReplyLink, replyLinkPath } from './reply-links.ts';
 import { pathTooltip } from './reading-paths';
 import { UserMessage, type MessageEntry } from './PendingPromptEntries';
 import { MessageCard } from './MessageMenu';
@@ -86,16 +86,19 @@ function DeferredPicture({ picture, projectId, result, onError }: { picture: Gen
   </>;
 }
 
-// A message card with the right-click menu (引用 / 复制). A message with words of its own can be quoted; one that was left out
-// for size, or holds only a picture, has no menu.
-function Message({ entry, who, className, onError, children }: { entry: ConversationEntry; who: string; className: string; onError: (message: string) => void; children: ReactNode }) {
+// The full path a reply's file link opens, for its right-click 复制路径 (replyLinkPath, with the feed's project and copies).
+type PathOf = (target: string) => Promise<string | null>;
+
+// A message card with the right-click menu (引用 / 复制, and 复制路径 on a reply's file link when pathOf is given). A message
+// with words of its own can be quoted; one that was left out for size, or holds only a picture, has no menu.
+function Message({ entry, who, className, pathOf, onError, children }: { entry: ConversationEntry; who: string; className: string; pathOf?: PathOf; onError: (message: string) => void; children: ReactNode }) {
   const quote = useContext(ConversationDecorations)?.quote;
-  return <MessageCard id={entry.id} className={className} text={entry.omitted ? undefined : entry.text} who={who} quote={quote} onError={onError}>{children}</MessageCard>;
+  return <MessageCard id={entry.id} className={className} text={entry.omitted ? undefined : entry.text} who={who} quote={quote} pathOf={pathOf} onError={onError}>{children}</MessageCard>;
 }
 
 // A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
 // (the agents are told they can show one this way: reading-note.cjs).
-function AssistantReply({ entry, agent, projectId, result = false, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; onError: (message: string) => void }) {
+function AssistantReply({ entry, agent, projectId, result = false, pathOf, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; pathOf?: PathOf; onError: (message: string) => void }) {
   const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
   const words = entry.text ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : entry.text} /> : null;
   // The latest result shows its picture first with the words under it; anywhere else the words come first. A picture
@@ -103,7 +106,7 @@ function AssistantReply({ entry, agent, projectId, result = false, onError }: { 
   const deferred = !entry.images?.[0] && entry.generated?.deferred;
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} picture={entry.generated} projectId={projectId} result={result} onError={onError}>{result && words}</GeneratedImage>
     : deferred ? <DeferredPicture picture={entry.generated!} projectId={projectId} result={result} onError={onError} /> : null;
-  return <Message entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} onError={onError}>{result && picture}{!(result && picture) && !deferred && words}
+  return <Message entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} pathOf={pathOf} onError={onError}>{result && picture}{!(result && picture) && !deferred && words}
       {entry.generated && !picture && <GeneratedCopy picture={entry.generated} projectId={projectId} onError={onError} />}
       {named.length > 0 && <FileCards projectId={projectId} files={named} excludeImages={picture && entry.generated ? [entry.generated.path] : []} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
       {!result && picture}</Message>;
@@ -158,6 +161,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
   const turns = useMemo(() => conversationTurns(grouped, decorations?.start ?? 0), [grouped, decorations?.start]);
   const result = useMemo(() => latestResult(entries, { idle: !live, interrupted: false }), [entries, live]);
   const copies = useMemo(() => generatedCopies(entries), [entries]);
+  const pathOf = useMemo(() => (target: string) => replyLinkPath(projectId, target, copies), [projectId, copies]);
   const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
   // The newest round is the one after your last message; earlier ones keep their words but speak more quietly.
   let latestUser = -1, latestAgent = -1;
@@ -208,7 +212,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
               // The status row says when the round ended: the result's own entry needs no stamp of its own.
               return <AgentTurnItem key={block.entry.id} at={at} showTime={showTime && !holdsResult} kind="message">
                 {holdsResult && decorations?.beforeResult}
-                <AssistantReply entry={block.entry} agent={kind} projectId={projectId} result={holdsResult} onError={onError} />
+                <AssistantReply entry={block.entry} agent={kind} projectId={projectId} result={holdsResult} pathOf={pathOf} onError={onError} />
                 {holdsResult && decorations?.afterResult}
               </AgentTurnItem>;
             })}

@@ -524,6 +524,10 @@
     "id": "src/features/reading/MessageMenu.tsx:b3895212250290259c1406fc"
   },
   {
+    "text": "run(() => onCopy(place.link!, true))",
+    "id": "src/features/reading/MessageMenu.tsx:f47551c9644f901bf5f62b09"
+  },
+  {
     "text": "window.agentrix.writeTerminal(terminal.id, '\\x1b')",
     "id": "src/features/reading/ReadingView.tsx:ca741eacdbbf1b21d8843c29"
   },

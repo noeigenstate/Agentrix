@@ -27,8 +27,8 @@ the latest round, and the switch between reading and the raw terminal.
 - `src/features/agents/sign-in-screen.ts`
 - `src/features/agents/action-text.ts`
 - `src/features/agents/AgentBrandIcon.ts`
-- `src/features/files/file-popup.ts`
-- `src/features/files/tree-reveal.ts` (a reply's link shows its file in the open project's file tree)
+- `src/features/files/*.ts` (file-popup, the popup over the view; tree-reveal, a reply's link shown in the open project's file tree)
+- `src/features/native-session/NativeToast.tsx` (the light note after a reply link's path is copied)
 - `src/features/voice/voice-input.ts`
 - `src/features/voice/VoiceButton.tsx`
 - `src/features/terminal/terminal-*.ts`
