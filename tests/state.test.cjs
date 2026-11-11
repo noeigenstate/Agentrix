@@ -166,6 +166,45 @@ test('new workspaces and settings start on the first theme', t => {
   assert.equal(new WorkspaceStore(file).settings.theme, 'mono');
 });
 
+test('a profile with no workspace file follows the system theme without writing one', t => {
+  const file = path.join(fixture(t).directory, 'fresh.json');
+  for (const [systemTheme, theme] of [['light', 'light'], ['dark', 'mono'], [undefined, 'mono'], ['sepia', 'mono']]) {
+    assert.equal(new WorkspaceStore(file, { systemTheme }).settings.theme, theme);
+    assert.equal(fs.existsSync(file), false);
+  }
+  assert.equal(new WorkspaceStore(file, {}).settings.theme, 'mono');
+  const store = new WorkspaceStore(file, { systemTheme: 'light' });
+  store.updateSettings({ fontSize: 14 });
+  assert.equal(new WorkspaceStore(file, { systemTheme: 'dark' }).settings.theme, 'light', 'the first saved theme stays');
+});
+
+test('an existing workspace file keeps its theme whatever the system theme is', t => {
+  const file = path.join(fixture(t).directory, 'existing.json');
+  const projects = [];
+  const cases = [
+    [{ version: 2, projects }, 'mono'],
+    [{ version: 2, projects, settings: {} }, 'mono'],
+    [{ version: 2, projects, settings: { language: 'zh', fontSize: 16 } }, 'mono'],
+    [{ version: 2, projects, settings: { theme: 'mono' } }, 'mono'],
+    [{ version: 2, projects, settings: { theme: 'light' } }, 'light'],
+    [{ version: 2, projects, settings: { theme: 'retired' } }, 'mono'],
+  ];
+  for (const [workspace, theme] of cases) {
+    const saved = JSON.stringify(workspace);
+    for (const systemTheme of ['light', 'dark']) {
+      fs.writeFileSync(file, saved);
+      const store = new WorkspaceStore(file, { systemTheme });
+      assert.equal(store.settings.theme, theme, `${saved} on a ${systemTheme} system`);
+      assert.equal(store.warning, null);
+      assert.equal(fs.readFileSync(file, 'utf8'), saved);
+      store.updateSettings({ sound: false });
+      assert.equal(new WorkspaceStore(file, { systemTheme: 'light' }).settings.theme, theme, 'saving settings keeps it');
+    }
+  }
+  fs.writeFileSync(file, '{ invalid');
+  assert.equal(new WorkspaceStore(file, { systemTheme: 'light' }).settings.theme, 'mono', 'an unreadable file is not a fresh profile');
+});
+
 test('every theme offered in Settings survives saving, loading and switching', t => {
   const { store, file } = fixture(t);
   for (const { id } of [...THEMES, THEMES[0]]) {

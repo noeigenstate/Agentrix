@@ -62,3 +62,15 @@ test('active desktop glass keeps transparency and failed glass uses the saved th
   await vm.runInContext(`(async () => { ${main.slice(glassStart, glassEnd)} })()`, context);
   assert.deepEqual(context.window.backgrounds, ['#f8f9fb']);
 });
+
+test('the first launch reads the system theme, treating an unreadable one as light, before macOS overrides it', t => {
+  const context = fixture(t, 'mono');
+  const read = nativeTheme => { context.nativeTheme = nativeTheme; return vm.runInContext('systemTheme()', context); };
+  assert.equal(read({ shouldUseDarkColors: true }), 'dark');
+  assert.equal(read({ shouldUseDarkColors: false }), 'light');
+  assert.equal(read({}), 'light');
+  assert.equal(read({ get shouldUseDarkColors() { throw new Error('No appearance'); } }), 'light');
+  const create = main.indexOf('store = new WorkspaceStore(');
+  assert.match(main.slice(create, main.indexOf('\n', create)), /\{ systemTheme: systemTheme\(\) \}\);\r?$/);
+  assert.ok(create > 0 && create < main.indexOf('    applyNativeTheme();', create));
+});

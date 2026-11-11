@@ -115,14 +115,19 @@ function cleanSettings(input = {}) {
 }
 
 class WorkspaceStore {
-  constructor(filename) {
+  // systemTheme is the OS appearance ('light' or 'dark'), read by the caller because Electron is not available here.
+  constructor(filename, { systemTheme } = {}) {
     this.filename = filename;
     this.projects = [];
     this.history = [];
     this.sshHistory = [];
     this.settings = { ...defaults };
     this.warning = null;
-    if (!fs.existsSync(filename)) return;
+    // Only a profile with no workspace file follows the system; an existing file keeps its saved theme, or the first.
+    if (!fs.existsSync(filename)) {
+      if (systemTheme === 'light') this.settings.theme = 'light';
+      return;
+    }
     try {
       const value = JSON.parse(fs.readFileSync(filename, 'utf8'));
       if (value.version !== 2 || !Array.isArray(value.projects)) throw new Error('Unsupported workspace format');
