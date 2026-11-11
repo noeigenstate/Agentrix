@@ -2,6 +2,11 @@
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
+  { title: "新建窗口报错", text: "在新终端里输入 codex 进入原生模式时，不再提示 Cannot read properties of undefined (reading 'write')。", group: 'new' },
+  { title: "启动中改设置", text: "Codex 原生会话启动过程中改模型、思考强度或快速模式不再报错，改动会在会话建好后生效。", group: 'new' },
+  { title: "模型名称", text: "派发出去的 Codex 工作者在活动栏和模型看板里显示实际使用的模型；还没确认时标明「未确认」，不再显示 unreported。", group: 'new' },
+  { title: "任务书渲染", text: "主控模型发给工作者的任务书和追加指示按 Markdown 显示；你自己的消息仍是纯文本。", group: 'new' },
+  { title: "活动栏调整", text: "「通道」显示在「连接」上面；不再显示 API 花费和「在控制台核对」，余额不足的提示旁仍保留控制台按钮。", group: 'new' },
   { title: "继承开发历史", text: "修复在新项目卡片上选择「继承开发历史」时提示 folderOf is not defined、无法接着上次对话的问题。", group: 'new' },
   { title: "终端 Codex 命令", text: "在 Agentrix 终端里，codex --version、login、mcp、doctor 等不开启对话的命令重新直接运行；开启对话的仍进入原生模式。", group: 'new' },
   { title: "提问不卡住", text: "派发出去的 Codex 工作者提问后无人回答时，10 分钟后自动拒绝，任务继续完成，不再一直卡住。", group: 'new' },

@@ -2995,5 +2995,15 @@
   "提问不卡住": "No stuck questions",
   "派发出去的 Codex 工作者提问后无人回答时，10 分钟后自动拒绝，任务继续完成，不再一直卡住。": "When a dispatched Codex worker asks a question nobody answers, it is declined after ten minutes and the task finishes instead of hanging.",
   "切换原因": "Switch causes",
-  "运行方式切换失败时，提示里会附上具体原因。": "A failed switch between API and terminal now says why."
+  "运行方式切换失败时，提示里会附上具体原因。": "A failed switch between API and terminal now says why.",
+  "新建窗口报错": "New window error",
+  "在新终端里输入 codex 进入原生模式时，不再提示 Cannot read properties of undefined (reading 'write')。": "Typing codex in a new terminal to open native mode no longer shows Cannot read properties of undefined (reading 'write').",
+  "启动中改设置": "Settings at start",
+  "Codex 原生会话启动过程中改模型、思考强度或快速模式不再报错，改动会在会话建好后生效。": "Changing the model, effort or fast mode while a Codex native session starts no longer fails; the change applies once the session is ready.",
+  "模型名称": "Model names",
+  "派发出去的 Codex 工作者在活动栏和模型看板里显示实际使用的模型；还没确认时标明「未确认」，不再显示 unreported。": "A dispatched Codex worker shows the model it actually runs in the activity pane and the model dashboard; until confirmed it says so instead of unreported.",
+  "任务书渲染": "Rendered briefs",
+  "主控模型发给工作者的任务书和追加指示按 Markdown 显示；你自己的消息仍是纯文本。": "Briefs and follow-ups a lead model sends a worker render as Markdown; your own messages stay plain text.",
+  "活动栏调整": "Activity pane",
+  "「通道」显示在「连接」上面；不再显示 API 花费和「在控制台核对」，余额不足的提示旁仍保留控制台按钮。": "The channel now shows above the connection; API spend and the standalone console button are gone, while a balance rejection still offers the console."
 }
