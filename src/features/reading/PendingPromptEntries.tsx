@@ -16,8 +16,9 @@ import './pending-prompts.css';
 // What the user wrote, folded to three lines when it runs longer (a pasted log, a long brief), with a button to read
 // all of it. Whether it runs longer is measured on the laid-out text, so a long line that wraps counts too.
 
-export function UserText({ text }: { text: string }) {
-  const node = useRef<HTMLParagraphElement>(null);
+// rendered: a model wrote it (a lead's brief to a worker), so it is laid out as Markdown like an agent's reply; yours stays plain.
+export function UserText({ text, rendered = false }: { text: string; rendered?: boolean }) {
+  const node = useRef<HTMLDivElement & HTMLParagraphElement>(null);
   const [open, setOpen] = useState(false), [long, setLong] = useState(false);
   useLayoutEffect(() => {
     const element = node.current; if (!element) return;
@@ -27,7 +28,8 @@ export function UserText({ text }: { text: string }) {
     return () => observer.disconnect();
   }, [text, open]);
   return <>
-    <p ref={node} className={open ? undefined : 'is-folded'}>{text}</p>
+    {rendered ? <div ref={node} className={`reading-user-rendered${open ? '' : ' is-folded'}`}><Markdown text={text} /></div>
+      : <p ref={node} className={open ? undefined : 'is-folded'}>{text}</p>}
     {(long || open) && <button type="button" className="text-button reading-user-more" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? t('收起') : t('展开全文')}</button>}
   </>;
 }
@@ -36,10 +38,10 @@ export function UserText({ text }: { text: string }) {
 // shows as that picture. Only the words fold: the quote is bounded when it is made.
 // imagesOmitted: the message had pictures the session's record could not keep; the words are all there is, and it says so.
 export type MessageEntry = ConversationEntry & { imagesOmitted?: boolean };
-export function UserMessage({ text, images, imagesOmitted = false }: { text: string; images?: readonly string[]; imagesOmitted?: boolean }) {
+export function UserMessage({ text, images, imagesOmitted = false, rendered = false }: { text: string; images?: readonly string[]; imagesOmitted?: boolean; rendered?: boolean }) {
   const { quote, rest } = splitQuote(text), shown = withPictures(rest, images);
   return <>{quote && <blockquote className="reading-user-quote"><Markdown text={quote} /></blockquote>}
-    {shown.text && <UserText text={shown.text} />}{shown.images.length > 0 && <UserImages images={shown.images} />}
+    {shown.text && <UserText text={shown.text} rendered={rendered} />}{shown.images.length > 0 && <UserImages images={shown.images} />}
     {imagesOmitted && !shown.images.length && <small className="reading-user-note" role="note">{t('图片已省略，文字仍然保留。')}</small>}</>;
 }
 

@@ -27,17 +27,20 @@ function compileTsx(filename, resolve) {
 }
 const timeline = () => compileTsx(path.join(__dirname, '../src/features/reading/Timeline.tsx'), () => null);
 
-function pendingMarkup(prompts, props = {}) {
+function loadEntries(markdown = ({ text }) => text) {
   const filename = path.join(__dirname, '../src/features/reading/PendingPromptEntries.tsx');
   const mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const originalRequire = mod.require.bind(mod);
   const icon = props => React.createElement('svg', { className: props.className });
-  mod.require = name => name.endsWith('/UserAvatar') ? { UserAvatar: () => React.createElement('svg') } : name === './Timeline' ? timeline() : name.endsWith('/i18n') ? { t: text => en[text] ?? text } : name.endsWith('.css') ? {} : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => icon }) : name === './pasted-pictures' ? require('../src/features/reading/pasted-pictures.ts') : name === '../files/file-popup' ? { showPopup() {} } : name === './message-quote' ? require('../src/features/reading/message-quote.ts') : name === './Markdown' ? { Markdown: ({ text }) => text } : originalRequire(name);
+  mod.require = name => name.endsWith('/UserAvatar') ? { UserAvatar: () => React.createElement('svg') } : name === './Timeline' ? timeline() : name.endsWith('/i18n') ? { t: text => en[text] ?? text } : name.endsWith('.css') ? {} : name === '@phosphor-icons/react' ? new Proxy({}, { get: () => icon }) : name === './pasted-pictures' ? require('../src/features/reading/pasted-pictures.ts') : name === '../files/file-popup' ? { showPopup() {} } : name === './message-quote' ? require('../src/features/reading/message-quote.ts') : name === './Markdown' ? { Markdown: markdown } : originalRequire(name);
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText, filename);
-  return renderToStaticMarkup(React.createElement(mod.exports.PendingPromptEntries, { prompts, ...props }));
+  return mod.exports;
+}
+function pendingMarkup(prompts, props = {}) {
+  return renderToStaticMarkup(React.createElement(loadEntries().PendingPromptEntries, { prompts, ...props }));
 }
 
 test('pending messages use the user style and translated sending note, and escape pasted markup', () => {
@@ -276,4 +279,27 @@ test("an SSH project's pasted picture path is shown as the picture pasted, not a
   rememberPicture(path, 'data:image/png;base64,AAAA');
   assert.deepEqual(withPictures(`${path} 这个是什么`), { text: '这个是什么', images: ['data:image/png;base64,AAAA'] });
   assert.deepEqual(withPictures('/tmp/other.png 看看'), { text: '/tmp/other.png 看看', images: [] }, 'a path not pasted here stays text');
+});
+
+// The reading view's own parser (raw HTML escaped); the window's sanitizer is the second guard and needs a DOM.
+test("a message a model wrote is laid out as Markdown like a reply; yours with the same words stays plain text", () => {
+  const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
+  const { UserMessage } = loadEntries(({ text }) => React.createElement('div', { className: 'reading-markdown', dangerouslySetInnerHTML: { __html: readingMarked.parse(text) } }));
+  const brief = ['# Project memory', '', '- first `src/a.ts`', '- second', '', '```js', 'const a = 1;', '```', '', '<img src=x onerror=alert(1)>'].join('\n');
+  const model = renderToStaticMarkup(React.createElement(UserMessage, { text: brief, rendered: true }));
+  assert.match(model, /<h1>Project memory<\/h1>/);
+  assert.match(model, /<li>first <code>src\/a\.ts<\/code><\/li>/);
+  assert.match(model, /<pre><code class="language-js">const a = 1;/);
+  assert.match(model, /reading-user-rendered/);
+  assert.doesNotMatch(model, /<img/);
+  assert.match(model, /&lt;img/);
+  const owner = renderToStaticMarkup(React.createElement(UserMessage, { text: brief }));
+  assert.doesNotMatch(owner, /<h1>|<li>|<code|reading-markdown/);
+  assert.match(owner, /<p class="is-folded"># Project memory/);
+});
+
+test('the feed marks only a planner sender as rendered', () => {
+  const feed = fs.readFileSync(path.join(__dirname, '../src/features/reading/ConversationFeed.tsx'), 'utf8');
+  assert.match(feed, /const sender = turn\.entry\.sender, planner = sender\?\.kind === 'planner'/);
+  assert.match(feed, /<UserMessage [^>]*rendered=\{planner\} \/>/);
 });

@@ -148,7 +148,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
           const mark = planner ? identified ? <AgentMark agent={sender.agent!} /> : <Robot size={18} /> : <UserAvatar />;
           return <TimelineStep key={turn.entry.id} at={turn.entry.at} kind="user" who={who} latest={index === latestUser} mark={mark}>
             <Message entry={turn.entry} who={who} className={`reading-user${turn.entry.answer ? ' is-answer' : ''}`} onError={onError}>
-              {turn.entry.answer && <span className="reading-user-label">{planner ? t('{name} 回答了它的问题', { name: who }) : t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} /></Message>
+              {turn.entry.answer && <span className="reading-user-label">{planner ? t('{name} 回答了它的问题', { name: who }) : t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} rendered={planner} /></Message>
           </TimelineStep>;
         }
         const liveStatus = index === turns.length - 1 ? decorations?.status : null;

@@ -24,4 +24,8 @@
 
 /* A long message folds to three lines; its button sits under the text, in the text's column. */
 .reading-user > p.is-folded { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.reading-user > .reading-user-rendered { overflow-wrap: anywhere; color: var(--flow-ink); }
+.reading-user > .reading-user-rendered.is-folded { max-height: calc(4.5em * var(--reading-text)); overflow: hidden; }
+/* A model's brief is long and headed: its headings stay at the reply's body size so the bubble keeps one focus. */
+.reading-user-rendered .reading-markdown :is(h1, h2, h3, h4, h5, h6) { font-size: calc(14px * var(--reading-text)); }
 .reading-user-more { align-self: flex-start; margin-top: 4px; font-size: calc(12px * var(--reading-text)); color: var(--text-2); }
