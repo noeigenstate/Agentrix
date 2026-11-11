@@ -90,7 +90,8 @@ export function receiptLine({ status, reason }: Receipt) {
 // The route codes the main process gives for a switch; one it does not know is shown as given, never hidden.
 const REASON_WORDS: Record<string, string> = {
   budget_exhausted: '本月 API 预算已用完', credits_exhausted: 'API 额度已用完', rate_limited: 'API 被限流', no_key: '还没有保存 API key',
-  native_cli_required: '未找到原生 Claude Code，无法通过 API 运行', settings: '按设置运行', user: '你选择了终端',
+  native_cli_required: '未找到原生 Claude Code，无法通过 API 运行', native_cli_unverified: 'Claude Code 检查没有通过，无法通过 API 运行',
+  settings: '按设置运行', user: '你选择了终端',
   codex_cli_required: '未找到 Codex 命令行，无法使用原生模式', unsupported_codex_version: '这个 Codex 版本不支持原生模式', terminal_selected: '按设置使用终端',
   terminal_agent_exited: 'Claude Code 在终端里启动后就退出了', terminal_start_failed: '终端里的 Claude Code 没有启动成功',
 };
@@ -206,7 +207,7 @@ export function connectionWord(agent: NativeAgent, connection: (AgentConnection)
 // what failed. The key itself is never in a result; a detail is one plain sentence from the main process.
 const KEY_WORDS: Record<string, string> = { ok: '有效', missing: '没有保存密钥', invalid: '无效', forbidden: '无权限', rate_limited: '被限流', unreachable: '无法连接', error: '检查出错' };
 const KEY_HINTS: Record<string, string> = {
-  missing: '先保存 API key，再测试。', invalid: '请检查密钥是否完整，或是否已在 Anthropic 控制台被撤销。', forbidden: '这个密钥没有权限，请到 Anthropic 控制台检查它的权限。',
+  missing: '先保存 API key，再测试。', invalid: '请检查密钥是否完整，或是否已在 Anthropic 控制台被撤销。', forbidden: '这个密钥没有权限，请到 Anthropic 控制台检查它的权限，或检查网络和代理（所在地区可能不受支持）。',
   rate_limited: '请求太频繁，稍后再测试。', unreachable: '请检查网络或代理设置后重试。', error: '请稍后重试。',
 };
 const MODELS_SHOWN = 5;
@@ -225,20 +226,38 @@ function billingLine(test: ConnectionTest): TestLine {
       : t('无法确认 Claude Code 的计费来源，请重试。') };
 }
 
+// Why a CLI that may be installed did not pass its check; `not_found` (or an older main that gives no reason) asks for an install.
+function cliHint({ reason, found: file, error, elapsedMs, required }: ConnectionTest['cli']) {
+  if (!reason || reason === 'not_found') return t('请安装 Claude Code（需要 ≥ {required}）。', { required });
+  if (!file) return t('检查 Claude Code 时出错，请重试。');
+  if (reason === 'timeout') return typeof elapsedMs === 'number'
+    ? t('找到 {file}，但运行 claude --version {seconds} 秒后仍没有结束，请稍后重试。', { file, seconds: Math.round(elapsedMs / 1000) })
+    : t('找到 {file}，但运行 claude --version 超时，请稍后重试。', { file });
+  const what = reason === 'unreadable' ? t('找到 {file}，但它没有输出版本号。', { file })
+    : error ? t('找到 {file}，但无法运行它（{error}）。', { file, error }) : t('找到 {file}，但无法运行它。', { file });
+  return `${what} ${t('请重新安装 Claude Code，或检查安全软件是否拦截。')}`;
+}
+const anthropicSays = (error: string | null | undefined) => error ? t('Anthropic：{error}', { error }) : null;
+
 export function connectionLines(test: ConnectionTest): TestLine[] {
   const { key, models, cli } = test, keyTone = key.status === 'ok' ? 'ok' : key.status === 'rate_limited' ? 'warn' : 'bad';
   const latency = key.status === 'ok' && typeof key.latencyMs === 'number' ? ` · ${Math.round(key.latencyMs)} ms` : '';
-  const keyHint = key.status === 'ok' ? null : [t(KEY_HINTS[key.status] ?? KEY_HINTS.error), key.status === 'error' ? key.detail : null].filter(Boolean).join(' ');
+  const keyHint = key.status === 'ok' ? null
+    : [t(KEY_HINTS[key.status] ?? KEY_HINTS.error), key.status === 'error' ? key.detail : null, anthropicSays(key.error)].filter(Boolean).join(' ');
   const shown = models?.slice(0, MODELS_SHOWN) ?? [];
-  const modelText = !models ? t('未知') : !models.length ? t('没有可用模型') : shown.join('、') + (models.length > shown.length ? ` ${t('等 {n} 个', { n: models.length })}` : '');
-  const required = cli.required, version = cli.version;
+  const modelText = test.modelsForbidden ? t('无列表权限') : !models ? t('未知') : !models.length ? t('没有可用模型')
+    : shown.join('、') + (models.length > shown.length ? ` ${t('等 {n} 个', { n: models.length })}` : '');
+  const modelHint = test.modelsForbidden ? [t('这个密钥不能读取模型列表，但能正常通过验证。'),
+    test.unavailableModel ? t('模型 {model} 对这个密钥不可用。', { model: test.unavailableModel }) : null, anthropicSays(test.modelsError)].filter(Boolean).join(' ') : null;
+  const required = cli.required, version = cli.version, unverified = cli.status === 'missing' && !!cli.reason && cli.reason !== 'not_found';
   const cliText = cli.status === 'ok' ? (version ? t('版本 {version}（满足 ≥ {required}）', { version, required }) : t('已找到（需要 ≥ {required}）', { required }))
-    : cli.status === 'missing' ? t('未找到') : version ? t('版本 {version} 过低（需要 ≥ {required}）', { version, required }) : t('版本过低（需要 ≥ {required}）', { required });
+    : unverified ? t('检查失败') : cli.status === 'missing' ? t('未找到')
+      : version ? t('版本 {version} 过低（需要 ≥ {required}）', { version, required }) : t('版本过低（需要 ≥ {required}）', { required });
   const pathText = test.path === 'api' ? 'API' : test.path === 'terminal' ? t('终端（订阅）') : t('未知');
   return [
     { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: key.detail },
-    { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: null, title: models?.join('\n') || null },
-    { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? t('请安装 Claude Code（需要 ≥ {required}）。', { required }) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: null },
+    { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: modelHint, title: models?.join('\n') || null },
+    { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: cli.found ?? null },
     // Older callers without the new field retain their rows; the settings page renders absent billing as unknown.
     ...(test.billing ? [billingLine(test)] : []),
     { id: 'path', tone: test.path ? 'ok' : 'warn', label: t('新会话将使用'), text: [pathText, reasonWords(test.reason)].filter(Boolean).join(' · '), hint: null, title: null },

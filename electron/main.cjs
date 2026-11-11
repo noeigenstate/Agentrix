@@ -18,7 +18,7 @@ const { subscriptionLimits } = require('./features/native-session/usage.cjs');
 const { createProjectAccounts } = require('./features/native-session/project-accounts.cjs');
 const { inspectClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
 const { recoveryWarnings, readJson: readNativeJson, writeJson: writeNativeJson } = require('./features/native-session/storage.cjs');
-const { createClaudeRuntime } = require('./features/claude-sdk/index.cjs');
+const { createClaudeRuntime, netRequest } = require('./features/claude-sdk/index.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
 const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
 const { registerWorkspaceIpc } = require('./features/workspace/ipc.cjs');
@@ -1355,8 +1355,9 @@ function readNativeSubscriptionLimits(projectId) {
 
 async function readNativeUsageInputs(projectId) {
   if (projectId) await shellPathReady;
-  const [claudeCli, codexFile] = await Promise.all([inspectClaudeExecutable(), codexExecutable()]);
-  claudeRuntime?.observeCli?.(claudeCli);
+  // The runtime numbers each CLI check: a stale one comes back as the newer result and changes nothing.
+  const claudeCheck = inspectClaudeExecutable();
+  const [claudeCli, codexFile] = await Promise.all([claudeRuntime?.trackCli?.(claudeCheck) ?? claudeCheck, codexExecutable()]);
   const cli = { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } };
   const project = store.projects.find(project => project.id === projectId);
   if (project && project.kind !== 'ssh') {
@@ -1483,7 +1484,7 @@ async function initializeNativeSessions() {
   ({ address: controlAddress } = await dispatchControl.listen());
   const directory = path.join(app.getPath('userData'), 'native-session');
   claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,
-    loadSdk: createSdkLoader({ packaged: app.isPackaged }),
+    loadSdk: createSdkLoader({ packaged: app.isPackaged }), request: netRequest(electronNet),
     connectionSpec: projectId => {
       const project = projectId && store.projects.find(project => project.id === projectId);
       if (projectId && (!project || project.kind === 'ssh')) throw new Error('原生会话仅支持本地项目。');
@@ -1497,7 +1498,8 @@ async function initializeNativeSessions() {
           billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 });
     },
   });
-  claudeRuntime.observeCli?.(await inspectClaudeExecutable());
+  // The first look at the CLI only seeds what later looks compare with; the window does not wait for it.
+  claudeRuntime.trackCli(inspectClaudeExecutable()).catch(() => {});
   const codexFactory = createCodexRuntime({ renderImage: (item, spec) => spec.kind === 'ssh' ? null : generatedPreview(item, spec), translate: t,
     launchRemote: async (spec, { signal, readOnly = false }) => {
       const project = findProject(spec.terminalId);

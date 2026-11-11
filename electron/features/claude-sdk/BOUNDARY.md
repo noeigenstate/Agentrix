@@ -12,9 +12,9 @@ Project hooks remain enabled for workers, matching the trusted project's CLI beh
 - `electron/features/claude-sdk/**`
 
 ## Interface
-- `createClaudeRuntime` (`electron/features/claude-sdk/index.cjs`) — injected SDK session factory, credentials, usage and availability
+- `createClaudeRuntime` (`electron/features/claude-sdk/index.cjs`) — injected SDK session factory, credentials, usage and availability; the file also exports `netRequest`, which gives the connection test Electron net (the session's proxy) in the shape of https.request
 - `createSdkLoader` (`electron/features/claude-sdk/runtime.cjs`) — deferred ESM loading from development or unpacked production paths
-- `inspectClaudeExecutable` (`electron/features/claude-sdk/executable.cjs`) — whether the installed native Claude Code exists and meets the minimum version; main reads it to say what a new session takes
+- `inspectClaudeExecutable` (`electron/features/claude-sdk/executable.cjs`) — whether the installed native Claude Code exists and meets the minimum version; main reads it to say what a new session takes. A missing result names why: none found, or the file found whose version check timed out, failed to run or printed no version; the check's deadline yields to an exit already waiting while main was busy, and output that never closes is let go after a short grace, so the check always ends
 - `commands` (`electron/features/claude-sdk/session.cjs`) — a native-safe command catalog from the live SDK, its replacement pushes or the shared file catalog before a query exists; listing never starts a query
 
 ## May import

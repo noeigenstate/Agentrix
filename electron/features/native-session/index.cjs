@@ -19,11 +19,11 @@ function createNativeSessions(options) {
   async function testConnection(projectId) {
     if (options.validateProject?.(projectId)?.kind === 'ssh') projectId = undefined;
     const result = await options.claude.testConnection({ ...settings.get(), projectId }), config = settings.get();
-    const failures = { missing: 'no_key', invalid: 'invalid_key', forbidden: 'API 密钥没有模型列表权限。',
+    const failures = { missing: 'no_key', invalid: 'invalid_key', forbidden: 'API 密钥没有调用权限。',
       rate_limited: 'rate_limited', unreachable: '无法连接 Anthropic API。', error: '无法完成 API 连接检查。' };
     const reason = result.key.status !== 'ok' ? failures[result.key.status]
       : result.cli.status === 'too_old' ? 'Claude Code 版本过低，请升级到 2.1.317 或更高'
-        : result.cli.status === 'missing' ? 'native_cli_required'
+        : result.cli.status === 'missing' ? (result.cli.reason && result.cli.reason !== 'not_found' ? 'native_cli_unverified' : 'native_cli_required')
           : result.billing?.status !== 'ok' ? result.reason || '无法确认 Claude Code 的计费来源。' : null;
     const selection = choosePath({ agent: 'claude', ...config,
       apiState: reason ? { reason } : options.claude.apiState(config.monthlyBudgetUsd, projectId) });

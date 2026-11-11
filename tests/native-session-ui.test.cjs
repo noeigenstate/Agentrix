@@ -1779,6 +1779,26 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   const odd = connectionLines({ ...good, models: [], cli: { status: 'missing', version: null, required }, path: null });
   assert.deepEqual(odd.map(line => [line.tone, line.text]), [['ok', '有效 · 182 ms'], ['warn', '没有可用模型'], ['bad', '未找到'], ['warn', '未知']]);
   assert.match(odd[2].hint, /请安装 Claude Code（需要 ≥ 2\.1\.317）/);
+  // Anthropic's own reason follows the refusal; a key that may not list models but answered the token count reads as working.
+  const refused = connectionLines({ ...good, key: { status: 'forbidden', detail: 'x', latencyMs: 1, error: 'permission_error: key is disabled' }, models: null })[0];
+  assert.equal(refused.text, '无权限'); assert.match(refused.hint, /检查网络和代理（所在地区可能不受支持）。 Anthropic：permission_error: key is disabled$/);
+  const unlisted = connectionLines({ ...good, models: null, modelsForbidden: true, modelsError: 'permission_error: no list' });
+  assert.deepEqual([unlisted[0].tone, unlisted[1].tone, unlisted[1].text], ['ok', 'warn', '无列表权限']);
+  assert.equal(unlisted[1].hint, '这个密钥不能读取模型列表，但能正常通过验证。 Anthropic：permission_error: no list');
+  assert.equal(connectionLines({ ...good, models: null, modelsForbidden: true, modelsError: null, unavailableModel: 'claude-x-1' })[1].hint,
+    '这个密钥不能读取模型列表，但能正常通过验证。 模型 claude-x-1 对这个密钥不可用。');
+  // A CLI that was found but failed its check says how, with the file, instead of 未找到.
+  const file = 'C:\\Users\\u\\.local\\bin\\claude.exe', cliLine = cli => connectionLines({ ...good, cli: { status: 'missing', version: null, required, ...cli } })[2];
+  assert.deepEqual([cliLine({ reason: 'timeout', found: file }).text, cliLine({ reason: 'timeout', found: file }).title], ['检查失败', file]);
+  assert.equal(cliLine({ reason: 'timeout', found: file }).hint, `找到 ${file}，但运行 claude --version 超时，请稍后重试。`);
+  assert.equal(cliLine({ reason: 'timeout', found: file, elapsedMs: 11500 }).hint, `找到 ${file}，但运行 claude --version 12 秒后仍没有结束，请稍后重试。`);
+  assert.equal(cliLine({ reason: 'failed', found: file, error: 'EPERM' }).hint, `找到 ${file}，但无法运行它（EPERM）。 请重新安装 Claude Code，或检查安全软件是否拦截。`);
+  assert.equal(cliLine({ reason: 'failed', found: file }).hint, `找到 ${file}，但无法运行它。 请重新安装 Claude Code，或检查安全软件是否拦截。`);
+  assert.equal(cliLine({ reason: 'unreadable', found: file }).hint, `找到 ${file}，但它没有输出版本号。 请重新安装 Claude Code，或检查安全软件是否拦截。`);
+  assert.equal(cliLine({ reason: 'failed' }).hint, '检查 Claude Code 时出错，请重试。');
+  assert.deepEqual([cliLine({ reason: 'not_found' }).text, cliLine({ reason: 'not_found' }).title], ['未找到', null]);
+  assert.equal(connectionLines({ ...good, cli: { status: 'missing', version: null, required, reason: 'failed' }, path: 'terminal', reason: 'native_cli_unverified' })[3].text,
+    '终端（订阅） · Claude Code 检查没有通过，无法通过 API 运行');
   assert.doesNotMatch(JSON.stringify([lines, bad, odd]), /sk-ant/);
 });
 

@@ -32,6 +32,12 @@ for (const [agent, config, status, cli, expected] of [
 ]) test(`next path: ${agent} ${JSON.stringify(config)} ${status} CLI ${cli}`, () => {
   assert.deepEqual(nextPath(agent, config, { status }, { status: cli }), { path: expected[0], reason: expected[1] });
 });
+test('next path: a Claude Code found but not verified reads as unverified, the way the connection test words it', () => {
+  for (const reason of ['timeout', 'failed', 'unreadable']) {
+    assert.deepEqual(nextPath('claude', {}, { status: 'ready' }, { status: 'missing', reason }), { path: 'terminal', reason: 'native_cli_unverified' });
+  }
+  assert.deepEqual(nextPath('claude', {}, { status: 'ready' }, { status: 'missing', reason: 'not_found' }), { path: 'terminal', reason: 'cli_missing' });
+});
 
 test('subscription limits preserve milliseconds, missing windows, credits, source and freshness', () => {
   const account = { at: 1000, source: 'fixture', limits: [{ minutes: 10080, percent: 42, resetsAt: 1234567890000 }] };
@@ -97,7 +103,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
     randomUUID: require('node:crypto').randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
     app: { getPath: () => directory, isPackaged: false }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
-    createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }),
+    createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }), netRequest: () => forbidden, electronNet: {},
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
     generatedPreview: forbidden, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     require: name => {

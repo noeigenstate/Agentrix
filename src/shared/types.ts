@@ -156,9 +156,16 @@ export type TitlebarStyle = {
 export type TitlebarState = { view: TitlebarView; decisions: number; style?: TitlebarStyle };
 export type ConnectionTest = {
   checkedAt: number;
-  key: { status: 'ok' | 'missing' | 'invalid' | 'forbidden' | 'rate_limited' | 'unreachable' | 'error'; detail: string | null; latencyMs: number | null };
+  // `error` is Anthropic's own reason for refusing the key, with the key removed.
+  key: { status: 'ok' | 'missing' | 'invalid' | 'forbidden' | 'rate_limited' | 'unreachable' | 'error'; detail: string | null; latencyMs: number | null; error?: string | null };
   models: string[] | null;
-  cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string };
+  // The key may not list models yet still works (a free token count answered); `modelsError` is Anthropic's reason,
+  // `unavailableModel` the model the count asked about when the key may not use it.
+  modelsForbidden?: boolean; modelsError?: string | null; unavailableModel?: string;
+  // A missing CLI says why: none found, or the file `found` whose version check timed out (after `elapsedMs`), failed
+  // (`error`) or printed no version.
+  cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string;
+    reason?: 'not_found' | 'timeout' | 'failed' | 'unreadable'; found?: string; error?: string; elapsedMs?: number };
   billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null };
   path: 'api' | 'terminal' | null; reason: string | null;
 };

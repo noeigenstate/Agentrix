@@ -313,7 +313,8 @@ function createClaudeSession(spec, emit, dependencies) {
     } catch (error) {
       if (stopping || closed) throw new Error('会话已停止。');
       const message = error.outdated ? 'Claude Code 版本过低，请升级到 2.1.317 或更高'
-        : error.code === 'native_cli_required' ? '未找到原生 Claude Code，无法通过 API 运行' : 'Claude API 会话无法启动。';
+        : error.unverified ? 'Claude Code 检查没有通过，无法通过 API 运行'
+          : error.code === 'native_cli_required' ? '未找到原生 Claude Code，无法通过 API 运行' : 'Claude API 会话无法启动。';
       const failure = error.code === 'native_cli_required' ? Object.assign(new Error(message), { code: error.code, beforeInput: true }) : startupFailure(error);
       publish('error', { code: error.outdated ? 'native_cli_outdated' : failure.code, message: failure.message, retryable: false, willRetry: false, stage: 'startup' });
       setState('failed', failure.code);
