@@ -13,7 +13,7 @@ function compile(basename, frame) {
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
   const stubs = {
-    '../../shared/i18n': { t: text => text }, '../../shared/model-name': require('../src/shared/model-name.ts'), '../../shared/useNow': { useNow: () => 10000 },
+    '../../shared/i18n': { t: text => text }, '../../shared/model-name': require('../src/shared/model-name.ts'), '../../shared/call-model-name': { callModelName: ({ model }) => model }, '../../shared/useNow': { useNow: () => 10000 },
     '../terminal/terminal-screen.ts': { ...require('../src/features/terminal/terminal-screen.ts'), readScreen: () => frame, subscribeScreen: () => () => {} },
     '../home/send-to-agent': { sendToAgent: () => assert.fail('state display never sends input') },
     './AgentBrandIcon': require('../src/features/agents/AgentBrandIcon.ts'), './action-text': { actionText: () => 'step' },

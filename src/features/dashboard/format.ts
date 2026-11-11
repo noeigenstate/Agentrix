@@ -2,6 +2,7 @@
 // never 0. Pure functions, so the page and its tests agree on one wording.
 import type { DashboardFindingCategory, DashboardKpis, DashboardModelRow, DashboardRange, DashboardWeight } from '../../shared/dashboard-types';
 import { t } from '../../shared/i18n';
+import { callModelName } from '../../shared/call-model-name';
 
 export const NONE = '—';
 
@@ -62,11 +63,13 @@ export const ALIAS = /^(opus|sonnet|haiku|fable)$/i;
 
 // "claude-opus-5-5" and the alias "opus" are Opus, "gpt-6.1-sol" is Sol; an id in none of these shapes stands for itself.
 export function modelShort(model: string) {
+  if (model === 'unreported') return callModelName({ model: null });
   const name = CLAUDE.exec(model)?.[1] ?? GPT.exec(model)?.[1] ?? ALIAS.exec(model)?.[1];
   return name ? capital(name.toLowerCase()) : model;
 }
 
 export function modelLabel(model: string) {
+  if (model === 'unreported') return callModelName({ model: null });
   const claude = CLAUDE.exec(model);
   if (claude) return `${capital(claude[1])} ${claude[2]}.${claude[3]}`;
   return GPT.test(model) ? `${modelShort(model)} · ${model}` : modelShort(model);

@@ -9,6 +9,9 @@ const { findClaudeSession } = require('../../claude-sessions.cjs');
 const ENTRY_LIMIT = 400, FINAL_LIMIT = 20, FINAL_TTL = 30 * 60000, PUSH_INTERVAL = 250;
 const time = value => Number.isFinite(value) && value >= 0 ? value : null;
 const stateOf = call => call.done ? call.dispatch && !call.failure ? 'done' : 'reviewing' : call.preparing ? 'preparing' : 'running';
+// The model a call is shown with. A dispatched worker that has not reported one ('unreported') shows the model the lead
+// asked for, marked unconfirmed, or none; the placeholder itself stays in the records.
+const shownModel = call => call.dispatch && call.model === 'unreported' ? { model: call.requestedModel ?? null, modelUnconfirmed: true } : { model: call.model };
 const rootValue = value => typeof value === 'function' ? value() : value;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const ownsRecord = (call, record) => call.agent === 'Codex'
@@ -149,7 +152,7 @@ class SubagentFeeds {
     if (!entry) return;
     entry.everReadable ||= readable;
     call.viewable = this.local && (readable || entry.completedAt != null && entry.everReadable);
-    const header = { id: call.id, agent: call.agent, model: call.model, effort: call.effort ?? null, fast: call.fast ?? null,
+    const header = { id: call.id, agent: call.agent, ...shownModel(call), effort: call.effort ?? null, fast: call.fast ?? null,
       title: call.title, role: call.role, state: stateOf(call), failure: call.failure || null,
       startedAt: time(call.startedAt), endedAt: time(call.finishedAt), rate: call.rate ? { ...call.rate } : null };
     const signature = JSON.stringify([header, call.viewable]);
@@ -281,4 +284,4 @@ class SubagentFeeds {
   }
 }
 
-module.exports = { SubagentFeeds, stateOf, time, rootValue, ENTRY_LIMIT, FINAL_LIMIT, FINAL_TTL, PUSH_INTERVAL };
+module.exports = { SubagentFeeds, stateOf, shownModel, time, rootValue, ENTRY_LIMIT, FINAL_LIMIT, FINAL_TTL, PUSH_INTERVAL };

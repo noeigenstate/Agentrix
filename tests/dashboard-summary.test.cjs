@@ -225,6 +225,7 @@ test('unreported values remain null and duplicate dispatch ends do not inflate r
   const row = model(result, 'unreported');
   for (const key of ['firstPassRate', 'avgActiveMs', 'tokensPerSecond', 'costUsd', 'quotaPercent']) assert.equal(row[key], null, key);
   assert.equal(result.speed[0].tokensPerSecond, null);
+  assert.equal(result.models.filter(item => item.model === 'unreported').length, 1, 'old records without a model form one bucket');
 });
 
 test('latest issues snapshots distinguish zero from historical absence and supply changed-plan suggestions', () => {

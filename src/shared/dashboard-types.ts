@@ -33,7 +33,7 @@ export type DashboardDailyPoint = {
   day: string; model: string; runs: number; firstPass: number; costUsd: number | null; activeMs: number | null;
 };
 export type DashboardLiveRun = {
-  id: string; project: string | null; agent: string; model: string; title: string; role: string;
+  id: string; project: string | null; agent: string; model: string; modelUnconfirmed?: boolean; title: string; role: string;
   startedAt: number | null; tokensPerSecond: number | null;
 };
 export type DashboardWeight = { model: string; kind: string; from: number; to: number };

@@ -224,9 +224,9 @@ function eventSink(filename) {
     socket.once('connect', () => socket.end(JSON.stringify({ ...event, projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey }) + '\n'));
   }
   return event => {
-    // A slow/disappeared app cannot retain unlimited rate reports.
-    if (event.type === 'dispatch-rate') {
-      const index = queue.findIndex(value => value.type === 'dispatch-rate');
+    // A slow/disappeared app cannot retain unlimited rate or routing reports; the newest of each supersedes the older.
+    if (['dispatch-rate', 'dispatch-routing'].includes(event.type)) {
+      const index = queue.findIndex(value => value.type === event.type);
       if (index >= 0) queue.splice(index, 1);
     }
     queue.push(event); drain();
@@ -490,7 +490,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   const workerEnv = workerEnvironment(env);
-  let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, endSent = false;
+  let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
   let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
@@ -588,7 +588,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const assignment = () => ({ type: 'dispatch-start', id, helperPid: process.pid, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
     ...billing(),
     kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
-    cwd: options.cwd, brief: options.brief, out: options.out, sessionId: output.sessionId, startedAt: Date.now() });
+    cwd: options.cwd, brief: options.brief, out: options.out, requestedModel: options.model, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
     if (unconfirmed || started) return;
     unconfirmed = true; signal(`failed to start ${id}: ${reason.replace(/[\r\n]+/g, ' ')}`);
@@ -623,7 +623,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (!started) {
       started = true;
       signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
-      send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
+      sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
       for (const fact of inputFacts.values()) send(fact);
     }
     if (final || rateTimer) return;
@@ -634,7 +634,16 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       send({ type: 'dispatch-rate', id, ...lastRate });
     }, rateInterval);
   };
-  let output = new WorkerOutput(argv[0], () => confirm());
+  // A model reported after the start went out (app-server's turn can start before its session file names the model, or
+  // the server reroutes) is sent on, so the pane's row follows what the worker runs; an unknown model is never sent.
+  const reroute = () => {
+    if (!started || output.model === null) return;
+    const route = output.routing();
+    if (['model', 'effort', 'fast'].every(key => route[key] === sentRoute[key])) return;
+    sentRoute = route; send({ type: 'dispatch-routing', id, ...route });
+  };
+  const changed = () => { confirm(); reroute(); };
+  let output = new WorkerOutput(argv[0], changed);
   output.onInput = cliInput;
   let rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
   const stop = (kind, requested = true) => {
@@ -890,7 +899,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       } else if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && !event.replay) {
         const fact = workerInput(event, controlInputs, resumeControlIds, resumeInputId);
         if (fact) recordInput(fact.entryId, fact.inputId, fact.origin, fact.ownerMessageIds);
-      } else if (event.type === 'routing.updated' && event.payload.observed) output.settings(event.payload.observed);
+      } else if (event.type === 'routing.updated') {
+        // Codex app-server names the model it runs in effective (thread start or resume, settings, reroute); its observed stays empty.
+        const { observed, effective } = event.payload;
+        output.settings({ ...observed, model: observed?.model ?? effective?.model }); reroute();
+      }
       else if (event.type === 'input.receipt' && controlReceipts.has(event.payload.clientMessageId)) void recordReceipt(event.payload.clientMessageId, event.payload.status).catch(() => {});
       else if (event.type === 'input.receipt' && event.payload.clientMessageId === resumeInputId) {
         for (const id of resumeControlIds) void recordReceipt(id, event.payload.status).catch(() => {});
@@ -968,7 +981,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     for (;;) {
       const effective = resumeSession ? { ...options, resume: resumeSession } : options;
       if (resumeSession) {
-        const nextOutput = new WorkerOutput(options.agent, () => confirm());
+        const nextOutput = new WorkerOutput(options.agent, changed);
         nextOutput.onInput = cliInput;
         const nextRollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), nextOutput);
         if (options.agent === 'codex') await nextRollout.prepare(resumeSession);

@@ -5,7 +5,7 @@ const { TokenRates, emptyRate } = require('./token-rate.cjs');
 const { agentSettings } = require('./agent-settings.cjs');
 const { taskKind } = require('../dashboard/records-routing.cjs');
 const { containedFile } = require('../../session-files.cjs');
-const { SubagentFeeds, stateOf, time, rootValue } = require('./subagent-feed.cjs');
+const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subagent-feed.cjs');
 
 const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -46,7 +46,7 @@ class AgentCalls {
   dispose() { this.reset(); this.finishedIds.clear(); }
   running() {
     return [...this.calls.values()].filter(call => !call.done && !call.reviewed).map(call => ({
-      id: call.id, agent: call.agent, model: call.model, title: call.title, role: call.role,
+      id: call.id, agent: call.agent, ...shownModel(call), title: call.title, role: call.role,
       startedAt: time(call.startedAt), rate: call.rate ? { ...call.rate } : null,
     }));
   }
@@ -55,7 +55,7 @@ class AgentCalls {
     for (const call of this.calls.values()) {
       if (call.reviewed || call.hidden && call.dispatch && !call.failure) continue;
       const route = { agent: call.agent, provider: call.dispatch ? null : provider ?? null,
-        ...(call.unconfirmed && call.declared ? call.declared : { model: call.model, effort: call.effort, fast: call.fast }) };
+        ...(call.unconfirmed && call.declared ? call.declared : { ...shownModel(call), effort: call.effort, fast: call.fast }) };
       const key = JSON.stringify(route);
       if (!groups.has(key)) groups.set(key, { ...route, preparing: 0, running: 0, reviewing: 0, tasks: [], items: [], rate: emptyRate(false) });
       const group = groups.get(key);
@@ -80,7 +80,7 @@ class AgentCalls {
     if (event.type === 'dispatch-start') {
       if (call || this.calls.size >= 1024) return false;
       const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
-        model: event.model, effort: event.effort, fast: event.fast, declared: event.declared,
+        model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
         planner: event.planner || { kind: 'planner', agent: null, model: null },
         kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
@@ -100,6 +100,12 @@ class AgentCalls {
     if (event.type === 'dispatch-receipt') {
       const entry = this.feeds.owned(call);
       if (entry) { entry.dirty = true; this.feeds.update(call); }
+      return true;
+    }
+    // What the worker reported after its start: a Codex worker can name its model only once its turn runs.
+    if (event.type === 'dispatch-routing') {
+      Object.assign(call, { model: event.model, effort: event.effort, fast: event.fast });
+      this.feeds.update(call);
       return true;
     }
     if (event.type === 'dispatch-rate') {

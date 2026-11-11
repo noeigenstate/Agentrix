@@ -15,11 +15,12 @@ function validDispatch(event) {
   if (event.type === 'dispatch-receipt') return typeof event.messageId === 'string' && /^[\w-]{1,160}$/.test(event.messageId)
     && ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(event.status);
   if (!routing(event)) return false;
+  if (event.type === 'dispatch-routing') return true;
   if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role) &&
     line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) &&
     (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
     (line(event.sessionId, 160) || event.unconfirmed === true && event.sessionId === null) &&
-    number(event.startedAt) && (event.declared === undefined || routing(event.declared)) &&
+    number(event.startedAt) && (event.declared === undefined || routing(event.declared)) && (event.requestedModel == null || line(event.requestedModel, 160)) &&
     (event.kind == null || TASK_KINDS.includes(event.kind)) &&
     (event.meeting == null || typeof event.meeting === 'string' && /^[\w.-]{1,64}$/.test(event.meeting)) &&
     (event.skipMeeting == null || line(event.skipMeeting, 1024));

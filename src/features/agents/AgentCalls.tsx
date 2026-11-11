@@ -1,6 +1,7 @@
 import { CheckCircle, Circle, CircleNotch, Record as RecordDot, WarningCircle } from '@phosphor-icons/react';
 import type { AgentCall, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
+import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
@@ -64,8 +65,8 @@ export function CallsCard({ calls, terminalId }: { calls: AgentCall[]; terminalI
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     <ul className="activity-call-groups">
       {groups.map(({ call, items }) => {
-        const name = modelName(call.model);
-        return <li key={JSON.stringify([call.agent, call.provider, call.model, call.effort, call.fast])}>
+        const name = callModelName(call);
+        return <li key={JSON.stringify([call.agent, call.provider, call.model, call.modelUnconfirmed, call.effort, call.fast])}>
           <ul className="activity-call-rows">
             <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={call.rate} />
             {items.slice(0, MAX_CALL_ITEMS).map(item => {

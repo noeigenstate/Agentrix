@@ -5,12 +5,12 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import { ArrowDown, X } from '@phosphor-icons/react';
 import type { AgentIntervention, SubagentFeed } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import { modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { ConversationFeed } from '../reading/ConversationFeed';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { elapsedClock } from './ActivityPane';
+import { callModelName } from '../../shared/call-model-name';
 import { CALL_STATES, failureWord, rateValue } from './AgentCalls';
 import { SubagentInput } from './SubagentInput';
 import { type Receipt, receiptLine } from '../native-session/native-words';
@@ -66,7 +66,7 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
     event.stopPropagation();
     if ((event.target as HTMLElement).tagName === 'TEXTAREA') body.current?.focus(); else onClose();
   };
-  const name = feed ? modelName(feed.model) : t('子 agent'), Mark = feed?.agent === 'Codex' ? CodexLogo : ClaudeLogo;
+  const name = feed ? callModelName(feed) : t('子 agent'), Mark = feed?.agent === 'Codex' ? CodexLogo : ClaudeLogo;
   // The task first, then the model: two splits of one model are told apart by their task, in the header and in every accessible name.
   const title = feed?.title ?? '', who = title ? `${title} · ${name}` : name;
   // A finished Task subagent is 'reviewing' but has an end time; either way nothing more can be said to it.

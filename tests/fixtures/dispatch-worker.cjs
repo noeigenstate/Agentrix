@@ -43,16 +43,25 @@ function appServer(fixture) {
       return send({ id: request.id, error: { code: -32600, message: 'Invalid request: missing field `threadId`' } });
     let result = {};
     if (request.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
+    // fixture.thread: what the response adds, such as the model the thread runs as.
     if (['thread/start', 'thread/resume'].includes(request.method)) result = { thread: { id: threadId, turns: [] }, cwd: process.cwd(),
-      sandbox: { type: params.sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' } };
+      sandbox: { type: params.sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' }, ...fixture.thread };
     if (request.method === 'turn/start') {
       const brief = params.input.filter(item => item.type === 'text').map(item => item.text).join('\n');
       const capture = () => fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid, requests }));
       capture();
       let replied = false, failed = null;
+      const begin = () => {
+        if (replied) return;
+        replied = true; send({ id: request.id, result: { turn: { id: turnId, status: 'inProgress' } } });
+        notify('turn/started', { turn: { id: turnId } });
+      };
       for (const entry of fixture.lines || []) {
         if (entry.delay) await delay(entry.delay);
         if (entry.mark) { fs.writeFileSync(entry.mark, String(Date.now())); continue; }
+        // The turn starts before its session file says anything, as app-server's own turn/started can.
+        if (entry.turnStarted) { begin(); continue; }
+        if (entry.notify) { notify(entry.notify.method, { turnId, ...entry.notify.params }); continue; }
         if (entry.write) { fs.mkdirSync(path.dirname(path.resolve(entry.write)), { recursive: true }); fs.writeFileSync(path.resolve(entry.write), entry.text || ''); continue; }
         // The worker's own request (a question, a form, an approval): it waits for the reply, which joins the captured requests.
         if (entry.request) {
@@ -64,10 +73,7 @@ function appServer(fixture) {
         if (entry.rollout || entry.rolloutRaw) {
           const folder = path.join(process.env.CODEX_HOME, 'sessions/2026/01/01'); fs.mkdirSync(folder, { recursive: true });
           fs.appendFileSync(path.join(folder, `rollout-fixture-${entry.rolloutSession || threadId}.jsonl`), entry.rolloutRaw || JSON.stringify(entry.rollout) + '\n');
-          if (entry.rollout?.type === 'turn_context' && !replied) {
-            replied = true; send({ id: request.id, result: { turn: { id: turnId, status: 'inProgress' } } });
-            notify('turn/started', { turn: { id: turnId } });
-          }
+          if (entry.rollout?.type === 'turn_context') begin();
           continue;
         }
         if (entry.stderr) process.stderr.write(entry.raw || JSON.stringify(entry.record) + '\n');

@@ -2,6 +2,7 @@
 // how fast it writes. Live calls are global; a project filter keeps only the calls known to belong to that project.
 import type { DashboardSummary } from '../../shared/dashboard-types';
 import { t } from '../../shared/i18n';
+import { callModelName } from '../../shared/call-model-name';
 import { Marker } from './Charts';
 import { clock, modelLabel, modelShort, speed } from './format';
 import { useModels } from './model-look';
@@ -14,7 +15,7 @@ export function LiveStrip({ live, projectId, now }: { live: DashboardSummary['li
   return <Panel title={t('正在运行')} hint={hint}>
     {running.length === 0 ? <p className="empty-line">{t('现在没有子任务在运行')}</p>
       : <div className="live-list">{running.map(run => <div key={run.id} className={`live-item ${of(run.model).dim}`}>
-        <div className="l1"><Marker model={run.model} /><span title={modelLabel(run.model)}>{modelShort(run.model)}</span><span className="tag">{t(run.role)}</span></div>
+        <div className="l1"><Marker model={run.model} /><span title={run.modelUnconfirmed ? callModelName(run) : modelLabel(run.model)}>{run.modelUnconfirmed ? callModelName(run) : modelShort(run.model)}</span><span className="tag">{t(run.role)}</span></div>
         <div className="r1">{t('已运行')} <span>{clock(run.startedAt === null ? null : now - run.startedAt)}</span></div>
         <div className="l2" title={run.title}>{run.title}</div>
         <div className="r2"><b>{speed(run.tokensPerSecond)}</b></div>
