@@ -217,6 +217,18 @@ test('candidate previews use the requested theme and automatic selection keeps c
   assert.equal((await context.projectImageCandidates('project', 1)).candidates[0].image, svg);
 });
 
+test('an automatic picture is stored canonical: a themed copy is rejected, and the window re-themes it for display', t => {
+  const { store, project } = fixture(t);
+  const light = projectSvgForTheme(svg, 'light');
+  assert.notEqual(light, svg);
+  assert.throws(() => store.setProjectImage(project.id, light, 'auto'));
+  store.setProjectImage(project.id, svg, 'auto');
+  assert.equal(store.projects[0].image, svg);
+  // main.cjs asks for automatic candidates without a theme, so what it saves is the canonical SVG.
+  const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  assert.match(main, /listCandidates: folder => projectImageCandidates\(folder, 1\),/);
+});
+
 
 test('automatic, custom and number modes round-trip and legacy pictures keep their implicit custom mode', t => {
   const { store, project, file } = fixture(t);
