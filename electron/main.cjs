@@ -124,6 +124,8 @@ let macTitlebar = null;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
 function windowBackgroundColor() { return store.settings.theme === 'light' ? '#f8f9fb' : '#181818'; }
+// A first launch (no workspace file) follows this; read before applyNativeTheme, which overrides it on macOS.
+function systemTheme() { try { return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'; } catch { return 'light'; } }
 // macOS draws its own window parts (the full-screen title strip, menus, dialogs) in the system appearance unless given the theme's.
 function applyNativeTheme() { if (process.platform === 'darwin') nativeTheme.themeSource = store.settings.theme === 'light' ? 'light' : 'dark'; }
 function updateStoreSettings(patch) {
@@ -2003,7 +2005,7 @@ if (!app.requestSingleInstanceLock()) {
     const shellIcon = prepareWindowIcon({ app, shell, root, installed, appUserModelId, relaunchDisplayName });
     const shellIntegration = prepareShellIntegration({ app, integrationDir, agents });
     zshStartup = shellIntegration.startup; shellPathReady = shellIntegration.ready;
-    store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'));
+    store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'), { systemTheme: systemTheme() });
     if (store.settings.restoreSessions && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_RESTORE === '1')) {
       for (const project of store.projects) for (const record of [project, ...(project.terminals || [])]) {
         if (record.restore?.codex === true) void prepareReading(record.id, { ...record.restore, agent: record.restore.agent || 'codex' });
