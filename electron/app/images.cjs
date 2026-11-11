@@ -112,9 +112,12 @@ function registerImageIpc({ handle, app, findProject, getSession, clipboard, nat
     let image, bytes;
     if (project?.kind === 'ssh') image = nativeImage.createFromBuffer(bytes = await remoteImage(projectId, file));
     else {
+      // The path is judged before the file system is touched: a network path (\\host\share) is refused unread, so a
+      // link in a reply cannot make this computer authenticate to another.
       const local = project && !isGeneratedImage(file) ? resolveRevealPathText(project.path, file) : file;
+      if (!(isGeneratedImage(local) || isImageFile(local) && path.isAbsolute(local))) throw new Error('只能显示图片文件。');
       const stat = fs.statSync(local, { throwIfNoEntry: false });
-      if (!(isGeneratedImage(local) || isImageFile(local) && path.isAbsolute(local)) || !stat?.isFile()) throw new Error('只能显示图片文件。');
+      if (!stat?.isFile()) throw new Error('只能显示图片文件。');
       image = nativeImage.createFromPath(local);
       if (image.isEmpty() && stat.size <= REMOTE_IMAGE_BYTES) bytes = await fs.promises.readFile(local);
     }

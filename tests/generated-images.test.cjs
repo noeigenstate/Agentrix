@@ -274,3 +274,16 @@ test('a WebP picture this computer cannot decode is shown from its own bytes, wi
   assert.equal(rawPicture(webp, 4), null, 'larger than the limit');
   assert.equal(rawPicture(Buffer.from('\x89PNG\r\n\x1a\n')), null, 'only WebP');
 });
+
+test('the picture popup refuses a network path before it touches the file system', async t => {
+  const { project } = generatedFolder(t), { registerImageIpc } = require('../electron/app/images.cjs'), handlers = {};
+  registerImageIpc({ handle: (name, handler) => { handlers[name] = handler; }, app: {}, findProject: () => ({ kind: 'local', path: project }), getSession() {}, clipboard: {}, isGeneratedImage,
+    nativeImage: { createFromPath: () => assert.fail('nothing is decoded'), createFromBuffer: () => assert.fail('nothing is decoded') }, remoteImage: () => assert.fail('a local project is not read over SSH') });
+  const stat = t.mock.method(fs, 'statSync'), read = t.mock.method(fs.promises, 'readFile');
+  // Windows reads //host as a share too; elsewhere it is an ordinary folder and only its backslash form is a share.
+  const shares = ['\\\\host\\share\\a.png', '\\\\?\\UNC\\host\\share\\a.png', '\\\\.\\pipe\\a.png', '\\\\host\\share\\generated_images\\t\\a.png', '//host/share/generated_images/t/a.png'];
+  for (const file of shares) for (const projectId of ['local', undefined]) await assert.rejects(handlers['agent:image'](file, projectId), /只能显示图片文件|无效的链接/, file);
+  if (process.platform === 'win32') await assert.rejects(handlers['agent:image']('//host/share/a.png', 'local'), /只能显示图片文件/);
+  assert.deepEqual(stat.mock.calls.map(call => call.arguments[0]), [], 'no network path is stat-ed');
+  assert.equal(read.mock.callCount(), 0);
+});

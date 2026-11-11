@@ -194,6 +194,9 @@
 .reading-generated-copy button { padding: 0; border: 0; border-radius: 4px; background: none; font: inherit; color: var(--text-2); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; overflow-wrap: anywhere; text-align: left; }
 .reading-generated-copy button:hover { color: var(--text-1); }
 .reading-generated-copy button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+/* The load-picture button is a line of text; its hit area reaches 32px high around it without changing how it looks. */
+.reading-generated-copy .reading-generated-load { position: relative; }
+.reading-generated-copy .reading-generated-load::after { content: ''; position: absolute; inset: -7px -8px; }
 
 /* A picture on its way: an indeterminate bar, the seconds so far and how long it usually takes. */
 .reading-generating { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 12px; row-gap: 4px; width: min(100%, 520px); margin: 8px 0 12px; padding: 16px; border-radius: 12px; background: var(--bg-card); font-size: calc(13px * var(--reading-text)); color: var(--text-1); }
