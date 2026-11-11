@@ -3027,5 +3027,7 @@
   "原生模式里，工具步骤显示做了什么和对应的文件或命令，不贴出输出内容；失败时附一行原因，结果没能确认的标上问号。": "In native mode, tool steps show what was done and the file or command involved, without pasting the output; a failure adds one line with the reason, and a step whose result could not be confirmed is marked with a question mark.",
   "SSH 连接": "SSH connection",
   "修复 1.4.0 打开 SSH 项目时提示 Invalid dispatch modules、会话无法启动的问题。": "Fixed the Invalid dispatch modules error that kept sessions from starting when opening an SSH project in 1.4.0.",
-  "此前测试版的更新": "Earlier betas of this version"
+  "此前测试版的更新": "Earlier betas of this version",
+  "Codex app-server 连接失败，请重试。原因": "The Codex app-server connection failed. Please retry. Cause",
+  "远端启动 Codex 超时，请重试。": "Starting Codex on the remote host timed out. Please retry."
 }

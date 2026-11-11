@@ -789,14 +789,27 @@ class CodexActivityReader:
             read_transcript(self, source, size, self.record)
             return dict(self.snapshot) if self.offset >= size else None
 
+# Marked lines, because a login shell's startup files may print anything before them.
+CODEX_LOOKUP = r'''printf '\nAGENTRIX_CODEX=%s\nAGENTRIX_PATH=%s\n' "$(type -P codex)" "$PATH"'''
+
 def resolve_codex(env):
-    # SSH's command shell does not load the login/interactive PATH used by nvm and volta.
-    result = subprocess.run(["/bin/bash", "-lic", "type -P codex"], env=dict(env),
+    """The Codex executable and the PATH it runs with, both from the login shell."""
+    # SSH's command shell does not load the login/interactive PATH used by nvm and volta. An npm Codex is a
+    # "#!/usr/bin/env node" script whose node is on that PATH only, so the app-server must start with it too.
+    # Bytes, not text: without LANG, Python 3.6 decodes as ASCII and one Chinese character a startup file prints would
+    # fail. os.fsdecode hands the names to Popen, which encodes them back to the same bytes under any locale.
+    result = subprocess.run(["/bin/bash", "-lic", CODEX_LOOKUP], env=dict(env),
         stdin=subprocess.DEVNULL, start_new_session=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
-    for line in reversed(result.stdout.splitlines()):
-        file = line.strip()
-        if os.path.isabs(file) and os.path.isfile(file) and os.access(file, os.X_OK): return file
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+    found = dict(line.split(b"=", 1) for line in result.stdout.splitlines() if line.startswith((b"AGENTRIX_CODEX=", b"AGENTRIX_PATH=")))
+    if b"AGENTRIX_CODEX" not in found:
+        # A startup file that runs exec or exit ends the shell before the lookup: that is not a missing Codex.
+        tail = " / ".join(result.stderr.decode("utf-8", "replace").strip().splitlines()[-3:])[-500:]
+        raise ValueError("远端登录 shell 没有执行到 Codex 查找（退出码 %s）。请检查远端 ~/.bash_profile、~/.profile 和 ~/.bashrc 中的 exec 或 exit。%s"
+            % (result.returncode, tail))
+    file = os.fsdecode(found[b"AGENTRIX_CODEX"].strip())
+    if os.path.isabs(file) and os.path.isfile(file) and os.access(file, os.X_OK):
+        return file, ({"PATH": os.fsdecode(found[b"AGENTRIX_PATH"])} if found.get(b"AGENTRIX_PATH") else {})
     error = ValueError("远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。")
     error.code = "codex_cli_required"
     raise error
@@ -855,11 +868,11 @@ class Worker:
         with self.lock:
             if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
             if self.codex_processes: raise ValueError("远程 Codex 进程数量已达上限。")
-        executable = resolve_codex(self.agent_env)
+        executable, login = resolve_codex(self.agent_env)
         with self.lock:
             if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
             child = subprocess.Popen([executable, "app-server", "--listen", "stdio://"], cwd=self.coding_root,
-                env=dict(self.agent_env), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=dict(self.agent_env, **login), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 start_new_session=os.name == "posix")
             self.codex_processes[process_id] = child
         def pump(stream, name):

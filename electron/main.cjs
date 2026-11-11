@@ -1545,7 +1545,8 @@ async function initializeNativeSessions() {
       try {
         const info = await remote.ready;
         if (signal.aborted) throw new Error('session_closed');
-        return { cwd: info.cwd || info.root, context: info.context,
+        // The host's alias and address are redacted from a failed start's reason.
+        return { cwd: info.cwd || info.root, context: info.context, hosts: [project.ssh.host, project.ssh.host.split('@').at(-1)],
           child: require('./features/ssh/codex-process.cjs').createRemoteCodexProcess(remote) };
       } catch (error) { remote.close(); throw error; }
       finally { signal.removeEventListener('abort', cancel); }

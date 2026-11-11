@@ -1,3 +1,4 @@
+import ast
 import base64
 import contextlib
 import importlib.util
@@ -37,10 +38,13 @@ class RemoteFilesTest(unittest.TestCase):
         self.worker.emit = events.append
         self.worker.agent_env = dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)
         original = subprocess.Popen
+        login_path = os.pathsep.join(["/login-only/bin", os.environ.get("PATH", "")])
         def launch(argv, **options):
             commands.append(argv)
+            self.assertEqual(options["env"]["PATH"], login_path, "an npm Codex finds its node on the login PATH only")
+            self.assertEqual(options["env"]["GIT_CEILING_DIRECTORIES"], self.temp.name)
             return original([sys.executable, "-u", "-c", "import sys; data=sys.stdin.buffer.readline();sys.stdout.buffer.write(data);sys.stdout.buffer.flush()"], **options)
-        with mock.patch.object(remote, "resolve_codex", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+        with mock.patch.object(remote, "resolve_codex", return_value=("/fake/codex", {"PATH": login_path})), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
             self.worker.codex_open("native-1")
             self.worker.codex_input("native-1", base64.b64encode(b"bound\n").decode("ascii"))
             for _ in range(100):
@@ -55,14 +59,32 @@ class RemoteFilesTest(unittest.TestCase):
 
     def test_codex_resolution_uses_login_shell_and_preserves_missing_reason(self):
         executable = str(Path(sys.executable).resolve())
-        with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout="startup noise\n" + executable + "\n")) as run:
-            self.assertEqual(remote.resolve_codex(dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)), executable)
-            self.assertEqual(run.call_args.args[0], ["/bin/bash", "-lic", "type -P codex"])
+        found = lambda stdout, stderr=b"", code=0: mock.Mock(stdout=stdout, stderr=stderr, returncode=code)
+        output = b"startup noise\nAGENTRIX_PATH=/not/this\n" + os.fsencode(executable) + b"\nAGENTRIX_CODEX=" + os.fsencode(executable) + b"\nAGENTRIX_PATH=/home/u/.nvm/bin:/usr/bin\nbye\n"
+        with mock.patch.object(remote.subprocess, "run", return_value=found(output)) as run:
+            self.assertEqual(remote.resolve_codex(dict(os.environ, GIT_CEILING_DIRECTORIES=self.temp.name)), (executable, {"PATH": "/home/u/.nvm/bin:/usr/bin"}))
+            self.assertEqual(run.call_args.args[0][:2], ["/bin/bash", "-lic"])
+            self.assertIn("type -P codex", run.call_args.args[0][2])
             self.assertIs(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
             self.assertTrue(run.call_args.kwargs["start_new_session"])
-        with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout="")):
+            self.assertNotIn("universal_newlines", run.call_args.kwargs, "bytes: a session without LANG decodes text as ASCII on 3.6")
+        # A bare path printed by a startup file is not the lookup's answer.
+        with mock.patch.object(remote.subprocess, "run", return_value=found(os.fsencode(executable) + b"\nAGENTRIX_CODEX=\nAGENTRIX_PATH=/usr/bin\n")):
             with self.assertRaisesRegex(ValueError, "type -P codex") as failure: remote.resolve_codex({})
             self.assertEqual(failure.exception.code, "codex_cli_required")
+        # A startup file that runs exec or exit ends the shell before the lookup: its exit and last words, not "install Codex".
+        with mock.patch.object(remote.subprocess, "run", return_value=found(b"", "bash: no job control\n欢迎\nexec: zsh: not found\n".encode("utf-8"), 127)):
+            with self.assertRaisesRegex(ValueError, r"没有执行到 Codex 查找（退出码 127）.*exec: zsh: not found$") as failure: remote.resolve_codex({})
+            self.assertIsNone(getattr(failure.exception, "code", None))
+
+    def test_codex_resolution_keeps_a_chinese_startup_output_and_a_non_ascii_path_byte_for_byte(self):
+        executable = str(Path(sys.executable).resolve())
+        login_path = "/home/用户/工具/bin:/usr/bin".encode("utf-8")
+        output = "欢迎回来，今天是星期三\n".encode("utf-8") + b"AGENTRIX_CODEX=" + os.fsencode(executable) + b"\nAGENTRIX_PATH=" + login_path + b"\n"
+        with mock.patch.object(remote.subprocess, "run", return_value=mock.Mock(stdout=output, stderr="提示\n".encode("utf-8"), returncode=0)):
+            file, login = remote.resolve_codex({})
+        self.assertEqual(file, executable)
+        self.assertEqual(os.fsencode(login["PATH"]), login_path, "Popen encodes the PATH back to the bytes the login shell printed")
 
     def test_stopping_during_remote_lookup_never_spawns_codex(self):
         entered, released = threading.Event(), threading.Event()
@@ -70,7 +92,7 @@ class RemoteFilesTest(unittest.TestCase):
         def resolve(_env):
             entered.set()
             released.wait(2)
-            return "/fake/codex"
+            return "/fake/codex", {}
         def open():
             try: self.worker.codex_open("late")
             except ValueError as error: failures.append(str(error))
@@ -101,7 +123,7 @@ class RemoteFilesTest(unittest.TestCase):
             try:
                 for _ in range(20): self.worker.codex_input("blocked", base64.b64encode(b"x" * 32768))
             except (OSError, ValueError): pass
-        with mock.patch.object(remote, "resolve_codex", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+        with mock.patch.object(remote, "resolve_codex", return_value=("/fake/codex", {})), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
             self.worker.codex_open("blocked")
         writer = threading.Thread(target=fill, daemon=True)
         closer = threading.Thread(target=lambda: self.worker.codex_close("blocked"), daemon=True)
@@ -132,7 +154,7 @@ class RemoteFilesTest(unittest.TestCase):
             child = original([sys.executable, "-c", "pass"], **options)
             child.stdin = Unflushed(child.stdin)
             return child
-        with mock.patch.object(remote, "resolve_codex", return_value="/fake/codex"), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
+        with mock.patch.object(remote, "resolve_codex", return_value=("/fake/codex", {})), mock.patch.object(remote.subprocess, "Popen", side_effect=launch):
             self.worker.codex_open("unflushed")
         deadline = time.time() + 8
         while not events and time.time() < deadline: time.sleep(0.02)
@@ -1153,6 +1175,85 @@ class RemoteCodexShellNotifyTest(unittest.TestCase):
                 self.assertEqual(typed(args), ([], [args], "STATUS=0"), args)
             self.assertEqual(typed(["--version"], installed=False), ([], [], "STATUS=127"))
             self.assertEqual(typed(["resume", "--last"], installed=False), ([], [["resume", "--last"]], "STATUS=0"))
+
+
+# What Python 3.7 and later added, which the remote's Python 3.6 (docs/usage.md) refuses. Two checks, each with its share:
+# this syntax-tree check runs everywhere without a network and also reads the Python the worker writes out (NOTIFY_SOURCE,
+# the shell's heredoc), which vermin cannot see in strings; CI's pinned vermin (Linux SSH integration) is the authority
+# for the worker file itself, with its full table of library changes.
+NEWER_ATTRIBUTES = {("datetime", "fromisoformat"), ("date", "fromisoformat"), ("asyncio", "run"), ("asyncio", "create_task"),
+    ("contextlib", "nullcontext"), ("contextlib", "asynccontextmanager"), ("time", "time_ns"), ("time", "monotonic_ns"),
+    ("time", "perf_counter_ns"), ("math", "prod"), ("math", "isqrt"), ("math", "dist"), ("math", "comb"), ("math", "perm"),
+    ("functools", "cached_property"), ("functools", "cache"), ("shlex", "join"), ("os", "waitstatus_to_exitcode"),
+    ("os", "pidfd_open"), ("os", "memfd_create"), ("subprocess", "CREATE_NO_WINDOW")}
+NEWER_METHODS = {"isascii", "removeprefix", "removesuffix", "is_relative_to", "bit_count", "fromisoformat"}
+NEWER_MODULES = {"dataclasses", "contextvars", "zoneinfo", "graphlib", "tomllib", "importlib.resources", "importlib.metadata"}
+NEWER_KEYWORDS = {"text": "subprocess", "capture_output": "subprocess", "missing_ok": None, "dirs_exist_ok": None,
+    "cancel_futures": None, "strict": "zip"}
+NEWER_BUILTINS = {"breakpoint", "aiter", "anext"}
+GENERIC_TYPES = {"list", "dict", "tuple", "set", "frozenset", "type"}
+
+
+def newer_python(source):
+    """The lines and reasons of every 3.7+ form in the source, from its syntax tree: strings and comments never match.
+    A use under hasattr(module, "name") is feature detection and is allowed."""
+    tree, found, guarded = ast.parse(source), [], set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.IfExp)) and isinstance(node.test, ast.Call) and getattr(node.test.func, "id", None) == "hasattr" \
+                and len(node.test.args) == 2 and isinstance(node.test.args[1], ast.Constant):
+            guarded.update(id(child) for part in ([node.body] if isinstance(node, ast.IfExp) else node.body) for child in ast.walk(part))
+    def add(node, reason): found.append((getattr(node, "lineno", 0), reason))
+    for node in ast.walk(tree):
+        name = type(node).__name__
+        if name in ("NamedExpr", "Match", "TryStar"): add(node, name)
+        elif isinstance(node, ast.arguments) and getattr(node, "posonlyargs", None): add(node, "positional-only parameters")
+        elif isinstance(node, ast.ImportFrom) and node.module == "__future__" and any(alias.name == "annotations" for alias in node.names): add(node, "from __future__ import annotations")
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for module in ([alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""] + ["%s.%s" % (node.module, alias.name) for alias in node.names]):
+                if module in NEWER_MODULES or module.split(".")[0] in NEWER_MODULES: add(node, "module " + module)
+            for alias in node.names if isinstance(node, ast.ImportFrom) else ():
+                if (node.module, alias.name) in NEWER_ATTRIBUTES: add(node, "from %s import %s" % (node.module, alias.name))
+        elif isinstance(node, ast.Attribute) and id(node) not in guarded:
+            owner = node.value.id if isinstance(node.value, ast.Name) else node.value.attr if isinstance(node.value, ast.Attribute) else None
+            if (owner, node.attr) in NEWER_ATTRIBUTES or node.attr in NEWER_METHODS: add(node, "%s.%s" % (owner or "...", node.attr))
+        elif isinstance(node, ast.Call):
+            func = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
+            owner = getattr(node.func.value, "id", None) if isinstance(node.func, ast.Attribute) else func
+            if func in NEWER_BUILTINS: add(node, func + "()")
+            for keyword in node.keywords:
+                if keyword.arg in NEWER_KEYWORDS and NEWER_KEYWORDS[keyword.arg] in (None, owner): add(node, "%s(%s=)" % (func, keyword.arg))
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr) and any(isinstance(side, (ast.Dict, ast.DictComp)) for side in (node.left, node.right)): add(node, "dict |")
+        elif isinstance(node, ast.JoinedStr) and re.search(r"[^=!<>]=\s*(?:![rsa])?(?::[^{}]*)?\}", ast.get_source_segment(source, node) or ""): add(node, "f-string =")
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.AnnAssign, ast.arg)):
+            annotations = [node.returns] if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else [node.annotation]
+            for part in (child for annotation in annotations if annotation is not None for child in ast.walk(annotation)):
+                if isinstance(part, ast.Subscript) and getattr(part.value, "id", None) in GENERIC_TYPES: add(part, "%s[...] annotation" % part.value.id)
+                elif isinstance(part, ast.BinOp) and isinstance(part.op, ast.BitOr): add(part, "X | Y annotation")
+    return sorted(found)
+
+
+class RemoteWorkerPython36Test(unittest.TestCase):
+    def test_the_checker_finds_each_newer_form_and_ignores_strings_comments_and_feature_detection(self):
+        newer = {"subprocess.run(['x'], text=True)": "run(text=)", "subprocess.run(['x'], capture_output=True)": "run(capture_output=)",
+            "datetime.fromisoformat('x')": "datetime.fromisoformat", "import dataclasses": "module dataclasses",
+            "from contextlib import nullcontext": "from contextlib import nullcontext", "contextlib.nullcontext()": "contextlib.nullcontext", "time.time_ns()": "time.time_ns", "'a'.isascii()": "....isascii",
+            "from __future__ import annotations": "from __future__ import annotations", "if (n := 1): pass": "NamedExpr",
+            "x = 1\nf'{x=}'": "f-string =", "def f(a, /): pass": "positional-only parameters", "math.prod([1])": "math.prod",
+            "shlex.join([])": "shlex.join", "os.waitstatus_to_exitcode(0)": "os.waitstatus_to_exitcode", "{} | {}": "dict |",
+            "def f(a: list[str]): pass": "list[...] annotation", "functools.cached_property": "functools.cached_property", "breakpoint()": "breakpoint()"}
+        for source, reason in newer.items():
+            self.assertIn(reason, [found for _line, found in newer_python(source)], source)
+        for source in ("subprocess.run(['x'], universal_newlines=True)", "s = 'subprocess.run(text=True) time.time_ns()'  # f'{x=}' time.time_ns()",
+                       "t = time.time_ns() if hasattr(time, 'time_ns') else int(time.time() * 1e9)", "f'{a == b}' if a else f'{a!r:>4}'",
+                       "re.findall(text, value)", "message.get('text')", "a | b"):
+            self.assertEqual(newer_python(source), [], source)
+
+    def test_the_remote_worker_and_the_python_it_writes_run_on_python_3_6(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        # The shell's notify helper and its inline Claude settings script run on the same remote Python.
+        heredoc = re.search(r"<<'PY'\n(.*?)\nPY\n", remote.BASH_SOURCE, re.S).group(1)
+        for name, text in (("remote-worker.py", source), ("NOTIFY_SOURCE", remote.NOTIFY_SOURCE), ("BASH_SOURCE heredoc", heredoc)):
+            self.assertEqual(newer_python(text), [], name + " uses Python 3.7+ forms; the remote may run Python 3.6")
 
 
 if __name__ == "__main__": unittest.main()

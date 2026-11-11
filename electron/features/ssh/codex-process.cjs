@@ -24,7 +24,8 @@ function createRemoteCodexProcess(connection) {
   };
   const disconnected = () => finish(255);
   connection.events.on('codex-process', receive); connection.events.on('exit', disconnected);
-  const opened = connection.request('codex-open', { processId });
+  // The remote looks Codex up in a login shell before starting it; a caller's handshake deadline starts after this.
+  const opened = child.opened = connection.request('codex-open', { processId }, { timeout: 30000, timeoutMessage: '远端启动 Codex 超时，请重试。' });
   child.stdin = new Writable({
     write(chunk, _encoding, done) {
       void opened.then(async () => {
