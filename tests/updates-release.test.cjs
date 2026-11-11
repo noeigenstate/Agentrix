@@ -100,6 +100,7 @@ test('stable release bodies keep their original introduction and unpinned macOS 
   const install = macVersionFromCommand(body);
   assert.equal(install.command, 'curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | bash');
   assert.equal(install.version, 'latest');
-  // Entire rendered body from c0ae0f5, before Windows-only betas, with this fixture's exact inputs.
-  assert.equal(createHash('sha256').update(body).digest('hex'), 'f0cbb80538db32bb8fb3e6e5b6d2dec31c1557871b2ba579b0683d85c13032c8');
+  // Entire rendered body from c0ae0f5, before Windows-only betas, with this fixture's exact inputs; only the Linux paragraph
+  // has since changed, for the AppImage names without "linux" and their AppImageUpdate support from 1.4.1 on.
+  assert.equal(createHash('sha256').update(body).digest('hex'), '83c914bd334f6c7006d9732016189b6e197c4055ba4bae327832a87c276a7580');
 });

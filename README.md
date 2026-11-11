@@ -1,3 +1,5 @@
+<h1 align="center">Agentrix</h1>
+
 <p align="center">
   <a href="https://github.com/noeigenstate/Agentrix/releases/latest"><img src="docs/images/hero.svg" alt="Agentrix: AI agents working in parallel on one grid" width="100%" /></a>
 </p>
@@ -178,8 +180,8 @@ New installs default to English. Choose 中文 under **Settings → Appearance �
 | --- | --- | --- |
 | **Windows x64** | `Agentrix-Setup-<version>-x64.exe` | Installed copies check and download stable updates; restart to install when ready |
 | **macOS arm64** | `Agentrix-<version>-mac-arm64.dmg` / `Agentrix-<version>-mac-arm64.zip`, or the command below | Signed ad hoc, not notarized; rerun the command to update |
-| **Linux x64** | `Agentrix-<version>-linux-x86_64.AppImage` / `Agentrix-<version>-linux-x64.tar.xz` | Make the AppImage executable, or unpack the archive and run `./agentrix`; update manually |
-| **Linux arm64** | `Agentrix-<version>-linux-arm64.AppImage` / `Agentrix-<version>-linux-arm64.tar.xz` | Same steps as Linux x64; update manually |
+| **Linux x64** | `Agentrix-<version>-x86_64.AppImage` / `Agentrix-<version>-linux-x64.tar.xz` | Make the AppImage executable, or unpack the archive and run `./agentrix`; from 1.4.1 on, update the AppImage with AppImageUpdate; update the archive manually |
+| **Linux arm64** | `Agentrix-<version>-arm64.AppImage` / `Agentrix-<version>-linux-arm64.tar.xz` | Same steps as Linux x64 |
 
 Windows portable folders and development builds do not update themselves; Settings identifies the distribution and explains the available update action. Windows builds are installers only; there is no portable executable.
 

@@ -647,7 +647,8 @@ jobs:
           [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo 'Invalid package version.'; exit 1; }
           if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "v$version" ]]; then echo 'The version tag must match package.json.'; exit 1; fi
           image_arch=${{ matrix.arch == 'x64' && 'x86_64' || 'arm64' }}
-          echo "image=Agentrix-$version-linux-$image_arch.AppImage" >> "$GITHUB_OUTPUT"
+          echo "image=Agentrix-$version-$image_arch.AppImage" >> "$GITHUB_OUTPUT"
+          echo "update=gh-releases-zsync|noeigenstate|Agentrix|latest|Agentrix-*-$image_arch.AppImage.zsync" >> "$GITHUB_OUTPUT"
           echo "archive=Agentrix-$version-linux-${{ matrix.arch }}.tar.xz" >> "$GITHUB_OUTPUT"
           echo "unpacked=release/${{ matrix.arch == 'x64' && 'linux-unpacked' || 'linux-arm64-unpacked' }}" >> "$GITHUB_OUTPUT"
 
@@ -668,6 +669,34 @@ jobs:
 
       - name: Build the AppImage and tar.xz
         run: npm run dist:linux
+
+      - name: Embed update information and create the zsync file
+        # electron-builder writes no update information into the AppImage, so it is unpacked and packed again with
+        # appimagetool 1.9.1 and type2-runtime 20251108 (the runtime of electron-builder's appimage toolset 1.0.3).
+        # appimagetool's bundled zsyncmake writes the .zsync next to the AppImage. The SHA-256 values are the
+        # digests GitHub lists for those release assets.
+        shell: bash
+        env:
+          TOOL_ARCH: ${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}
+          APPIMAGETOOL_SHA256: ${{ matrix.arch == 'x64' && 'ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0' || 'f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158' }}
+          RUNTIME_SHA256: ${{ matrix.arch == 'x64' && '2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d' || '00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444' }}
+          IMAGE: ${{ steps.version.outputs.image }}
+          UPDATE_INFORMATION: ${{ steps.version.outputs.update }}
+        run: |
+          set -euo pipefail
+          tools="$RUNNER_TEMP/appimage-tools"
+          mkdir -p "$tools"
+          curl -fsSL --retry 3 -o "$tools/appimagetool" "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$TOOL_ARCH.AppImage"
+          curl -fsSL --retry 3 -o "$tools/runtime" "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-$TOOL_ARCH"
+          printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$tools/appimagetool" "$RUNTIME_SHA256" "$tools/runtime" | sha256sum --check --strict
+          chmod +x "$tools/appimagetool"
+          cd "$RUNNER_TEMP"
+          "$GITHUB_WORKSPACE/release/$IMAGE" --appimage-extract > /dev/null
+          cd "$GITHUB_WORKSPACE/release"
+          rm -f "$IMAGE"
+          ARCH="$TOOL_ARCH" "$tools/appimagetool" --runtime-file "$tools/runtime" -u "$UPDATE_INFORMATION" "$RUNNER_TEMP/squashfs-root" "$IMAGE"
+          test -s "$IMAGE.zsync"
+          [[ $("./$IMAGE" --appimage-updateinformation) == "$UPDATE_INFORMATION" ]] || { echo 'The AppImage has no update information.'; exit 1; }
 
       - name: Verify the package
         shell: bash
@@ -707,11 +736,11 @@ jobs:
         run: |
           set -euo pipefail
           cd release
-          sha256sum "${{ steps.version.outputs.image }}" "${{ steps.version.outputs.archive }}" > "SHA256SUMS-linux-${{ matrix.arch }}.txt"
+          sha256sum "${{ steps.version.outputs.image }}" "${{ steps.version.outputs.image }}.zsync" "${{ steps.version.outputs.archive }}" > "SHA256SUMS-linux-${{ matrix.arch }}.txt"
           cat "SHA256SUMS-linux-${{ matrix.arch }}.txt"
           {
             echo "## Linux ${{ matrix.arch }} build is ready"
-            echo "- AppImage: **${{ steps.version.outputs.image }}**"
+            echo "- AppImage: **${{ steps.version.outputs.image }}**, update information: \`${{ steps.version.outputs.update }}\`"
             echo "- Archive: **${{ steps.version.outputs.archive }}**"
             echo "- Commit: $GITHUB_SHA"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -722,6 +751,7 @@ jobs:
           name: Agentrix-linux-${{ matrix.arch }}
           path: |
             release/${{ steps.version.outputs.image }}
+            release/${{ steps.version.outputs.image }}.zsync
             release/${{ steps.version.outputs.archive }}
             release/SHA256SUMS-linux-${{ matrix.arch }}.txt
           if-no-files-found: error
@@ -834,7 +864,8 @@ jobs:
           test -f "$MAC_ARCHIVE"
           test -f "$MAC_IMAGE"
           sha256sum --check SHA256SUMS-mac.txt
-          linux=("Agentrix-$RELEASE_VERSION-linux-x86_64.AppImage" "Agentrix-$RELEASE_VERSION-linux-x64.tar.xz" "Agentrix-$RELEASE_VERSION-linux-arm64.AppImage" "Agentrix-$RELEASE_VERSION-linux-arm64.tar.xz")
+          linux=("Agentrix-$RELEASE_VERSION-x86_64.AppImage" "Agentrix-$RELEASE_VERSION-x86_64.AppImage.zsync" "Agentrix-$RELEASE_VERSION-linux-x64.tar.xz"
+            "Agentrix-$RELEASE_VERSION-arm64.AppImage" "Agentrix-$RELEASE_VERSION-arm64.AppImage.zsync" "Agentrix-$RELEASE_VERSION-linux-arm64.tar.xz")
           for file in "${linux[@]}"; do test -f "$file"; done
           sha256sum --check SHA256SUMS-linux-x64.txt SHA256SUMS-linux-arm64.txt
           assets=("$RELEASE_INSTALLER" "$RELEASE_INSTALLER.blockmap" latest.yml SHA256SUMS.txt BUILD-INFO.txt "$MAC_IMAGE" "$MAC_ARCHIVE" SHA256SUMS-mac.txt "${linux[@]}" SHA256SUMS-linux-x64.txt SHA256SUMS-linux-arm64.txt)
@@ -858,7 +889,7 @@ jobs:
 
           Or download **$MAC_IMAGE** and drag Agentrix to Applications. The app is signed ad hoc, not notarized by Apple: on first open, allow it once in System Settings › Privacy & Security (Open Anyway), or run \`xattr -dr com.apple.quarantine "/Applications/Agentrix.app"\`. The macOS edition does not update itself; run the command again to update.
 
-          **Linux (x64 and arm64):** download the AppImage for your processor (**Agentrix-$RELEASE_VERSION-linux-x86_64.AppImage** or **Agentrix-$RELEASE_VERSION-linux-arm64.AppImage**), make it executable with \`chmod +x\` and run it. The **.tar.xz** archives hold the same app: unpack and run \`./agentrix\` (on Ubuntu 23.10 or later, add \`--no-sandbox\`; the AppImage does that by itself when needed). Local terminals run Bash or zsh, chosen in Settings. The Linux edition does not update itself; download the new version to update.
+          **Linux (x64 and arm64):** download the AppImage for your processor (**Agentrix-$RELEASE_VERSION-x86_64.AppImage** or **Agentrix-$RELEASE_VERSION-arm64.AppImage**), make it executable with \`chmod +x\` and run it. The **.tar.xz** archives hold the same app: unpack and run \`./agentrix\` (on Ubuntu 23.10 or later, add \`--no-sandbox\`; the AppImage does that by itself when needed). Local terminals run Bash or zsh, chosen in Settings. The Linux edition does not update itself, but from 1.4.1 on the AppImage carries update information, so AppImageUpdate or another AppImage update tool can update it; to update the archive, download the new version.
 
           Install Codex CLI on the computer or Linux SSH host where your project runs.
 

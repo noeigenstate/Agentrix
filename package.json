@@ -233,6 +233,9 @@
       ],
       "artifactName": "Agentrix-${version}-linux-${arch}.${ext}"
     },
+    "appImage": {
+      "artifactName": "Agentrix-${version}-${arch}.${ext}"
+    },
     "toolsets": {
       "appimage": "1.0.3"
     },
