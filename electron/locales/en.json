@@ -2991,6 +2991,11 @@
   "恢复 Codex 会话后，上次没跑完的步骤不再被当作正在运行，可以正常开始新会话。": "After a Codex session is resumed, steps left unfinished earlier no longer count as running, so a new conversation can start.",
   "会话更稳": "Steadier sessions",
   "修复 Claude 原生会话偶尔在回复途中失败的问题；查看状态失败时不再影响会话本身。": "Fixed Claude native sessions that sometimes failed in the middle of a reply; a failed status lookup no longer affects the session.",
-  "模型编排": "Model routing",
-  "系统的模型路由加入 Fable：由它主控并规划跨模块的任务，Opus 负责审查。": "The built-in model routing adds Fable: it leads and plans work that crosses modules, and Opus reviews."
+  "修复在新项目卡片上选择「继承开发历史」时提示 folderOf is not defined、无法接着上次对话的问题。": "Choosing 继承开发历史 on a new project's card no longer fails with folderOf is not defined.",
+  "终端 Codex 命令": "Codex in terminals",
+  "在 Agentrix 终端里，codex --version、login、mcp、doctor 等不开启对话的命令重新直接运行；开启对话的仍进入原生模式。": "In an Agentrix terminal, Codex commands that start no conversation (--version, login, mcp, doctor, …) run directly again; conversations still open in native mode.",
+  "提问不卡住": "No stuck questions",
+  "派发出去的 Codex 工作者提问后无人回答时，10 分钟后自动拒绝，任务继续完成，不再一直卡住。": "When a dispatched Codex worker asks a question nobody answers, it is declined after ten minutes and the task finishes instead of hanging.",
+  "切换原因": "Switch causes",
+  "运行方式切换失败时，提示里会附上具体原因。": "A failed switch between API and terminal now says why."
 }

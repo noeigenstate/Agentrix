@@ -2,13 +2,16 @@
 // Each note is a short title and one detail line, both with their English at the end of electron/locales/en.json.
 // group: "new" marks what this beta adds. Those notes come first; the list shows them under their own heading and the rest under "also in".
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
+  { title: "继承开发历史", text: "修复在新项目卡片上选择「继承开发历史」时提示 folderOf is not defined、无法接着上次对话的问题。", group: 'new' },
+  { title: "终端 Codex 命令", text: "在 Agentrix 终端里，codex --version、login、mcp、doctor 等不开启对话的命令重新直接运行；开启对话的仍进入原生模式。", group: 'new' },
+  { title: "提问不卡住", text: "派发出去的 Codex 工作者提问后无人回答时，10 分钟后自动拒绝，任务继续完成，不再一直卡住。", group: 'new' },
+  { title: "切换原因", text: "运行方式切换失败时，提示里会附上具体原因。", group: 'new' },
   { title: "结果面板", text: "原生模式里，/status、/usage、/context、/cost 的结果显示在输入框上方的面板里，不写进对话，也不发给模型；按 Esc 或点面板外面关闭。", group: 'new' },
   { title: "设置提示", text: "用 /model、/effort、/fast 改完设置后，会出现一条两秒的提示，不再在对话里留一行。", group: 'new' },
   { title: "额度更准", text: "换账号后，活动栏显示的是新账号的额度；Codex 的额度会持续更新，不再停在第一次读到的数值。", group: 'new' },
   { title: "未确认步骤", text: "结果没能确认的步骤显示问号和「结果未能确认」，不再显示成已完成或测试通过。", group: 'new' },
   { title: "历史步骤", text: "恢复 Codex 会话后，上次没跑完的步骤不再被当作正在运行，可以正常开始新会话。", group: 'new' },
   { title: "会话更稳", text: "修复 Claude 原生会话偶尔在回复途中失败的问题；查看状态失败时不再影响会话本身。", group: 'new' },
-  { title: "模型编排", text: "系统的模型路由加入 Fable：由它主控并规划跨模块的任务，Opus 负责审查。", group: 'new' },
   { title: "派发恢复", text: "修复 beta.9 中从安装版派发任务时启动失败的问题。" },
   { title: "额度不再跳回", text: "活动栏会保留最后一次读到的连接和额度；临时读取失败不再显示成「未知」。到了重置时间还没读到新数据时，会注明正在等待更新。" },
   { title: "Codex 状态", text: "Codex 原生模式输入 /status，会显示模型、推理强度、快速模式、审批和沙箱、工作目录、账号、token、上下文和额度；读取失败时会说明原因。" },
