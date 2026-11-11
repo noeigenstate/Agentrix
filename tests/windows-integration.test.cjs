@@ -99,7 +99,7 @@ test('notification identity registration tolerates denied queries, failed writes
 
 test('search refresh backs up only this application cached icons and runs once per icon revision', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-search-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const userData = path.join(root, 'profile'), iconSource = path.join(root, 'icon.ico');
   const cache = path.join(root, 'Packages', 'Microsoft.Windows.Search_cw5n1h2txyewy', 'LocalState', 'AppIconCache', '150');
   fs.mkdirSync(cache, { recursive: true });
@@ -121,7 +121,7 @@ test('search refresh backs up only this application cached icons and runs once p
 
 test('repair keeps an idempotent branded search entry and leaves other shortcuts alone', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-shortcuts-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const folders = Object.fromEntries(['userData', 'programs', 'commonPrograms', 'desktop'].map(name => { const folder = path.join(root, name); fs.mkdirSync(folder); return [name, folder]; }));
   const executable = path.join(root, 'Agentrix.exe'), iconSource = path.join(root, 'icon.ico');
   fs.writeFileSync(iconSource, 'fixture icon');

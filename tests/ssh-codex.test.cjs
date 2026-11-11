@@ -34,7 +34,7 @@ function transport(t, root) {
 
 test('SSH Codex starts, sends, resumes and reads accounts solely through its remote byte channel', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-ssh-')), seen = [];
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const f = transport(t, root), forbidden = () => assert.fail('SSH accessed local executable/account/process');
   const factory = createCodexRuntime({ resolveExecutable: forbidden, spawnProcess: forbidden,
     launchRemote: async () => ({ cwd: root, context: 'Remote instructions "quoted"\nsecond line', child: createRemoteCodexProcess(f.connection) }) });
@@ -92,7 +92,7 @@ test('main SSH specification preserves the remote resume folder without local fi
 
 test('SSH usage holds remote native limits without consulting local usage inputs', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-ssh-usage-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const facade = require('../electron/features/native-session/index.cjs').createNativeSessions({ directory: root,
     claude: { usage: { summary: () => ({}) }, apiState: () => ({ status: 'no_key' }) }, codex: {}, emit() {},
     validateProject: () => ({ kind: 'ssh' }), usageInputs: () => assert.fail('SSH read local accounts/CLI'),

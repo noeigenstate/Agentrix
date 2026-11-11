@@ -50,7 +50,7 @@ test('the POSIX Codex stand-in answers the app-server protocol from a folder ins
   const { posixCodexStandIn } = require('../scripts/gui-codex-env.mjs');
   const { spawn } = require('node:child_process'), os = require('node:os');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-stand-in-')), file = path.join(root, 'bin', 'codex');
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   fs.mkdirSync(path.dirname(file));
   fs.writeFileSync(path.join(root, 'package.json'), '{"type":"module"}');
   fs.writeFileSync(file, posixCodexStandIn(), { mode: 0o755 });

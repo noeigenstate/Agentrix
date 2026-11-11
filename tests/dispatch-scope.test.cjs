@@ -45,7 +45,7 @@ function fixture(t) {
     for (const worker of workers) { fs.writeFileSync(worker.writeGate, 'go'); fs.writeFileSync(worker.release, 'done'); }
     await Promise.allSettled(workers.map(worker => worker.result));
   });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   function start(name, allow, writes, cwd = linked) {
     const base = path.join(root, randomUUID()), brief = base + '.md', configFile = base + '.json';
     const config = { sessionId: randomUUID(), writes: writes.map(([file, text]) => [path.join(cwd, file), text]),

@@ -91,7 +91,7 @@ test('A4 resume requests the entire verified chain and only displays the newest 
   };
   const runtime = createClaudeRuntime({ directory, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'offline-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
-  t.after(async () => { await runtime.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(async () => { await runtime.close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   runtime.credentials.save('sk-ant-offline-history-not-a-real-key');
   const session = runtime.create({ agent: 'claude', owner: 'gui', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', providerSessionId: fake.sessionId,
     cwd: directory, env: { HOME: directory, CLAUDE_CONFIG_DIR: path.join(directory, '.claude') } }, event => events.push(event));
@@ -173,7 +173,7 @@ test('A8 the actual SDK session keeps background work and the query after a stop
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-interrupt-')), fake = fakeSdk(), events = [];
   const runtime = createClaudeRuntime({ directory, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'offline-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
-  t.after(async () => { await runtime.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(async () => { await runtime.close(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   runtime.credentials.save('sk-ant-offline-interrupt-not-a-real-key');
   const session = runtime.create({ agent: 'claude', owner: 'gui', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', cwd: directory,
     env: { HOME: directory, CLAUDE_CONFIG_DIR: path.join(directory, '.claude') } }, event => events.push(event));

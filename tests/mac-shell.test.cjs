@@ -65,7 +65,7 @@ test('macOS Bash sources the system profile before the first readable user login
   ];
   for (const item of cases) await t.test(item.name, { skip: item.unreadable && process.getuid() === 0 }, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-mac-bash-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
     const home = path.join(root, 'home'), project = path.join(root, "项目 'q' $x"), trace = path.join(root, 'sources');
     fs.mkdirSync(home); fs.mkdirSync(project);
     for (const file of [...item.files, '.bashrc']) {

@@ -130,7 +130,7 @@ test('file path copying reserves before remote readiness and shares clipboard su
 test('open file location shows a local item selected in its folder, opens the root itself, and refuses SSH and outside paths', async t => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-reveal-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   fs.mkdirSync(path.join(root, 'docs')); fs.writeFileSync(path.join(root, 'docs', 'a.md'), 'a');
   const h = handlers(), shown = [], opened = [];
   let project = { id: 'p', kind: 'local', path: root };
@@ -162,7 +162,7 @@ test('remote file links validate the root and try line-suffix removal in order',
 test('reading path reveal selects existing files, opens folders, permits outside results and reports errors without opening files', async t => {
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), { pathToFileURL } = require('node:url');
   const prefix = path.join(os.tmpdir(), 'agentrix-reading-reveal-'), directory = fs.mkdtempSync(prefix);
-  t.after(() => { assert.ok(path.resolve(directory).startsWith(prefix)); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(() => { assert.ok(path.resolve(directory).startsWith(prefix)); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const root = path.join(directory, 'project'), file = path.join(root, 'docs', '中文 file.md'), outside = path.join(directory, 'outside.png');
   fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, 'file'); fs.writeFileSync(outside, 'image');
   const h = handlers(), shown = [], opened = [];

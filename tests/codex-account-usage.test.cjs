@@ -52,7 +52,7 @@ setInterval(() => {}, 1000);
 
 async function fakeRead(t, mode, extra = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-usage-child-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const file = path.join(root, 'fake.cjs'); fs.writeFileSync(file, FAKE);
   const sent = []; let child, exited, stops = 0;
   const result = await readCodexAccount({ ...options, executable: 'fake-codex', timeout: 3000, ...extra,
@@ -255,7 +255,7 @@ test('config boundary accepts explicit official config and refuses provider rede
 
 test('home and ancestor project config checks stay read-only, bounded, and stop custom routes before an account read', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-scope-config-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const home = path.join(root, 'account'), cwd = path.join(root, 'project', 'nested');
   fs.mkdirSync(home); fs.mkdirSync(cwd, { recursive: true });
   fs.writeFileSync(path.join(home, 'config.toml'), 'model_provider = "openai"');
@@ -278,7 +278,7 @@ test('home and ancestor project config checks stay read-only, bounded, and stop 
 
 test('proven benign complete flags reach watch preflight and a ready count; later account flags never query', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-benign-flags-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   fs.writeFileSync(path.join(root, 'config.toml'), 'model_provider = "openai"');
   const env = {}, baseline = accountEnvironment(env); let reads = 0;
   const service = new CodexAccountUsage({ read: async () => { ++reads; return ready(2); } });
@@ -431,7 +431,7 @@ test('closing a project drops its late answer even after reopening the same scop
 
 test('project-open preflight proves the official default and never reads remote, custom or unproven account routes', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-project-open-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   fs.writeFileSync(path.join(root, 'config.toml'), 'model_provider = "openai"');
   let reads = 0;
   const service = new CodexAccountUsage({ read: async opts => {

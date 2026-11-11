@@ -11,7 +11,7 @@ const { createInterventions } = require('../electron/features/agents/interventio
 
 test('an accepted unread Codex steer resumes the same thread once before helper exit', { timeout: 15000 }, async t => {
   const lifetime = resources(t), root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-unread-codex-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const git = args => execFileSync('git', args, { cwd: root, stdio: 'ignore', windowsHide: true });
   git(['init', '-q']); fs.writeFileSync(path.join(root, '.gitignore'), '.dispatch/\n'); git(['add', '.gitignore']);
   git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Fixture']);

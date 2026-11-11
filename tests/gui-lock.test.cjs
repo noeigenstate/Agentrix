@@ -9,7 +9,7 @@ const { pathToFileURL } = require('node:url');
 // A copy in a temporary folder keeps its lock file away from the checkout's real GUI lock.
 function lockCopy(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-gui-lock-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   fs.mkdirSync(path.join(root, 'scripts'));
   fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'gui-lock.mjs'), path.join(root, 'scripts', 'gui-lock.mjs'));
   return { url: pathToFileURL(path.join(root, 'scripts', 'gui-lock.mjs')).href, lock: path.join(root, '.test-output', 'gui-probe.lock') };

@@ -8,7 +8,7 @@ const { THEMES } = require('../src/shared/themes.ts');
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-test-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const projectDir = path.join(directory, "中文项目 & 空格 [a] 'b' $c");
   fs.mkdirSync(projectDir);
   const file = path.join(directory, 'workspace.json');

@@ -17,7 +17,7 @@ const draft = (name, scope = 'global', projectId = null, body = 'First version.'
 
 test('metadata and activity descriptions share front-matter decoding for BOM, quotes and folded scalars', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-front-matter-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const file = path.join(root, 'SKILL.md');
   for (const description of ['"Read \\"quoted\\" paths"', "'Read the project''s own procedure'", '>\n  Read the project\n  before changing code']) {
     const source = `\uFEFF---\nname: example\ndescription: ${description}\n---\nBody.\n`;
@@ -37,7 +37,7 @@ function fixture(t, setup = () => {}) {
     changed: (value, change) => { changed.push(value); changes.push(change); }, report: error => errors.push(error) };
   setup({ root, dataDir, builtinDir, projects, active });
   const store = new SkillsStore(options);
-  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { root, dataDir, builtinDir, projects, store, changed, changes, errors, active, options };
 }
 
@@ -68,7 +68,7 @@ test('shipped code standard stays always and marks only the first agent session 
   fs.mkdirSync(project.path);
   const store = new SkillsStore({ dataDir: path.join(root, 'profile'), builtinDir: path.join(__dirname, '../resources/skills'),
     getProjects: () => [project, remote], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
-  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
 
   const skill = store.list().find(item => item.id === 'builtin:code-standard');
   assert.ok(skill);

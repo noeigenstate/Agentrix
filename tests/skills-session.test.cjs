@@ -17,7 +17,7 @@ async function fixture(t, routingNote = () => '') {
   const project = { id: 'project', path: path.join(root, 'project'), name: 'Isolated' };
   fs.mkdirSync(project.path);
   const store = new SkillsStore({ dataDir: root, builtinDir: path.join(root, 'builtins'), getProjects: () => [project], routingNote });
-  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const draft = { name: 'sample', scope: 'global', projectId: null, description: 'Use when testing 中文说明.', text: 'First body.' };
   await store.save(null, draft);
   const delivery = id => store.delivery(project, false, id, { agent: 'claude', started: true });

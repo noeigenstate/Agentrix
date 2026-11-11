@@ -115,7 +115,7 @@ for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${actio
     if (!finished) for (const worker of team.live()) await team.queueControl(worker.id, { id: randomUUID(), type: 'stop', at: Date.now(), noResume: true }).catch(() => {});
     await result;
   });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   for (let n = 0; !stdout.includes('[dispatch] started') && n < 400 && !finished; n++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.match(stdout, /\[dispatch\] started/);
   if (action === 'npm') {

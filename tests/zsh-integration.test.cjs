@@ -89,7 +89,7 @@ const zsh = process.platform === 'darwin' ? fs.existsSync(ZSH) && ZSH : process.
 test('a real zsh terminal keeps the user start-up files and reports prompts, Codex and Claude Code', { skip: !zsh, timeout: 60000 }, async t => {
   const pty = require('node-pty');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-zsh-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const home = path.join(root, 'home'), bin = path.join(home, 'bin'), log = path.join(root, 'log');
   const project = path.join(root, "项目 空格 'q' $x");
   const sessionFolder = path.join(root, "sessions 'quoted'"), noteFile = path.join(sessionFolder, 'terminal-skills.txt');

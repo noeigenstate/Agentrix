@@ -23,7 +23,7 @@ test('host identities distinguish default SDK owner messages from workers and un
 });
 
 test('team session identities exclude CLI workers from restore and project memory without inspecting their text', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-provenance-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-provenance-')); t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
   const home = path.join(root, 'fake-home'), folder = path.join(home, 'projects', encodeClaudeCwd(root)); fs.mkdirSync(folder, { recursive: true });
   const worker = randomUUID(), owner = randomUUID();
@@ -39,7 +39,7 @@ test('team session identities exclude CLI workers from restore and project memor
 });
 
 test('host owner identities survive a fresh process without a query or a transcript marker', t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-owner-source-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-owner-source-')); t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const id = randomUUID(), runtimeFile = path.join(__dirname, '../electron/features/claude-sdk/index.cjs'), promptFile = path.join(__dirname, '../electron/prompt-queue.cjs');
   require(runtimeFile).createClaudeRuntime({ directory: root }).create({ owner: 'gui', cwd: root, providerSessionId: id }, () => {});
   const script = `require(${JSON.stringify(runtimeFile)}).createClaudeRuntime({directory:${JSON.stringify(root)}});process.stdout.write(String(require(${JSON.stringify(promptFile)}).promptText('Owner after restart',{sessionId:${JSON.stringify(id)},turnOrigin:'sdk',promptSource:'sdk',entrypoint:'sdk-ts'})));`;

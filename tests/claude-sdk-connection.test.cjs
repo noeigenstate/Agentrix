@@ -66,7 +66,7 @@ test('concurrent clicks coalesce and the reported latency excludes CLI inspectio
 
 function directory(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-billing-check-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true })); return root;
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })); return root;
 }
 const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value).reverse(), decryptString: value => Buffer.from(value).reverse().toString() };
 const specOf = root => ({ agent: 'claude', owner: 'gui', cwd: root, effort: 'high', fast: true,
