@@ -42,10 +42,12 @@ test('the guide card never outgrows the window: it clips, the buttons never shri
   assert.match(read('src/features/settings/settings.css'), /\.about-page \.release-groups, \.about-page \.release-notes \{ max-width: \d+px; \}/, 'the About change log has a comfortable line length');
 });
 
-test('this beta\'s notes come first as a group the list shows under its own heading, with the rest of the release under another', () => {
+test('a beta groups its new notes ahead of the rest under their own headings; a stable release lists every note ungrouped', () => {
   const marked = WHATS_NEW.map(note => note.group === 'new');
-  assert.ok(marked.some(Boolean) && marked.some(flag => !flag), 'both groups are present');
-  assert.deepEqual(marked, [...marked].sort((a, b) => Number(b) - Number(a)), 'the new notes are a prefix, so the release body keeps its order');
+  if (JSON.parse(read('package.json')).version.includes('-beta.')) {
+    assert.ok(marked.some(Boolean) && marked.some(flag => !flag), 'both groups are present');
+    assert.deepEqual(marked, [...marked].sort((a, b) => Number(b) - Number(a)), 'the new notes are a prefix, so the release body keeps its order');
+  } else assert.ok(!marked.some(Boolean), 'a stable release shows one list, so no note carries a group');
   assert.ok(WHATS_NEW.every(note => note.group === undefined || note.group === 'new'));
   const component = read('src/features/guide/ReleaseNotes.tsx'), css = read('src/features/guide/release-notes.css');
   for (const heading of ['本次测试版新增', '1.3.26 的其他更新']) {
