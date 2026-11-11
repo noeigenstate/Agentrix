@@ -419,7 +419,7 @@ def write_new(name, folder, data):
 def install_file(folder, name, data):
     """A new file of that name in folder (a descriptor), never replacing one: False when the name was taken meanwhile.
     As in finish_upload, a hard link installs the whole file at once; a file system without hard links (EPERM,
-    EOPNOTSUPP) gets it written under its name directly."""
+    EOPNOTSUPP, ENOTSUP) gets it written under its name directly."""
     temporary = ".agentrix-copy-" + os.urandom(6).hex()
     write_new(temporary, folder, data)
     try:
@@ -427,7 +427,7 @@ def install_file(folder, name, data):
         return True
     except FileExistsError: return False
     except OSError as error:
-        if error.errno not in (errno.EPERM, errno.EOPNOTSUPP): raise
+        if error.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP): raise
     finally: os.unlink(temporary, dir_fd=folder)
     try: write_new(name, folder, data)
     except FileExistsError: return False
@@ -1282,7 +1282,7 @@ class Worker:
                 try: info = os.stat(candidate, dir_fd=folder, follow_symlinks=False)
                 except FileNotFoundError: info = None
                 if info is not None:
-                    if stat.S_ISREG(info.st_mode):
+                    if stat.S_ISREG(info.st_mode) and info.st_size == len(data):
                         with open_regular(candidate, folder) as existing:
                             if file_digest(existing) == wanted: return "generated-images/" + candidate
                     continue

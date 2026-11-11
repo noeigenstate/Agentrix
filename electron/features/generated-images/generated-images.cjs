@@ -41,7 +41,8 @@ async function projectCopy(root, source, write) {
   if (!info?.isFile()) throw new Error('只能复制 Codex 生成的图片。');
   if (info.size > REMOTE_IMAGE_BYTES) throw new Error('图片太大，不复制到项目。');
   const folder = path.join(root, FOLDER);
-  if (write) await fs.mkdir(folder, { recursive: true });
+  // Never recursive: a project folder removed meanwhile is not made again.
+  if (write) await fs.mkdir(folder).catch(error => { if (error.code !== 'EEXIST') throw error; });
   const found = await fs.lstat(folder).catch(missing);
   if (!found) return null;
   if (!found.isDirectory()) throw new Error('项目里的 generated-images 不是普通文件夹。');
@@ -49,7 +50,7 @@ async function projectCopy(root, source, write) {
   for (let number = 1; number <= 1000; number++) {
     const file = number === 1 ? `${name}${ext}` : `${name}-${number}${ext}`, target = path.join(folder, file);
     const existing = await fs.lstat(target).catch(missing);
-    if (existing) { if (existing.isFile() && digest(await fs.readFile(target)) === wanted) return `${FOLDER}/${file}`; continue; }
+    if (existing) { if (existing.isFile() && existing.size === bytes.length && digest(await fs.readFile(target)) === wanted) return `${FOLDER}/${file}`; continue; }
     if (!write) return null;
     const handle = await fs.open(target, 'wx').catch(error => { if (error.code === 'EEXIST') return null; throw error; });
     if (!handle) continue;

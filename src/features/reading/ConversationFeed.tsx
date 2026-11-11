@@ -81,7 +81,7 @@ function DeferredPicture({ picture, projectId, result, onError }: { picture: Gen
       .catch(error => onError(String(error))).finally(() => setLoading(false));
   };
   return <>
-    <p className="reading-generated-copy"><button type="button" disabled={loading} onClick={load}>{t(loading ? '正在取回图片…' : '点击加载图片')}</button></p>
+    <p className="reading-generated-copy"><button type="button" className="reading-generated-load" disabled={loading} onClick={load}>{t(loading ? '正在取回图片…' : '点击加载图片')}</button></p>
     <GeneratedCopy picture={picture} projectId={projectId} onError={onError} />
   </>;
 }
