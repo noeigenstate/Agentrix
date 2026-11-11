@@ -225,7 +225,7 @@ function eventSink(filename) {
   }
   return event => {
     // A slow/disappeared app cannot retain unlimited rate or routing reports; the newest of each supersedes the older.
-    if (['dispatch-rate', 'dispatch-routing'].includes(event.type)) {
+    if (['dispatch-rate', 'dispatch-routing', 'dispatch-account'].includes(event.type)) {
       const index = queue.findIndex(value => value.type === event.type);
       if (index >= 0) queue.splice(index, 1);
     }
@@ -625,6 +625,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
       sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
       for (const fact of inputFacts.values()) send(fact);
+      if (heldLimits !== undefined) { reportAccount(heldLimits); heldLimits = undefined; }
     }
     if (final || rateTimer) return;
     rateTimer = setInterval(() => {
@@ -642,6 +643,21 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (['model', 'effort', 'fast'].every(key => route[key] === sentRoute[key])) return;
     sentRoute = route; send({ type: 'dispatch-routing', id, ...route });
   };
+  // The worker's own app-server reads its account and quota. A planner in a terminal has no native Codex session, so
+  // these reports are the pane's first-hand Codex reading. Each report reads the account afresh; it is named only with
+  // main's key (codexAccountKey, from a local control registration). Reports follow the start and stop at the end.
+  let codexAccountKey = null, heldLimits;
+  function reportAccount(limits) {
+    const codex = activeRuntime;
+    if (!codex || endSent) return;
+    if (!started) { heldLimits = limits; return; }
+    const named = !!codexAccountKey;
+    void codex.readAccount().then(connection => {
+      if (activeRuntime !== codex || endSent) return;
+      send({ type: 'dispatch-account', id, limits, connection: { kind: connection.kind, observedAt: connection.observedAt ?? null,
+        ...(named && connection.scopeId ? { scopeId: connection.scopeId } : {}) } });
+    });
+  }
   const changed = () => { confirm(); reroute(); };
   let output = new WorkerOutput(argv[0], changed);
   output.onInput = cliInput;
@@ -909,6 +925,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         for (const id of resumeControlIds) void recordReceipt(id, event.payload.status).catch(() => {});
       }
       else if (event.type === 'usage.updated' && !event.replay) output.nativeUsage(event.payload, !!(options.resume || resumeSession));
+      else if (event.type === 'limits.updated' && !event.replay && options.agent === 'codex') reportAccount(event.payload);
       else if (event.type === 'error' && (event.payload.code === 'billing_identity_mismatch' || event.payload.stage === 'startup'
         && ['sdk_initialization_timeout', 'sdk_startup_failed', 'native_cli_required', 'native_cli_outdated'].includes(event.payload.code))) signal(`transport ${id} claude-sdk: ${event.payload.message}`);
       else if (event.type === 'item.upsert' && event.payload.kind === 'agent-message' && event.payload.status === 'completed') {
@@ -971,6 +988,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+      endSent = true;
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();
@@ -1004,7 +1022,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (options.agent === 'codex') {
-          activeRuntime = createCodexRuntime({ resolveExecutable: async () => 'codex', spawnProcess: (_file, _args, spawnOptions) => {
+          codexAccountKey = controlClient?.accountKey || null;
+          activeRuntime = createCodexRuntime({ accountKey: codexAccountKey || undefined, resolveExecutable: async () => 'codex', spawnProcess: (_file, _args, spawnOptions) => {
             const command = resolveExecutable('codex', commandOf(effective), env); return launch(command.file, command.args, spawnOptions);
           } }).create(spec, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
@@ -1021,6 +1040,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
               : '：请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。' : ''}`);
           }
           child = { pid: activeRuntime.pid, exitCode: null };
+          // The read publishes limits.updated, which reports; an account without plan windows (an API key) reports without them.
+          void activeRuntime.readLimits().catch(() => reportAccount(null));
           pollTimer = setInterval(() => { void rollout.read(); }, POLL_INTERVAL);
           const receipt = await activeRuntime.send({ clientMessageId: randomUUID(), text: brief.toString('utf8'), images: options.images });
           if (receipt.status !== 'delivered') throw new Error('native_input_' + receipt.status);
@@ -1160,6 +1181,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...usage(),
         verdict: routingVerdict(output, declared()), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+      endSent = true;
     }
     log?.destroy();
     return 1;

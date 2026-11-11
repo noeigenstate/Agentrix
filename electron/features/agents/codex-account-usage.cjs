@@ -31,8 +31,11 @@ function environmentFingerprint(env) {
   return createHmac('sha256', fingerprintKey).update(JSON.stringify(values)).digest('hex');
 }
 
-// An account's opaque name, the same for every reader of account/read in this process; the identifiers never leave it.
-const accountScopeId = account => createHmac('sha256', fingerprintKey)
+// An account's opaque name, the same for every reader of account/read in this process. Its key is this process's own,
+// apart from the scope fingerprints': main hands it to its local dispatch helpers (dispatch-control), whose names for a
+// worker's account then match main's. The identifiers never leave the process that read them; only the name does.
+const accountKey = randomBytes(32).toString('hex');
+const accountScopeId = (account, key = accountKey) => createHmac('sha256', Buffer.from(key, 'hex'))
   .update(JSON.stringify([account?.type, account?.id, account?.accountId, account?.email])).digest('hex');
 
 function accountResult(result, at = Date.now()) {
@@ -589,4 +592,4 @@ class CodexAccountUsage {
   }
 }
 
-module.exports = { CodexAccountUsage, readCodexAccount, accountScopeId, consumeCodexResetCredit, usageAtLimit, resetCreditMessage, accountResult, usageScope, codexExecutable, configScope, accountConfigScope, scopePathKey };
+module.exports = { CodexAccountUsage, readCodexAccount, accountScopeId, accountKey, consumeCodexResetCredit, usageAtLimit, resetCreditMessage, accountResult, usageScope, codexExecutable, configScope, accountConfigScope, scopePathKey };

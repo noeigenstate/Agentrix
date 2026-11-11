@@ -957,6 +957,12 @@ function onEvent(event) {
   if (!s || event.sessionKey !== s.sessionKey) return;
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
+  if (event.type === 'dispatch-account') {
+    // The pane reads usage on its own; an account report changes nothing the window state shows. Only a call the
+    // session knows can report.
+    require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project), payload => observeDispatchAccount(project, payload));
+    return;
+  }
   if (['dispatch-start', 'dispatch-routing', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'].includes(event.type)) {
     if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project))) {
       if (event.type === 'dispatch-start' && event.agent === 'claude' && event.unconfirmed !== true) rememberClaudeSource(event.sessionId, 'dispatch');
@@ -1316,7 +1322,7 @@ function structuredEvent(id, event) {
 async function readNativeConnections(projectId) {
   const result = {}, observed = new Map();
   for (const agent of ['claude', 'codex']) {
-    const host = [...sessions.values()].reverse().find(s => (!projectId || s.projectId === projectId) && s.agent === agent && s.codexActive === true && s.status !== 'exited');
+    const host = liveHost(projectId, agent);
     if (!host) { result[agent] = projectAccounts.snapshot(projectId)?.[agent]?.connection || { kind: 'none', source: null, observedAt: null };
       result[agent] = { ...result[agent], active: false }; continue; }
     observed.set(agent, host);
@@ -1341,6 +1347,28 @@ async function readNativeConnections(projectId) {
   return result;
 }
 
+// The agent's running session in a project (any project without one), the latest started.
+function liveHost(projectId, agent) {
+  return [...sessions.values()].reverse().find(s => (!projectId || s.projectId === projectId) && s.agent === agent && s.codexActive === true && s.status !== 'exited');
+}
+
+// Per local project, the newest account and quota a dispatched Codex worker's own app-server reported, as a limits
+// payload; it outlives the worker. SSH workers' accounts belong to their host's channel.
+const dispatchAccounts = new Map();
+function observeDispatchAccount(project, payload) {
+  if (project.kind === 'ssh' || payload.observedAtMs < (dispatchAccounts.get(project.id)?.observedAtMs ?? -Infinity)) return false;
+  dispatchAccounts.set(project.id, payload); return true;
+}
+// A planner in a terminal has no Codex session, so a dispatched worker's report is the pane's Codex reading — but only
+// where the project has none of its own: no running Codex session, and no account the project's read named, unless the
+// report names that same account. Another account's report never displaces the project's. Old reports read as stale.
+function dispatchReading(projectId, account, staleAfterMs) {
+  const payload = dispatchAccounts.get(projectId), named = account?.connection?.scopeId;
+  if (!payload || liveHost(projectId, 'codex') || named && payload.accountScopeId !== named) return null;
+  if (payload.state !== 'ready' || Date.now() - payload.observedAtMs <= staleAfterMs) return payload;
+  return Object.defineProperty({ ...payload, state: 'stale' }, 'accountConnection', { value: payload.accountConnection });
+}
+
 function readNativeSubscriptionLimits(projectId) {
   const latest = candidates => candidates.filter(Boolean).sort((a, b) => (b.observedAtMs ?? -Infinity) - (a.observedAtMs ?? -Infinity))[0] || null;
   const account = projectAccounts.snapshot(projectId);
@@ -1348,7 +1376,7 @@ function readNativeSubscriptionLimits(projectId) {
   // Meters also hold the existing local-cache fallback. Reading them must never refresh an account.
   for (const s of localClaudeMeters()) if ((!projectId || s.projectId === projectId) && s.usage.limits.length) claude.push(subscriptionLimits({
     limits: s.usage.limits, at: s.usage.limitsAt, source: s.usage.limitsFrom }, 'claude-account', 120000));
-  const codex = projectId ? [subscriptionLimits(account?.codex, 'codex-account', 2 * codexAccounts.interval)]
+  const codex = projectId ? [subscriptionLimits(account?.codex, 'codex-account', 2 * codexAccounts.interval), dispatchReading(projectId, account?.codex, 2 * codexAccounts.interval)]
     : [...codexAccounts.entries].map(([key, entry]) => subscriptionLimits(entry.value, key, 2 * codexAccounts.interval));
   return { claude: latest(claude), codex: latest(codex) };
 }
@@ -1479,7 +1507,7 @@ async function initializeNativeSessions() {
     const worker = projectTeam(project.path)?.live().find(run => run.id === registration.runId);
     if (!worker) return null;
     return { runId: worker.id, projectId: registration.projectId, cwd: worker.cwd, worktree: worker.cwd, allow: worker.allow,
-      readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查', roundtable: worker.role === '圆桌' };
+      readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查', roundtable: worker.role === '圆桌', local: project.kind !== 'ssh' };
   } });
   ({ address: controlAddress } = await dispatchControl.listen());
   const directory = path.join(app.getPath('userData'), 'native-session');
@@ -1912,7 +1940,7 @@ function registerIpc() {
   }, getRecentProjects: () => store.recentProjects(), getRecentSSH: () => store.recentSSH(), forgetRecentSSH: (host, folder) => store.forgetSSH(host, folder), clearSSHHistory: () => store.clearSSHHistory(), existsSync: fs.existsSync,
     getRecentEntry: folder => store.recentEntry(folder), forgetRecent: folder => store.forget(folder), clearHistory: () => store.clearHistory(),
     getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews: id => previewResources.closeProject(id),
-    removeProject: id => { projectAccounts.close(id); codexAccounts.closeProject(id); store.remove(id); },
+    removeProject: id => { projectAccounts.close(id); codexAccounts.closeProject(id); dispatchAccounts.delete(id); store.remove(id); },
     forgetBranch, broadcast, acknowledgeProject: id => store.acknowledge(id), reorderProjects: ids => store.reorderProjects(ids), reorderTerminals,
     setProjectImage: (id, image, mode) => {
       store.setProjectImage(id, image, mode);

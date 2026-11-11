@@ -2,7 +2,7 @@ const readline = require('node:readline');
 const fs = require('node:fs');
 const path = require('node:path');
 const mode = process.env.SYNTHETIC_CODEX_MODE || 'normal';
-let threadId = 'synthetic-thread', turnId = 'turn-1', turns = 0, skillReads = 0;
+let threadId = 'synthetic-thread', turnId = 'turn-1', turns = 0, skillReads = 0, account = process.env.SYNTHETIC_CODEX_ACCOUNT;
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const notify = (method, params) => send({ method, params: { threadId, ...params } });
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -50,6 +50,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       return;
     }
     notify('item/agentMessage/delta', { turnId, itemId: 'message-' + turns, delta: 'partial 汉字' });
+    // Signing in to another account mid-turn: Codex says the account changed, then reports the new account's quota.
+    if (process.env.SYNTHETIC_CODEX_NEXT_ACCOUNT) setTimeout(() => {
+      account = process.env.SYNTHETIC_CODEX_NEXT_ACCOUNT;
+      notify('account/updated', {});
+      notify('account/rateLimits/updated', { rateLimits: { limitId: 'codex', primary: { usedPercent: 60, windowDurationMins: 300, resetsAt: 200 } } });
+    }, 20);
     if (mode === 'approval') send({ id: 91, method: 'item/commandExecution/requestApproval', params: { threadId, turnId, itemId: 'command', approvalId: 'a', command: 'echo example' } });
     if (mode === 'unread-worker' && params.input?.some(item => item.text?.includes('业主插话'))) setTimeout(() => {
       notify('item/completed', { turnId, item: { type: 'userMessage', id: 'resumed-input', clientId: params.clientUserMessageId, content: params.input } });
@@ -99,5 +105,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     } else result = { data: [{ id: mode === 'race' ? turnId : 'history', status: 'completed', items: [] }], nextCursor: 'next-page', backwardsCursor: null };
   }
   else if (request.method === 'account/usage/read') result = { tokenUsage: { totalTokens: 50 } };
+  // A synthetic account only when a test names one; otherwise account/read stays empty (an account nobody named).
+  else if (request.method === 'account/read' && account) result = { account: JSON.parse(account) };
   if (request.id !== undefined) send({ id: request.id, result });
 });
