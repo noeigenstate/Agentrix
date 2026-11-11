@@ -1645,7 +1645,8 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.deepEqual(asked, ['p1'], 'the read is scoped to the project in view');
   assert.match(html, /<h3 class="activity-card-title">运行方式与额度<\/h3>/);
   assert.match(claude, /<h4[^>]*>Claude<\/h4>/); assert.match(codex, /<h4[^>]*>Codex<\/h4>/);
-  assert.deepEqual(labels(claude), ['连接', '通道']); assert.deepEqual(labels(codex), ['连接', '通道']);
+  assert.deepEqual(labels(claude), ['通道', '连接']); assert.deepEqual(labels(codex), ['通道', '连接']);
+  assert.ok(claude.indexOf('<dt>通道</dt>') < claude.indexOf('<dt>连接</dt>'), '通道 precedes 连接');
   assert.ok(codex.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'), 'who pays and which way it runs are told apart');
   assert.ok(claude.includes('<dt>通道</dt><dd><span>原生模式</span></dd>'));
   assert.doesNotMatch(html, /最近切换/, 'the owner asked for no last-switch row, even after a switch');

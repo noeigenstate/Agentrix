@@ -160,8 +160,8 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   return <section className="api-agent" aria-label={NAMES[agent]}>
     <h4 className="api-agent-title">{NAMES[agent]}</h4>
     <dl className="api-usage">
-      <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
       {channel && <Row label={t('通道')}><span>{channel}</span></Row>}
+      <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
       {!shown && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
     </dl>
     {(current || shown) && <div className="activity-metrics">
