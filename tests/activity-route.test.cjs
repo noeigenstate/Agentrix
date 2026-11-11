@@ -689,7 +689,7 @@ test('an agent’s sections follow the connection: a session that reports plan w
   assert.doesNotMatch(agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: own }, { claude: 'unknown' }), 'Claude'), /5 小时额度/);
   // An API connection shows no subscription windows even when the session has some, and has no limit reset.
   const api = agentSection(usageMarkup('zh', { agent: 'codex', agentUsage: own }, { codex: 'api' }), 'Codex');
-  assert.doesNotMatch(api, /5 小时额度|activity-estop/); assert.match(api, /API 花费/);
+  assert.doesNotMatch(api, /5 小时额度|activity-estop|API 花费/);
 });
 
 test('the session’s own windows win when the screen read them after main did; main’s win otherwise, and neither an API connection nor another agent borrows them', () => {

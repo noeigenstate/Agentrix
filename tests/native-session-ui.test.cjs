@@ -1655,8 +1655,7 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.ok(codex.includes(connectionRow('account/read: ChatGPT login', 'ChatGPT 订阅')));
   // An API connection: the budget as a bar (a share of the month's spend) and the spend, never the subscription windows.
   assert.match(claude, /<span class="activity-metric-label">月预算<\/span><span class="activity-meter[^"]*" role="meter"[^>]*aria-valuenow="25"[^>]*>[\s\S]*?<b>25%<\/b><small>本月 \$12\.40 \/ \$50\.00<\/small>/);
-  assert.match(claude, /<span class="activity-metric-label">API 花费<\/span><small>今日 \$1\.23 · 本月 \$12\.40 · 估算<\/small>/); assert.match(claude, /title="估算，按公开价格计算"/);
-  assert.ok(claude.indexOf('月预算') < claude.indexOf('API 花费'));
+  assert.doesNotMatch(claude, /API 花费|今日|估算|在控制台核对/, 'the spend row and the standalone console button are not shown');
   assert.doesNotMatch(claude, /5 小时额度|每周额度|额度来自/);
   // A subscription: the two windows as the same bars, never spend or a budget.
   assert.match(codex, /<span class="activity-metric-label">5 小时额度<\/span>[\s\S]*?aria-valuenow="40"[\s\S]*?<b[^>]*>40%<\/b><small>[^<]+ 重置<\/small>/);
@@ -1678,10 +1677,10 @@ test('the usage block says 未知 for what nobody gave and keeps a real zero as 
   // An API connection: a real zero is $0.00; a missing amount is 未知; a budget with no known spend has no share and no bar; no budget says 未设置.
   const api = patch => usageHtml({ usage: async () => ({ ok: true, value: usageOf({ ...patch }) }) });
   const none = await api({ todayUsdMicros: 0, monthUsdMicros: null, budgetUsd: null });
-  assert.match(none, /<small>今日 \$0\.00 · 本月 未知 · 估算<\/small>/); assert.match(none, /<span class="activity-metric-label">月预算<\/span><small>未设置<\/small>/); assert.doesNotMatch(usageSection(none, 'Claude'), /role="meter"/);
+  assert.doesNotMatch(none, /今日|估算/); assert.match(none, /<span class="activity-metric-label">月预算<\/span><small>未设置<\/small>/); assert.doesNotMatch(usageSection(none, 'Claude'), /role="meter"/);
   const noShare = await api({ monthUsdMicros: null });
   assert.match(noShare, /<span class="activity-metric-label">月预算<\/span><b[^>]*>未知<\/b><small>本月 未知 \/ \$50\.00<\/small>/); assert.doesNotMatch(usageSection(noShare, 'Claude'), /role="meter"/, 'no spend, no share, no bar');
-  assert.match(await api({ todayUsdMicros: null, monthUsdMicros: null }), /<small>今日 未知 · 本月 未知 · 估算<\/small>/, 'records with missing amounts stay unknown, never $0.00');
+  assert.doesNotMatch(await api({ todayUsdMicros: null, monthUsdMicros: null }), /今日|估算|API 花费/, 'no spend row, whatever the amounts');
   // The warning colour only from 90%.
   assert.doesNotMatch(usageSection(await api({ monthUsdMicros: 44_000_000 }), 'Claude'), /is-warn/); assert.match(await api({ monthUsdMicros: 45_000_000 }), /activity-metric is-warn activity-figure/);
   // A rate-limited subscription with no window says so rather than a number.
@@ -1691,14 +1690,12 @@ test('the usage block says 未知 for what nobody gave and keeps a real zero as 
 
 test('the usage block distinguishes no API records from records with unknown or zero spend, and Codex on the API has none to show', async () => {
   const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ apiRecords: false, todayUsdMicros: null, monthUsdMicros: null, budgetUsd: null }) }) });
-  assert.match(usageSection(html, 'Claude'), /<span class="activity-metric-label">API 花费<\/span><small>还没有 API 用量记录<\/small>/);
-  assert.doesNotMatch(usageSection(html, 'Claude'), /估算|今日|本月|role="meter"|最近切换/);
+  assert.doesNotMatch(usageSection(html, 'Claude'), /API 花费|API 用量记录|估算|今日|本月|role="meter"|最近切换/);
   assert.doesNotMatch(usageSection(html, 'Codex'), /API 用量记录/);
   // Codex through the API: the same words and no budget (there is no spend record to measure one against).
   const codexApi = usageOf({  }); codexApi.agents.codex.connection = { kind: 'api', source: 'account/read: API key', observedAt: 1 };
   const codex = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: codexApi }) }), 'Codex');
-  assert.match(codex, /<span class="activity-metric-label">API 花费<\/span><small>还没有 API 用量记录<\/small>/);
-  assert.doesNotMatch(codex, /月预算|5 小时额度|每周额度|role="meter"/);
+  assert.doesNotMatch(codex, /API 花费|API 用量记录|月预算|5 小时额度|每周额度|role="meter"/);
 });
 
 test('the allowance of each agent follows its connection: the current session’s agent leads with the context and ends with the round, windows come from main with the session’s own as fallback', async () => {
@@ -1759,10 +1756,10 @@ test('an account signed in while the agent has no main session names its plan an
   assert.match(claude, /<dd><span[^>]*>API<\/span><\/dd>/); assert.match(codex, /<dd><span[^>]*>ChatGPT 订阅<\/span><\/dd>/);
   assert.doesNotMatch(html, /未开会话/, 'a sub-agent may be running on this account, so no session is not something the pane can say');
   assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.match(codex, /额度来自 Codex/);
-  assert.match(claude, /月预算/); assert.match(claude, /API 花费/);
+  assert.match(claude, /月预算/); assert.doesNotMatch(claude, /API 花费/);
   assert.doesNotMatch(html, /上下文长度|本轮|本次对话|<dt>额度<\/dt>/, 'no session: no context, no round, no empty row');
   const signed = { ...base.agents.codex, connection: c('api', false) }, codexApi = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: { ...base.agents, codex: signed } }) }) }), 'Codex');
-  assert.match(codexApi, /还没有 API 用量记录/);
+  assert.doesNotMatch(codexApi, /API 用量记录|API 花费|activity-metrics/);
 });
 
 test('a connection test reads as four lines, each with a tone and a next step for what failed, and nothing in it can carry the key', () => {
@@ -2412,9 +2409,9 @@ test('the usage block tells the provider’s notice with its recovery time only 
   assert.match(rejected, /已限流，约 [^<]+ 恢复/);
   const both = usageSection(await api({}, { providerStatus: 'rejected', notice: { code: 'rate_limited', message: 'API 请求受到限流。', resetsAtMs: null } }), 'Codex');
   assert.doesNotMatch(both, /已限流/); assert.match(both, /API 请求受到限流。/);
-  // The billing link: Claude on the API only, with the spend still marked as an estimate.
+  // No standalone billing link under the spend (there is no spend row); the button is only beside a balance-rejection notice.
   const html = await api({}), claude = usageSection(html, 'Claude');
-  assert.ok(claude.includes('<button type="button" class="text-button api-billing">在控制台核对</button>')); assert.ok(claude.includes('今日 $1.23 · 本月 $12.40 · 估算'));
+  assert.doesNotMatch(claude, /在控制台核对|api-billing|今日|估算/);
   assert.doesNotMatch(usageSection(html, 'Codex'), /在控制台核对/);
   const subscription = usageOf({  }); subscription.agents.claude.connection = { kind: 'subscription', source: null, observedAt: 1 };
   assert.doesNotMatch(await usageHtml({ usage: async () => ({ ok: true, value: subscription }) }), /在控制台核对/);
@@ -2426,14 +2423,14 @@ test('a balance rejection brings the console button next to its notice in the us
   const api = claude => { const value = usageOf({}); Object.assign(value.agents.claude.limits, claude); return usageHtml({ usage: async () => ({ ok: true, value }) }); };
   const notice = patch => ({ code: 'credits_required', message: line, resetsAtMs: null, action: 'check-console', url, ...patch });
   const withBoth = usageSection(await api({ providerStatus: 'rejected', ordinaryUsageAllowed: false, notice: notice() }), 'Claude');
-  assert.equal(count(withBoth, '>在控制台核对</button>'), 1, 'the spend row’s button and the notice’s are one button');
+  assert.equal(count(withBoth, '>在控制台核对</button>'), 1, 'only the notice has the button');
   assert.ok(withBoth.indexOf(line) < withBoth.indexOf('在控制台核对'), 'it stands beside the notice that says why'); assert.equal(count(withBoth, line), 1);
   const noSpend = usageOf({ apiRecords: false }); noSpend.agents.claude.limits.notice = notice();
   const alone = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: noSpend }) }), 'Claude');
   assert.equal(count(alone, '>在控制台核对</button>'), 1, 'a notice without API records still has the button');
   for (const other of [notice({ url: 'https://example.com/billing' }), notice({ url: undefined }), notice({ action: undefined })]) {
     const section = usageSection(await api({ providerStatus: 'rejected', notice: other }), 'Claude');
-    assert.equal(count(section, '>在控制台核对</button>'), 1, 'only the spend row’s button remains'); assert.ok(section.indexOf('在控制台核对') < section.indexOf(line));
+    assert.equal(count(section, '>在控制台核对</button>'), 0, 'no standalone button remains: an unknown address or action has none'); assert.match(section, new RegExp(line));
   }
   const none = usageOf({ apiRecords: false }); none.agents.claude.limits.notice = notice({ url: 'https://example.com/billing' });
   assert.doesNotMatch(usageSection(await usageHtml({ usage: async () => ({ ok: true, value: none }) }), 'Claude'), /在控制台核对/, 'an unknown address has no button at all');

@@ -126,19 +126,15 @@ function QuotaMetrics({ limits, current, usage }: { limits: LimitsPayload | null
   </>;
 }
 
-// API spend (an estimate from tokens at public prices) and the monthly budget: a bar when one is set, else "未设置". Codex has no spend record.
-function ApiMetrics({ agent, usage }: { agent: NativeAgent; usage: NativeUsage }) {
+// The monthly budget: a bar when one is set, else "未设置". The spend row is not shown (it is still recorded);
+function ApiMetrics({ usage }: { usage: NativeUsage }) {
   const { budgetUsd, monthUsdMicros } = usage;
   const share = budgetUsd && typeof monthUsdMicros === 'number' ? Math.round(monthUsdMicros / (budgetUsd * 1e6) * 100) : null;
-  if (agent === 'codex') return <Metric className="activity-tokens" label={t('API 花费')} note={t('还没有 API 用量记录')} />;
   return <>
     {budgetUsd === null
       ? <Metric className="activity-tokens" label={t('月预算')} note={t('未设置')} />
       : <Metric className="activity-figure" label={t('月预算')} percent={share ?? undefined} value={share === null ? t('未知') : `${share}%`} meterLabel={t('月预算已用 {percent}', { percent: `${share}%` })}
         note={`${t('本月 {amount}', { amount: money(monthUsdMicros) })} / $${budgetUsd.toFixed(2)}`} />}
-    {usage.apiRecords === false
-      ? <Metric className="activity-tokens" label={t('API 花费')} note={t('还没有 API 用量记录')} />
-      : <Metric className="activity-tokens" label={t('API 花费')} title={t('估算，按公开价格计算')} note={`${t('今日 {amount}', { amount: money(usage.todayUsdMicros) })} · ${t('本月 {amount}', { amount: money(monthUsdMicros) })} · ${t('估算')}`} />}
   </>;
 }
 
@@ -154,8 +150,10 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
   // A session that reported plan windows of its own is on a plan even when main could not tell the connection (a terminal session): its bars show, and it is not 额度 未知.
   const plan = kind === 'subscription' || (kind !== 'api' && current && windowsFromScreen(tokens).length > 0), shown = plan || kind === 'api';
-  // The console button is the owner's way to check a rejection for balance, next to the notice that says it; the one the spend row has is not shown twice.
-  const billing = agent === 'claude' && kind === 'api' && usage?.apiRecords !== false && !!projectId, checkNotice = !!notice && !!projectId && consoleCheck(state?.limits?.notice);
+  // The console button is the owner's way to check a rejection for balance, shown only next to the notice that says it.
+  const checkNotice = !!notice && !!projectId && consoleCheck(state?.limits?.notice);
+  // Only Claude on the API has a budget to show; Codex on the API has nothing of its own, so no empty block.
+  const budgeted = agent === 'claude' && kind === 'api' && !!usage;
   const source = plan ? quotaSource(agent, state?.limits, current, tokens) : null;
   return <section className="api-agent" aria-label={NAMES[agent]}>
     <h4 className="api-agent-title">{NAMES[agent]}</h4>
@@ -164,13 +162,12 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
       <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
       {!shown && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
     </dl>
-    {(current || shown) && <div className="activity-metrics">
+    {(current || plan || budgeted) && <div className="activity-metrics">
       {current && <ContextMetric usage={tokens} />}
       {plan && <QuotaMetrics limits={state?.limits} current={current} usage={tokens} />}
-      {kind === 'api' && usage && <ApiMetrics agent={agent} usage={usage} />}
+      {budgeted && <ApiMetrics usage={usage} />}
       {current && rows.map(([label, counted]) => counted && <TokenMetric key={label} label={label} tokens={counted} />)}
     </div>}
-    {billing && !checkNotice && <BillingLink projectId={projectId} />}
     {notice && <p className="activity-note" role="status">{[notice.text, notice.resets].filter(Boolean).join(' · ')}</p>}
     {notice && checkNotice && <BillingLink projectId={projectId} />}
     {source && <p className="activity-note">{source}</p>}
