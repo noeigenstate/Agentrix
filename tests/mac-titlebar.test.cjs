@@ -446,7 +446,7 @@ function buildFixture(t, environment = {}) {
   const buildRoot = path.join(root, 'native/mac-titlebar/build');
   fs.mkdirSync(buildRoot, { recursive: true });
   const directory = fs.mkdtempSync(path.join(buildRoot, 'test-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const source = path.join(directory, 'native/mac-titlebar');
   fs.mkdirSync(source, { recursive: true });
   for (const file of ['binding.gyp', 'titlebar.mm']) fs.writeFileSync(path.join(source, file), 'test source');

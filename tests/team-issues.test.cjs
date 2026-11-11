@@ -14,7 +14,7 @@ function lab(t) {
   const team = projectTeam(directory, true);
   team.append({ type: 'meeting', meeting: 'r', id: 'task', session: 's', agent: 'codex', model: 'gpt-6.1-sol', status: 'understood',
     title: 'Task', understanding: { goal: 'a', files: 'b', provides: 'c', uses: 'd', doneWhen: 'e', questions: 'none' } });
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return team;
 }
 const issue = { issue: 'scope', raisedBy: 'Sol', answer: 'split module', result: 'changed the plan' };

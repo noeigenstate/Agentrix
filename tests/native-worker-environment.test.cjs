@@ -16,7 +16,7 @@ const synthetic = { PATH: '', ANTHROPIC_API_KEY: 'synthetic-key', anthropic_auth
 for (const sdkParent of [false, true]) test(`N5: CLI preserves owner authentication and strips only marked SDK authentication (marked=${sdkParent})`, async t => {
   const lifetime = resources(t);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-env-test-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const brief = path.join(root, 'brief.md'), out = path.join(root, 'answer.md'); fs.writeFileSync(brief, 'Synthetic task');
   let stdout = '', launched = false;
   const code = await run(['claude', '--role', 'review', '--title', 'Synthetic CLI', '--model', 'synthetic-model', '--effort', 'high',

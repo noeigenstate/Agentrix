@@ -15,7 +15,7 @@ const conversations = [[], argv, ['--profile', 'other'], ['exec', 'task'], ['rev
 const managed = [...TERMINAL_COMMANDS.map(word => [word]), ['mcp', 'add', 'name with space', '--env', 'A="b c"', '中文 \\ end\\', '']];
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-wrapper-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return root;
 }
 const powershell = () => path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');

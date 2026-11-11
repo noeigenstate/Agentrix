@@ -151,7 +151,7 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
     if (!finished) { control.close(); await lifetime.wait(claude.close(), 'stop Claude'); }
     await lifetime.wait(result, `helper result; output=${stdout}`);
   });
-  t.after(() => { calls.reset(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  t.after(async () => { calls.reset(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   await until(() => sdk.inputs.length === 1);
   const id = team.live()[0].id;
   target = { terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, route: 'dispatch', runId: id,

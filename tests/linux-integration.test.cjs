@@ -116,7 +116,7 @@ for (const loginFiles of [false, true]) test(loginFiles
 { skip: loginFiles ? process.platform !== 'darwin' : !['linux', 'darwin'].includes(process.platform) || !findShell('bash'), timeout: 60000 }, async t => {
   const pty = require('node-pty');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pg-bash-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const home = path.join(root, 'home'), bin = path.join(home, 'bin'), log = path.join(root, 'log');
   const project = path.join(root, "项目 空格 'q' $x");
   const sessionFolder = path.join(root, "sessions 'quoted'"), noteFile = path.join(sessionFolder, 'terminal-skills.txt');

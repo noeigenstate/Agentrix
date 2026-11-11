@@ -8,7 +8,7 @@ const { repoFiles, snapshot, changedBetween, boundariesFor } = require('../elect
 
 function repository(t) {
   const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-boundaries-')));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   fs.mkdirSync(path.join(directory, 'src'));
   for (const file of ['a.js', 'b.js']) fs.writeFileSync(path.join(directory, 'src', file), 'base\n');
   fs.writeFileSync(path.join(directory, 'src/BOUNDARY.md'), '# Boundary: Src\n\n## Owns\n- `src/**`\n');
@@ -45,7 +45,7 @@ test('snapshots retain staged working-tree untracked and rename status without c
 
 test('boundary helpers keep their existing outside-git results', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-no-boundary-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   assert.equal(repoFiles(directory), null); assert.equal(snapshot(directory), null);
   assert.deepEqual(boundariesFor(directory, ['**']), []);
 });

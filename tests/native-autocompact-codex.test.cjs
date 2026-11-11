@@ -41,7 +41,7 @@ for (const mode of ['configured', 'default', 'below-limit', 'post-turn-on', 'pos
     return child;
   } });
   const session = runtime.create({ owner: 'gui', cwd, env, projectId: 'p', terminalId: 't', runtimeSessionId: randomUUID(), readOnly: true, policy: { approvalPolicy: 'never' } }, event => events.push(event));
-  t.after(async () => { await session.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  t.after(async () => { await session.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const wait = async count => { for (let i = 0; i < 1500; i++) { if (events.filter(row => row.type === 'turn.completed').length >= count) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail(JSON.stringify({ requests, events: events.slice(-4) })); };
   await session.start();
   for (const [index, text] of ['Offline input one', 'Offline input two'].entries()) { await session.send({ clientMessageId: 'input-' + index, text }); await wait(index + 1); }

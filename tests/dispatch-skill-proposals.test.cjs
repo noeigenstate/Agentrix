@@ -18,7 +18,7 @@ function fixture(t, allow = ['skills/**'], linked = true) {
   if (linked) git(['worktree', 'add', '-qb', 'worker', root]);
   const options = { cwd: root, allow, out: path.join(root, 'answer.md') };
   put(path.join(root, 'skills/old/SKILL.md'), 'Existing uncommitted contents.\r\n');
-  t.after(() => fs.rmSync(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(parent, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { root, main, parent, options, file: path.join(root, 'skills/old/SKILL.md') };
 }
 

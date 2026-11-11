@@ -8,7 +8,7 @@ const { createCodexRuntime } = require('../electron/features/codex-app-server/in
 
 test('Codex lists only enabled bound skills, caches reads, invalidates changes and attaches a selected skill by host path', async t => {
   const lifetime = resources(t), root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-codex-commands-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const log = path.join(root, 'wire.jsonl'), skill = path.join(root, 'offline/SKILL.md');
   const runtime = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: (_file, _args, options) => {
     return lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options));

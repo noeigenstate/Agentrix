@@ -15,7 +15,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function directory(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-review-'));
   disposers.set(root, []);
-  t.after(async () => { for (const close of disposers.get(root)) await close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); disposers.delete(root); }); return root;
+  t.after(async () => { for (const close of disposers.get(root)) await close(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); disposers.delete(root); }); return root;
 }
 function codex(t, root, extra = {}) {
   const log = path.join(root, 'wire');

@@ -13,7 +13,7 @@ function lab(t, withJournal = true) {
   const common = path.join(directory, '.git'); fs.mkdirSync(common);
   const journalDirectory = path.join(common, 'agentrix'); if (withJournal) fs.mkdirSync(journalDirectory);
   const file = path.join(journalDirectory, 'journal.jsonl');
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { directory, common, journalDirectory, file };
 }
 
@@ -84,7 +84,7 @@ test('non-git results are cached per path until the dashboard opens again or tha
 test('reopening the dashboard discovers a project initialized as Git after a cached miss and keeps successful probes', async t => {
   const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-git-init-')));
   const source = new DashboardJournals({ getProjects: () => [{ id: 'p', name: 'P', kind: 'local', path: directory }], changed() {} });
-  t.after(() => { source.stop(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  t.after(async () => { source.stop(); await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   await source.start(); assert.deepEqual(await source.read(), []);
   execFileSync('git', ['init', '-q'], { cwd: directory, windowsHide: true, stdio: 'ignore' });
   const common = fs.realpathSync.native(path.join(directory, '.git')), journalDirectory = path.join(common, 'agentrix');
@@ -135,7 +135,7 @@ test('the default journal resolver reads an isolated real Git common directory w
   const journal = path.join(directory, '.git', 'agentrix', 'journal.jsonl'); fs.mkdirSync(path.dirname(journal));
   fs.writeFileSync(journal, JSON.stringify({ type: 'consolidate', time: 100, meeting: 'real-common' }) + '\n');
   const source = new DashboardJournals({ getProjects: () => [{ id: 'p', name: 'P', kind: 'local', path: directory }], changed() {} });
-  t.after(() => { source.stop(); fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  t.after(async () => { source.stop(); await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const result = await source.read();
   assert.equal(result.length, 1); assert.equal(result[0].entries[0].meeting, 'real-common');
   assert.equal(result[0].key, fs.realpathSync.native(path.join(directory, '.git')));

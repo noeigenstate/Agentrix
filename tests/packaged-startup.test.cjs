@@ -189,7 +189,7 @@ for (const [platform, arch] of [['win32', 'x64'], ['darwin', 'arm64'], ['linux',
 
 for (const arch of ['x64', 'arm64']) test(`packaged Linux ${arch} retains every main-process startup dependency and the standalone dispatch runtime`, { timeout: 45000 }, async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-package-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const { FileMatcher, getFileMatchers } = posixBuilderModule('fileMatcher.js');
   const expand = value => value.replaceAll('${platform}', 'linux').replaceAll('${arch}', arch);
   const extras = getFileMatchers(build, 'extraResources', '/resources', {

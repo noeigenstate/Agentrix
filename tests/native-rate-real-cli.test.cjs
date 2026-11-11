@@ -119,7 +119,7 @@ test('real Codex 0.166 streaming notifications feed the native main rate without
     return child;
   } });
   const session = runtime.create({ owner: 'gui', cwd, env, projectId: 'p', terminalId: 't', runtimeSessionId: randomUUID(), readOnly: true, policy: { approvalPolicy: 'never' } }, event => { events.push(event); usage.apply(event, event.type === 'usage.updated' ? session.tokenRate() : null); });
-  t.after(async () => { await session.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  t.after(async () => { await session.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const wait = async check => { for (let i = 0; i < 1200; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail('real Codex rate did not settle'); };
   await session.start(); await session.send({ clientMessageId: 'rate-input', text: 'Offline rate proof' });
   await wait(() => wire.some(row => row.method === 'item/agentMessage/delta'));

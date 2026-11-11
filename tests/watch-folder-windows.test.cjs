@@ -102,7 +102,7 @@ async function liveAliasWatchers() {
 test('native watchers follow real Windows 8.3 aliases without changing caller-visible paths', { skip: process.platform !== 'win32' && 'Windows 8.3 directory aliases are required' }, async t => {
   const { timeoutScale } = await import('../scripts/wait.mjs');
   const directory = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'agentrix native watcher long directory '));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const script = "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); $files = New-Object -ComObject Scripting.FileSystemObject; $folder = $files.GetFolder($env:AGENTRIX_WATCH_ALIAS_DIRECTORY); [Console]::Write(($folder.ShortPath | ConvertTo-Json -Compress))";
   const aliasResult = spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     env: { ...process.env, AGENTRIX_WATCH_ALIAS_DIRECTORY: directory }, encoding: 'utf8', windowsHide: true, timeout: 10000 * timeoutScale,

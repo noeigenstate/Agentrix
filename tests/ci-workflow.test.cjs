@@ -406,7 +406,7 @@ test('the release shell verifies and lists Windows-only beta assets and keeps st
   for (const beta of [true, false]) {
     await t.test(beta ? 'Windows beta' : 'full stable release', () => {
       const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-release-assets-'));
-      t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+      t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
       const assets = path.join(directory, 'release-assets');
       fs.mkdirSync(assets);
       const version = beta ? '8.2.7-beta.12' : '8.2.7';
@@ -611,7 +611,7 @@ test('the extracted selector returns IDs for reuse and selects only current-run 
 
 test('selector CLI falls back with empty outputs on lookup failure but fails current-run selection without leaking errors', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-ci-select-build-'));
-  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const output = path.join(directory, 'reuse-output');
   const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path')), PATH: '',
     GH_TOKEN: 'private-test-token', GITHUB_REPOSITORY: 'owner/Agentrix', GITHUB_SHA: 'a'.repeat(40),

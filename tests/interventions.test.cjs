@@ -21,7 +21,7 @@ async function fixture(t) {
     route: 'dispatch', runId: id, title: 'Synthetic worker', cwd: repo, projectPath: repo, local: true };
   const notifications = [], observedInputs = [];
   const api = createInterventions({ resolve: () => target, noteInput: (bound, id) => observedInputs.push({ callId: bound.callId, id }), sendParentPrompt: (terminal, text) => { notifications.push({ terminal, text }); }, now: () => 1000 });
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   return { root, repo, team, id, inbox, target, notifications, observedInputs, api };
 }
 

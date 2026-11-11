@@ -25,7 +25,7 @@ function fixture(t, options = {}) {
   const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only',
     inspectCli: async () => ({ status: 'ok', version: '2.1.318' }), initializationTimeoutMs: options.initializationTimeoutMs });
   factory.credentials.save(key);
-  t.after(async () => { await factory.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  t.after(async () => { await factory.close(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const events = [], spec = { agent: 'claude', owner: 'gui', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', cwd: root, env };
   const session = factory.create(spec, event => events.push(event));
   return { root, env, fake, factory, events, spec, session, ownerFile };

@@ -13,7 +13,7 @@ const { apiEnvironment } = require('../electron/features/claude-sdk/credentials.
 for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_json', 'missing_file', 'missing_capability', 'missing_session_key', 'rejected_registration', 'dead_address']) {
   test(`helper startup diagnoses ${scenario} without exposing bootstrap paths or credentials`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-startup-')), lifetime = resources(t);
-    t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+    t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
     const control = createDispatchControl({ resolveRun: auth => auth.capability === 'synthetic-capability'
       ? { runId: auth.runId, projectId: 'p', agent: 'codex', cwd: root, allow: [], readOnly: true } : null });
     const { address } = await control.listen(); lifetime.defer('close control', () => control.close());
@@ -69,7 +69,7 @@ for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_
 
 test('a GUI Claude SDK planner passes its bootstrap to the helper and its CLI fallback uses the inherited default config', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-gui-bootstrap-')), lifetime = resources(t);
-  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const control = createDispatchControl({ resolveRun: auth => auth.sessionKey === 'synthetic-session' && auth.capability === 'synthetic-capability'
     ? { runId: auth.runId, projectId: 'p', agent: 'claude', cwd: root, allow: [], readOnly: true } : null });
   const { address } = await control.listen(); lifetime.defer('close control', () => control.close());
