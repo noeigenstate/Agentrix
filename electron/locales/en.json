@@ -3118,5 +3118,11 @@
   "检查没有通过。先在「运行方式」里保存 API 密钥，再点「测试连接」查看原因。": "The check did not pass. Save an API key under Run mode first, then click Test connection to see why.",
   "终端用版本 {version}": "Terminal uses version {version}",
   "终端用的版本未知": "Terminal's version unknown",
-  "安装不完整 · 点击查看": "Incomplete install · click to see"
+  "安装不完整 · 点击查看": "Incomplete install · click to see",
+  "终端输入框里还有一段文字，新消息排在它后面": "The terminal input still holds some text; new messages wait behind it",
+  "终端输入框里留着已发送的文字": "The terminal input still shows text that was already sent",
+  "先发送终端里这段": "Send the terminal's text first",
+  "清空它，再发送新消息": "Clear it, then send the new message",
+  "排在终端输入框里那段文字后面": "Waiting behind the text in the terminal input",
+  "终端还没准备好，这次没有中断，请稍后再试。": "The terminal is not ready, so nothing was interrupted. Try again in a moment."
 }

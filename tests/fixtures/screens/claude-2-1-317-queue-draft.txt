@@ -1,0 +1,30 @@
+
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   <project-root>
+
+
+❯ SLOW_TURN start working
+
+❯ QUEUED_ONE first queued message
+
+❯ QUEUED_TWO second queued message
+
+❯ QUEUED_ONE first queued message
+  ctrl+x ctrl+s to send now
+
+
+
+
+
+
+
+
+
+
+✽ Befuddling… (7s · ↓ 11 tokens)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ DRAFT_NOT_SENT words still being typed
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

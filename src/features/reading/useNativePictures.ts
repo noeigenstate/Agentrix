@@ -35,10 +35,23 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
     if (!hasCliInput(agent, current.rows, screen) || cliDialogShown(agent, current.rows, screen)) return null;
     return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen) };
   };
+  // readInput reads nothing while xterm parses a write. Claude Code's busy output keeps it parsing, so a send waits for
+  // a parsed frame (half a second at most) instead of taking the absent input for a missing or empty one.
+  const parsing = () => !!readScreen(terminalId)?.pending;
+  const settle = async (owns: () => boolean) => {
+    for (let tries = 0; tries < 10 && owns() && parsing(); tries++) await new Promise(resolve => setTimeout(resolve, 50));
+  };
+  // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
   const clearInput = async (owns: () => boolean) => {
-    for (let tries = 0; tries < 30 && owns() && readInput()?.text; tries++) {
+    for (let tries = 0; owns(); tries++) {
+      if (parsing()) await settle(owns);
+      const current = owns() ? readInput() : null;
+      if (!current) return false;
+      if (!current.text) return true;
+      if (tries === 30) return false;
       window.agentrix.writeTerminal(terminalId, '\x15'); await new Promise(resolve => setTimeout(resolve, 80));
     }
+    return false;
   };
   // Observe a new chip only against this paste's exact baseline; existing chips are not receipts for a later paste.
   const observe = (batch: readonly NativeImage[] = images) => {
@@ -108,7 +121,7 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
     } catch (error) { if (owns()) onError(String(error)); }
     finally { if (valid() && interaction.current === intent) sending.current = false; }
   };
-  return { images, clear, readInput, clearInput, observe, paste, remove,
+  return { images, clear, readInput, parsing, settle, clearInput, observe, paste, remove,
     prepare: (batch: readonly NativeImage[]) => Promise.all(batch.map(image => context.pastes.get(image.id)?.ready)),
     numbers: images.map((image, index) => Number(context.pastes.get(image.id)?.label?.match(/\d+/)?.[0] ?? index + 1)),
   };

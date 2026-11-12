@@ -53,3 +53,4 @@ test('a positively parsed current permission dialog stays waiting after newer si
   frame.pending = true; assert.equal(cliStateFor('claude', frame, terminal).waiting, true, 'an in-flight write cannot hide the dialog still on screen');
   frame.sessionId = 'previous-pty'; assert.equal(cliStateFor('claude', frame, terminal).waiting, false);
 });
+

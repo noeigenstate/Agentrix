@@ -1,0 +1,30 @@
+
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   <project-root>
+
+
+❯ SLOW_TURN start working
+
+❯ QUEUED_ONE first queued message
+
+❯ QUEUED_TWO second queued message
+  ctrl+x ctrl+s to send now
+
+
+
+
+
+
+
+
+
+
+
+
+✶ Befuddling… (4s · ↓ 6 tokens)
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Press up to edit queued messages
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · esc to interrupt · ← for agents
