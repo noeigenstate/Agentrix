@@ -87,7 +87,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
     require: name => {
       if (name === 'electron') return { safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: forbidden } };
       if (name === './features/agents/dispatch-events.cjs') return require('../electron/features/agents/dispatch-events.cjs');
-      if (name === './features/team/team.cjs') return { projectTeam: forbidden };
+      if (name === './features/team/team-locate.cjs') return { locateTeam: forbidden };
       assert.fail(`unexpected require: ${name}`);
     },
     importFixture: async name => {

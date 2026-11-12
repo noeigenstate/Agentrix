@@ -540,6 +540,23 @@ test('without bootstrap or with a stalled pipe the worker still runs and finishe
   assert.ok(Date.now() - began < 2000, 'the worker never awaits pipe acknowledgments');
 });
 
+// The planner's output is the only place it learns that Agentrix heard nothing; the worker's own run is unaffected (no event waits for the pipe).
+test('a pipe that cannot be reached is said once on the worker’s output and the worker still runs', async t => {
+  const gone = process.platform === 'win32' ? `agentrix-gone-${randomUUID()}` : path.join(os.tmpdir(), `agx-gone-${randomUUID().slice(0, 8)}.sock`);
+  const unreachable = await fixture(t, codex, { bootstrap: false, environment: async directory => {
+    const file = path.join(directory, 'unreachable.json');
+    await fs.writeFile(file, JSON.stringify({ pipeName: gone, sessionKey: 'secret-for-test', projectId: 'project' }));
+    return { AGENTRIX_BOOTSTRAP: file };
+  } });
+  const result = await unreachable.finished, notes = result.stdout.match(/^\[dispatch\] events not delivered to Agentrix \(([^)]+)\)$/gm) || [];
+  assert.equal(result.code, 0, 'the worker finishes as it would with a listening Agentrix');
+  assert.deepEqual(notes, ['[dispatch] events not delivered to Agentrix (ENOENT)'], 'one line for the whole run, with the errno code');
+  assert.match(result.stdout, /\[dispatch\] started /, 'the run itself is reported as usual');
+  const listening = await fixture(t, codex), reached = await listening.finished;
+  assert.equal(reached.code, 0); assert.doesNotMatch(reached.stdout, /events not delivered/, 'a pipe that takes the events needs no note');
+  assert.ok(listening.events.some(event => event.type === 'dispatch-end'));
+});
+
 test('headers are read as reports and missing or backwards timing never invents a rate', () => {
   const output = new WorkerOutput('codex');
   for (const line of ['model: actual', 'reasoning effort: high', 'service tier: standard', `session id: ${session}`]) output.line(line);

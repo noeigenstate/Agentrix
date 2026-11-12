@@ -199,6 +199,7 @@ type Bridge = {
     newConversation(terminalId: string, runtimeSessionId: string): Promise<Result<{ runtimeSessionId: string }>>;
     shell(terminalId: string, runtimeSessionId: string, clientMessageId: string, command: string): Promise<Result<{ exitCode: number | null }>>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
+    onUsageChanged?(listener: (change: { projectId: string }) => void): () => void;
     getSettings(): Promise<Result<NativeSettings>>;
     setSettings(patch: Partial<NativeSettings>): Promise<Result<NativeSettings>>;
     keySave(key: string): Promise<Result<{ saved: boolean }>>;

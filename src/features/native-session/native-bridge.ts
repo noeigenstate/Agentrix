@@ -50,6 +50,8 @@ export interface NativeBridge {
   answer(terminalId: string, runtimeSessionId: string, requestId: string, answer: NativeAnswer): Promise<Result<unknown>>;
   snapshot(terminalId: string): Promise<Result<NativeSnapshot | null>>;
   onEvent(listener: (event: AgentEvent) => void): () => void;
+  // A project's allowance numbers changed in main (a dispatched worker reported its account); an older main never says it.
+  onUsageChanged?(listener: (change: { projectId: string }) => void): () => void;
   getSettings(): Promise<Result<NativeSettings>>;
   setSettings(patch: Partial<NativeSettings>): Promise<Result<unknown>>;
   keySave(key: string): Promise<Result<unknown>>;
