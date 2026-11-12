@@ -102,3 +102,21 @@ test('image removal gaps and wrapped image chips stay readable in both native in
     assert.equal(cliInputDraft(agent, wrapped, inspect(agent, wrapped)), '[Image #1] [Image #2]  [Image #3]');
   }
 });
+
+test('Claude Code 2.1.317 lists queued messages above its working line, never in its input', () => {
+  // Captured from the locked CLI in a PTY: each queued message is its own "❯ …" row above "ctrl+x ctrl+s to send now" and
+  // the working line; the empty input shows a placeholder. Its queue-operation record was written within 5 ms of Enter,
+  // before the screen showed the row.
+  for (const name of ['one', 'two', 'same']) {
+    const rows = fixture('claude-2-1-317-queue-' + name), screen = inspect('claude', rows);
+    assert.equal(cliInputDraft('claude', rows, screen), '', name + ': the placeholder is no draft');
+    assert.equal(hasCliInput('claude', rows, screen), true); assert.equal(cliDialogShown('claude', rows, screen), false);
+    assert.ok(rows.some(row => /^❯ QUEUED_ONE first queued message\s*$/.test(row)), name + ': the queue is drawn outside the input box');
+  }
+  assert.equal(fixture('claude-2-1-317-queue-same').filter(row => /^❯ QUEUED_ONE first queued message\s*$/.test(row)).length, 2, 'the same words twice are two rows');
+  const draft = fixture('claude-2-1-317-queue-draft');
+  assert.equal(cliInputDraft('claude', draft, inspect('claude', draft)), 'DRAFT_NOT_SENT words still being typed', 'a draft under the queue is the input');
+  const after = fixture('claude-2-1-317-queue-esc'), screen = inspect('claude', after);
+  assert.equal(cliInputDraft('claude', after, screen), '', 'Esc sends the queue on; nothing comes back into the input');
+  assert.equal(isCliIdle('claude', after, screen), true);
+});

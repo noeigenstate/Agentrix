@@ -41,12 +41,17 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
   const settle = async (owns: () => boolean) => {
     for (let tries = 0; tries < 10 && owns() && parsing(); tries++) await new Promise(resolve => setTimeout(resolve, 50));
   };
+  // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
   const clearInput = async (owns: () => boolean) => {
-    for (let tries = 0; tries < 30 && owns(); tries++) {
+    for (let tries = 0; owns(); tries++) {
       if (parsing()) await settle(owns);
-      if (!owns() || !readInput()?.text) return;
+      const current = owns() ? readInput() : null;
+      if (!current) return false;
+      if (!current.text) return true;
+      if (tries === 30) return false;
       window.agentrix.writeTerminal(terminalId, '\x15'); await new Promise(resolve => setTimeout(resolve, 80));
     }
+    return false;
   };
   // Observe a new chip only against this paste's exact baseline; existing chips are not receipts for a later paste.
   const observe = (batch: readonly NativeImage[] = images) => {

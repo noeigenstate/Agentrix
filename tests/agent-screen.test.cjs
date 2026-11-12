@@ -441,6 +441,11 @@ const expected = {
   // Claude Code 2.1.301 at work, a long dictated message left unsent in its input, wrapped over three rows (see
   // cli-panel.test.cjs): no choice, nothing over it.
   'claude-wrapped-draft': { ...emptyScreen, banner: { ...claudeBanner, version: '2.1.301', model: null, effort: null, plan: null, directory: '~\\work\\demo-app' } },
+  // Claude Code 2.1.317 (the locked CLI, offline stand-in API) at work with messages queued: one, two, the same words
+  // twice, a draft typed under the queue, and the screen after Esc sent the queue. See cli-panel.test.cjs.
+  ...Object.fromEntries(['one', 'two', 'same', 'draft', 'esc'].map(name => ['claude-2-1-317-queue-' + name, { ...emptyScreen,
+    banner: { ...claudeBanner, version: '2.1.317', model: null, effort: null, plan: null, directory: '<project-root>' },
+    status: { ...emptyStatus, mode: 'manual mode on' } }])),
   // Claude Code 2.1.302's /usage during a round: the capture has no banner, input footer or choice.
   'claude-usage-working': emptyScreen,
   // Claude Code 2.1.302's /config during a round: settings and its filter hint are not an agent choice or footer.

@@ -1,0 +1,30 @@
+
+ ▐▛███▛█   Claude Code v2.1.317
+▝▜██████▀  Sonnet 4.5 · API Usage Billing
+ ▝▝   ▝▝   <project-root>
+
+
+❯ SLOW_TURN start working
+
+●  word1 word2 word3 word4 word5 word6 word7 word8
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ QUEUED_ONE first queued message
+
+❯ QUEUED_TWO second queued message
+
+❯ QUEUED_ONE first queued message
+
+● ACK
+
+✻ Cooked for 0s · done 4:50 PM
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts

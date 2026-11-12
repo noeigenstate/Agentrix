@@ -77,3 +77,16 @@ for (const agent of ['claude', 'codex']) {
     assert.ok(elements(h.tree()).some(node => node.props.className === 'reading-outbox'));
   });
 }
+
+test('a busy Claude takes a message while its frame is parsing; a dialog still holds one', () => {
+  const terminal = { sessionId: 'pty', agentStartedAt: 0, codexActivity: 'working', needsInput: null };
+  const rows = ['✶ Writing… (0s · esc to interrupt)', '', '────', '❯ ', '────', '  ⏵⏵ accept edits on'];
+  const frame = { sessionId: 'pty', revision: 1, updatedAt: 1, rows };
+  const state = (extra = {}) => { const current = { ...frame, ...extra }; return readingState('claude', current.rows, parseAgentScreen('claude', current.rows), terminal, null, current); };
+  const busy = state();
+  assert.equal(busy.working, true); assert.equal(busy.accepting, true); assert.equal(busy.canDeliver, true);
+  const parsing = state({ pending: true });
+  assert.equal(parsing.accepting, true, 'a write xterm has not parsed yet does not hold a message'); assert.equal(parsing.canDeliver, false);
+  const dialog = state({ rows: [...rows, 'Esc to cancel'] });
+  assert.equal(dialog.accepting, false); assert.equal(dialog.waiting, true);
+});
