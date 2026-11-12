@@ -138,7 +138,10 @@ export type SkillVersion = { version: number; at: number; by: 'agent' | 'user' |
 export type SkillDetail = { text: string; versions: SkillVersion[]; pending: string | null };
 export type SkillDraft = { name: string; description: string; scope: 'global' | 'project'; projectId: string | null; text: string };
 export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'autoOptimize' | 'confirmChanges'>>;
-export type AgentsState = { codex: { installed: boolean }; claude: { installed: boolean }; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
+// Where the Claude Code a session runs was found (claude-runtime/BOUNDARY.md); `fileShown` writes home as ~.
+export type ClaudeVia = 'path' | 'npm' | 'platform-package' | 'local-bin' | 'claude-local' | 'winget' | 'registry-path' | 'system';
+export type ClaudeFound = { version: string | null; via: ClaudeVia; fileShown: string };
+export type AgentsState = { codex: { installed: boolean }; claude: { installed: boolean } & Partial<ClaudeFound>; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }
   | { kind: 'image' | 'video'; mimeType: string; url: string; previewId: string }
@@ -167,9 +170,14 @@ export type ConnectionTest = {
   // `unavailableModel` the model the count asked about when the key may not use it.
   modelsForbidden?: boolean; modelsError?: string | null; unavailableModel?: string;
   // A missing CLI says why: none found, or the file `found` whose version check timed out (after `elapsedMs`), failed
-  // (`error`) or printed no version.
+  // (`error`) or printed no version. None found says where it looked (`pathFolders` on PATH, the install folders
+  // `searched`) and names an npm package found without its native program (`incomplete`). One found says where
+  // (`via`, `fileShown`); when the terminal's copy is too old the native path runs another (`notice`), still ok, and
+  // `split` describes the terminal's.
   cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string;
-    reason?: 'not_found' | 'timeout' | 'failed' | 'unreadable'; found?: string; error?: string; elapsedMs?: number };
+    reason?: 'not_found' | 'timeout' | 'failed' | 'unreadable'; found?: string; error?: string; elapsedMs?: number;
+    pathFolders?: number; searched?: string[]; incomplete?: string;
+    via?: ClaudeVia; fileShown?: string; notice?: 'cli_split_versions'; split?: { terminal: ClaudeFound } };
   // `reported` is what Claude Code named in place of the key (any short plain name, known or not); `detail` says why
   // billing is not this key or could not be read, as a Chinese template and its values the view translates.
   billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null;
