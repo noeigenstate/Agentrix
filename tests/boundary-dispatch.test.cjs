@@ -91,6 +91,8 @@ test('main, the control channel and the sub-agent view ask the team without a sy
     assert.doesNotMatch(source, /\bprojectTeam\s*\(/, `${file} looks a team up with the synchronous projectTeam`);
     assert.doesNotMatch(source, /\b(?:execFileSync|execSync|spawnSync)\s*\(/, `${file} runs a process synchronously`);
   }
+  // Renaming a destructured import must not get past the call scan above: the synchronous module is not required here at all.
+  for (const file of files) assert.doesNotMatch(code(read(file)), /\b(?:require|import)\s*\(\s*['"][^'"]*team\/team\.cjs['"]/, `${file} requires team/team.cjs`);
   assert.match(read('electron/main.cjs'), /team-locate\.cjs/, 'main asks the asynchronous lookup');
   assert.match(read('electron/features/agents/subagent-feed.cjs'), /team-locate\.cjs|locateTeam/, 'the sub-agent view asks the asynchronous lookup');
 });

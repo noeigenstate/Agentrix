@@ -1643,7 +1643,7 @@ const usageSection = (html, agent) => {
 };
 
 test('a quota change reported for one project makes only that project’s usage card read again', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window'), store = load('features/native-session/native-store.ts');
   const bridge = { onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: null }), usage: async id => { reads.push(id); return { ok: true, value: usageOf() }; }, onUsageChanged: listener => { bridge.changed = listener; return () => {}; } }, reads = [];
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
@@ -1662,6 +1662,30 @@ test('a quota change reported for one project makes only that project’s usage 
     assert.deepEqual(reads, ['a'], 'project b did not read again for project a’s report');
     a.dispose(); b.dispose();
   } finally { store.disposeNativeStore(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
+});
+
+test('a burst of quota changes is read at most once a second and never moves the minute timer', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window'), store = load('features/native-session/native-store.ts'), reads = [];
+  const bridge = { onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: null }), usage: async () => { reads.push(Date.now()); return { ok: true, value: usageOf() }; }, onUsageChanged: listener => { bridge.changed = listener; return () => {}; } };
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: id => read(() => store.useUsageRevision(id)) }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './activity-pane.css': {} });
+  const render = () => harness.render('ApiUsage', { terminal: quietTerminal, projectId: 'a' });
+  try {
+    store.ensureNativeSession('t1'); await settle(); render();
+    t.mock.timers.tick(0); await settle();
+    assert.equal(reads.length, 1, 'the card reads when it opens');
+    // Ten changes, 300 ms apart: the first waits out the window opened by the opening read, then at most one read per second.
+    for (let n = 0; n < 10; n++) { t.mock.timers.tick(300); bridge.changed({ projectId: 'a' }); render(); await settle(); }
+    t.mock.timers.tick(1000); await settle();
+    const burst = reads.slice(1);
+    assert.ok(burst.length >= 2, `the burst was read ${burst.length} times`);
+    assert.ok(burst.every((at, index) => index === 0 ? at - reads[0] >= 1000 : at - burst[index - 1] >= 1000), 'two reads are never closer than a second');
+    assert.ok(burst.length <= 4, 'ten changes in three seconds do not cost ten reads');
+    // The minute timer started with the card: it fires at 60 s whatever the changes did.
+    reads.length = 0; t.mock.timers.tick(60_000 - 4000); await settle();
+    assert.deepEqual(reads, [60_000], 'the 60 s read comes on time, as if no change had happened');
+  } finally { harness.dispose(); store.disposeNativeStore(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
 });
 
 test('Codex billing keeps ChatGPT subscriptions while legacy terminal snapshots require app-server restoration', async () => {

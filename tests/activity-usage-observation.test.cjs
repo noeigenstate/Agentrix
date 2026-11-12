@@ -18,6 +18,7 @@ test('the activity usage card retains observations on remount, isolates projects
         current.values.push(typeof initial === 'function' ? initial() : initial);
         return [current.values[index], value => { current.values[index] = value; }];
       },
+      useRef(initial) { const slot = { current: initial }; hooks.values.push(slot); return slot; },
       useEffect(effect) { hooks.effects.push(effect); },
     };
     if (name === '../native-session/native-bridge.ts') return { nativeBridge: () => bridge };

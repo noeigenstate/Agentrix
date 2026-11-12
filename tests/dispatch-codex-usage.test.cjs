@@ -66,15 +66,15 @@ async function dispatchCodex(t, env, { control = true } = {}) {
 // main.cjs's own event handler, usage readers and native-session assembly; a planner Claude in a terminal and no Codex
 // session. projectAccount is what the project's own account read retained (null: it gave nothing, as reported).
 // locate: main's team lookup (default: refuses); giving one also makes the control channel the real one, so a worker's registration
-// runs main's own resolver. root is the project's folder.
-async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, root } = {}) {
+// runs main's own resolver. root is the project's folder. claudeAccount is the app-wide Claude account reading.
+async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, root, claudeAccount = null } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-main-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const forbidden = () => assert.fail('usage read must not start an account poll, CLI session, SDK or network request');
   const project = { id: 'p', kind, path: root }, calls = new AgentCalls(), sent = []; t.after(() => calls.dispose());
   const planner = { terminalId: 't', projectId: 'p', sessionKey: 'planner-key', controlCapability: 'synthetic-capability', agent: 'claude', codexActive: true, status: 'codex',
     activitySince: Date.now(), usage: { agent: 'claude', limits: [] } };
-  const context = { path, structuredClone, sessions: new Map([['t', planner]]), claudeAccounts: { account: null },
+  const context = { path, structuredClone, sessions: new Map([['t', planner]]), claudeAccounts: { account: claudeAccount },
     codexAccounts: new Proxy({ interval: 30000, entries: new Map(), closeProject() {} }, { get: (target, key) => key in target ? target[key] : forbidden }),
     projectAccounts: { snapshot: id => id === 'p' && projectAccount ? { codex: projectAccount } : null, read: async () => null, close() {} },
     shellPathReady: Promise.resolve(), createTerminalEnvironment: () => ({}), withoutAppImage: value => value, process: { env: {} },
@@ -115,6 +115,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc(')), context);
   const unavailable = new Map(); context.registerUnavailableNative((name, handle) => unavailable.set(name, handle));
   return { context, removeProject, sent, fallbackUsage: async () => (await unavailable.get('native:usage')('p')).agents.codex,
+    fallbackClaude: async () => (await unavailable.get('native:usage')('p')).agents.claude,
     controlAddress: () => vm.runInContext('controlAddress', context), held: () => vm.runInContext('dispatchAccounts', context),
     usage: async () => (await handlers.get('native:usage')('p')).agents.codex };
 }
@@ -277,6 +278,17 @@ test('when native sessions are unavailable the usage the pane reads still carrie
   assert.equal(codex.limits.limitsById.codex.primary.usedPercent, 35); assert.equal(codex.limits.accountScopeId, accountScopeId(first));
 });
 
+// Without the native runtime no project's Claude account is read, so the fallback keeps the app-wide reading rather than none.
+test('when native sessions are unavailable a project without a Claude terminal still shows the global Claude account quota', async t => {
+  const at = Date.now(), claudeAccount = { at, limits: [{ percent: 42, minutes: 300, resetsAt: at + 3600000 }],
+    connection: { kind: 'subscription', source: 'Claude Code login', observedAt: at } };
+  const { context, fallbackClaude } = await mainAssembly(t, { claudeAccount });
+  context.sessions.clear();
+  const claude = await fallbackClaude();
+  assert.equal(claude.limits.state, 'ready');
+  assert.equal(claude.limits.limitsById.subscription.primary.usedPercent, 42);
+});
+
 // Main's registration resolver finds the team through the injected locator. Git is a stand-in that answers after `delay`, so a slow
 // Git is exactly what the helper's wait sees: the answer is the repository's own .git, as `rev-parse --git-common-dir` gives it.
 test('a slow Git lookup does not fail the control registration: the worker is bound and its account is named', async t => {
@@ -284,7 +296,7 @@ test('a slow Git lookup does not fail the control registration: the worker is bo
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-slow-git-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, '.git', 'agentrix', 'board'), { recursive: true });
   const asked = [];
-  for (const delay of [800, 1800]) {
+  for (const delay of [800, 1500]) {
     const id = randomUUID(), execFile = (file, args, options, done) => { asked.push([file, ...args]); setTimeout(() => done(null, '.git\n'), delay); };
     fs.writeFileSync(path.join(root, '.git', 'agentrix', 'board', `${id}.json`), JSON.stringify({ id, pid: process.pid, title: 'Slow Git', role: '执行', agent: 'codex',
       model: 'synthetic-model', cwd: root, allow: [], startedAt: Date.now() }));

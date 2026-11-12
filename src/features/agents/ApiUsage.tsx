@@ -10,7 +10,7 @@
 // Windows come from the main process; the current session's agent falls back to what its own screen and records gave when the main process has none.
 // Read-only: it only asks the main process (for the current project's scope). A value nobody gave is 未知, never 0. What the main process does not give (a read
 // that has not come back, one that failed, a project it cannot answer for) leaves the connection and the allowance 未知; the current session's own context, bars and tokens stay.
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import type { AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { type LimitsPayload, type NativeAgent, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
@@ -187,17 +187,31 @@ export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; p
   const bridge = nativeBridge(), revision = useUsageRevision(projectId);
   const key = projectId || '';
   const [usage, setUsage] = useState<NativeUsage | null>(() => observations.get(key)?.bridge === bridge ? observations.get(key)!.usage : null), [error, setError] = useState<string | null>(null);
+  // The reader the timer effect below installs; the revision effect calls it at most once per REVISION_DELAY_MS.
+  const reader = useRef<{ read: () => void; last: number; timer: ReturnType<typeof setTimeout> | null }>({ read: () => {}, last: 0, timer: null });
+  const seen = useRef(revision);
   useEffect(() => {
     if (!bridge) return;
     let active = true;
+    const state = reader.current;
     const read = async () => {
+      state.last = Date.now();
       const result = await bridge.usage(projectId).catch((failure: unknown) => ({ ok: false as const, error: failure instanceof Error ? failure.message : String(failure) }));
       if (!active) return;
       if (result.ok) { observe(key, bridge, result.value); setUsage(result.value); setError(null); } else setError(result.error);
     };
-    const first = setTimeout(() => void read(), revision === 0 ? 0 : REVISION_DELAY_MS), again = setInterval(() => void read(), REFRESH_MS);
-    return () => { active = false; clearTimeout(first); clearInterval(again); };
-  }, [revision, projectId]);
+    state.read = () => void read();
+    const first = setTimeout(state.read, 0), again = setInterval(state.read, REFRESH_MS);
+    return () => { active = false; clearTimeout(first); clearInterval(again); if (state.timer) clearTimeout(state.timer); state.timer = null; state.read = () => {}; };
+  }, [projectId]);
+  // A change main reports reads at once, unless a read ran within the last second: then one read closes that window. The 60 s timer is not touched.
+  useEffect(() => {
+    if (revision === seen.current) return;
+    seen.current = revision;
+    const state = reader.current, wait = state.last + REVISION_DELAY_MS - Date.now();
+    if (wait <= 0) state.read();
+    else if (!state.timer) state.timer = setTimeout(() => { state.timer = null; state.read(); }, wait);
+  }, [revision]);
   // Without the bridge there is no one to ask; the card still tells a running session's context, bars and tokens.
   if (!bridge && !terminal.codexActive) return null;
   const label = t('运行方式与额度');
