@@ -72,3 +72,20 @@ test('ordinary settings still save while only setUpdateChannel can accept the ag
   assert.equal(new WorkspaceStore(f.file).settings.betaAgreement, BETA_AGREEMENT_VERSION);
   assert.deepEqual(f.states.at(-1), result.value);
 });
+
+test('api.settings keeps only the three Codex permission choices and refuses anything else without saving', async t => {
+  const f = fixture(t, 'stable', null);
+  assert.equal(f.store.settings.codexPermissions, 'full');
+  for (const value of ['config', 'ask', 'full']) {
+    assert.equal((await f.api.settings({ codexPermissions: value })).ok, true);
+    assert.equal(new WorkspaceStore(f.file).settings.codexPermissions, value);
+  }
+  await f.api.settings({ codexPermissions: 'ask' });
+  const saved = fs.readFileSync(f.file, 'utf8'); f.calls.length = 0;
+  for (const value of ['bypass', '', null, undefined, 3]) {
+    assert.deepEqual(await f.api.settings({ codexPermissions: value }), { ok: false, error: '无效的 Codex 权限设置。' });
+    assert.equal(f.store.settings.codexPermissions, 'ask', 'a refused write leaves the choice as it was (not the permissive default)');
+    assert.equal(fs.readFileSync(f.file, 'utf8'), saved);
+    assert.deepEqual(f.calls, []);
+  }
+});

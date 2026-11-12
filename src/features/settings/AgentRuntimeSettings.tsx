@@ -2,9 +2,10 @@
 // quota is used up; Codex always on app-server, with nothing to choose — and the monthly API budget. The key is write-only here: it is sent to the
 // main process, the field is emptied, and only "saved or not" ever comes back.
 import { useEffect, useRef, useState } from 'react';
-import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Info, WarningCircle, XCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Info, ShieldCheck, WarningCircle, XCircle } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
+import type { Settings } from '../../shared/types';
 import { type ClaudePath, type ConnectionTest, type NativeSettings, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { usageChanged, useUsageRevision } from '../native-session/native-store.ts';
 import { clockWords, connectionLines } from '../native-session/native-words';
@@ -13,6 +14,14 @@ import './agent-runtime-settings.css';
 const CLAUDE_PATHS = (): { value: ClaudePath; label: string }[] => [
   { value: 'api-then-terminal', label: t('API，额度用完转终端（默认）') }, { value: 'api-only', label: t('只用 API') }, { value: 'terminal-only', label: t('只用终端（订阅）') },
 ];
+// What a new native Codex session may do. 'full' is the default, and what anything else (a missing key, an old file) means.
+export type CodexPermissions = Settings['codexPermissions'];
+const CODEX_PERMISSIONS = (): { value: CodexPermissions; label: string; hint: string }[] => [
+  { value: 'full', label: t('全部放开（默认）'), hint: t('不询问，不使用沙箱：Codex 可以直接运行任何命令、修改任何文件。和 Claude 的 bypass 一样，请用在你信任的项目上。') },
+  { value: 'config', label: t('按 Codex 配置'), hint: t('沿用 Codex 自己 config.toml 里的设置。') },
+  { value: 'ask', label: t('先询问'), hint: t('只能在工作目录里写文件；执行需要权限的操作前先问你。') },
+];
+export const codexPermissionOf = (value: unknown): CodexPermissions => CODEX_PERMISSIONS().some(option => option.value === value) ? value as CodexPermissions : 'full';
 // A mark per tone, so a line reads without its colour.
 const TONE_MARKS = { ok: <CheckCircle size={16} weight="fill" />, warn: <WarningCircle size={16} weight="fill" />, bad: <XCircle size={16} weight="fill" /> };
 const failure = (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) });
@@ -30,7 +39,8 @@ export function parseBudget(text: string): number | null | undefined {
 
 // projectId: the project the owner is working in, whose scope the connection test and the usage numbers are read for.
 // focusOnOpen: the page was opened to deal with the connection (the launcher's incomplete Claude Code): the test button takes the focus, or the key field when no key is saved.
-export function AgentRuntimeSettings({ projectId, focusOnOpen = false }: { projectId?: string; focusOnOpen?: boolean }) {
+// codexPermissions / onCodexPermissions: the window's own setting (not the native session store's), written through the usual settings update.
+export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPermissions, onCodexPermissions }: { projectId?: string; focusOnOpen?: boolean; codexPermissions?: unknown; onCodexPermissions?: (value: CodexPermissions) => void }) {
   const bridge = nativeBridge(), revision = useUsageRevision();
   const [settings, setSettings] = useState<NativeSettings | null>(null), [saved, setSaved] = useState<boolean | null>(null);
   const [key, setKey] = useState(''), [budget, setBudget] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
@@ -93,6 +103,7 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false }: { proje
     if (amount !== settings?.monthlyBudgetUsd) void change({ monthlyBudgetUsd: amount });
   };
 
+  const permissionOptions = CODEX_PERMISSIONS(), permission = codexPermissionOf(codexPermissions);
   return <>
     <p className="agents-intro">{t('Claude 默认通过 Anthropic API 在应用自己的界面里运行；API 额度用完时，按下面的选择改用订阅登录的终端，对话接着上一次继续。')}</p>
     <p className="settings-note"><Info size={15} /><span>{t('修改运行方式、保存或清除 API key，都会同时应用到正在运行的会话：空闲的立刻切换，工作中的等本轮结束，有后台任务的先问你。')}</span></p>
@@ -119,6 +130,8 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false }: { proje
     </div>}
     <label className="setting-row"><span><Robot size={19} /><span><b>{t('Claude 的运行方式')}</b><small>{t('API：应用里的原生模式，按量计费；订阅：Claude Code 终端')}</small></span></span>
       <Select label={t('Claude 的运行方式')} className="runtime-select" value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
+    <label className="setting-row"><span><ShieldCheck size={19} /><span><b>{t('Codex 权限')}</b><small>{permissionOptions.find(option => option.value === permission)?.hint}</small><small>{t('只影响之后新建的原生 Codex 会话；正在运行的用 /permissions 切换；派发的工作者不受影响。')}</small></span></span>
+      <Select label={t('Codex 权限')} className="runtime-select" value={permission} disabled={!onCodexPermissions} options={permissionOptions} onChange={value => onCodexPermissions?.(codexPermissionOf(value))} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
       <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
     <div className="setting-row"><span><CurrencyDollar size={19} /><span><b>{t('API 月预算（美元）')}</b><small>{t('按 UTC 自然月累计的估算；用完后 Claude 按上面的选择处理。留空表示不限')}</small></span></span>

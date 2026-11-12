@@ -50,7 +50,7 @@ const DEFAULT_START = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST
 // Isolated test profiles keep pixel layouts exact at 100 % unless they choose 自动 themselves (a test machine's small
 // display would otherwise shrink every layout under test).
 const DEFAULT_ZOOM = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_ZOOM !== 'auto' ? 100 : null;
-const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', uiZoom: DEFAULT_ZOOM, voiceModel: DEFAULT_VOICE_MODEL, updateChannel: 'stable', betaAgreement: null };
+const defaults = { startView: DEFAULT_START, surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', autoSave: true, activityPane: true, notifications: true, sound: true, language: 'en', theme: 'mono', shortcuts: {}, guideVersion: '', shell: 'powershell', closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', restoreSessions: true, focusAnimation: 'smooth', uiZoom: DEFAULT_ZOOM, voiceModel: DEFAULT_VOICE_MODEL, updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full' };
 
 // Keyboard shortcuts the user changed, by action; defaults live in the window (src/features/shortcuts/shortcuts.ts).
 // "Ctrl+Shift+F": Ctrl, Alt and Shift in that order, then one letter, digit, F-key or punctuation key.
@@ -79,8 +79,13 @@ function validProjectImage(input) {
   return ['VP8 ', 'VP8L'].includes(chunk) || chunk === 'VP8X' && bytes.length >= 30 && !(bytes[20] & 2);
 }
 
+// What new native Codex sessions may do: 'full' asks nothing and uses no sandbox, 'config' leaves it to Codex's own config.toml, 'ask' writes only in the working directory and asks first.
+// A missing or unknown value (an older workspace.json) is 'full'.
+const CODEX_PERMISSIONS = ['full', 'config', 'ask'];
+
 function cleanSettings(input = {}) {
   return {
+    codexPermissions: CODEX_PERMISSIONS.includes(input.codexPermissions) ? input.codexPermissions : defaults.codexPermissions,
     updateChannel: ['stable', 'beta'].includes(input.updateChannel) ? input.updateChannel : defaults.updateChannel,
     betaAgreement: typeof input.betaAgreement === 'string' && input.betaAgreement.length > 0 && input.betaAgreement.length <= 80 && input.betaAgreement === input.betaAgreement.trim() && !/[\u0000-\u001f\u007f]/.test(input.betaAgreement) ? input.betaAgreement : defaults.betaAgreement,
     fontSize: Number.isInteger(input.fontSize) && input.fontSize >= 10 && input.fontSize <= 20 ? input.fontSize : defaults.fontSize,
@@ -349,4 +354,4 @@ class WorkspaceStore {
   }
 }
 
-module.exports = { WorkspaceStore, cleanSettings };
+module.exports = { WorkspaceStore, cleanSettings, CODEX_PERMISSIONS };

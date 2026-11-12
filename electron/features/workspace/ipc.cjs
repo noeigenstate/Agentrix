@@ -1,4 +1,5 @@
 const { sanitizeProjectSvg } = require('../../project-svg.cjs');
+const { CODEX_PERMISSIONS } = require('../../state.cjs');
 
 function registerWorkspaceIpc({ handle, publicState, dialog, getWindow, t, addProject, getRecentProjects, existsSync, getRecentEntry, forgetRecent, clearHistory, getRecentSSH, forgetRecentSSH, clearSSHHistory, reorderTerminals, getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews, removeProject, forgetBranch, broadcast, acknowledgeProject, reorderProjects, setProjectImage, listProjectImageCandidates, getSettings, updateStoreSettings, clearRestorePlans, chooseVoiceModel }) {
   // Adds a local folder as a project; an already open folder just returns its id. Its card then offers Claude Code
@@ -51,6 +52,8 @@ function registerWorkspaceIpc({ handle, publicState, dialog, getWindow, t, addPr
   function updateSettings(patch) {
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('无效的设置。');
     if (Object.hasOwn(patch, 'updateChannel') || Object.hasOwn(patch, 'betaAgreement')) throw new Error('请在“关于”页面切换更新通道。');
+    // The store would turn an unknown value into 'full', the most permissive choice: a bad write is refused instead.
+    if (Object.hasOwn(patch, 'codexPermissions') && !CODEX_PERMISSIONS.includes(patch.codexPermissions)) throw new Error('无效的 Codex 权限设置。');
     updateStoreSettings(patch); broadcast();
     if (patch.restoreSessions === false) clearRestorePlans();
     chooseVoiceModel(getSettings().voiceModel);

@@ -233,7 +233,7 @@ test('legacy theme values fall back to the first theme on load and on settings u
 });
 
 test('settings reject invalid layout and font values', () => {
-  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', uiZoom: null, language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice', updateChannel: 'stable', betaAgreement: null });
+  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', uiZoom: null, language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice', updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full' });
   // The spoken notice is gone: its old settings are dropped.
   const old = cleanSettings({ announce: true, announcePhrase: '{项目}', summary: { mode: 'local' } });
   assert.equal('announce' in old || 'announcePhrase' in old || 'summary' in old, false);
@@ -255,6 +255,20 @@ test('settings reject invalid layout and font values', () => {
   assert.equal(cleanSettings({ focusAnimation: 'invalid' }).focusAnimation, 'smooth');
   assert.equal(cleanSettings({ focusAnimation: 'system' }).focusAnimation, 'system');
   assert.equal(cleanSettings({ focusAnimation: 'off' }).focusAnimation, 'off');
+});
+
+test('Codex permissions: full when missing or unknown, and the three choices are kept', t => {
+  for (const value of [undefined, null, '', 'FULL', 'bypass', 1, {}]) assert.equal(cleanSettings({ codexPermissions: value }).codexPermissions, 'full', String(value));
+  for (const value of ['full', 'config', 'ask']) assert.equal(cleanSettings({ codexPermissions: value }).codexPermissions, value);
+  // A workspace.json written before the setting existed reads as full, and a stored choice survives a restart.
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-perm-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'workspace.json');
+  fs.writeFileSync(file, JSON.stringify({ projects: [], settings: { fontSize: 14 } }));
+  const store = new WorkspaceStore(file);
+  assert.equal(store.settings.codexPermissions, 'full');
+  store.updateSettings({ codexPermissions: 'ask' });
+  assert.equal(new WorkspaceStore(file).settings.codexPermissions, 'ask');
 });
 
 test('SSH projects retain their host, remote path and recovery state without becoming local folders', t => {
