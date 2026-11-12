@@ -52,12 +52,14 @@ function billingIdentityError(source, { beforeInput = false, messageType, tokenS
 // for a process that never ran), the redacted end of the stderr the caller collected, or the SDK's own error in one
 // redacted line. The saved key never appears.
 function startWhy(error, stderr, key) {
-  // The saved key, and anything shaped like an Anthropic key, before the shared redaction.
-  const scrub = text => (key ? String(text).split(key).join('<key>') : String(text)).replace(/sk-ant-[\w-]+/gi, '<key>');
+  // The saved key, and anything shaped like an Anthropic key, masked after the escapes are stripped and before the
+  // shared credential rules (see stderrTail's order).
+  const mask = text => (key ? text.split(key).join('<key>') : text).replace(/sk-ant-[\w-]+/gi, '<key>');
   if (error?.code === 'sdk_initialization_timeout') {
     return { text: 'Claude Code 初始化 {seconds} 秒仍未完成，尚未发送消息。请稍后重试。', values: { seconds: Math.max(1, Math.round((error.elapsedMs ?? 0) / 1000)) } };
   }
-  const tail = stderrTail(scrub(stderr)), output = tail ? '，尚未发送消息。错误输出：{stderr}' : '，尚未发送消息，也没有错误输出。';
+  if (error?.code === 'no_key') return { text: '还没有保存 API 密钥，尚未发送消息。请在设置里保存密钥后重试。', values: {} };
+  const tail = stderrTail(String(stderr), { mask }), output = tail ? '，尚未发送消息。错误输出：{stderr}' : '，尚未发送消息，也没有错误输出。';
   if (error?.errorClass === 'process_exited_nonzero' && Number.isInteger(error.exitCode)) {
     return { text: `Claude Code 启动后退出（退出码 {code}）${output}`, values: { stderr: tail, code: error.exitCode } };
   }
@@ -67,7 +69,7 @@ function startWhy(error, stderr, key) {
   if (typeof error?.code === 'string' && /^E[A-Z0-9]{2,20}$/.test(error.code)) {
     return { text: `Claude Code 没能启动（{code}）${output}`, values: { stderr: tail, code: error.code } };
   }
-  const detail = stderrTail(scrub(error?.message || ''), { limit: 200 });
+  const detail = stderrTail(String(error?.message || ''), { limit: 200, mask });
   return detail ? { text: 'Claude Agent SDK 出错，尚未发送消息：{detail}', values: { detail } } : { text: 'Claude Code 没能启动，尚未发送消息。', values: {} };
 }
 

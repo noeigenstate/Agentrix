@@ -12,6 +12,7 @@ const { createNativeSessions } = require('../electron/features/native-session/in
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const { fixtureProcesses } = require('./fixtures/claude-sdk-processes.cjs');
 const { en } = require('../electron/i18n.cjs');
+const { startupFailure } = require('../electron/features/claude-sdk/identity.cjs');
 const key = 'sk-ant-api03-offline-connection-only';
 function http(statusCode, body = { data: [{ id: 'claude-test-model' }] }) {
   const calls = [];
@@ -449,4 +450,33 @@ test('the connection result carries the billing reason and what was reported; th
     probeBilling: async () => { throw new Error(`C:\\Users\\someone\\secret ${key}`); } })();
   assert.deepEqual(broken.billing.detail, { text: '检查 Claude Code 的计费来源时出错，请重试。', values: {} });
   assert.equal(broken.reason, 'billing_unconfirmed'); assert.ok(!JSON.stringify(broken).includes('someone'));
+});
+test('a stderr window cut mid-line drops that line, so no half of a key opens it', () => {
+  const { stderrCollector } = require('../electron/features/agents/start-failure.cjs');
+  const stderr = stderrCollector(40);
+  stderr.push(`starting\n${key}\n`); stderr.push('settings.json is broken\n');
+  assert.equal(stderr.text(), 'settings.json is broken\n', 'the window began inside the key line, which is dropped whole');
+  const whole = stderrCollector(40); whole.push('first\nsecond\n'); assert.equal(whole.text(), 'first\nsecond\n', 'a window that fits keeps everything');
+  const long = stderrCollector(10); long.push('x'.repeat(30)); assert.equal(long.text(), '', 'a window inside one long line keeps nothing of it');
+});
+
+test('terminal escapes are stripped before the key is masked, so an escape inside the key cannot hide it', () => {
+  const split = `${key.slice(0, 12)}\x1b[31m${key.slice(12)}\x1b[0m`, other = 'sk-ant-api03-another-key-value';
+  const failure = startupFailure(Object.assign(new Error('x'), { errorClass: 'process_exited_nonzero', exitCode: 1 }),
+    { stderr: `bad key ${split}\nalso ${other.slice(0, 9)}\x1b]8;;https://example.invalid\x07${other.slice(9)}\n`, key });
+  assert.equal(failure.message, 'Claude Code 启动后退出（退出码 1），尚未发送消息。错误输出：bad key <key> / also <key>');
+  assert.ok(!failure.message.includes(key.slice(12))); assert.ok(!failure.message.includes('another-key'));
+});
+
+test('a session started with no saved key says so, before any input', async t => {
+  const root = directory(t), events = [], fake = fakeSdk();
+  const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, inspectCli: cli, loadSdk: async () => fake.sdk,
+    resolveExecutable: async () => 'synthetic-only', connectionSpec: () => specOf(root) });
+  t.after(() => factory.close());
+  const session = factory.create({ ...specOf(root), projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, event => events.push(event));
+  t.after(() => session.close());
+  const expected = '还没有保存 API 密钥，尚未发送消息。请在设置里保存密钥后重试。';
+  await assert.rejects(session.start(), error => error.beforeInput === true && error.code === 'sdk_startup_failed' && error.message === expected);
+  assert.equal(events.find(event => event.type === 'error').payload.message, expected); assert.equal(fake.inputs.length, 0);
+  assert.ok(Object.hasOwn(en, expected));
 });

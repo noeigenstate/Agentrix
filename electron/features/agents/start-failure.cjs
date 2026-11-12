@@ -17,12 +17,14 @@ const line = value => value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' 
 // Terminal escapes: OSC (titles, ]8;; hyperlinks with their URL) up to BEL or ST, then CSI (colours, cursor).
 const plain = value => value.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
 
-// Credentials, terminal escapes, the SSH host's names and this computer's user and home, removed from process output.
-const redactor = hosts => value => scrubText(SECRETS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), plain(value)), { ...local, hosts }).text;
+// Terminal escapes, the caller's own masking (a known key), credentials, the SSH host's names and this computer's user
+// and home, removed from process output in that order: escapes first, so none can split a secret a later rule matches.
+const redactor = (hosts, mask = text => text) => value => scrubText(SECRETS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement),
+  mask(plain(value))), { ...local, hosts }).text;
 // The last stderr lines as one redacted line within limit. The whole tail is redacted before it is split, so a secret
 // spread over lines is still recognized; its end is kept over its start.
-function stderrTail(stderr, { limit = LIMIT, hosts = [] } = {}) {
-  return clip(redactor(hosts)(stderr).split(/\r?\n/).map(line).filter(Boolean).slice(-3).join(' / '), limit, true);
+function stderrTail(stderr, { limit = LIMIT, hosts = [], mask } = {}) {
+  return clip(redactor(hosts, mask)(stderr).split(/\r?\n/).map(line).filter(Boolean).slice(-3).join(' / '), limit, true);
 }
 
 // Why a start failed, as one redacted line: the stage, the code or protocol error, the exit and the last stderr lines.
@@ -38,10 +40,16 @@ function startupDetail(error, { stderr = '', processError = null, exitCode = nul
   return tail ? head + label + tail : head;
 }
 
-// The end of a process's stderr as it arrives, bounded, for a failure that may come before any other output.
+// The end of a process's stderr as it arrives, bounded, for a failure that may come before any other output. A window
+// cut mid-line drops that line's remainder, so it never starts with half of a secret the redaction cannot recognize.
 function stderrCollector(kept = 8192) {
   let text = '';
-  return { push: chunk => { text = (text + chunk).slice(-kept); }, text: () => text };
+  return { push: chunk => {
+    text += chunk;
+    if (text.length <= kept) return;
+    const window = text.slice(-kept), cut = window.indexOf('\n');
+    text = cut < 0 ? '' : window.slice(cut + 1);
+  }, text: () => text };
 }
 
 module.exports = { startupDetail, stderrTail, stderrCollector };
