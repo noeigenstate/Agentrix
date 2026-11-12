@@ -8,6 +8,7 @@ const { billingIdentityError, startupFailure, CREDITS_LOW } = require('./identit
 const { stderrCollector } = require('../agents/start-failure.cjs');
 const { inputQueue, queryOptions, openQuery, readBillingIdentity } = require('./query.cjs');
 const { turnResult, tokensOf, hasModelReply } = require('./result.cjs');
+const { REFUSALS } = require('./usage.cjs');
 const { rateLimits } = require('./limits.cjs');
 const { claudeCommands } = require('./commands.cjs');
 const { runShell } = require('./shell.cjs');
@@ -110,8 +111,8 @@ function createClaudeSession(spec, emit, dependencies) {
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
   }
   function budgetNotice() {
-    const exhausted = usage.available(spec.monthlyBudgetUsd ?? null, active?.reservation?.id) <= 0;
-    const message = exhausted ? '本月 API 预算已用完。' : active?.background.size
+    const refusal = usage.refusal(spec.monthlyBudgetUsd ?? null, active?.reservation?.id), exhausted = !!refusal;
+    const message = exhausted ? REFUSALS[refusal] : active?.background.size
       ? 'API 预算上限已用完。后台任务结束后才能继续，或先停止它们。' : 'API 预算上限已用完，请发送新消息继续。';
     publish('error', { code: 'budget_exhausted', message, retryable: !exhausted, willRetry: false, stage: 'runtime' });
     if (exhausted) publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
