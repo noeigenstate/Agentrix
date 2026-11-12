@@ -84,7 +84,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
       await onAction(window.agentrix.startTerminal(terminalId));
       onOpenTerminal(terminalId);
     }
-    else if (incomplete(what)) window.dispatchEvent(new CustomEvent('agentrix:open-settings', { detail: { section: 'runtime' } }));
+    else if (incomplete(what)) window.dispatchEvent(new CustomEvent('agentrix:open-settings', { detail: { section: 'runtime', focus: true } }));
     else if (missing(what) && !agents?.npm) await onAction(window.agentrix.openNode());
     else {
       const installed = missing(what) ? await onAction(window.agentrix.installAgent(what)) : agents;
@@ -98,7 +98,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   };
   const note = (agent: Agent) => {
     if (runsHere(agent) && agents?.installing === agent) return t('正在安装…');
-    if (incomplete(agent)) return t('安装不完整 · 去测试连接查看');
+    if (incomplete(agent)) return runtime?.keySaved === false ? t('安装不完整 · 点击查看') : t('安装不完整 · 去测试连接查看');
     if (missing(agent)) return agents!.npm ? t('未安装 · 点击一键安装') : t('未安装 · 需要先安装 Node.js');
     if (chosen === 'new') return t('开始新的对话');
     if (!history) return t('正在查找开发记录…');
@@ -120,7 +120,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
       <button type="button" role="radio" aria-checked={chosen === 'new'} onClick={() => setMode('new')}>{t('开始新开发')}</button>
       <button type="button" role="radio" aria-checked={chosen === 'continue'} disabled={!known && !remote} title={history && !known && !remote ? t('这个文件夹还没有开发记录') : undefined} onClick={() => setMode('continue')}>{t('继承开发历史')}</button>
     </div>
-    <div className="agent-launcher-agents">{AGENTS.filter(({ agent }) => !remote || agent === 'codex').map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) || incomplete(agent) ? ' is-missing' : ''}`} disabled={!!starting || (runsHere(agent) && !!agents?.installing)} onClick={() => void start(agent)}>
+    <div className="agent-launcher-agents">{AGENTS.filter(({ agent }) => !remote || agent === 'codex').map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || (runsHere(agent) && !!agents?.installing)} onClick={() => void start(agent)}>
       <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || (runsHere(agent) && agents?.installing === agent) ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
       <b>{name}</b><small>{[note(agent), routeNote(agent)].filter(Boolean).join(' · ')}</small>
     </button>)}</div>

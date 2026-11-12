@@ -17,8 +17,8 @@ import { ProjectImagesSettings } from './ProjectImagesSettings';
 import { AboutSettings } from './AboutSettings';
 import { steps as ZOOM_STEPS } from '../../../electron/window-zoom.json';
 
-export function SettingsDialog({ settings, projects = [], projectId, desktopGlass, uiZoom, localShell, agents, onAgents, initialSection, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
-  localShell: Workspace['localShell']; agents: AgentsState | null; onAgents: (state: AgentsState) => void; initialSection: string;
+export function SettingsDialog({ settings, projects = [], projectId, desktopGlass, uiZoom, localShell, agents, onAgents, initialSection, focusOnOpen = false, updates, onCheckUpdate, onInstallUpdate, onDownloadPage, onGuide, close, update, quit }: {
+  localShell: Workspace['localShell']; agents: AgentsState | null; onAgents: (state: AgentsState) => void; initialSection: string; focusOnOpen?: boolean;
   projects?: Project[]; projectId?: string; desktopGlass?: Workspace['desktopGlass']; uiZoom?: Workspace['uiZoom']; settings: Settings; close: () => void; update: (patch: Partial<Settings>) => void; quit: () => void; onGuide: () => void;
   updates: AppUpdateState | null; onCheckUpdate: () => void; onInstallUpdate: () => void; onDownloadPage: () => void;
 }) {
@@ -95,9 +95,9 @@ export function SettingsDialog({ settings, projects = [], projectId, desktopGlas
       <div className="setting-row"><span><Microphone size={19} /><span><b>{t('本地语音输入')}</b><small>{t('按 {key} 或点击终端上的麦克风说话，按回车识别并发送，Esc 取消', { key: shortcut('voice') })}</small></span></span><VoiceModelSetting choice={settings.voiceModel} onChoose={voiceModel => update({ voiceModel })} /></div>
       </section>
       <section className="settings-section" id="settings-agents" aria-label={t('编码助手')} hidden={current.id !== 'agents'}>
-      <AgentsSettings agents={agents} onChange={onAgents} />
+      <AgentsSettings agents={agents} onChange={onAgents} visible={current.id === 'agents'} />
       </section>
-      {current.id === 'runtime' && <section className="settings-section" id="settings-runtime" aria-label={t('运行方式')}><AgentRuntimeSettings projectId={projectId} /></section>}
+      {current.id === 'runtime' && <section className="settings-section" id="settings-runtime" aria-label={t('运行方式')}><AgentRuntimeSettings projectId={projectId} focusOnOpen={focusOnOpen} /></section>}
       {current.id === 'skills' && <section className="settings-section skills-section" id="settings-skills" aria-label={t('技能')}><SkillsSettings projects={projects} /></section>}
       {current.id === 'shortcuts' && <ShortcutSettings settings={settings} update={update} />}
       <section className="settings-section" id="settings-about" aria-label={t('更新与关于')} hidden={current.id !== 'about'}>

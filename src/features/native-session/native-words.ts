@@ -247,6 +247,8 @@ export const viaWords = (via: string) => (VIA_WORDS[via] ? t(VIA_WORDS[via]) : v
 // One install in a line: its version (未知 when it has none) and where it came from; its file goes on a line of its own.
 const foundWords = ({ version, via }: Partial<ClaudeFound>) => [version ? t('版本 {version}', { version }) : t('版本未知'), via && t('来自 {via}', { via: viaWords(via) })].filter(Boolean).join(' · ');
 
+// The official installer's command, bare, for a place that shows it as a command (the sentence below says it for a hint).
+export const installerCommand = (windows: boolean) => (windows ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash');
 // The official installer's command. Main writes the package path with its own separators, so a backslash means Windows.
 const installCommand = (dir: string) => dir.includes('\\')
   ? t('在 PowerShell 运行 irm https://claude.ai/install.ps1 | iex') : t('在终端运行 curl -fsSL https://claude.ai/install.sh | bash');

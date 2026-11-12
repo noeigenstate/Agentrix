@@ -3104,5 +3104,10 @@
   "安装不完整 · 去测试连接查看": "Incomplete install · see the connection test",
   "npm 装了，但里面没有原生程序。{hint}": "npm installed it, but its native program is missing. {hint}",
   "到「运行方式 › 测试连接」查看原因。": "See the reason under Run mode › Test connection.",
-  "原生用的是另一份：{found}": "Native mode uses another install: {found}"
+  "原生用的是另一份：{found}": "Native mode uses another install: {found}",
+  "npm 装了，但里面没有原生程序。请用官方安装器重新安装：{command}": "npm installed it, but its native program is missing. Reinstall with the official installer: {command}",
+  "检查没有通过。先在「运行方式」里保存 API 密钥，再点「测试连接」查看原因。": "The check did not pass. Save an API key under Run mode first, then click Test connection to see why.",
+  "终端用版本 {version}": "Terminal uses version {version}",
+  "终端用的版本未知": "Terminal's version unknown",
+  "安装不完整 · 点击查看": "Incomplete install · click to see"
 }

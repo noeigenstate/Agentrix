@@ -1,7 +1,7 @@
 // 运行方式: how Claude and Codex run — Claude on the Anthropic API key in the app's own view, falling back to the terminal when the API's
 // quota is used up; Codex always on app-server, with nothing to choose — and the monthly API budget. The key is write-only here: it is sent to the
 // main process, the field is emptied, and only "saved or not" ever comes back.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Info, WarningCircle, XCircle } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
@@ -29,12 +29,15 @@ export function parseBudget(text: string): number | null | undefined {
 }
 
 // projectId: the project the owner is working in, whose scope the connection test and the usage numbers are read for.
-export function AgentRuntimeSettings({ projectId }: { projectId?: string }) {
+// focusOnOpen: the page was opened to deal with the connection (the launcher's incomplete Claude Code): the test button takes the focus, or the key field when no key is saved.
+export function AgentRuntimeSettings({ projectId, focusOnOpen = false }: { projectId?: string; focusOnOpen?: boolean }) {
   const bridge = nativeBridge(), revision = useUsageRevision();
   const [settings, setSettings] = useState<NativeSettings | null>(null), [saved, setSaved] = useState<boolean | null>(null);
   const [key, setKey] = useState(''), [budget, setBudget] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<ConnectionTest | null>(null), [testing, setTesting] = useState(false), [testError, setTestError] = useState<string | null>(null);
   const [waiting, setWaiting] = useState<number | null>(null);
+  const keyField = useRef<HTMLInputElement>(null), testButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => { if (focusOnOpen && saved !== null) (saved ? testButton : keyField).current?.focus(); }, [focusOnOpen, saved]);
   useEffect(() => {
     if (!bridge) return;
     let active = true;
@@ -98,13 +101,13 @@ export function AgentRuntimeSettings({ projectId }: { projectId?: string }) {
     <p className="settings-note"><Info size={15} /><span>{t('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的预算估算。')}</span></p>
     <div className="setting-row runtime-key-row"><span><Key size={19} /><span><b>{t('Anthropic API key')}</b><small role="status">{saved === null ? t('正在读取…') : saved ? t('已保存') : t('未保存')}</small></span></span>
       <span className="runtime-key">
-        <input type="password" autoComplete="off" spellCheck={false} aria-label={t('Anthropic API key')} placeholder={saved ? t('输入新的 key 以替换') : 'sk-ant-…'} value={key} disabled={busy || testing}
+        <input ref={keyField} type="password" autoComplete="off" spellCheck={false} aria-label={t('Anthropic API key')} placeholder={saved ? t('输入新的 key 以替换') : 'sk-ant-…'} value={key} disabled={busy || testing}
           onChange={event => setKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') saveKey(); }} />
         <button type="button" className="button secondary small" disabled={busy || testing || !key.trim()} onClick={saveKey}>{t('保存')}</button>
         {saved && <button type="button" className="text-button" disabled={busy || testing} onClick={() => void run(() => bridge.keyClear(), () => void refreshKey())}>{t('清除')}</button>}
       </span></div>
     <div className="setting-row runtime-test-row"><span><PlugsConnected size={19} /><span><b>{t('检查连接')}</b><small>{t('只在你点击时运行，不会自动检查')}</small></span></span>
-      <button type="button" className="button secondary small" disabled={!saved || busy || testing} title={saved ? undefined : t('先保存 API key')} onClick={() => void runTest()}>{t('测试连接')}</button></div>
+      <button type="button" ref={testButton} className="button secondary small" disabled={!saved || busy || testing} title={saved ? undefined : t('先保存 API key')} onClick={() => void runTest()}>{t('测试连接')}</button></div>
     {testing && <p className="runtime-testing" role="status"><CircleNotch size={14} className="loading-spinner" aria-hidden="true" />{t('正在测试连接…')}</p>}
     {testError && <p className="form-error runtime-error" role="alert">{t('测试没有完成：{message}', { message: testError })}</p>}
     {test && <div className="runtime-test">
