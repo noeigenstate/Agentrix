@@ -65,12 +65,14 @@ async function dispatchCodex(t, env, { control = true } = {}) {
 
 // main.cjs's own event handler, usage readers and native-session assembly; a planner Claude in a terminal and no Codex
 // session. projectAccount is what the project's own account read retained (null: it gave nothing, as reported).
-async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
+// locate: main's team lookup (default: refuses); giving one also makes the control channel the real one, so a worker's registration
+// runs main's own resolver. root is the project's folder.
+async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, root } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-main-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const forbidden = () => assert.fail('usage read must not start an account poll, CLI session, SDK or network request');
-  const project = { id: 'p', kind }, calls = new AgentCalls(); t.after(() => calls.dispose());
-  const planner = { terminalId: 't', projectId: 'p', sessionKey: 'planner-key', agent: 'claude', codexActive: true, status: 'codex',
+  const project = { id: 'p', kind, path: root }, calls = new AgentCalls(), sent = []; t.after(() => calls.dispose());
+  const planner = { terminalId: 't', projectId: 'p', sessionKey: 'planner-key', controlCapability: 'synthetic-capability', agent: 'claude', codexActive: true, status: 'codex',
     activitySince: Date.now(), usage: { agent: 'claude', limits: [] } };
   const context = { path, structuredClone, sessions: new Map([['t', planner]]), claudeAccounts: { account: null },
     codexAccounts: new Proxy({ interval: 30000, entries: new Map(), closeProject() {} }, { get: (target, key) => key in target ? target[key] : forbidden }),
@@ -82,16 +84,17 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex',
     netRequest: () => forbidden, electronNet: {},
-    generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
+    generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send: (channel, data) => { sent.push([channel, data]); }, scheduleState() {}, t: value => value,
     broadcast() {}, callsOf: () => calls, acceptShellEvent: () => false, rememberClaudeSource() {},
     require: name => {
       if (name === 'electron') return { safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: forbidden } };
       if (name === './features/agents/dispatch-events.cjs') return require('../electron/features/agents/dispatch-events.cjs');
-      if (name === './features/team/team-locate.cjs') return { locateTeam: forbidden };
+      if (name === './features/team/team-locate.cjs') return { locateTeam: locate || forbidden };
       assert.fail(`unexpected require: ${name}`);
     },
     importFixture: async name => {
       if (name === './features/codex-app-server/index.cjs') return { createCodexRuntime: () => ({ create: forbidden }) };
+      if (name === './features/agents/dispatch-control.cjs' && locate) return { createDispatchControl };
       if (name === './features/agents/dispatch-control.cjs') return { createDispatchControl: () => ({ listen: async () => ({ address: 'fixture-control' }), onRequest() {} }) };
       assert.fail(`unexpected import: ${name}`);
     },
@@ -106,9 +109,13 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
   // The workspace's project removal, as main registers it.
   const removeProject = vm.runInContext(`(${/removeProject: (id => \{[^\n]*\}),/.exec(source)[1]})`, context);
   await context.initializeNativeSessions();
-  t.after(() => context.nativeSessions.close());
+  t.after(() => { context.nativeSessions.close(); if (locate) vm.runInContext('dispatchControl', context).close(); });
   const handlers = new Map(); context.nativeSessions.register((name, handle) => handlers.set(name, handle));
-  return { context, removeProject, held: () => vm.runInContext('dispatchAccounts', context),
+  // The fallback main registers when native sessions failed to start: its usage still has to carry what dispatched workers report.
+  vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc(')), context);
+  const unavailable = new Map(); context.registerUnavailableNative((name, handle) => unavailable.set(name, handle));
+  return { context, removeProject, sent, fallbackUsage: async () => (await unavailable.get('native:usage')('p')).agents.codex,
+    controlAddress: () => vm.runInContext('controlAddress', context), held: () => vm.runInContext('dispatchAccounts', context),
     usage: async () => (await handlers.get('native:usage')('p')).agents.codex };
 }
 
@@ -250,4 +257,42 @@ test('a native Codex session names its account with main\'s key and carries noth
   assert.equal(accountConnection({ account: first }, 1000, key).scopeId, accountScopeId(first, key));
   assert.notEqual(accountScopeId(first, key), accountScopeId(first), 'another key gives another name');
   assert.equal(accountConnection({ account: {} }, 1000).scopeId, undefined, 'an account nobody named has no name');
+});
+
+test('an accepted account report tells the window which project\'s quota changed; a refused one tells nothing', async t => {
+  const { context, sent } = await mainAssembly(t), at = Date.now(), id = randomUUID();
+  context.onEvent(report(id, first, 20, at));
+  assert.deepEqual(sent, [], 'a call nobody started cannot report, so nothing changed');
+  context.onEvent(start(id)); context.onEvent({ ...report(id, first, 20, at), sessionKey: 'forged' });
+  assert.deepEqual(sent, [], 'a forged key is not heard');
+  context.onEvent(report(id, first, 20, at));
+  assert.equal(JSON.stringify(sent), JSON.stringify([['agents:usage-changed', { projectId: 'p' }]]));
+});
+
+test('when native sessions are unavailable the usage the pane reads still carries a dispatched Codex worker\'s quota', async t => {
+  const { context, fallbackUsage } = await mainAssembly(t), at = Date.now(), id = randomUUID();
+  assert.equal((await fallbackUsage()).limits, null, 'before any report there is nothing to show');
+  context.onEvent(start(id)); context.onEvent(report(id, first, 35, at));
+  const codex = await fallbackUsage();
+  assert.equal(codex.limits.limitsById.codex.primary.usedPercent, 35); assert.equal(codex.limits.accountScopeId, accountScopeId(first));
+});
+
+// Main's registration resolver finds the team through the injected locator. Git is a stand-in that answers after `delay`, so a slow
+// Git is exactly what the helper's wait sees: the answer is the repository's own .git, as `rev-parse --git-common-dir` gives it.
+test('a slow Git lookup does not fail the control registration: the worker is bound and its account is named', async t => {
+  const { createTeamLocator } = require('../electron/features/team/team-locate.cjs'), { connectDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-slow-git-')); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, '.git', 'agentrix', 'board'), { recursive: true });
+  const asked = [];
+  for (const delay of [800, 1800]) {
+    const id = randomUUID(), execFile = (file, args, options, done) => { asked.push([file, ...args]); setTimeout(() => done(null, '.git\n'), delay); };
+    fs.writeFileSync(path.join(root, '.git', 'agentrix', 'board', `${id}.json`), JSON.stringify({ id, pid: process.pid, title: 'Slow Git', role: '执行', agent: 'codex',
+      model: 'synthetic-model', cwd: root, allow: [], startedAt: Date.now() }));
+    const { controlAddress } = await mainAssembly(t, { locate: createTeamLocator({ execFile }), root });
+    const began = Date.now(), client = await connectDispatchControl({ address: controlAddress(), runId: id, projectId: 't', sessionKey: 'planner-key', capability: 'synthetic-capability' });
+    t.after(() => client.close());
+    assert.ok(Date.now() - began >= delay - 50, `the registration really waited for Git (${delay} ms)`);
+    assert.equal(client.accountKey, require('../electron/features/agents/codex-account-usage.cjs').accountKey, 'main\'s key reaches the worker, so its account has a name');
+  }
+  assert.ok(asked.length === 2 && asked.every(call => call[0] === 'git' && call.join(' ').includes('rev-parse --git-common-dir')));
 });
