@@ -4,7 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { popupHarness, elements } = require('./reading-popup-coverage.test.cjs');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
-const { cliStateFor } = require('../src/features/agents/agent-screen-state.ts');
+const { readingState } = require('../src/features/reading/reading-state.ts');
+// The reading view's own verdict for one frame: the screen's state plus `accepting`, which the reading module derives.
+const frameState = (frame, terminal) => readingState('claude', frame.rows, undefined, terminal, undefined, frame);
 const { COMPOSER_HOLD_MS } = require('../src/features/reading/useHeldTrue.ts');
 
 // Claude Code's busy screen as the repo captured it (2.1.296 and 2.1.302 layouts), and the half-drawn frames a redraw of it
@@ -44,7 +46,7 @@ function busyView(t) {
   const card = () => !!decorations()?.beforeResult;
   const live = () => elements(h.tree()).find(element => element.type?.name === 'ConversationFeed').props.live;
   const look = () => ({ line: line(), card: card(), hint: elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, stop: !!stop(), stopDisabled: stop()?.props.disabled });
-  const raw = name => { const s = cliStateFor('claude', { rows: FRAMES[name], sessionId: 'fixture-session', revision: ++revision, updatedAt: at + 1 }, h.props.terminal); return { accepting: s.accepting, working: s.working }; };
+  const raw = name => { const s = frameState({ rows: FRAMES[name], sessionId: 'fixture-session', revision: ++revision, updatedAt: at + 1 }, h.props.terminal); return { accepting: s.accepting, working: s.working }; };
   show('full');
   return { h, show, look, raw, live, card };
 }
@@ -98,7 +100,7 @@ for (const [file, hint] of [['claude-permission.txt', /等终端处理完后发�
   test(file + ': the frame alone holds delivery, and the box blocks in the same render', t => {
     const terminal = { sessionId: 'fixture-session', agentStartedAt: 0, codexActivity: 'working', needsInput: null,
       cliState: { sessionId: 'fixture-session', revision: 1, state: 'working', updatedAt: 10000 } };
-    const state = cliStateFor('claude', { rows: fixture(file), sessionId: 'fixture-session', revision: 2, updatedAt: 10001 }, terminal);
+    const state = frameState({ rows: fixture(file), sessionId: 'fixture-session', revision: 2, updatedAt: 10001 }, terminal);
     assert.equal(state.waiting, true); assert.equal(state.accepting, false); assert.equal(state.canDeliver, false);
 
     const { h, show, look } = busyView(t);
