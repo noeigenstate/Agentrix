@@ -625,8 +625,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
   };
   // What the agent is doing, written at the end of the conversation the way its CLI writes it, never in a corner.
-  // The line is display: it follows the held shownWorking, so a half-drawn redraw does not blink it. What the round has settled into
-  // (the result card, the completion state) keeps the frame's own verdict, `working`.
+  // The line and what a round settles into (its result card, the hint after it, the feed's liveness) are display: they follow the
+  // held shownWorking, so a half-drawn redraw does not blink them, and a round's result waits out the hold. Notifications and
+  // confirmations are the main process's and never read this.
   const status = hasChoice && screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
     : hasChoice && state.message != null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: state.message })}</span>
@@ -635,7 +636,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     : null;
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
   // works or waits, and nothing for earlier rounds.
-  const settled = !working && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
+  const settled = !shownWorking && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
   const result = useMemo(() => latestResult(entries, { idle: settled, interrupted }), [entries, settled, interrupted]);
   // Only the owner's click on a message's 引用 gets here, so only it moves the keyboard to the message box.
   const quoteMessage = (who: string, text: string) => {

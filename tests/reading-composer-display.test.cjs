@@ -23,8 +23,13 @@ const FRAMES = {
 // The order a busy redraw walks through, repeated: whole frame, rows erased, rows drawn again.
 const REDRAW = ['full', 'spinnerRowErased', 'full', 'boxErased', 'full', 'boxHalfDrawn', 'full', 'blank', 'full'];
 
+// A round in progress: the request, a reply so far and a step still running. A result card for it would be a result before its end.
+const ROUND = [{ id: 'u1', role: 'user', text: 'fix the parser', at: 1000 }, { id: 'a1', role: 'assistant', text: 'Looking at it.', at: 2000 },
+  { id: 't1', role: 'assistant', at: 3000, tool: { kind: 'command', phrase: '运行测试', target: 'npm test', done: false, failed: false, written: [] } }];
+
 function busyView(t) {
   const h = popupHarness(t, 'claude', FRAMES.full, 'working');
+  h.setEntries(ROUND);
   h.props.terminal.cliState = { sessionId: 'fixture-session', revision: 1, state: 'working', updatedAt: 10000 };
   let revision = 1, at = 10000;
   const show = (name, wait = 100) => {
@@ -33,24 +38,27 @@ function busyView(t) {
   };
   const stop = () => elements(h.tree()).find(element => element.props.title === '中断（Esc）');
   // The status line and the feed's liveness: the line is display, `live` is what the round has settled into.
-  const line = () => elements(h.tree()).some(element => typeof element.props.label === 'string' && /正在思考/.test(element.props.label));
+  // With a round in the conversation the line goes to the feed through the decorations, otherwise it follows the feed as a step.
+  const decorations = () => elements(h.tree()).find(element => element.props.value && 'beforeResult' in element.props.value)?.props.value;
+  const line = () => [...elements(h.tree()), ...elements(decorations()?.status)].some(element => typeof element.props.label === 'string' && /正在思考/.test(element.props.label));
+  const card = () => !!decorations()?.beforeResult;
   const live = () => elements(h.tree()).find(element => element.type?.name === 'ConversationFeed').props.live;
-  const look = () => ({ line: line(), hint: elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, stop: !!stop(), stopDisabled: stop()?.props.disabled });
+  const look = () => ({ line: line(), card: card(), hint: elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, stop: !!stop(), stopDisabled: stop()?.props.disabled });
   const raw = name => { const s = cliStateFor('claude', { rows: FRAMES[name], sessionId: 'fixture-session', revision: ++revision, updatedAt: at + 1 }, h.props.terminal); return { accepting: s.accepting, working: s.working }; };
   show('full');
-  return { h, show, look, raw, live };
+  return { h, show, look, raw, live, card };
 }
 const flips = values => values.slice(1).filter((value, index) => JSON.stringify(value) !== JSON.stringify(values[index])).length;
 
 test('reproduction: the raw verdict flips on a busy redraw, the message box does not', t => {
   const { show, look, raw } = busyView(t);
   const steady = look();
-  assert.deepEqual(steady, { line: true, hint: steady.hint, stop: true, stopDisabled: false });
+  assert.deepEqual(steady, { line: true, card: false, hint: steady.hint, stop: true, stopDisabled: false });
   assert.match(steady.hint, /发消息/);
   const verdicts = [], looks = [];
   for (let round = 0; round < 5; round++) for (const name of REDRAW) { verdicts.push(raw(name)); show(name); looks.push(look()); }
   assert.ok(flips(verdicts) >= 2 * 5, 'the frames themselves flip accepting and working (' + flips(verdicts) + ' flips)');
-  assert.equal(flips(looks), 0, 'status line, hint, interrupt button and its enabled state stay as they were');
+  assert.equal(flips(looks), 0, 'status line, result card, hint, interrupt button and its enabled state stay as they were');
   assert.deepEqual(looks.at(-1), steady);
 });
 
@@ -59,7 +67,7 @@ test('input lost for good: the hint changes after the hold, and returns at once 
   const ready = look().hint;
   show('boxErased', COMPOSER_HOLD_MS - 1); assert.equal(look().hint, ready);
   show('boxErased', 1); assert.match(look().hint, /等待终端输入就绪后发送/); assert.equal(look().stopDisabled, true);
-  show('full'); assert.deepEqual(look(), { line: true, hint: ready, stop: true, stopDisabled: false });
+  show('full'); assert.deepEqual(look(), { line: true, card: false, hint: ready, stop: true, stopDisabled: false });
 });
 
 test('work over: the interrupt button leaves after the hold, and returns at once with the spinner', t => {
@@ -70,14 +78,19 @@ test('work over: the interrupt button leaves after the hold, and returns at once
   show('full'); assert.equal(look().stop, true); assert.equal(look().line, true);
 });
 
-test('the status line is display only: the feed goes on following the frame, so the round settles as before', t => {
-  const { show, look, live } = busyView(t);
-  assert.equal(live(), true);
+test('a round in progress shows no result card and keeps its hint through a redraw; the card comes once the end has lasted the hold', t => {
+  const { h, show, look, live, card } = busyView(t);
+  const working = look();
+  assert.equal(live(), true); assert.equal(card(), false);
+  show('spinnerRowErased', COMPOSER_HOLD_MS - 1);
+  assert.deepEqual(look(), working, 'no result card, no 继续修改 hint, status line and button as they were'); assert.equal(live(), true);
+  show('full', 1); assert.deepEqual(look(), working);
+  // The turn really ends: the host says idle and the spinner row stays gone.
+  h.props.terminal.cliState = { ...h.props.terminal.cliState, revision: 2, state: 'idle', updatedAt: 20000 };
+  h.setEntries(ROUND.map(entry => entry.tool ? { ...entry, tool: { ...entry.tool, done: true } } : entry));
+  show('spinnerRowErased', COMPOSER_HOLD_MS - 1); assert.equal(card(), false); assert.equal(look().line, true);
   show('spinnerRowErased', 1);
-  assert.equal(look().line, true, 'the line holds through the redraw');
-  assert.equal(live(), false, 'the round has the frame own verdict: no spinner row, settled');
-  show('full', 1);
-  assert.equal(look().line, true); assert.equal(live(), true);
+  assert.equal(card(), true); assert.equal(look().line, false); assert.match(look().hint, /继续修改/); assert.equal(live(), false);
 });
 
 // A menu or dialog is one frame: accepting turns false and waiting true with no hold, and the box shows and blocks in that render.
