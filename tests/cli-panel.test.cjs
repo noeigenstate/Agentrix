@@ -120,3 +120,10 @@ test('Claude Code 2.1.317 lists queued messages above its working line, never in
   assert.equal(cliInputDraft('claude', after, screen), '', 'Esc sends the queue on; nothing comes back into the input');
   assert.equal(isCliIdle('claude', after, screen), true);
 });
+
+test('the queue placeholder is empty only with Claude Code\'s queue row on screen', () => {
+  const typed = ['────', '❯ Press up to edit queued messages', '────', '  ⏸ manual mode on'];
+  assert.equal(cliInputDraft('claude', typed, inspect('claude', typed)), 'Press up to edit queued messages', 'without the queue row the words were typed');
+  const queued = ['❯ first queued', '  ctrl+x ctrl+s to send now', '✶ Befuddling… (2s)', ...typed];
+  assert.equal(cliInputDraft('claude', queued, inspect('claude', queued)), '');
+});

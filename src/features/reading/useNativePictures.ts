@@ -41,6 +41,17 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
   const settle = async (owns: () => boolean, limit = 500) => {
     for (let waited = 0; waited < limit && owns() && parsing(); waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
   };
+  // The input on the first parsed frame that draws it: a busy agent's redraw can leave it out for a moment. Nothing once
+  // a dialog takes its place, the caller lets go, or it stays away past the limit.
+  const awaitInput = async (owns: () => boolean, limit = 2000) => {
+    for (let waited = 0; owns(); waited += 50) {
+      const current = readInput(), shown = readScreen(terminalId);
+      if (current) return current;
+      if (shown && !shown.pending && cliDialogShown(agent, shown.rows, parseAgentScreen(agent, shown.rows)) || waited >= limit) return null;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    return null;
+  };
   // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
   const clearInput = async (owns: () => boolean) => {
     for (let tries = 0; owns(); tries++) {
@@ -121,7 +132,7 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
     } catch (error) { if (owns()) onError(String(error)); }
     finally { if (valid() && interaction.current === intent) sending.current = false; }
   };
-  return { images, clear, readInput, parsing, settle, clearInput, observe, paste, remove,
+  return { images, clear, readInput, parsing, settle, awaitInput, clearInput, observe, paste, remove,
     prepare: (batch: readonly NativeImage[]) => Promise.all(batch.map(image => context.pastes.get(image.id)?.ready)),
     numbers: images.map((image, index) => Number(context.pastes.get(image.id)?.label?.match(/\d+/)?.[0] ?? index + 1)),
   };

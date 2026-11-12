@@ -2959,7 +2959,7 @@ test('claude: a second Enter on a draft still settling sends it once', async t =
   const h = workingComposerHarness(t, 'claude');
   h.view.pending = true; h.render();
   h.edit('double'); h.press('Enter'); await h.tick(0);
-  assert.equal(h.node.value, 'double', 'the draft stays in the box while the frame settles');
+  assert.equal(h.node.value, '', 'the message shows as sent while the frame settles');
   h.press('Enter'); await h.tick(0);
   h.view.pending = false; await h.tick(50);
   for (let step = 0; step < 6; step++) await h.tick(700);
@@ -3082,7 +3082,8 @@ test('claude: queued words typed again in the terminal are a leftover there, nev
   assert.deepEqual(h.pasted.map(item => item.text), ['继续'], 'nothing is pasted onto the owner\'s terminal draft');
   assert.equal(h.view.draft, '继续'); assert.deepEqual(outboxTexts(h), ['另一条']);
   const notice = leftoverNotice(h);
-  assert.equal(notice.text, '继续'); assert.deepEqual(Object.keys(notice.actions), [en['清空它，再发送新消息']], 'words already queued are not offered for sending again');
+  assert.equal(notice.text, '继续'); assert.equal(notice.title, en['终端输入框里还有一段文字，新消息排在它后面'], 'Claude Code never keeps words it took in its input');
+  assert.deepEqual(Object.keys(notice.actions), [en['先发送终端里这段'], en['清空它，再发送新消息']]);
 });
 
 for (const action of ['清空它，再发送新消息', 'again']) test(`claude: words the owner cleared from the terminal are never sent again by the safety net (${action})`, async t => {
@@ -3121,4 +3122,78 @@ test('claude: a paste whose frame parses within two seconds is sent, not handed 
   assert.deepEqual(h.written.map(item => item.text), ['\r'], 'Enter once the input can be read');
   assert.deepEqual(h.view.records.map(record => record.text), ['busy redraws']);
   assert.equal(h.node.value, '', 'the words are not handed back while they are in the terminal');
+});
+
+const stopButton = h => elements(h.tree()).find(node => node.props['aria-label'] === en['中断（Esc）']);
+const sentCards = h => elements(h.tree()).find(element => element.props.queued)?.props.prompts ?? [];
+
+test('claude: the Stop button a finished round still shows writes no Esc to the idle prompt', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  assert.ok(stopButton(h));
+  h.view.working = false; h.render();
+  assert.ok(stopButton(h), 'the button outlasts the round by a moment');
+  stopButton(h).props.onClick(); await h.advance(0); stopButton(h).props.onClick(); await h.advance(0);
+  assert.deepEqual(h.written, [], 'two quick clicks open no history menu');
+  h.press('Escape'); assert.deepEqual(h.written, []);
+});
+
+test('claude: a message sent on a half-drawn working frame shows as sent, never in the outbox', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  // A redraw caught halfway: the spinner row is there, the input box not yet.
+  h.view.rows = ['✶ Swooping… (12s)']; h.render();
+  h.edit('straight in'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), [], 'the outbox stays empty while the send waits for the input');
+  assert.deepEqual(sentCards(h).map(prompt => prompt.text), ['straight in'], 'the conversation shows it as sent');
+  assert.equal(h.node.value, ''); assert.deepEqual(h.pasted, []);
+  delete h.view.rows; await h.tick(50); await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.pasted.map(item => item.text), ['straight in']);
+  assert.deepEqual(h.view.records.map(record => record.text), ['straight in']); assert.deepEqual(outboxTexts(h), []);
+});
+
+test('claude: a dialog that comes up instead of the input sends the waiting message to the outbox', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['✶ Swooping… (12s)']; h.render();
+  h.edit('hold me'); h.press('Enter'); await h.tick(0);
+  h.view.rows = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel']; await h.advance(50); h.render();
+  assert.deepEqual(h.pasted, []); assert.deepEqual(h.written, []);
+  assert.deepEqual(outboxTexts(h), ['hold me']); assert.deepEqual(sentCards(h), []);
+});
+
+// The same words twice: Claude Code queued the first, the second was pasted but its Enter did not take.
+async function sameWordsTwice(t) {
+  const h = workingComposerHarness(t, 'claude');
+  h.edit('继续'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  h.view.accept = false;
+  h.edit('继续'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700); await h.tick(3000);
+  h.view.accept = true;
+  assert.deepEqual(h.view.records.map(record => [record.text, record.queued]), [['继续', true]]); assert.equal(h.view.draft, '继续');
+  h.edit('另一条'); h.press('Enter'); await h.tick(0); await h.tick(1000);
+  return h;
+}
+
+test('claude: words in the input are not called sent because the same words are queued', async t => {
+  const h = await sameWordsTwice(t), notice = leftoverNotice(h);
+  assert.equal(notice.title, en['终端输入框里还有一段文字，新消息排在它后面']);
+  assert.deepEqual(Object.keys(notice.actions), [en['先发送终端里这段'], en['清空它，再发送新消息']]);
+});
+
+test('claude: clearing the words withdraws only their own card, never the queued one', async t => {
+  const h = await sameWordsTwice(t);
+  const queuedCard = () => sentCards(h).find(prompt => prompt.text === '继续' && elements(h.tree()).find(element => element.props.queued).props.queued(prompt));
+  const before = queuedCard();
+  assert.ok(before);
+  leftoverNotice(h).actions[en['清空它，再发送新消息']].onClick(); await h.tick(80); h.render();
+  for (let step = 0; step < 4; step++) await h.tick(700);
+  assert.equal(queuedCard()?.id, before.id, 'the queued message keeps its own card');
+  assert.equal(sentCards(h).filter(prompt => prompt.text === '继续').length, 1, 'the cleared copy has none');
+});
+
+test('claude: Stop on a half-drawn working frame looks again quietly and then interrupts', async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.onError = error => errors.push(error);
+  h.view.rows = ['✶ Swooping… (12s)']; h.render();
+  stopButton(h).props.onClick(); await h.advance(0);
+  assert.deepEqual(h.written, []);
+  delete h.view.rows; await h.advance(50);
+  assert.deepEqual(h.written.map(item => item.text), ['\x1b']); assert.deepEqual(errors, [], 'no warning for a frame that finished drawing');
 });
