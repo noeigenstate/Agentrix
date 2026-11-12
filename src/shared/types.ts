@@ -141,7 +141,13 @@ export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'auto
 // Where the Claude Code a session runs was found (claude-runtime/BOUNDARY.md); `fileShown` writes home as ~.
 export type ClaudeVia = 'path' | 'npm' | 'platform-package' | 'local-bin' | 'claude-local' | 'winget' | 'registry-path' | 'system';
 export type ClaudeFound = { version: string | null; via: ClaudeVia; fileShown: string };
-export type AgentsState = { codex: { installed: boolean }; claude: { installed: boolean } & Partial<ClaudeFound>; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
+// `claude` is what the terminal runs (version, via, fileShown). Installed also covers one that cannot run natively:
+// `reason` says why (too_old, or its check's timeout, failed or unreadable), and `incomplete` an npm install without its
+// native program (never installed again by npm: the connection test says what to do). `notice` with `native` describes
+// the other, newer one the native path runs.
+export type ClaudeAgentState = { installed: boolean } & Partial<ClaudeFound> & {
+  reason?: 'too_old' | 'timeout' | 'failed' | 'unreadable'; incomplete?: true; notice?: 'cli_split_versions'; native?: ClaudeFound };
+export type AgentsState = { codex: { installed: boolean }; claude: ClaudeAgentState; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }
   | { kind: 'image' | 'video'; mimeType: string; url: string; previewId: string }
