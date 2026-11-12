@@ -678,8 +678,12 @@ test('an incomplete npm install of Claude Code is not installed again: the card 
     assert.deepEqual(calls, [['event', 'agentrix:open-settings', { section: 'runtime', focus: true }]], 'no npm install, no session, and the settings open on 运行方式, asking to focus the test or the key');
   } finally { view.done(); }
   // With no key saved the connection test cannot be clicked: the card says only that there is something to see; the click is the same.
-  const noKey = launcher({ ...runtime, saved: false }, [], { claude: { installed: true, incomplete: true } });
-  try { noKey.render(); await settle(); assert.equal(noKey.note('claude'), '安装不完整 · 点击查看'); } finally { noKey.done(); }
+  const noKeyCalls = [], noKey = launcher({ ...runtime, saved: false }, noKeyCalls, { claude: { installed: true, incomplete: true } });
+  try {
+    noKey.render(); await settle(); assert.equal(noKey.note('claude'), '安装不完整 · 点击查看');
+    noKeyCalls.length = 0; noKey.button('claude').props.onClick(); await settle();
+    assert.deepEqual(noKeyCalls, [['event', 'agentrix:open-settings', { section: 'agents' }]], 'the page with the installer command opens, nothing to focus');
+  } finally { noKey.done(); }
   // Installed but not passing its check (or old): not treated as missing, so nothing is installed over it, and the click starts as before.
   for (const reason of ['too_old', 'timeout', 'failed', 'unreadable']) {
     const started = [], other = launcher(runtime, started, { claude: { installed: true, reason } });
