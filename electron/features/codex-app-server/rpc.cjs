@@ -69,7 +69,7 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
   child.stdin.on('error', error => fail(error.code === 'codex_cli_required' ? error.code : 'write_failed'));
   child.on('error', error => { processError ||= error; fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required'].includes(error.code) ? error.code : 'process_failed'); });
   child.once('exit', () => fail('process_exited'));
-  // Only a bounded tail is kept, for a failed start's redacted reason (failure.cjs); stderr is never forwarded as events.
+  // Only a bounded tail is kept, for a failed start's redacted reason (agents/start-failure.cjs); stderr is never forwarded as events.
   child.stderr?.setEncoding?.('utf8');
   child.stderr?.on('data', text => { stderrTail = (stderrTail + text).slice(-STDERR_TAIL); });
   return {

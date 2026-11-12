@@ -106,3 +106,9 @@ test('F8 an exhausted cap with background tasks explains why an explicit send ca
   await assert.rejects(session.send({ clientMessageId: 'second', text: 'second' }), error => error.code === 'budget_exhausted' && /后台任务/.test(error.message));
   assert.equal(session.activity().count, 1); assert.equal(fake.calls.length, 1);
 });
+test('the native API channel clears a user apiKeyHelper (the owner decision), and keeps the other user helpers', t => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ apiKeyHelper: 'echo private-helper', proxyAuthHelper: 'echo proxy-helper' }));
+  const config = routeSettings(f.spec);
+  assert.equal(config.apiKeyHelper, ''); assert.equal(config.proxyAuthHelper, 'echo proxy-helper');
+});

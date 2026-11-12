@@ -11,6 +11,7 @@ const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.c
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const { fixtureProcesses } = require('./fixtures/claude-sdk-processes.cjs');
+const { en } = require('../electron/i18n.cjs');
 const key = 'sk-ant-api03-offline-connection-only';
 function http(statusCode, body = { data: [{ id: 'claude-test-model' }] }) {
   const calls = [];
@@ -147,12 +148,15 @@ for (const mode of ['api-only', 'api-then-terminal']) test(`the real connection 
   const native = createNativeSessions({ directory: directoryPath, claude: factory });
   const result = await native.testConnection();
   assert.equal(result.key.status, 'ok'); assert.equal(result.cli.status, 'ok');
-  assert.deepEqual(result.billing, { status: 'mismatch', source: 'apiKeyHelper' });
+  assert.deepEqual({ status: result.billing.status, source: result.billing.source, reported: result.billing.reported },
+    { status: 'mismatch', source: 'apiKeyHelper', reported: { apiKeySource: 'apiKeyHelper', tokenSource: 'none' } });
+  // The billing line says why (a helper the native channel cannot clear comes from a managed policy); the path names the consequence.
+  assert.match(result.billing.detail.text, /托管策略配置了 apiKeyHelper/); assert.equal(result.reason, 'billing_identity_mismatch');
   assert.equal(result.path, mode === 'api-only' ? null : 'terminal');
   factory.resetAvailability();
   const session = factory.create({ ...specOf(root), projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 10 }, () => {});
   await session.start();
-  await assert.rejects(session.send({ clientMessageId: 'm', text: 'must remain unsent' }), error => error.beforeInput === true && error.message === result.reason);
+  await assert.rejects(session.send({ clientMessageId: 'm', text: 'must remain unsent' }), error => error.beforeInput === true && error.message === result.billing.detail.text.replace('{detail}', result.billing.detail.values.detail));
   assert.equal(fake.inputs.length, 0); assert.equal(fake.closes.length, 2); await session.close();
 });
 
@@ -179,7 +183,11 @@ for (const [source, status] of [['ANTHROPIC_API_KEY', 'ok'], ['apiKeyHelper', 'm
       } });
     scope.defer(() => factory.close()); factory.credentials.save(key);
     const result = await factory.testConnection();
-    assert.deepEqual(result.billing, { status, source });
+    assert.deepEqual({ status: result.billing.status, source: result.billing.source }, { status, source });
+    // A mismatch names what the CLI reported; one that reported nothing says so instead of showing an unknown source.
+    if (status === 'mismatch') assert.equal(result.billing.reported.apiKeySource, source);
+    if (!source) assert.match(result.billing.detail.text, /没有报告计费来源/);
+    if (status === 'mismatch') assert.equal(result.reason, 'billing_identity_mismatch');
     for (const child of children) await scope.wait(new Promise(resolve => {
       if (child.fixtureClosed) resolve(); else child.once('close', resolve);
     }), 'connection probe exit');
@@ -362,4 +370,83 @@ test('in the app the token count asks about the stand-in model: main\'s connecti
     assert.equal((await factory.testConnection()).key.status, 'ok'); models.push(fake.calls[1].body.model);
   }
   assert.deepEqual(models, ['claude-opus-5-5', 'claude-sonnet-5-5']);
+});
+// The billing probe against an injected SDK: what it answers the initialize with, or how it fails.
+const probeWith = (root, initializationResult, options = {}) => probeBillingIdentity({ key, spec: specOf(root),
+  resolveExecutable: async () => 'synthetic-only', loadSdk: async () => ({ query: () => ({ initializationResult, close() {} }) }), ...options });
+
+test('a billing mismatch names what Claude Code reported and what to check, unknown names included', async t => {
+  const root = directory(t);
+  for (const [account, words, shown] of [
+    [{ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' }, /^Claude Code 的托管策略配置了 apiKeyHelper[^]*（apiKeySource=ANTHROPIC_API_KEY; tokenSource=apiKeyHelper）$/, 'ANTHROPIC_API_KEY'],
+    [{ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'ANTHROPIC_AUTH_TOKEN' }, /^Claude Code 的托管策略设置了 ANTHROPIC_AUTH_TOKEN/, 'ANTHROPIC_API_KEY'],
+    [{ apiKeySource: '/login managed key', tokenSource: 'none' }, /\/login 登录 Anthropic 控制台时保存的密钥/, '/login managed key'],
+    [{ apiKeySource: 'none', tokenSource: 'claude.ai' }, /没有使用 API 密钥，可能在用 claude\.ai 登录/, 'none'],
+    [{ tokenSource: 'none' }, /没有报告计费来源[^]*（apiKeySource=missing）$/, null],
+    // A value Claude Code is not known to report is never echoed, a key-shaped one least of all.
+    [{ apiKeySource: 'weird-source', tokenSource: 'none' }, /^Claude Code 报告的计费来源不是 ANTHROPIC_API_KEY[^]*（apiKeySource=unknown）$/, 'unknown'],
+    [{ apiKeySource: key, tokenSource: 'odd-token' }, /^Claude Code 报告的计费来源不是 ANTHROPIC_API_KEY[^]*（apiKeySource=unknown）$/, 'unknown'],
+  ]) {
+    const result = await probeWith(root, async () => ({ account }));
+    assert.equal(result.status, 'mismatch'); assert.match(result.reason, words); assert.equal(result.reported.apiKeySource, shown);
+    assert.equal(result.reason, result.why.text.replace(/\{(\w+)\}/g, (_, name) => result.why.values[name]));
+    assert.ok(Object.hasOwn(en, result.why.text), `an English entry for ${result.why.text}`);
+    assert.ok(!JSON.stringify(result).includes(key)); assert.doesNotMatch(JSON.stringify(result), /weird-source|odd-token/);
+  }
+  assert.deepEqual(await probeWith(root, async () => ({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'claude.ai' } })),
+    { status: 'ok', source: 'ANTHROPIC_API_KEY' }, 'a claude.ai login beside the key still bills the key (real 2.1.322 sends only x-api-key)');
+});
+
+test('an unread billing source says why: a slow initialize with its wait, a failed start with its exit and redacted stderr, no CLI', async t => {
+  const root = directory(t);
+  const slow = await probeWith(root, () => new Promise(() => {}), { timeoutMs: 20 });
+  assert.equal(slow.status, 'unknown'); assert.equal(slow.why.text, 'Claude Code 初始化 {seconds} 秒仍未完成，无法确认计费来源。请稍后重试。');
+  assert.equal(slow.reason, 'Claude Code 初始化 1 秒仍未完成，无法确认计费来源。请稍后重试。');
+  // The SDK's own error fields say how the process ended; the stderr is what the probe collected, redacted.
+  const failing = (error, stderr = '') => probeWith(root, null, { loadSdk: async () => ({ query: ({ options }) => {
+    if (stderr) options.stderr(stderr);
+    return { initializationResult: async () => { throw error; }, close() {} };
+  } }) });
+  const exited = await failing(Object.assign(new Error('Claude Code process exited with code 2. stderr: hidden'), { errorClass: 'process_exited_nonzero', exitCode: 2 }),
+    `settings broken\nAuthorization: Bearer abc123secretvalue ${key}`);
+  assert.deepEqual(Object.keys(exited.why.values).sort(), ['code', 'stderr']); assert.equal(exited.why.values.code, 2);
+  assert.match(exited.reason, /^Claude Code 启动后退出（退出码 2），错误输出：settings broken \/ Authorization: Bearer <secret>/);
+  assert.doesNotMatch(exited.reason, /abc123secretvalue|exited with code|hidden/); assert.ok(!JSON.stringify(exited).includes(key));
+  const quiet = await failing(Object.assign(new Error('x'), { errorClass: 'process_exited_nonzero', exitCode: 1 }));
+  assert.equal(quiet.reason, 'Claude Code 启动后退出（退出码 1），没有错误输出。');
+  const killed = await failing(Object.assign(new Error('x'), { errorClass: 'process_killed_by_signal', signal: 'SIGKILL' }));
+  assert.equal(killed.reason, 'Claude Code 启动后被终止（信号 SIGKILL），没有错误输出。');
+  const spawned = await failing(Object.assign(new Error('spawn EPERM'), { code: 'EPERM' }));
+  assert.equal(spawned.reason, 'Claude Code 没能启动（EPERM），没有错误输出。');
+  const unverified = await probeWith(root, null, { resolveExecutable: async () => { throw Object.assign(new Error('Claude Code 检查没有通过，无法通过 API 运行'), { code: 'native_cli_required', unverified: true }); } });
+  assert.equal(unverified.reason, 'Claude Code 检查没有通过，无法通过 API 运行');
+  const absent = await probeWith(root, null, { resolveExecutable: async () => null });
+  assert.equal(absent.reason, '没有找到能用的 Claude Code，无法确认计费来源。');
+  for (const { why } of [slow, exited, quiet, killed, spawned, unverified, absent]) assert.ok(Object.hasOwn(en, why.text), `an English entry for ${why.text}`);
+});
+
+test('the initialize deadline yields to an answer already waiting while main was busy', async t => {
+  const root = directory(t);
+  // Main is busy from the first turn until both the answer (due at 30 ms) and the 60 ms deadline are overdue; the
+  // answer comes due first, as a CLI's reply read in the same turn would, and wins.
+  const answer = () => new Promise(resolve => {
+    setTimeout(() => setImmediate(() => resolve({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none' } })), 30);
+    setImmediate(() => { const end = Date.now() + 120; while (Date.now() < end); });
+  });
+  assert.deepEqual(await probeWith(root, answer, { timeoutMs: 60 }), { status: 'ok', source: 'ANTHROPIC_API_KEY' });
+});
+
+test('the connection result carries the billing reason and what was reported; the path names only the consequence', async t => {
+  const root = directory(t);
+  const check = createConnectionTest({ credentials: { read: () => key }, inspectCli: cli, request: http(200).request,
+    probeBilling: () => probeWith(root, async () => ({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' } })) });
+  const value = await check();
+  assert.deepEqual(value.billing.reported, { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' });
+  assert.equal(value.billing.status, 'mismatch'); assert.match(value.billing.detail.text, /托管策略配置了 apiKeyHelper/);
+  assert.equal(value.reason, 'billing_identity_mismatch');
+  // A probe that throws gets a fixed sentence: nothing of its message reaches the owner.
+  const broken = await createConnectionTest({ credentials: { read: () => key }, inspectCli: cli, request: http(200).request,
+    probeBilling: async () => { throw new Error(`C:\\Users\\someone\\secret ${key}`); } })();
+  assert.deepEqual(broken.billing.detail, { text: '检查 Claude Code 的计费来源时出错，请重试。', values: {} });
+  assert.equal(broken.reason, 'billing_unconfirmed'); assert.ok(!JSON.stringify(broken).includes('someone'));
 });

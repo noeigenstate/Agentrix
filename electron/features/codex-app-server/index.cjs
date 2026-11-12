@@ -12,7 +12,7 @@ const { assertCompatible, probeCapabilities, commandName, builtinCommands, unsup
 const { codexExecutable, scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/codex-account-usage.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
-const { startupDetail } = require('./failure.cjs');
+const { startupDetail } = require('../agents/start-failure.cjs');
 // A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
 const RECENT_PICTURES = 6;
 

@@ -29,7 +29,7 @@ const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-
   'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
-  'features/codex-app-server/failure.cjs', 'features/agents/skill-privacy.cjs'];
+  'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs'];
 const runtimeFiles = () => {
   // A supplies this pure module in the merged tree. Older or standalone helper trees remain usable without it.
   const routing = 'features/native-session/routing.cjs';

@@ -1799,6 +1799,15 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   assert.deepEqual([cliLine({ reason: 'not_found' }).text, cliLine({ reason: 'not_found' }).title], ['未找到', null]);
   assert.equal(connectionLines({ ...good, cli: { status: 'missing', version: null, required, reason: 'failed' }, path: 'terminal', reason: 'native_cli_unverified' })[3].text,
     '终端（订阅） · Claude Code 检查没有通过，无法通过 API 运行');
+  // The billing line says why and what to check; the path line only the consequence, so the card says the reason once.
+  const why = { text: 'Claude Code 的托管策略配置了 apiKeyHelper。（{detail}）', values: { detail: 'tokenSource=apiKeyHelper' } };
+  const billed = connectionLines({ ...good, billing: { status: 'mismatch', source: 'ANTHROPIC_API_KEY', reported: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' }, detail: why },
+    path: 'terminal', reason: 'billing_identity_mismatch' });
+  assert.deepEqual([billed[3].tone, billed[3].text, billed[3].hint], ['bad', 'apiKeyHelper', 'Claude Code 的托管策略配置了 apiKeyHelper。（tokenSource=apiKeyHelper）']);
+  assert.equal(billed[4].text, '终端（订阅） · Claude Code 没有使用这个密钥');
+  assert.equal(JSON.stringify(billed).split('托管策略').length, 2, 'the reason appears once');
+  const unread = connectionLines({ ...good, billing: { status: 'unknown', source: null, detail: { text: '没有找到能用的 Claude Code，无法确认计费来源。', values: {} } }, path: 'terminal', reason: 'billing_unconfirmed' });
+  assert.deepEqual([unread[3].text, unread[3].hint, unread[4].text], ['未知', '没有找到能用的 Claude Code，无法确认计费来源。', '终端（订阅） · 无法确认 Claude Code 的计费来源']);
   assert.doesNotMatch(JSON.stringify([lines, bad, odd]), /sk-ant/);
 });
 

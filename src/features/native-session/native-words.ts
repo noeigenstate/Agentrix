@@ -92,6 +92,7 @@ export function receiptLine({ status, reason }: Receipt) {
 const REASON_WORDS: Record<string, string> = {
   budget_exhausted: '本月 API 预算已用完', credits_exhausted: 'API 额度已用完', rate_limited: 'API 被限流', no_key: '还没有保存 API key',
   native_cli_required: '未找到原生 Claude Code，无法通过 API 运行', native_cli_unverified: 'Claude Code 检查没有通过，无法通过 API 运行',
+  billing_identity_mismatch: 'Claude Code 没有使用这个密钥', billing_unconfirmed: '无法确认 Claude Code 的计费来源',
   settings: '按设置运行', user: '你选择了终端',
   codex_cli_required: '未找到 Codex 命令行，无法使用原生模式', unsupported_codex_version: '这个 Codex 版本不支持原生模式', terminal_selected: '按设置使用终端',
   terminal_agent_exited: 'Claude Code 在终端里启动后就退出了', terminal_start_failed: '终端里的 Claude Code 没有启动成功',
@@ -214,17 +215,23 @@ const KEY_HINTS: Record<string, string> = {
 const MODELS_SHOWN = 5;
 export type TestLine = { id: 'key' | 'models' | 'cli' | 'billing' | 'path'; tone: 'ok' | 'warn' | 'bad'; label: string; text: string; hint: string | null; title: string | null };
 const BILLING_SOURCES = new Set(['ANTHROPIC_API_KEY', 'apiKeyHelper', '/login managed key', 'none', 'user', 'project', 'org', 'temporary', 'oauth']);
+const BILLING_TOKENS = new Set(['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN']);
+const BILLING_NAMES = new Set([...BILLING_SOURCES, ...BILLING_TOKENS, 'claude.ai', 'CLAUDE_CODE_OAUTH_TOKEN']);
 
+// A mismatch names what Claude Code reported in place of the key: the token source when that is what the requests
+// carry, otherwise its key source; only a value Claude Code is known to report is shown, any other reads 未知值.
+// The hint says why and what to check (main's sentence). What that means for new sessions is the path line's to say,
+// except that a setting allowing no terminal starts none.
 function billingLine(test: ConnectionTest): TestLine {
-  const source = test.billing?.source, known = source && BILLING_SOURCES.has(source);
-  const ok = known && source === 'ANTHROPIC_API_KEY' && test.billing.status === 'ok';
-  const mismatch = known && source !== 'ANTHROPIC_API_KEY' && test.billing.status === 'mismatch';
+  const { status, source, reported, detail } = test.billing;
+  const ok = status === 'ok' && source === 'ANTHROPIC_API_KEY', mismatch = status === 'mismatch';
+  const raw = reported?.tokenSource && BILLING_TOKENS.has(reported.tokenSource) ? reported.tokenSource
+    : reported?.apiKeySource ?? (source !== 'ANTHROPIC_API_KEY' ? source : null);
+  const named = raw == null ? null : BILLING_NAMES.has(raw) ? raw : t('未知值');
+  const why = detail ? t(detail.text, detail.values) : mismatch ? t('Claude Code 没有使用这个密钥。') : t('无法确认 Claude Code 的计费来源，请重试。');
   return { id: 'billing', label: t('计费来源'), tone: ok ? 'ok' : mismatch ? 'bad' : 'warn',
-    text: ok || mismatch ? source : t('未知'), title: null,
-    hint: ok ? null : mismatch ? test.path === 'terminal'
-      ? t('Claude Code 没有使用这个密钥，新会话将走终端。')
-      : t('Claude Code 没有使用这个密钥，当前设置不允许启动新会话。')
-      : t('无法确认 Claude Code 的计费来源，请重试。') };
+    text: ok ? source : mismatch && named ? named : t('未知'), title: null,
+    hint: ok ? null : mismatch && !test.path ? `${why} ${t('当前设置不允许启动新会话。')}` : why };
 }
 
 // Why a CLI that may be installed did not pass its check; `not_found` (or an older main that gives no reason) asks for an install.

@@ -84,6 +84,8 @@ function routeSettings(spec) {
       : /^CLAUDE_CODE_USE_/i.test(name) ? '0' : trusted.get(canonical) ?? (canonical === 'ANTHROPIC_BASE_URL' ? 'https://api.anthropic.com' : '');
     for (const variant of [name, canonical, name.toLowerCase()]) env[variant] = typeof value === 'string' ? value : '';
   }
-  return { env, ...Object.fromEntries(HELPERS.map(name => [name, typeof user[name] === 'string' ? user[name] : ''])) };
+  // The owner's decision: the native API channel bills only the saved key, so a user apiKeyHelper is cleared here
+  // (the terminal's Claude Code keeps it). The other helpers keep the user's value. Only a managed policy outranks this.
+  return { env, ...Object.fromEntries(HELPERS.map(name => [name, name !== 'apiKeyHelper' && typeof user[name] === 'string' ? user[name] : ''])) };
 }
 module.exports = { routeSettings, ROUTE_ENV, routeName };

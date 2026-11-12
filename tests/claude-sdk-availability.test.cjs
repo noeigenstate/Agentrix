@@ -59,7 +59,7 @@ for (const tokenSource of ['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN', 'claude.ai', 
   const result = await f.native.testConnection('p');
   assert.equal(result.billing.status, unsafe ? 'mismatch' : 'ok'); assert.equal(result.billing.source, 'ANTHROPIC_API_KEY');
   assert.equal(result.path, unsafe ? 'terminal' : 'api');
-  if (unsafe) assert.match(result.reason, new RegExp(`tokenSource=${tokenSource}`));
+  if (unsafe) { assert.equal(result.reason, 'billing_identity_mismatch'); assert.match(result.billing.detail.values.detail, new RegExp(`tokenSource=${tokenSource}`)); }
 });
 
 for (const failure of ['timeout', 'query_refused', 'cli_refused']) for (const mode of ['api-only', 'api-then-terminal']) {

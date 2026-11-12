@@ -154,12 +154,19 @@ test('测试连接 waits for a saved key and for the owner’s click, shows its 
 
 for (const [billing, path, expectedText, expectedHint, tone] of [
   [{ status: 'ok', source: 'ANTHROPIC_API_KEY' }, 'api', 'ANTHROPIC_API_KEY', null, 'ok'],
-  [{ status: 'mismatch', source: 'apiKeyHelper' }, 'terminal', 'apiKeyHelper', 'Claude Code 没有使用这个密钥，新会话将走终端。', 'bad'],
-  [{ status: 'mismatch', source: '/login managed key' }, null, '/login managed key', 'Claude Code 没有使用这个密钥，当前设置不允许启动新会话。', 'bad'],
+  [{ status: 'mismatch', source: 'apiKeyHelper' }, 'terminal', 'apiKeyHelper', 'Claude Code 没有使用这个密钥。', 'bad'],
+  [{ status: 'mismatch', source: '/login managed key' }, null, '/login managed key', 'Claude Code 没有使用这个密钥。 当前设置不允许启动新会话。', 'bad'],
   [{ status: 'unknown', source: null }, 'terminal', '未知', '无法确认 Claude Code 的计费来源，请重试。', 'warn'],
   [undefined, 'terminal', '未知', '无法确认 Claude Code 的计费来源，请重试。', 'warn'],
   [{ status: 'ok', source: SECRET }, null, '未知', '无法确认 Claude Code 的计费来源，请重试。', 'warn'],
-]) test(`the settings page renders the real billing-source words and mark (${billing?.status ?? 'older host'}, ${tone}, ${path})`, async () => {
+  // A managed apiKeyHelper keeps apiKeySource=ANTHROPIC_API_KEY (real 2.1.322): the row names the helper and main's reason.
+  [{ status: 'mismatch', source: 'ANTHROPIC_API_KEY', reported: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' },
+    detail: { text: '托管策略配置了 apiKeyHelper。（{detail}）', values: { detail: 'tokenSource=apiKeyHelper' } } }, 'terminal', 'apiKeyHelper', '托管策略配置了 apiKeyHelper。（tokenSource=apiKeyHelper）', 'bad'],
+  [{ status: 'mismatch', source: null, reported: { apiKeySource: 'weird-source', tokenSource: null },
+    detail: { text: 'Claude Code 报告的计费来源不是 ANTHROPIC_API_KEY。', values: {} } }, null, '未知值', 'Claude Code 报告的计费来源不是 ANTHROPIC_API_KEY。 当前设置不允许启动新会话。', 'bad'],
+  [{ status: 'unknown', source: null, detail: { text: 'Claude Code 初始化 {seconds} 秒仍未完成，无法确认计费来源。请稍后重试。', values: { seconds: 31 } } },
+    'terminal', '未知', 'Claude Code 初始化 31 秒仍未完成，无法确认计费来源。请稍后重试。', 'warn'],
+]) test(`the settings page renders the real billing-source words and mark (${billing?.status ?? 'older host'}, ${billing?.reported?.tokenSource ?? billing?.reported?.apiKeySource ?? (billing?.detail ? 'with reason' : 'plain')}, ${tone}, ${path})`, async () => {
   const wordsHarness = hookHarness('src/features/native-session/native-words.ts', { './i18n': { t: fill } });
   const value = { checkedAt: 1, key: { status: 'ok', detail: null, latencyMs: 10 }, models: ['synthetic-model'],
     cli: { status: 'ok', version: '2.1.318', required: '2.1.317' }, billing, path, reason: null };

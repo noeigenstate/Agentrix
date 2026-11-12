@@ -176,7 +176,8 @@ async function runtimeSmoke(output, stages) {
       await app.evaluate(() => { process.env.AGENTRIX_FAKE_TOKEN_SOURCE = 'apiKeyHelper'; });
       const blocked = await testConnection();
       assert.equal(blocked.value.billing.status, 'mismatch'); assert.equal(blocked.value.path, null);
-      assert.match(blocked.value.reason, /tokenSource=apiKeyHelper/);
+      // The billing line says why (a helper the native channel cannot clear is a managed policy's); the path names the consequence.
+      assert.equal(blocked.value.reason, 'billing_identity_mismatch'); assert.match(blocked.value.billing.detail.values.detail, /tokenSource=apiKeyHelper/);
       assert.equal((await page.evaluate(id => window.agentrix.nativeSession.usage(id), projectId)).value.agents.claude.next.path, null);
       assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, 'api', 'one project cannot poison another scope');
       await app.evaluate(() => { delete process.env.AGENTRIX_FAKE_TOKEN_SOURCE; });
@@ -191,7 +192,8 @@ async function runtimeSmoke(output, stages) {
       await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only' }));
       const refused = await testConnection();
       assert.equal(refused.value.billing.status, 'unknown'); assert.equal(refused.value.path, null);
-      assert.equal(refused.value.reason, 'Claude API 启动失败，尚未发送消息。');
+      assert.equal(refused.value.reason, 'billing_unconfirmed');
+      assert.deepEqual([refused.value.billing.detail.text, refused.value.billing.detail.values.code], ['Claude Code 启动后退出（退出码 {code}），没有错误输出。', 7]);
       await app.evaluate(() => { delete process.env.AGENTRIX_FAKE_INIT_FAILURE; });
       await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey);
       assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, 'api');

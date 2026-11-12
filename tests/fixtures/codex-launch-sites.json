@@ -37,7 +37,7 @@
   },
   {
     "text": "resolveExecutable({ env: spec.env || process.env })",
-    "id": "electron/features/claude-sdk/connection.cjs:c9cafb77d8c43bbce1f12637"
+    "id": "electron/features/claude-sdk/billing.cjs:c9cafb77d8c43bbce1f12637"
   },
   {
     "text": "resolveExecutable({ env: spec.env || process.env })",

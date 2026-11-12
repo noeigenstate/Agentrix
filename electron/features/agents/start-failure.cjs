@@ -1,5 +1,5 @@
 const os = require('node:os');
-const { scrubText } = require('../agents/skill-privacy.cjs');
+const { scrubText } = require('./skill-privacy.cjs');
 const LIMIT = 300, HEAD = 160;
 // Credentials scrubText has no rule for: HTTP authorization schemes, API key headers and secret query parameters.
 const SECRETS = [
@@ -17,20 +17,25 @@ const line = value => value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' 
 // Terminal escapes: OSC (titles, ]8;; hyperlinks with their URL) up to BEL or ST, then CSI (colours, cursor).
 const plain = value => value.replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
 
+// Credentials, terminal escapes, the SSH host's names and this computer's user and home, removed from process output.
+const redactor = hosts => value => scrubText(SECRETS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), plain(value)), { ...local, hosts }).text;
+// The last stderr lines as one redacted line within limit. The whole tail is redacted before it is split, so a secret
+// spread over lines is still recognized; its end is kept over its start.
+function stderrTail(stderr, { limit = LIMIT, hosts = [] } = {}) {
+  return clip(redactor(hosts)(stderr).split(/\r?\n/).map(line).filter(Boolean).slice(-3).join(' / '), limit, true);
+}
+
 // Why a start failed, as one redacted line: the stage, the code or protocol error, the exit and the last stderr lines.
-// The general failure sentence alone cannot be told apart, so it cannot be fixed. The stderr end is kept over its start.
-// The SSH host's names and this computer's user and home are redacted too.
+// The general failure sentence alone cannot be told apart, so it cannot be fixed.
 function startupDetail(error, { stderr = '', processError = null, exitCode = null, signal = null } = {}, { hosts = [] } = {}) {
-  const redact = value => scrubText(SECRETS.reduce((text, [pattern, replacement]) => text.replace(pattern, replacement), plain(value)), { ...local, hosts }).text;
+  const redact = redactor(hosts);
   const code = typeof error.code === 'string' ? error.code : Number.isInteger(error.code) ? `rpc ${error.code}` : null;
   const what = [...new Set([code, error.method && `${error.method} ${error.category || ''}`.trim(), error.message, error.serverMessage, processError]
     .filter(value => value && value !== 'rpc_rejected'))].join(', ');
   const exit = signal ? ` (signal ${signal})` : exitCode != null ? ` (exit ${exitCode})` : '';
   const head = clip(line(redact(`${error.stage ? error.stage + ': ' : ''}${what}${exit}`)), HEAD);
-  // Redact the whole tail before splitting it, so a secret spread over lines is still recognized.
-  const tail = redact(stderr).split(/\r?\n/).map(line).filter(Boolean).slice(-3).join(' / ');
-  const label = ' · stderr: ';
-  return tail ? head + label + clip(tail, LIMIT - head.length - label.length, true) : head;
+  const label = ' · stderr: ', tail = stderrTail(stderr, { limit: LIMIT - head.length - label.length, hosts });
+  return tail ? head + label + tail : head;
 }
 
-module.exports = { startupDetail };
+module.exports = { startupDetail, stderrTail };

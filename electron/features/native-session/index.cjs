@@ -24,7 +24,7 @@ function createNativeSessions(options) {
     const reason = result.key.status !== 'ok' ? failures[result.key.status]
       : result.cli.status === 'too_old' ? 'Claude Code 版本过低，请升级到 2.1.317 或更高'
         : result.cli.status === 'missing' ? (result.cli.reason && result.cli.reason !== 'not_found' ? 'native_cli_unverified' : 'native_cli_required')
-          : result.billing?.status !== 'ok' ? result.reason || '无法确认 Claude Code 的计费来源。' : null;
+          : result.billing?.status !== 'ok' ? result.reason || 'billing_unconfirmed' : null;
     const selection = choosePath({ agent: 'claude', ...config,
       apiState: reason ? { reason } : options.claude.apiState(config.monthlyBudgetUsd, projectId) });
     router.reconcile();

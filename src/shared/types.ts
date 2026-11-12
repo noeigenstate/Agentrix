@@ -170,7 +170,10 @@ export type ConnectionTest = {
   // (`error`) or printed no version.
   cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string;
     reason?: 'not_found' | 'timeout' | 'failed' | 'unreadable'; found?: string; error?: string; elapsedMs?: number };
-  billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null };
+  // `reported` is what Claude Code named in place of the key (any short plain name, known or not); `detail` says why
+  // billing is not this key or could not be read, as a Chinese template and its values the view translates.
+  billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null;
+    reported?: { apiKeySource: string | null; tokenSource: string | null }; detail?: { text: string; values: Record<string, string | number> } };
   path: 'api' | 'terminal' | null; reason: string | null;
 };
 // What the native composer's /model, /effort and /fast read and change. An empty patch changes nothing and answers the current values.

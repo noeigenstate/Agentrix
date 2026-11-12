@@ -73,14 +73,18 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudg
   };
 }
 
+// The deadline yields one turn of the event loop before it fails: an initialize answer already waiting while main was
+// busy wins, so a busy main is not taken for a slow CLI. The failure says how long it waited.
 async function readBillingIdentity(query, { signal, timeoutMs = 30000 }) {
+  const started = Date.now();
   let timer, abort, initialization;
   try {
     initialization = await Promise.race([query.initializationResult(), new Promise((_, reject) => {
       abort = () => reject(new Error('会话已停止。'));
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) return abort();
-      timer = setTimeout(() => reject(Object.assign(new Error('sdk_initialization_timeout'), { code: 'sdk_initialization_timeout' })), timeoutMs);
+      timer = setTimeout(() => setImmediate(() => reject(Object.assign(new Error('sdk_initialization_timeout'),
+        { code: 'sdk_initialization_timeout', elapsedMs: Date.now() - started }))), timeoutMs);
     })]);
   } finally { clearTimeout(timer); if (abort) signal.removeEventListener('abort', abort); }
   if (signal.aborted) throw new Error('会话已停止。');

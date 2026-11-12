@@ -1,7 +1,6 @@
 const https = require('node:https');
-const { createPolicy } = require('./policy.cjs');
-const { billingSource, billingIdentityError, startupFailure } = require('./identity.cjs');
-const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
+const { billingSource } = require('./identity.cjs');
+const { probeBillingIdentity } = require('./billing.cjs');
 const required = '2.1.317';
 const details = { ok: 'API 密钥验证成功。', missing: '还没有保存 API key。', invalid: 'API 密钥无效。',
   forbidden: 'API 密钥没有调用权限。', rate_limited: 'API 请求被限流，请稍后重试。',
@@ -102,26 +101,6 @@ function cliResult(value) {
   if (cli.reason === 'timeout' && Number.isSafeInteger(value.elapsedMs) && value.elapsedMs >= 0) cli.elapsedMs = value.elapsedMs;
   return cli;
 }
-async function probeBillingIdentity({ key, spec, loadSdk, resolveExecutable, maxBudgetUsd, timeoutMs }) {
-  const prompt = inputQueue(), abort = new AbortController();
-  let query;
-  try {
-    const executable = await resolveExecutable({ env: spec.env || process.env });
-    if (!executable) return { status: 'unknown', source: null };
-    const sdk = await loadSdk();
-    query = sdk.query({ prompt, options: queryOptions(spec, { key, executable, abort, maxBudgetUsd,
-      policy: createPolicy(spec), canUseTool: async () => ({ behavior: 'deny', message: 'Connection tests do not execute tools.' }) }) });
-    // The queue is never populated: initialize is a control request, not an inference turn.
-    return { status: 'ok', source: await readBillingIdentity(query, { signal: abort.signal, timeoutMs }) };
-  } catch (error) {
-    const failure = startupFailure(error);
-    return { status: failure.code === 'billing_identity_mismatch' ? 'mismatch' : 'unknown',
-      source: billingSource(failure.source), reason: failure.message };
-  } finally {
-    prompt.close(); abort.abort();
-    try { query?.close(); } catch { }
-  }
-}
 
 // The model a new session for this scope sets, when it names a full model ID; otherwise the stand-in default.
 function probeModel(sessionModel, config) {
@@ -146,19 +125,20 @@ function createConnectionTest({ credentials, inspectCli, request, probeBilling =
     // An inspection that throws is a check that failed, not a CLI that is absent.
     let cli;
     try { cli = cliResult(await inspectCli()); } catch { cli = { status: 'missing', version: null, required, reason: 'failed' }; }
-    let billing = { status: 'unknown', source: null }, billingReason = null;
+    // The billing line says why billing is not this key or could not be read, and what to check (`detail`); the path's
+    // reason only names the consequence, so the card does not say the same sentence twice.
+    let billing = { status: 'unknown', source: null };
     if (key && cli.status === 'ok') {
       try {
         const value = await probeBilling(key, config, generation), source = billingSource(value.source);
-        billing = { status: value.status === 'mismatch' ? 'mismatch' : source === 'ANTHROPIC_API_KEY' && value.status === 'ok' ? 'ok' : 'unknown', source };
-        billingReason = value.reason || null;
-      } catch { }
+        billing = { status: value.status === 'mismatch' ? 'mismatch' : source === 'ANTHROPIC_API_KEY' && value.status === 'ok' ? 'ok' : 'unknown', source,
+          ...(value.status === 'mismatch' && value.reported ? { reported: value.reported } : {}), ...(value.why ? { detail: value.why } : {}) };
+      } catch { billing.detail = { text: '检查 Claude Code 的计费来源时出错，请重试。', values: {} }; }
     }
     return { checkedAt, key: { status: observed.status, detail: details[observed.status], latencyMs: observed.latencyMs, error: observed.error || null },
       models: observed.models, ...(observed.modelsForbidden ? { modelsForbidden: true, modelsError: observed.modelsError || null,
         ...(observed.unavailableModel ? { unavailableModel: observed.unavailableModel } : {}) } : {}), cli,
-      billing, path: null, reason: billingReason || (billing.status === 'mismatch' ? billingIdentityError(billing.source).message
-        : billing.status === 'unknown' ? '无法确认 Claude Code 的计费来源。' : null) };
+      billing, path: null, reason: { mismatch: 'billing_identity_mismatch', unknown: 'billing_unconfirmed' }[billing.status] ?? null };
   }
   return (config = {}) => {
     const scope = config.projectId || '';

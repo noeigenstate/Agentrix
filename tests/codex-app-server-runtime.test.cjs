@@ -194,7 +194,7 @@ test('a failed start carries its stage, exit code and redacted stderr tail, and 
   assert.match(error.detail, /No such file or directory$/, 'the last stderr line, the one that names the cause, is kept');
   assert.doesNotMatch(error.detail, /early line one|abcdefsecret123|sk-proj-abcdefghijklmn|\x1b/, 'three lines at most, secrets and colours removed');
   assert.ok(!events.some(event => JSON.stringify(event).includes('No such file')), 'stderr is never published as an event');
-  const { startupDetail } = require('../electron/features/codex-app-server/failure.cjs');
+  const { startupDetail } = require('../electron/features/agents/start-failure.cjs');
   assert.equal(startupDetail(Object.assign(new Error('rpc_rejected'), { code: -32600, serverMessage: 'Invalid request: unknown variant `fast`', stage: 'thread_start' })),
     'thread_start: rpc -32600, Invalid request: unknown variant `fast`');
   // A newer server words a missing field differently: the probe's refusal keeps what the server said.
