@@ -87,6 +87,18 @@ test('a smoke-only change selects its suites and importing tests; notes do not b
   assert.deepEqual(p.modules, []);
 });
 
+test('a test helper mapped to one module selects that module and the tests that use it, not the full run', async t => {
+  const f = fixture(t), { buildCatalog, selectTests } = await core;
+  f.write('tests/helpers/b-files.cjs', '// helper'); f.write('tests/b.test.cjs', "require('../src/b/index.ts'); require('./helpers/b-files.cjs');");
+  const mapped = { ...f.manifest, fullOn: [...f.manifest.fullOn, 'tests/helpers/**'], helpers: { 'tests/helpers/b-files.cjs': [f.id('b')] } };
+  const c = buildCatalog(f.directory, mapped);
+  assert.deepEqual(c.errors, []);
+  const p = selectTests(c, ['tests/helpers/b-files.cjs']);
+  assert.equal(p.full, false); assert.ok(p.unit.includes('tests/b.test.cjs')); assert.ok(!p.unit.includes('tests/c.test.cjs'));
+  assert.equal(selectTests(buildCatalog(f.directory, { ...mapped, helpers: {} }), ['tests/helpers/b-files.cjs']).full, true, 'an unmapped helper is shared');
+  assert.match(buildCatalog(f.directory, { ...mapped, helpers: { 'tests/helpers/gone.cjs': [f.id('b')] } }).errors.join(), /Invalid helper mapping/);
+});
+
 test('declared and pinned dynamic dependencies propagate; a stale pin or stale explicit test mapping forces full coverage', async t => {
   const f = fixture(t), { buildCatalog, selectTests } = await core;
   f.write('src/a/index.ts', 'require(variable);');

@@ -104,8 +104,8 @@ test('real main assembly reports terminal-only Claude subscription usage without
     app: { getPath: () => directory, isPackaged: false, on() {} }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }), netRequest: () => forbidden, electronNet: {},
-    // main's CLI check composed as main composes it, over the stand-in check.
-    checkClaude: () => { const check = context.inspectClaudeExecutable(); return context.claudeRuntime?.trackCli?.(check) ?? check; },
+    // main's own checkClaude (read below) runs over this stand-in for the locator's check.
+    inspectClaude: () => context.inspectClaudeExecutable(),
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     require: name => {
@@ -125,6 +125,8 @@ test('real main assembly reports terminal-only Claude subscription usage without
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
+  const check = source.indexOf('function checkClaude(');
+  vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
   // Execute the actual main composition and callbacks; substitute only dynamic module loading at the process boundary.
   vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('function startTerminal('))
     .replaceAll('await import(', 'await importFixture('), context);

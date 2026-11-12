@@ -1,5 +1,11 @@
+# AGENTRIX_TEST_STORED_PATH ({"Machine": "...", "User": "..."}) stands in for the stored PATH, so a test of the
+# wrappers never reads this computer's registry.
 param(
-    [scriptblock]$ReadPath = { param($Scope) [Environment]::GetEnvironmentVariable('Path', $Scope) }
+    [scriptblock]$ReadPath = {
+        param($Scope)
+        if ($env:AGENTRIX_TEST_STORED_PATH) { return (ConvertFrom-Json $env:AGENTRIX_TEST_STORED_PATH).$Scope }
+        [Environment]::GetEnvironmentVariable('Path', $Scope)
+    }
 )
 
 # Keep launch-time toolchains first, then supplement them with newly installed

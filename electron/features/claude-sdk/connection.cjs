@@ -1,8 +1,7 @@
 const https = require('node:https');
 const { billingSource } = require('./identity.cjs');
 const { probeBillingIdentity } = require('./billing.cjs');
-const { VIAS } = require('../claude-runtime/locator.cjs');
-const required = '2.1.317';
+const { VIAS, REQUIRED: required } = require('../claude-runtime/locator.cjs');
 const details = { ok: 'API 密钥验证成功。', missing: '还没有保存 API key。', invalid: 'API 密钥无效。',
   forbidden: 'API 密钥没有调用权限。', rate_limited: 'API 请求被限流，请稍后重试。',
   unreachable: '无法连接 Anthropic API。', error: '无法完成 API 连接检查。' };

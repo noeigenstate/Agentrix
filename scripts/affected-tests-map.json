@@ -137,6 +137,11 @@
       "electron/features/agents/BOUNDARY.md"
     ]
   },
+  "helpers": {
+    "tests/helpers/claude-files.cjs": [
+      "electron/features/claude-runtime/BOUNDARY.md"
+    ]
+  },
   "gui": {
     "session": {
       "file": "scripts/session-smoke.mjs",

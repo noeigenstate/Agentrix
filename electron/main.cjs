@@ -187,6 +187,8 @@ const nativeSpecs = new Map();
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
 let shellPathReady = Promise.resolve();
+// The first look for Claude Code, started as soon as the app is ready; terminals restored at start-up wait for it.
+let claudeFirst = Promise.resolve();
 let activeTerminal = null;
 let activeFileTree = null;
 let fileOperations, filesIpc;
@@ -203,18 +205,19 @@ function send(channel, data) { if (window && !window.isDestroyed()) window.webCo
 // One Claude Code locator for the terminal and the native path (claude-runtime/BOUNDARY.md).
 const claudeLocator = createLocator();
 const agents = new AgentsManager({ onChange: state => send('agents:changed', state), translate: t,
-  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude(true) });
-// The CLI the native path runs, from the locator: a plain check only stats what it chose; a fresh one (start-up, window
-// focus, the connection test, an install) reads the stored Windows PATH and searches again. The agents' state is told
-// again when what the terminal runs changed.
-async function inspectClaude(fresh) {
-  const before = JSON.stringify(agents.getState().claude);
-  try { return await inspectClaudeExecutable({ locator: claudeLocator, fresh }); }
-  finally { if (JSON.stringify(agents.getState().claude) !== before) agents.changed(); }
+  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh') });
+// The CLI the native path runs, from the locator. `mode`: 'locate' only stats what it chose; 'refresh' (start-up, the
+// connection test, an install) reads the stored Windows PATH and searches again; 'focus' does that at most once a
+// minute. The agents' state is told again when the terminal's file, its version, its via or the outcome changed.
+async function inspectClaude(mode) {
+  const seen = () => { const found = claudeLocator.peek(), terminal = found?.terminal; return [terminal?.file, terminal?.version, terminal?.via, found?.reason].join(' '); };
+  const before = seen();
+  try { return await inspectClaudeExecutable({ locator: claudeLocator, fresh: mode !== 'locate', throttled: mode === 'focus' }); }
+  finally { if (seen() !== before) agents.changed(); }
 }
 // The runtime numbers each CLI check: a stale one comes back as the newer result and changes nothing.
-function checkClaude(fresh = false) {
-  const check = inspectClaude(fresh);
+function checkClaude(mode = 'locate') {
+  const check = inspectClaude(mode);
   return claudeRuntime?.trackCli?.(check) ?? check;
 }
 function findProject(id) {
@@ -1533,7 +1536,7 @@ async function initializeNativeSessions() {
   const directory = path.join(app.getPath('userData'), 'native-session');
   claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,
     loadSdk: createSdkLoader({ packaged: app.isPackaged }), request: netRequest(electronNet),
-    inspectCli: () => inspectClaude(true), resolveExecutable: () => resolveClaudeExecutable({ locator: claudeLocator }),
+    inspectCli: () => inspectClaude('refresh'), resolveExecutable: () => resolveClaudeExecutable({ locator: claudeLocator }),
     connectionSpec: projectId => {
       const project = projectId && store.projects.find(project => project.id === projectId);
       if (projectId && (!project || project.kind === 'ssh')) throw new Error('原生会话仅支持本地项目。');
@@ -1547,10 +1550,8 @@ async function initializeNativeSessions() {
           billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 });
     },
   });
-  // The first look at the CLI only seeds what later looks compare with; the window does not wait for it. Coming back to
-  // the window looks again, so a CLI installed meanwhile is found without a restart.
-  checkClaude(true).catch(() => {});
-  app.on('browser-window-focus', () => { checkClaude(true).catch(() => {}); });
+  // The first look at the CLI (already under way since the app was ready) seeds what later looks compare with.
+  checkClaude().catch(() => {});
   const codexFactory = createCodexRuntime({ renderImage: generatedImages.render, settleImage: generatedImages.settle, translate: t,
     launchRemote: async (spec, { signal, readOnly = false }) => {
       const project = findProject(spec.terminalId);
@@ -1700,7 +1701,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '');
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
-  const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.file;
+  const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
   if (claudeFile) env.AGENTRIX_CLAUDE_EXECUTABLE = claudeFile;
   if (project.kind !== 'ssh') env.AGENTRIX_ACCOUNT_BASELINE = JSON.stringify(accountEnvironment(env));
   // The agent wrappers tell Claude Code and Codex what the reading view shows (an SSH project's worker is told on start),
@@ -2064,6 +2065,11 @@ if (!app.requestSingleInstanceLock()) {
     const shellIcon = prepareWindowIcon({ app, shell, root, installed, appUserModelId, relaunchDisplayName });
     const shellIntegration = prepareShellIntegration({ app, integrationDir, agents });
     zshStartup = shellIntegration.startup; shellPathReady = shellIntegration.ready;
+    // Claude Code is looked for now, again once a macOS or Linux login shell has given its PATH, and when the window
+    // comes back at most once a minute, so one installed meanwhile is found without a restart.
+    claudeFirst = checkClaude('refresh').catch(() => {});
+    if (process.platform !== 'win32') void shellPathReady.then(() => checkClaude('refresh')).catch(() => {});
+    app.on('browser-window-focus', () => { checkClaude('focus').catch(() => {}); });
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'), { systemTheme: systemTheme() });
     if (store.settings.restoreSessions && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_RESTORE === '1')) {
       for (const project of store.projects) for (const record of [project, ...(project.terminals || [])]) {
@@ -2160,6 +2166,8 @@ if (!app.requestSingleInstanceLock()) {
     for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();
     if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();
+    // A restored local terminal is told the Claude Code to run: the first look is waited for, at most three seconds.
+    await Promise.race([claudeFirst, new Promise(resolve => setTimeout(resolve, 3000))]);
     restoreTerminals({ store, restorePlans, startupErrors, startTerminal: restoreTerminal, broadcast, isQuitting: () => quitting });
   }).catch(error => {
     dialog.showErrorBox(t('Agentrix 无法启动'), t(String(error?.stack || error)));

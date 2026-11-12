@@ -45,9 +45,11 @@ test('PowerShell wrapper runs the Claude Code Agentrix chose while it exists, an
   const bootstrap = path.join(root, 'bootstrap.json'), script = path.join(root, 'probe.ps1');
   fs.writeFileSync(bootstrap, JSON.stringify({ projectPath: root, projectId: 't', sessionKey: 'key', pipeName: 'unused' }));
   fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. '${integration.replace(/'/g, "''")}\\bootstrap.ps1'\nWrite-Output "CLAUDE=$global:AgentrixClaudeCommand|$global:AgentrixClaudeExecutable"\n`);
-  const run = async hint => {
-    const env = { ...isolatedEnvironment(root), AGENTRIX_BOOTSTRAP: bootstrap, PATH: `${bin};${path.join(process.env.SystemRoot, 'System32')}`, AGENTRIX_CLAUDE_EXECUTABLE: hint,
-      PSModuleAnalysisCachePath: path.join(root, 'module-cache') };
+  // The stored PATH the terminal merges is a stand-in (refresh-path.ps1's AGENTRIX_TEST_STORED_PATH): this computer's
+  // registry is never read.
+  const run = async (hint, PATH = `${bin};${path.join(process.env.SystemRoot, 'System32')}`, stored = { Machine: '', User: '' }) => {
+    const env = { ...isolatedEnvironment(root), AGENTRIX_BOOTSTRAP: bootstrap, PATH, AGENTRIX_CLAUDE_EXECUTABLE: hint,
+      AGENTRIX_TEST_STORED_PATH: JSON.stringify(stored), PSModuleAnalysisCachePath: path.join(root, 'module-cache') };
     delete env.Path;
     const { stdout } = await exec(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
       { cwd: root, env, windowsHide: true, timeout: 20000 * timeoutScale });
@@ -58,4 +60,7 @@ test('PowerShell wrapper runs the Claude Code Agentrix chose while it exists, an
   assert.equal(await run(chosen), `${chosen}|${chosen}`.toLowerCase());
   assert.equal(await run(path.join(root, 'gone', 'claude.exe')), own);
   assert.equal(await run(''), own);
+  // A folder only the stored PATH has is searched after the inherited ones, as a terminal opened after an install sees it.
+  assert.equal(await run('', path.join(process.env.SystemRoot, 'System32'), { Machine: '', User: bin }), own);
+  assert.equal(await run('', path.join(process.env.SystemRoot, 'System32')), '|');
 });

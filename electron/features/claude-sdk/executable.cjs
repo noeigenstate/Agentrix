@@ -1,14 +1,16 @@
 const { createLocator, REQUIRED } = require('../claude-runtime/locator.cjs');
 
 // The CLI the native path runs, from claude-runtime's locator: `locator` is main's shared one (`fresh` asks it to read
-// the stored Windows PATH again first); without one, a locator of these options searches afresh.
+// the stored Windows PATH and search again first, `throttled` at most once a minute); without one, a locator of these
+// options searches afresh.
 // `missing` keeps its meaning for every caller: no usable native CLI. `reason` says why: `not_found`, or a file was
 // found (`found`) whose version check timed out (`elapsedMs`), failed to run (`error` names how) or printed no version.
 // A `not_found` also says where it looked: how many PATH folders (inherited and stored) and the install folders by
 // name, home written as ~; `incomplete` names an npm package found without its native program. One found says where
 // (`via`, `fileShown`); when the terminal runs another, older one, `notice` says so and `split` describes it.
-async function inspectClaudeExecutable({ locator, fresh = !locator, ...options } = {}) {
-  const found = await (locator || createLocator(options))[fresh ? 'refresh' : 'locate'](options);
+async function inspectClaudeExecutable({ locator, fresh = !locator, throttled = false, ...options } = {}) {
+  const using = locator || createLocator(options);
+  const found = await (fresh ? using.refresh(options, { throttled }) : using.locate(options));
   const { native, terminal } = found;
   if (native) {
     return { status: 'ok', version: native.version, required: REQUIRED, file: native.file, via: native.via, fileShown: native.fileShown,

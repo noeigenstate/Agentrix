@@ -81,8 +81,8 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
     app: { getPath: () => directory, isPackaged: false, on() {} }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex',
-    // main's CLI check composed as main composes it, over the stand-in check.
-    checkClaude: () => { const check = context.inspectClaudeExecutable(); return context.claudeRuntime?.trackCli?.(check) ?? check; },
+    // main's own checkClaude (read below) runs over this stand-in for the locator's check.
+    inspectClaude: () => context.inspectClaudeExecutable(),
     netRequest: () => forbidden, electronNet: {},
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     broadcast() {}, callsOf: () => calls, acceptShellEvent: () => false, rememberClaudeSource() {},
@@ -103,6 +103,8 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
   vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')), context);
   vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
+  const check = source.indexOf('function checkClaude(');
+  vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
   vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('function startTerminal('))
     .replaceAll('await import(', 'await importFixture('), context);
   // The workspace's project removal, as main registers it.

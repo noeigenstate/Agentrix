@@ -13,6 +13,19 @@ function onPath(name, env, platform = process.platform) {
   }));
 }
 
+// The agents' word on Claude Code from claude-runtime's locate: installed whenever one was found, also one that cannot
+// run natively (`reason`: too old, or its check timed out, failed or printed no version) and an npm install whose native
+// program is missing (`incomplete`); a version split names the copy the native path runs.
+const found = candidate => ({ version: candidate.version, via: candidate.via, fileShown: candidate.fileShown });
+function claudeState({ terminal, native, reason, version, failure, incomplete }) {
+  const state = { installed: !!terminal || !!failure?.found || reason === 'too_old' || !!incomplete, ...(terminal ? found(terminal) : {}) };
+  if (reason === 'too_old') Object.assign(state, { reason, version: state.version ?? version ?? null });
+  if (failure) state.reason = failure.reason;
+  if (incomplete) state.incomplete = true;
+  if (reason === 'cli_split_versions') Object.assign(state, { notice: reason, native: found(native) });
+  return state;
+}
+
 class AgentsManager {
   // `claude` gives claude-runtime's last locate (locator.peek()), never running a search: the program the terminal
   // runs, its version and where it was found. Before the first search the PATH check stands in. `refreshClaude`
@@ -25,9 +38,8 @@ class AgentsManager {
   getState() {
     // Existing isolated desktop checks should not depend on tools installed on the test host.
     const isolated = !!this.env.AGENTRIX_DATA_DIR && this.env.AGENTRIX_TEST_AGENTS !== '1';
-    const located = isolated ? null : this.located(), terminal = located?.terminal;
-    const claude = located ? { installed: !!terminal, ...(terminal ? { version: terminal.version, via: terminal.via, fileShown: terminal.fileShown } : {}) }
-      : { installed: isolated || this.detect('claude', this.env) };
+    const located = isolated ? null : this.located();
+    const claude = located ? claudeState(located) : { installed: isolated || this.detect('claude', this.env) };
     return { codex: { installed: isolated || this.detect('codex', this.env) }, claude, npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
   }
   changed() { const state = this.getState(); this.onChange(state); return state; }

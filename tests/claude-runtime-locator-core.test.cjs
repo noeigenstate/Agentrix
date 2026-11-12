@@ -96,7 +96,7 @@ test('the terminal runs the first Claude Code found and the native path the firs
   // One that meets it is both, and the search stops there: the second is never run.
   const same = await run({ [oldExe]: '2.1.318 (Claude Code)' });
   assert.equal(same.found.native, same.found.terminal); assert.equal(same.found.reason, null); assert.deepEqual(same.runs, [oldExe, oldExe]);
-  assert.deepEqual(Object.keys(same.found.native).sort(), ['file', 'fileShown', 'fingerprint', 'version', 'via']);
+  assert.deepEqual(Object.keys(same.found.native).sort(), ['file', 'fileShown', 'fingerprint', 'path', 'version', 'via']);
   assert.deepEqual(Object.keys(same.found.native.fingerprint).sort(), ['file', 'mtimeMs', 'pathHash', 'size']);
   // None meets it: too old, with the terminal's version; the terminal still has its file.
   const tooOld = await run({ [oldExe]: '2.1.300 (Claude Code)', [newExe]: '2.1.301 (Claude Code)' });
@@ -112,9 +112,10 @@ test('one fingerprint runs --version once: a locate only stats what the last sea
   assert.deepEqual([runs.length, locator.peek()], [1, first]);
   const before = { ...files.calls };
   for (let i = 0; i < 3; i++) assert.equal(await locator.locate(options), first);
-  assert.deepEqual([runs.length, files.calls.realpath, files.calls.readFile, files.calls.stat - before.stat], [1, before.realpath, before.readFile, 3], 'a locate is one stat');
-  // Overlapping calls share one search.
-  await Promise.all([locator.refresh(options), locator.refresh(options), locator.locate(options)]); assert.equal(runs.length, 1);
+  assert.deepEqual([runs.length, files.calls.realpath - before.realpath, files.calls.readFile, files.calls.stat - before.stat], [1, 3, before.readFile, 3],
+    'a locate is one realpath and one stat');
+  // A refresh runs the search again, but not the version check of a file it already checked.
+  await locator.refresh(options); assert.equal(runs.length, 1);
   // An update rewrote the file: it is searched for and run again, once.
   files.put(exe, { size: NATIVE + 1, mtimeMs: 2 });
   const updated = await locator.locate(options);
@@ -128,43 +129,98 @@ test('one fingerprint runs --version once: a locate only stats what the last sea
   assert.equal((await locator.locate(options)).reason, 'not_found');
 });
 
-test('a refresh reads the stored Windows PATH; while nothing is found at most once a minute, and nothing found stays the answer until the next refresh', async () => {
+test('a refresh reads the stored Windows PATH and searches; a throttled one does so at most once a minute, and nothing found stays the answer until a refresh', async () => {
   let clock = 0, stored = ['D:\\bin', ''];
-  const later = 'D:\\later', reads = [], files = fakeFiles({}), { probe, runs } = fakeProbe();
+  const reads = [], files = fakeFiles({}), { probe } = fakeProbe();
   const locator = createLocator({ files, probe, now: () => clock, storedPath: async env => { reads.push(env.SystemRoot); return stored; } });
   const options = { env: { PATH: 'D:\\inherited', SystemRoot: 'C:\\Windows' }, platform: 'win32', arch: 'x64', home };
+  const focus = () => locator.refresh(options, { throttled: true });
   assert.equal((await locator.refresh(options)).reason, 'not_found'); assert.deepEqual(reads, ['C:\\Windows']);
-  // Installed into a folder already on PATH: a plain locate keeps the old answer; a refresh searches and finds it
-  // without reading the stored PATH again within the minute.
+  // Installed into a folder only the stored PATH has: a locate and a focus within the minute keep the old answer; an
+  // explicit refresh (the connection test, an install) finds it at once.
   files.put(W.join('D:\\bin', 'claude.exe'), { size: NATIVE });
   assert.equal((await locator.locate(options)).reason, 'not_found');
   clock = 30000;
-  assert.equal((await locator.refresh(options)).native.via, 'registry-path'); assert.equal(reads.length, 1);
-  // Once found, every refresh reads it again.
-  stored = [`${later};D:\\bin`, '']; files.put(W.join(later, 'claude.exe'), { size: NATIVE });
-  clock = 31000;
-  assert.equal((await locator.refresh(options)).native.file, W.join(later, 'claude.exe')); assert.equal(reads.length, 2);
-  // Gone again: a refresh within the minute keeps the stored PATH it has, one after it reads again.
-  files.remove(W.join(later, 'claude.exe')); files.remove(W.join('D:\\bin', 'claude.exe'));
-  assert.equal((await locator.refresh(options)).reason, 'not_found'); assert.equal(reads.length, 3);
-  stored = ['D:\\elsewhere', '']; files.put(W.join('D:\\elsewhere', 'claude.exe'), { size: NATIVE });
+  assert.equal((await focus()).reason, 'not_found'); assert.equal(reads.length, 1);
+  assert.equal((await locator.refresh(options)).native.via, 'registry-path'); assert.equal(reads.length, 2);
+  // Found or not, a focus searches anew only a minute after the last full search.
+  stored = ['D:\\later;D:\\bin', '']; files.put(W.join('D:\\later', 'claude.exe'), { size: NATIVE });
   clock = 60000;
-  assert.equal((await locator.refresh(options)).reason, 'not_found'); assert.equal(reads.length, 3);
-  clock = 91000;
-  assert.equal((await locator.refresh(options)).native.file, W.join('D:\\elsewhere', 'claude.exe')); assert.equal(reads.length, 4);
+  assert.equal((await focus()).native.file, W.join('D:\\bin', 'claude.exe')); assert.equal(reads.length, 2);
+  clock = 90000;
+  assert.equal((await focus()).native.file, W.join('D:\\later', 'claude.exe')); assert.equal(reads.length, 3);
   // A read that fails keeps the stored PATH read before; other platforms never read it.
   stored = null;
-  assert.equal((await locator.refresh(options)).native.file, W.join('D:\\elsewhere', 'claude.exe'));
+  assert.equal((await locator.refresh(options)).native.file, W.join('D:\\later', 'claude.exe')); assert.equal(reads.length, 4);
   // Nothing found is kept for the same PATH only: another PATH is another search.
   const empty = { ...options, env: { ...options.env, PATH: 'D:\\empty' } };
-  files.remove(W.join('D:\\elsewhere', 'claude.exe')); files.put(W.join('D:\\moved', 'claude.exe'), { size: NATIVE });
-  clock = 200000; stored = [];
+  stored = [];
   assert.equal((await locator.refresh(empty)).reason, 'not_found');
   files.put(W.join('D:\\empty', 'claude.exe'), { size: NATIVE });
   assert.equal((await locator.locate(empty)).reason, 'not_found');
-  assert.equal((await locator.locate({ ...options, env: { ...options.env, PATH: 'D:\\moved' } })).native.via, 'path');
+  assert.equal((await locator.locate({ ...options, env: { ...options.env, PATH: 'D:\\later' } })).native.via, 'path');
   await createLocator({ files, probe, storedPath: async () => assert.fail('only Windows stores a PATH') }).refresh({ ...options, platform: 'linux', env: { PATH: '/usr/bin' } });
-  assert.ok(runs.length >= 1);
+});
+
+test('a failed check is trusted for ten seconds: a locate after that searches and runs the CLI again', async () => {
+  let clock = 0, answer = null;
+  const exe = 'D:\\bin\\claude.exe', files = fakeFiles({ [exe]: { size: NATIVE } }), runs = [];
+  // The first check hangs (a timeout); the next prints the version.
+  const probe = (file, _args, _options, callback) => { runs.push(file); if (answer) callback(null, answer); return { exitCode: null, signalCode: null, kill() { callback(Object.assign(new Error('killed'), { signal: 'SIGKILL' }), ''); } }; };
+  const locator = createLocator({ files, probe, now: () => clock, storedPath: async () => null, timeoutMs: 5, graceMs: 5 });
+  const options = { env: { PATH: 'D:\\bin' }, platform: 'win32', arch: 'x64', home };
+  const first = await locator.refresh(options);
+  assert.deepEqual([first.reason, first.failure.found, runs.length], ['timeout', exe, 1]);
+  answer = '2.1.322 (Claude Code)';
+  clock = 9999;
+  assert.equal(await locator.locate(options), first); assert.equal(runs.length, 1);
+  clock = 10000;
+  assert.equal((await locator.locate(options)).native.file, exe); assert.equal(runs.length, 2);
+  // Within ten seconds a refresh trusts the failed check too: the file is not run again until then.
+  answer = null; files.put(exe, { size: NATIVE, mtimeMs: 2 });
+  clock = 20000; assert.equal((await locator.refresh(options)).reason, 'timeout'); assert.equal(runs.length, 3);
+  answer = '2.1.322 (Claude Code)';
+  clock = 25000; assert.equal((await locator.refresh(options)).reason, 'timeout'); assert.equal(runs.length, 3);
+  clock = 30000; assert.equal((await locator.refresh(options)).reason, null); assert.equal(runs.length, 4);
+});
+
+test('a refresh asked for while one runs is done once after it, however many ask, and a refresh after a running locate follows it', async () => {
+  const exe = 'D:\\bin\\claude.exe', files = fakeFiles({ [exe]: { size: NATIVE } }), { probe } = fakeProbe();
+  let reads = 0;
+  const locator = createLocator({ files, probe, storedPath: async () => { reads++; return null; } });
+  const options = { env: { PATH: 'D:\\bin' }, platform: 'win32', arch: 'x64', home };
+  const searches = () => files.calls.realpath;
+  await Promise.all([locator.refresh(options), locator.refresh(options), locator.refresh(options), locator.locate(options)]);
+  assert.equal(reads, 2, 'the first refresh and one trailing refresh');
+  const before = searches();
+  const [locate, refresh] = await Promise.all([locator.locate(options), locator.refresh(options)]);
+  assert.equal(reads, 3); assert.notEqual(locate, refresh, 'the refresh searched again after the locate'); assert.deepEqual(locate, refresh);
+  assert.ok(searches() > before);
+});
+
+test('a CLI behind a link is told to the terminal by the link, and an update that moves the link is followed', async () => {
+  const links = W.join(local, 'Microsoft', 'WinGet', 'Links'), link = W.join(links, 'claude.exe');
+  const v1 = W.join(local, 'WinGet', 'Packages', 'v1', 'claude.exe'), v2 = W.join(local, 'WinGet', 'Packages', 'v2', 'claude.exe');
+  const files = fakeFiles({ [link]: { link: v1 }, [v1]: { size: NATIVE }, [v2]: { size: NATIVE } }), { probe } = fakeProbe({ [v1]: '2.1.318', [v2]: '2.1.322' });
+  const locator = createLocator({ files, probe, storedPath: async () => null });
+  const options = { env: { PATH: '', LOCALAPPDATA: local }, platform: 'win32', arch: 'x64', home };
+  const first = await locator.refresh(options);
+  assert.deepEqual([first.terminal.path, first.terminal.file, first.terminal.version], [link, v1, '2.1.318']);
+  files.put(link, { link: v2 });
+  const moved = await locator.locate(options);
+  assert.deepEqual([moved.terminal.path, moved.terminal.file, moved.terminal.version], [link, v2, '2.1.322']);
+});
+
+test('a shim names a package only inside its own folder: never a UNC path, never above the folder', async () => {
+  const folder = 'D:\\tools\\npm', outside = 'D:\\tools\\evil\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe';
+  const unc = '\\\\server\\share\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe';
+  const shim = text => ({ [W.join(folder, 'claude.cmd')]: { text } });
+  const locate = entries => createLocator({ files: fakeFiles(entries), probe: fakeProbe().probe, storedPath: async () => null })
+    .refresh({ env: { PATH: folder }, platform: 'win32', arch: 'x64', home });
+  assert.equal((await locate({ ...shim('"%dp0%\\..\\evil\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*'), [outside]: { size: NATIVE } })).reason, 'not_found');
+  assert.equal((await locate({ ...shim('"%dp0%\\\\server\\share\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*'), [unc]: { size: NATIVE } })).reason, 'not_found');
+  const inner = W.join(folder, 'global', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+  assert.equal((await locate({ ...shim('"%~dp0\\global\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*'), [inner]: { size: NATIVE } })).native.file, inner);
 });
 
 test('POSIX: npm, its placeholder, the native installer and the system folders, in the platform path rules on any host', async () => {

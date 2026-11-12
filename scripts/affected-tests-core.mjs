@@ -71,7 +71,8 @@ export function buildCatalog(root, manifest = JSON.parse(read(root, 'scripts/aff
       imports: boundary.sections['May import'].flatMap(line => [...line.matchAll(/`([^`]+)`/g)].map(match => match[1])), text: read(root, file) };
   });
   const matches = (patterns, file) => patterns.some(pattern => match(pattern, file));
-  const owners = file => boundaries.filter(boundary => boundary.id === file || matches(boundary.owns, file)).map(boundary => boundary.id);
+  // A test helper one module's tests share (manifest.helpers) belongs to that module, not to every test.
+  const owners = file => [...boundaries.filter(boundary => boundary.id === file || matches(boundary.owns, file)).map(boundary => boundary.id), ...(manifest.helpers?.[file] ?? [])];
   const modules = Object.fromEntries(boundaries.map(boundary => [boundary.id, { name: boundary.name, unit: [], real: [], python: [], gui: [] }]));
   const errors = boundaries.flatMap(boundary => boundary.errors), dependencies = new Map(), referencesByFile = new Map();
   for (const file of files.filter(file => source.test(file))) {
@@ -125,6 +126,7 @@ export function buildCatalog(root, manifest = JSON.parse(read(root, 'scripts/aff
     for (const id of spec.modules) if (modules[id]) modules[id].gui.push(suite);
   }
   for (const file of Object.keys(manifest.dynamicLoads ?? {})) if (!referencesByFile.get(file)?.dynamicDigest) errors.push(`Stale dynamic-load mapping: ${file}`);
+  for (const [file, ids] of Object.entries(manifest.helpers ?? {})) if (!files.includes(file) || !ids.length || !validModules(ids)) errors.push(`Invalid helper mapping: ${file}`);
   // File graph is retained through unowned intermediate files; modules are the stable unit
   // of selection. Main/shared are composition sinks, not reverse edges between all providers.
   const reverse = new Map();
@@ -146,7 +148,7 @@ export function selectTests(catalog, changed, { base = null, head = null, forceF
   for (const file of changed) {
     const ignored = (manifest.ignored ?? []).find(item => match(item.glob, file));
     if (ignored) { why(file, ignored.reason); continue; }
-    if (globalChange(file, manifest)) { fullReasons.push(`Shared/infrastructure change: ${file}`); continue; }
+    if (globalChange(file, manifest) && !manifest.helpers?.[file]) { fullReasons.push(`Shared/infrastructure change: ${file}`); continue; }
     if (catalog.tests.includes(file)) { why(file, `Test changed: ${file}`); continue; }
     const suites = Object.entries(manifest.gui).filter(([, spec]) => spec.file === file).map(([name]) => name);
     if (suites.length) { suites.forEach(name => why(`gui:${name}`, `Smoke changed: ${file}`)); queue.push(file); continue; }
