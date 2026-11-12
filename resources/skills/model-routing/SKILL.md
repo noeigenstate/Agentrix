@@ -190,9 +190,9 @@ the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscr
 - **Codex always runs in native mode.** There is no terminal mode for Codex, as lead or as worker.
 - **A Claude lead's Claude workers follow the lead's run mode and never cross.** A lead in native mode uses native
   subagents, billed to the API. A lead in terminal mode uses the terminal's own subagents, billed to the subscription.
-  A terminal-mode lead never starts a Claude worker through native mode or the API, and a native-mode lead never starts
-  one on the subscription. A Claude lead therefore starts its Claude workers as its own subagents, not with the
-  helper's `claude` command.
+  A terminal-mode lead never starts a Claude worker on the API, and a native-mode lead never starts one on the
+  subscription. The helper's `claude` command takes its run mode from Settings, which may differ from the lead's, so a
+  Claude lead starts its Claude workers as its own subagents: only then do they stay on the lead's side.
 - **A Codex lead starts Claude workers with the helper's `claude` command.** The helper asks Agentrix to run the worker
   as a native Claude session. Agentrix applies Claude's run mode from Settings:
 
@@ -213,9 +213,11 @@ Codex workers, and the Claude workers of a Codex lead, are started through the d
 `codex exec` or `claude -p` yourself. The helper runs Codex on the app-server (native mode) and runs Claude as described in
 Run mode and billing. The helper's path is in the session's startup note (`Dispatch helper: node
 "<path>/dispatch.cjs"`); it declares the worker to Agentrix, so the activity pane's called models shows it, and reports how
-it ended. Outside Agentrix there is no startup note: start the same workers directly (`codex exec -m <model> -c
-model_reasoning_effort=<effort> -c service_tier='"fast"' -C <dir> -o <out.md> - < <brief.md>`, `claude -p --model <model>
---effort <effort> --permission-mode <mode> < <brief.md>`) with the same settings.
+it ended. The helper also works outside Agentrix, where there is no startup note: run `integration/dispatch.cjs` from an
+Agentrix checkout with Node. With no connection to Agentrix it still runs Codex on the app-server (native mode) and runs
+Claude as `claude -p`. Codex workers always go through the helper, never `codex exec`. Only when no helper can be had,
+start a Claude worker directly (`claude -p --model <model> --effort <effort> --permission-mode <mode> < <brief.md>`)
+with the same settings.
 
 ```
 node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
