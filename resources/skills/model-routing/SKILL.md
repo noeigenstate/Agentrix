@@ -5,7 +5,7 @@ trigger: auto
 when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算
 requires: any-agent
 title: 模型路由
-summary: 任务由 Opus 规划审架构，Sol 处理核心代码，Sonnet 做常规功能、前端并验证界面。GPT 默认 high + fast，Claude 默认 high。
+summary: Opus 规划审架构，Sol 做核心代码，Sonnet 做常规功能并验证界面。Claude 子代理跟随领队的运行方式，Codex 一律原生。
 ---
 
 # Routing work between models
@@ -22,7 +22,7 @@ model-routing-<id>; follow this skill first, and where the two conflict this ski
 
 ## What to do
 
-1. Check the installed agents and the project's model settings, then choose the matching setup below.
+1. Check the installed agents, the project's model settings and the lead's run mode (native or terminal), then choose the matching setup below.
 2. Have the architect plan the work by module, define separate file scopes and agree the shared contracts before implementation.
 3. Hold a roundtable: every worker restates its task from the whole plan, the planner (the orchestrator, checking against the architect's plan) checks the restatement and corrects misreadings, everyone confirms, and the user sees the minutes as tables.
 4. Route the builds by difficulty, integrate in dependency order and run the project's checks.
@@ -114,7 +114,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 | Execution engineer | Sonnet subagent |
 | Visual and verification, small tasks | A fresh Sonnet subagent that reads screenshots |
 
-- Sonnet: an Agent call with `model: "sonnet"`, `effort: "high"`, working in worktree B (`isolation: "worktree"` or its path in the brief).
+- Sonnet: an Agent call with `model: "sonnet"`, `effort: "high"`, working in worktree B (`isolation: "worktree"` or its path in the brief). The Agent call is the lead's own subagent, so its run mode and billing follow the lead (see Run mode and billing).
 - Sol, as a background command, brief in a file:
 
   ```
@@ -138,6 +138,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
   node "<helper>" claude --role <role> --title "<one line>" --model opus --effort high --permission plan --cwd <dir> --brief <brief.md> --out <answer.md>
   ```
 
+- A Claude worker started this way follows Claude's run mode in Settings (see Run mode and billing).
 - Sonnet edits files, so point it at worktree B:
 
   ```
@@ -148,7 +149,7 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 
 #### 3. Claude Code only
 
-Every worker is an Agent call with `model` set and `effort: "high"`; worktrees through `isolation: "worktree"`. Split by difficulty:
+Every worker is an Agent call with `model` set and `effort: "high"`; worktrees through `isolation: "worktree"`. The subagent follows the lead's run mode (see Run mode and billing). Split by difficulty:
 
 | Role | Model |
 | --- | --- |
@@ -171,10 +172,46 @@ Every worker is a background Codex worker (`node "<helper>" codex --model <model
 
 The author never reviews its own change: review and UI acceptance are a fresh Sol run (`--read-only`, with `--image <png>` for screens).
 
+### Run mode and billing
+
+Dispatching a worker and paying for it are two questions. How a worker is dispatched (the helper, the roundtable, the
+`--allow` scope, its entry in the left sidebar) never decides how it is billed, and billing never decides how it is
+dispatched. Billing follows the run mode only: native mode (the Claude Agent SDK with the API key saved in Agentrix, or
+the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscription).
+
+| Lead | Worker | How the worker runs | Billing |
+| --- | --- | --- | --- |
+| Codex | Codex | Native mode: the Codex app-server, for the lead and every worker | Codex account |
+| Claude, native mode | Claude | The lead's native subagent (an Agent call) | API |
+| Claude, terminal mode | Claude | The terminal's own subagent (Claude Code's Agent tool) | Subscription |
+| Claude, either mode | Codex | The dispatch helper, native mode | Codex account |
+| Codex | Claude | The dispatch helper, following Claude's run mode in Settings | API or subscription, see below |
+
+- **Codex always runs in native mode.** There is no terminal mode for Codex, as lead or as worker.
+- **A Claude lead's Claude workers follow the lead's run mode and never cross.** A lead in native mode uses native
+  subagents, billed to the API. A lead in terminal mode uses the terminal's own subagents, billed to the subscription.
+  A terminal-mode lead never starts a Claude worker through native mode or the API, and a native-mode lead never starts
+  one on the subscription. A Claude lead therefore starts its Claude workers as its own subagents, not with the
+  helper's `claude` command.
+- **A Codex lead starts Claude workers with the helper's `claude` command.** The helper asks Agentrix to run the worker
+  as a native Claude session. Agentrix applies Claude's run mode from Settings:
+
+  | Setting | The worker runs |
+  | --- | --- |
+  | API, then terminal when credits run out (default) | Native, billed to the API, while the saved key is ready and credits remain; otherwise as below |
+  | API only | Native, billed to the API; it fails to start without a usable key |
+  | Terminal only (subscription) | As below |
+
+- **Without the native path, the helper runs Claude Code non-interactively** (`claude -p`, streamed output), billed to the
+  subscription. This is not an interactive terminal worker; an interactive terminal worker is a planned improvement.
+  The helper takes the same path when it has no connection to Agentrix, outside the app for example, and says so in a
+  `[dispatch] transport … claude-cli fallback` line.
+
 ### Launching workers
 
-Command-line workers (Codex, or Claude Code through `claude -p`) are started through the dispatch helper, never by
-typing `codex exec` or `claude -p` yourself. The helper's path is in the session's startup note (`Dispatch helper: node
+Codex workers, and the Claude workers of a Codex lead, are started through the dispatch helper, never by typing
+`codex exec` or `claude -p` yourself. The helper runs Codex on the app-server (native mode) and runs Claude as described in
+Run mode and billing. The helper's path is in the session's startup note (`Dispatch helper: node
 "<path>/dispatch.cjs"`); it declares the worker to Agentrix, so the activity pane's called models shows it, and reports how
 it ended. Outside Agentrix there is no startup note: start the same workers directly (`codex exec -m <model> -c
 model_reasoning_effort=<effort> -c service_tier='"fast"' -C <dir> -o <out.md> - < <brief.md>`, `claude -p --model <model>
@@ -294,7 +331,7 @@ A task with one side may run in the project itself. Every brief holds:
 A Codex run has no approvals, so its scope comes from the prompt alone. An "at capacity" error at the end of a run can
 come after the work is done: check the outputs before rerunning.
 
-A command-line Claude worker under `--permission acceptEdits` can edit files, but every shell command is refused and it
+A non-interactive Claude Code worker (the helper's terminal path) under `--permission acceptEdits` can edit files, but every shell command is refused and it
 cannot commit. Its brief says so: it writes the code and the tests, then you run them in its worktree, send failures back
 by resuming the same session, and commit on its branch once they pass.
 
@@ -337,6 +374,7 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 ## Rules
 
 - The lead orchestrates and holds permissions; workers stay within their brief and never delegate further.
+- Codex always runs in native mode. Claude workers follow the lead's run mode and never cross: native-mode lead, native subagents, API billing; terminal-mode lead, terminal subagents, subscription billing. Dispatch and billing are separate questions.
 - Route every change to a worker, however small; the lead never builds alone. A task too small for a roundtable skips it with a stated reason.
 - Route by difficulty and responsibility, not by renderer versus main-process location.
 - A fresh instance reviews, never the instance that planned or wrote the work; Opus reviews what Sol or Sonnet wrote, and a fresh Opus reviews what Opus built.
