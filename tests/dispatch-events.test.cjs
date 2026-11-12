@@ -85,7 +85,9 @@ test('settings reported by the worker group independently from declarations and 
   assert.deepEqual(group.items[1].declared, declared);
   assert.equal(group.rate.outputTokens, 100); assert.equal(group.rate.activeMs, 2000);
   f.send(end(first.id, { model: first.model, effort: first.effort, fast: first.fast, outputTokens: null, activeMs: null }));
-  assert.equal(f.calls.snapshot()[0].rate, null, 'unreported final records supersede provisional totals');
+  assert.equal(f.calls.calls.get(first.id).rate, null, 'unreported final records supersede provisional totals');
+  const { outputTokens, activeMs, partial } = f.calls.snapshot()[0].rate;
+  assert.deepEqual({ outputTokens, activeMs, partial }, { outputTokens: 50, activeMs: 1000, partial: true }, 'the group keeps the reported worker, marked partial');
 });
 
 test('other failures survive the launch Stop and leave on the next delivered notification plus Stop or user round', t => {

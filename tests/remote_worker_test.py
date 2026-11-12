@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timezone
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "integration" / "remote-worker.py"
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
 spec = importlib.util.spec_from_file_location("remote_worker", MODULE_PATH)
 remote = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(remote)
@@ -480,6 +481,19 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         self.assertIsNone(first["parentUuid"]); self.assertIn("parentUuid", first)
         self.assertEqual(later["parentUuid"], "a")
 
+    def test_compaction_keeps_a_launched_sub_agents_resolved_model_only_as_a_bounded_string(self):
+        # The async_launched shape of Claude Code 2.1.3xx's Agent tool, with placeholder values.
+        launched = {"status": "async_launched", "isAsync": True, "agentId": "a0123456789abcdef", "description": "Placeholder task",
+                    "resolvedModel": "claude-opus-5-5", "modelsUsed": ["claude-opus-5-5"], "prompt": "private prompt", "outputFile": "/tmp/private.output"}
+        def kept(result):
+            return remote.compact_claude_record({"type": "user", "toolUseResult": result,
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_launch", "content": "private output"}]}})["toolUseResult"]
+        self.assertEqual(kept(launched), {"status": "async_launched", "isAsync": True, "agentId": "a0123456789abcdef", "resolvedModel": "claude-opus-5-5"})
+        for model in (None, 42, ["claude-opus-5-5"], {"id": "claude-opus-5-5"}, "m" * (remote.MODEL_NAME_LIMIT + 1)):
+            with self.subTest(model=model):
+                self.assertNotIn("resolvedModel", kept(dict(launched, resolvedModel=model)))
+        self.assertEqual(kept(dict(launched, resolvedModel="m" * remote.MODEL_NAME_LIMIT))["resolvedModel"], "m" * remote.MODEL_NAME_LIMIT)
+
     def test_compaction_preserves_completion_identities_and_terminal_statuses_without_outputs(self):
         for result in ({"isAsync": True, "agentId": "agent", "status": "async_launched"}, {"backgroundTaskId": "shell"},
                        {"task": {"task_id": "shell", "status": "killed", "output": "private output"}}):
@@ -613,6 +627,120 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         outside = self.root / "outside.jsonl"; outside.write_text("{}\n", encoding="utf-8")
         filename.symlink_to(outside)
         with self.assertRaises(ValueError): self.worker.claude_status(str(filename), 1000)
+
+    def subagent_file(self, agent_id="a0123456789abcdef"):
+        """A followed transcript and where Claude Code writes that sub-agent's records: <session>/subagents/agent-<id>.jsonl."""
+        transcript = self.claude_file()
+        transcript.write_text(json.dumps({"type": "user", "uuid": "u1", "message": {"content": "Remote prompt"}}) + "\n", encoding="utf-8")
+        folder = transcript.parent / "session" / "subagents"
+        folder.mkdir(parents=True)
+        return transcript, folder / ("agent-%s.jsonl" % agent_id)
+
+    def test_sub_agent_compaction_keeps_only_what_a_token_rate_needs(self):
+        rows = [json.loads(line) for line in (FIXTURES / "claude-subagent-ssh.jsonl").read_text(encoding="utf-8").splitlines()]
+        compact = [json.loads(line) for line in (FIXTURES / "claude-subagent-ssh.compact.jsonl").read_text(encoding="utf-8").splitlines()]
+        kept = [remote.compact_subagent_record(row) for row in rows]
+        # tests/agent-calls-rate.test.cjs computes the rate from the same compacted file.
+        self.assertEqual(kept, compact)
+        text = json.dumps(kept)
+        for private in ("Placeholder reasoning", "/srv/project", "Placeholder file contents", "Placeholder finding", "req_sub_1", "cache_read_input_tokens", "Read"):
+            self.assertNotIn(private, text)
+        prompt = remote.compact_subagent_record({"type": "user", "isMeta": True, "uuid": "p", "message": {"content": [{"type": "text", "text": "w" * 1000}]}})
+        self.assertEqual(prompt["message"]["content"], [{"type": "text", "text": "w" * remote.PROMPT_MARK_LIMIT}])
+        self.assertTrue(prompt["isMeta"], "provenance tells an automatic message from a prompt")
+        reply = remote.compact_subagent_record({"type": "assistant", "message": {"id": 1, "model": "m" * (remote.MODEL_NAME_LIMIT + 1), "usage": {"output_tokens": "9"}, "content": "text"}})
+        self.assertEqual(reply["message"], {"content": []})
+        for record in (None, [], {"type": "system"}, {"type": "queue-operation", "content": "queued"}):
+            self.assertIsNone(remote.compact_subagent_record(record))
+
+    def test_sub_agent_reader_reads_bounded_steps_only_after_what_it_read_was_sent(self):
+        filename = Path(self.temp.name) / "agent-a1.jsonl"
+        row = json.dumps({"type": "assistant", "uuid": "a", "timestamp": "2026-01-01T00:00:01.000Z", "isSidechain": True,
+                          "message": {"id": "m", "model": "claude-opus-5-5", "usage": {"output_tokens": 1}, "content": [{"type": "text", "text": "x" * 2000}]}}) + "\n"
+        filename.write_text(row * (2 * remote.SUBAGENT_READ_LIMIT // len(row) + 10), encoding="utf-8")
+        reader = remote.SubagentReader(filename.name)
+        def step():
+            with filename.open("rb") as source: reader.read(source)
+        step()
+        self.assertEqual(reader.offset, remote.SUBAGENT_READ_LIMIT)
+        self.assertTrue(reader.outbox); self.assertTrue(reader.reset); self.assertFalse(reader.partial)
+        step()
+        self.assertEqual(reader.offset, remote.SUBAGENT_READ_LIMIT, "nothing more is read while the last step waits to be sent")
+        answer = remote.take_subagents({"a1": reader})
+        self.assertTrue(answer["a1"]["reset"]); self.assertFalse(reader.outbox)
+        step()
+        self.assertEqual(reader.offset, 2 * remote.SUBAGENT_READ_LIMIT)
+        self.assertFalse(remote.take_subagents({"a1": reader})["a1"]["reset"])
+        # A replaced file starts over; past the history window its start is left out and the reader says so.
+        replacement = filename.with_name("replacement")
+        replacement.write_text(json.dumps({"padding": "x" * (remote.HISTORY_WINDOW + 10)}) + "\n" + row, encoding="utf-8")
+        os.replace(str(replacement), str(filename))
+        step()
+        self.assertTrue(reader.reset); self.assertTrue(reader.partial)
+        self.assertEqual(reader.offset, filename.stat().st_size - remote.HISTORY_WINDOW + remote.SUBAGENT_READ_LIMIT)
+        # The window starts inside the oversized line: a bounded step at a time reaches the row after it.
+        for _ in range(remote.HISTORY_WINDOW // remote.SUBAGENT_READ_LIMIT + 1):
+            if reader.outbox: break
+            step()
+        self.assertEqual([record["uuid"] for record in reader.outbox], ["a"])
+
+    def test_sub_agent_records_share_one_budget_per_answer_and_follow_in_later_answers(self):
+        record = remote.compact_subagent_record({"type": "assistant", "uuid": "a", "timestamp": "2026-01-01T00:00:01.000Z",
+                                                 "message": {"id": "m", "model": "claude-opus-5-5", "usage": {"output_tokens": 1}, "content": []}})
+        readers = dict(("a%d" % index, remote.SubagentReader("agent-a%d.jsonl" % index)) for index in range(3))
+        each = remote.SUBAGENTS_BUDGET // len(json.dumps(record, ensure_ascii=True))
+        # Readers that found their files and read a step each.
+        for index, reader in enumerate(readers.values()): reader.outbox, reader.file_identity = [record] * each, (1, index)
+        answer = remote.take_subagents(readers)
+        # As the worker writes it to the connection (main).
+        self.assertLessEqual(len(json.dumps(answer, ensure_ascii=True, separators=(",", ":"))), remote.SUBAGENTS_BUDGET + 1024)
+        self.assertEqual(sorted(answer), ["a0", "a1", "a2"], "a reader that started over says so even when its records wait")
+        taken = sum(len(entry["records"]) for entry in answer.values())
+        while any(reader.outbox for reader in readers.values()):
+            answer = remote.take_subagents(readers)
+            self.assertTrue(answer); self.assertFalse(any(entry["reset"] for entry in answer.values()))
+            taken += sum(len(entry["records"]) for entry in answer.values())
+        self.assertEqual(taken, 3 * each)
+        self.assertEqual(remote.take_subagents({"missing": remote.SubagentReader("agent-missing.jsonl")}), {}, "a file never found is not mentioned")
+
+    @unittest.skipUnless(os.name == "posix", "the remote side runs on Linux and macOS (descriptor-relative opens)")
+    def test_claude_status_follows_the_named_sub_agents_in_the_session_folder_and_drops_the_rest(self):
+        transcript, child = self.subagent_file()
+        rows = (FIXTURES / "claude-subagent-ssh.jsonl").read_text(encoding="utf-8").splitlines(True)
+        compact = [json.loads(line) for line in (FIXTURES / "claude-subagent-ssh.compact.jsonl").read_text(encoding="utf-8").splitlines()]
+        child.write_text("".join(rows[:3]), encoding="utf-8")
+        ids = ["a0123456789abcdef"]
+        first = self.worker.claude_status(str(transcript), 1000, ids)
+        self.assertTrue(first["reset"]); self.assertNotIn("subagents", first, "a reset answer replaces the history the ids came from")
+        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {ids[0]: {"records": compact[:3], "reset": True, "partial": False}})
+        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {})
+        with child.open("a", encoding="utf-8") as output: output.write("".join(rows[3:]))
+        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {ids[0]: {"records": compact[3:], "reset": False, "partial": False}})
+        unsafe = ["..", "../session", "/etc/passwd", "a.b", "a/b", "", 7, None, "a" * 101]
+        named = ["missing"] + ["b%d" % index for index in range(20)]
+        self.assertEqual(self.worker.claude_status(str(transcript), 1000, unsafe + named)["subagents"], {})
+        self.assertEqual(list(self.worker.claude_reader.subagents), named[:remote.SUBAGENT_LIMIT])
+        self.assertNotIn("subagents", self.worker.claude_status(str(transcript), 1000))
+        self.assertEqual(self.worker.claude_reader.subagents, {}, "the ones no longer asked for are dropped")
+        self.assertTrue(self.worker.claude_status(str(transcript), 1000, ids)["subagents"][ids[0]]["reset"], "asked for again, it starts over")
+
+    @unittest.skipUnless(os.name == "posix", "the remote side runs on Linux and macOS (symbolic links, descriptor-relative opens)")
+    def test_sub_agent_reads_never_follow_a_link_out_of_the_session_folder(self):
+        transcript, child = self.subagent_file()
+        ids = ["a0123456789abcdef"]
+        outside = self.root / "outside"
+        (outside / "subagents").mkdir(parents=True)
+        for folder in (outside, outside / "subagents"):
+            (folder / child.name).write_text((FIXTURES / "claude-subagent-ssh.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
+        self.worker.claude_status(str(transcript), 1000, ids)
+        def read(): return self.worker.claude_status(str(transcript), 1000, ids)["subagents"]
+        child.symlink_to(outside / "subagents" / child.name)
+        self.assertEqual(read(), {}, "a linked sub-agent file")
+        child.unlink(); child.parent.rmdir(); child.parent.symlink_to(outside / "subagents")
+        self.assertEqual(read(), {}, "a linked subagents folder")
+        session = child.parent.parent
+        child.parent.unlink(); session.rmdir(); session.symlink_to(outside)
+        self.assertEqual(read(), {}, "a linked session folder")
 
     def test_claude_status_uses_history_window_and_drains_response_budget_before_history_done(self):
         filename = self.claude_file()

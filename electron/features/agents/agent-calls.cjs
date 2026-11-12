@@ -10,6 +10,7 @@ const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subag
 const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
 const enabled = value => value === true || value === 'true';
+const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/, REMOTE_FOLLOWS = 16;
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
 function helperAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
@@ -51,7 +52,9 @@ class AgentCalls {
     }));
   }
   snapshot(provider) {
-    const groups = new Map();
+    // A group sums the members whose records can be read; one that cannot marks the sum partial, and with none readable
+    // the group has no rate.
+    const groups = new Map(), rated = new Set(), unrated = new Set();
     for (const call of this.calls.values()) {
       if (call.reviewed || call.hidden && call.dispatch && !call.failure) continue;
       const route = { agent: call.agent, provider: call.dispatch ? null : provider ?? null,
@@ -59,8 +62,9 @@ class AgentCalls {
       const key = JSON.stringify(route);
       if (!groups.has(key)) groups.set(key, { ...route, preparing: 0, running: 0, reviewing: 0, tasks: [], items: [], rate: emptyRate(false) });
       const group = groups.get(key);
-      if (!call.hidden && !call.rate) group.rate = null;
-      else if (!call.hidden && group.rate) {
+      if (!call.hidden && !call.rate) unrated.add(group);
+      else if (!call.hidden) {
+        rated.add(group);
         group.rate.outputTokens += call.rate.outputTokens; group.rate.activeMs += call.rate.activeMs; group.rate.samples += call.rate.samples;
         group.rate.updatedAt = Math.max(group.rate.updatedAt, call.rate.updatedAt); group.rate.partial ||= call.rate.partial;
       }
@@ -72,6 +76,7 @@ class AgentCalls {
         ...(call.dispatch && call.declared ? { declared: call.declared } : {}) });
       if (!call.hidden && call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
     }
+    for (const group of unrated) if (rated.has(group)) group.rate.partial = true; else group.rate = null;
     for (const group of groups.values()) group.items.reverse();
     return [...groups.values()];
   }
@@ -269,6 +274,31 @@ class AgentCalls {
     }
     this.schedule();
     return changed;
+  }
+  // Over SSH the host reads the sub-agents' records (integration/remote-worker.py, which takes the same id form and
+  // count): the newest running ones whose launch named their id.
+  remoteSubagents() {
+    if (this.local) return [];
+    return [...this.calls.values()].filter(call => !call.dispatch && !call.done && !call.reviewed && REMOTE_ID.test(call.agentId || ''))
+      .map(call => call.agentId).slice(-REMOTE_FOLLOWS);
+  }
+  // What the host sent of them: each restart builds a new meter, marked partial when the host left out the file's start.
+  remoteRecords(subagents) {
+    if (this.local || !subagents || typeof subagents !== 'object') return;
+    let changed = false;
+    for (const call of this.calls.values()) {
+      const entry = !call.dispatch && !call.reviewed && call.agentId && Object.hasOwn(subagents, call.agentId) ? subagents[call.agentId] : null;
+      if (!Array.isArray(entry?.records)) continue;
+      const before = this.signature(call);
+      if (entry.reset || !call.meter) { call.meter = new TokenRates('claude', { sidechain: true }); call.meter.reset(entry.partial === true); }
+      for (const record of entry.records) {
+        if (record && typeof record === 'object' && (call.startedAt === null || Date.parse(record.timestamp) >= call.startedAt)) call.meter.apply(record);
+      }
+      call.rate = call.meter.snapshot();
+      call.model = call.meter.model || call.resultModel || call.requested.model;
+      changed ||= before !== this.signature(call);
+    }
+    if (changed) this.changed();
   }
   follows(call) {
     return this.local && !call.feedExpired && (call.dispatch ? !call.done || !call.feedDrained : this.folder && (call.done ? !call.drained : !call.reviewed));

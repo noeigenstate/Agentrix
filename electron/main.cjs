@@ -497,7 +497,9 @@ function followClaude(project, s, event) {
   s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
   s.claudeSessionId = event.sessionId;
   s.approval?.context('claude-session', event.sessionId);
-  s.usage?.calls.setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
+  // The terminal's own calls, not the agent's meter: a hook can bind the transcript before startUsage builds the meter,
+  // and the meter it builds keeps these calls and their folder.
+  callsOf(s, project).setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
   if (s.claudeTranscript?.filename !== file) {
     let tail;
     const readCurrent = () => sessions.get(s.terminalId) === s && (!tail || s.claudeTranscript === tail)
@@ -534,6 +536,9 @@ function followClaude(project, s, event) {
     const since = Number.isFinite(event.sentAt) ? event.sentAt : s.activitySince || Date.now();
     const remoteStatus = value => {
       if (!value || !readCurrent() || !s.activityMonitor) return null;
+      // The host reads the sub-agents after this transcript: their records go first, so a completion below ends a call
+      // whose replies are already counted. A reset answer carries none.
+      callsOf(s, project).remoteRecords(value.subagents);
       if (value.reset) onHistory(false);
       for (const record of Array.isArray(value.records) ? value.records : []) { try { onRecord(record); } catch { } }
       if (value.historyDone) onHistory(true);
@@ -542,7 +547,10 @@ function followClaude(project, s, event) {
       return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading, transcriptRead: true };
     };
     s.activityMonitor = monitorActivity(async () => {
-      if (remote) return s.terminal.request('claude-status', { path: file, since }).then(remoteStatus);
+      if (remote) {
+        const subagents = callsOf(s, project).remoteSubagents();
+        return s.terminal.request('claude-status', { path: file, since, ...(subagents.length ? { subagents } : {}) }).then(remoteStatus);
+      }
       await tail.read(onRecord);
       if (!readCurrent()) return null;
       if (s.completionWork) {
