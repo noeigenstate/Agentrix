@@ -1,3 +1,4 @@
+const { stderrTail } = require('../agents/start-failure.cjs');
 const sources = new Set(['ANTHROPIC_API_KEY', 'apiKeyHelper', '/login managed key', 'none', 'user', 'project', 'org', 'temporary', 'oauth']);
 const billingSource = source => sources.has(source) ? source : null;
 // A name the CLI reported is echoed only when it is one of the values Claude Code is known to report; any other
@@ -47,16 +48,41 @@ function billingIdentityError(source, { beforeInput = false, messageType, tokenS
   identityFailures.add(error); return error;
 }
 
-function startupFailure(error) {
+// Why a start failed before any input, from the SDK error's own fields (errorClass, exitCode, signal; an errno code
+// for a process that never ran), the redacted end of the stderr the caller collected, or the SDK's own error in one
+// redacted line. The saved key never appears.
+function startWhy(error, stderr, key) {
+  // The saved key, and anything shaped like an Anthropic key, before the shared redaction.
+  const scrub = text => (key ? String(text).split(key).join('<key>') : String(text)).replace(/sk-ant-[\w-]+/gi, '<key>');
+  if (error?.code === 'sdk_initialization_timeout') {
+    return { text: 'Claude Code 初始化 {seconds} 秒仍未完成，尚未发送消息。请稍后重试。', values: { seconds: Math.max(1, Math.round((error.elapsedMs ?? 0) / 1000)) } };
+  }
+  const tail = stderrTail(scrub(stderr)), output = tail ? '，尚未发送消息。错误输出：{stderr}' : '，尚未发送消息，也没有错误输出。';
+  if (error?.errorClass === 'process_exited_nonzero' && Number.isInteger(error.exitCode)) {
+    return { text: `Claude Code 启动后退出（退出码 {code}）${output}`, values: { stderr: tail, code: error.exitCode } };
+  }
+  if (error?.errorClass === 'process_killed_by_signal' && typeof error.signal === 'string') {
+    return { text: `Claude Code 启动后被终止（信号 {signal}）${output}`, values: { stderr: tail, signal: error.signal } };
+  }
+  if (typeof error?.code === 'string' && /^E[A-Z0-9]{2,20}$/.test(error.code)) {
+    return { text: `Claude Code 没能启动（{code}）${output}`, values: { stderr: tail, code: error.code } };
+  }
+  const detail = stderrTail(scrub(error?.message || ''), { limit: 200 });
+  return detail ? { text: 'Claude Agent SDK 出错，尚未发送消息：{detail}', values: { detail } } : { text: 'Claude Code 没能启动，尚未发送消息。', values: {} };
+}
+
+// A start failure the owner can read: identity and route failures as they are, anything else with its cause (`why`).
+// The code and beforeInput, which decide a fallback to the terminal, are the same whatever the cause.
+function startupFailure(error, { stderr = '', key = null } = {}) {
   if (identityFailures.has(error) || routeFailures.has(error)) return error;
   if (['route_config_unreadable', 'project_api_key_override', 'user_api_key_override'].includes(error?.code)) {
     const message = error.code === 'user_api_key_override' ? 'Claude 用户设置不能覆盖应用保存的 API 密钥。'
       : error.code === 'project_api_key_override' ? '项目 Claude 配置不能覆盖应用保存的 API 密钥。' : '无法读取 Claude 路由配置。';
     return Object.assign(new Error(message), { code: error.code, beforeInput: true });
   }
-  const timeout = error?.code === 'sdk_initialization_timeout';
-  return Object.assign(new Error(timeout ? 'Claude API 初始化超时，尚未发送消息。' : 'Claude API 启动失败，尚未发送消息。'), {
-    code: timeout ? 'sdk_initialization_timeout' : 'sdk_startup_failed', beforeInput: true,
+  const why = startWhy(error, stderr, key);
+  return Object.assign(new Error(whyText(why)), {
+    code: error?.code === 'sdk_initialization_timeout' ? 'sdk_initialization_timeout' : 'sdk_startup_failed', beforeInput: true, why,
   });
 }
 

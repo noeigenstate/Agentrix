@@ -166,7 +166,7 @@ for (const failure of ['identity', 'timeout', 'query_refused']) for (const claud
     },
   });
   assert.equal(f.fake.inputs.length, 0);
-  assert.match(stdout, failure === 'identity' ? /apiKeySource=\/login managed key/ : failure === 'timeout' ? /初始化超时，尚未发送消息/ : /启动失败，尚未发送消息/);
+  assert.match(stdout, failure === 'identity' ? /apiKeySource=\/login managed key/ : failure === 'timeout' ? /初始化 \d+ 秒仍未完成，尚未发送消息/ : /^(?![^]*Claude API 启动失败)[^]*尚未发送消息/);
   assert.equal(stdout.includes(key), false);
   assert.equal(launches, claudePath === 'api-only' ? 0 : 1);
   assert.equal(code, claudePath === 'api-only' ? 1 : 0);

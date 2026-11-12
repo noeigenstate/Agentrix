@@ -400,8 +400,8 @@ test('a billing mismatch names what Claude Code reported and what to check, unkn
 test('an unread billing source says why: a slow initialize with its wait, a failed start with its exit and redacted stderr, no CLI', async t => {
   const root = directory(t);
   const slow = await probeWith(root, () => new Promise(() => {}), { timeoutMs: 20 });
-  assert.equal(slow.status, 'unknown'); assert.equal(slow.why.text, 'Claude Code 初始化 {seconds} 秒仍未完成，无法确认计费来源。请稍后重试。');
-  assert.equal(slow.reason, 'Claude Code 初始化 1 秒仍未完成，无法确认计费来源。请稍后重试。');
+  assert.equal(slow.status, 'unknown'); assert.equal(slow.why.text, 'Claude Code 初始化 {seconds} 秒仍未完成，尚未发送消息。请稍后重试。');
+  assert.equal(slow.reason, 'Claude Code 初始化 1 秒仍未完成，尚未发送消息。请稍后重试。');
   // The SDK's own error fields say how the process ended; the stderr is what the probe collected, redacted.
   const failing = (error, stderr = '') => probeWith(root, null, { loadSdk: async () => ({ query: ({ options }) => {
     if (stderr) options.stderr(stderr);
@@ -410,14 +410,14 @@ test('an unread billing source says why: a slow initialize with its wait, a fail
   const exited = await failing(Object.assign(new Error('Claude Code process exited with code 2. stderr: hidden'), { errorClass: 'process_exited_nonzero', exitCode: 2 }),
     `settings broken\nAuthorization: Bearer abc123secretvalue ${key}`);
   assert.deepEqual(Object.keys(exited.why.values).sort(), ['code', 'stderr']); assert.equal(exited.why.values.code, 2);
-  assert.match(exited.reason, /^Claude Code 启动后退出（退出码 2），错误输出：settings broken \/ Authorization: Bearer <secret>/);
+  assert.match(exited.reason, /^Claude Code 启动后退出（退出码 2），尚未发送消息。错误输出：settings broken \/ Authorization: Bearer <secret>/);
   assert.doesNotMatch(exited.reason, /abc123secretvalue|exited with code|hidden/); assert.ok(!JSON.stringify(exited).includes(key));
   const quiet = await failing(Object.assign(new Error('x'), { errorClass: 'process_exited_nonzero', exitCode: 1 }));
-  assert.equal(quiet.reason, 'Claude Code 启动后退出（退出码 1），没有错误输出。');
+  assert.equal(quiet.reason, 'Claude Code 启动后退出（退出码 1），尚未发送消息，也没有错误输出。');
   const killed = await failing(Object.assign(new Error('x'), { errorClass: 'process_killed_by_signal', signal: 'SIGKILL' }));
-  assert.equal(killed.reason, 'Claude Code 启动后被终止（信号 SIGKILL），没有错误输出。');
+  assert.equal(killed.reason, 'Claude Code 启动后被终止（信号 SIGKILL），尚未发送消息，也没有错误输出。');
   const spawned = await failing(Object.assign(new Error('spawn EPERM'), { code: 'EPERM' }));
-  assert.equal(spawned.reason, 'Claude Code 没能启动（EPERM），没有错误输出。');
+  assert.equal(spawned.reason, 'Claude Code 没能启动（EPERM），尚未发送消息，也没有错误输出。');
   const unverified = await probeWith(root, null, { resolveExecutable: async () => { throw Object.assign(new Error('Claude Code 检查没有通过，无法通过 API 运行'), { code: 'native_cli_required', unverified: true }); } });
   assert.equal(unverified.reason, 'Claude Code 检查没有通过，无法通过 API 运行');
   const absent = await probeWith(root, null, { resolveExecutable: async () => null });

@@ -5,6 +5,7 @@ const { TokenRates } = require('../agents/token-rate.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
 const { billingIdentityError, startupFailure } = require('./identity.cjs');
+const { stderrCollector } = require('../agents/start-failure.cjs');
 const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
 const { turnResult, tokensOf, hasModelReply } = require('./result.cjs');
 const { rateLimits } = require('./limits.cjs');
@@ -328,7 +329,7 @@ function createClaudeSession(spec, emit, dependencies) {
     const maxBudgetUsd = spec.monthlyBudgetUsd == null ? undefined : usage.available(spec.monthlyBudgetUsd) / 1e6;
     const run = { key, reservation: null, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
-      remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map() };
+      remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map(), stderr: stderrCollector() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     try {
@@ -342,6 +343,8 @@ function createClaudeSession(spec, emit, dependencies) {
           return decision.behavior === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };
         },
       });
+      // A start that fails before its initialize answer is told with the end of the CLI's stderr.
+      options.stderr = run.stderr.push;
       if (!prepareOnly) {
         run.reservation = usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
         options.maxBudgetUsd = run.reservation.maxBudgetUsd;
@@ -368,7 +371,7 @@ function createClaudeSession(spec, emit, dependencies) {
       cancelQuery(run, 'startup'); if (run.reservation) usage.release(run.reservation.id); secrets.delete(key);
       if (stopping || closed) throw new Error('会话已停止。');
       if (error.code === 'budget_exhausted') throw error;
-      const failure = startupFailure(error);
+      const failure = startupFailure(error, { stderr: run.stderr.text(), key });
       if (observing) throw failure;
       onFailure(failure.code, failure, run.generation);
       publish('error', { code: failure.code, message: failure.message, retryable: false, willRetry: false, stage: 'startup' });

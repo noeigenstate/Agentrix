@@ -193,7 +193,7 @@ async function runtimeSmoke(output, stages) {
       const refused = await testConnection();
       assert.equal(refused.value.billing.status, 'unknown'); assert.equal(refused.value.path, null);
       assert.equal(refused.value.reason, 'billing_unconfirmed');
-      assert.deepEqual([refused.value.billing.detail.text, refused.value.billing.detail.values.code], ['Claude Code 启动后退出（退出码 {code}），没有错误输出。', 7]);
+      assert.deepEqual([refused.value.billing.detail.text, refused.value.billing.detail.values.code], ['Claude Code 启动后退出（退出码 {code}），尚未发送消息，也没有错误输出。', 7]);
       await app.evaluate(() => { delete process.env.AGENTRIX_FAKE_INIT_FAILURE; });
       await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey);
       assert.equal((await page.evaluate(() => window.agentrix.nativeSession.usage())).value.agents.claude.next.path, 'api');

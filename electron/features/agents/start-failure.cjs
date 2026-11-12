@@ -38,4 +38,10 @@ function startupDetail(error, { stderr = '', processError = null, exitCode = nul
   return tail ? head + label + tail : head;
 }
 
-module.exports = { startupDetail, stderrTail };
+// The end of a process's stderr as it arrives, bounded, for a failure that may come before any other output.
+function stderrCollector(kept = 8192) {
+  let text = '';
+  return { push: chunk => { text = (text + chunk).slice(-kept); }, text: () => text };
+}
+
+module.exports = { startupDetail, stderrTail, stderrCollector };

@@ -22,6 +22,12 @@ function fixture(t, { mode = 'api-then-terminal', sdkOptions, failure } = {}) {
     const query = fake.sdk.query;
     fake.sdk.query = input => {
       if (failure === 'query_refused') throw Object.assign(new Error(key), { code: 'org_pin_api_key_conflict' });
+      if (failure === 'sdk_threw') throw new Error('The Claude Agent SDK cannot read its options');
+      // The CLI exits before answering the initialize, as the real SDK reports it: its own fields, the stderr seen so far.
+      if (failure === 'exited') return { ...query(input), initializationResult: async () => {
+        input.options.stderr(`settings.json is broken\nAuthorization: Bearer abc123secretvalue ${key}\n`);
+        throw Object.assign(new Error('Claude Code process exited with code 3. stderr: settings.json is broken'), { errorClass: 'process_exited_nonzero', exitCode: 3 });
+      } };
       return { ...query(input), initializationResult: () => new Promise(() => {}) };
     };
   }
@@ -65,16 +71,19 @@ for (const tokenSource of ['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN', 'claude.ai', 
 for (const failure of ['timeout', 'query_refused', 'cli_refused']) for (const mode of ['api-only', 'api-then-terminal']) {
   test(`pre-input ${failure} under ${mode} has a safe reason and never replays input`, async t => {
     const f = fixture(t, { failure, mode });
+    // Each failure names its cause; the fakes throw the key itself as their message, and it never shows.
+    const cause = { timeout: /^Claude Code 初始化 \d+ 秒仍未完成，尚未发送消息。请稍后重试。$/, query_refused: /^Claude Agent SDK 出错，尚未发送消息：<key>$/, cli_refused: /^Claude Agent SDK 出错，尚未发送消息：<key>$/ }[failure];
     const act = async () => {
       const started = await f.native.start('t', { agent: 'claude' });
       if (failure !== 'cli_refused') return f.native.send('t', started.runtimeSessionId, { clientMessageId: 'm', text: 'never execute' });
     };
     if (mode === 'api-only') {
-      await assert.rejects(act(), error => error.beforeInput === true && /^Claude API (初始化超时|启动失败)，尚未发送消息。$/.test(error.message));
+      await assert.rejects(act(), error => error.beforeInput === true && cause.test(error.message));
+      assert.match(f.events.findLast(event => event.type === 'error').payload.message, cause);
       assert.equal(f.terminals.length, 0); assert.ok(f.events.some(event => event.type === 'error'));
     } else {
       await act(); if (failure !== 'cli_refused') await completeSwitch(f.native, 't'); assert.equal(f.terminals.length, 1);
-      assert.match(f.events.findLast(event => event.type === 'path.changed').payload.reason, /^Claude API (初始化超时|启动失败)，尚未发送消息。$/);
+      assert.match(f.events.findLast(event => event.type === 'path.changed').payload.reason, cause);
       assert.equal(f.events.some(event => event.type === 'error' || event.type === 'session.state' && event.payload.state === 'failed'), false);
       assert.equal(f.native.snapshot('t').events.findLast(event => event.type === 'path.changed').payload.selected, 'terminal');
     }
@@ -193,4 +202,28 @@ test('N1: a late successful pre-check cannot erase a newer failure, while a fres
   await f.factory.testConnection({ projectId: 'p' }); f.fake.sdk.query = original;
   await third.send({ clientMessageId: 'fresh', text: 'Fresh pre-check' });
   assert.equal(f.factory.apiState(10, 'p').status, 'ready');
+});
+
+// A session that fails before any input says what failed, on its card (the error event) and in the path's reason
+// when it falls back to the terminal; the fallback rules (code and beforeInput) do not change.
+for (const [failure, cause] of [
+  ['timeout', /^Claude Code 初始化 \d+ 秒仍未完成，尚未发送消息。请稍后重试。$/],
+  ['exited', /^Claude Code 启动后退出（退出码 3），尚未发送消息。错误输出：settings\.json is broken \/ Authorization: Bearer <secret> <key>$/],
+  ['sdk_threw', /^Claude Agent SDK 出错，尚未发送消息：The Claude Agent SDK cannot read its options$/],
+]) for (const mode of ['api-only', 'api-then-terminal']) test(`a session start that fails (${failure}) states its cause under ${mode}`, async t => {
+  const f = fixture(t, { failure, mode });
+  const act = async () => {
+    const started = await f.native.start('t', { agent: 'claude' });
+    return f.native.send('t', started.runtimeSessionId, { clientMessageId: 'm', text: 'never execute' });
+  };
+  if (mode === 'api-only') {
+    await assert.rejects(act(), error => error.beforeInput === true && cause.test(error.message));
+    assert.match(f.events.findLast(event => event.type === 'error').payload.message, cause);
+  } else {
+    await act(); await completeSwitch(f.native, 't');
+    assert.match(f.events.findLast(event => event.type === 'path.changed').payload.reason, cause);
+    assert.equal(f.native.snapshot('t').events.findLast(event => event.type === 'path.changed').payload.selected, 'terminal');
+  }
+  assert.equal(f.fake.inputs.length, 0); assert.equal(JSON.stringify(f.events).includes(key), false);
+  assert.equal(JSON.stringify(f.events).includes('abc123secretvalue'), false);
 });
