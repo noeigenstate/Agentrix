@@ -40,8 +40,8 @@ const SANDBOX_REFUSALS = {
   change: {
     'workspace-write': 'Codex 不会应用工作区可写沙箱，本会话权限未更改。请检查 Codex 沙箱配置。',
     'danger-full-access': 'Codex 不会应用完全访问权限，本会话权限未更改。请检查 Codex 的沙箱配置或管理策略。',
-    // A running thread cannot take the request-scoped unelevated sandbox a new session gets, so "ask" would run unsandboxed.
-    windows: '这台电脑上的 Codex 没有配置 Windows 沙箱，正在运行的会话不能切换到「先询问」。请新建会话使用「先询问」，或在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"。',
+    // A local Windows thread has a Windows sandbox only when it started writable; a later configuration change does not give it one.
+    windows: '这个会话启动时没有 Windows 沙箱，中途不能切换到「先询问」，修改 Codex 配置后也一样。请新建会话使用「先询问」，新会话会带上 Windows 沙箱。',
     ssh: REMOTE_WRITE,
   },
 };
@@ -174,6 +174,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null, settingsSeen = null;
       // Ephemeral threads this session started to read a permissions target; each is let go as soon as it is known and no read needs it.
       let probing = false; const probeThreads = new Set();
+      // Whether this thread started with a writable sandbox Codex applied: on local Windows only such a thread has a Windows sandbox to run "ask" in.
+      let startedWritable = false;
       // Run options belong to a thread: a change made while the session starts waits until the thread exists (or the session closes).
       let threadKnown; const threadReady = new Promise(resolve => { threadKnown = resolve; });
       let configuredFast = typeof initialSpec.fast === 'boolean' ? initialSpec.fast : null;
@@ -403,6 +405,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
             && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
           assertSandbox(options.sandbox, result.sandbox, place());
+          startedWritable = options.sandbox === 'workspace-write';
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
           assertOpen();
           bind(result.thread.id); threadResponse = result;
@@ -581,21 +584,28 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       // /permissions changes what this session's thread may do from its next turn (a turn already running keeps what it started with), never the
       // Settings default. The target is what a new session with that choice would get, read from an ephemeral thread started with the same request:
       // the CLI's own configuration (writable roots, network, a managed policy) still applies, and a sandbox Codex will not apply is refused as it
-      // stops a start. On Windows a writable target that needs the request-scoped unelevated retry is refused: thread/settings/update carries no
-      // configuration, so the running thread would report workspace-write without a Windows sandbox. The change is applied only when
-      // thread/settings/updated reports the target with the user as the only approver; until then, or a deadline, it is not taken as done.
+      // stops a start. On local Windows "ask" is taken only by a thread that started writable (decided at its start, never by the configuration
+      // read now): thread/settings/update carries no configuration, so another thread would report workspace-write without a Windows sandbox; the
+      // target is read as that start read it, with the unelevated retry. The change is applied only when thread/settings/updated reports the target
+      // with the user as the only approver; until then, or a deadline, it is not taken as done.
       async function changePermissions(mode) {
         if (!ownPermissions()) throw new Error(translate('这个会话不能更改权限。'));
         if (!Object.hasOwn(PERMISSIONS, mode)) throw new Error(translate('无效的权限选项。'));
         const request = { cwd: wireCwd, ephemeral: true, approvalsReviewer: 'user', ...PERMISSIONS[mode] };
+        if (request.sandbox === 'workspace-write' && windowsLocal() && !startedWritable) assertSandbox(request.sandbox, null, place(), 'change');
         let target, sent = false, waiting;
         try {
           probing = true;
-          try { target = await rpc.request('thread/start', request); }
+          try {
+            target = await rpc.request('thread/start', request);
+            const retry = unelevated(request, target);
+            // The read-only probe is let go before its retry.
+            if (retry) { probeThreads.delete(target.thread?.id); releaseThread(target.thread?.id); target = await rpc.request('thread/start', retry); }
+          }
           finally {
             probing = false;
-            if (typeof target?.thread?.id === 'string') probeThreads.add(target.thread.id);
-            for (const threadId of probeThreads) releaseThread(threadId);
+            probeThreads.add(target?.thread?.id);
+            for (const threadId of probeThreads) if (typeof threadId === 'string') releaseThread(threadId);
             probeThreads.clear();
           }
           assertOpen();

@@ -214,22 +214,34 @@ test('/permissions refuses with the reason when Codex would not apply the sandbo
   assert.equal((await first.session.runOptions({})).permissions, 'ask');
 });
 
-test('Windows (local, injected platform): a running session never switches to "ask" when only the unelevated retry gives a writable sandbox', async t => {
-  // No [windows] sandbox in the CLI's configuration: a writable request is answered read-only unless it carries the request-scoped unelevated one.
-  const unconfigured = params => params.sandbox === 'workspace-write' && params.config?.['windows.sandbox'] !== 'unelevated' ? { type: 'readOnly' }
+test('Windows (local, injected platform): only a thread that started writable switches to "ask", whatever the configuration says later', async t => {
+  // Whether the CLI's configuration has a [windows] sandbox: without one a writable request is answered read-only unless it carries the
+  // request-scoped unelevated sandbox. The stand-in can change it mid-session, as an owner editing config.toml would.
+  let configured = false;
+  const answer = params => params.sandbox === 'workspace-write' && !configured && params.config?.['windows.sandbox'] !== 'unelevated' ? { type: 'readOnly' }
     : params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox;
-  const server = codexServer({ apply: unconfigured });
+  const server = codexServer({ apply: answer });
   const { session } = runtime(t, { platform: 'win32', server, spec: { permissions: 'full' } });
   await session.start();
-  await assert.rejects(session.runOptions({ permissions: 'ask' }), error => error.code === 'sandbox_mismatch' && /正在运行的会话不能切换到「先询问」。请新建会话使用「先询问」/.test(error.message));
-  assert.equal(server.wire.filter(row => row.method === 'thread/start' && row.params.ephemeral).length, 1, 'no unelevated retry for a running thread');
-  assert.equal(server.wire.some(row => row.method === 'thread/settings/update'), false);
-  assert.ok(server.wire.some(row => row.method === 'thread/unsubscribe' && row.params.threadId === 'probe-1'));
+  const refusal = error => error.code === 'sandbox_mismatch' && /这个会话启动时没有 Windows 沙箱.*修改 Codex 配置后也一样。请新建会话使用「先询问」/.test(error.message);
+  await assert.rejects(session.runOptions({ permissions: 'ask' }), refusal);
+  // The configuration now has a Windows sandbox, so a new thread would be writable: this thread still started without one.
+  configured = true;
+  await assert.rejects(session.runOptions({ permissions: 'ask' }), refusal, 'a configuration changed mid-session gives the running thread no sandbox');
+  assert.equal(server.wire.some(row => row.method === 'thread/settings/update' || row.params?.ephemeral), false, 'nothing is asked of Codex for it');
   assert.deepEqual([(await session.runOptions({})).permissions, session.threadResponse.sandbox.type], ['full', 'dangerFullAccess']);
-  // With a Windows sandbox configured the CLI answers writable at once, and the running session may switch.
-  const configured = runtime(t, { platform: 'win32', spec: { permissions: 'full' } });
-  await configured.session.start();
-  assert.equal((await configured.session.runOptions({ permissions: 'ask' })).permissions, 'ask');
+  // A thread that started as "ask" (through the unelevated retry) keeps its sandbox: it may leave "ask" and come back, its target read the same way.
+  configured = false;
+  const writable = codexServer({ apply: answer }), asked = runtime(t, { platform: 'win32', server: writable, spec: { permissions: 'ask' } });
+  await asked.session.start();
+  assert.equal((await asked.session.runOptions({ permissions: 'full' })).permissions, 'full');
+  assert.equal((await asked.session.runOptions({ permissions: 'ask' })).permissions, 'ask');
+  const probes = writable.wire.filter(row => row.method === 'thread/start' && row.params.ephemeral && row.params.sandbox === 'workspace-write');
+  assert.deepEqual(probes.map(row => row.params.config?.['windows.sandbox']), [undefined, 'unelevated']);
+  const at = test => writable.wire.findIndex(test);
+  const letGo = at(row => row.method === 'thread/unsubscribe' && row.params.threadId === 'probe-2');
+  assert.ok(letGo >= 0 && letGo < at(row => row.params?.ephemeral && row.params.config?.['windows.sandbox'] === 'unelevated'), 'the read-only probe is let go before the retry');
+  assert.equal(asked.session.threadResponse.sandbox.type, 'workspaceWrite');
   // Over SSH a remote that answers read-only is told as a remote one.
   const remoteServer = codexServer({ apply: params => params.ephemeral && params.sandbox === 'workspace-write' ? { type: 'readOnly' } : { type: TYPES[params.sandbox] } });
   const remote = runtime(t, { kind: 'ssh', platform: 'win32', server: remoteServer, spec: { permissions: 'full' } });
