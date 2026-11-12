@@ -3,7 +3,7 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "Codex 权限", text: "设置的「运行方式」页可以选「全部放开（默认）」「按 Codex 配置」或「先询问」，新的原生 Codex 会话按所选方式启动；在会话里输入 /permissions 可切换当前会话，从下一轮起生效。派发出去的工作者不受影响。" },
+  { title: "Codex 权限", text: "设置的「运行方式」页可以选「全部放开（默认）」「按 Codex 配置」或「先询问」，新的原生 Codex 会话按所选方式启动；在会话里输入 /permissions 可切换当前会话，从下一轮起生效。派发出去的工作者不受影响。从 1.4.1 升级后，原生 Codex 会话默认「全部放开」（不询问、不使用沙箱）；想保持原来的行为，请在设置里选「按 Codex 配置」。" },
   { title: "工作时也能发送", text: "Claude Code 在终端模式下工作时也能发消息，和在终端里一样由它自己排队。" },
   { title: "终端里的未发文字", text: "终端输入框里还有没提交的文字时，可以选「先发送终端里这段」或「清空它，再发送新消息」，不再出现误报的提示；待发区和提示块也换了新版式。" },
   { title: "发送框不再闪烁", text: "Claude 工作时，发送框的提示文字、中断按钮、状态行和结果卡不再来回闪动；一轮结束后，中断按钮不会再误发 Esc。" },

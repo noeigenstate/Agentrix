@@ -3145,7 +3145,7 @@
   "清空它，再发送新消息": "Clear it, then send the new message",
   "排在终端输入框里那段文字后面": "Waiting behind the text in the terminal input",
   "终端还没准备好，这次没有中断，请稍后再试。": "The terminal is not ready, so nothing was interrupted. Try again in a moment.",
-  "设置的「运行方式」页可以选「全部放开（默认）」「按 Codex 配置」或「先询问」，新的原生 Codex 会话按所选方式启动；在会话里输入 /permissions 可切换当前会话，从下一轮起生效。派发出去的工作者不受影响。": "On the Run mode page in Settings you can choose Full access (default), Follow Codex config, or Ask first, and new native Codex sessions start with your choice. Type /permissions in a session to change that session, effective from the next turn. Dispatched workers are not affected.",
+  "设置的「运行方式」页可以选「全部放开（默认）」「按 Codex 配置」或「先询问」，新的原生 Codex 会话按所选方式启动；在会话里输入 /permissions 可切换当前会话，从下一轮起生效。派发出去的工作者不受影响。从 1.4.1 升级后，原生 Codex 会话默认「全部放开」（不询问、不使用沙箱）；想保持原来的行为，请在设置里选「按 Codex 配置」。": "On the Run mode page in Settings you can choose Full access (default), Follow Codex config, or Ask first, and new native Codex sessions start with your choice. Type /permissions in a session to change that session, effective from the next turn. Dispatched workers are not affected. After upgrading from 1.4.1, native Codex sessions default to Full access (no approval prompts, no sandbox); to keep the previous behavior, choose Follow Codex config in Settings.",
   "工作时也能发送": "Send while it works",
   "Claude Code 在终端模式下工作时也能发消息，和在终端里一样由它自己排队。": "In terminal mode you can send a message while Claude Code is working; as in the terminal itself, it queues the message on its own.",
   "终端里的未发文字": "Unsent terminal text",
