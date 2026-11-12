@@ -3084,5 +3084,11 @@
   "新安装首次启动时跟随系统的浅色或深色外观，已有设置不变。": "A fresh install follows the system light or dark appearance on first launch; existing settings are unchanged.",
   "Linux 的 AppImage 文件名不再带 linux，并且从 1.4.1 起可以用 AppImageUpdate 等工具更新。": "The Linux AppImage file name no longer contains \"linux\", and from 1.4.1 it can be updated with tools such as AppImageUpdate.",
   "复制路径": "Copy path",
-  "在回复里的文件链接上点右键，可以复制它的完整路径；生成的图片复制的是项目里那份的路径。": "Right-click a file link in a reply to copy its full path; for a generated image, the path copied is that of the copy in the project."
+  "在回复里的文件链接上点右键，可以复制它的完整路径；生成的图片复制的是项目里那份的路径。": "Right-click a file link in a reply to copy its full path; for a generated image, the path copied is that of the copy in the project.",
+  "计费原因": "Billing reason",
+  "测试连接无法确认计费来源时，会写明原因，例如初始化超时、Claude Code 启动后退出（附错误输出），或者 Claude Code 报告了别的计费来源。": "When the connection test cannot confirm the billing source, it states why, for example an initialization timeout, Claude Code exiting after launch (with its error output), or Claude Code reporting a different billing source.",
+  "启动原因": "Start reason",
+  "原生会话启动失败时，卡片和转到终端的提示里都会写明具体原因；没有保存密钥时会直接说明。": "When a native session fails to start, both the card and the notice about moving to the terminal state the specific reason; if no key is saved, it says so directly.",
+  "只用保存的密钥": "Saved key only",
+  "原生模式只用 Agentrix 里保存的 API 密钥，Claude Code 设置里的 apiKeyHelper 不会再让 API 通道无法使用；终端里的 Claude Code 不受影响。": "Native mode uses only the API key saved in Agentrix, so an apiKeyHelper in Claude Code settings no longer makes the API channel unusable; Claude Code in the terminal is unaffected."
 }
