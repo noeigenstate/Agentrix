@@ -6,4 +6,5 @@ export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
   { title: "计费原因", text: "测试连接无法确认计费来源时，会写明原因，例如初始化超时、Claude Code 启动后退出（附错误输出），或者 Claude Code 报告了别的计费来源。" },
   { title: "启动原因", text: "原生会话启动失败时，卡片和转到终端的提示里都会写明具体原因；没有保存密钥时会直接说明。" },
   { title: "只用保存的密钥", text: "原生模式只用 Agentrix 里保存的 API 密钥，Claude Code 设置里的 apiKeyHelper 不会再让 API 通道无法使用；终端里的 Claude Code 不受影响。" },
+  { title: "派发更及时", text: "派发出去的 Codex 工作者报告额度后，活动栏会立刻刷新；查找团队目录不再卡住界面；派发的消息送不到 Agentrix 时，规划员的终端里会写明原因。" },
 ];
