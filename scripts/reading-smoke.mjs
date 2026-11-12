@@ -530,8 +530,14 @@ try {
     await holdEnter(true);
     let mark = (await entered()).length; const whileWorking = `GUI_WHILE_WORKING_${theme}`;
     await composer.fill(whileWorking); await resetWrites(); await composer.press('Enter');
-    await waitFor(async () => (await enteredSince(mark)).includes('held:' + whileWorking), 'the terminal received the message while Claude works');
-    // The words are written once a parsed frame shows the input (a paste waits up to two seconds for one): until then the outbox shows them, sending.
+    // The words are written once a frame shows the input drawn (up to two seconds); meanwhile the conversation's own card says
+    // it is sending. The outbox holds only a message something blocks, so it stays empty while this one waits.
+    let outboxSeen = 0;
+    await waitFor(async () => {
+      outboxSeen = Math.max(outboxSeen, await outbox.count());
+      return (await enteredSince(mark)).includes('held:' + whileWorking);
+    }, 'the terminal received the message while Claude works');
+    assert.equal(outboxSeen, 0, 'a message sent while Claude works never shows in the outbox');
     await waitFor(async () => await outbox.count() === 0, 'a working Claude Code takes the message; nothing stays in the outbox', 10000);
     assert.equal(await terminal.getByText(SEND_TEXT.waiting, { exact: true }).count(), 0);
     assert.equal(await leftover.count(), 0);
