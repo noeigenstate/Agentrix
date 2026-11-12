@@ -25,7 +25,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     const records = rows(threadId), last = records.filter(row => row.type === 'event_msg').at(-1)?.payload?.type;
     status = ['task_started', 'turn_started'].includes(last) ? 'inProgress' : 'completed';
     if (!records.length) fs.writeFileSync(path.join(folder, 'rollout-' + threadId + '.jsonl'), JSON.stringify({ type: 'session_meta', payload: { id: threadId, cwd, source: 'cli' } }) + '\n');
-    result = { thread: thread(threadId), cwd, model: 'fixture-model', sandbox: { type: { 'read-only': 'readOnly', 'danger-full-access': 'dangerFullAccess' }[p.sandbox] || 'workspaceWrite' }, approvalPolicy: 'never' };
+    result = { thread: thread(threadId), cwd, model: 'fixture-model', sandbox: { type: { 'read-only': 'readOnly', 'danger-full-access': 'dangerFullAccess' }[p.sandbox] || 'workspaceWrite' }, approvalPolicy: p.approvalPolicy || 'never' };
     receipt();
   } else if (request.method === 'thread/turns/list') result = { data: [{ id: turnId, status, items: [] }], nextCursor: null, backwardsCursor: null };
   else if (request.method === 'thread/list') result = { data: fs.readdirSync(folder).filter(file => file.startsWith('rollout-') && file.endsWith('.jsonl')).map(file => thread(file.slice(8, -6))).filter(item => item.cwd === p.cwd), nextCursor: null };

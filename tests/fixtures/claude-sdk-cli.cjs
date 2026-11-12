@@ -13,6 +13,7 @@ if (args.includes('--version')) {
   console.log(mode === 'claude' ? '2.1.317 (Claude Code)' : 'codex-cli 0.166.0'); process.exit(0);
 }
 const output = process.env.AGENTRIX_FAKE_OUTPUT;
+const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const append = value => fs.appendFileSync(path.join(output, `${mode}-wire.jsonl`), JSON.stringify(value) + '\n');
 const resume = args.find(value => value.startsWith('--resume='))?.slice('--resume='.length)
@@ -108,8 +109,9 @@ reader.on('line', line => {
   if (message.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
   else if (message.method === 'thread/start' || message.method === 'thread/resume') {
     sessionId = params.threadId || sessionId;
+    // As Codex does, the sandbox and approvals asked for come back; with none asked, this stand-in's own configuration is workspace-write.
     result = { thread: { id: sessionId, turns: [] }, cwd: params.cwd, model: params.model, reasoningEffort: 'high',
-      serviceTier: params.serviceTier, sandbox: { type: 'workspaceWrite' } };
+      serviceTier: params.serviceTier, sandbox: { type: SANDBOX_TYPES[params.sandbox || 'workspace-write'] }, approvalPolicy: params.approvalPolicy || 'on-request' };
   } else if (message.method === 'thread/turns/list') result = { data: [], nextCursor: null, backwardsCursor: null };
   else if (message.method === 'turn/start') {
     activeTurn = `turn-${++turns}`; result = { turn: { id: activeTurn, status: 'inProgress', items: [] } };

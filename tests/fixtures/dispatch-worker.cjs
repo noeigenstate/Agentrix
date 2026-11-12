@@ -45,7 +45,7 @@ function appServer(fixture) {
     if (request.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
     // fixture.thread: what the response adds, such as the model the thread runs as.
     if (['thread/start', 'thread/resume'].includes(request.method)) result = { thread: { id: threadId, turns: [] }, cwd: process.cwd(),
-      sandbox: { type: params.sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' }, ...fixture.thread };
+      sandbox: { type: { 'read-only': 'readOnly', 'danger-full-access': 'dangerFullAccess' }[params.sandbox] || 'workspaceWrite' }, approvalPolicy: params.approvalPolicy || 'on-request', ...fixture.thread };
     if (request.method === 'turn/start') {
       const brief = params.input.filter(item => item.type === 'text').map(item => item.text).join('\n');
       const capture = () => fs.writeFileSync(process.env.DISPATCH_CAPTURE, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), brief, pid: process.pid, requests }));
