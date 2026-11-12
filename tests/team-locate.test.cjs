@@ -69,19 +69,20 @@ test('Git that never answers gives null after 10 s and is asked again next time'
   const root = project(t);
   // Git is asked to give up after 10 s (node kills it and reports an error); the stand-in does the same.
   const calls = [];
+  // The lookup reaches Git only after the folder's real path is read on the thread pool, which takes however long it takes: wait for the call.
+  let onCall; const called = new Promise(resolve => { onCall = resolve; });
   const execFile = (file, args, options, done) => {
-    calls.push(options);
+    calls.push(options); onCall();
     if (calls.length === 1) setTimeout(() => done(Object.assign(new Error('timed out'), { killed: true, signal: 'SIGTERM' })), options.timeout);
     else setImmediate(() => done(null, '.git\n'));
   };
   const locate = createTeamLocator({ execFile, now: () => 0 });
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const pending = locate(root);
-  for (let n = 0; n < 6; n++) await new Promise(resolve => setImmediate(resolve));
+  await called;
   assert.equal(calls.length, 1); assert.equal(calls[0].timeout, 10_000, 'Git is told to stop after 10 s');
-  t.mock.timers.tick(9_999); for (let n = 0; n < 3; n++) await new Promise(resolve => setImmediate(resolve));
-  let settled = false; void pending.then(() => { settled = true; });
-  await new Promise(resolve => setImmediate(resolve)); assert.equal(settled, false, 'before 10 s it still waits');
+  t.mock.timers.tick(9_999);
+  assert.equal(await Promise.race([pending.then(() => 'answered'), new Promise(resolve => setImmediate(() => resolve('waiting')))]), 'waiting', 'before 10 s it still waits');
   t.mock.timers.tick(1);
   assert.equal(await pending, null);
   t.mock.timers.reset();
