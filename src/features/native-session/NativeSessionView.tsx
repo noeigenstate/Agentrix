@@ -246,8 +246,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
     {error && <p className="form-error native-error" role="alert">{error}</p>}
     {over && <div className="native-ended"><span>{reasonWords(model.session?.reason) ?? t('这个会话已经结束')}</span><button type="button" className="button secondary small" onClick={() => dismissNative(terminalId)}>{t('开始新的对话')}</button></div>}
     {carried.length > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: carried.length })}<UserImages images={carried} onRemove={index => setCarried(list => list.filter((_, at) => at !== index))} /></div>}
-    {unsent.length > 0 && <div className="reading-outbox" role="status"><span>{t('未发送的消息')}</span><ol>{unsent.map(item => <li key={item.clientMessageId}>{item.text}
-      <button type="button" className="text-button" disabled={!!text.trim() || locked} onClick={() => take(item)}>{t('取回')}</button></li>)}</ol></div>}
+    {unsent.length > 0 && <div className="reading-outbox" role="status"><span>{t('未发送的消息')}</span><ul>{unsent.map(item => <li key={item.clientMessageId}><span className="reading-notice-text" title={item.text}>{item.text}</span>
+      <div className="reading-notice-actions"><button type="button" className="button small" disabled={!!text.trim() || locked} onClick={() => take(item)}>{t('取回')}</button></div></li>)}</ul></div>}
     {quote && <QuoteChip quote={quote} onRemove={() => { setQuote(null); box.current?.focus(); }} />}
     {commandList(palette)}
     <div className={`reading-composer${sendingSoon ? ' is-sending-soon' : ''}`}>
