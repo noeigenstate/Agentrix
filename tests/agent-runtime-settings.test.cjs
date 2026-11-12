@@ -244,7 +244,7 @@ test('the key goes only to keySave and is never read back, logged or stored; the
   const dialog = code('src/features/settings/SettingsDialog.tsx');
   assert.match(dialog, /id: 'runtime', title: t\('运行方式'\)/); assert.match(dialog, /<AgentRuntimeSettings[ >]/);
   // The project in view reaches the page, so the connection test and the usage numbers are read for its scope.
-  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} focusOnOpen=\{focusOnOpen\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
+  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} focusOnOpen=\{focusOnOpen\} codexPermissions=\{settings\.codexPermissions\} onCodexPermissions=\{codexPermissions => update\(\{ codexPermissions \}\)\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
 });
 
 test('Codex’s automatic reset is a switch that is off by default, saves alone without a path change or a stale test, and a refusal leaves it as it was', async () => {
@@ -397,4 +397,32 @@ test('a page opened to deal with the connection gives its focus to the test butt
       assert.deepEqual(focused, [expected], `key saved: ${saved}`);
     } finally { view.done(); }
   }
+});
+
+test('Codex permissions: three choices, full when unset or unreadable, and a choice is handed on as given', async () => {
+  const chosen = [], onCodexPermissions = value => chosen.push(value);
+  const select = props => { const view = page(fake(), wordsStub, { onCodexPermissions, ...props }); return view; };
+  const view = select({});
+  try {
+    view.render(); await settle();
+    const control = view.select('Codex 权限');
+    assert.deepEqual(control.props.options.map(option => option.value), ['full', 'config', 'ask']);
+    assert.deepEqual(control.props.options.map(option => option.label), ['全部放开（默认）', '按 Codex 配置', '先询问']);
+    assert.equal(control.props.value, 'full', 'no key: full');
+    assert.match(view.html(), /不询问，不使用沙箱/); assert.match(view.html(), /\/permissions/); assert.match(view.html(), /派发的工作者不受影响/);
+    for (const value of ['config', 'ask', 'full']) control.props.onChange(value);
+    assert.deepEqual(chosen, ['config', 'ask', 'full']);
+    control.props.onChange('bypass');
+    assert.equal(chosen.at(-1), 'full', 'an unknown value is never passed on as itself');
+  } finally { view.done(); }
+  for (const [stored, shown, hint] of [['config', 'config', /config\.toml/], ['ask', 'ask', /工作目录里写文件/], ['bogus', 'full', /不使用沙箱/], [null, 'full', /不使用沙箱/], [42, 'full', /不使用沙箱/]]) {
+    const page2 = select({ codexPermissions: stored });
+    try {
+      page2.render(); await settle();
+      assert.equal(page2.select('Codex 权限').props.value, shown, `stored ${String(stored)}`);
+      assert.match(page2.html(), hint);
+    } finally { page2.done(); }
+  }
+  const readonly = page(fake(), wordsStub, {});
+  try { readonly.render(); await settle(); assert.equal(readonly.select('Codex 权限').props.disabled, true, 'without a writer the choice is shown but cannot change'); } finally { readonly.done(); }
 });
