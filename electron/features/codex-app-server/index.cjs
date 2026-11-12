@@ -17,7 +17,9 @@ const { startupDetail } = require('../agents/start-failure.cjs');
 const RECENT_PICTURES = 6;
 
 // What the owner's own session may do without asking (Settings.codexPermissions, and /permissions for one session): what
-// thread/start is given. 'config' gives nothing, so the CLI's own configuration decides. A missing or unknown choice is full.
+// thread/start is given. 'config' gives nothing, so the CLI's own configuration decides. The names are electron/codex-permissions.cjs's
+// (tests/codex-permissions.test.cjs holds them equal); this module cannot require it, because the dispatch helper carries the runtime to an
+// SSH host file by file. A spec without a choice (any caller but main, whose Settings hold one of the three) runs full, the Settings default.
 const PERMISSIONS = {
   full: { approvalPolicy: 'never', sandbox: 'danger-full-access' },
   config: {},
@@ -25,18 +27,39 @@ const PERMISSIONS = {
 };
 const permissionMode = value => typeof value === 'string' && Object.hasOwn(PERMISSIONS, value) ? value : 'full';
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
-const SANDBOX_MISMATCH = {
-  'read-only': 'Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。',
-  'workspace-write': 'Codex 未应用工作区可写沙箱，已停止启动。请检查 Codex 沙箱配置后重试。',
-  'danger-full-access': 'Codex 未应用完全访问权限，已停止启动。请检查 Codex 的沙箱配置或管理策略后重试。',
-  // Windows without a configured sandbox answers a writable request read-only.
-  windows: 'Codex 返回只读沙箱。请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。',
+// Windows and an SSH host answer a writable request read-only when their Codex has no Windows sandbox configured.
+const REMOTE_WRITE = '远端 Codex 只给了只读沙箱，无法使用「先询问」。远端是 Windows 时，请在远端 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"（Agentrix 不会改远端的配置），或改用「全部放开」或「按 Codex 配置」。';
+const SANDBOX_REFUSALS = {
+  start: {
+    'read-only': 'Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。',
+    'workspace-write': 'Codex 未应用工作区可写沙箱，已停止启动。请检查 Codex 沙箱配置后重试。',
+    'danger-full-access': 'Codex 未应用完全访问权限，已停止启动。请检查 Codex 的沙箱配置或管理策略后重试。',
+    windows: 'Codex 返回只读沙箱。请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。',
+    ssh: REMOTE_WRITE,
+  },
+  change: {
+    'workspace-write': 'Codex 不会应用工作区可写沙箱，本会话权限未更改。请检查 Codex 沙箱配置。',
+    'danger-full-access': 'Codex 不会应用完全访问权限，本会话权限未更改。请检查 Codex 的沙箱配置或管理策略。',
+    // A running thread cannot take the request-scoped unelevated sandbox a new session gets, so "ask" would run unsandboxed.
+    windows: '这台电脑上的 Codex 没有配置 Windows 沙箱，正在运行的会话不能切换到「先询问」。请新建会话使用「先询问」，或在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"。',
+    ssh: REMOTE_WRITE,
+  },
 };
-// Codex answers with the sandbox it really applied; another one than requested stops, so a session never runs with less or more than asked.
-function assertSandbox(requested, applied, windowsLocal) {
+// Codex answers with the sandbox it really applied; another one than requested stops (a start, or a change), so a session never runs with less or
+// more than asked. `place` is 'windows' for a local Windows session, 'ssh' for a remote one.
+function assertSandbox(requested, applied, place, phase = 'start') {
   if (!requested || applied?.type === SANDBOX_TYPES[requested]) return;
-  throw Object.assign(new Error(SANDBOX_MISMATCH[requested === 'workspace-write' && windowsLocal ? 'windows' : requested]),
+  throw Object.assign(new Error(SANDBOX_REFUSALS[phase][requested === 'workspace-write' && place ? place : requested]),
     { code: 'sandbox_mismatch', requestedSandbox: requested, appliedSandbox: typeof applied?.type === 'string' ? applied.type : null });
+}
+// A failed /permissions request in the owner's words. One that reached Codex and was not answered may have been applied.
+function permissionsFailure(error, sent) {
+  if (error.code === 'sandbox_mismatch' || error.code === 'closed') return error;
+  const reason = error.code === 'rpc_timeout' ? sent ? 'Codex 没有及时确认权限更改，可能已经应用，请用 /status 查看。' : 'Codex 没有及时回应，本会话权限未更改。请稍后重试。'
+    : [-32600, -32601, -32602].includes(error.code) ? '这个版本的 Codex 不支持在会话中切换权限，本会话权限未更改。请升级 Codex 或新建会话。'
+      : Number.isInteger(error.code) ? 'Codex 拒绝了权限更改，本会话权限未更改。'
+        : sent ? '与 Codex 的连接已断开，未能确认权限是否已更改。' : '与 Codex 的连接已断开，本会话权限未更改。';
+  return Object.assign(new Error(reason), { code: 'permissions_failed', cause: error });
 }
 
 // Host-owned choices only, separate from CLI configuration and transcript files.
@@ -148,7 +171,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let wireCwd = spec.cwd, wireHome;
       let accountRead = null;
-      let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null, settingsRevision = 0, settingsSeen = null;
+      let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null, settingsSeen = null;
+      // Ephemeral threads this session started to read a permissions target; each is let go as soon as it is known and no read needs it.
+      let probing = false; const probeThreads = new Set();
       // Run options belong to a thread: a change made while the session starts waits until the thread exists (or the session closes).
       let threadKnown; const threadReady = new Promise(resolve => { threadKnown = resolve; });
       let configuredFast = typeof initialSpec.fast === 'boolean' ? initialSpec.fast : null;
@@ -161,10 +186,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         events.publish('session.state', { state, reason });
       };
       const windowsLocal = () => platform === 'win32' && spec.kind !== 'ssh';
+      const place = () => windowsLocal() ? 'windows' : spec.kind === 'ssh' ? 'ssh' : null;
+      const releaseThread = threadId => rpc?.request('thread/unsubscribe', { threadId }).catch(() => {});
       // Only the owner's own writable session has a permissions choice; a worker, a roundtable and a read-only session never do.
       const ownPermissions = () => spec.owner === 'gui' && !spec.readOnly && !spec.roundtable;
-      // A read-only or roundtable worker only reads; a dispatched worker writes its workspace and its approvals go to the owner; the owner's
-      // own session runs as its permissions choice says (spec.policy, set by tests, overrides that choice). Approvals always go to the user.
+      // A read-only or roundtable worker only reads, and a dispatched one writes its workspace; the owner's own session runs as its permissions
+      // choice says. spec.policy is a caller's explicit policy and overrides that choice: the dispatch helper sends approvalPolicy 'never'
+      // (integration/dispatch.cjs), the real-CLI tests a sandbox. Approval requests always go to the user.
       function threadPolicy() {
         const policy = spec.policy || (ownPermissions() ? PERMISSIONS[spec.permissions] : {});
         const sandbox = spec.readOnly || spec.roundtable ? 'read-only' : policy.sandbox || (spec.owner === 'dispatch' ? 'workspace-write' : null);
@@ -192,12 +220,18 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (method === 'codex/event/item_completed' && params.msg?.item?.kind === 'image_gen.generation') {
           method = 'item/completed'; params = { ...params, item: { ...params.msg.item, type: 'imageGeneration' } };
         }
+        if (method === 'thread/started' && params.thread?.ephemeral === true && typeof params.thread.id === 'string') {
+          // Only a permissions read starts an ephemeral thread here; one announced after its read gave up is let go now.
+          if (probing) probeThreads.add(params.thread.id); else releaseThread(params.thread.id);
+          return;
+        }
         if (params.threadId && params.threadId !== events.binding.providerSessionId) return;
         if (method === 'thread/settings/updated' && params.threadSettings) {
           const settings = params.threadSettings;
           threadResponse = { ...threadResponse, model: settings.model, reasoningEffort: settings.effort, serviceTier: settings.serviceTier,
-            ...(settings.sandboxPolicy ? { sandbox: settings.sandboxPolicy } : {}), ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}) };
-          ++settingsRevision; settingsSeen?.();
+            ...(settings.sandboxPolicy ? { sandbox: settings.sandboxPolicy } : {}), ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
+            ...(settings.approvalsReviewer ? { approvalsReviewer: settings.approvalsReviewer } : {}) };
+          settingsSeen?.();
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
             effective: { model: settings.model ?? null, effort: settings.effort ?? null, fast: ['fast', 'priority'].includes(settings.serviceTier) }, observed: { model: null, effort: null, fast: null }, reason: null });
           return;
@@ -357,8 +391,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const retry = unelevated(options, result);
           if (retry) {
             // A resumed thread is cached in its process. Retire the first read-only
-            // runtime before retrying the same thread so the request override is applied.
-            if (resumed) {
+            // runtime before retrying the same thread so the request override is applied; a new read-only thread is let go.
+            if (!resumed) releaseThread(result.thread?.id);
+            else {
               reconnecting = true; rpc.close(); await stopProcess(child); child.dispose?.(); child = null; reconnecting = false;
               assertOpen(); await connect(); stage = 'thread_resume';
             }
@@ -367,7 +402,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           }
           if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
             && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
-          assertSandbox(options.sandbox, result.sandbox, windowsLocal());
+          assertSandbox(options.sandbox, result.sandbox, place());
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
           assertOpen();
           bind(result.thread.id); threadResponse = result;
@@ -545,34 +580,48 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       // /permissions changes what this session's thread may do from its next turn (a turn already running keeps what it started with), never the
       // Settings default. The target is what a new session with that choice would get, read from an ephemeral thread started with the same request:
-      // the CLI's own configuration (writable roots, network, a managed policy) still applies, and a sandbox Codex will not apply stops here as it
-      // stops a start. Codex confirms the change with thread/settings/updated; any other outcome is refused with its reason.
+      // the CLI's own configuration (writable roots, network, a managed policy) still applies, and a sandbox Codex will not apply is refused as it
+      // stops a start. On Windows a writable target that needs the request-scoped unelevated retry is refused: thread/settings/update carries no
+      // configuration, so the running thread would report workspace-write without a Windows sandbox. The change is applied only when
+      // thread/settings/updated reports the target with the user as the only approver; until then, or a deadline, it is not taken as done.
       async function changePermissions(mode) {
         if (!ownPermissions()) throw new Error(translate('这个会话不能更改权限。'));
         if (!Object.hasOwn(PERMISSIONS, mode)) throw new Error(translate('无效的权限选项。'));
-        const request = { cwd: wireCwd, ephemeral: true, approvalsReviewer: 'user', ...PERMISSIONS[mode] }, probes = [];
-        let target;
+        const request = { cwd: wireCwd, ephemeral: true, approvalsReviewer: 'user', ...PERMISSIONS[mode] };
+        let target, sent = false, waiting;
         try {
-          target = await rpc.request('thread/start', request); probes.push(target?.thread?.id);
-          const retry = unelevated(request, target);
-          if (retry) { target = await rpc.request('thread/start', retry); probes.push(target?.thread?.id); }
-        } finally { for (const threadId of probes) if (typeof threadId === 'string') rpc.request('thread/unsubscribe', { threadId }).catch(() => {}); }
-        assertOpen();
-        assertSandbox(request.sandbox, target?.sandbox, windowsLocal());
-        const applied = () => JSON.stringify([threadResponse?.sandbox, threadResponse?.approvalPolicy]) === JSON.stringify([target.sandbox, target.approvalPolicy]);
-        if (!applied()) {
-          const revision = settingsRevision;
-          await rpc.request('thread/settings/update', { threadId: events.binding.providerSessionId, approvalPolicy: target.approvalPolicy,
-            ...(target.activePermissionProfile?.id ? { permissions: target.activePermissionProfile.id } : { sandboxPolicy: target.sandbox }) });
-          // Codex confirms after it answers; a confirmation that never comes is waited for as long as a request.
-          if (settingsRevision === revision) await new Promise(resolve => {
-            const done = () => { clearTimeout(timer); settingsSeen = null; resolve(); }, timer = setTimeout(done, spec.rpcTimeoutMs || 8000);
-            settingsSeen = done;
-          });
+          probing = true;
+          try { target = await rpc.request('thread/start', request); }
+          finally {
+            probing = false;
+            if (typeof target?.thread?.id === 'string') probeThreads.add(target.thread.id);
+            for (const threadId of probeThreads) releaseThread(threadId);
+            probeThreads.clear();
+          }
           assertOpen();
-          if (!applied()) throw new Error(translate('Codex 没有按请求更改本会话的权限，当前权限见 /status。'));
+          assertSandbox(request.sandbox, target.sandbox, place(), 'change');
+          const applied = () => JSON.stringify([threadResponse?.sandbox, threadResponse?.approvalPolicy, threadResponse?.approvalsReviewer])
+            === JSON.stringify([target.sandbox, target.approvalPolicy, 'user']);
+          if (!applied()) {
+            // Every notice counts, before the answer and after it, until one reports the target.
+            const confirmed = new Promise(resolve => {
+              const done = value => { clearTimeout(timer); settingsSeen = null; resolve(value); }, timer = setTimeout(() => done(false), spec.rpcTimeoutMs || 8000);
+              settingsSeen = () => (closed || applied()) && done(true);
+              waiting = () => done(false);
+            });
+            sent = true;
+            await rpc.request('thread/settings/update', { threadId: events.binding.providerSessionId, approvalPolicy: target.approvalPolicy, approvalsReviewer: 'user',
+              ...(target.activePermissionProfile?.id ? { permissions: target.activePermissionProfile.id } : { sandboxPolicy: target.sandbox }) });
+            if (!applied() && !await confirmed) throw Object.assign(new Error('rpc_timeout'), { code: 'rpc_timeout' });
+            assertOpen();
+          }
+          spec.permissions = mode;
+        } catch (error) {
+          waiting?.();
+          const failure = permissionsFailure(error, sent);
+          if (failure !== error) failure.message = translate(failure.message);
+          throw failure;
         }
-        spec.permissions = mode;
       }
       // /status and /usage are read-only observations for the owner's popup: no conversation item, no input receipt, no turn and no place in the send
       // queue, so a message sent right after never waits for these reads. The answer travels in the return value only: neither the snapshot nor a

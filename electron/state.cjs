@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { normalizeSSH } = require('./ssh-config.cjs');
+const { CODEX_PERMISSIONS } = require('./codex-permissions.cjs');
 const { sanitizeProjectSvg } = require('./project-svg.cjs');
 const { MODELS: VOICE_MODELS, DEFAULT_MODEL: DEFAULT_VOICE_MODEL } = require('./voice.cjs');
 const { steps: UI_ZOOM_STEPS } = require('./window-zoom.json');
@@ -79,9 +80,7 @@ function validProjectImage(input) {
   return ['VP8 ', 'VP8L'].includes(chunk) || chunk === 'VP8X' && bytes.length >= 30 && !(bytes[20] & 2);
 }
 
-// What new native Codex sessions may do: 'full' asks nothing and uses no sandbox, 'config' leaves it to Codex's own config.toml, 'ask' writes only in the working directory and asks first.
-// A missing or unknown value (an older workspace.json) is 'full'.
-const CODEX_PERMISSIONS = ['full', 'config', 'ask'];
+// What new native Codex sessions may do (codex-permissions.cjs). A missing or unknown value (an older workspace.json) is 'full'.
 
 function cleanSettings(input = {}) {
   return {
