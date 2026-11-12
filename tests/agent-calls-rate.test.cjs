@@ -97,6 +97,10 @@ test('a group with no readable member has no rate, and one with only waiting mem
   await claudeFile(folder, 'third', records.slice(0, 1));
   calls.apply(use('third', 'Agent', { model: 'sonnet', description: 'Exact third' })); await calls.work;
   assert.deepEqual(calls.snapshot()[0].rate, emptyRate(true), 'a member without a finished reply contributes no figure');
+  await fs.writeFile(path.join(folder, 'agent-fourth.jsonl'), lines(records.slice(0, 1)));
+  await fs.writeFile(path.join(folder, 'agent-fourth.meta.json'), JSON.stringify({ toolUseId: 'fourth', model: 'haiku' }));
+  calls.apply(use('fourth', 'Agent', { model: 'haiku', description: 'Exact fourth' })); await calls.work;
+  assert.deepEqual(calls.snapshot().find(group => group.model === 'haiku').rate, emptyRate(false), 'a group whose only member waits waits');
 });
 
 // main.cjs from followClaude to the end of startUsage, with stand-ins for what lies outside it.
@@ -143,6 +147,9 @@ test('over SSH the running sub-agents the host named are asked for, and their co
   assert.deepEqual(calls.snapshot()[0].rate, expected(45, 2000, 1, 3));
   calls.remoteRecords({ [REMOTE_ID]: { records: compact.slice(3), reset: false, partial: false } });
   assert.deepEqual(calls.snapshot()[0].rate, local.snapshot()[0].rate, 'the compacted records give the rate the full ones give');
+  const settings = group => [group.effort, group.fast];
+  assert.deepEqual(settings(calls.snapshot()[0]), ['high', false], 'its own recorded effort and speed');
+  assert.deepEqual(settings(calls.snapshot()[0]), settings(local.snapshot()[0]));
   calls.remoteRecords({ [REMOTE_ID]: { records: compact.slice(3), reset: true, partial: true } });
   assert.deepEqual(calls.snapshot()[0].rate, emptyRate(true), 'a restart without the file start counts afresh, marked partial');
   calls.apply(notice('toolu_launch'));
@@ -158,6 +165,46 @@ test('over SSH at most the newest 16 named sub-agents are asked for, and only id
   calls.apply(use('toolu_long', 'Agent', { model: 'opus', run_in_background: true }));
   calls.apply(result('toolu_long', { status: 'async_launched', isAsync: true, agentId: 'a'.repeat(101) }));
   assert.deepEqual(calls.remoteSubagents(), Array.from({ length: 16 }, (_, index) => `a${index + 4}`));
+});
+
+test('over SSH an ended sub-agent is asked for until the host has sent all its records, and one it stopped following is partial', async t => {
+  const finished = [], calls = new AgentCalls({ local: false, since: 0, finished: (_call, event) => finished.push(event) });
+  t.after(() => calls.dispose());
+  const records = await jsonFixture('claude-subagent-ssh.compact.jsonl');
+  calls.apply(use('toolu_launch', 'Agent', { model: 'opus', run_in_background: true })); calls.apply(launched('toolu_launch'));
+  calls.remoteRecords({ [REMOTE_ID]: { records: records.slice(0, 3), reset: true, partial: false, behind: true } });
+  calls.apply(notice('toolu_launch'));
+  assert.deepEqual(calls.remoteSubagents(), [REMOTE_ID], 'its last records are still to come');
+  assert.equal(finished.length, 0);
+  calls.remoteRecords({ [REMOTE_ID]: { records: records.slice(3), reset: false, partial: false, behind: false } });
+  assert.deepEqual(calls.remoteSubagents(), []);
+  assert.deepEqual(finished.map(({ outputTokens, activeMs }) => [outputTokens, activeMs]), [[75, 5000]], 'recorded once, with every reply');
+  calls.apply(use('toolu_other', 'Agent', { model: 'sonnet', run_in_background: true }));
+  calls.apply(result('toolu_other', { status: 'async_launched', isAsync: true, agentId: 'b1' }));
+  calls.remoteRecords({ b1: { records: records.slice(0, 3), reset: true, partial: false, behind: true } });
+  calls.remoteRecords({});
+  assert.equal(calls.calls.get('toolu_other').rate.partial, true, 'crowded out of the 16 the host follows, its sum misses records');
+  calls.remoteRecords({ b1: { records: records, reset: true, partial: false, behind: false } });
+  assert.equal(calls.calls.get('toolu_other').rate.partial, false, 'asked for again, the host reads it from the start');
+  calls.remoteRecords({}); calls.apply(notice('toolu_other'));
+  assert.deepEqual(finished.at(-1).outputTokens, null, 'a partial sum is not recorded as its rate');
+});
+
+test('over SSH no sub-agent is asked for while the history of main is read', t => {
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.dispose());
+  calls.history(true);
+  calls.apply(use('toolu_launch', 'Agent', { model: 'opus', run_in_background: true })); calls.apply(launched('toolu_launch'));
+  assert.deepEqual(calls.remoteSubagents(), []);
+  calls.history(false);
+  assert.deepEqual(calls.remoteSubagents(), [REMOTE_ID]);
+});
+
+test('the host keeps enough words of a user message for every rule that tells a prompt from a message Claude writes itself', () => {
+  // The rules and the limit live in two languages; this reads both.
+  const queue = syncFs.readFileSync(path.join(__dirname, '../electron/prompt-queue.cjs'), 'utf8'), worker = syncFs.readFileSync(path.join(__dirname, '../integration/remote-worker.py'), 'utf8');
+  const limit = Number(/^PROMPT_MARK_LIMIT = (\d+)\s*$/m.exec(worker)[1]), reset = /const USAGE_RESET = '([^']+)'/.exec(queue)[1];
+  assert.ok(queue.includes('clean(text) === USAGE_RESET'), 'the longest rule compares the whole cleaned message');
+  assert.ok(limit >= reset.length + 32, `PROMPT_MARK_LIMIT ${limit} keeps the ${reset.length}-character usage-reset message with room for spacing`);
 });
 
 test('over SSH the poll asks for the running sub-agents and counts their records before a completion in the same answer', async t => {
@@ -177,7 +224,7 @@ test('over SSH the poll asks for the running sub-agents and counts their records
   await s.activityMonitor.poll();
   assert.deepEqual(requests[0], ['claude-status', { path: file, since: 900 }], 'nothing is asked for before a sub-agent is named');
   const compact = await jsonFixture('claude-subagent-ssh.compact.jsonl');
-  answers.push({ records: [later(notice('toolu_launch'))], reset: false, historyDone: true, subagents: { [REMOTE_ID]: { records: compact.map(later), reset: true, partial: false } } });
+  answers.push({ records: [later(notice('toolu_launch'))], reset: false, historyDone: true, subagents: { [REMOTE_ID]: { records: compact.map(later), reset: true, partial: false, behind: false } } });
   await s.activityMonitor.poll();
   assert.deepEqual(requests[1][1].subagents, [REMOTE_ID]);
   assert.equal(finished.length, 1);
