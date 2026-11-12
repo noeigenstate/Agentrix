@@ -56,7 +56,7 @@ test('a real billing rejection preserves budget and offers only the proved unexe
   assert.equal(runtime.apiState(10).status, 'credits_exhausted');
   assert.deepEqual(session.fallbackInput(), { input: { clientMessageId: 'rejected', text: 'Another message', images: [] }, safe: true }, JSON.stringify(observed.filter(message => ['assistant', 'result'].includes(message.type))));
   const notice = events.findLast(event => event.type === 'limits.updated').payload.notice;
-  assert.equal(notice.code, 'credits_required'); assert.equal(notice.action, 'check-console'); assert.match(notice.message, /服务端拒绝/);
+  assert.equal(notice.code, 'credits_required'); assert.equal(notice.action, 'check-console'); assert.match(notice.message, /控制台余额不足/);
   assert.ok(!events.some(event => event.type === 'error' && event.payload.code === 'sdk_failed'));
 });
 test('a finishing worker answers a late streamed intervention before control.finish retires it', { skip, timeout: 60000 }, async t => {
