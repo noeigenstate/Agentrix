@@ -674,7 +674,7 @@ for (const agent of ['claude', 'codex']) {
     h.edit('maybe delivered'); h.press('Enter'); await h.tick(0);
     assert.equal(h.pasted.length, 1);
     h.view.pending = true; await h.tick(400);
-    for (let step = 0; step < 12; step++) await h.tick(50);
+    for (let step = 0; step < 50; step++) await h.tick(50);
     h.view.pending = false; await h.tick(700); await h.tick(30000);
     assert.deepEqual(h.written, [], 'no Enter without a parsed input');
     assert.equal(h.pasted.length, 1); assert.equal(h.node.value, 'maybe delivered', 'the words come back to the box, as before');
@@ -3058,7 +3058,7 @@ for (const action of ['先发送终端里这段', '清空它，再发送新消�
   h.edit('send me'); h.press('Enter'); await h.tick(0);
   assert.equal(h.pasted.length, 1);
   // The frame stays unparsed past the paste check: the send is left unconfirmed, its card withdrawn, its words back here.
-  h.view.pending = true; await h.tick(400); for (let step = 0; step < 12; step++) await h.tick(50);
+  h.view.pending = true; await h.tick(400); for (let step = 0; step < 50; step++) await h.tick(50);
   h.view.pending = false; h.render();
   assert.equal(h.node.value, 'send me'); assert.equal(h.view.draft, 'send me'); assert.deepEqual(h.written, []);
   h.press('Enter'); await h.tick(0); await h.tick(1000);
@@ -3083,4 +3083,42 @@ test('claude: queued words typed again in the terminal are a leftover there, nev
   assert.equal(h.view.draft, '继续'); assert.deepEqual(outboxTexts(h), ['另一条']);
   const notice = leftoverNotice(h);
   assert.equal(notice.text, '继续'); assert.deepEqual(Object.keys(notice.actions), [en['清空它，再发送新消息']], 'words already queued are not offered for sending again');
+});
+
+for (const action of ['清空它，再发送新消息', 'again']) test(`claude: words the owner cleared from the terminal are never sent again by the safety net (${action})`, async t => {
+  const h = workingComposerHarness(t, 'claude');
+  const first = action === 'again' ? 'send me once' : 'left in the box';
+  if (action === 'again') {
+    // The frame stays unparsed past the paste check: the send is left unconfirmed and its words come back to the box.
+    h.edit(first); h.press('Enter'); await h.tick(0);
+    h.view.pending = true; await h.tick(400); for (let step = 0; step < 50; step++) await h.tick(50);
+    h.view.pending = false; h.render();
+    assert.equal(h.node.value, first);
+    h.press('Enter'); await h.tick(0); await h.tick(1000);
+  } else {
+    h.view.accept = false;
+    h.edit(first); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700); await h.tick(30000);
+    h.view.accept = true;
+    h.edit('the next message'); h.press('Enter'); await h.tick(0); await h.tick(1000);
+  }
+  assert.equal(h.view.draft, first); assert.deepEqual(h.view.records, []);
+  leftoverNotice(h).actions[en['清空它，再发送新消息']].onClick(); await h.tick(80); h.render();
+  for (let step = 0; step < 6; step++) await h.tick(700);
+  // The round ends: the agent sits idle well past the echo timeout and the safety net's five seconds.
+  h.view.working = false; h.render();
+  for (let step = 0; step < 8; step++) await h.tick(10000);
+  const sent = h.view.records.map(record => record.text);
+  assert.deepEqual(sent, action === 'again' ? [first] : ['the next message'], 'the cleared words go no further than the owner chose');
+  assert.equal(h.pasted.filter(item => item.text === first).length, action === 'again' ? 2 : 1, 'the cleared words are not pasted again by the safety net');
+});
+
+test('claude: a paste whose frame parses within two seconds is sent, not handed back', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.edit('busy redraws'); h.press('Enter'); await h.tick(0);
+  assert.equal(h.pasted.length, 1);
+  h.view.pending = true; await h.tick(400); for (let step = 0; step < 20; step++) await h.tick(50);
+  h.view.pending = false; await h.tick(50); await h.tick(700);
+  assert.deepEqual(h.written.map(item => item.text), ['\r'], 'Enter once the input can be read');
+  assert.deepEqual(h.view.records.map(record => record.text), ['busy redraws']);
+  assert.equal(h.node.value, '', 'the words are not handed back while they are in the terminal');
 });
