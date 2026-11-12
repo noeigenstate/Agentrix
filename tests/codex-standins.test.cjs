@@ -45,7 +45,7 @@ async function ask(t, file) {
   const child = spawn(process.execPath, [path.join(root, file), ...(LAUNCH[file] || ['app-server', '--listen', 'stdio://'])], { cwd: home, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const closed = new Promise(resolve => child.once('close', resolve));
   // The folder is the stand-in's working directory: it goes once the process has closed.
-  t.after(async () => { child.stdin.end(); child.kill(); await closed; fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+  t.after(async () => { child.stdin.end(); child.kill(); await closed; await fs.promises.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
   const waiting = new Map(); let next = 0, stderr = '';
   child.stderr.on('data', chunk => { stderr += chunk; });
   readline.createInterface({ input: child.stdout }).on('line', line => {
