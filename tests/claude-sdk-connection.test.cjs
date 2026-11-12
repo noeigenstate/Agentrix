@@ -334,6 +334,14 @@ test('a CLI check that failed says how, and only in fields of a known shape', as
   assert.deepEqual(await cliOf({ status: 'missing', reason: 'not_found', pathFolders: -1, searched: [1], incomplete: 'x'.repeat(1025) }), { ...missing, reason: 'not_found' });
   assert.deepEqual(await cliOf({ status: 'missing', reason: 'timeout', found, pathFolders: 3, searched, incomplete }), { ...missing, reason: 'timeout', found });
   assert.deepEqual(await cliOf({ status: 'ok', version: '2.1.320', reason: 'timeout', found }), { status: 'ok', version: '2.1.320', required: '2.1.317' });
+  // One found says where; two different ones for the terminal and the native path say both, still ok.
+  const npm = 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe', ok = { status: 'ok', version: '2.1.322', required: '2.1.317', via: 'npm', fileShown: npm };
+  assert.deepEqual(await cliOf({ ...ok, file: npm }), ok);
+  const split = { notice: 'cli_split_versions', split: { terminal: { version: '2.1.300', via: 'local-bin', fileShown: '~\\.local\\bin\\claude.exe' } } };
+  assert.deepEqual(await cliOf({ ...ok, ...split }), { ...ok, ...split });
+  assert.deepEqual(await cliOf({ ...ok, via: 'elsewhere', notice: 'cli_split_versions', split: { terminal: { version: 'x', via: 'npm', fileShown: npm } } }),
+    { status: 'ok', version: '2.1.322', required: '2.1.317' }, 'an unknown via or version is dropped');
+  assert.deepEqual(await cliOf({ status: 'too_old', version: '2.1.300', via: 'npm', fileShown: npm }), { status: 'too_old', version: '2.1.300', required: '2.1.317' });
 });
 
 test('an inspection that throws, also inside the runtime\'s CLI observer, is a failed check that routes as unverified, not a missing CLI', async t => {

@@ -121,3 +121,20 @@ test('a timed out install kills its process and reports an error instead of succ
   const result = await manager.install('codex');
   assert.equal(fake.children[0].killed, true); assert.equal(result.error, '安装超时，请重试。'); assert.equal(result.message, ''); assert.equal(result.installing, null);
 });
+
+test('Claude Code reads as installed from the locator\'s last search, never a search of its own, and an install searches again', async t => {
+  const { env, add } = fixture(t); add('npm'); add('claude');
+  const file = 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe', terminal = { file, fileShown: file, version: '2.1.322', via: 'npm' };
+  let located = null, refreshes = 0;
+  const fake = fakeLaunch(), manager = new AgentsManager({ env, launch: fake.launch, claude: () => located,
+    refreshClaude: async () => { refreshes++; located = { terminal, native: terminal }; } });
+  // Before the first search the PATH check stands in; a search that found nothing (a placeholder shim) reads as missing.
+  assert.deepEqual(manager.getState().claude, { installed: true });
+  located = { terminal: null, native: null, reason: 'not_found' };
+  assert.deepEqual(manager.getState().claude, { installed: false });
+  const pending = manager.install('claude'); fake.children[0].emit('close', 0);
+  assert.deepEqual((await pending).claude, { installed: true, version: '2.1.322', via: 'npm', fileShown: file }); assert.equal(refreshes, 1);
+  // A failed install searches nothing; an isolated desktop check reads neither.
+  const failed = manager.install('claude'); fake.children[1].emit('close', 1); await failed; assert.equal(refreshes, 1);
+  assert.deepEqual(new AgentsManager({ env: { ...env, AGENTRIX_DATA_DIR: 'x' }, claude: () => assert.fail('not read') }).getState().claude, { installed: true });
+});

@@ -101,9 +101,11 @@ test('real main assembly reports terminal-only Claude subscription usage without
     shellPathReady: Promise.resolve(), createTerminalEnvironment: () => ({}), withoutAppImage: value => value, process: { env: {} },
     store: { projects: [{ id: 'p', kind: 'local' }], findTerminal: () => ({ project: { id: 'p', kind: 'local' }, record: { restore: {} } }) },
     randomUUID: require('node:crypto').randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
-    app: { getPath: () => directory, isPackaged: false }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
+    app: { getPath: () => directory, isPackaged: false, on() {} }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }), netRequest: () => forbidden, electronNet: {},
+    // main's CLI check composed as main composes it, over the stand-in check.
+    checkClaude: () => { const check = context.inspectClaudeExecutable(); return context.claudeRuntime?.trackCli?.(check) ?? check; },
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     require: name => {

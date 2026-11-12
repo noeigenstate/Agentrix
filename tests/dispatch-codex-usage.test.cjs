@@ -78,9 +78,11 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null } = {}) {
     shellPathReady: Promise.resolve(), createTerminalEnvironment: () => ({}), withoutAppImage: value => value, process: { env: {} },
     store: { projects: [project], findTerminal: () => ({ project, record: { restore: {} } }), remove() {} },
     randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
-    app: { getPath: () => directory, isPackaged: false }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
+    app: { getPath: () => directory, isPackaged: false, on() {} }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: 'ok' }), codexExecutable: async () => 'fixture-codex',
+    // main's CLI check composed as main composes it, over the stand-in check.
+    checkClaude: () => { const check = context.inspectClaudeExecutable(); return context.claudeRuntime?.trackCli?.(check) ?? check; },
     netRequest: () => forbidden, electronNet: {},
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     broadcast() {}, callsOf: () => calls, acceptShellEvent: () => false, rememberClaudeSource() {},

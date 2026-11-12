@@ -218,34 +218,31 @@ test('G7 rate-limit events carry restrictions without inventing an API credit ba
   assert.equal(limits.billingRoute, 'api'); assert.deepEqual(limits.limitsById, {}); assert.equal(limits.resetCredits, null);
   assert.equal(limits.ordinaryUsageAllowed, false); assert.equal(limits.notice.resetsAtMs, 123000);
 });
-test('native executable discovery never searches relative directories or accepts wrappers', async t => {
+// The executable checks run on a fake file system in Windows path rules (tests/helpers/claude-files.cjs): no real CLI
+// or profile is touched, on any host. Where each install puts Claude Code is tests/claude-runtime-locator-core.test.cjs.
+const W = path.win32, { fakeFiles, NATIVE } = require('./helpers/claude-files.cjs'), cliHome = 'D:\\Users\\u';
+test('native executable discovery never searches relative directories or accepts wrappers', async () => {
   const { resolveClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');
-  const dir = directory(t); fs.writeFileSync(path.join(dir, 'claude.cmd'), 'not executable');
+  const dir = 'D:\\agx', files = fakeFiles({ [W.join(dir, 'claude.cmd')]: { text: 'not executable' }, [W.resolve('relative', 'claude.exe')]: { size: NATIVE } });
   let probes = 0;
   // The probe keeps its own deadline: execFile's would kill a CLI that answered while main was busy.
   const probe = (_file, _args, options, callback) => { probes++; assert.equal(options.shell, false); assert.equal(options.timeout, undefined); callback(null, '2.1.317 (Claude Code)'); };
-  assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), null);
-  fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
-  for (const version of ['2.1.316', '2.0.999']) {
-    await assert.rejects(resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
-      probe: (_file, _args, _options, callback) => callback(null, version) }), /2\.1\.317/);
-  }
-  const resolved = await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe });
-  assert.equal(resolved, await fs.promises.realpath(resolved));
-  assert.equal(await fs.promises.realpath(resolved), await fs.promises.realpath(path.join(dir, 'claude.exe')));
+  const resolve = (answer = probe) => resolveClaudeExecutable({ env: { PATH: `relative;${dir}` }, platform: 'win32', home: cliHome, files, probe: answer, storedPath: async () => null });
+  assert.equal(await resolve(), null);
+  files.put(W.join(dir, 'claude.exe'), { size: NATIVE });
+  for (const version of ['2.1.316', '2.0.999']) await assert.rejects(resolve((_file, _args, _options, callback) => callback(null, version)), /2\.1\.317/);
+  assert.equal(await resolve(), W.join(dir, 'claude.exe'));
   assert.equal(probes, 1);
-  for (const version of ['2.2.0', '3.0.0']) assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
-    probe: (_file, _args, _options, callback) => callback(null, version) }), resolved);
+  for (const version of ['2.2.0', '3.0.0']) assert.equal(await resolve((_file, _args, _options, callback) => callback(null, version)), W.join(dir, 'claude.exe'));
 });
 test('a native executable whose version check fails is reported with the reason and file, never as not found', async t => {
   const { inspectClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');
-  const dir = directory(t), other = path.join(dir, 'other'); fs.mkdirSync(other);
-  const inspect = (probe, PATH = dir) => inspectClaudeExecutable({ env: { PATH }, platform: 'win32', home: dir, probe, timeoutMs: 20, graceMs: 20 });
+  const dir = 'D:\\agx', other = W.join(dir, 'other'), files = fakeFiles();
+  const inspect = (probe, PATH = dir) => inspectClaudeExecutable({ env: { PATH }, platform: 'win32', home: cliHome, files, probe, storedPath: async () => null, timeoutMs: 20, graceMs: 20 });
   const missing = { status: 'missing', version: null, required: '2.1.317', file: null };
-  assert.deepEqual(await inspect(() => assert.fail('nothing to run')), { ...missing, reason: 'not_found', pathFolders: 1,
-    searched: [path.join('~', '.local', 'bin'), path.join('~', '.claude', 'local')] });
-  fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
-  const found = await fs.promises.realpath(path.join(dir, 'claude.exe'));
+  assert.deepEqual(await inspect(() => assert.fail('nothing to run')), { ...missing, reason: 'not_found', pathFolders: 1, searched: ['~\\.local\\bin', '~\\.claude\\local'] });
+  const found = W.join(dir, 'claude.exe'), ok = { status: 'ok', version: '2.1.322', required: '2.1.317', file: found, via: 'path', fileShown: found };
+  files.put(found, { size: NATIVE });
   // A hung CLI is killed; its close then ends the check as a timeout that says how long it took.
   const child = (fields = {}) => {
     const value = { exitCode: null, signalCode: null, killed: 0, destroyed: 0, stderr: { destroy() {} },
@@ -264,7 +261,7 @@ test('a native executable whose version check fails is reported with the reason 
   assert.deepEqual(await inspect(run(exited)), { ...missing, reason: 'unreadable', found }); assert.equal(exited.destroyed, 1);
   // A version the CLI printed before the kill still counts.
   const late = child({ kill() { this.killed++; this.callback(Object.assign(new Error('killed'), { signal: 'SIGKILL' }), '2.1.322 (Claude Code)\n'); } });
-  assert.deepEqual(await inspect(run(late)), { status: 'ok', version: '2.1.322', required: '2.1.317', file: found }); assert.equal(late.killed, 1);
+  assert.deepEqual(await inspect(run(late)), ok); assert.equal(late.killed, 1);
   // The grace yields a turn as the deadline does: main is busy past it (from the moment the deadline finds the CLI
   // exited) and the close is already waiting when the grace comes due; the close wins.
   let busy = false;
@@ -277,22 +274,21 @@ test('a native executable whose version check fails is reported with the reason 
     return 0;
   } });
   assert.equal((await inspect(run(slow))).status, 'ok'); assert.equal(slow.destroyed, 0);
-  // The same file reached through two PATH spellings is checked once.
+  // The same file reached through other PATH spellings is checked once.
   let probes = 0;
-  await inspect((_file, _args, _options, callback) => { probes++; callback(null, ''); }, [dir, `${dir}${path.sep}`].join(path.delimiter)); assert.equal(probes, 1);
-  await assert.rejects(require('../electron/features/claude-sdk/executable.cjs').resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, timeoutMs: 20,
+  await inspect((_file, _args, _options, callback) => { probes++; callback(null, ''); }, [dir, `${dir}\\`, dir.toLowerCase()].join(';')); assert.equal(probes, 1);
+  await assert.rejects(require('../electron/features/claude-sdk/executable.cjs').resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: cliHome, files, storedPath: async () => null, timeoutMs: 20,
     probe: (_file, _args, _options, callback) => callback(null, '') }), error => error.code === 'native_cli_required' && error.unverified === true && /检查没有通过/.test(error.message));
   // A session that cannot start on such a CLI says so in the same words, before any input.
-  const fake = fakeSdk(), events = [], runtime = createClaudeRuntime({ directory: path.join(dir, 'state'), safeStorage, loadSdk: async () => fake.sdk,
+  const state = directory(t), fake = fakeSdk(), events = [], runtime = createClaudeRuntime({ directory: path.join(state, 'state'), safeStorage, loadSdk: async () => fake.sdk,
     resolveExecutable: async () => { throw Object.assign(new Error('x'), { code: 'native_cli_required', unverified: true }); } });
   runtime.credentials.save(key);
-  const session = runtime.create({ cwd: dir, worktree: dir, agent: 'claude', owner: 'gui', terminalId: 't', projectId: 'p', runtimeSessionId: randomUUID(), env: { PATH: '' } }, event => events.push(event));
+  const session = runtime.create({ cwd: state, worktree: state, agent: 'claude', owner: 'gui', terminalId: 't', projectId: 'p', runtimeSessionId: randomUUID(), env: { PATH: '' } }, event => events.push(event));
   t.after(() => session.close());
   await assert.rejects(session.start(), error => error.beforeInput === true && error.message === 'Claude Code 检查没有通过，无法通过 API 运行');
   assert.ok(events.some(event => event.type === 'error' && event.payload.message === 'Claude Code 检查没有通过，无法通过 API 运行'));
   // Main was busy past the deadline while the CLI had already exited: its answer, read late within the grace, still counts.
-  assert.deepEqual(await inspect((_file, _args, _options, callback) => { setTimeout(() => callback(null, '2.1.322 (Claude Code)'), 25); return { exitCode: 0, signalCode: null, kill: () => assert.fail('an exited CLI is not killed') }; }),
-    { status: 'ok', version: '2.1.322', required: '2.1.317', file: found });
+  assert.deepEqual(await inspect((_file, _args, _options, callback) => { setTimeout(() => callback(null, '2.1.322 (Claude Code)'), 25); return { exitCode: 0, signalCode: null, kill: () => assert.fail('an exited CLI is not killed') }; }), ok);
   for (const [error, code] of [[Object.assign(new Error(key), { code: 'EPERM' }), 'EPERM'], [Object.assign(new Error('x'), { code: 1 }), 'exit 1'], [new Error(key), undefined]]) {
     const value = await inspect((_file, _args, _options, callback) => callback(error, ''));
     assert.deepEqual(value, { ...missing, reason: 'failed', found, ...(code ? { error: code } : {}) }); assert.ok(!JSON.stringify(value).includes(key));
@@ -300,68 +296,10 @@ test('a native executable whose version check fails is reported with the reason 
   assert.deepEqual(await inspect(() => { throw new Error('spawn broke'); }), { ...missing, reason: 'failed', found });
   assert.deepEqual(await inspect((_file, _args, _options, callback) => callback(null, 'no version here')), { ...missing, reason: 'unreadable', found });
   // A failed candidate does not hide a working one later on the path, and an outdated one still reads as too old.
-  fs.writeFileSync(path.join(other, 'claude.exe'), 'fake');
-  const byFolder = answers => (file, _args, _options, callback) => callback(null, answers[path.dirname(file) === path.dirname(found) ? 0 : 1]);
-  assert.equal((await inspect(byFolder(['', '2.1.317']), [dir, other].join(path.delimiter))).status, 'ok');
-  assert.deepEqual(await inspect(byFolder(['', '2.1.300']), [dir, other].join(path.delimiter)), { ...missing, status: 'too_old', version: '2.1.300' });
-});
-test('Claude Code is found where npm, the stored PATH, the legacy local install and WinGet put it, and none found says where it looked', async () => {
-  const { inspectClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');
-  // The owner's machine: Node at D:\nodejs22 is npm's prefix, so PATH holds the shims (claude, claude.cmd) and the
-  // package sits beside them, neither on C: nor under %APPDATA%\npm.
-  const drive = process.platform === 'win32' ? 'D:\\' : '/d', home = path.join(drive, 'Users', 'u'), node = path.join(drive, 'nodejs22');
-  const local = path.join(home, 'AppData', 'Local'), pkg = path.join(node, 'node_modules', '@anthropic-ai', 'claude-code'), bin = path.join(pkg, 'bin', 'claude.exe');
-  const shim = '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n';
-  const NATIVE = 346496160, STUB = 500, npm = { [path.join(node, 'claude')]: { text: '#!/bin/sh\n' }, [path.join(node, 'claude.cmd')]: { text: shim } };
-  const fakeFiles = entries => {
-    const get = file => entries[path.resolve(file)] ?? (() => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); })();
-    return { realpath: async file => get(file).link ?? path.resolve(file), access: async file => { get(file); }, readFile: async file => get(file).text ?? '',
-      stat: async file => ({ isFile: () => true, size: get(file).size ?? Buffer.byteLength(get(file).text ?? '') }) };
-  };
-  const runs = [], stored = [];
-  const inspect = (entries, { PATH = node, storedPath = [], arch = 'x64', version = '2.1.322 (Claude Code)' } = {}) => inspectClaudeExecutable({
-    env: { PATH, LOCALAPPDATA: local }, platform: 'win32', arch, home, files: fakeFiles(entries),
-    storedPath: async (_env, platform) => { stored.push(platform); return storedPath; },
-    probe: (file, _args, _options, callback) => { runs.push(file); callback(null, version); } });
-  const ok = file => ({ status: 'ok', version: '2.1.322', required: '2.1.317', file });
-  const searched = [path.join('~', '.local', 'bin'), path.join('~', '.claude', 'local'), path.join('~', 'AppData', 'Local', 'Microsoft', 'WinGet', 'Links')];
-
-  // npm with its postinstall: bin\claude.exe is the native program, found from the shim's folder and run directly.
-  assert.deepEqual(await inspect({ ...npm, [bin]: { size: NATIVE } }), ok(bin)); assert.deepEqual(runs.splice(0), [bin]);
-  assert.deepEqual(stored.splice(0), [], 'a CLI on the inherited PATH needs no read of the stored one');
-  // npm 12 skipped the postinstall: bin\claude.exe is the placeholder script, never run; the platform package's copy
-  // beside it (or nested in it, for this machine's arch first) is.
-  const beside = path.join(node, 'node_modules', '@anthropic-ai', 'claude-code-win32-x64', 'claude.exe');
-  assert.deepEqual(await inspect({ ...npm, [bin]: { size: STUB }, [beside]: { size: NATIVE } }), ok(beside)); assert.deepEqual(runs.splice(0), [beside]);
-  const nested = path.join(pkg, 'node_modules', '@anthropic-ai', 'claude-code-win32-arm64', 'claude.exe');
-  assert.deepEqual(await inspect({ ...npm, [bin]: { size: STUB }, [beside]: { size: NATIVE }, [nested]: { size: NATIVE } }, { arch: 'arm64' }), ok(nested)); runs.length = 0;
-  // Without any native copy the package is named, and nothing ran.
-  assert.deepEqual(await inspect({ ...npm, [bin]: { size: STUB } }), { status: 'missing', version: null, required: '2.1.317', file: null,
-    reason: 'not_found', pathFolders: 1, searched, incomplete: pkg });
-  assert.deepEqual(runs, []); assert.deepEqual(stored.splice(0), ['win32']);
-  // A package from before the native program (bin cli.js) is too old by its own package.json, and is not run.
-  assert.deepEqual(await inspect({ ...npm, [path.join(pkg, 'cli.js')]: { text: '' }, [path.join(pkg, 'package.json')]: { text: JSON.stringify({ version: '2.1.100' }) } }),
-    { status: 'too_old', version: '2.1.100', required: '2.1.317', file: null }); assert.deepEqual(runs, []); stored.length = 0;
-  // A pnpm shim runs a package elsewhere; its path is read from the shim.
-  const pnpm = path.join(local, 'pnpm'), store = path.join(pnpm, 'global', '5', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
-  assert.deepEqual(await inspect({ [path.join(pnpm, 'claude.cmd')]: { text: '@SETLOCAL\r\n"%~dp0\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n' },
-    [store]: { size: NATIVE } }, { PATH: pnpm }), ok(store)); runs.length = 0;
-
-  // Installed after Agentrix started: the folder is only on the stored PATH, read after the install folders.
-  const tools = path.join(drive, 'Tools'), late = path.join(tools, 'claude.exe');
-  assert.deepEqual(await inspect({ [late]: { size: NATIVE } }, { PATH: '', storedPath: [` ${tools} `, node, 'relative'] }), ok(late));
-  assert.deepEqual(stored.splice(0), ['win32']); runs.length = 0;
-  // The legacy local install keeps an npm package in ~\.claude\local.
-  const legacy = path.join(home, '.claude', 'local', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
-  assert.deepEqual(await inspect({ [legacy]: { size: NATIVE } }, { PATH: '' }), ok(legacy)); runs.length = 0;
-  // WinGet's command link resolves to the package it installed, which is what runs.
-  const winget = path.join(local, 'Microsoft', 'WinGet', 'Packages', 'Anthropic.ClaudeCode_Microsoft.Winget.Source_8wekyb3d8bbwe', 'claude.exe');
-  assert.deepEqual(await inspect({ [path.join(local, 'Microsoft', 'WinGet', 'Links', 'claude.exe')]: { link: winget }, [winget]: { size: NATIVE } }, { PATH: '' }), ok(winget));
-  assert.deepEqual(runs.splice(0), [winget]);
-  // Nothing anywhere: every PATH folder counted once (inherited and stored), the install folders named with ~.
-  assert.deepEqual(await inspect({}, { PATH: [node, tools].join(path.delimiter), storedPath: [node, path.join(drive, 'Other')] }),
-    { status: 'missing', version: null, required: '2.1.317', file: null, reason: 'not_found', pathFolders: 3, searched });
-  assert.deepEqual(runs, []);
+  files.put(W.join(other, 'claude.exe'), { size: NATIVE });
+  const byFolder = answers => (file, _args, _options, callback) => callback(null, answers[W.dirname(file) === dir ? 0 : 1]);
+  assert.equal((await inspect(byFolder(['', '2.1.317']), [dir, other].join(';'))).status, 'ok');
+  assert.deepEqual(await inspect(byFolder(['', '2.1.300']), [dir, other].join(';')), { ...missing, status: 'too_old', version: '2.1.300' });
 });
 test('GUI and helper cannot resume the same Claude session concurrently', async t => {
   const { session, runtime, fake, spec } = setup(t, { auto: false }); await session.start(); session.send({ clientMessageId: randomUUID(), text: 'hold session' });

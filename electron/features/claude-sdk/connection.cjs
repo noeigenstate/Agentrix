@@ -1,6 +1,7 @@
 const https = require('node:https');
 const { billingSource } = require('./identity.cjs');
 const { probeBillingIdentity } = require('./billing.cjs');
+const { VIAS } = require('../claude-runtime/locator.cjs');
 const required = '2.1.317';
 const details = { ok: 'API 密钥验证成功。', missing: '还没有保存 API key。', invalid: 'API 密钥无效。',
   forbidden: 'API 密钥没有调用权限。', rate_limited: 'API 请求被限流，请稍后重试。',
@@ -92,10 +93,19 @@ async function checkKey(key, model, options, now) {
 // Only the fields the view words a CLI check with, each of a known shape.
 function cliResult(value) {
   const status = ['ok', 'missing', 'too_old'].includes(value.status) ? value.status : 'missing';
-  const cli = { status, version: typeof value.version === 'string' && /^\d+\.\d+\.\d+$/.test(value.version) ? value.version : null, required };
+  const semver = text => typeof text === 'string' && /^\d+\.\d+\.\d+$/.test(text), place = text => typeof text === 'string' && text.length <= 1024;
+  // Where a CLI was found: its `via` and `fileShown`, read as a pair.
+  const where = found => VIAS.includes(found?.via) && place(found.fileShown) ? { via: found.via, fileShown: found.fileShown } : {};
+  const cli = { status, version: semver(value.version) ? value.version : null, required };
+  if (status === 'ok') {
+    Object.assign(cli, where(value));
+    const terminal = value.split?.terminal;
+    if (value.notice === 'cli_split_versions' && semver(terminal?.version) && where(terminal).via) {
+      Object.assign(cli, { notice: value.notice, split: { terminal: { version: terminal.version, ...where(terminal) } } });
+    }
+  }
   if (status !== 'missing') return cli;
   cli.reason = CLI_REASONS.has(value.reason) ? value.reason : 'not_found';
-  const place = text => typeof text === 'string' && text.length <= 1024;
   if (cli.reason === 'not_found') {
     if (Number.isSafeInteger(value.pathFolders) && value.pathFolders >= 0) cli.pathFolders = value.pathFolders;
     if (Array.isArray(value.searched) && value.searched.length <= 16 && value.searched.every(place)) cli.searched = value.searched;

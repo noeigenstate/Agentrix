@@ -36,6 +36,10 @@
     "id": "electron/features/agents/codex-account-usage.cjs:88e087e71550c1efedf0cb78"
   },
   {
+    "text": "run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => resolve(error ? null : Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')))",
+    "id": "electron/features/claude-runtime/path-env.cjs:efd579f4e757ba5afe754b99"
+  },
+  {
     "text": "resolveExecutable({ env: spec.env || process.env })",
     "id": "electron/features/claude-sdk/billing.cjs:c9cafb77d8c43bbce1f12637"
   },

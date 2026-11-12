@@ -62,12 +62,15 @@ for __pg_name in codex claude; do
 done
 unset __pg_name
 
-# The words that run codex or claude ($1), in reply; fails when neither the alias nor PATH has a program.
+# The words that run codex or claude ($1), in reply; fails when neither the alias nor PATH has a program. Without an
+# alias, claude is the file Agentrix chose for this terminal (AGENTRIX_CLAUDE_EXECUTABLE) while it is there.
 __pg_program() {
   emulate -L zsh
   reply=()
   (( ${+__pg_aliases[$1]} )) && reply=(${(Q)${(z)__pg_aliases[$1]}})
-  (( $#reply )) || reply=($1)
+  if (( ! $#reply )); then
+    if [[ $1 == claude && -f ${AGENTRIX_CLAUDE_EXECUTABLE-} && -x ${AGENTRIX_CLAUDE_EXECUTABLE-} ]]; then reply=($AGENTRIX_CLAUDE_EXECUTABLE); else reply=($1); fi
+  fi
   reply[1]=${reply[1]/#\~/$HOME}
   if [[ $reply[1] == */* ]]; then [[ -x $reply[1] ]]
   else reply[1]=$(whence -p -- $reply[1]) || return 1; [[ -n $reply[1] ]]; fi

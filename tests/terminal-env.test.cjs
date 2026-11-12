@@ -7,6 +7,11 @@ test('a terminal drops inherited SDK entrypoints in every letter case', () => {
   assert.equal(Object.keys(env).some(name => name.toUpperCase() === 'CLAUDE_CODE_ENTRYPOINT'), false);
 });
 
+test('a terminal drops an inherited Claude Code choice: only main tells a terminal which one to run', () => {
+  const env = createTerminalEnvironment({ AGENTRIX_CLAUDE_EXECUTABLE: 'C:\\old\\claude.exe', agentrix_claude_executable: '/old/claude' }, 'fake-bootstrap');
+  assert.equal(Object.keys(env).some(name => name.toUpperCase() === 'AGENTRIX_CLAUDE_EXECUTABLE'), false);
+});
+
 test('PTYs advertise color support even when launched by a monochrome host', () => {
   const source = Object.freeze({ NO_COLOR: '1', NODE_DISABLE_COLORS: '1', TERM: 'dumb', COLORTERM: '', CLICOLOR: '0', FORCE_COLOR: '0', PATH: 'existing-path' });
   const env = createTerminalEnvironment(source, 'session.json');
