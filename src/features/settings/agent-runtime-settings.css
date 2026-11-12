@@ -15,7 +15,12 @@
 .runtime-test li > b { font-weight: 600; }
 .runtime-test li > span:last-child { min-width: 0; overflow-wrap: anywhere; }
 .runtime-test small { display: block; margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--text-2); }
-.runtime-test-mark { display: inline-flex; align-self: center; }
+.runtime-test-mark { display: inline-flex; align-self: start; margin-top: 2px; }
+/* A line that compares two installs: each is a block of its label and its words, its file under them. */
+.runtime-test-split { display: grid; gap: 8px; margin-top: 8px; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.runtime-test-block { display: grid; grid-template-columns: 32px minmax(0, 1fr); column-gap: 8px; }
+.runtime-test-block > b { font-weight: 600; color: var(--text-1); }
+.runtime-test-file { display: block; margin-top: 2px; color: var(--text-3); }
 .runtime-test li.is-ok .runtime-test-mark { color: var(--success-text); }
 .runtime-test li.is-warn .runtime-test-mark { color: var(--warning); }
 .runtime-test li.is-bad .runtime-test-mark { color: var(--danger); }

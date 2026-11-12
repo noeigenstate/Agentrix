@@ -149,6 +149,15 @@ test('测试连接 waits for a saved key and for the owner’s click, shows its 
     assert.deepEqual(['is-ok', 'is-bad', 'is-warn'].map(tone => html.includes(`<li class="${tone}"`)), [true, true, true], 'each line has a tone class beside its mark');
     assert.equal((html.match(/runtime-test-mark/g) ?? []).length, 3, 'and a mark, so tone is not colour alone');
     assert.deepEqual(calls, [[undefined]], 'the call carries no key (only the project in use, none here): the key stays in the main process'); assert.ok(!html.includes(SECRET));
+    // A line that compares two installs lays each out as a block: label, words, and the file on a line of its own.
+    const TOOLS = String.raw`C:\Tools\claude.exe`;
+    view.button('测试连接').props.onClick(); await settle();
+    finish(answer([{ id: 'cli', tone: 'warn', label: 'Claude Code', text: '原生 · 版本 2.1.322', hint: '不是同一个', title: null,
+      blocks: [{ label: '终端', text: '版本 2.1.300 · 来自 PATH', file: TOOLS }, { label: '原生', text: '版本 2.1.322 · 来自 官方安装器', file: null }] }])); await settle();
+    const split = view.html();
+    assert.ok(split.includes(`<span class="runtime-test-block"><b>终端</b><span>版本 2.1.300 · 来自 PATH<span class="runtime-test-file">${TOOLS}</span></span></span>`), 'the file sits in its own element under the words');
+    assert.ok(split.includes('<span class="runtime-test-block"><b>原生</b><span>版本 2.1.322 · 来自 官方安装器</span></span>'), 'a block without a file has none');
+    assert.equal((split.match(/runtime-test-split/g) ?? []).length, 1);
   } finally { view.done(); }
 });
 

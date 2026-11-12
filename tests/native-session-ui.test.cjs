@@ -1808,18 +1808,21 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   assert.match(cliLine({ reason: 'not_found', incomplete: '~/.npm-global/lib/node_modules/@anthropic-ai/claude-code' }).hint, /在终端运行 curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash，/);
   // A found CLI says where it came from and its file (main writes home as ~); a via this view does not know is shown as given.
   const okLine = cli => connectionLines({ ...good, cli: { status: 'ok', version: '2.1.322', required, ...cli } })[2];
-  const home = '~\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe';
+  const home = String.raw`~\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`, tools = String.raw`C:\Tools\claude.exe`;
   assert.deepEqual([okLine({}).text, okLine({}).hint, okLine({}).tone], ['版本 2.1.322（满足 ≥ 2.1.317）', null, 'ok']);
   const npmLine = okLine({ via: 'npm', fileShown: home });
   assert.deepEqual([npmLine.text, npmLine.hint, npmLine.title, npmLine.tone], ['版本 2.1.322（满足 ≥ 2.1.317） · 来自 npm 全局安装', home, home, 'ok']);
   assert.deepEqual(['path', 'npm', 'platform-package', 'local-bin', 'claude-local', 'winget', 'registry-path', 'system', 'someday'].map(via => okLine({ via }).text.split(' · ')[1]),
-    ['来自 PATH', '来自 npm 全局安装', '来自 npm 平台包', '来自 官方安装器（~/.local/bin）', '来自 旧版本地安装（~/.claude/local）', '来自 WinGet', '来自 系统 PATH（注册表）', '来自 系统目录', '来自 someday']);
-  // The terminal runs another install than native mode: the line is a warning that names both and says why.
-  const split = okLine({ via: 'local-bin', fileShown: '~/.local/bin/claude', notice: 'cli_split_versions', split: { terminal: { version: '2.1.200', via: 'path', fileShown: 'C:\Tools\claude.exe' } } });
-  assert.equal(split.tone, 'warn');
-  assert.equal(split.hint, '终端和原生用的 Claude Code 版本不同。终端：版本 2.1.200 · 来自 PATH · C:\Tools\claude.exe；原生：版本 2.1.322 · 来自 官方安装器（~/.local/bin） · ~/.local/bin/claude。原生需要 ≥ 2.1.317。');
-  assert.match(okLine({ via: 'path', fileShown: 'x', split: { terminal: { version: null, via: 'path', fileShown: 'y' } } }).hint, /^x$/, 'a split without the notice is not announced');
-  assert.match(okLine({ notice: 'cli_split_versions', split: { terminal: { version: null, via: 'npm', fileShown: 'y' } } }).hint, /终端：版本未知 · 来自 npm 全局安装 · y；原生：版本 2\.1\.322。/);
+    ['来自 PATH', '来自 npm 全局安装', '来自 npm 平台包', '来自 官方安装器', '来自 旧版本地安装', '来自 WinGet', '来自 系统 PATH（注册表）', '来自 系统目录', '来自 someday']);
+  // The terminal runs another install than native mode: a warning whose main line is the native one, the reason in a sentence,
+  // and each install a block of its own (label, version and way, file on its own line).
+  const split = okLine({ via: 'local-bin', fileShown: '~/.local/bin/claude', notice: 'cli_split_versions', split: { terminal: { version: '2.1.200', via: 'path', fileShown: tools } } });
+  assert.deepEqual([split.tone, split.text], ['warn', '原生 · 版本 2.1.322（满足 ≥ 2.1.317） · 来自 官方安装器']);
+  assert.equal(split.hint, '终端和原生用的不是同一个 Claude Code：终端的版本低于 2.1.317，原生改用了另一份安装');
+  assert.deepEqual(split.blocks, [{ label: '终端', text: '版本 2.1.200 · 来自 PATH', file: tools }, { label: '原生', text: '版本 2.1.322 · 来自 官方安装器', file: '~/.local/bin/claude' }]);
+  assert.equal(okLine({ via: 'path', fileShown: 'x', split: { terminal: { version: null, via: 'path', fileShown: 'y' } } }).blocks, undefined, 'a split without the notice is not announced');
+  assert.deepEqual(okLine({ notice: 'cli_split_versions', split: { terminal: { version: null, via: 'npm', fileShown: 'y' } } }).blocks.map(block => [block.label, block.text, block.file]),
+    [['终端', '版本未知 · 来自 npm 全局安装', 'y'], ['原生', '版本 2.1.322', null]]);
   assert.equal(connectionLines({ ...good, cli: { status: 'missing', version: null, required, reason: 'failed' }, path: 'terminal', reason: 'native_cli_unverified' })[3].text,
     '终端（订阅） · Claude Code 检查没有通过，无法通过 API 运行');
   // The billing line says why and what to check; the path line only the consequence, so the card says the reason once.
