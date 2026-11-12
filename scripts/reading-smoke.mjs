@@ -504,6 +504,22 @@ try {
     }, terminalId);
     await write(`Stream-ReadingFixtureWork -Seconds 5 ${streamArguments}\r`);
     await waitFor(async () => (await enteredSince(mark)).includes('stream:done'), 'the stand-in finished its five seconds of work', 30000);
+    // The round ends while the sampling goes on for about a second: the Stop button outlasts the round by half a second,
+    // and a click on it then writes nothing (Esc at an idle prompt would open Claude Code's history). The clicks start once
+    // the renderer can have the idle frame, one screen publish after Stop.
+    await write(hook('stop', { session_id: queueSession, transcript_path: transcript }));
+    await waitFor(async () => (await state()).cliState?.state === 'idle', `${label}: Stop publishes idle`);
+    await resetWrites();
+    const lingeringClicks = await page.evaluate(id => new Promise(resolve => {
+      let clicks = 0; const begin = performance.now();
+      const timer = setInterval(() => {
+        const stop = document.querySelector(`[data-terminal-id="${id}"] .reading-composer button[title="中断（Esc）"]`);
+        if (stop && !stop.disabled && performance.now() - begin >= 150) { stop.click(); clicks++; }
+        if (performance.now() - begin >= 1000) { clearInterval(timer); resolve(clicks); }
+      }, 50);
+    }), terminalId);
+    assert.deepEqual((await writes()).filter(item => item.data === '\x1b'), [], `${label}: a click on the lingering Stop button writes no Esc`);
+    console.log(`${label}: clicks on the lingering Stop button after the round: ${lingeringClicks}`);
     const samples = await page.evaluate(() => { clearInterval(window.agentrixComposerSamples.timer); return window.agentrixComposerSamples.samples; });
     const summary = {};
     for (const field of ['placeholder', 'textareaDisabled', 'interrupt', 'sendDisabled', 'composerClass', 'composerHeight', 'textareaHeight']) {
@@ -514,7 +530,7 @@ try {
       summary[field] = { flips, values: [...new Set(samples.map(sample => sample[field]))], transitions };
     }
     summary.sampleCount = samples.length; summary.spanMs = samples.at(-1)?.at ?? 0;
-    flicker[label] = summary;
+    flicker[label] = { ...summary, lingeringClicks };
     await fs.writeFile(path.join(output, `composer-samples-${label}.json`), JSON.stringify({ summary, samples }, null, 1));
     console.log(`Composer while Claude Code works, ${label} (50 ms samples):`, JSON.stringify(summary));
     await renderIdle(`${label} done`); await composer.fill('');
@@ -567,8 +583,9 @@ try {
       mark = (await entered()).length;
       await composer.fill(first); await composer.press('Enter');
       await waitFor(async () => await rowsInclude(first), 'the first message sits unsubmitted in the input');
-      // The next message is sent once the first send has finished (it leaves the outbox); sent earlier it only waits behind it.
-      await waitFor(async () => await outbox.count() === 0, 'the first send finished', 10000);
+      // The first send has pressed Enter once the stand-in logs it (it holds Enter, so the words stay in the input). The
+      // next message then meets them: at once if that send is over, or from the outbox once it is, either way behind them.
+      await waitFor(async () => (await enteredSince(mark)).includes('held:' + first), 'the first send pressed Enter', 10000);
       await composer.fill(second); await resetWrites(); await composer.press('Enter');
       await waitFor(async () => await leftover.count() > 0 && await outbox.count() > 0, 'the next message was held behind the words in the input');
       assert.ok((await leftover.locator('li').first().innerText()).includes(first), 'the notice shows the words in the input');

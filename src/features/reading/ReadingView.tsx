@@ -7,7 +7,7 @@ import { VoiceButton } from '../voice/VoiceButton';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
 import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
-import { cliInputDraft, hasCliInput, isAtPrompt } from './cli-panel';
+import { cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { readingState, nextCliState, type CliState } from './reading-state.ts';
 import { cliReady, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
@@ -306,10 +306,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       hold(text, own);
       return false;
     }
-    const owner = ++sendCounter.current;
+    const owner = ++sendCounter.current, place = ++nextWaitingMessage;
     sending.current = true; sendingDraft.current = own ? text : null;
     try {
-      const sent = await deliver(text, own, owner, automatic);
+      const sent = await deliver(text, own, owner, automatic, place);
       // The input went away between this render and the write (a dialog came up): the message waits, as one sent then would.
       if (sent === false && !automatic && ownsSend(owner) && !images.length && !serverPictures.current.length && (!own || input.current?.value.trim() === text)) hold(text, own);
       return sent;
@@ -317,24 +317,35 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (ownsSend(owner)) { sending.current = false; sendingDraft.current = null; setOutbox(messages => [...messages]); }
     }
   };
-  // The message waits in the outbox, with the quote it is sent with, and leaves the composer.
-  const hold = (text: string, own: boolean) => {
-    const carried = own && !isTypedCommand(text) ? quoteRef.current : null;
-    saveOutbox([...(waitingMessages.get(ownHistory) ?? []), { id: ++nextWaitingMessage, text: withQuote(carried?.excerpt, text) }]);
-    if (carried) holdQuote(null);
-    if (own) edit('');
-  };
-  // Esc stops a round, on a parsed frame with no dialog (which it would answer instead), and only while this frame says
-  // the agent works: the Stop button outlasts a round by a moment, and Esc at an idle prompt opens Claude Code's history.
-  // A frame drawn halfway gets a quiet second look before the owner is told.
-  const interrupt = async () => {
-    if (!workingNow.current) return;
-    if (!canWrite.current) {
-      const ready = await native.awaitInput(() => mounted.current && !choiceVisible.current, 500);
-      if (!mounted.current || !workingNow.current) return;
-      if (!ready || choiceVisible.current) { onError(t('终端还没准备好，这次没有中断，请稍后再试。')); return; }
+  // The message waits in its conversation's outbox, in the order its send began, with the quote it was sent with. The
+  // composer and the quote chip let go of it only while they still show it: what the owner wrote or picked since stays.
+  // A view that went away meanwhile (the raw terminal, another session) keeps it in that outbox, shown when the
+  // conversation is, and the owner is told.
+  const hold = (text: string, own: boolean, quote = own && !isTypedCommand(text) ? quoteRef.current : null, place = ++nextWaitingMessage) => {
+    const messages = [...(waitingMessages.get(ownHistory) ?? []), { id: place, text: withQuote(quote?.excerpt, text) }].sort((a, b) => a.id - b.id);
+    if (!mounted.current || identity.current.epoch !== epoch) {
+      waitingMessages.set(ownHistory, messages); onError(t('视图已切换，这条消息还没写进终端，已留在原会话的待发消息里。'));
+      return;
     }
-    window.agentrix.writeTerminal(terminal.id, '\x1b');
+    saveOutbox(messages);
+    if (quote && quoteRef.current === quote) holdQuote(null);
+    if (own && input.current?.value.trim() === text) edit('');
+  };
+  // Esc stops a round, on a parsed frame with no dialog (which it would answer instead) that shows the agent at work: the
+  // Stop button outlasts a round by a moment, and Esc at an idle prompt opens Claude Code's history. A frame drawn halfway
+  // (no input, or no spinner row yet) gets quiet looks for half a second. Then a round that is over leaves nothing to
+  // stop and nothing is said; a dialog, or a frame that never drew, is reported.
+  const interrupt = async () => {
+    const owns = () => mounted.current && !choiceVisible.current;
+    for (let waited = 0; owns(); waited += 50) {
+      const current = native.readInput();
+      if (!waited && canWrite.current && workingNow.current || current && isCliWorking(kind, current.rows, parseAgentScreen(kind, current.rows))) {
+        window.agentrix.writeTerminal(terminal.id, '\x1b'); return;
+      }
+      if (native.dialogShown() || waited >= 500) break;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    if (mounted.current && (workingNow.current || choiceVisible.current || native.dialogShown())) onError(t('终端还没准备好，这次没有中断，请稍后再试。'));
   };
   // Words of ours left unsubmitted in the CLI's input hold the outbox; the owner submits or clears them from here.
   // again: the message that met them, when it is those same words; it goes once the input is clear.
@@ -376,6 +387,13 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (card) cancelEcho(card.id);
     if (shown.again) hold(shown.again, false);
   };
+  // A waiting message met our own words in the input: the notice shows them, and a message that is those very words is
+  // held by the notice itself (sent from the input, or after it is cleared), so it cannot go twice.
+  const leftBehind = (text: string, head: WaitingMessage) => {
+    const again = sameMessage(head.text, text);
+    if (again) saveOutbox((waitingMessages.get(ownHistory) ?? []).filter(message => message.id !== head.id));
+    setLeftover({ text, again: again ? head.text : null });
+  };
   const keepNativeInput = () => {
     setTerminalPopup({ command: '', focus: false });
     onError(t('终端输入框中还有先前发送的消息。为避免丢失或重复发送，请先在终端中处理；本次输入已保留。'));
@@ -383,7 +401,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // The CLI recognises slash commands and shell mode from typed keys, not bracketed paste.
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
-  const deliver = async (words: string, own: boolean, owner: number, automatic: boolean) => {
+  const deliver = async (words: string, own: boolean, owner: number, automatic: boolean, place: number) => {
     if (inputBlocked || shownBlocked) return false;
     if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
@@ -415,6 +433,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       setTerminalPopup({ command: text });
       await ready;
       const sent = await typeReadingCommand(text, value => window.agentrix.writeTerminal(terminal.id, value), () => ownsSend(owner) && !wasChoice.current, () => canWrite.current);
+      if (sent === null && ownsSend(owner)) {
+        // The input never came back, so nothing was typed: the command returns to the box and the owner is told.
+        closePopup(false); if (own && !input.current?.value) edit(text);
+        onError(t('终端还没准备好，这条命令没有输入，请稍后再发送。'));
+        return false;
+      }
       if (sent && clears(terminal.agent, text)) { const ids = new Set(conversationEntries.map(entry => entry.id)); cleared.set(conversation, ids); setHidden(ids); }
       return sent ? true : undefined; // A cancelled typed command may already have written keys; never replay it automatically.
     }
@@ -427,7 +451,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (!textOnly) return false;
       if (early) cancelEcho(early);
       if (automatic) return false;
-      if (mounted.current && identity.current.epoch === epoch) hold(words, own);
+      hold(words, own, carried, place);
       return;
     }
     if (batch.length) {
@@ -454,12 +478,17 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const unsent = sameMessage(text, left) && !queuedLeft && !receivedInput(left) && (automatic || pending.some(prompt => sameMessage(prompt.text, left)));
     if (ownedLeft && !returnedQueued && !unsent) {
       if (pendingId && (own || !automatic)) cancelEcho(pendingId);
-      if (automatic) return;
+      if (automatic) {
+        // A safety-net resend leaves the words as they are; the outbox's head shows them and waits.
+        if (outbox[0]?.text !== words) return;
+        if (pendingId) cancelEcho(pendingId);
+        leftBehind(left, outbox[0]); return false;
+      }
       if (pictureSend) { keepNativeInput(); return; }
       // The same words left there are this message: sent from the input, or after it is cleared, never twice.
       const again = sameMessage(text, left);
-      if (!again) hold(words, own);
-      else if (own) { edit(''); if (carried) holdQuote(null); }
+      if (!again) hold(words, own, carried, place);
+      else if (carried && quoteRef.current === carried) holdQuote(null);
       setLeftover({ text: left, again: again ? text : null });
       return;
     }
@@ -468,7 +497,6 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (carried && quoteRef.current === carried) holdQuote(null);
     const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
-    if (own && !pictureSend) edit('');
     if (left && (!queuedLeft || returnedQueued) && sameMessage(text, left)) {
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
@@ -491,9 +519,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       // waits in this conversation's outbox. A picture send never cleared the composer; its draft is still there.
       if (pendingId) cancelEcho(pendingId);
       if (automatic) return false;
-      if (pictureSend || !mounted.current || identity.current.epoch !== epoch) { restoreQuote(); return; }
-      if (carried && !quoteRef.current) holdQuote(carried);
-      hold(words, own);
+      if (pictureSend) { restoreQuote(); return; }
+      hold(words, own, carried, place);
       return;
     }
     if (!ownsSend(owner)) return;
@@ -558,9 +585,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       }
       return;
     }
-    const held = native.readInput()?.text;
-    if (held) return; // Never replace a draft the owner is editing in the terminal.
-    const head = outbox[0], attempt = JSON.stringify([conversation, head.id, visibleScreen?.rows, signal?.revision]);
+    const held = native.readInput()?.text, head = outbox[0];
+    // Never replace a draft the owner is editing in the terminal. Words of ours there (an Enter the CLI did not take)
+    // get the notice that sends or clears them; the same words as the waiting message are that message.
+    if (held) { if (!leftoverShown && ownInput(held)) leftBehind(held, head); return; }
+    const attempt = JSON.stringify([conversation, head.id, visibleScreen?.rows, signal?.revision]);
     if (outboxAttempt.current === attempt) return;
     outboxAttempt.current = attempt;
     // A raw/reading switch can interrupt this async send. Persist uncertainty before writing so a remount never replays it.

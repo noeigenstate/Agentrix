@@ -3170,5 +3170,7 @@
   "写明失败原因": "Failure reasons",
   "测试连接无法确认计费来源时会写明原因，例如找不到 Claude Code、安装不完整、版本过低、没有保存密钥、初始化超时，或 Claude Code 启动后退出；原生会话启动失败时也会写明原因。": "When the connection test cannot confirm the billing source, it states why: Claude Code not found, an incomplete install, a version that is too old, no saved key, an initialization timeout, or Claude Code exiting after launch. A native session that fails to start also states the reason.",
   "只用保存的密钥": "Saved key only",
-  "原生模式只用 Agentrix 里保存的 API 密钥，Claude Code 设置里的 apiKeyHelper 不会再让 API 通道无法使用；终端里的 Claude Code 不受影响。": "Native mode uses only the API key saved in Agentrix, so an apiKeyHelper in Claude Code settings no longer makes the API channel unusable; Claude Code in the terminal is unaffected."
+  "原生模式只用 Agentrix 里保存的 API 密钥，Claude Code 设置里的 apiKeyHelper 不会再让 API 通道无法使用；终端里的 Claude Code 不受影响。": "Native mode uses only the API key saved in Agentrix, so an apiKeyHelper in Claude Code settings no longer makes the API channel unusable; Claude Code in the terminal is unaffected.",
+  "视图已切换，这条消息还没写进终端，已留在原会话的待发消息里。": "The view changed before this message reached the terminal; it waits among that conversation's unsent messages.",
+  "终端还没准备好，这条命令没有输入，请稍后再发送。": "The terminal was not ready, so the command was not typed. Send it again in a moment."
 }
