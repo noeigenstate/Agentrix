@@ -625,16 +625,17 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
   };
   // What the agent is doing, written at the end of the conversation the way its CLI writes it, never in a corner.
-  const statusRunning = working;
+  // The line is display: it follows the held shownWorking, so a half-drawn redraw does not blink it. What the round has settled into
+  // (the result card, the completion state) keeps the frame's own verdict, `working`.
   const status = hasChoice && screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
     : hasChoice && state.message != null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: state.message })}</span>
       {!screen.choice && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
-    : statusRunning ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
+    : shownWorking ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
     : null;
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
   // works or waits, and nothing for earlier rounds.
-  const settled = !status && !statusRunning && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
+  const settled = !working && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
   const result = useMemo(() => latestResult(entries, { idle: settled, interrupted }), [entries, settled, interrupted]);
   // Only the owner's click on a message's 引用 gets here, so only it moves the keyboard to the message box.
   const quoteMessage = (who: string, text: string) => {
@@ -653,12 +654,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const lastBlock = grouped.at(-1);
   const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);
   const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
-    {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
+    {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={shownWorking ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
   const beforeFeed = terminal.agentCommand ? <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />
     : !entries.length && !cards.prompts.length ? <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} /> : <>
     {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
     {historyPage.error && <p role="status">{t(historyPage.error)}</p>}</>;
-  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: shownWorking, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
     quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage },
     frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: beforeFeed } }}>
       <ConversationFeed entries={terminal.agentCommand ? [] : entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>

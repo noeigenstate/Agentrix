@@ -32,22 +32,25 @@ function busyView(t) {
     h.render(); h.tick(wait);
   };
   const stop = () => elements(h.tree()).find(element => element.props.title === '中断（Esc）');
-  const look = () => ({ hint: elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, stop: !!stop(), stopDisabled: stop()?.props.disabled });
+  // The status line and the feed's liveness: the line is display, `live` is what the round has settled into.
+  const line = () => elements(h.tree()).some(element => typeof element.props.label === 'string' && /正在思考/.test(element.props.label));
+  const live = () => elements(h.tree()).find(element => element.type?.name === 'ConversationFeed').props.live;
+  const look = () => ({ line: line(), hint: elements(h.tree()).find(element => element.type === 'textarea').props.placeholder, stop: !!stop(), stopDisabled: stop()?.props.disabled });
   const raw = name => { const s = cliStateFor('claude', { rows: FRAMES[name], sessionId: 'fixture-session', revision: ++revision, updatedAt: at + 1 }, h.props.terminal); return { accepting: s.accepting, working: s.working }; };
   show('full');
-  return { h, show, look, raw };
+  return { h, show, look, raw, live };
 }
 const flips = values => values.slice(1).filter((value, index) => JSON.stringify(value) !== JSON.stringify(values[index])).length;
 
 test('reproduction: the raw verdict flips on a busy redraw, the message box does not', t => {
   const { show, look, raw } = busyView(t);
   const steady = look();
-  assert.deepEqual(steady, { hint: steady.hint, stop: true, stopDisabled: false });
+  assert.deepEqual(steady, { line: true, hint: steady.hint, stop: true, stopDisabled: false });
   assert.match(steady.hint, /发消息/);
   const verdicts = [], looks = [];
   for (let round = 0; round < 5; round++) for (const name of REDRAW) { verdicts.push(raw(name)); show(name); looks.push(look()); }
   assert.ok(flips(verdicts) >= 2 * 5, 'the frames themselves flip accepting and working (' + flips(verdicts) + ' flips)');
-  assert.equal(flips(looks), 0, 'hint, interrupt button and its enabled state stay as they were');
+  assert.equal(flips(looks), 0, 'status line, hint, interrupt button and its enabled state stay as they were');
   assert.deepEqual(looks.at(-1), steady);
 });
 
@@ -56,15 +59,25 @@ test('input lost for good: the hint changes after the hold, and returns at once 
   const ready = look().hint;
   show('boxErased', COMPOSER_HOLD_MS - 1); assert.equal(look().hint, ready);
   show('boxErased', 1); assert.match(look().hint, /等待终端输入就绪后发送/); assert.equal(look().stopDisabled, true);
-  show('full'); assert.deepEqual(look(), { hint: ready, stop: true, stopDisabled: false });
+  show('full'); assert.deepEqual(look(), { line: true, hint: ready, stop: true, stopDisabled: false });
 });
 
 test('work over: the interrupt button leaves after the hold, and returns at once with the spinner', t => {
   const { h, show, look } = busyView(t);
   h.props.terminal.cliState = { ...h.props.terminal.cliState, revision: 2, state: 'idle', updatedAt: 10001 };
   show('spinnerRowErased', COMPOSER_HOLD_MS - 1); assert.equal(look().stop, true);
-  show('spinnerRowErased', 1); assert.equal(look().stop, false);
-  show('full'); assert.equal(look().stop, true);
+  show('spinnerRowErased', 1); assert.equal(look().stop, false); assert.equal(look().line, false);
+  show('full'); assert.equal(look().stop, true); assert.equal(look().line, true);
+});
+
+test('the status line is display only: the feed goes on following the frame, so the round settles as before', t => {
+  const { show, look, live } = busyView(t);
+  assert.equal(live(), true);
+  show('spinnerRowErased', 1);
+  assert.equal(look().line, true, 'the line holds through the redraw');
+  assert.equal(live(), false, 'the round has the frame own verdict: no spinner row, settled');
+  show('full', 1);
+  assert.equal(look().line, true); assert.equal(live(), true);
 });
 
 // A menu or dialog is one frame: accepting turns false and waiting true with no hold, and the box shows and blocks in that render.
