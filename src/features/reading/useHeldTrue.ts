@@ -5,9 +5,9 @@ import { useEffect, useState } from 'react';
 // one or two samples; 500 ms is five samples, past any redraw, and still a blink for a change that is real.
 export const COMPOSER_HOLD_MS = 500;
 
-// A signal for display only: true at once, false only after it has been false for `ms`, and false at once while `off` is set
-// (a dialog, a menu or the popup: those must show, and block, in the very render they are seen). Nothing that writes to the terminal
-// reads this; the delivery gates keep the frame's own verdict.
+// A signal for display and admission only: true at once, false only after it has been false for `ms`, and false at once while
+// `off` is set (a dialog, a menu or the popup: those must show, and block, in the very render they are seen). It may let a send
+// or a key through; nothing is written on its word: every write first reads the parsed frame again.
 export function useHeldTrue(value: boolean, off: boolean, ms = COMPOSER_HOLD_MS) {
   const [held, setHeld] = useState(value);
   useEffect(() => {

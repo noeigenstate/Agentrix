@@ -3134,6 +3134,8 @@ test('claude: the Stop button a finished round still shows writes no Esc to the 
   assert.ok(stopButton(h), 'the button outlasts the round by a moment');
   stopButton(h).props.onClick(); await h.advance(0); stopButton(h).props.onClick(); await h.advance(0);
   assert.deepEqual(h.written, [], 'two quick clicks open no history menu');
+  for (let step = 0; step < 12; step++) await h.advance(50);
+  assert.deepEqual(h.written, [], 'nor once the quiet looks are over, and no warning for a round that is over');
   h.press('Escape'); assert.deepEqual(h.written, []);
 });
 
@@ -3196,4 +3198,96 @@ test('claude: Stop on a half-drawn working frame looks again quietly and then in
   assert.deepEqual(h.written, []);
   delete h.view.rows; await h.advance(50);
   assert.deepEqual(h.written.map(item => item.text), ['\x1b']); assert.deepEqual(errors, [], 'no warning for a frame that finished drawing');
+});
+
+const DIALOG = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'];
+const pickQuote = (h, text) => { elements(h.tree()).find(element => element.props.value?.quote).props.value.quote.pick('Claude Code', text); h.render(); };
+const quoteChip = h => elements(h.tree()).find(element => element.type?.name === 'QuoteChip')?.props.quote.excerpt;
+
+test('claude: what the owner writes and quotes while a message waits stays when that message is held', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['✶ Swooping… (12s)']; h.render();
+  h.edit('A first'); h.press('Enter'); await h.tick(0);
+  h.edit('B still being written'); pickQuote(h, 'a newer quote');
+  h.view.rows = DIALOG; await h.advance(50); h.render();
+  assert.deepEqual(outboxTexts(h), ['A first'], 'the held message keeps only the quote it was sent with');
+  assert.equal(h.node.value, 'B still being written', 'the new draft is not cleared');
+  assert.equal(quoteChip(h), 'a newer quote', 'the newer quote stays for the next message');
+});
+
+test('claude: a message held after its wait goes before one sent during it', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['✶ Swooping… (12s)']; h.render();
+  h.edit('A first'); h.press('Enter'); await h.tick(0);
+  h.edit('B second'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), ['B second']);
+  h.view.rows = DIALOG; await h.advance(50); h.render();
+  assert.deepEqual(outboxTexts(h), ['A first', 'B second'], 'first sent, first in the outbox');
+});
+
+for (const step of ['waiting for its input', 'clearing the input']) test(`claude: a message whose view goes away while ${step} stays in that conversation's outbox`, async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [], write = window.agentrix.writeTerminal;
+  h.props.onError = error => errors.push(error);
+  if (step === 'waiting for its input') { h.view.rows = ['✶ Swooping… (12s)']; h.render(); }
+  else {
+    h.view.draft = 'typed in the terminal'; h.render(); h.render();
+    window.agentrix.writeTerminal = (id, text) => { if (text === '\x15') { h.written.push({ id, text }); h.unmount(); return; } write(id, text); };
+  }
+  h.edit('do not lose me'); h.press('Enter'); await h.tick(0);
+  if (step === 'waiting for its input') h.unmount();
+  for (let wait = 0; wait < 50; wait++) await h.advance(50);
+  assert.deepEqual(h.pasted, []); assert.deepEqual(errors, [en['视图已切换，这条消息还没写进终端，已留在原会话的待发消息里。']]);
+  delete h.view.rows; window.agentrix.writeTerminal = write; h.view.draft = 'typed in the terminal';
+  h.remount();
+  assert.deepEqual(outboxTexts(h), ['do not lose me'], 'the conversation shows it again');
+});
+
+for (const frame of ['parses within a second', 'never parses']) test(`claude: a slash command on a frame that ${frame} is typed then, or comes back to the box`, async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.onError = error => errors.push(error);
+  h.view.pending = true; h.render();
+  h.edit('/status'); h.press('Enter'); await h.tick(0);
+  if (frame === 'parses within a second') { await h.tick(300); h.view.pending = false; }
+  // Each 20 ms pause of the command's wait is its own timer: step through them.
+  for (let wait = 0; wait < 60; wait++) await h.tick(20);
+  if (frame === 'parses within a second') {
+    assert.deepEqual(h.written.map(item => item.text), ['\x15', '/status', '\r']); assert.deepEqual(errors, []);
+  } else {
+    assert.deepEqual(h.written, [], 'no key was typed');
+    assert.equal(h.node.value, '/status', 'the command is back in the box');
+    assert.equal(h.popup(), undefined); assert.deepEqual(errors, [en['终端还没准备好，这条命令没有输入，请稍后再发送。']]);
+  }
+});
+
+test('claude: Stop on a frame drawn without its spinner row waits for it, then interrupts', async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.onError = error => errors.push(error);
+  // The input box is drawn, the spinner row not yet: this frame alone looks idle.
+  h.view.working = false; h.render();
+  assert.ok(stopButton(h));
+  stopButton(h).props.onClick(); await h.advance(0);
+  assert.deepEqual(h.written, []);
+  h.view.working = true; await h.advance(50);
+  assert.deepEqual(h.written.map(item => item.text), ['\x1b']); assert.deepEqual(errors, []);
+});
+
+for (const next of ['other words', 'the same words']) test(`claude: a message that waited behind a send whose Enter did not take gets the leftover notice (${next})`, async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.accept = false;
+  h.edit('first words'); h.press('Enter'); await h.tick(0);
+  const second = next === 'other words' ? 'second words' : 'first words';
+  h.edit(second); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), [second], 'sent while the first send still runs, it waits');
+  await h.tick(400); await h.tick(700); await h.tick(3000); h.render();
+  assert.equal(h.view.draft, 'first words', 'the first words sit unsubmitted in the input');
+  const notice = leftoverNotice(h);
+  assert.ok(notice, 'the waiting message does not sit there without a way out');
+  assert.equal(notice.text, 'first words');
+  assert.deepEqual(Object.keys(notice.actions), [en['先发送终端里这段'], en['清空它，再发送新消息']]);
+  assert.deepEqual(outboxTexts(h), next === 'other words' ? [second] : [], 'the same words wait as the notice, not twice');
+  h.view.accept = true;
+  notice.actions[en['先发送终端里这段']].onClick(); await h.tick(80); h.render();
+  for (let step = 0; step < 6; step++) await h.tick(700);
+  assert.deepEqual(h.view.records.map(record => record.text), next === 'other words' ? ['first words', 'second words'] : ['first words']);
+  assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined);
 });

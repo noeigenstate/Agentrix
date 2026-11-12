@@ -3152,5 +3152,7 @@
   "先发送终端里这段": "Send the terminal's text first",
   "清空它，再发送新消息": "Clear it, then send the new message",
   "排在终端输入框里那段文字后面": "Waiting behind the text in the terminal input",
-  "终端还没准备好，这次没有中断，请稍后再试。": "The terminal is not ready, so nothing was interrupted. Try again in a moment."
+  "终端还没准备好，这次没有中断，请稍后再试。": "The terminal is not ready, so nothing was interrupted. Try again in a moment.",
+  "视图已切换，这条消息还没写进终端，已留在原会话的待发消息里。": "The view changed before this message reached the terminal; it waits among that conversation's unsent messages.",
+  "终端还没准备好，这条命令没有输入，请稍后再发送。": "The terminal was not ready, so the command was not typed. Send it again in a moment."
 }
