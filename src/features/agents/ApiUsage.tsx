@@ -184,7 +184,7 @@ export const AgentSections = ({ usage, terminal, projectId }: { usage: NativeUsa
 
 // A pane belongs to one project for its whole life (the app keys each project's panel by its id), so the state below never changes project.
 export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
-  const bridge = nativeBridge(), revision = useUsageRevision();
+  const bridge = nativeBridge(), revision = useUsageRevision(projectId);
   const key = projectId || '';
   const [usage, setUsage] = useState<NativeUsage | null>(() => observations.get(key)?.bridge === bridge ? observations.get(key)!.usage : null), [error, setError] = useState<string | null>(null);
   useEffect(() => {

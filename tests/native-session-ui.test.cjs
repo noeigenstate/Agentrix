@@ -607,6 +607,23 @@ test('a replayed event never counts as news for the usage panel; a live one does
   });
 });
 
+test('a project’s usage change reaches only that project’s revision; a malformed one and a bridge without the call change nothing', async () => {
+  const bridge = { onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: null }), onUsageChanged: listener => { bridge.changed = listener; return () => { bridge.stopped = true; }; } };
+  await withBridge(bridge, async store => {
+    store.ensureNativeSession('t1'); await settle();
+    const revisions = () => [read(() => store.useUsageRevision('a')), read(() => store.useUsageRevision('b')), read(() => store.useUsageRevision())];
+    assert.deepEqual(revisions(), [0, 0, 0]);
+    bridge.changed({ projectId: 'a' }); assert.deepEqual(revisions(), [1, 0, 0], 'project a read again, b and the window-wide revision did not');
+    bridge.changed({}); bridge.changed(null); bridge.changed({ projectId: 7 }); assert.deepEqual(revisions(), [1, 0, 0]);
+    store.usageChanged(); assert.deepEqual(revisions(), [2, 1, 1], 'a window-wide change still reaches every project');
+  });
+  assert.equal(bridge.stopped, true, 'disposing the store stops listening');
+  await withBridge({ onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: null }) }, async store => {
+    store.ensureNativeSession('t1'); await settle();
+    assert.equal(read(() => store.useUsageRevision('a')), 0, 'an older main never says it');
+  });
+});
+
 // ---- how a session starts -----------------------------------------------------------------------------------------------------------
 test('the launch route follows the settings: native by default, the terminal when chosen, the reason when a missing key is why, and nothing for API-only without a key', () => {
   const { launchRoute } = load('features/native-session/native-bridge.ts'), set = claudePath => ({ claudePath, monthlyBudgetUsd: null });
@@ -1624,6 +1641,28 @@ const usageSection = (html, agent) => {
   assert.ok(section, `${agent} has its own named section`);
   return section[1];
 };
+
+test('a quota change reported for one project makes only that project’s usage card read again', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window'), store = load('features/native-session/native-store.ts');
+  const bridge = { onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: null }), usage: async id => { reads.push(id); return { ok: true, value: usageOf() }; }, onUsageChanged: listener => { bridge.changed = listener; return () => {}; } }, reads = [];
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  const mount = projectId => {
+    const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: id => read(() => store.useUsageRevision(id)) }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './activity-pane.css': {} });
+    harness.render('ApiUsage', { terminal: quietTerminal, projectId }); return harness;
+  };
+  try {
+    store.ensureNativeSession('t1'); await settle();
+    const [a, b] = [mount('a'), mount('b')];
+    t.mock.timers.tick(0); await settle();
+    assert.deepEqual(reads.sort(), ['a', 'b'], 'each card reads once when it opens');
+    reads.length = 0; bridge.changed({ projectId: 'a' });
+    for (const harness of [a, b]) harness.render('ApiUsage', { terminal: quietTerminal, projectId: harness === a ? 'a' : 'b' });
+    t.mock.timers.tick(1000); await settle();
+    assert.deepEqual(reads, ['a'], 'project b did not read again for project a’s report');
+    a.dispose(); b.dispose();
+  } finally { store.disposeNativeStore(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
+});
 
 test('Codex billing keeps ChatGPT subscriptions while legacy terminal snapshots require app-server restoration', async () => {
   const usage = async () => ({ ok: true, value: usageOf() });

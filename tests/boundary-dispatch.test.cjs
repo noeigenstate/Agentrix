@@ -79,3 +79,18 @@ test('the helper and its runtime modules fit the SSH worker limits with a quarte
   assert.ok(limit('DISPATCH_HELPER_BYTES') + limit('DISPATCH_MODULE_BYTES') + MAX_SSH_BUNDLE_BYTES <= limit('MAX_MESSAGE') * 0.75,
     'the helper, its modules and the skills bundle leave a quarter of MAX_MESSAGE for escaping and the envelope');
 });
+
+// Main's event loop also serves the pipe, the window and every terminal: a synchronous Git call for a team lookup stalled the control
+// registration past the helper's wait, so a worker lost its account name. Main asks locateTeam; only the helper keeps projectTeam.
+test('main, the control channel and the sub-agent view ask the team without a synchronous Git call', () => {
+  const files = ['electron/main.cjs', 'electron/features/agents/dispatch-control.cjs', 'electron/features/agents/subagent-feed.cjs'];
+  // A reference such as the SSH runtime's injected execFileSync is not a call; comments may name what they replaced.
+  const code = source => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const file of files) {
+    const source = code(read(file));
+    assert.doesNotMatch(source, /\bprojectTeam\s*\(/, `${file} looks a team up with the synchronous projectTeam`);
+    assert.doesNotMatch(source, /\b(?:execFileSync|execSync|spawnSync)\s*\(/, `${file} runs a process synchronously`);
+  }
+  assert.match(read('electron/main.cjs'), /team-locate\.cjs/, 'main asks the asynchronous lookup');
+  assert.match(read('electron/features/agents/subagent-feed.cjs'), /team-locate\.cjs|locateTeam/, 'the sub-agent view asks the asynchronous lookup');
+});

@@ -21,8 +21,8 @@ const RESYNC_DELAY = 250;
 // A switch moving changes how many sessions Settings says are waiting.
 const USAGE_EVENTS = new Set(['usage.updated', 'limits.updated', 'path.changed', 'turn.completed', 'switch.updated']);
 
-let entries: ReadonlyMap<string, NativeEntry> = new Map(), usageRevision = 0, stopListening: (() => void) | null = null, dismissedSwitches: ReadonlySet<string> = new Set();
-const listeners = new Set<() => void>(), waiting = new Map<string, AgentEvent[]>(), loading = new Set<string>(), resyncing = new Set<string>(), takenHandoffs = new Map<string, number>();
+let entries: ReadonlyMap<string, NativeEntry> = new Map(), usageRevision = 0, stopListening: (() => void) | null = null, stopUsageListening: (() => void) | null = null, dismissedSwitches: ReadonlySet<string> = new Set();
+const listeners = new Set<() => void>(), waiting = new Map<string, AgentEvent[]>(), loading = new Set<string>(), resyncing = new Set<string>(), takenHandoffs = new Map<string, number>(), projectRevisions = new Map<string, number>();
 
 function publish(terminalId: string, entry: NativeEntry) {
   entries = new Map(entries).set(terminalId, entry);
@@ -30,6 +30,12 @@ function publish(terminalId: string, entry: NativeEntry) {
 }
 
 function bump() { usageRevision += 1; listeners.forEach(listener => listener()); }
+// One project's numbers changed in main: only that project's usage card reads again.
+function bumpProject(change: { projectId?: unknown } | null | undefined) {
+  if (typeof change?.projectId !== 'string') return;
+  projectRevisions.set(change.projectId, (projectRevisions.get(change.projectId) ?? 0) + 1);
+  listeners.forEach(listener => listener());
+}
 // A change the main process already knows about (a key, a path, a budget): the usage card reads again without waiting for its timer.
 export const usageChanged = bump;
 
@@ -73,6 +79,7 @@ function onEvent(event: AgentEvent) {
 
 function listen() {
   if (!stopListening) stopListening = nativeBridge()?.onEvent(onEvent) ?? null;
+  if (!stopUsageListening) stopUsageListening = nativeBridge()?.onUsageChanged?.(bumpProject) ?? null;
 }
 
 function subscribe(listener: () => void) {
@@ -82,7 +89,9 @@ function subscribe(listener: () => void) {
 
 // Every terminal's entry; the map is replaced, never changed, so a component re-renders when it does.
 export const useNativeEntries = () => useSyncExternalStore(subscribe, () => entries, () => entries);
-export const useUsageRevision = () => useSyncExternalStore(subscribe, () => usageRevision, () => usageRevision);
+// The window-wide revision, plus the project's own when one is named: each only ever grows, so their sum changes exactly when either does.
+const revisionOf = (projectId?: string) => usageRevision + (projectId ? projectRevisions.get(projectId) ?? 0 : 0);
+export const useUsageRevision = (projectId?: string) => useSyncExternalStore(subscribe, () => revisionOf(projectId), () => revisionOf(projectId));
 
 // Asks once for a terminal's session, if the window has not heard of it: a window opened onto sessions that already run.
 export function ensureNativeSession(terminalId: string) {
@@ -157,6 +166,6 @@ export function takeHandoff(terminalId: string): NativeDraft | null {
 
 // Tests: forget everything and stop listening.
 export function disposeNativeStore() {
-  stopListening?.(); stopListening = null;
-  entries = new Map(); usageRevision = 0; dismissedSwitches = new Set(); waiting.clear(); loading.clear(); resyncing.clear(); takenHandoffs.clear(); listeners.clear();
+  stopListening?.(); stopListening = null; stopUsageListening?.(); stopUsageListening = null;
+  entries = new Map(); usageRevision = 0; dismissedSwitches = new Set(); waiting.clear(); loading.clear(); resyncing.clear(); takenHandoffs.clear(); projectRevisions.clear(); listeners.clear();
 }

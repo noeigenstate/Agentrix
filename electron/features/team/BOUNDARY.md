@@ -6,11 +6,13 @@ Coordinates dispatched workers through shared project memory, roundtable records
 - `electron/features/team/team.cjs`
 - `electron/features/team/minutes-page.cjs`
 - `electron/features/team/inbox.cjs`
+- `electron/features/team/team-locate.cjs`
 
 ## Interface
 - `projectTeam` (`electron/features/team/team.cjs`) — repository state, worker admission, context, meeting records, every-role end metadata, minutes with bounded latest issues snapshots and consolidation with validated incidents and findings
 - `minutesMarkdown` (`electron/features/team/team.cjs`) — two Markdown tables from the minutes-page data contract
 - `RunInbox` (`electron/features/team/inbox.cjs`) — a dispatched run's bounded owner inbox: incremental reads, atomic final closure; `queueControl` and `recordControl` serialize owner controls, their audit record and the planner's notification, rolling back when the planner's admission fails
+- `locateTeam` (`electron/features/team/team-locate.cjs`) — main's team lookup for a working directory without blocking: Git runs off the event loop, Git's common directory is remembered 30 s by the directory's real path and a failed lookup is never kept; `createTeamLocator({ execFile })` lets a test delay or fail Git; the helper keeps the synchronous `projectTeam`
 - `minutesPage` (`electron/features/team/minutes-page.cjs`) — a self-contained HTML document from the same minutes data
 
 ## May import
@@ -18,7 +20,7 @@ Coordinates dispatched workers through shared project memory, roundtable records
 - `electron/features/dashboard/records-routing.cjs`
 
 ## Invariants
-- All worktrees share Git's common-directory state; roundtables require Git and other runs keep their outside-Git behavior — repository context must not cross repositories — test: `tests/dispatch-team.test.cjs` › "worktrees share team state and outside git the helper behaves as before"; test: `tests/dispatch-team.test.cjs` › "roundtables outside git are refused before any worker launches"
+- All worktrees share Git's common-directory state; roundtables require Git and other runs keep their outside-Git behavior — repository context must not cross repositories — test: `tests/dispatch-team.test.cjs` › "worktrees share team state and outside git the helper behaves as before"; test: `tests/dispatch-team.test.cjs` › "roundtables outside git are refused before any worker launches"; main, the control channel and the sub-agent view ask the team through `locateTeam`, never a synchronous Git call, so a slow Git delays only that lookup and a worker's registration keeps its account name — test: `tests/boundary-dispatch.test.cjs` › "main, the control channel and the sub-agent view ask the team without a synchronous Git call"; test: `tests/dispatch-codex-usage.test.cjs` › "a slow Git lookup does not fail the control registration: the worker is bound and its account is named"
 - Scope admission checks and board registration hold one exclusive lock, and dead helpers are removed — simultaneous launches must not acquire overlapping files — test: `tests/dispatch-team.test.cjs` › "simultaneous helpers serialize overlap admission and retain the helper pid"
 - Execution requires its resumed session's latest clean confirmation and the agreed scope set, or a recorded skip reason — a worker must understand its task before work — test: `tests/dispatch-team.test.cjs` › "execution requires a confirmed resumed session and the same scope set"
 - A different meeting waits for pending rounds; consolidated ids stay closed even after late ends and live workers prevent consolidation — resuming an old review must not block a new round — test: `tests/dispatch-team.test.cjs` › "meeting lifecycle keeps consolidated ids closed even after late ends"; test: `tests/dispatch-team.test.cjs` › "review and investigation resumed from a consolidated round do not block the next roundtable"
