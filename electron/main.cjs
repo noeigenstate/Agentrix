@@ -210,7 +210,7 @@ const agents = new AgentsManager({ onChange: state => send('agents:changed', sta
 // connection test, an install) reads the stored Windows PATH and searches again; 'focus' does that at most once a
 // minute. The agents' state is told again when the terminal's file, its version, its via or the outcome changed.
 async function inspectClaude(mode) {
-  const seen = () => { const found = claudeLocator.peek(), terminal = found?.terminal; return [terminal?.file, terminal?.version, terminal?.via, found?.reason].join(' '); };
+  const seen = () => { const found = claudeLocator.peek(), terminal = found?.terminal; return [terminal?.file, terminal?.version, terminal?.via, found?.reason].join('\0'); };
   const before = seen();
   try { return await inspectClaudeExecutable({ locator: claudeLocator, fresh: mode !== 'locate', throttled: mode === 'focus' }); }
   finally { if (seen() !== before) agents.changed(); }
