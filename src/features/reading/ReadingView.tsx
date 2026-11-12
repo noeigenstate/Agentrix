@@ -353,7 +353,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const cleared = await native.clearInput(leftoverOwns).finally(() => { leftoverClearing.current = false; });
     if (!mounted.current) return;
     setLeftover(cleared ? null : { ...shown });
-    if (cleared && shown.again) hold(shown.again, false);
+    if (!cleared) return;
+    // The owner gave those words up: their unconfirmed card goes too, or the safety net would send them again.
+    for (const prompt of pending) if (sameMessage(prompt.text, shown.text)) cancelEcho(prompt.id);
+    if (shown.again) hold(shown.again, false);
   };
   const keepNativeInput = () => {
     setTerminalPopup({ command: '', focus: false });
@@ -481,7 +484,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (pictureSend) clearDraft();
     toBottom();
     if (text) await new Promise(resolve => setTimeout(resolve, 400));
-    if (native.parsing()) await native.settle(() => ownsSend(owner));
+    // The words are in the terminal now. Handing them back on a frame that only has not parsed yet would leave them in
+    // both places, so this waits longer for one (a send of them again still meets them there as a leftover).
+    if (native.parsing()) await native.settle(() => ownsSend(owner), 2000);
     if (!ownsSend(owner) || choiceVisible.current || !native.readInput()) {
       if (pendingId) cancelEcho(pendingId);
       restoreQuote();

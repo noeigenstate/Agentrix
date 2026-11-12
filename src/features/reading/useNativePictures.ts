@@ -36,10 +36,10 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
     return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen) };
   };
   // readInput reads nothing while xterm parses a write. Claude Code's busy output keeps it parsing, so a send waits for
-  // a parsed frame (half a second at most) instead of taking the absent input for a missing or empty one.
+  // a parsed frame (half a second unless told otherwise) instead of taking the absent input for a missing or empty one.
   const parsing = () => !!readScreen(terminalId)?.pending;
-  const settle = async (owns: () => boolean) => {
-    for (let tries = 0; tries < 10 && owns() && parsing(); tries++) await new Promise(resolve => setTimeout(resolve, 50));
+  const settle = async (owns: () => boolean, limit = 500) => {
+    for (let waited = 0; waited < limit && owns() && parsing(); waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
   };
   // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
   const clearInput = async (owns: () => boolean) => {
