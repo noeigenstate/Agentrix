@@ -34,7 +34,7 @@ function fixture(t, { remote = false, scope = 'host-a', home } = {}) {
         if (method === 'skills/list') result = { data: [{ cwd: root, skills: [{ name: 'lookup', path: path.join(root, 'SKILL.md'), enabled: true }] }] };
         if (method === 'thread/start' || method === 'thread/resume') {
           const id = p.threadId || 'thread-' + ++serial;
-          result = { ...threads.get(id), thread: { id, status: { type: 'idle' } }, model: p.model || 'model-a', reasoningEffort: p.config?.model_reasoning_effort || 'high', serviceTier: p.serviceTier || null, sandbox: { type: 'readOnly' } };
+          result = { ...threads.get(id), thread: { id, status: { type: 'idle' } }, model: p.model || 'model-a', reasoningEffort: p.config?.model_reasoning_effort || 'high', serviceTier: p.serviceTier || null, sandbox: { type: { 'danger-full-access': 'dangerFullAccess', 'workspace-write': 'workspaceWrite' }[p.sandbox] || 'readOnly' } };
           threads.set(id, result);
           if (holding) { held.push(() => write({ id: message.id, result })); continue; }
         }
@@ -80,7 +80,7 @@ test('Codex choices validate against the real catalog shape, persist before a tu
     const id = f.session.snapshot().events.find(row => row.providerSessionId).providerSessionId;
     await assert.rejects(f.session.runOptions({ effort: 'invented' }), /不支持/);
     await f.session.runOptions({ model: 'model-b' });
-    assert.deepEqual(await f.session.runOptions({}), { model: 'model-b', effort: 'medium', fast: false });
+    assert.deepEqual(await f.session.runOptions({}), { model: 'model-b', effort: 'medium', fast: false, permissions: 'full' });
     assert.equal((await f.session.commands()).some(row => row.name === '/fast'), false);
     await assert.rejects(f.session.runOptions({ fast: true }), /不支持快速/);
     await f.session.runOptions({ model: null, effort: 'ultra', fast: true });
@@ -88,7 +88,7 @@ test('Codex choices validate against the real catalog shape, persist before a tu
     assert.equal(f.wire.filter(row => row.method === 'turn/start' && row.params.threadId).length, 0);
     await f.session.close();
     const resumed = f.factory.create({ ...f.spec, providerSessionId: id, preserveRunOptions: true }, event => f.events.push(event)); t.after(() => resumed.close());
-    await resumed.resume(); assert.deepEqual(await resumed.runOptions({}), { model: 'model-a', effort: 'ultra', fast: true });
+    await resumed.resume(); assert.deepEqual(await resumed.runOptions({}), { model: 'model-a', effort: 'ultra', fast: true, permissions: 'full' });
     await resumed.send({ clientMessageId: 'next', text: 'Next turn' }); await tick();
     const params = f.wire.findLast(row => row.method === 'turn/start').params;
     assert.equal(params.model, 'model-a'); assert.equal(params.effort, 'ultra'); assert.equal(params.serviceTier, 'fast');
@@ -116,8 +116,8 @@ test('a Codex choice made while the session starts waits for its thread, then ap
   while (!f.wire.some(row => row.method === 'thread/start')) await tick();
   const late = f.session.runOptions({ fast: true });
   await tick(); release(); await started;
-  assert.deepEqual(await early, { model: 'model-a', effort: 'ultra', fast: false });
-  assert.deepEqual(await late, { model: 'model-a', effort: 'ultra', fast: true });
+  assert.deepEqual(await early, { model: 'model-a', effort: 'ultra', fast: false, permissions: 'full' });
+  assert.deepEqual(await late, { model: 'model-a', effort: 'ultra', fast: true, permissions: 'full' });
   assert.deepEqual(f.events.findLast(event => event.type === 'routing.updated').payload.declared, { model: 'model-a', effort: 'ultra', fast: true });
   await f.session.send({ clientMessageId: 'first', text: 'First turn' }); await tick();
   const params = f.wire.findLast(row => row.method === 'turn/start').params;
@@ -125,7 +125,7 @@ test('a Codex choice made while the session starts waits for its thread, then ap
   const id = f.session.snapshot().events.find(row => row.providerSessionId).providerSessionId;
   await f.session.close();
   const resumed = f.factory.create({ ...f.spec, providerSessionId: id, preserveRunOptions: true }, () => {}); t.after(() => resumed.close());
-  await resumed.resume(); assert.deepEqual(await resumed.runOptions({}), { model: 'model-a', effort: 'ultra', fast: true }, 'the held choice persisted with its thread');
+  await resumed.resume(); assert.deepEqual(await resumed.runOptions({}), { model: 'model-a', effort: 'ultra', fast: true, permissions: 'full' }, 'the held choice persisted with its thread');
   // A session that closes before its thread exists refuses the held choice instead of leaving it waiting.
   const closing = fixture(t); closing.holdThread();
   const failed = closing.session.start().catch(error => error);
@@ -151,17 +151,19 @@ test('built-ins execute protocol controls, review root turns complete once, and 
     assert.deepEqual([status.status, status.local.command, status.local.account.kind, status.local.limits.map(row => row.usedPercent)], ['consumed', 'status', 'none', [null, null]], 'the answer is the receipt, with unread quota unknown');
     assert.equal(f.events.filter(row => row.type === 'item.upsert').length, itemsBefore, 'and no item of the conversation');
     assert.ok(f.wire.slice(before).every(row => !row.method.startsWith('turn/')));
-    for (const text of ['/permissions', '/fork', '/reset', '/reviewing nope']) {
+    for (const text of ['/fork', '/reset', '/reviewing nope']) {
       if (text.startsWith('/reviewing')) continue;
       await assert.rejects(f.session.send({ clientMessageId: text.slice(1), text }), /原生模式暂不支持/);
     }
+    // /permissions is the composer's menu (run options), never words for the model.
+    await assert.rejects(f.session.send({ clientMessageId: 'permissions', text: '/permissions full' }), /请使用原生输入框的命令菜单/);
     const turns = f.wire.filter(row => row.method === 'turn/start' && row.params.threadId).length;
     await f.session.send({ clientMessageId: 'custom', text: '/prompts:mine ARG' }); await tick();
     await f.session.send({ clientMessageId: 'skill', text: '/lookup ARG' }); await tick();
     const sent = f.wire.filter(row => row.method === 'turn/start' && row.params.threadId).slice(turns);
     assert.equal(sent[0].params.input[0].text, '/prompts:mine ARG');
     assert.deepEqual(sent[1].params.input.at(-1), { type: 'skill', name: 'lookup', path: path.join(f.root, 'SKILL.md') });
-    assert.deepEqual(builtinCommands().map(row => row.name), ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status', '/usage']);
+    assert.deepEqual(builtinCommands().map(row => row.name), ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status', '/usage', '/permissions']);
     assert.equal(unsupported.has('fork'), true);
   }
 });
@@ -185,7 +187,7 @@ test('Codex router controls and fresh conversation preserve identity checks and 
   const second = await router.newConversation('t', first.runtimeSessionId);
   assert.notEqual(first.runtimeSessionId, second.runtimeSessionId);
   await assert.rejects(router.models('t', first.runtimeSessionId), /会话已变化/);
-  assert.deepEqual(await router.runOptions('t', second.runtimeSessionId, {}), { model: 'model-a', effort: 'ultra', fast: true });
+  assert.deepEqual(await router.runOptions('t', second.runtimeSessionId, {}), { model: 'model-a', effort: 'ultra', fast: true, permissions: 'full' });
   const handlers = {};
   registerIpc({ handle: (name, handler) => { handlers[name] = handler; }, router, settings: { get() {} }, claude: { credentials: {} } });
   await handlers['native:run-options']('t', second.runtimeSessionId, { effort: 'ultra' });

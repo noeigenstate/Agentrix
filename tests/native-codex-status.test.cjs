@@ -27,7 +27,8 @@ function server(cwd, tier = 'fast') {
         if (request.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
         else if (request.method === 'thread/start') result = { thread: { id: 'offline-thread', sessionId: 'offline-session', turns: [], cliVersion: '0.166.0', cwd, modelProvider: 'openai', source: 'vscode',
           preview: '', projectId: null, ephemeral: true, status: { type: 'idle' }, createdAt: 2000000000, updatedAt: 2000000000 },
-        cwd, model: 'gpt-6.1-sol', modelProvider: 'openai', reasoningEffort: 'high', serviceTier: tier, approvalPolicy: 'never', approvalsReviewer: 'user', sandbox: { type: 'readOnly' } };
+        cwd, model: 'gpt-6.1-sol', modelProvider: 'openai', reasoningEffort: 'high', serviceTier: tier, approvalPolicy: p.approvalPolicy || 'on-request', approvalsReviewer: 'user',
+          sandbox: { type: { 'danger-full-access': 'dangerFullAccess', 'workspace-write': 'workspaceWrite' }[p.sandbox] || 'readOnly' } };
         else if (request.method === 'account/read') result = { account: { type: 'chatgpt', email: 'private@example.invalid', planType: 'pro' }, requiresOpenaiAuth: true };
         else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 2000000000 }, secondary: { usedPercent: 70, windowDurationMins: 10080, resetsAt: 2000500000 } }, rateLimitsByLimitId: {} };
         else if (request.method === 'turn/start') result = { turn: { id: 'offline-turn', status: 'inProgress', items: [] } };
@@ -84,7 +85,7 @@ test('Codex /status reports provider data, both quota windows and safe failures,
   const f = await fixture(t);
   f.notify('thread/tokenUsage/updated', { turnId: 'offline-turn', tokenUsage: { total: { inputTokens: 100, cachedInputTokens: 20, outputTokens: 30, reasoningOutputTokens: 10, totalTokens: 130 }, last: { inputTokens: 50, cachedInputTokens: 0, outputTokens: 10, reasoningOutputTokens: 0, totalTokens: 60 }, modelContextWindow: 200000 } });
   const { local } = await f.router.send('t', f.id, { clientMessageId: 'known', text: '/status' });
-  assert.deepEqual(local.session, { model: 'gpt-6.1-sol', effort: 'high', fast: true, cwd: local.session.cwd, sandbox: 'readOnly', approval: 'never' });
+  assert.deepEqual(local.session, { model: 'gpt-6.1-sol', effort: 'high', fast: true, cwd: local.session.cwd, sandbox: 'dangerFullAccess', approval: 'never', permissions: 'full' });
   assert.equal(typeof local.session.cwd, 'string');
   assert.deepEqual(local.account, { provider: 'openai', kind: 'subscription' });
   assert.deepEqual(local.tokens, { total: 130, input: 100, output: 30, cachedInput: 20, reasoning: 10, context: 60, window: 200000 });
@@ -144,7 +145,7 @@ test('a refused local command cannot poison the queue for the next /status', asy
 test('unknown values stay unknown (null), including Fast, approval, sandbox, tokens and the account', () => {
   const { statusPanel } = require('../electron/features/codex-app-server/status.cjs');
   const panel = statusPanel({ options: { model: null, effort: null, fast: null }, thread: {}, cwd: null, usage: null, account: null, limits: null, errors: [] });
-  assert.deepEqual(panel.session, { model: null, effort: null, fast: null, cwd: null, sandbox: null, approval: null });
+  assert.deepEqual(panel.session, { model: null, effort: null, fast: null, cwd: null, sandbox: null, approval: null, permissions: null });
   assert.deepEqual(Object.values(panel.tokens), [null, null, null, null, null, null, null]);
   assert.deepEqual(panel.limits, [{ id: '5h', usedPercent: null, resetsAtMs: null }, { id: 'week', usedPercent: null, resetsAtMs: null }]);
   assert.deepEqual([panel.account, panel.errors], [{ provider: null, kind: 'unknown' }, []]);

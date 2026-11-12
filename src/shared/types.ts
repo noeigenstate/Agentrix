@@ -191,9 +191,10 @@ export type ConnectionTest = {
     reported?: { apiKeySource: string | null; tokenSource: string | null }; detail?: { text: string; values: Record<string, string | number> } };
   path: 'api' | 'terminal' | null; reason: string | null;
 };
-// What the native composer's /model, /effort and /fast read and change. An empty patch changes nothing and answers the current values.
-export type NativeRunOptionsPatch = { model?: string | null; effort?: string | null; fast?: boolean };
-export type NativeRunOptions = { model: string | null; effort: string | null; fast: boolean };
+// What the native composer's /model, /effort, /fast and Codex's /permissions read and change. An empty patch changes nothing and answers the
+// current values; a Codex owner session also answers the permissions it runs with, and /permissions is sent alone.
+export type NativeRunOptionsPatch = { model?: string | null; effort?: string | null; fast?: boolean; permissions?: Settings['codexPermissions'] };
+export type NativeRunOptions = { model: string | null; effort: string | null; fast: boolean; permissions?: Settings['codexPermissions'] };
 export type NativeModelOption = { value: string; displayName: string; description: string; efforts: string[] };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; active?: boolean; source: string | null; observedAt: number | null };
 type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & {

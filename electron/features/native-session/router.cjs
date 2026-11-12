@@ -146,8 +146,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         const reason = error.code || error.message;
         if (agent === 'codex') {
           try { await runtime.close(); } catch { }
-          const message = reason === 'sandbox_mismatch' && error.requestedSandbox === 'read-only' ? 'Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。'
-            : reason === 'sandbox_mismatch' ? 'Codex 返回只读沙箱。请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。'
+          // A sandbox Codex did not apply is named by the runtime, which knows what was asked and what came back.
+          const message = reason === 'sandbox_mismatch' ? error.message
             : ['codex_cli_required', 'ENOENT'].includes(reason) ? spec.kind === 'ssh'
               ? '远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。'
               : '未找到 Codex 程序，请在设置中安装。'
@@ -318,6 +318,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       const record = current(id, runtimeSessionId);
       if (!record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
       if (record.spec.agent === 'claude' && patch.effort != null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effort)) throw new Error('无效的运行选项。');
+      if (record.spec.agent !== 'codex' && patch.permissions !== undefined) throw new Error('此会话不支持切换权限。');
       const result = await record.runtime.runOptions(patch);
       current(id, runtimeSessionId);
       if (record.spec.agent === 'codex') Object.assign(record.spec, result);

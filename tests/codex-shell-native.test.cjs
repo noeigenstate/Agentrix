@@ -84,7 +84,7 @@ for (const kind of ['local', 'ssh']) test(`${kind} native spec applies only the 
   const project = { id: 'p', kind, path: kind === 'ssh' ? '/remote/project' : path.resolve('project') };
   let disposed = 0;
   const context = vm.createContext({ path, randomUUID: () => 'id', sessions: new Map([['t', { status: 'shell' }]]),
-    findProject: () => project, disposeTerminal: () => { disposed++; }, store: { findTerminal: () => ({ record: { restore: { agent: 'claude', threadId: 'other', cwd: 'old' } } }) },
+    findProject: () => project, disposeTerminal: () => { disposed++; }, store: { settings: { codexPermissions: 'full' }, findTerminal: () => ({ record: { restore: { agent: 'claude', threadId: 'other', cwd: 'old' } } }) },
     nativeSpecs: new Map(), runtimeDir: path.resolve('runtime'), eventServer: { name: 'pipe', address: '/socket' }, process: { platform: process.platform, env: {} },
     fs: { writeFileSync() {} }, createTerminalEnvironment: () => ({ codex_home: 'old-home' }), withoutAppImage: value => value,
     startupNote: () => 'context', READING_NOTE: 'reading', handoffFile: () => 'handoff', skills: { delivery() {} }, integrationDir: 'integration', controlAddress: 'control' });

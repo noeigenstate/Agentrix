@@ -5,6 +5,7 @@ const mode = process.env.SYNTHETIC_CODEX_MODE || 'normal';
 let threadId = 'synthetic-thread', turnId = 'turn-1', turns = 0, skillReads = 0, account = process.env.SYNTHETIC_CODEX_ACCOUNT;
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const notify = (method, params) => send({ method, params: { threadId, ...params } });
+const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line), params = request.params || {};
   if (process.env.SYNTHETIC_CODEX_LOG) fs.appendFileSync(process.env.SYNTHETIC_CODEX_LOG, JSON.stringify(request) + '\n');
@@ -19,7 +20,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     if (mode === 'empty-thread' && request.method === 'thread/resume') return send({ id: request.id,
       error: { code: -32600, message: 'no rollout found for thread id ' + params.threadId } });
     threadId = params.threadId || threadId;
-    if (mode === 'resume-frame-limit') return send({ id: request.id, result: { thread: { id: threadId, turns: [] }, padding: 'x'.repeat(4 * 1024 * 1024) } });
+    if (mode === 'resume-frame-limit') return send({ id: request.id, result: { thread: { id: threadId, turns: [] }, sandbox: { type: SANDBOX_TYPES[params.sandbox || 'workspace-write'] }, padding: 'x'.repeat(4 * 1024 * 1024) } });
     if (mode.startsWith('long-') && request.method === 'thread/resume' && params.excludeTurns !== true) return send({ id: request.id, result: { thread: { id: threadId, turns: [] }, padding: 'x'.repeat(4 * 1024 * 1024) } });
     let sandbox = params.sandbox || 'workspace-write';
     if (mode === 'windows-sandbox' && params.config?.['windows.sandbox'] !== 'unelevated') sandbox = 'read-only';
@@ -28,7 +29,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
       fs.writeFileSync(process.env.SYNTHETIC_POLICY_FILE, JSON.stringify({ sandbox }));
     }
     result = { thread: { id: threadId, turns: [] }, cwd: params.cwd, model: params.model, serviceTier: params.serviceTier,
-      reasoningEffort: params.config?.model_reasoning_effort, approvalPolicy: params.approvalPolicy || 'on-request', sandbox: { type: sandbox === 'read-only' ? 'readOnly' : 'workspaceWrite' } };
+      reasoningEffort: params.config?.model_reasoning_effort, approvalPolicy: params.approvalPolicy || 'on-request', sandbox: { type: SANDBOX_TYPES[sandbox] } };
   } else if (request.method === 'turn/start') {
     if (mode === 'skill-catalog') notify('skills/changed', {});
     if (mode === 'sandbox-persist' && JSON.parse(fs.readFileSync(process.env.SYNTHETIC_POLICY_FILE)).sandbox === 'workspace-write') fs.writeFileSync(path.join(process.cwd(), 'synthetic-write-proof.txt'), 'workspace-write');

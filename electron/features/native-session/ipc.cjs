@@ -1,4 +1,5 @@
 const { exact, id, text, assert, validImages, validSwitchAnswer, validHandoff } = require('./validate.cjs');
+const { CODEX_PERMISSIONS } = require('../../state.cjs');
 function registerIpc({ handle, router, settings, claude }) {
   const binding = (terminalId, runtimeSessionId) => assert(id(terminalId) && id(runtimeSessionId));
   handle('native:start', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent', 'resume']) && ['claude', 'codex'].includes(options.agent) && (options.resume === undefined || typeof options.resume === 'boolean')); return router.start(terminalId, options); });
@@ -17,9 +18,9 @@ function registerIpc({ handle, router, settings, claude }) {
   handle('native:commands', (...args) => { assert(args.length === 2); binding(...args); return router.commands(...args); });
   handle('native:run-options', (terminalId, runtimeSessionId, patch) => {
     binding(terminalId, runtimeSessionId);
-    assert(exact(patch, ['model', 'effort', 'fast']) && (patch.model === undefined || patch.model === null || text(patch.model, 160))
+    assert(exact(patch, ['model', 'effort', 'fast', 'permissions']) && (patch.model === undefined || patch.model === null || text(patch.model, 160))
       && (patch.effort === undefined || patch.effort === null || typeof patch.effort === 'string' && /^[\w-]{1,32}$/.test(patch.effort))
-      && (patch.fast === undefined || typeof patch.fast === 'boolean'));
+      && (patch.fast === undefined || typeof patch.fast === 'boolean') && (patch.permissions === undefined || CODEX_PERMISSIONS.includes(patch.permissions)));
     return router.runOptions(terminalId, runtimeSessionId, patch);
   });
   handle('native:models', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.models(terminalId, runtimeSessionId); });

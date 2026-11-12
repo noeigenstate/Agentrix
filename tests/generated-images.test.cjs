@@ -178,14 +178,14 @@ function picturePeer(cwd, items) {
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
   child.kill = () => { child.exitCode = 0; child.emit('exit', 0); child.emit('close', 0); };
   const send = message => child.stdout.write(JSON.stringify(message) + '\n');
-  const thread = id => ({ thread: { id, turns: [], cwd, status: { type: 'idle' } }, cwd, model: 'gpt-6.1-sol', reasoningEffort: 'high', serviceTier: 'default', sandbox: { type: 'readOnly' } });
+  const thread = (id, sandbox) => ({ thread: { id, turns: [], cwd, status: { type: 'idle' } }, cwd, model: 'gpt-6.1-sol', reasoningEffort: 'high', serviceTier: 'default', sandbox: { type: { 'danger-full-access': 'dangerFullAccess', 'workspace-write': 'workspaceWrite' }[sandbox] || 'readOnly' } });
   child.stdin = new Writable({ write(bytes, _encoding, done) {
     for (const line of bytes.toString().trim().split('\n')) {
       const request = JSON.parse(line); if (request.id == null) continue;
       // The capability probe names no thread, and is refused as the real server refuses it.
       if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(request.method) && !request.params?.threadId) { queueMicrotask(() => send({ id: request.id, error: { code: -32602, message: 'missing threadId' } })); continue; }
       queueMicrotask(() => send({ id: request.id, result: request.method === 'initialize' ? { userAgent: 'codex/0.166.0' }
-        : request.method === 'thread/start' ? thread('fresh-thread') : request.method === 'thread/resume' ? thread(request.params.threadId)
+        : request.method === 'thread/start' ? thread('fresh-thread', request.params.sandbox) : request.method === 'thread/resume' ? thread(request.params.threadId, request.params.sandbox)
           : request.method === 'thread/turns/list' ? { data: [{ id: 'turn', status: 'completed', items }], nextCursor: null } : {} }));
     }
     done();

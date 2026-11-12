@@ -22,7 +22,7 @@ function server(cwd, running = false) {
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
   child.kill = () => { child.exitCode = 0; child.emit('exit', 0); child.emit('close', 0); };
   const send = message => child.stdout.write(JSON.stringify(message) + '\n');
-  const thread = id => ({ thread: { id, turns: [], cwd, status: { type: 'idle' } }, cwd, model: 'gpt-6.1-sol', reasoningEffort: 'high', serviceTier: 'default', sandbox: { type: 'readOnly' } });
+  const thread = (id, sandbox) => ({ thread: { id, turns: [], cwd, status: { type: 'idle' } }, cwd, model: 'gpt-6.1-sol', reasoningEffort: 'high', serviceTier: 'default', sandbox: { type: { 'danger-full-access': 'dangerFullAccess', 'workspace-write': 'workspaceWrite' }[sandbox] || 'readOnly' } });
   child.stdin = new Writable({ write(bytes, _encoding, done) {
     for (const line of bytes.toString().trim().split('\n')) {
       const request = JSON.parse(line); if (request.id == null) continue;
@@ -30,7 +30,7 @@ function server(cwd, running = false) {
         const p = request.params || {};
         if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(request.method) && !p.threadId) return send({ id: request.id, error: { code: -32602, message: 'missing threadId' } });
         const result = request.method === 'initialize' ? { userAgent: 'codex/0.166.0' }
-          : request.method === 'thread/start' ? thread('fresh-thread') : request.method === 'thread/resume' ? thread(p.threadId)
+          : request.method === 'thread/start' ? thread('fresh-thread', p.sandbox) : request.method === 'thread/resume' ? thread(p.threadId, p.sandbox)
             : request.method === 'thread/turns/list' ? { data: HISTORY, nextCursor: null } : request.method === 'turn/start' ? { turn: { id: 'live', status: 'inProgress', items: [] } } : {};
         // The provider may still be running the newest turn: its live item arrives while the history is being read.
         if (running && request.method === 'thread/turns/list') send({ method: 'item/started', params: { threadId: p.threadId, turnId: 'crashed', item: HISTORY[0].items[0] } });

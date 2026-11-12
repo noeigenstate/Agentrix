@@ -28,8 +28,8 @@ test('N5: a read-only meeting resumes writable for dispatch execution; owner and
   for (const spec of [{ owner: 'dispatch', readOnly: true }, { owner: 'dispatch', roundtable: true }]) {
     const readonly = await open(spec); assert.equal(readonly.threadResponse.sandbox.type, 'readOnly'); await readonly.close();
   }
-  const owner = await open({ owner: 'gui' });
-  assert.equal(owner.threadResponse.sandbox.type, 'readOnly', 'owner resume does not override its stored read-only policy');
+  const owner = await open({ owner: 'gui', permissions: 'config' });
+  assert.equal(owner.threadResponse.sandbox.type, 'readOnly', 'an owner resume under "config" does not override its stored read-only policy');
   await owner.close();
 });
 

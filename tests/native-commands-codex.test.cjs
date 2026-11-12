@@ -16,7 +16,7 @@ test('Codex lists only enabled bound skills, caches reads, invalidates changes a
   lifetime.defer('close runtime', () => runtime.close());
   await runtime.start();
   assert.deepEqual((await runtime.commands()).filter(row => row.source === 'skill'), [{ name: '/offline', description: 'Offline skill', source: 'skill', view: 'reading' }]);
-  assert.deepEqual((await runtime.commands()).filter(row => row.source === 'builtin').map(row => row.name), ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status', '/usage']);
+  assert.deepEqual((await runtime.commands()).filter(row => row.source === 'builtin').map(row => row.name), ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status', '/usage', '/permissions']);
   await runtime.commands();
   const requests = () => fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(requests().filter(row => row.method === 'skills/list').length, 1);
