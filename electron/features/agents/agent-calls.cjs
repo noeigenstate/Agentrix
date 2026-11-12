@@ -11,6 +11,14 @@ const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
 const enabled = value => value === true || value === 'true';
 const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/, REMOTE_FOLLOWS = 16;
+// One record of a sub-agent's own transcript, read here or compacted by the SSH host: its own effort and speed, and its
+// replies' timing once the call started. Both readers take every record through this, and name the model alike.
+function childRecord(call, record) {
+  const settings = agentSettings(null, 'claude', { ...record, isSidechain: false });
+  if (settings) { call.effort = settings.effort ?? call.effort; call.fast = settings.fast ?? call.fast; }
+  if (call.startedAt === null || Date.parse(record.timestamp) >= call.startedAt) call.meter.apply(record);
+}
+const childModel = (call, meta) => call.meter?.model || call.resultModel || text(meta?.model) || call.requested.model;
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
 function helperAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
@@ -268,35 +276,42 @@ class AgentCalls {
     }
     for (const [id, call] of this.calls) {
       this.feeds.update(call);
-      if (call.done && !call.dispatch && (!this.local || !this.folder)) {
-        call.drained = true; this.recordSubagent(call); this.feeds.finish(call);
-      } else if (call.done && !call.drained) this.refresh(id);
+      // An SSH sub-agent whose host still has records to send ends once they are in (remoteRecords).
+      if (call.done && !call.dispatch && (!this.local || !this.folder) && call.behind !== true) this.drain(call);
+      else if (call.done && !call.drained) this.refresh(id);
     }
     this.schedule();
     return changed;
   }
+  drain(call) { call.drained = true; this.recordSubagent(call); this.feeds.finish(call); }
   // Over SSH the host reads the sub-agents' records (integration/remote-worker.py, which takes the same id form and
-  // count): the newest running ones whose launch named their id.
+  // count): those whose launch named their id, running or ended with records still to come, until they are all in.
+  remoteFollows(call) { return !this.local && !call.dispatch && !call.drained && (call.done || !call.reviewed) && REMOTE_ID.test(call.agentId || ''); }
+  // The newest of them, and none while main's history is read: its replayed calls are not live.
   remoteSubagents() {
-    if (this.local) return [];
-    return [...this.calls.values()].filter(call => !call.dispatch && !call.done && !call.reviewed && REMOTE_ID.test(call.agentId || ''))
-      .map(call => call.agentId).slice(-REMOTE_FOLLOWS);
+    if (this.local || this.replaying) return [];
+    return [...this.calls.values()].filter(call => this.remoteFollows(call)).map(call => call.agentId).slice(-REMOTE_FOLLOWS);
   }
-  // What the host sent of them: each restart builds a new meter, marked partial when the host left out the file's start.
+  // What the host sent of them. A restart builds a new meter, marked partial when the host left out the file's start; a
+  // sub-agent the host no longer follows (crowded out, its file gone) keeps its rate marked partial until it restarts.
   remoteRecords(subagents) {
-    if (this.local || !subagents || typeof subagents !== 'object') return;
+    if (this.local) return;
+    const answer = subagents && typeof subagents === 'object' ? subagents : {};
     let changed = false;
     for (const call of this.calls.values()) {
-      const entry = !call.dispatch && !call.reviewed && call.agentId && Object.hasOwn(subagents, call.agentId) ? subagents[call.agentId] : null;
-      if (!Array.isArray(entry?.records)) continue;
-      const before = this.signature(call);
-      if (entry.reset || !call.meter) { call.meter = new TokenRates('claude', { sidechain: true }); call.meter.reset(entry.partial === true); }
-      for (const record of entry.records) {
-        if (record && typeof record === 'object' && (call.startedAt === null || Date.parse(record.timestamp) >= call.startedAt)) call.meter.apply(record);
-      }
-      call.rate = call.meter.snapshot();
-      call.model = call.meter.model || call.resultModel || call.requested.model;
+      if (!this.remoteFollows(call)) continue;
+      const before = this.signature(call), entry = Object.hasOwn(answer, call.agentId) ? answer[call.agentId] : null;
+      if (Array.isArray(entry?.records)) {
+        if (entry.reset || !call.meter) {
+          Object.assign(call, call.requested, { unfollowed: false });
+          call.meter = new TokenRates('claude', { sidechain: true }); call.meter.reset(entry.partial === true);
+        }
+        for (const record of entry.records) if (record && typeof record === 'object') childRecord(call, record);
+        call.behind = entry.behind === true;
+      } else Object.assign(call, { behind: null, unfollowed: !!call.meter });
+      if (call.meter) { call.rate = { ...call.meter.snapshot(), ...(call.unfollowed ? { partial: true } : {}) }; call.model = childModel(call); }
       changed ||= before !== this.signature(call);
+      if (call.done && call.behind !== true) this.drain(call);
     }
     if (changed) this.changed();
   }
@@ -358,19 +373,17 @@ class AgentCalls {
         this.feeds.resetLog(call, partial);
       } }) : null;
     }
-    if (!call.reader) { call.model = call.resultModel || text(meta?.model) || call.requested.model; this.feeds.update(call, false); return; }
+    if (!call.reader) { call.model = childModel(call, meta); this.feeds.update(call, false); return; }
     const readable = await call.reader.read(record => {
       if (this.calls !== calls) return;
-      const settings = agentSettings(null, 'claude', { ...record, isSidechain: false });
-      if (settings) { call.effort = settings.effort ?? call.effort; call.fast = settings.fast ?? call.fast; }
-      if (call.startedAt === null || Date.parse(record.timestamp) >= call.startedAt) call.meter.apply(record);
+      childRecord(call, record);
       this.feeds.consume(call, record);
       if (record.type === 'assistant' || record.type === 'token_usage_record') call.preparing = false;
     }).catch(() => false);
     if (this.calls !== calls) return;
     call.rate = readable ? call.meter.snapshot() : null;
     call.effort ??= text(meta?.effort).trim() || null;
-    call.model = call.meter.model || call.resultModel || text(meta?.model) || call.requested.model;
+    call.model = childModel(call, meta);
     this.feeds.update(call, readable);
   }
   async readModels(folder, ids, calls) {

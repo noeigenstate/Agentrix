@@ -691,11 +691,19 @@ def compact_record(record):
         return {"type": kind, "timestamp": at, "payload": {key: clip(value) for key, value in payload.items() if key in ("type", "name", "call_id", "id", "input", "arguments", "action")}}
     return None
 
+def take_batch(outbox, size, budget):
+    """Records from the front of an outbox while they fit a budget of which size is spent (at least one while nothing
+    is, so each answer moves on), and the size spent after them."""
+    batch = []
+    while outbox:
+        cost = len(json.dumps(outbox[0], ensure_ascii=True))
+        if size and size + cost > budget: break
+        batch.append(outbox.pop(0)); size += cost
+    return batch, size
+
 def take_records(reader):
     """The records waiting, up to a budget per answer; the rest go with the next one."""
-    batch, size = [], 0
-    while reader.outbox and (not batch or size + len(json.dumps(reader.outbox[0], ensure_ascii=True)) <= RECORDS_BUDGET):
-        record = reader.outbox.pop(0); size += len(json.dumps(record, ensure_ascii=True)); batch.append(record)
+    batch, _size = take_batch(reader.outbox, 0, RECORDS_BUDGET)
     reset, reader.reset = reader.reset, False
     result = {"records": batch, "reset": reset, "historyDone": bool(reader.filename) and not reader.history_pending and not reader.outbox}
     if getattr(getattr(reader, "work_history", None), "uncertain", False): result["completionUncertain"] = True
@@ -712,11 +720,24 @@ def read_transcript(reader, source, size, receive, limit=LIVE_READ_LIMIT):
         while b"\n" in reader.buffer:
             line, reader.buffer = reader.buffer.split(b"\n", 1)
             if not reader.skipping and len(line) <= 1024 * 1024:
+                # A line nested past the parser's depth is skipped like any line that cannot be read.
                 try: receive(json.loads(line))
-                except (ValueError, UnicodeError, TypeError): pass
+                except (ValueError, UnicodeError, TypeError, RecursionError): pass
             reader.skipping = False
         if len(reader.buffer) > 1024 * 1024: reader.buffer, reader.skipping = b"", True
     if reader.offset >= size: reader.history_pending = False
+
+def follow_file(reader, source):
+    """The open file's size, after starting the reader over at its history window when the file was replaced or cut
+    short (True with it then)."""
+    info = os.fstat(source.fileno())
+    size, identity = info.st_size, (info.st_dev, info.st_ino)
+    replaced = reader.file_identity != identity or size < reader.file_size
+    if replaced:
+        reader.offset, reader.skipping = transcript_window(size)
+        reader.buffer, reader.outbox, reader.reset = b"", [], True
+    reader.file_identity, reader.file_size = identity, size
+    return size, replaced
 
 class CompletionHistory:
     def __init__(self, end):
@@ -743,18 +764,24 @@ class CompletionHistory:
         return self.done
 
 # The sub-agents of a followed Claude transcript whose token rate the other computer shows: how many at once, how much of
-# one file each answer reads, and how much of their records one answer carries beside the transcript's own budget.
+# one file and of all of them each answer reads, and how much of their records one answer carries beside the
+# transcript's own budget.
 SUBAGENT_LIMIT = 16
 SUBAGENT_READ_LIMIT = 256 * 1024
-SUBAGENTS_BUDGET = 256 * 1024
+SUBAGENTS_READ_BUDGET = 1024 * 1024
+SUBAGENTS_BUDGET = 64 * 1024
+# A user message's words kept per text block: enough for every rule that tells a prompt from Claude's own messages
+# (electron/prompt-queue.cjs; tests/agent-calls-rate.test.cjs checks the margin), and the attachments that make one.
 PROMPT_MARK_LIMIT = 256
+PROMPT_ATTACHMENTS = ("image", "input_image", "file", "input_file")
 # A session or sub-agent id as Claude Code names its files: never a separator, a dot or an empty name.
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
 
 def compact_subagent_record(record):
-    """What a token rate (electron/features/agents/token-rate.cjs) takes from one sub-agent record: its place in the
-    conversation, a reply's identity, model and output tokens, the tools called and the results that came back, and for
-    any other user message its provenance and first words, which tell a prompt. Nothing else of the work leaves here."""
+    """What a sub-agent's row takes from one of its records (electron/features/agents/token-rate.cjs and
+    agent-settings.cjs): its place in the conversation, a reply's identity, model, output tokens, effort and speed, the
+    tools called and the results that came back, and for any other user message its provenance and each text block's
+    first words, which tell a prompt. Nothing else of the work leaves here."""
     if not isinstance(record, dict) or record.get("type") not in ("user", "assistant"): return None
     message = record.get("message") if isinstance(record.get("message"), dict) else {}
     content = message.get("content")
@@ -763,14 +790,19 @@ def compact_subagent_record(record):
         parts = [{"type": "tool_use", "id": block["id"]} for block in blocks if block.get("type") == "tool_use" and isinstance(block.get("id"), str)]
     else:
         parts = [{"type": "tool_result", "tool_use_id": block["tool_use_id"]} for block in blocks if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str)]
-        text = content if isinstance(content, str) else "\n".join(block["text"] for block in blocks if isinstance(block.get("text"), str))
-        if not parts and text.strip(): parts = [{"type": "text", "text": text[:PROMPT_MARK_LIMIT]}]
+        if not parts and isinstance(content, str): parts = [{"type": "text", "text": content[:PROMPT_MARK_LIMIT]}]
+        elif not parts:
+            parts = [{"type": "text", "text": block["text"][:PROMPT_MARK_LIMIT]} if isinstance(block.get("text"), str) else {"type": block["type"]}
+                     for block in blocks if isinstance(block.get("text"), str) or block.get("type") in PROMPT_ATTACHMENTS]
     kept = {**prompt_provenance(record), **{key: record[key] for key in ("type", "uuid", "parentUuid", "timestamp", "isSidechain") if key in record}}
+    kept.update((key, record[key]) for key in ("effort", "perTurnEffort") if isinstance(record.get(key), str) and len(record[key]) <= MODEL_NAME_LIMIT)
     kept["message"] = {"content": parts}
     if isinstance(message.get("id"), str): kept["message"]["id"] = message["id"]
     if isinstance(message.get("model"), str) and len(message["model"]) <= MODEL_NAME_LIMIT: kept["message"]["model"] = message["model"]
-    usage = message.get("usage")
-    if isinstance(usage, dict) and type(usage.get("output_tokens")) is int: kept["message"]["usage"] = {"output_tokens": usage["output_tokens"]}
+    usage = message.get("usage") if isinstance(message.get("usage"), dict) else {}
+    numbers = {"output_tokens": usage["output_tokens"]} if type(usage.get("output_tokens")) is int else {}
+    if usage.get("speed") in ("fast", "standard"): numbers["speed"] = usage["speed"]
+    if numbers: kept["message"]["usage"] = numbers
     return kept
 
 def subagent_folder(transcript):
@@ -803,29 +835,27 @@ class SubagentReader:
         kept = compact_subagent_record(record)
         if kept is not None: self.outbox.append(kept)
 
-    def read(self, source):
-        info = os.fstat(source.fileno())
-        size, identity = info.st_size, (info.st_dev, info.st_ino)
-        if self.file_identity != identity or size < self.file_size:
-            self.offset, self.skipping = transcript_window(size)
-            self.buffer, self.outbox, self.reset, self.partial = b"", [], True, self.skipping
-        self.file_identity, self.file_size = identity, size
-        if not self.outbox: read_transcript(self, source, size, self.record, SUBAGENT_READ_LIMIT)
+    def read(self, source, limit=SUBAGENT_READ_LIMIT):
+        """The bytes read: at most limit, and none while records read before wait to be sent."""
+        size, replaced = follow_file(self, source)
+        if replaced: self.partial = self.skipping
+        if self.outbox: return 0
+        start = self.offset
+        read_transcript(self, source, size, self.record, min(limit, SUBAGENT_READ_LIMIT))
+        return self.offset - start
 
-def take_subagents(readers):
-    """The sub-agents' waiting records, up to one shared budget per answer (always at least one record, so each answer
-    moves on); a reader that started over on a file it found says so, and whether the start of the file was left out.
-    One whose file was never found is not mentioned."""
+    def behind(self): return self.offset < self.file_size or bool(self.outbox)
+
+def take_subagents(order):
+    """The waiting records of the (id, reader) pairs in that order, up to one shared budget per answer. Each sub-agent
+    whose file was found says whether it started over, whether its file's start was left out and whether records are
+    still to come (behind); one whose file was never found is not mentioned."""
     answer, size = {}, 0
-    for agent_id, reader in readers.items():
-        batch = []
-        while reader.outbox:
-            cost = len(json.dumps(reader.outbox[0], ensure_ascii=True))
-            if size and size + cost > SUBAGENTS_BUDGET: break
-            batch.append(reader.outbox.pop(0)); size += cost
-        if batch or reader.reset and reader.file_identity is not None:
-            answer[agent_id] = {"records": batch, "reset": reader.reset, "partial": reader.partial}
-            reader.reset = False
+    for agent_id, reader in order:
+        if reader.file_identity is None: continue
+        batch, size = take_batch(reader.outbox, size, SUBAGENTS_BUDGET)
+        answer[agent_id] = {"records": batch, "reset": reader.reset, "partial": reader.partial, "behind": reader.behind()}
+        reader.reset = False
     return answer
 
 class ClaudeTranscriptReader:
@@ -835,7 +865,7 @@ class ClaudeTranscriptReader:
         self.offset, self.buffer, self.skipping = 0, b"", False
         self.file_identity, self.file_size, self.history_pending = None, 0, True
         self.outbox, self.reset = [], True
-        self.subagents = {}
+        self.subagents, self.subagent_turn = {}, 0
 
     def record(self, record, work_only=False):
         kept = compact_claude_record(record)
@@ -847,14 +877,8 @@ class ClaudeTranscriptReader:
         try: source = open(self.filename, "rb")
         except FileNotFoundError: return
         with source:
-            info = os.fstat(source.fileno())
-            size, identity = info.st_size, (info.st_dev, info.st_ino)
-            if self.file_identity != identity or size < self.file_size:
-                self.offset, self.skipping = transcript_window(size)
-                self.work_history = CompletionHistory(self.offset)
-                self.buffer, self.history_pending = b"", True
-                self.outbox, self.reset = [], True
-            self.file_identity, self.file_size = identity, size
+            size, replaced = follow_file(self, source)
+            if replaced: self.work_history, self.history_pending = CompletionHistory(self.offset), True
             if not self.work_history.read(source, lambda record: self.record(record, True)): return
             read_transcript(self, source, size, self.record)
 
@@ -862,18 +886,23 @@ class ClaudeTranscriptReader:
 
     def read_subagents(self, ids):
         """The records of the sub-agents asked for (ids the other computer took from this transcript's launch results),
-        read in this session's subagents folder; the ones no longer asked for are dropped."""
+        read in this session's subagents folder; the ones no longer asked for are dropped. Each answer starts with the
+        next of them, so a busy one cannot take every answer's reading and budget."""
         self.subagents = dict((agent_id, self.subagents.get(agent_id) or SubagentReader("agent-%s.jsonl" % agent_id)) for agent_id in ids)
-        if not self.subagents: return {}
-        try: folder = subagent_folder(self.filename)
-        except (OSError, ValueError): return {}
+        order = list(self.subagents.items())
+        if not order: return {}
+        turn = self.subagent_turn % len(order)
+        self.subagent_turn += 1
+        order = order[turn:] + order[:turn]
+        folder, budget = subagent_folder(self.filename), SUBAGENTS_READ_BUDGET
         try:
-            for reader in self.subagents.values():
-                try: source = open_regular(reader.name, folder)
-                except (OSError, ValueError): continue
-                with source: reader.read(source)
+            for _agent_id, reader in order:
+                # One file that cannot be read (gone, a link, a stale handle) leaves the others and the transcript be.
+                try:
+                    with open_regular(reader.name, folder) as source: budget -= reader.read(source, budget)
+                except Exception: pass
         finally: os.close(folder)
-        return take_subagents(self.subagents)
+        return take_subagents(order)
 
 class CodexActivityReader:
     """Incrementally read the interactive parent's records: its lifecycle, and (compacted) what the reading view shows."""
@@ -1093,8 +1122,12 @@ class Worker:
             self.claude_reader.read()
             answer = self.claude_reader.take()
             # A reset answer replaces the history those ids came from: the sub-agents asked for again start over.
-            if ids and not answer["reset"]: answer["subagents"] = self.claude_reader.read_subagents(ids)
-            else: self.claude_reader.subagents = {}
+            if not ids or answer["reset"]: self.claude_reader.subagents = {}
+            else:
+                # The transcript's records are taken already and go with this answer whatever reading the sub-agents
+                # meets (a host without descriptor-relative opens, a stale handle): it costs only their records.
+                try: answer["subagents"] = self.claude_reader.read_subagents(ids)
+                except Exception: answer["subagents"] = {}
             return answer
 
     def claude_account(self):

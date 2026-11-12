@@ -1,6 +1,7 @@
 import ast
 import base64
 import contextlib
+import errno
 import importlib.util
 import io
 import json
@@ -636,20 +637,36 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         folder.mkdir(parents=True)
         return transcript, folder / ("agent-%s.jsonl" % agent_id)
 
-    def test_sub_agent_compaction_keeps_only_what_a_token_rate_needs(self):
+    @contextlib.contextmanager
+    def subagents_by_path(self, transcript, fail=None):
+        """On every platform: the subagents folder opened by its path instead of descriptor-relative opens (tested on their
+        own on Linux and macOS), and fail(name) raising for a file that cannot be read."""
+        folder = transcript.parent / "session" / "subagents"
+        def open_by_name(name, _descriptor):
+            if fail: fail(name)
+            return open(str(folder / name), "rb")
+        with mock.patch.object(remote, "subagent_folder", lambda _path: os.open(str(transcript), os.O_RDONLY)), \
+             mock.patch.object(remote, "open_regular", open_by_name):
+            yield
+
+    def test_sub_agent_compaction_keeps_only_what_the_row_needs(self):
         rows = [json.loads(line) for line in (FIXTURES / "claude-subagent-ssh.jsonl").read_text(encoding="utf-8").splitlines()]
         compact = [json.loads(line) for line in (FIXTURES / "claude-subagent-ssh.compact.jsonl").read_text(encoding="utf-8").splitlines()]
         kept = [remote.compact_subagent_record(row) for row in rows]
-        # tests/agent-calls-rate.test.cjs computes the rate from the same compacted file.
+        # tests/agent-calls-rate.test.cjs computes the rate, effort and speed from the same compacted file.
         self.assertEqual(kept, compact)
+        self.assertEqual((kept[1]["effort"], kept[1]["message"]["usage"]["speed"]), ("high", "standard"))
         text = json.dumps(kept)
         for private in ("Placeholder reasoning", "/srv/project", "Placeholder file contents", "Placeholder finding", "req_sub_1", "cache_read_input_tokens", "Read"):
             self.assertNotIn(private, text)
-        prompt = remote.compact_subagent_record({"type": "user", "isMeta": True, "uuid": "p", "message": {"content": [{"type": "text", "text": "w" * 1000}]}})
-        self.assertEqual(prompt["message"]["content"], [{"type": "text", "text": "w" * remote.PROMPT_MARK_LIMIT}])
+        # Each text block on its own and clipped, as the local reader filters them one by one, with the attachments that make a prompt.
+        blocks = [{"type": "text", "text": "w" * 1000}, {"type": "text", "text": "<bash-input>ls</bash-input>"}, {"type": "image", "source": {"data": "private"}}, {"type": "thinking", "thinking": "private"}]
+        prompt = remote.compact_subagent_record({"type": "user", "isMeta": True, "uuid": "p", "message": {"content": blocks}})
+        self.assertEqual(prompt["message"]["content"], [{"type": "text", "text": "w" * remote.PROMPT_MARK_LIMIT}, {"type": "text", "text": "<bash-input>ls</bash-input>"}, {"type": "image"}])
         self.assertTrue(prompt["isMeta"], "provenance tells an automatic message from a prompt")
-        reply = remote.compact_subagent_record({"type": "assistant", "message": {"id": 1, "model": "m" * (remote.MODEL_NAME_LIMIT + 1), "usage": {"output_tokens": "9"}, "content": "text"}})
-        self.assertEqual(reply["message"], {"content": []})
+        reply = remote.compact_subagent_record({"type": "assistant", "effort": 3, "perTurnEffort": "e" * (remote.MODEL_NAME_LIMIT + 1),
+            "message": {"id": 1, "model": "m" * (remote.MODEL_NAME_LIMIT + 1), "usage": {"output_tokens": "9", "speed": "warp"}, "content": "text"}})
+        self.assertEqual(reply, {"type": "assistant", "message": {"content": []}})
         for record in (None, [], {"type": "system"}, {"type": "queue-operation", "content": "queued"}):
             self.assertIsNone(remote.compact_subagent_record(record))
 
@@ -659,18 +676,19 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
                           "message": {"id": "m", "model": "claude-opus-5-5", "usage": {"output_tokens": 1}, "content": [{"type": "text", "text": "x" * 2000}]}}) + "\n"
         filename.write_text(row * (2 * remote.SUBAGENT_READ_LIMIT // len(row) + 10), encoding="utf-8")
         reader = remote.SubagentReader(filename.name)
-        def step():
-            with filename.open("rb") as source: reader.read(source)
-        step()
-        self.assertEqual(reader.offset, remote.SUBAGENT_READ_LIMIT)
+        def step(limit=remote.SUBAGENT_READ_LIMIT):
+            with filename.open("rb") as source: return reader.read(source, limit)
+        self.assertEqual(step(), remote.SUBAGENT_READ_LIMIT)
         self.assertTrue(reader.outbox); self.assertTrue(reader.reset); self.assertFalse(reader.partial)
-        step()
-        self.assertEqual(reader.offset, remote.SUBAGENT_READ_LIMIT, "nothing more is read while the last step waits to be sent")
-        answer = remote.take_subagents({"a1": reader})
-        self.assertTrue(answer["a1"]["reset"]); self.assertFalse(reader.outbox)
-        step()
-        self.assertEqual(reader.offset, 2 * remote.SUBAGENT_READ_LIMIT)
-        self.assertFalse(remote.take_subagents({"a1": reader})["a1"]["reset"])
+        self.assertEqual(step(), 0, "nothing more is read while the last step waits to be sent")
+        answer = remote.take_subagents([("a1", reader)])["a1"]
+        self.assertTrue(answer["reset"]); self.assertTrue(answer["behind"], "the file has more")
+        while reader.outbox: remote.take_subagents([("a1", reader)])
+        self.assertEqual(step(1000), 1000, "a smaller share of the answer's reading is kept to")
+        while reader.behind():
+            while reader.outbox: remote.take_subagents([("a1", reader)])
+            step()
+        self.assertFalse(remote.take_subagents([("a1", reader)])["a1"]["behind"])
         # A replaced file starts over; past the history window its start is left out and the reader says so.
         replacement = filename.with_name("replacement")
         replacement.write_text(json.dumps({"padding": "x" * (remote.HISTORY_WINDOW + 10)}) + "\n" + row, encoding="utf-8")
@@ -687,21 +705,61 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
     def test_sub_agent_records_share_one_budget_per_answer_and_follow_in_later_answers(self):
         record = remote.compact_subagent_record({"type": "assistant", "uuid": "a", "timestamp": "2026-01-01T00:00:01.000Z",
                                                  "message": {"id": "m", "model": "claude-opus-5-5", "usage": {"output_tokens": 1}, "content": []}})
-        readers = dict(("a%d" % index, remote.SubagentReader("agent-a%d.jsonl" % index)) for index in range(3))
+        order = [("a%d" % index, remote.SubagentReader("agent-a%d.jsonl" % index)) for index in range(3)]
         each = remote.SUBAGENTS_BUDGET // len(json.dumps(record, ensure_ascii=True))
         # Readers that found their files and read a step each.
-        for index, reader in enumerate(readers.values()): reader.outbox, reader.file_identity = [record] * each, (1, index)
-        answer = remote.take_subagents(readers)
+        for index, (_agent_id, reader) in enumerate(order): reader.outbox, reader.file_identity = [record] * each, (1, index)
+        answer = remote.take_subagents(order)
         # As the worker writes it to the connection (main).
         self.assertLessEqual(len(json.dumps(answer, ensure_ascii=True, separators=(",", ":"))), remote.SUBAGENTS_BUDGET + 1024)
         self.assertEqual(sorted(answer), ["a0", "a1", "a2"], "a reader that started over says so even when its records wait")
+        self.assertEqual([answer[agent_id]["behind"] for agent_id in ("a0", "a1", "a2")], [False, True, True])
         taken = sum(len(entry["records"]) for entry in answer.values())
-        while any(reader.outbox for reader in readers.values()):
-            answer = remote.take_subagents(readers)
-            self.assertTrue(answer); self.assertFalse(any(entry["reset"] for entry in answer.values()))
+        while any(reader.outbox for _agent_id, reader in order):
+            answer = remote.take_subagents(order)
+            self.assertFalse(any(entry["reset"] for entry in answer.values()))
             taken += sum(len(entry["records"]) for entry in answer.values())
         self.assertEqual(taken, 3 * each)
-        self.assertEqual(remote.take_subagents({"missing": remote.SubagentReader("agent-missing.jsonl")}), {}, "a file never found is not mentioned")
+        self.assertEqual(remote.take_subagents([("missing", remote.SubagentReader("agent-missing.jsonl"))]), {}, "a file never found is not mentioned")
+
+    def test_claude_status_delivers_the_transcript_whatever_reading_the_sub_agents_meets(self):
+        transcript, _child = self.subagent_file()
+        ids = ["a0123456789abcdef"]
+        self.worker.claude_status(str(transcript), 1000, ids)
+        for index, error in enumerate((NotImplementedError("dir_fd unavailable"), RecursionError("nested"), OSError(errno.ESTALE, "stale"))):
+            with self.subTest(error=type(error).__name__), mock.patch.object(remote, "subagent_folder", side_effect=error):
+                with transcript.open("a", encoding="utf-8") as output: output.write(json.dumps({"type": "system", "subtype": "stop_hook_summary", "uuid": "stop-%d" % index}) + "\n")
+                status = self.worker.claude_status(str(transcript), 1000, ids)
+                self.assertEqual([record["uuid"] for record in status["records"]], ["stop-%d" % index], "the transcript's records still go")
+                self.assertEqual(status["subagents"], {})
+
+    def test_one_unreadable_sub_agent_leaves_the_others_and_a_deeply_nested_line_is_skipped(self):
+        transcript, child = self.subagent_file()
+        compact = [json.loads(line) for line in (FIXTURES / "claude-subagent-ssh.compact.jsonl").read_text(encoding="utf-8").splitlines()]
+        nested = "[" * 100000 + "]" * 100000 + "\n"
+        child.write_text(nested + (FIXTURES / "claude-subagent-ssh.jsonl").read_text(encoding="utf-8"), encoding="utf-8")
+        (child.parent / "agent-stale.jsonl").write_text("{}\n", encoding="utf-8")
+        def fail(name):
+            if name == "agent-stale.jsonl": raise OSError(errno.ESTALE, "stale")
+        ids = ["stale", "a0123456789abcdef"]
+        self.worker.claude_status(str(transcript), 1000, ids)
+        with self.subagents_by_path(transcript, fail):
+            status = self.worker.claude_status(str(transcript), 1000, ids)
+        self.assertEqual(status["subagents"], {ids[1]: {"records": compact, "reset": True, "partial": False, "behind": False}})
+
+    def test_sub_agents_share_one_reading_budget_per_answer_and_take_turns_starting(self):
+        transcript, child = self.subagent_file()
+        row = json.dumps({"type": "user", "uuid": "u", "isSidechain": True, "message": {"content": [{"type": "tool_result", "tool_use_id": "t", "content": "x" * 4000}]}}) + "\n"
+        ids = ["a%d" % index for index in range(6)]
+        for agent_id in ids: (child.parent / ("agent-%s.jsonl" % agent_id)).write_text(row * (remote.SUBAGENT_READ_LIMIT // len(row) + 10), encoding="utf-8")
+        self.worker.claude_status(str(transcript), 1000, ids)
+        with self.subagents_by_path(transcript):
+            first = self.worker.claude_status(str(transcript), 1000, ids)["subagents"]
+            readers = self.worker.claude_reader.subagents
+            self.assertLessEqual(sum(reader.offset for reader in readers.values()), remote.SUBAGENTS_READ_BUDGET)
+            self.assertEqual([agent_id for agent_id in ids if readers[agent_id].offset], ids[:4], "1 MiB is four sub-agents' steps")
+            second = self.worker.claude_status(str(transcript), 1000, ids)["subagents"]
+        self.assertEqual(list(first)[0], "a0"); self.assertEqual(list(second)[0], "a1", "the next answer starts with the next sub-agent")
 
     @unittest.skipUnless(os.name == "posix", "the remote side runs on Linux and macOS (descriptor-relative opens)")
     def test_claude_status_follows_the_named_sub_agents_in_the_session_folder_and_drops_the_rest(self):
@@ -712,10 +770,10 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         ids = ["a0123456789abcdef"]
         first = self.worker.claude_status(str(transcript), 1000, ids)
         self.assertTrue(first["reset"]); self.assertNotIn("subagents", first, "a reset answer replaces the history the ids came from")
-        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {ids[0]: {"records": compact[:3], "reset": True, "partial": False}})
-        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {})
+        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {ids[0]: {"records": compact[:3], "reset": True, "partial": False, "behind": False}})
+        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {ids[0]: {"records": [], "reset": False, "partial": False, "behind": False}})
         with child.open("a", encoding="utf-8") as output: output.write("".join(rows[3:]))
-        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {ids[0]: {"records": compact[3:], "reset": False, "partial": False}})
+        self.assertEqual(self.worker.claude_status(str(transcript), 1000, ids)["subagents"], {ids[0]: {"records": compact[3:], "reset": False, "partial": False, "behind": False}})
         unsafe = ["..", "../session", "/etc/passwd", "a.b", "a/b", "", 7, None, "a" * 101]
         named = ["missing"] + ["b%d" % index for index in range(20)]
         self.assertEqual(self.worker.claude_status(str(transcript), 1000, unsafe + named)["subagents"], {})
