@@ -231,13 +231,16 @@ test('a resumed SSH conversation with 40 pictures keeps at most two picture requ
   await session.resume({ providerSessionId: 'old-thread' });
   await worker.request('codex-input', { data: 'aGk=' });
   assert.equal(worker.stats().inputWaited, false, 'the session input finds a free worker thread while the pictures load');
-  for (let n = 0; n < 400 && worker.asked.filter(([op]) => op === 'generated-copy').length < 40; n++) await new Promise(resolve => setTimeout(resolve, 10));
+  // Looking for copies and reading pictures back are separate requests that the connection answers in turn: wait for both, as long as a slow runner needs.
+  const { timeoutScale } = require('../scripts/wait.mjs');
+  const content = id => session.snapshot().items.find(item => item.itemId === id)?.content;
+  const readBack = () => new Set(worker.asked.filter(([op]) => op === 'generated-image').map(([, data]) => data.path));
+  for (let n = 0; n < 400 * timeoutScale && !(worker.asked.filter(([op]) => op === 'generated-copy').length >= 40 && readBack().size >= 6 && content('p39')?.images.length); n++) await new Promise(resolve => setTimeout(resolve, 10));
   await settleOnce();
   assert.equal(worker.stats().mostPictures, 2, 'two picture jobs at a time on the connection');
   assert.ok(worker.stats().mostPending <= 4, 'far below the connection\'s 64 pending requests');
   assert.deepEqual(worker.asked.filter(([op]) => op === 'generated-copy').map(([, data]) => data.write), Array(40).fill(false), 'history only looks for copies');
   assert.deepEqual([...new Set(worker.asked.filter(([op]) => op === 'generated-image').map(([, data]) => data.path))].sort(), [34, 35, 36, 37, 38, 39].map(saved).sort(), 'only the six newest are read back');
-  const content = id => session.snapshot().items.find(item => item.itemId === id).content;
   assert.deepEqual(content('p39').images, [`data:image/png;base64,${Buffer.from('pixe').toString('base64')}`]);
   assert.deepEqual([content('p0').text, content('p0').generated.deferred, content('p0').images], ['点击加载图片', true, []], 'an older picture waits for the reader');
 });

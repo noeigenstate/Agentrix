@@ -96,11 +96,12 @@ test('S14 shell removes provider key and OAuth names in every letter case', asyn
 });
 test('S3 shell background descendants cannot hold timeout and cancellation hostage', async t => {
   const root = directory(t), abort = new AbortController();
-  const began = Date.now();
-  const task = require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: bashEnvironment(root), command: 'sleep 5 & echo started',
+  // A slow runner stretches the budget as it does every other timeout; the descendant outlives it, so holding the shell would still show.
+  const { timeoutScale } = require('../scripts/wait.mjs'), budget = 2500 * timeoutScale, began = Date.now();
+  const task = require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: bashEnvironment(root), command: `sleep ${Math.ceil(budget / 1000) + 3} & echo started`,
     signal: abort.signal, timeout: 1000, output() { setTimeout(() => abort.abort(), 250); } });
-  const result = await Promise.race([task, pause(2500).then(() => assert.fail('shell timeout did not settle'))]);
-  assert.ok(Date.now() - began < 2500); abort.abort(); await result.closed;
+  const result = await Promise.race([task, pause(budget).then(() => assert.fail('shell timeout did not settle'))]);
+  assert.ok(Date.now() - began < budget); abort.abort(); await result.closed;
 });
 test('S9 subscription limits are isolated by project including SSH', async t => {
   const root = directory(t), streams = new Map();
