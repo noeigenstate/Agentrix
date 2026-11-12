@@ -335,3 +335,26 @@ test('the agents page says where Claude Code was found beside 已安装, and onl
     assert.deepEqual(status({ installed: false })[1], ['未安装', undefined]);
   } finally { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
 });
+test('the agents page tells a split, an install that is too old, one whose check failed and an incomplete npm install, and sends each to the right place', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {} } });
+  const harness = hookHarness('src/features/agents/AgentsSettings.tsx', { './i18n': { t: fill }, './native-words': { viaWords: via => via } });
+  try {
+    // The Claude Code row: its status words, the small line under them, and whether the install button is offered.
+    const row = claude => {
+      const tree = elements(harness.render('AgentsSettings', { agents: { codex: { installed: true }, claude, npm: true, installing: null, message: '', error: '' }, onChange() {} }).result);
+      const section = tree.filter(node => node.props?.className === 'agent-setting')[1], inside = elements(section.props.children);
+      return { status: elementsText(inside.find(node => node.type === 'small' && node.props.role === 'status').props.children),
+        hint: inside.filter(node => node.type === 'small' && !node.props.role).map(node => elementsText(node.props.children))[0] ?? null,
+        install: inside.some(node => node.type === 'button') };
+    };
+    const hint = '到「运行方式 › 测试连接」查看原因。';
+    assert.deepEqual(row({ installed: true, version: '2.1.300', via: 'path', fileShown: 'x', notice: 'cli_split_versions', native: { version: '2.1.322', via: 'local-bin', fileShown: 'y' } }),
+      { status: '终端 · 版本 2.1.300 · 来自 path', hint: '原生用的是另一份：版本 2.1.322 · 来自 local-bin', install: false });
+    assert.deepEqual(row({ installed: true, version: '2.1.300', via: 'path', reason: 'too_old' }), { status: '版本 2.1.300 过低 · 来自 path', hint: '请升级 Claude Code。', install: false });
+    for (const reason of ['timeout', 'failed', 'unreadable']) assert.deepEqual(row({ installed: true, reason }), { status: '已安装 · 检查未通过', hint, install: false }, reason);
+    assert.deepEqual(row({ installed: true, incomplete: true }), { status: '安装不完整', hint: `npm 装了，但里面没有原生程序。${hint}`, install: false }, 'installed, so no install button is offered');
+    assert.deepEqual(row({ installed: false }), { status: '未安装', hint: null, install: true });
+    assert.deepEqual(row({ installed: true, version: '2.1.322', via: 'npm' }), { status: '已安装 · 版本 2.1.322 · 来自 npm', hint: null, install: false });
+  } finally { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
+});

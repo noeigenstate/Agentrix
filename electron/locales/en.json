@@ -3097,5 +3097,12 @@
   "来自 {via}": "from {via}",
   "官方安装器": "Official installer",
   "旧版本地安装": "Legacy local install",
-  "终端和原生用的不是同一个 Claude Code：终端的版本低于 {required}，原生改用了另一份安装": "The terminal and native mode do not use the same Claude Code: the terminal's is older than {required}, and native mode uses another install"
+  "终端和原生用的不是同一个 Claude Code：终端的版本低于 {required}，原生改用了另一份安装": "The terminal and native mode do not use the same Claude Code: the terminal's is older than {required}, and native mode uses another install",
+  "版本 {version} 过低": "Version {version} is too old",
+  "版本过低": "Version too old",
+  "已安装 · 检查未通过": "Installed · check did not pass",
+  "安装不完整 · 去测试连接查看": "Incomplete install · see the connection test",
+  "npm 装了，但里面没有原生程序。{hint}": "npm installed it, but its native program is missing. {hint}",
+  "到「运行方式 › 测试连接」查看原因。": "See the reason under Run mode › Test connection.",
+  "原生用的是另一份：{found}": "Native mode uses another install: {found}"
 }

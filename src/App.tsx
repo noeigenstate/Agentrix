@@ -195,6 +195,12 @@ export function App() {
     const clock = setInterval(() => setNow(Date.now()), 5000);
     return () => { offState(); offFocus(); offError(); offUpdates(); offAgents(); offFullScreen(); offAuth(); offEditor(); clearInterval(clock); if (errorTimer.current) clearTimeout(errorTimer.current); };
   }, [focusProject, perform, reportError, allowNavigation]);
+  // A card that sends the owner to a settings page (the launcher's incomplete Claude Code) asks with this event.
+  useEffect(() => {
+    const open = (event: Event) => { setSettingsSection((event as CustomEvent<{ section: string }>).detail.section); setSettingsOpen(true); };
+    window.addEventListener('agentrix:open-settings', open);
+    return () => window.removeEventListener('agentrix:open-settings', open);
+  }, []);
   useEffect(() => {
     if (focusedId && workspace && !workspace.projects.some(p => p.id === focusedId)) returnToGrid();
   }, [workspace, focusedId, returnToGrid]);

@@ -620,14 +620,14 @@ test('the launch route follows the settings: native by default, the terminal whe
 
 // A stand-in for the main process on `window.agentrix`, for the launcher.
 // `kind`: the project's kind; `codexHere`: whether this computer has Codex installed; `startError`: what a start is refused with. `errors`: what the card shows of a refusal.
-function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null } } = {}) {
+function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null }, claude = { installed: true } } = {}) {
   const bridge = {
     getSettings: async () => ({ ok: true, value: runtime.settings }), keyStatus: async () => ({ ok: true, value: { saved: runtime.saved } }),
     start: async (...args) => { calls.push(['start', ...args]); return startError ? { ok: false, error: startError } : { ok: true, value: { runtimeSessionId: 'rs1' } }; },
   };
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {
-    getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude: { installed: true } } }), onAgents: () => () => {},
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { dispatchEvent: event => { calls.push(['event', event.type, event.detail]); return true; }, agentrix: {
+    getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude } }), onAgents: () => () => {},
     startTerminal: async id => { calls.push(['terminal', id]); return { ok: true, value: null }; },
     installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
     agentHistory: async () => ({ ok: true, value: history }),
@@ -664,6 +664,28 @@ test('the launcher starts a native session or a terminal by the settings, says w
       assert.deepEqual(calls, expected, `${agent} ${JSON.stringify(runtime)}`);
       if (!expected.length) assert.match(view.text(), /只用 API 运行，但还没有保存 API key/, 'and it says why nothing started');
     } finally { view.done(); }
+  }
+});
+
+test('an incomplete npm install of Claude Code is not installed again: the card says so and a click opens the run-mode page of the settings; a failed check or an old version still starts', async () => {
+  const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
+  const calls = [], view = launcher(runtime, calls, { claude: { installed: true, incomplete: true } });
+  try {
+    view.render(); await settle();
+    assert.equal(view.note('claude'), '安装不完整 · 去测试连接查看', 'no route words either: nothing would start');
+    assert.match(view.button('claude').props.className, /is-missing/);
+    view.button('claude').props.onClick(); await settle();
+    assert.deepEqual(calls, [['event', 'agentrix:open-settings', { section: 'runtime' }]], 'no npm install, no session, and the settings open on 运行方式');
+  } finally { view.done(); }
+  // Installed but not passing its check (or old): not treated as missing, so nothing is installed over it, and the click starts as before.
+  for (const reason of ['too_old', 'timeout', 'failed', 'unreadable']) {
+    const started = [], other = launcher(runtime, started, { claude: { installed: true, reason } });
+    try {
+      other.render(); await settle();
+      assert.equal(other.note('claude'), '开始新的对话 · API · 原生模式', reason);
+      other.button('claude').props.onClick(); await settle();
+      assert.deepEqual(started, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], reason);
+    } finally { other.done(); }
   }
 });
 
