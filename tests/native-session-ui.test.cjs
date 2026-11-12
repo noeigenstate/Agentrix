@@ -2107,7 +2107,7 @@ test('the switch line and the question stand at the end of the timeline, not in 
 
 test('a draft carried into the native view lands in the empty box, beside typed words otherwise, with its pictures and unsent messages; nothing is sent', async () => {
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
-  const texts = () => elements(view.tree()).filter(node => node.type === 'li').map(node => node.props.children[0]);
+  const texts = () => elements(view.tree()).filter(node => node.type === 'li').map(node => node.props.children[0].props.children);
   const take = node => node.type === 'button' && node.props.children === '取回';
   const attached = () => elements(view.tree()).find(node => node.type === view.parts.UserImages)?.props.images;
   try {
@@ -2131,7 +2131,7 @@ test('a draft carried into the native view lands in the empty box, beside typed 
 
 test('a draft that comes back to the box it left (a switch that failed) is shown once: in the box, its picture once, and a message that is still here as lost is not listed again', async () => {
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
-  const texts = () => elements(view.tree()).filter(node => node.type === 'li').map(node => node.props.children[0]);
+  const texts = () => elements(view.tree()).filter(node => node.type === 'li').map(node => node.props.children[0].props.children);
   const attached = () => elements(view.tree()).find(node => node.type === view.parts.UserImages)?.props.images;
   try {
     view.type('half a thought'); view.tree();
@@ -2377,7 +2377,7 @@ test('the reading view offers its words and the messages still waiting to be wri
 
 test('a draft that comes with the new session goes into the empty box, beside typed words otherwise; its messages wait as unsent for the owner’s click, and nothing is written to the terminal', t => {
   const h = popupHarness(t, 'codex'), handoff = handoffProps(), box = () => elements(h.tree()).find(element => element.type === 'textarea').props;
-  const unsent = () => elements(h.tree()).filter(element => element.type === 'li').map(element => element.props.children[0]);
+  const unsent = () => elements(h.tree()).filter(element => element.type === 'li').map(element => element.props.children[0].props.children);
   const retrieve = () => elements(h.tree()).find(element => element.type === 'button' && element.props.children === '取回');
   h.props.handoff = handoff; h.render();
   handoff.incoming = { version: 2, text: 'carried words', images: ['data:image/png;base64,AAAA'], undelivered: [{ clientMessageId: 'u1', text: 'never delivered' }] };
