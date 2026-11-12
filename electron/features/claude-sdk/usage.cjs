@@ -29,7 +29,7 @@ function processAlive(pid) {
 const REFUSALS = { zero: 'API 月预算设为 0，原生会话不使用 API。', spent: '本月 API 预算已用完。',
   held: '本月剩余的 API 预算被其他会话占用，或有会话的花费还未确认。' };
 const refused = (cause, extra = {}) => Object.assign(new Error(REFUSALS[cause]), { code: 'budget_exhausted', refusal: cause, ...extra });
-function createUsage({ file, now = Date.now, pid = process.pid, alive = processAlive }) {
+function createUsage({ file, now = Date.now, pid = process.pid, alive = processAlive, warn = console.warn }) {
   let data = readJson(file, { version: 1, days: {}, sessions: {}, reservations: {}, unknownDays: [] }, { validate: validUsage });
   data.unknownDays ||= [];
   data.estimates ||= {};
@@ -53,7 +53,10 @@ function createUsage({ file, now = Date.now, pid = process.pid, alive = processA
           baseline: lease.baseline ?? null, day: lease.day || utcDay(now()), uncertain: true };
       }
     }
-    if (changed) commit(next);
+    if (!changed) return;
+    // Startup must not fail on a ledger it cannot write now (a scanner holding the file, a full disk): the adopted ledger
+    // stays in memory and reaches the disk with the next write.
+    try { commit(next); } catch (error) { data = next; warn(`Agentrix: the API usage ledger could not be saved at startup (${error?.code || 'error'}); it is saved with the next change.`); }
   }
   adopt();
   function uncertain(next, id) {
@@ -73,9 +76,9 @@ function createUsage({ file, now = Date.now, pid = process.pid, alive = processA
       const own = data.reservations[reservationId];
       return budget === null ? Infinity : Math.max(0, micros(budget) - spent() - held() + (own?.month === monthOf() ? own.micros : 0));
     },
-    // Why nothing is left for a new query (zero, spent or held), or null while some is.
-    refusal(budget) {
-      if (this.available(budget) > 0) return null;
+    // Why nothing is left for a new query, or for the query owning `reservationId` (zero, spent or held); null while some is.
+    refusal(budget, reservationId = null) {
+      if (this.available(budget, reservationId) > 0) return null;
       return micros(budget) === 0 ? 'zero' : spent() >= micros(budget) ? 'spent' : 'held';
     },
     // The allowance a new query may use, in USD; none left is refused with its cause before any CLI starts.

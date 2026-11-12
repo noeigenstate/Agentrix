@@ -229,11 +229,9 @@ function owner(t, budget, directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx
     event => events.push(event));
   return { directory, fake, runtime, events, session };
 }
-// A process id that no longer runs: a child that has already exited.
-async function endedPid() {
-  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
-  await once(child, 'exit'); return child.pid;
-}
+// A process that no longer runs, by injection: a real exited pid can be reused at once on Windows by a concurrent test.
+// The stand-in is the test runner, which does run, so a ledger read without the injection keeps its entries held.
+const ENDED = process.ppid, ended = pid => pid !== ENDED;
 const zero = 'API 月预算设为 0，原生会话不使用 API。', held = '本月剩余的 API 预算被其他会话占用，或有会话的花费还未确认。';
 
 for (const [month, reason] of [['set to zero', zero], ['spent', 'budget_exhausted'], ['held by a running session', held]]) {
@@ -274,9 +272,9 @@ test('every SDK query starts through openQuery, which passes only a positive fin
 });
 
 test('a reservation or estimate left by a process that no longer runs holds nothing after a restart, and its session still settles it', async t => {
-  const f = owner(t, 10), file = path.join(f.directory, 'usage.json'), pid = await endedPid();
+  const f = owner(t, 10), file = path.join(f.directory, 'usage.json');
   await f.runtime.close();
-  const before = createUsage({ file, pid });
+  const before = createUsage({ file, pid: ENDED });
   before.record('earlier-session', { uuid: 'earlier', total_cost_usd: 1, modelUsage: {} });
   const closed = before.reserve(10, { maxBudgetUsd: 1 });
   before.unverified(closed.id); before.finish(closed.id);
@@ -285,7 +283,7 @@ test('a reservation or estimate left by a process that no longer runs holds noth
   const ledger = JSON.parse(fs.readFileSync(file, 'utf8'));
   ledger.reservations.lastMonth = { month: '2000-01', micros: 5000000, sessionId: null, baseline: 0, day: '2000-01-31' };
   fs.writeFileSync(file, JSON.stringify(ledger));
-  const after = createClaudeRuntime({ directory: f.directory, safeStorage: reversed });
+  const after = createClaudeRuntime({ directory: f.directory, safeStorage: reversed, alive: ended });
   t.after(() => after.close());
   assert.equal(after.usage.available(10), 9000000);
   assert.equal(after.usage.summary().monthUsdMicros, null, 'the crashed turn spent an unknown amount');
@@ -305,4 +303,44 @@ test('a reservation of a process that still runs stays held after another reads 
   const running = createUsage({ file, pid: 4242 }); running.reserve(10);
   assert.equal(createUsage({ file, alive: pid => pid === 4242 }).available(10), 0);
   assert.equal(createUsage({ file, alive: () => false }).available(10), 10000000);
+});
+
+// The default liveness check against a real process. Windows reuses a freed pid at once, so a concurrent test may own it
+// by the time the ledger is read; Linux and macOS hand out pids in sequence, so there the exited child's pid stays free.
+test('by default a reservation of a child that has exited holds nothing for the next reader', { skip: process.platform === 'win32' && 'Windows reuses pids at once' }, async t => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-budget-pid-')), 'usage.json');
+  t.after(() => fs.promises.rm(path.dirname(file), { recursive: true, force: true }));
+  const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+  await once(child, 'exit');
+  createUsage({ file, pid: child.pid }).reserve(10);
+  assert.equal(createUsage({ file }).available(10), 10000000);
+});
+
+test('a ledger that cannot be written at startup leaves the runtime usable and is saved with the next change', async t => {
+  const f = owner(t, 10), file = path.join(f.directory, 'usage.json');
+  await f.runtime.close();
+  createUsage({ file, pid: ENDED }).reserve(10, { sessionId: 'crashed-session' });
+  const warnings = t.mock.method(console, 'warn', () => {});
+  const rename = t.mock.method(fs, 'renameSync', (from, to) => {
+    if (path.basename(to) === 'usage.json') throw Object.assign(new Error('held by a scanner'), { code: 'EPERM' });
+    return rename.mock.original(from, to);
+  });
+  const after = createClaudeRuntime({ directory: f.directory, safeStorage: reversed, alive: ended });
+  t.after(() => after.close());
+  rename.mock.restore();
+  assert.equal(after.usage.available(10), 10000000, 'the leftover holds nothing although the disk still has it');
+  assert.equal(warnings.mock.callCount(), 1); assert.match(warnings.mock.calls[0].arguments[0], /EPERM/);
+  assert.equal(Object.keys(JSON.parse(fs.readFileSync(file, 'utf8')).reservations).length, 1);
+  after.usage.record('other-session', { uuid: 'next', total_cost_usd: 1, modelUsage: {} });
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(saved.reservations, {}); assert.equal(Object.values(saved.estimates)[0].micros, 0);
+});
+
+test('a background wake refused for allowance held by another session names that cause, not a spent month', { timeout: 5000 }, async t => {
+  const f = fixture(t); await f.session.start(); await f.send(); await f.result(1);
+  f.runtime.usage.reserve(10, { sessionId: 'other-offline-session' });
+  f.fake.emit({ type: 'assistant', uuid: randomUUID(), message: { id: randomUUID(), content: [{ type: 'text', text: 'background wake' }] } });
+  await until(() => f.fake.closes.length === 1 && f.session.snapshot().state === 'idle');
+  assert.equal(f.events.findLast(event => event.type === 'turn.completed').payload.error, held);
+  assert.equal(f.events.findLast(event => event.type === 'error' && event.payload.code === 'budget_exhausted').payload.message, held);
 });

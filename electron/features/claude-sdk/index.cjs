@@ -10,7 +10,7 @@ const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
 const { rememberClaudeSource } = require('../../prompt-queue.cjs');
 function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader(), resolveExecutable = resolveClaudeExecutable,
-  now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs,
+  now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs, alive,
   connectionSpec = () => ({ agent: 'claude', owner: 'gui', cwd: process.cwd(), effort: 'high', fast: true }) } = {}) {
   const sessions = new Set(), leases = new Map(), unavailable = new Map(), observations = new Map(), listeners = new Set();
   let generation = 0, observation = 0, cliIdentity = null, refreshing, credentialVersion = 0;
@@ -19,7 +19,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   const availabilityGeneration = () => ({ generation, sequence: ++observation });
   const currentObservation = (scope, value) => value?.generation === generation && value.sequence >= (observations.get(scope) || 0);
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage, onChange: () => { credentialVersion++; resetAvailability(); } });
-  const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
+  const usage = createUsage({ file: path.join(directory, 'usage.json'), now, ...(alive ? { alive } : {}) });
   const ownerFile = path.join(directory, 'owner-sessions.json');
   const owners = readJson(ownerFile, []);
   const ownerSessions = new Map((Array.isArray(owners) ? owners.slice(-10000) : []).filter(row => row && typeof row.id === 'string' && /^[\w-]{1,100}$/.test(row.id) && typeof row.cwd === 'string').map(row => [row.id, row.cwd]));
