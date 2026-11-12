@@ -1,5 +1,5 @@
 const { exact, id, text, assert, validImages, validSwitchAnswer, validHandoff } = require('./validate.cjs');
-const { CODEX_PERMISSIONS } = require('../../state.cjs');
+const { CODEX_PERMISSIONS } = require('../../codex-permissions.cjs');
 function registerIpc({ handle, router, settings, claude }) {
   const binding = (terminalId, runtimeSessionId) => assert(id(terminalId) && id(runtimeSessionId));
   handle('native:start', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent', 'resume']) && ['claude', 'codex'].includes(options.agent) && (options.resume === undefined || typeof options.resume === 'boolean')); return router.start(terminalId, options); });

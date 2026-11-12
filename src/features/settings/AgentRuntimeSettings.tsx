@@ -6,6 +6,7 @@ import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, P
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import type { Settings } from '../../shared/types';
+import { isCodexPermissions } from '../../shared/codex-permissions.ts';
 import { type ClaudePath, type ConnectionTest, type NativeSettings, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { usageChanged, useUsageRevision } from '../native-session/native-store.ts';
 import { clockWords, connectionLines } from '../native-session/native-words';
@@ -21,7 +22,7 @@ const CODEX_PERMISSIONS = (): { value: CodexPermissions; label: string; hint: st
   { value: 'config', label: t('按 Codex 配置'), hint: t('沿用 Codex 自己 config.toml 里的设置。') },
   { value: 'ask', label: t('先询问'), hint: t('只能在工作目录里写文件；执行需要权限的操作前先问你。') },
 ];
-export const codexPermissionOf = (value: unknown): CodexPermissions => CODEX_PERMISSIONS().some(option => option.value === value) ? value as CodexPermissions : 'full';
+export const codexPermissionOf = (value: unknown): CodexPermissions => isCodexPermissions(value) ? value : 'full';
 // A mark per tone, so a line reads without its colour.
 const TONE_MARKS = { ok: <CheckCircle size={16} weight="fill" />, warn: <WarningCircle size={16} weight="fill" />, bad: <XCircle size={16} weight="fill" /> };
 const failure = (error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) });

@@ -72,6 +72,12 @@ test('real app-server: each permissions choice starts as asked, and /permissions
   // Windows PowerShell writes the file in UTF-16: its presence is the proof.
   assert.ok(fs.existsSync(path.join(cwd, 'proof.txt')), 'the command ran');
   assert.equal(ask.events.some(event => event.type === 'request.opened'), false, 'full access asks nothing');
+  // Without a [windows] sandbox in this profile, a running session cannot take "ask" back: the CLI gives a writable thread only with the
+  // request-scoped unelevated sandbox a new session gets.
+  if (process.platform === 'win32') {
+    await assert.rejects(ask.session.runOptions({ permissions: 'ask' }), /正在运行的会话不能切换到「先询问」/);
+    assert.equal((await ask.session.runOptions({})).permissions, 'full');
+  }
   // Back to the CLI's configuration: what a new thread here gets.
   await ask.session.runOptions({ permissions: 'config' });
   assert.equal(ask.session.threadResponse.sandbox.type, configured.session.threadResponse.sandbox.type);
