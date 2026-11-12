@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t } from '../../shared/i18n';
 import type { Result } from '../../shared/types';
 import { nativeBridge } from './native-bridge.ts';
-import { effortChoices, fastChoices, modelChoices, optionPatch, optionTold, type Choice, type ComposerAction, type ComposerOption } from './native-composer.ts';
+import { effortChoices, fastChoices, modelChoices, optionPatch, optionTold, optionUsage, permissionChoices, type Choice, type ComposerAction, type ComposerOption } from './native-composer.ts';
 import { nativeItem, refreshNativeSession } from './native-store.ts';
 import { readPanel } from './panel-read.ts';
 import type { PanelAgent, PanelCommand, PanelState } from './native-panel.ts';
@@ -34,12 +34,13 @@ export function useComposerActions({ terminalId, sessionId, agent, clear, restor
   };
   // The menu of an option: the current values and, for a model or an effort, the models the session can run.
   const choices = async (option: ComposerOption, words: string) => {
-    const bridge = nativeBridge();
-    const [now, models] = await Promise.all([ask(bridge?.runOptions?.(terminalId, sessionId, {})), option === 'fast' ? null : ask(bridge?.models?.(terminalId, sessionId))]);
+    const bridge = nativeBridge(), catalog = option === 'model' || option === 'effort';
+    const [now, models] = await Promise.all([ask(bridge?.runOptions?.(terminalId, sessionId, {})), catalog ? ask(bridge?.models?.(terminalId, sessionId)) : null]);
     if (!now.ok) return fail(words, now.error);
     if (models && !models.ok) return fail(words, models.error);
     const known = models?.ok ? models.value : [];
-    const items = option === 'fast' ? fastChoices(now.value.fast) : option === 'model' ? modelChoices(known, now.value.model) : effortChoices(known, now.value.model, now.value.effort);
+    const items = option === 'fast' ? fastChoices(now.value.fast) : option === 'permissions' ? permissionChoices(now.value.permissions)
+      : option === 'model' ? modelChoices(known, now.value.model) : effortChoices(known, now.value.model, now.value.effort);
     if (items.length) setMenu({ option, items }); else fail(words, t('没有可选的项'));
   };
   const renew = async (words: string) => {
@@ -80,7 +81,7 @@ export function useComposerActions({ terminalId, sessionId, agent, clear, restor
       return;
     }
     const { option, value } = action;
-    if (value && !optionPatch(option, value)) return onError(t('用法：/fast on 或 /fast off'));
+    if (value && !optionPatch(option, value)) return onError(optionUsage(option));
     clear();
     return value ? apply(option, value, words) : choices(option, words);
   };

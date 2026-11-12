@@ -83,7 +83,7 @@ test('main SSH specification preserves the remote resume folder without local fi
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const specs = new Map(), forbidden = () => assert.fail('SSH used local session setup');
   const context = vm.createContext({ findProject: () => ({ id: 'remote', kind: 'ssh', path: '/srv/project' }), sessions: new Map(), nativeSpecs: specs,
-    store: { findTerminal: () => ({ record: { restore: { agent: 'codex', threadId: 'remote-thread', cwd: '/srv/project/subfolder' } } }) },
+    store: { settings: { codexPermissions: 'full' }, findTerminal: () => ({ record: { restore: { agent: 'codex', threadId: 'remote-thread', cwd: '/srv/project/subfolder' } } }) },
     randomUUID: require('node:crypto').randomUUID, fs: { writeFileSync: forbidden }, createTerminalEnvironment: forbidden, disposeTerminal: forbidden });
   vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('function structuredEvent(')), context);
   const spec = context.nativeSpec('terminal', 'codex', true);

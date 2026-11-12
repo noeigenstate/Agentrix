@@ -1265,7 +1265,9 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const saved = store.findTerminal(id).record.restore;
   const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
   const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
-  const runOptions = { model: launch?.model || null, effort: launch?.effort || 'high', fast: launch?.fast ?? true };
+  // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
+  const runOptions = { model: launch?.model || null, effort: launch?.effort || 'high', fast: launch?.fast ?? true,
+    ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
     const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,

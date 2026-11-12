@@ -2,10 +2,12 @@
 // 未知 here. Pure: facts in, panel out.
 import { t } from '../../shared/i18n';
 import { array, compact, grouped, number, object, panelTitle, percentWords, readFailed, resetWords, share, unknown, word, type Panel, type PanelGroup, type Quota, type Row } from './native-panel.ts';
+import type { Settings } from '../../shared/types';
+import { permissionName } from './native-composer.ts';
 
 export type CodexFacts = {
   command: 'status' | 'usage';
-  session: { model: string | null; effort: string | null; fast: boolean | null; cwd: string | null; sandbox: string | null; approval: string | null };
+  session: { model: string | null; effort: string | null; fast: boolean | null; cwd: string | null; sandbox: string | null; approval: string | null; permissions: Settings['codexPermissions'] | null };
   account: { provider: string | null; kind: 'api' | 'subscription' | 'none' | 'unknown' };
   tokens: { total: number | null; input: number | null; output: number | null; cachedInput: number | null; reasoning: number | null; context: number | null; window: number | null };
   limits: { id: '5h' | 'week'; usedPercent: number | null; resetsAtMs: number | null }[];
@@ -18,7 +20,8 @@ export function readCodexFacts(local: Record<string, unknown> | null): CodexFact
   const session = object(local.session), account = object(local.account), tokens = object(local.tokens);
   return {
     command: local.command as CodexFacts['command'],
-    session: { model: word(session.model), effort: word(session.effort), fast: typeof session.fast === 'boolean' ? session.fast : null, cwd: word(session.cwd), sandbox: word(session.sandbox), approval: word(session.approval) },
+    session: { model: word(session.model), effort: word(session.effort), fast: typeof session.fast === 'boolean' ? session.fast : null, cwd: word(session.cwd), sandbox: word(session.sandbox), approval: word(session.approval),
+      permissions: ['full', 'config', 'ask'].includes(session.permissions as string) ? session.permissions as CodexFacts['session']['permissions'] : null },
     account: { provider: word(account.provider), kind: ['api', 'subscription', 'none'].includes(account.kind as string) ? account.kind as CodexFacts['account']['kind'] : 'unknown' },
     tokens: { total: number(tokens.total), input: number(tokens.input), output: number(tokens.output), cachedInput: number(tokens.cachedInput), reasoning: number(tokens.reasoning), context: number(tokens.context), window: number(tokens.window) },
     limits: (['5h', 'week'] as const).map(id => {
@@ -78,7 +81,9 @@ export function codexPanel(local: Record<string, unknown> | null, now = Date.now
     groups: [quota,
       { kind: 'rows', title: t('会话'), rows: [{ label: t('模型'), value: session.model ?? unknown() }, { label: t('思考强度'), value: session.effort ?? unknown() },
         { label: t('快速模式'), value: session.fast === null ? unknown() : session.fast ? t('开') : t('关') }, { label: t('工作目录'), value: session.cwd ?? unknown() }] },
-      { kind: 'chips', title: t('权限'), chips: [{ text: t('审批：{value}', { value: session.approval ? approvalWord(session.approval) : unknown() }) },
+      // The owner's choice for this session first (a worker's session has none), then what Codex applied.
+      { kind: 'chips', title: t('权限'), chips: [...(session.permissions ? [{ text: t('方式：{value}', { value: permissionName(session.permissions) }) }] : []),
+        { text: t('审批：{value}', { value: session.approval ? approvalWord(session.approval) : unknown() }) },
         { text: t('沙箱：{value}', { value: session.sandbox ? sandboxWord(session.sandbox) : unknown() }), warn: session.sandbox === 'dangerFullAccess' }] },
       { kind: 'rows', title: t('账号'), rows: [{ label: t('登录方式'), value: accountFailed ? readFailed(accountFailed) : accountWord(account.kind) },
         { label: t('模型服务'), value: account.provider ? account.provider === 'openai' ? 'OpenAI' : account.provider : unknown() }] },

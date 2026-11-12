@@ -15,7 +15,8 @@ function statusPanel({ options, thread, cwd, usage, account, limits, errors }, t
   const reason = error => Number.isInteger(error.code) ? `RPC ${error.code}` : t(['timeout', 'rpc_timeout'].includes(error.code) ? '请求超时' : ['closed', 'disconnected', 'process_exited'].includes(error.code) ? '连接已断开' : '原因未知');
   return {
     session: { model: text(options.model), effort: text(options.effort), fast: tier, cwd: text(cwd), sandbox: text(thread.sandbox?.type),
-      approval: text(thread.approvalPolicy) ?? (thread.approvalPolicy?.granular ? 'granular' : null) },
+      approval: text(thread.approvalPolicy) ?? (thread.approvalPolicy?.granular ? 'granular' : null),
+      permissions: text(options.permissions) },
     account: { provider: text(thread.modelProvider), kind: ['api', 'subscription', 'none'].includes(account?.kind) ? account.kind : 'unknown' },
     tokens: { total, input: count(usage?.input), output: count(usage?.output), cachedInput: count(usage?.cachedInput), reasoning: count(usage?.reasoning),
       context: count(usage?.contextTokens), window: count(usage?.contextWindow) },
