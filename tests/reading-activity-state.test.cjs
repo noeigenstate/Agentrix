@@ -53,3 +53,14 @@ test('a positively parsed current permission dialog stays waiting after newer si
   frame.pending = true; assert.equal(cliStateFor('claude', frame, terminal).waiting, true, 'an in-flight write cannot hide the dialog still on screen');
   frame.sessionId = 'previous-pty'; assert.equal(cliStateFor('claude', frame, terminal).waiting, false);
 });
+
+test('a busy Claude takes a message while its frame is parsing; a dialog still holds one', () => {
+  const terminal = { sessionId: 'pty', agentStartedAt: 0, codexActivity: 'working', needsInput: null };
+  const frame = { sessionId: 'pty', revision: 1, updatedAt: 1, rows: ['✶ Writing… (0s · esc to interrupt)', '', '────', '❯ ', '────', '  ⏵⏵ accept edits on'] };
+  const busy = cliStateFor('claude', frame, terminal);
+  assert.equal(busy.working, true); assert.equal(busy.accepting, true); assert.equal(busy.canDeliver, true);
+  const parsing = cliStateFor('claude', { ...frame, pending: true }, terminal);
+  assert.equal(parsing.accepting, true, 'a write xterm has not parsed yet does not hold a message'); assert.equal(parsing.canDeliver, false);
+  const dialog = cliStateFor('claude', { ...frame, rows: [...frame.rows, 'Esc to cancel'] }, terminal);
+  assert.equal(dialog.accepting, false); assert.equal(dialog.waiting, true);
+});

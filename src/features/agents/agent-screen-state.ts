@@ -27,6 +27,9 @@ export function cliStateFor(agent: ScreenAgent, frame: CliFrame | null, terminal
   const authority = signal && !newer ? signal : null;
   const waiting = dialog || (authority ? authority.state === 'waiting' : !signal && terminal.needsInput != null && !idle);
   const working = !waiting && (authority ? authority.state === 'working' : busy || !idle && (terminal.mainTurn?.state ?? terminal.codexActivity) === 'working');
+  // A busy CLI takes messages as its terminal does. accepting ignores a frame xterm is still parsing (Claude Code's busy
+  // output keeps one parsing most of the time): a send waits for the parsed frame before it writes.
+  const accepting = input && !dialog && !waiting;
   return { input, idle, waiting, working, message: authority?.state === 'waiting' ? authority.message : waiting ? terminal.needsInput : null,
-    canDeliver: input && !dialog && !waiting && !current?.pending };
+    accepting, canDeliver: accepting && !current?.pending };
 }

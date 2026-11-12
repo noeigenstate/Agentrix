@@ -3092,5 +3092,8 @@
   "只用保存的密钥": "Saved key only",
   "原生模式只用 Agentrix 里保存的 API 密钥，Claude Code 设置里的 apiKeyHelper 不会再让 API 通道无法使用；终端里的 Claude Code 不受影响。": "Native mode uses only the API key saved in Agentrix, so an apiKeyHelper in Claude Code settings no longer makes the API channel unusable; Claude Code in the terminal is unaffected.",
   "派发更及时": "Faster dispatch",
-  "派发出去的 Codex 工作者报告额度后，活动栏会立刻刷新；查找团队目录不再卡住界面；派发的消息送不到 Agentrix 时，规划员的终端里会写明原因。": "After a dispatched Codex worker reports its quota, the activity bar refreshes at once; looking up the team directory no longer freezes the interface; and when a dispatched message cannot reach Agentrix, the planner's terminal states the reason."
+  "派发出去的 Codex 工作者报告额度后，活动栏会立刻刷新；查找团队目录不再卡住界面；派发的消息送不到 Agentrix 时，规划员的终端里会写明原因。": "After a dispatched Codex worker reports its quota, the activity bar refreshes at once; looking up the team directory no longer freezes the interface; and when a dispatched message cannot reach Agentrix, the planner's terminal states the reason.",
+  "终端输入框里还有没提交的文字": "The terminal input still has text that was not submitted",
+  "发送框里的内容": "Send what is in the input",
+  "清空后发送本条": "Clear it and send this message"
 }

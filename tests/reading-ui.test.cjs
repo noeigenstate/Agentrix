@@ -441,6 +441,13 @@ test('the reading composer uses the shared microphone beside send, with the same
   h.props.handoff.locked = false; h.render(); assert.equal(microphone().disabled, false);
 });
 
+const outboxTexts = h => elements(h.tree()).find(node => node.props.className === 'reading-outbox')?.props.children[1].props.children.map(item => item.props.children[0]) ?? [];
+// The notice for our own words left unsubmitted in the CLI's input: its words and its buttons by label.
+function leftoverNotice(h) {
+  const item = elements(h.tree()).find(node => node.props.className === 'reading-outbox reading-leftover')?.props.children[1].props.children;
+  return item && { text: item.props.children[0], actions: Object.fromEntries(item.props.children.filter(child => child?.type === 'button').map(button => [button.props.children, button.props])) };
+}
+
 function workingComposerHarness(t, agent, overrides = {}) {
   let clock = 10000, sequence = 0;
   t.mock.method(Date, 'now', () => clock);
@@ -456,7 +463,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
     ...fixture.flatMap((row, index) => index === inputRow ? view.draft.split(/\r?\n/).map((line, part) => (part ? '  ' : agent === 'claude' ? '❯ ' : '› ') + line) : [row]),
   ];
   const h = dictationHarness(t, {
-    './terminal-screen': { useScreen: () => ({ rows: rows() }), readScreen: () => ({ rows: rows() }) },
+    './terminal-screen': { useScreen: () => ({ rows: rows(), pending: view.pending }), readScreen: () => ({ rows: rows(), pending: view.pending }) },
     './agent-screen': { parseAgentScreen },
     './useReadingConversation': { useReadingHistory: () => historySnapshot(view.records) },
     './usePendingPrompts': { usePendingPrompts: () => {
@@ -623,14 +630,49 @@ for (const agent of ['claude', 'codex']) {
       await h.tick(30000);
       assert.deepEqual(h.written.map(item => item.text), ['\r']);
       assert.deepEqual(h.pasted.map(item => item.text), ['queued message']);
-      assert.equal(h.view.draft, 'queued message'); assert.equal(h.node.value, 'next message');
-      assert.ok(h.popup()); assert.equal(errors.length, 1); return;
+      assert.equal(h.view.draft, 'queued message'); assert.equal(h.node.value, '');
+      assert.deepEqual(outboxTexts(h), ['next message'], 'the next message waits behind the retained input');
+      assert.deepEqual(Object.keys(leftoverNotice(h).actions), [en['清空后发送本条']], 'a delivered input is never offered for sending again');
+      assert.equal(h.popup(), undefined); assert.deepEqual(errors, []); return;
     }
     assert.equal(h.written.filter(item => item.text === '\r').length, retain ? 2 : 1, 'an idle returned input is submitted only by the next explicit send');
     await h.tick(700); await h.tick(400); await h.tick(700);
     assert.deepEqual(h.pasted.map(item => item.text), ['queued message', 'next message']);
     assert.equal(h.written.filter(item => item.text === '\r').length, retain ? 3 : 2);
     assert.equal(h.written.some(item => item.text === '\x15'), false);
+  });
+
+  test(agent + ': a busy agent takes a message at once, as its terminal does, while its frame is still parsing', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.pending = true; h.render();
+    assert.equal(h.render().props.placeholder.includes(en['等待终端输入就绪后发送']), false);
+    h.edit('sent while it works'); h.press('Enter'); await h.tick(0);
+    assert.deepEqual(h.pasted, [], 'no write before xterm has parsed the frame');
+    h.view.pending = false; await h.tick(50); await h.tick(0);
+    assert.deepEqual(h.pasted.map(item => item.text), ['sent while it works']);
+    await h.tick(400); await h.tick(700);
+    assert.deepEqual(h.written.map(item => item.text), ['\r']);
+    assert.deepEqual(outboxTexts(h), []); assert.equal(h.node.value, '');
+    assert.deepEqual(h.view.records.map(record => [record.text, record.queued]), [['sent while it works', true]]);
+  });
+
+  test(agent + ': a choice holds a message the busy agent would otherwise take', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+    h.edit('after the choice'); h.press('Enter'); await h.tick(1000);
+    assert.deepEqual(h.pasted, []); assert.deepEqual(h.written, []);
+    assert.deepEqual(outboxTexts(h), ['after the choice']);
+  });
+
+  test(agent + ': an input still parsing after the paste is left unconfirmed, never pressed or pasted again', async t => {
+    const h = workingComposerHarness(t, agent);
+    h.edit('maybe delivered'); h.press('Enter'); await h.tick(0);
+    assert.equal(h.pasted.length, 1);
+    h.view.pending = true; await h.tick(400);
+    for (let step = 0; step < 12; step++) await h.tick(50);
+    h.view.pending = false; await h.tick(700); await h.tick(30000);
+    assert.deepEqual(h.written, [], 'no Enter without a parsed input');
+    assert.equal(h.pasted.length, 1); assert.equal(h.node.value, 'maybe delivered', 'the words come back to the box, as before');
   });
 
   test(agent + ': busy input without a receipt never retries Enter or safety-net resends', async t => {
@@ -700,13 +742,21 @@ test('codex: a delivered receipt with retained input never causes another Enter 
   assert.deepEqual(h.written.map(item => item.text), ['\r'], 'a delivery receipt also stops delayed Enter retries');
   const quote = elements(h.tree()).find(element => element.props.value?.quote).props.value.quote;
   quote.pick('Codex', 'keep this quote'); h.render();
-  h.edit('next message'); h.press('Enter'); await h.tick(0);
+  h.edit('next message'); h.press('Enter'); await h.tick(0); await h.tick(30000);
   assert.deepEqual(h.written.map(item => item.text), ['\r']);
   assert.deepEqual(h.pasted.map(item => item.text), ['already delivered']);
-  assert.equal(h.view.draft, 'already delivered'); assert.equal(h.node.value, 'next message');
-  assert.equal(h.popup().props.focus, false); assert.equal(errors.length, 1);
-  assert.equal(elements(h.tree()).find(element => element.type?.name === 'QuoteChip').props.quote.excerpt, 'keep this quote');
+  assert.equal(h.view.draft, 'already delivered'); assert.equal(h.node.value, '');
+  assert.deepEqual(outboxTexts(h), ['> keep this quote\n\nnext message'], 'the waiting message carries its quote');
+  assert.equal(elements(h.tree()).some(element => element.type?.name === 'QuoteChip'), false);
+  assert.equal(h.popup(), undefined); assert.deepEqual(errors, []);
   assert.equal(elements(h.tree()).find(element => element.props.queued).props.prompts.length, 0);
+  const notice = leftoverNotice(h);
+  assert.equal(notice.text, 'already delivered'); assert.deepEqual(Object.keys(notice.actions), [en['清空后发送本条']]);
+  notice.actions[en['清空后发送本条']].onClick(); await h.tick(80); h.render(); await h.tick(0);
+  for (let step = 0; step < 4; step++) await h.tick(700);
+  assert.deepEqual(h.written.map(item => item.text), ['\r', '\x15', '\r'], 'only the clear and the waiting message are written');
+  assert.deepEqual(h.pasted.map(item => item.text), ['already delivered', '> keep this quote\n\nnext message']);
+  assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined);
 });
 
 for (const change of ['session', 'thread']) test('own send history does not cross a different ' + change, async t => {
@@ -2832,4 +2882,58 @@ test('a locked composer looks locked: no input fill, the quiet divider edge and 
   assert.match(locked, /background: transparent;/); assert.match(locked, /border-color: var\(--divider\);/);
   assert.match(css, /\.reading-composer textarea:disabled \{ color: var\(--text-2\); \}/, 'the draft kept in it stays readable');
   assert.doesNotMatch(locked, /#[0-9a-f]{3,8}\b|rgba?\(/i, 'tokens only');
+});
+
+test('claude: a message Claude Code has queued no longer counts as a leftover input', async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.onError = error => errors.push(error);
+  // The queued words stay where the input is read, as Claude Code may list its queue there; the receipt says they are queued.
+  h.view.retain = true;
+  h.edit('first while it works'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.view.records.map(record => [record.text, record.queued]), [['first while it works', true]]);
+  assert.equal(h.view.draft, 'first while it works');
+  h.view.retain = false;
+  h.edit('second while it works'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.equal(h.pasted.length, 2); assert.equal(h.pasted[1].text, 'second while it works');
+  assert.equal(h.written.some(item => item.text === '\x15'), false, 'the queue is never cleared');
+  assert.equal(h.popup(), undefined); assert.deepEqual(errors, []);
+  assert.equal(leftoverNotice(h), undefined); assert.deepEqual(outboxTexts(h), []);
+});
+
+for (const action of ['发送框里的内容', '清空后发送本条']) test(`claude: words of ours left unsubmitted hold the next message until ${action}`, async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.onError = error => errors.push(error);
+  h.view.accept = false;
+  h.edit('left in the box'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700); await h.tick(30000);
+  assert.equal(h.view.draft, 'left in the box'); assert.deepEqual(h.view.records, []);
+  h.view.accept = true; const before = h.written.length;
+  h.edit('the next message'); h.press('Enter'); await h.tick(0); await h.tick(1000);
+  assert.equal(h.written.length, before, 'nothing is written over the leftover'); assert.equal(h.pasted.length, 1);
+  assert.equal(h.node.value, ''); assert.deepEqual(outboxTexts(h), ['the next message']);
+  assert.equal(h.popup(), undefined); assert.deepEqual(errors, []);
+  const notice = leftoverNotice(h);
+  assert.equal(notice.text, 'left in the box');
+  assert.deepEqual(Object.keys(notice.actions), [en['发送框里的内容'], en['清空后发送本条']]);
+  notice.actions[en[action]].onClick(); await h.tick(80); h.render();
+  for (let step = 0; step < 6; step++) await h.tick(700);
+  const sent = h.view.records.map(record => record.text);
+  if (action === '发送框里的内容') {
+    assert.deepEqual(sent, ['left in the box', 'the next message'], 'the leftover goes first, then the waiting message');
+    assert.equal(h.written.some(item => item.text === '\x15'), false);
+  } else {
+    assert.deepEqual(sent, ['the next message'], 'the leftover is cleared, never sent');
+    assert.equal(h.written.filter(item => item.text === '\x15').length, 1);
+  }
+  assert.deepEqual(h.pasted.map(item => item.text), ['left in the box', 'the next message']);
+  assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined);
+});
+
+test('claude: the same words still unsubmitted are this message, sent with Enter instead of held', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.accept = false;
+  h.edit('send me'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700); await h.tick(30000);
+  h.view.accept = true;
+  h.edit('send me'); h.press('Enter'); await h.tick(0); await h.tick(700);
+  assert.deepEqual(h.view.records.map(record => record.text), ['send me']);
+  assert.equal(h.pasted.length, 1, 'never pasted twice'); assert.equal(leftoverNotice(h), undefined); assert.deepEqual(outboxTexts(h), []);
 });
