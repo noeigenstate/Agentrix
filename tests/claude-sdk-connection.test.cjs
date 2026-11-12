@@ -129,15 +129,30 @@ test('connection tests use the saved key and new-session options without changin
   await session.close();
 });
 
-test('a missing key or unavailable CLI skips SDK launch and billing stays unknown', async () => {
-  for (const status of ['missing', 'too_old']) {
-    const check = createConnectionTest({ credentials: { read: () => key }, request: http(200).request,
-      inspectCli: async () => ({ status, version: null }), probeBilling: () => assert.fail('SDK must not launch') });
-    assert.deepEqual((await check()).billing, { status: 'unknown', source: null });
-  }
-  const check = createConnectionTest({ credentials: { read: () => null, status: () => ({ saved: false }) }, inspectCli: cli,
-    request: () => assert.fail('no HTTP without a key'), probeBilling: () => assert.fail('no SDK without a key') });
-  assert.deepEqual((await check()).billing, { status: 'unknown', source: null });
+// A check that skipped the billing probe says why on its line: a retry changes nothing there, so only a probe that went wrong says "请重试".
+const skippedBilling = async (inspectCli, credentials = { read: () => key }) => (await createConnectionTest({ credentials, inspectCli,
+  request: credentials.status ? () => assert.fail('no HTTP without a key') : http(200).request, probeBilling: () => assert.fail('SDK must not launch') })()).billing;
+const unknownBecause = (text, values = {}) => ({ status: 'unknown', source: null, detail: { text, values } });
+const noKey = { read: () => null, status: () => ({ saved: false }) };
+test('no Claude Code: billing was not checked, and the line says so rather than asking for a retry', async () => {
+  assert.deepEqual(await skippedBilling(async () => ({ status: 'missing', version: null })), unknownBecause('没有找到能用的 Claude Code，无法确认计费来源。'));
+});
+test('an npm install without its native program: billing says the install is incomplete', async () => {
+  const incomplete = 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code';
+  assert.deepEqual(await skippedBilling(async () => ({ status: 'missing', version: null, reason: 'not_found', incomplete })),
+    unknownBecause('Claude Code 安装不完整：npm 装了，但里面没有原生程序，无法确认计费来源。'));
+});
+test('a Claude Code that is too old: billing names the version it needs', async () => {
+  assert.deepEqual(await skippedBilling(async () => ({ status: 'too_old', version: '2.1.316' })),
+    unknownBecause('Claude Code 版本过低（需要 ≥ {required}），无法确认计费来源。', { required: '2.1.317' }));
+});
+test('no saved key: billing says it was not checked for want of one; an unreadable saved key is not called missing', async () => {
+  assert.deepEqual(await skippedBilling(cli, noKey), unknownBecause('没有保存 API 密钥，所以没有检查计费来源。'));
+  assert.deepEqual(await skippedBilling(cli, { read: () => { throw new Error('locked'); }, status: () => ({ saved: true }) }),
+    unknownBecause('读不到已保存的 API 密钥，所以没有检查计费来源。'));
+});
+test('with no key and no Claude Code both, billing names the Claude Code (the key row already asks for the key)', async () => {
+  assert.deepEqual(await skippedBilling(async () => ({ status: 'missing', version: null }), noKey), unknownBecause('没有找到能用的 Claude Code，无法确认计费来源。'));
 });
 
 for (const mode of ['api-only', 'api-then-terminal']) test(`the real connection facade and a real session agree on billing mismatch under ${mode}`, async t => {

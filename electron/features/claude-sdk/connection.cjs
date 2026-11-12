@@ -126,6 +126,18 @@ function probeModel(sessionModel, config) {
   return DEFAULT_MODEL;
 }
 
+// Why billing was not checked at all, when it was not: a retry changes nothing then, so the sentence names the cause and
+// leaves "try again" to a check that went wrong. The CLI is named before the key because the CLI row and the key row
+// already say what to install or save; this line only says what that cost the billing check, in one short clause.
+function billingSkippedWhy(key, cli, keyStatus) {
+  const say = (text, values = {}) => ({ text, values });
+  if (cli.status === 'missing') return say(cli.incomplete ? 'Claude Code 安装不完整：npm 装了，但里面没有原生程序，无法确认计费来源。'
+    : '没有找到能用的 Claude Code，无法确认计费来源。');
+  if (cli.status === 'too_old') return say('Claude Code 版本过低（需要 ≥ {required}），无法确认计费来源。', { required: cli.required });
+  if (!key) return say(keyStatus === 'missing' ? '没有保存 API 密钥，所以没有检查计费来源。' : '读不到已保存的 API 密钥，所以没有检查计费来源。');
+  return null;
+}
+
 function createConnectionTest({ credentials, inspectCli, request, probeBilling = async () => ({ status: 'unknown', source: null }), sessionModel = () => null,
   availabilityGeneration = () => undefined, now = Date.now, timeoutMs = 5000 }) {
   const pending = new Map();
@@ -143,7 +155,9 @@ function createConnectionTest({ credentials, inspectCli, request, probeBilling =
     // The billing line says why billing is not this key or could not be read, and what to check (`detail`); the path's
     // reason only names the consequence, so the card does not say the same sentence twice.
     let billing = { status: 'unknown', source: null };
-    if (key && cli.status === 'ok') {
+    const skipped = billingSkippedWhy(key, cli, observed.status);
+    if (skipped) billing.detail = skipped;
+    else {
       try {
         const value = await probeBilling(key, config, generation), source = billingSource(value.source);
         billing = { status: value.status === 'mismatch' ? 'mismatch' : source === 'ANTHROPIC_API_KEY' && value.status === 'ok' ? 'ok' : 'unknown', source,
