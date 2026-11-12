@@ -552,12 +552,12 @@ function callsOf(s, project) {
   if (s.calls) return s.calls;
   const helperPids = new WeakMap();
   return s.calls ||= new AgentCalls({ changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
-    dispatchAlive: call => {
+    dispatchAlive: async call => {
       if (project.kind === 'ssh') return null;
       let pid = call.helperPid || helperPids.get(call);
       if (!pid || call.done) {
         try {
-          const team = require('./features/team/team.cjs').projectTeam(project.path);
+          const team = await require('./features/team/team-locate.cjs').locateTeam(project.path);
           if (!team || !/^[a-f\d-]{36}$/i.test(call.key)) return null;
           const file = path.join(team.board, call.key + '.json');
           if (fs.statSync(file).size > 65536) return null;
@@ -963,9 +963,11 @@ function onEvent(event) {
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
   if (event.type === 'dispatch-account') {
-    // The pane reads usage on its own; an account report changes nothing the window state shows. Only a call the
+    // An account report changes nothing the window state shows; the pane is told to read usage again. Only a call the
     // session knows can report.
-    require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project), payload => observeDispatchAccount(project, payload));
+    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project), payload => observeDispatchAccount(project, payload))) {
+      send('agents:usage-changed', { projectId: project.id });
+    }
     return;
   }
   if (['dispatch-start', 'dispatch-routing', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'].includes(event.type)) {
@@ -1505,13 +1507,13 @@ async function initializeNativeSessions() {
   // Load optional provider composition after app.ready; neither module starts a real account session here.
   const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
   const { createDispatchControl } = await import('./features/agents/dispatch-control.cjs');
-  const { projectTeam } = require('./features/team/team.cjs');
-  dispatchControl = createDispatchControl({ resolveRun: registration => {
+  const { locateTeam } = require('./features/team/team-locate.cjs');
+  dispatchControl = createDispatchControl({ resolveRun: async registration => {
     const s = sessions.get(registration.projectId), project = store.findTerminal(registration.projectId)?.project;
     if (!s || !project || s.sessionKey !== registration.sessionKey || s.controlCapability !== registration.capability) return null;
-    const worker = projectTeam(project.path)?.live().find(run => run.id === registration.runId);
+    const worker = (await locateTeam(project.path))?.live().find(run => run.id === registration.runId);
     if (!worker) return null;
-    return { runId: worker.id, projectId: registration.projectId, cwd: worker.cwd, worktree: worker.cwd, allow: worker.allow,
+    return { runId: worker.id, projectId: registration.projectId, agent: worker.agent, cwd: worker.cwd, worktree: worker.cwd, allow: worker.allow,
       readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查', roundtable: worker.role === '圆桌', local: project.kind !== 'ssh' };
   } });
   ({ address: controlAddress } = await dispatchControl.listen());
@@ -1910,7 +1912,7 @@ function registerUnavailableNative(handle) {
   handle('native:settings-get', () => ({ ...settings }));
   handle('native:snapshot', id => { findProject(id); return null; });
   handle('native:usage', async projectId => {
-    const connections = await readNativeConnections(projectId), limits = readNativeSubscriptionLimits();
+    const connections = await readNativeConnections(projectId), limits = readNativeSubscriptionLimits(projectId);
     const summary = claudeRuntime?.usage.summary() || { month: new Date().toISOString().slice(0, 7),
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
     return { ...summary, budgetUsd: null, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',

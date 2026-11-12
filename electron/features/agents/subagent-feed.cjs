@@ -1,6 +1,6 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
-const { projectTeam } = require('../team/team.cjs');
+const { locateTeam } = require('../team/team-locate.cjs');
 const { TranscriptTail } = require('../../agent-actions.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('../../conversation.cjs');
 const { containedFile, sessionHeader, findRolloutSession, sameDirectory } = require('../../session-files.cjs');
@@ -122,7 +122,7 @@ class SubagentFeeds {
     // A helper records identifiers and channel origins, never message text. Resume reads the same facts.
     const entry = this.owned(call);
     if (!entry || !call.cwd) return;
-    if (entry.team === undefined) entry.team = projectTeam(call.cwd) || null;
+    if (entry.team === undefined) entry.team = await locateTeam(call.cwd) || null;
     const team = entry.team;
     if (!team) return;
     let file;

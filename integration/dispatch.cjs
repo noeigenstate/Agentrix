@@ -204,6 +204,8 @@ async function teamCommand(argv, stdout) {
   }
 }
 
+// The planner is told once per helper process that Agentrix did not receive its events: the worker runs on regardless.
+let undeliveredNoted = false;
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
 function eventSink(filename) {
   let bootstrap;
@@ -219,10 +221,19 @@ function eventSink(filename) {
     if (sending || !queue.length) return;
     sending = true;
     const event = queue.shift(), socket = net.connect(address);
-    socket.setTimeout(250, () => socket.destroy());
-    socket.on('error', () => socket.destroy());
-    socket.once('close', () => { sending = false; drain(); });
-    socket.once('connect', () => socket.end(JSON.stringify({ ...event, projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey }) + '\n'));
+    // The errno code of the first failure (ENOENT, EPIPE, …) or timeout; an event counts as delivered once it is written.
+    let failure = null, written = false;
+    socket.setTimeout(250, () => { failure ??= 'timeout'; socket.destroy(); });
+    socket.on('error', error => { failure ??= error.code || 'socket_error'; socket.destroy(); });
+    socket.once('close', () => {
+      if (!written && !undeliveredNoted) {
+        undeliveredNoted = true;
+        process.stdout.write(`[dispatch] events not delivered to Agentrix (${failure || 'closed'})\n`);
+      }
+      sending = false; drain();
+    });
+    socket.once('connect', () => socket.end(JSON.stringify({ ...event, projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey }) + '\n',
+      error => { if (!error) written = true; }));
   }
   return event => {
     // A slow/disappeared app cannot retain unlimited rate or routing reports; the newest of each supersedes the older.

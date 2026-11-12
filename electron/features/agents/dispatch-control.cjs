@@ -3,7 +3,6 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
-const { projectTeam } = require('../team/team.cjs');
 const { accountKey: processAccountKey } = require('./codex-account-usage.cjs');
 
 /**
@@ -64,8 +63,6 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
         if (!verified || verified.runId !== value.runId || verified.projectId !== value.projectId || !path.isAbsolute(verified.cwd || '') || !Array.isArray(verified.allow) || socket.destroyed) return socket.destroy();
         // A worker may tighten its admitted mode (for example --permission plan), never loosen main's binding.
         const run = { ...verified, readOnly: !!verified.readOnly || value.readOnly === true, roundtable: !!verified.roundtable || value.roundtable === true };
-        const agent = verified.agent || projectTeam(verified.cwd)?.live().find(entry => entry.id === verified.runId)?.agent;
-        if (agent) run.agent = agent;
         if (clients.has(run.runId)) return socket.destroy();
         client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
@@ -110,7 +107,8 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
       // A's provider owns disconnect cleanup; application exit keeps today's worker policy.
       try { void Promise.resolve(client.control?.({ type: 'disconnect' })).catch(() => {}); } catch {}
     });
-    socket.setTimeout(1500, () => socket.destroy());
+    // Longer than a helper's 2 s registration wait, so main's own lookup decides the outcome, never this idle limit.
+    socket.setTimeout(2500, () => socket.destroy());
     if (registration) void handle(registration).catch(() => socket.destroy());
   }
   return {
@@ -146,7 +144,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
   };
 }
 
-function connectDispatchControl({ address, runId, projectId, sessionKey, capability, readOnly = false, roundtable = false, onControl = async () => 'queued', onEvent = () => {}, timeout = 500 }) {
+function connectDispatchControl({ address, runId, projectId, sessionKey, capability, readOnly = false, roundtable = false, onControl = async () => 'queued', onEvent = () => {}, timeout = 2000 }) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(address), pending = new Map();
     let registered = false, connected = false, failure, counter = 0, serial = Promise.resolve();

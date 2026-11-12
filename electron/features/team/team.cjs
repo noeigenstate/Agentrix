@@ -60,6 +60,11 @@ function pendingMeetings(history) {
 function projectTeam(cwd, create = false) {
   let common;
   try { common = path.resolve(cwd, git(cwd, ['rev-parse', '--git-common-dir']).trim()); } catch { return null; }
+  return teamAt(common, cwd, create);
+}
+
+// The team in Git's common directory `common` (absolute), as found from `cwd`. team-locate.cjs asks Git without blocking.
+function teamAt(common, cwd, create = false) {
   // Hosts may confine shared journal writes to explicitly admitted Git directories.
   const roots = process.env.AGENTRIX_TEAM_WRITE_ROOTS;
   if (roots) {
@@ -350,4 +355,4 @@ function minutesMarkdown(minutes) {
     + table(t.columns, rows) + '\n\n' + table(t.issueColumns, issues) + `\n\n${t.summary(confirmed, minutes.rows.length)}\n`;
 }
 
-module.exports = { projectTeam, understandingOf, confirmationOf, meetingRequest, memoryExcerpt, recordFindings, minutesMarkdown, FINDINGS };
+module.exports = { projectTeam, teamAt, understandingOf, confirmationOf, meetingRequest, memoryExcerpt, recordFindings, minutesMarkdown, FINDINGS };

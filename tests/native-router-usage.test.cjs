@@ -108,7 +108,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     require: name => {
       if (name === 'electron') return { safeStorage };
-      if (name === './features/team/team.cjs') return { projectTeam: forbidden };
+      if (name === './features/team/team-locate.cjs') return { locateTeam: forbidden };
       assert.fail(`unexpected require: ${name}`);
     },
     importFixture: async name => {

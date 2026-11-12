@@ -47,6 +47,16 @@ test('broker forwards later controls to the registered provider handler without 
   finish(); await result;
 });
 
+test('a registration main verifies within 2 s succeeds: neither the helper wait nor the channel idle limit cuts it short', async t => {
+  const id = randomUUID(), control = createDispatchControl({ resolveRun: async () => {
+    await new Promise(resolve => setTimeout(resolve, 1700));
+    return { runId: id, projectId: 'p', cwd: os.tmpdir(), allow: [], agent: 'codex' };
+  } });
+  const { address } = await control.listen(); t.after(() => control.close());
+  const client = await connectDispatchControl({ address, runId: id, projectId: 'p' }); t.after(() => client.close());
+  assert.equal(client.connected, true);
+});
+
 test('a disconnected in-flight push reports unknown and never resends automatically', async t => {
   const id = randomUUID(), control = createDispatchControl({ resolveRun: () => ({ runId: id, projectId: 'p', cwd: os.tmpdir(), allow: [] }) });
   const { address } = await control.listen(); t.after(() => control.close());
