@@ -53,12 +53,15 @@ export function isCliWorking(agent: ScreenAgent, rows: string[], _screen: AgentS
 
 // What is typed in the CLI's own input, without its placeholder ("Try …", "Ask Codex to do anything"). Claude puts an
 // interrupted prompt back there, so it can hold text the reading view did not type. Claude Code 2.1.317 lists the
-// messages it queued above its working line and shows "Press up to edit queued messages" in the empty input.
-const placeholder = (agent: ScreenAgent, text: string) => agent === 'claude' ? /^Try ["“].+["”]$/.test(text) || text === 'Press up to edit queued messages'
+// messages it queued above its working line, over "ctrl+x ctrl+s to send now", and shows "Press up to edit queued
+// messages" in the empty input; without that queue row the same words are typed ones.
+const queueShown = (rows: string[]) => rows.some(row => /^\s*ctrl\+x ctrl\+s to send now\s*$/.test(row));
+const placeholder = (agent: ScreenAgent, text: string, rows: string[]) => agent === 'claude'
+  ? /^Try ["“].+["”]$/.test(text) || text === 'Press up to edit queued messages' && queueShown(rows)
   : text === 'Ask Codex to do anything';
 export function cliInputDraft(agent: ScreenAgent, rows: string[], _screen: AgentScreen) {
   const text = cliInputArea(agent, rows)?.text ?? '';
-  return placeholder(agent, text) ? '' : commandInputText(text);
+  return placeholder(agent, text, rows) ? '' : commandInputText(text);
 }
 
 // Busy agents can take queued messages; dialogs and pickers own the keys even when the input stays visible.

@@ -175,6 +175,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const showOpen = state.waiting || terminalPopup !== null;
   const shownBlocked = !useHeldTrue(state.accepting, showOpen), shownWorking = useHeldTrue(working, state.waiting || !live);
   const canWrite = useRef(state.canDeliver); canWrite.current = state.canDeliver;
+  const workingNow = useRef(working); workingNow.current = working;
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const focusAfterPopup = useRef(false);
   const popupReady = useRef<(() => void) | null>(null);
@@ -297,7 +298,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const send = async (text = draft.trim(), own = true, automatic = false) => {
     if (own) dictationSend.cancel();
     if (inputBlocked || !text && !images.length && !serverPictures.current.length) return false;
-    if (deliveryBlocked || outbox.length && !automatic || sending.current) {
+    // The gate is the held one the box shows: a half-drawn redraw does not send a message to the outbox; the send waits
+    // for the input itself. A dialog, a menu or the popup holds it at once.
+    if (shownBlocked || outbox.length && !automatic || sending.current) {
       if (automatic || own && sendingDraft.current === text) return false;
       if (images.length || serverPictures.current.length) return false; // Native chips stay with the draft until their CLI input returns.
       hold(text, own);
@@ -321,12 +324,15 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (carried) holdQuote(null);
     if (own) edit('');
   };
-  // Esc stops the round only on a parsed frame with no dialog, which it would answer instead. A frame still parsing gets
-  // a moment to settle; then the screen decides.
+  // Esc stops a round, on a parsed frame with no dialog (which it would answer instead), and only while this frame says
+  // the agent works: the Stop button outlasts a round by a moment, and Esc at an idle prompt opens Claude Code's history.
+  // A frame drawn halfway gets a quiet second look before the owner is told.
   const interrupt = async () => {
+    if (!workingNow.current) return;
     if (!canWrite.current) {
-      if (native.parsing()) await native.settle(() => mounted.current);
-      if (!mounted.current || choiceVisible.current || !native.readInput()) { onError(t('终端还没准备好，这次没有中断，请稍后再试。')); return; }
+      const ready = await native.awaitInput(() => mounted.current && !choiceVisible.current, 500);
+      if (!mounted.current || !workingNow.current) return;
+      if (!ready || choiceVisible.current) { onError(t('终端还没准备好，这次没有中断，请稍后再试。')); return; }
     }
     window.agentrix.writeTerminal(terminal.id, '\x1b');
   };
@@ -335,7 +341,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const [leftover, setLeftover] = useState<Leftover | null>(null);
   useLayoutEffect(() => { setLeftover(null); }, [conversation]);
   const leftoverShown = leftover && sameMessage(cliInputDraft(kind, visibleScreen?.rows ?? [], parsedScreen), leftover.text) ? leftover : null;
-  const leftoverDelivered = !!leftoverShown && (queuedInput(leftoverShown.text) || receivedInput(leftoverShown.text));
+  // Words in the input were delivered only on evidence: Claude Code empties its input when it takes a message (2.1.317 draws
+  // its queue outside the input), so its words there never went; Codex keeps a sent message shown, so its receipt does,
+  // unless another send of the same words is still unconfirmed here.
+  const unconfirmed = (text: string) => pending.filter(prompt => !queued(prompt) && sameMessage(prompt.text, text));
+  const leftoverDelivered = !!leftoverShown && kind === 'codex' && (queuedInput(leftoverShown.text) || receivedInput(leftoverShown.text))
+    && !unconfirmed(leftoverShown.text).length;
   // An action reads the input again: a dialog may have come up, or the words gone, since the notice was drawn. Then it
   // writes nothing and the notice is drawn from the screen as it is now.
   const leftoverOwns = () => mounted.current && !choiceVisible.current;
@@ -359,8 +370,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (!mounted.current) return;
     setLeftover(cleared ? null : { ...shown });
     if (!cleared) return;
-    // The owner gave those words up: their unconfirmed card goes too, or the safety net would send them again.
-    for (const prompt of pending) if (sameMessage(prompt.text, shown.text)) cancelEcho(prompt.id);
+    // The owner gave those words up: their unconfirmed card goes too, or the safety net would send them again. The latest
+    // one only, and never a card Claude Code has queued.
+    const card = unconfirmed(shown.text).at(-1);
+    if (card) cancelEcho(card.id);
     if (shown.again) hold(shown.again, false);
   };
   const keepNativeInput = () => {
@@ -371,7 +384,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number, automatic: boolean) => {
-    if (inputBlocked || deliveryBlocked) return false;
+    if (inputBlocked || shownBlocked) return false;
     if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
     const pictureSend = !!(batch.length || uploads.length);
@@ -405,9 +418,18 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (sent && clears(terminal.agent, text)) { const ids = new Set(conversationEntries.map(entry => entry.id)); cleared.set(conversation, ids); setHidden(ids); }
       return sent ? true : undefined; // A cancelled typed command may already have written keys; never replay it automatically.
     }
-    // The screen may have changed since this render. Preserve the message; an absent input is not a dialog.
-    if (native.parsing()) await native.settle(() => ownsSend(owner));
-    if (!ownsSend(owner) || choiceVisible.current || !native.readInput()) return false;
+    // The screen may have changed since this render, and a busy agent's redraw can leave the input out for a moment. A
+    // text message shows as sent in the conversation while the send waits for the frame that draws the input, as the
+    // terminal would take the keys; only when none comes, or a dialog does, it waits in the outbox instead.
+    const textOnly = !pictureSend && !!text, early = textOnly ? echo(text, [], 0) : null;
+    if (textOnly) { toBottom(); if (own) edit(''); }
+    if (!native.readInput() && !await native.awaitInput(() => ownsSend(owner) && !choiceVisible.current) || !ownsSend(owner) || choiceVisible.current) {
+      if (!textOnly) return false;
+      if (early) cancelEcho(early);
+      if (automatic) return false;
+      if (mounted.current && identity.current.epoch === epoch) hold(words, own);
+      return;
+    }
     if (batch.length) {
       await native.prepare(batch);
       for (let attempt = 0; ; attempt++) {
@@ -417,7 +439,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         await new Promise(resolve => setTimeout(resolve, 80));
       }
     }
-    const pendingId = text || batch.length ? echo(text, attached, batch.length) : null;
+    const pendingId = textOnly ? early : text || batch.length ? echo(text, attached, batch.length) : null;
     if (pendingId) toBottom();
     const currentInput = text && !batch.length ? native.readInput() : null;
     const left = currentInput?.text ?? '';
