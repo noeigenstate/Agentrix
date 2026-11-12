@@ -79,6 +79,7 @@ function loadUI(name, overrides = {}) {
     if (key === './useFittingHint') return { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, hints) => hints[0] };
     if (key === './useNativePictures') return loadUI('features/reading/useNativePictures.ts', overrides);
     if (key === './useComposerHistory') return loadUI('features/reading/useComposerHistory.ts', overrides);
+    if (key === './useHeldTrue') return loadUI('features/reading/useHeldTrue.ts', overrides);
     if (key === './useCommandPalette') return loadUI('features/reading/useCommandPalette.ts', overrides);
     if (key === './CommandList') return loadUI('features/reading/CommandList.tsx', overrides);
     if (key === './markdown-escape') return require('../src/features/reading/markdown-escape.ts');

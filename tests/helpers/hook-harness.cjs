@@ -35,7 +35,7 @@ function hookHarness(filename, overrides = {}) {
     useId: () => memo(() => `id-${slots.length}`, []),
   };
   // The message box's hooks live in files of their own; they run on this harness's hooks, so one render sees all their state.
-  const shared = /\/(useComposerHistory|useCommandPalette|useMentions|useNativeCommands|CommandList)(\.tsx?)?$/, modules = new Map();
+  const shared = /\/(useComposerHistory|useCommandPalette|useMentions|useNativeCommands|useHeldTrue|CommandList)(\.tsx?)?$/, modules = new Map();
   const resolve = (from, name) => [name, `${name}.ts`, `${name}.tsx`].map(candidate => path.resolve(path.dirname(from), candidate)).find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
   const compile = full => {
     if (modules.has(full)) return modules.get(full).exports;

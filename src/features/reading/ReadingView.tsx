@@ -20,6 +20,7 @@ import { useWelcomeStarting } from './reading-welcome';
 import { ReadingTerminalPopup } from './ReadingTerminalPopup';
 import { setChoiceVisible } from './reading-mode';
 import { hasEditingFocus, isTyping, markTyping } from './typing';
+import { useHeldTrue } from './useHeldTrue';
 import { useStickToBottom } from './useStickToBottom';
 import { useReadingHistory } from './useReadingConversation';
 import { blocks, useVisibleTail } from './useVisibleTail';
@@ -166,6 +167,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const inputBlocked = preview || !live || !!handoff?.locked;
   // As in its terminal, a busy agent takes a message: only a dialog, a menu or the popup holds one back.
   const deliveryBlocked = !state.accepting || terminalPopup !== null;
+  // What the message box shows is steadier than the frames it is read from: a half-drawn redraw (no input box, no spinner row)
+  // must not blink the hint, the interrupt button or its enabled state. A dialog, a menu or the popup shows at once.
+  const showOpen = state.waiting || terminalPopup !== null;
+  const shownBlocked = !useHeldTrue(state.accepting, showOpen), shownWorking = useHeldTrue(working, state.waiting || !live);
   const canWrite = useRef(state.canDeliver); canWrite.current = state.canDeliver;
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const focusAfterPopup = useRef(false);
@@ -660,7 +665,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </ConversationDecorations.Provider>;
   // The hint, longest first: the box shows the first that fits its width, so a narrow composer gets a short hint instead of a cut-off one.
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
-  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续')] : preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : deliveryBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
+  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续')] : preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : shownBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent })]
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
@@ -691,7 +696,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} {...composerAria(palette, mentions)} placeholder={hint} {...fullHint} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
       <VoiceButton terminalId={terminal.id} sessionId={terminal.sessionId} name={agent} size={15} disabled={inputBlocked} onError={onError} />
-      {working && <button type="button" className="icon-button" disabled={inputBlocked || deliveryBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
+      {shownWorking && <button type="button" className="icon-button" disabled={inputBlocked || shownBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>
     </div>
   </div>;
