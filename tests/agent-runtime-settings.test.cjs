@@ -314,3 +314,15 @@ test('the page says a change applies to running sessions, counts those waiting f
   try { none.render(); await settle(); assert.doesNotMatch(none.html(), /在等待切换/, 'a failed read claims nothing'); } finally { none.done(); }
 });
 const elementsText = node => (Array.isArray(node) ? node.map(elementsText).join('') : React.isValidElement(node) ? elementsText(node.props.children) : typeof node === 'string' ? node : '');
+test('the agents page says where Claude Code was found beside 已安装, and only 已安装 when main gave nothing more', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {} } });
+  const harness = hookHarness('src/features/agents/AgentsSettings.tsx', { './i18n': { t: fill }, './native-words': { viaWords: via => via } });
+  try {
+    const status = claude => elements(harness.render('AgentsSettings', { agents: { codex: { installed: true }, claude, npm: true, installing: null, message: '', error: '' }, onChange() {} }).result)
+      .filter(node => node.type === 'small' && node.props.role === 'status').map(node => [elementsText(node.props.children), node.props.title]);
+    assert.deepEqual(status({ installed: true }), [['已安装', undefined], ['已安装', undefined]]);
+    assert.deepEqual(status({ installed: true, version: '2.1.322', via: 'npm', fileShown: '~/x/claude.exe' })[1], ['已安装 · 版本 2.1.322 · 来自 npm', '~/x/claude.exe']);
+    assert.deepEqual(status({ installed: false })[1], ['未安装', undefined]);
+  } finally { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; }
+});

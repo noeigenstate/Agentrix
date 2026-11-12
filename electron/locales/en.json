@@ -3089,5 +3089,18 @@
   "找到用 npm 安装的 Claude Code（{dir}），但里面没有原生程序：npm 跳过了它的安装步骤（npm 12 默认跳过，--ignore-scripts 或 --omit=optional 也会）。请改用官方安装器安装原生版：{command}，装好后重新测试连接。": "Found Claude Code installed with npm ({dir}), but its native program is missing: npm skipped its install step (npm 12 does by default, as do --ignore-scripts and --omit=optional). Install the native version with the official installer instead: {command}, then test the connection again.",
   "已查找 PATH 里的 {n} 个目录，以及 {places}。": "Searched {n} folders on PATH, and {places}.",
   "已查找 {places}。": "Searched {places}.",
-  "安装不完整": "Incomplete install"
+  "安装不完整": "Incomplete install",
+  "终端和原生用的 Claude Code 版本不同": "The terminal and native mode use different Claude Code versions",
+  "PATH": "PATH",
+  "npm 全局安装": "npm global install",
+  "npm 平台包": "npm platform package",
+  "官方安装器（~/.local/bin）": "Official installer (~/.local/bin)",
+  "旧版本地安装（~/.claude/local）": "Legacy local install (~/.claude/local)",
+  "WinGet": "WinGet",
+  "系统 PATH（注册表）": "System PATH (registry)",
+  "系统目录": "System folder",
+  "版本 {version}": "Version {version}",
+  "版本未知": "Version unknown",
+  "来自 {via}": "from {via}",
+  "{reason}。终端：{terminal}；原生：{native}。原生需要 ≥ {required}。": "{reason}. Terminal: {terminal}; native: {native}. Native mode needs ≥ {required}."
 }

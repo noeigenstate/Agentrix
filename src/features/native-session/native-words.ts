@@ -6,6 +6,7 @@
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `path`, `output` (or `result`), and `input` or `arguments`
 // only to name a step by (never shown); an assistant picture `generated { path, prompt, copied, copyNote, deferred }` and `images`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
+import type { ClaudeFound } from '../../shared/types';
 import type { ResultFacts } from '../reading/feed-parts';
 import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
 import type { LimitNotice, NativeItem, Payload, TurnEnd } from './native-model.ts';
@@ -95,6 +96,7 @@ const REASON_WORDS: Record<string, string> = {
   billing_identity_mismatch: 'Claude Code 没有使用这个密钥', billing_unconfirmed: '无法确认 Claude Code 的计费来源',
   settings: '按设置运行', user: '你选择了终端',
   codex_cli_required: '未找到 Codex 命令行，无法使用原生模式', unsupported_codex_version: '这个 Codex 版本不支持原生模式', terminal_selected: '按设置使用终端',
+  cli_split_versions: '终端和原生用的 Claude Code 版本不同',
   terminal_agent_exited: 'Claude Code 在终端里启动后就退出了', terminal_start_failed: '终端里的 Claude Code 没有启动成功',
 };
 
@@ -234,6 +236,15 @@ function billingLine(test: ConnectionTest): TestLine {
     hint: ok ? null : mismatch && !test.path ? `${why} ${t('当前设置不允许启动新会话。')}` : why };
 }
 
+// Where Claude Code was found (main's ClaudeVia); a value this view does not know is shown as given.
+const VIA_WORDS: Record<string, string> = {
+  path: 'PATH', npm: 'npm 全局安装', 'platform-package': 'npm 平台包', 'local-bin': '官方安装器（~/.local/bin）', 'claude-local': '旧版本地安装（~/.claude/local）',
+  winget: 'WinGet', 'registry-path': '系统 PATH（注册表）', system: '系统目录',
+};
+export const viaWords = (via: string) => (VIA_WORDS[via] ? t(VIA_WORDS[via]) : via);
+// One install in a sentence: its version (未知 when it has none), where it came from and its file.
+const foundWords = ({ version, via, fileShown }: Partial<ClaudeFound>) => [version ? t('版本 {version}', { version }) : t('版本未知'), via && t('来自 {via}', { via: viaWords(via) }), fileShown].filter(Boolean).join(' · ');
+
 // The official installer's command. Main writes the package path with its own separators, so a backslash means Windows.
 const installCommand = (dir: string) => dir.includes('\\')
   ? t('在 PowerShell 运行 irm https://claude.ai/install.ps1 | iex') : t('在终端运行 curl -fsSL https://claude.ai/install.sh | bash');
@@ -270,13 +281,17 @@ export function connectionLines(test: ConnectionTest): TestLine[] {
     test.unavailableModel ? t('模型 {model} 对这个密钥不可用。', { model: test.unavailableModel }) : null, anthropicSays(test.modelsError)].filter(Boolean).join(' ') : null;
   const required = cli.required, version = cli.version, unverified = cli.status === 'missing' && !!cli.reason && cli.reason !== 'not_found';
   const cliText = cli.status === 'ok' ? (version ? t('版本 {version}（满足 ≥ {required}）', { version, required }) : t('已找到（需要 ≥ {required}）', { required }))
+    + (cli.via ? ` · ${t('来自 {via}', { via: viaWords(cli.via) })}` : '')
     : unverified ? t('检查失败') : cli.status === 'missing' ? cli.incomplete ? t('安装不完整') : t('未找到')
       : version ? t('版本 {version} 过低（需要 ≥ {required}）', { version, required }) : t('版本过低（需要 ≥ {required}）', { required });
+  const split = cli.status === 'ok' && cli.notice === 'cli_split_versions' ? cli.split?.terminal ?? null : null;
   const pathText = test.path === 'api' ? 'API' : test.path === 'terminal' ? t('终端（订阅）') : t('未知');
   return [
     { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: key.detail },
     { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: modelHint, title: models?.join('\n') || null },
-    { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: cli.found ?? cli.incomplete ?? null },
+    { id: 'cli', tone: cli.status !== 'ok' ? 'bad' : split ? 'warn' : 'ok', label: 'Claude Code', text: cliText, title: cli.found ?? cli.incomplete ?? cli.fileShown ?? null,
+      hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。')
+        : split ? t('{reason}。终端：{terminal}；原生：{native}。原生需要 ≥ {required}。', { reason: t(REASON_WORDS.cli_split_versions), terminal: foundWords(split), native: foundWords(cli), required }) : cli.fileShown ?? null },
     // Older callers without the new field retain their rows; the settings page renders absent billing as unknown.
     ...(test.billing ? [billingLine(test)] : []),
     { id: 'path', tone: test.path ? 'ok' : 'warn', label: t('新会话将使用'), text: [pathText, reasonWords(test.reason)].filter(Boolean).join(' · '), hint: null, title: null },
