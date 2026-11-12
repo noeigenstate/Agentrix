@@ -436,7 +436,7 @@ try {
   checks.push('a confirmation arriving while typing opens a terminal without focusing it or answering; input return drains its queue');
   // Sending while Claude Code works: the terminal takes the message, Claude Code queues it, and only our own unsubmitted
   // words, a choice or the terminal popup hold the next one. The wording is the one thing a copy change touches.
-  const SEND_TEXT = { leftoverTitle: '终端输入框里还有没提交的文字', sendLeftover: '发送框里的内容', clearLeftover: '清空后发送本条', waiting: '等待终端输入就绪后发送' };
+  const SEND_TEXT = { leftoverTitle: '终端输入框里还有一段文字，新消息排在它后面', delivered: '终端输入框里留着已发送的文字', sendLeftover: '先发送终端里这段', clearLeftover: '清空它，再发送新消息', waiting: '等待终端输入就绪后发送', behindLeftover: '排在终端输入框里那段文字后面', retrieve: '取回' };
   const enterLog = path.join(output, 'enter.log');
   const entered = async () => (await fs.readFile(enterLog, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
   const enteredSince = async mark => (await entered()).slice(mark);
@@ -446,10 +446,25 @@ try {
   const holdEnter = async on => { if (holding !== on) { await write('\x07'); holding = on; } };
   const shot = name => page.screenshot({ path: path.join(output, name + '.png') });
   const busyFrame = async prompt => {
+    const before = (await entered()).length, drawn = "Clear-Host; Write-Host ([string][char]0x2736 + ' Osmosing' + [char]0x2026); Show-ReadingFixtureInput";
     await write(hook('start', { session_id: queueSession, transcript_path: transcript, prompt }));
-    await write("Clear-Host; Write-Host ([string][char]0x2736 + ' Osmosing' + [char]0x2026); Show-ReadingFixtureInput\r");
+    await write(drawn + '\r');
+    // The stand-in logs the line once it has run it: a check that reads the log next must not take this line for its own.
+    await waitFor(async () => (await enteredSince(before)).includes('submitted:' + drawn), 'the stand-in ran the busy frame');
     await waitFor(async () => await terminal.locator('.reading-status.is-working').count() > 0, 'working status rendered for the send check');
     await waitFor(async () => await terminal.locator('button[title="中断（Esc）"]:not([disabled])').count() === 1, 'the working composer takes messages');
+  };
+  // The notices above the message box stand in the composer's column, the words above their buttons, the buttons set apart by 8px and at least 32px high.
+  const assertNotice = (found, label) => {
+    assert.ok(Math.abs(found.node.x - found.composer.x) <= 0.5 && Math.abs(found.node.w - found.composer.w) <= 0.5, `${label}: the notice has the composer's left and right edges`);
+    assert.ok(found.buttons.every(button => button.h >= 32), `${label}: every button is at least 32px high`);
+    assert.ok(found.buttons.every(button => button.y >= found.text.y + found.text.h), `${label}: the buttons are below the words, not behind them`);
+    assert.ok(found.buttons.every(button => parseFloat(button.border) > 0), `${label}: every button has a visible edge`);
+    assert.equal(found.ringInside, true, `${label}: the buttons' focus rings fit inside the scrolling list`);
+    assert.equal(found.numbered, false, `${label}: one entry carries no number`);
+    assert.equal(found.listStyleType, 'none');
+    assert.equal(found.text.hoverText.length > 0, true, `${label}: the full words show on hover`);
+    if (found.buttons.length > 1) assert.ok(found.sameRow ? found.gapBetweenButtons === 8 : found.rowGap === 8, `${label}: the buttons are 8px apart (${found.gapBetweenButtons} / ${found.rowGap})`);
   };
   const rowsInclude = async text => (await physicalRows()).some(row => row.includes(text));
   const layout = (root, names) => root.evaluate((node, labels) => {
@@ -458,9 +473,15 @@ try {
       const button = [...node.querySelectorAll('button')].find(item => item.textContent === label), style = getComputedStyle(button);
       return { label, ...box(button), fontSize: style.fontSize, color: style.color, border: style.borderTopWidth, background: style.backgroundColor, display: style.display, padding: style.padding };
     });
-    const style = getComputedStyle(node);
-    return { node: box(node), fontSize: style.fontSize, color: style.color, padding: style.padding, buttons, gapBetweenButtons: +(buttons[1].x - (buttons[0].x + buttons[0].w)).toFixed(1),
-      sameRow: Math.abs(buttons[0].y - buttons[1].y) < 1, composerTop: +document.querySelector('.reading-composer').getBoundingClientRect().top.toFixed(1) };
+    const style = getComputedStyle(node), composer = document.querySelector('.reading-composer'), text = node.querySelector('.reading-notice-text'), title = node.firstElementChild;
+    const textStyle = getComputedStyle(text), titleStyle = getComputedStyle(title), listStyle = getComputedStyle(node.querySelector('li')), actions = node.querySelector('.reading-notice-actions');
+    return { node: box(node), composer: box(composer), title: { ...box(title), color: titleStyle.color, fontSize: titleStyle.fontSize }, text: { ...box(text), color: textStyle.color, fontSize: textStyle.fontSize, overflow: textStyle.textOverflow, whiteSpace: textStyle.whiteSpace, hoverText: text.title },
+      actions: { ...box(actions), gap: getComputedStyle(actions).gap, display: getComputedStyle(actions).display, wrap: getComputedStyle(actions).flexWrap }, listStyleType: listStyle.listStyleType, listCount: node.querySelectorAll('li').length, numbered: /^\s*\d+[.)]\s/m.test(node.innerText),
+      fontSize: style.fontSize, color: style.color, padding: style.padding, border: style.borderTopWidth + ' ' + style.borderTopColor, radius: style.borderTopLeftRadius, buttons,
+      gapBetweenButtons: buttons[1] ? +(buttons[1].x - (buttons[0].x + buttons[0].w)).toFixed(1) : null, rowGap: buttons[1] ? +(buttons[1].y - (buttons[0].y + buttons[0].h)).toFixed(1) : null,
+      sameRow: buttons[1] ? Math.abs(buttons[0].y - buttons[1].y) < 1 : null,
+      // A focus ring is 2px wide at a 2px offset: it must fit in the list's own padding, which scrolls with it and clips nothing.
+      ringInside: (() => { const list = box(node.querySelector('ul')); return buttons.every(button => button.x - 4 >= list.x - 0.5 && button.y - 4 >= list.y - 0.5 && button.x + button.w + 4 <= list.x + list.w + 0.5 && button.y + button.h + 4 <= list.y + list.h + 0.5); })(), composerTop: +composer.getBoundingClientRect().top.toFixed(1) };
   }, names);
   // Claude Code records each message it takes; without that record the safety net sends an unconfirmed message again once the agent has been idle for five seconds.
   const acknowledge = text => queueRows([{ type: 'user', uuid: randomUUID(), message: { content: [{ type: 'text', text }] } }]);
@@ -510,7 +531,8 @@ try {
     let mark = (await entered()).length; const whileWorking = `GUI_WHILE_WORKING_${theme}`;
     await composer.fill(whileWorking); await resetWrites(); await composer.press('Enter');
     await waitFor(async () => (await enteredSince(mark)).includes('held:' + whileWorking), 'the terminal received the message while Claude works');
-    assert.equal(await outbox.count(), 0, 'a working Claude Code takes the message; nothing waits in the outbox');
+    // The words are written once a parsed frame shows the input (a paste waits up to two seconds for one): until then the outbox shows them, sending.
+    await waitFor(async () => await outbox.count() === 0, 'a working Claude Code takes the message; nothing stays in the outbox', 10000);
     assert.equal(await terminal.getByText(SEND_TEXT.waiting, { exact: true }).count(), 0);
     assert.equal(await leftover.count(), 0);
     assert.equal(await composer.inputValue(), '', 'the message left the box');
@@ -525,7 +547,7 @@ try {
     await shot(name('b-claude-queued'));
     const heldCount = (await enteredSince(mark)).filter(line => line === 'held:' + whileWorking).length;
     assert.ok(heldCount >= 1 && heldCount <= 4, 'the message was entered once and retried at most three times: ' + heldCount);
-    assert.equal((await enteredSince(mark)).some(line => line.startsWith('submitted:')), false);
+    assert.deepEqual((await enteredSince(mark)).filter(line => line.startsWith('submitted:')), [], 'nothing was submitted while the stand-in held Enter');
     await write('\x15');
     await waitFor(async () => !await rowsInclude(whileWorking), 'the held words are cleared from the stand-in input');
     await holdEnter(false);
@@ -539,16 +561,10 @@ try {
       mark = (await entered()).length;
       await composer.fill(first); await composer.press('Enter');
       await waitFor(async () => await rowsInclude(first), 'the first message sits unsubmitted in the input');
-      // The next message is sent once the first send has finished (its Retrieve button is enabled again); sent earlier it only waits behind it.
-      for (let attempt = 0; ; attempt++) {
-        assert.ok(attempt < 6, 'the next message found the first send finished');
-        await composer.fill(second); await resetWrites(); await composer.press('Enter');
-        await waitFor(async () => await leftover.count() + await outbox.count() > 0, 'the next message was held');
-        if (await leftover.count()) break;
-        const retrieve = outbox.getByRole('button', { name: '取回' });
-        await waitFor(async () => await retrieve.isEnabled(), 'the first send finished');
-        await retrieve.click();
-      }
+      // The next message is sent once the first send has finished (it leaves the outbox); sent earlier it only waits behind it.
+      await waitFor(async () => await outbox.count() === 0, 'the first send finished', 10000);
+      await composer.fill(second); await resetWrites(); await composer.press('Enter');
+      await waitFor(async () => await leftover.count() > 0 && await outbox.count() > 0, 'the next message was held behind the words in the input');
       assert.ok((await leftover.locator('li').first().innerText()).includes(first), 'the notice shows the words in the input');
       assert.ok((await leftover.innerText()).includes(SEND_TEXT.leftoverTitle));
       assert.deepEqual(await leftover.getByRole('button').allInnerTexts(), [SEND_TEXT.sendLeftover, SEND_TEXT.clearLeftover]);
@@ -558,6 +574,8 @@ try {
       assert.equal(await composer.inputValue(), '');
       assert.equal(await popup.count(), 0, 'the old "terminal input still has an earlier message" popup is gone');
       sendLayouts[`${theme}-${action}`] = await layout(leftover, [SEND_TEXT.sendLeftover, SEND_TEXT.clearLeftover]);
+      assertNotice(sendLayouts[`${theme}-${action}`], `${theme} ${action}`);
+      sendLayouts[`${theme}-${action}-outbox`] = await layout(outbox, [SEND_TEXT.retrieve]); assertNotice(sendLayouts[`${theme}-${action}-outbox`], `${theme} ${action} outbox`);
       if (action === 'sendLeftover') {
         await shot(name('c-leftover'));
         // The same notice in a 320px wide card, the width of a card in a crowded grid.
@@ -565,6 +583,9 @@ try {
         await card.evaluate(node => { node.dataset.smokeStyle = node.getAttribute('style') ?? ''; node.style.width = '320px'; node.style.maxWidth = '320px'; node.style.flex = 'none'; });
         await terminalsSettled(page);
         sendLayouts[`${theme}-narrow`] = { ...await layout(leftover, [SEND_TEXT.sendLeftover, SEND_TEXT.clearLeftover]), cardWidth: await card.evaluate(node => node.getBoundingClientRect().width) };
+        assertNotice(sendLayouts[`${theme}-narrow`], `${theme} 320px card`);
+        sendLayouts[`${theme}-narrow-outbox`] = await layout(outbox, [SEND_TEXT.retrieve]);
+        assertNotice(sendLayouts[`${theme}-narrow-outbox`], `${theme} 320px card, outbox`);
         await shot(name('c-leftover-narrow'));
         await card.evaluate(node => { node.setAttribute('style', node.dataset.smokeStyle); delete node.dataset.smokeStyle; });
         await terminalsSettled(page);
