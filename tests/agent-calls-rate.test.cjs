@@ -1,6 +1,8 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const syncFs = require('node:fs');
+const vm = require('node:vm');
 const os = require('node:os');
 const path = require('node:path');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
@@ -81,7 +83,37 @@ test('groups sum worker tokens and durations, including overlap, while preservin
     { id: 'agent:a', state: 'reviewing', role: '通用', title: 'Exact a', startedAt: Date.parse(at(0)), endedAt: Date.parse(at(9)), viewable: true, hidden: false },
   ]);
   calls.apply(use('unreadable', 'Agent', { model: 'claude-opus-5-5', description: 'Exact unreadable' })); await calls.work;
-  assert.equal(calls.snapshot()[0].rate, null, 'an unreadable member cannot silently disappear from a group sum');
+  assert.deepEqual(calls.snapshot()[0].rate, expected(140, 6000, 3, 7, true), 'the readable members still sum; the unreadable one marks the sum partial');
+  assert.deepEqual(calls.snapshot()[0].items.map(item => item.id), ['agent:unreadable', 'agent:b', 'agent:a']);
+  assert.equal(calls.calls.get('unreadable').rate, null, 'the unreadable member itself keeps no rate');
+});
+
+test('a group with no readable member has no rate, and one with only waiting members waits', async t => {
+  const { folder, calls } = await workspace(t);
+  calls.apply(use('first', 'Agent', { model: 'sonnet', description: 'Exact first' }));
+  calls.apply(use('second', 'Agent', { model: 'sonnet', description: 'Exact second' })); await calls.work;
+  assert.equal(calls.snapshot()[0].rate, null);
+  const records = await jsonFixture('claude-subagent-token-rate.jsonl');
+  await claudeFile(folder, 'third', records.slice(0, 1));
+  calls.apply(use('third', 'Agent', { model: 'sonnet', description: 'Exact third' })); await calls.work;
+  assert.deepEqual(calls.snapshot()[0].rate, emptyRate(true), 'a member without a finished reply contributes no figure');
+});
+
+test('a transcript bound before the meter exists keeps its sub-agents folder through startUsage', t => {
+  const source = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  // Synthetic absolute paths on every platform; nothing is read from them.
+  const home = path.resolve('/synthetic-claude'), file = path.join(home, 'projects', 'project', 'session.jsonl');
+  const s = { terminalId: 't', agent: 'claude', codexActive: true, recordRun() {} }, project = { id: 'p', kind: 'local', path: path.resolve('/synthetic-project') };
+  const context = vm.createContext({ path, os, fs: syncFs, sessions: new Map([['t', s]]), AgentCalls, UsageMeter, scheduleState() {}, send() {},
+    createInterventions: () => ({}), claudeConfigDir: () => home, prepareReading: async () => {}, TranscriptTail: class { constructor(filename) { this.filename = filename; } },
+    monitorActivity: () => ({ stop() {}, poll() {} }), stopUsageAccount() {}, claudeProvider: async () => null, refreshClaudeAccounts() {} });
+  vm.runInContext(source.slice(source.indexOf('function followClaude('), source.indexOf('async function resetTerminalCodex(')), context);
+  context.followClaude(project, s, { sessionId: 'session', transcriptPath: file });
+  const folder = path.join(home, 'projects', 'project', 'session', 'subagents');
+  assert.equal(s.calls?.folder, folder, 'the hook binds the folder although no meter exists yet');
+  context.startUsage(project, s, { cwd: project.path });
+  t.after(() => s.calls.dispose());
+  assert.equal(s.usage.calls, s.calls); assert.equal(s.calls.folder, folder);
 });
 
 test('child truncation, file rotation, partial lines and agentId rebinding reset only that worker', async t => {

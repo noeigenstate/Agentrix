@@ -480,6 +480,19 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
         self.assertIsNone(first["parentUuid"]); self.assertIn("parentUuid", first)
         self.assertEqual(later["parentUuid"], "a")
 
+    def test_compaction_keeps_a_launched_sub_agents_resolved_model_only_as_a_bounded_string(self):
+        # The async_launched shape of Claude Code 2.1.3xx's Agent tool, with placeholder values.
+        launched = {"status": "async_launched", "isAsync": True, "agentId": "a0123456789abcdef", "description": "Placeholder task",
+                    "resolvedModel": "claude-opus-5-5", "modelsUsed": ["claude-opus-5-5"], "prompt": "private prompt", "outputFile": "/tmp/private.output"}
+        def kept(result):
+            return remote.compact_claude_record({"type": "user", "toolUseResult": result,
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_launch", "content": "private output"}]}})["toolUseResult"]
+        self.assertEqual(kept(launched), {"status": "async_launched", "isAsync": True, "agentId": "a0123456789abcdef", "resolvedModel": "claude-opus-5-5"})
+        for model in (None, 42, ["claude-opus-5-5"], {"id": "claude-opus-5-5"}, "m" * (remote.MODEL_NAME_LIMIT + 1)):
+            with self.subTest(model=model):
+                self.assertNotIn("resolvedModel", kept(dict(launched, resolvedModel=model)))
+        self.assertEqual(kept(dict(launched, resolvedModel="m" * remote.MODEL_NAME_LIMIT))["resolvedModel"], "m" * remote.MODEL_NAME_LIMIT)
+
     def test_compaction_preserves_completion_identities_and_terminal_statuses_without_outputs(self):
         for result in ({"isAsync": True, "agentId": "agent", "status": "async_launched"}, {"backgroundTaskId": "shell"},
                        {"task": {"task_id": "shell", "status": "killed", "output": "private output"}}):

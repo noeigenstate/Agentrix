@@ -15,6 +15,7 @@ const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
 const { CompletionWork, LOST_WORK_TIMEOUT } = require('../electron/completion-work.cjs');
 const { CodexActivityReader, monitorActivity } = require('../electron/codex-activity.cjs');
 const { TranscriptTail } = require('../electron/agent-actions.cjs');
+const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 
 const main = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 async function harness(t, kind = 'local', agent = 'codex') {
@@ -344,6 +345,7 @@ async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100
     path, TranscriptTail, CodexActivityReader, claudeConversation, codexConversation,
     claudeConfigDir: () => home, claudeRecord: () => [], codexRecord: () => [],
     describeActions() {}, noteSettings() {}, usageHistory() {}, readEvery: () => 1000,
+    callsOf: (session, owner) => session.calls ||= new AgentCalls({ local: owner.kind !== 'ssh' }),
     monitorActivity: (read, changed, options) => monitorActivity(read, snapshot => { changes++; changed(snapshot); }, { ...options, watch: null }),
   });
   if (s.agent === 'claude') {

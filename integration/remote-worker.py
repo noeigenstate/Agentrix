@@ -445,6 +445,7 @@ def image_type(data):
 
 HISTORY_WINDOW = 8 * 1024 * 1024
 LIVE_READ_LIMIT = 4 * 1024 * 1024
+MODEL_NAME_LIMIT = 200
 
 def transcript_window(size):
     offset = max(0, size - HISTORY_WINDOW)
@@ -532,6 +533,8 @@ def compact_claude_record(record):
     result = record.get("toolUseResult")
     if isinstance(result, dict):
         work = {key: result[key] for key in ("backgroundTaskId", "agentId", "isAsync", "status") if key in result}
+        # The model a launched sub-agent really runs: its row names it instead of the alias the call asked for.
+        if isinstance(result.get("resolvedModel"), str) and len(result["resolvedModel"]) <= MODEL_NAME_LIMIT: work["resolvedModel"] = result["resolvedModel"]
         if isinstance(result.get("task"), dict): work["task"] = {key: result["task"][key] for key in ("task_id", "status") if key in result["task"]}
         if work: kept["toolUseResult"] = work
     if isinstance(message.get("model"), str): kept["message"]["model"] = message["model"]

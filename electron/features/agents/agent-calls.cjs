@@ -51,7 +51,9 @@ class AgentCalls {
     }));
   }
   snapshot(provider) {
-    const groups = new Map();
+    // A group sums the members whose records can be read; one that cannot marks the sum partial, and with none readable
+    // the group has no rate.
+    const groups = new Map(), rated = new Set(), unrated = new Set();
     for (const call of this.calls.values()) {
       if (call.reviewed || call.hidden && call.dispatch && !call.failure) continue;
       const route = { agent: call.agent, provider: call.dispatch ? null : provider ?? null,
@@ -59,8 +61,9 @@ class AgentCalls {
       const key = JSON.stringify(route);
       if (!groups.has(key)) groups.set(key, { ...route, preparing: 0, running: 0, reviewing: 0, tasks: [], items: [], rate: emptyRate(false) });
       const group = groups.get(key);
-      if (!call.hidden && !call.rate) group.rate = null;
-      else if (!call.hidden && group.rate) {
+      if (!call.hidden && !call.rate) unrated.add(group);
+      else if (!call.hidden) {
+        rated.add(group);
         group.rate.outputTokens += call.rate.outputTokens; group.rate.activeMs += call.rate.activeMs; group.rate.samples += call.rate.samples;
         group.rate.updatedAt = Math.max(group.rate.updatedAt, call.rate.updatedAt); group.rate.partial ||= call.rate.partial;
       }
@@ -72,6 +75,7 @@ class AgentCalls {
         ...(call.dispatch && call.declared ? { declared: call.declared } : {}) });
       if (!call.hidden && call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
     }
+    for (const group of unrated) if (rated.has(group)) group.rate.partial = true; else group.rate = null;
     for (const group of groups.values()) group.items.reverse();
     return [...groups.values()];
   }

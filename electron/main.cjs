@@ -477,7 +477,9 @@ function followClaude(project, s, event) {
   s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
   s.claudeSessionId = event.sessionId;
   s.approval?.context('claude-session', event.sessionId);
-  s.usage?.calls.setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
+  // The terminal's own calls, not the agent's meter: a hook can bind the transcript before startUsage builds the meter,
+  // and the meter it builds keeps these calls and their folder.
+  callsOf(s, project).setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
   if (s.claudeTranscript?.filename !== file) {
     let tail;
     const readCurrent = () => sessions.get(s.terminalId) === s && (!tail || s.claudeTranscript === tail)
