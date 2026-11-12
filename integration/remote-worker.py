@@ -701,9 +701,9 @@ def take_records(reader):
     if getattr(getattr(reader, "work_history", None), "uncertain", False): result["completionUncertain"] = True
     return result
 
-def read_transcript(reader, source, size, receive):
+def read_transcript(reader, source, size, receive, limit=LIVE_READ_LIMIT):
     source.seek(reader.offset)
-    end = size if reader.history_pending else min(size, reader.offset + LIVE_READ_LIMIT)
+    end = size if reader.history_pending else min(size, reader.offset + limit)
     while reader.offset < end:
         chunk = source.read(min(65536, end - reader.offset))
         if not chunk: break
@@ -742,6 +742,92 @@ class CompletionHistory:
                 self.buffer, self.skipping, self.uncertain = b"", True, True
         return self.done
 
+# The sub-agents of a followed Claude transcript whose token rate the other computer shows: how many at once, how much of
+# one file each answer reads, and how much of their records one answer carries beside the transcript's own budget.
+SUBAGENT_LIMIT = 16
+SUBAGENT_READ_LIMIT = 256 * 1024
+SUBAGENTS_BUDGET = 256 * 1024
+PROMPT_MARK_LIMIT = 256
+# A session or sub-agent id as Claude Code names its files: never a separator, a dot or an empty name.
+SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,100}")
+
+def compact_subagent_record(record):
+    """What a token rate (electron/features/agents/token-rate.cjs) takes from one sub-agent record: its place in the
+    conversation, a reply's identity, model and output tokens, the tools called and the results that came back, and for
+    any other user message its provenance and first words, which tell a prompt. Nothing else of the work leaves here."""
+    if not isinstance(record, dict) or record.get("type") not in ("user", "assistant"): return None
+    message = record.get("message") if isinstance(record.get("message"), dict) else {}
+    content = message.get("content")
+    blocks = [block for block in content if isinstance(block, dict)] if isinstance(content, list) else []
+    if record["type"] == "assistant":
+        parts = [{"type": "tool_use", "id": block["id"]} for block in blocks if block.get("type") == "tool_use" and isinstance(block.get("id"), str)]
+    else:
+        parts = [{"type": "tool_result", "tool_use_id": block["tool_use_id"]} for block in blocks if block.get("type") == "tool_result" and isinstance(block.get("tool_use_id"), str)]
+        text = content if isinstance(content, str) else "\n".join(block["text"] for block in blocks if isinstance(block.get("text"), str))
+        if not parts and text.strip(): parts = [{"type": "text", "text": text[:PROMPT_MARK_LIMIT]}]
+    kept = {**prompt_provenance(record), **{key: record[key] for key in ("type", "uuid", "parentUuid", "timestamp", "isSidechain") if key in record}}
+    kept["message"] = {"content": parts}
+    if isinstance(message.get("id"), str): kept["message"]["id"] = message["id"]
+    if isinstance(message.get("model"), str) and len(message["model"]) <= MODEL_NAME_LIMIT: kept["message"]["model"] = message["model"]
+    usage = message.get("usage")
+    if isinstance(usage, dict) and type(usage.get("output_tokens")) is int: kept["message"]["usage"] = {"output_tokens": usage["output_tokens"]}
+    return kept
+
+def subagent_folder(transcript):
+    """A descriptor of <session>/subagents beside a transcript named <session>.jsonl: each folder is opened within the one
+    before it and never through a link, so the descent stays inside the transcript's own folder."""
+    session = os.path.basename(transcript)[:-len(".jsonl")]
+    if not transcript.endswith(".jsonl") or not SAFE_ID.fullmatch(session): raise ValueError("Not a Claude session transcript.")
+    descriptor = os.open(os.path.dirname(transcript), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name in (session, "subagents"):
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+class SubagentReader:
+    """One sub-agent's transcript, from where the last answer stopped, with the parent's bounded history window. It reads
+    on only once everything it read before has been sent, a bounded step at a time, so many sub-agents cannot flood the
+    connection."""
+    def __init__(self, name):
+        self.name = name
+        self.offset, self.buffer, self.skipping, self.history_pending = 0, b"", False, False
+        self.file_identity, self.file_size = None, 0
+        self.outbox, self.reset, self.partial = [], True, False
+
+    def record(self, record):
+        kept = compact_subagent_record(record)
+        if kept is not None: self.outbox.append(kept)
+
+    def read(self, source):
+        info = os.fstat(source.fileno())
+        size, identity = info.st_size, (info.st_dev, info.st_ino)
+        if self.file_identity != identity or size < self.file_size:
+            self.offset, self.skipping = transcript_window(size)
+            self.buffer, self.outbox, self.reset, self.partial = b"", [], True, self.skipping
+        self.file_identity, self.file_size = identity, size
+        if not self.outbox: read_transcript(self, source, size, self.record, SUBAGENT_READ_LIMIT)
+
+def take_subagents(readers):
+    """The sub-agents' waiting records, up to one shared budget per answer (always at least one record, so each answer
+    moves on); a reader that started over on a file it found says so, and whether the start of the file was left out.
+    One whose file was never found is not mentioned."""
+    answer, size = {}, 0
+    for agent_id, reader in readers.items():
+        batch = []
+        while reader.outbox:
+            cost = len(json.dumps(reader.outbox[0], ensure_ascii=True))
+            if size and size + cost > SUBAGENTS_BUDGET: break
+            batch.append(reader.outbox.pop(0)); size += cost
+        if batch or reader.reset and reader.file_identity is not None:
+            answer[agent_id] = {"records": batch, "reset": reader.reset, "partial": reader.partial}
+            reader.reset = False
+    return answer
+
 class ClaudeTranscriptReader:
     """Follow the transcript named by Claude's hooks, with bounded history and the same response budget as Codex."""
     def __init__(self, filename, since):
@@ -749,6 +835,7 @@ class ClaudeTranscriptReader:
         self.offset, self.buffer, self.skipping = 0, b"", False
         self.file_identity, self.file_size, self.history_pending = None, 0, True
         self.outbox, self.reset = [], True
+        self.subagents = {}
 
     def record(self, record, work_only=False):
         kept = compact_claude_record(record)
@@ -772,6 +859,21 @@ class ClaudeTranscriptReader:
             read_transcript(self, source, size, self.record)
 
     def take(self): return take_records(self)
+
+    def read_subagents(self, ids):
+        """The records of the sub-agents asked for (ids the other computer took from this transcript's launch results),
+        read in this session's subagents folder; the ones no longer asked for are dropped."""
+        self.subagents = dict((agent_id, self.subagents.get(agent_id) or SubagentReader("agent-%s.jsonl" % agent_id)) for agent_id in ids)
+        if not self.subagents: return {}
+        try: folder = subagent_folder(self.filename)
+        except (OSError, ValueError): return {}
+        try:
+            for reader in self.subagents.values():
+                try: source = open_regular(reader.name, folder)
+                except (OSError, ValueError): continue
+                with source: reader.read(source)
+        finally: os.close(folder)
+        return take_subagents(self.subagents)
 
 class CodexActivityReader:
     """Incrementally read the interactive parent's records: its lifecycle, and (compacted) what the reading view shows."""
@@ -977,17 +1079,23 @@ class Worker:
             child.wait(timeout=3)
         return {}
 
-    def claude_status(self, path, since):
+    def claude_status(self, path, since, subagents=None):
         if not isinstance(path, str) or not os.path.isabs(path) or len(path) > 4096 or "\0" in path: raise ValueError("Invalid Claude transcript path.")
         if not isinstance(since, (int, float)) or since <= 0: raise ValueError("Invalid session time.")
         projects = os.path.realpath(os.path.join(self.claude_home, "projects"))
         filename = os.path.realpath(path)
         if filename == projects or os.path.commonpath([projects, filename]) != projects: raise ValueError("Claude transcript lies outside the projects folder.")
+        # An id that could name anything but a file in the subagents folder is left out, not an error for the transcript.
+        ids = [agent_id for agent_id in subagents if isinstance(agent_id, str) and SAFE_ID.fullmatch(agent_id)][:SUBAGENT_LIMIT] if isinstance(subagents, list) else []
         with self.activity_lock:
             if self.claude_reader is None or self.claude_reader.filename != filename or self.claude_reader.since != since:
                 self.claude_reader = ClaudeTranscriptReader(filename, since)
             self.claude_reader.read()
-            return self.claude_reader.take()
+            answer = self.claude_reader.take()
+            # A reset answer replaces the history those ids came from: the sub-agents asked for again start over.
+            if ids and not answer["reset"]: answer["subagents"] = self.claude_reader.read_subagents(ids)
+            else: self.claude_reader.subagents = {}
+            return answer
 
     def claude_account(self):
         route = self.claude_route
@@ -1696,7 +1804,7 @@ class Channel:
             elif op == "preview": value = worker.preview(message["path"], message.get("page", 0))
             elif op == "save-file": value = worker.save_file(message["path"], message.get("page", 0), message.get("revision"), message["data"])
             elif op == "codex-status": value = worker.codex_status(message.get("since"), message.get("threadId"))
-            elif op == "claude-status": value = worker.claude_status(message.get("path"), message.get("since"))
+            elif op == "claude-status": value = worker.claude_status(message.get("path"), message.get("since"), message.get("subagents"))
             elif op == "claude-account": value = worker.claude_account()
             elif op == "history": value = history_records(worker.coding_root, worker.codex_home, os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
             elif op == "write-handoff": value = worker.write_handoff(message.get("text"))

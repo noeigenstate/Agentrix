@@ -99,21 +99,90 @@ test('a group with no readable member has no rate, and one with only waiting mem
   assert.deepEqual(calls.snapshot()[0].rate, emptyRate(true), 'a member without a finished reply contributes no figure');
 });
 
-test('a transcript bound before the meter exists keeps its sub-agents folder through startUsage', t => {
+// main.cjs from followClaude to the end of startUsage, with stand-ins for what lies outside it.
+function mainSlice(names) {
   const source = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const context = vm.createContext({ path, os, fs: syncFs, AgentCalls, UsageMeter, scheduleState() {}, scheduleUsageRollover() {}, send() {},
+    createInterventions: () => ({}), prepareReading: async () => {}, TranscriptTail: class { constructor(filename) { this.filename = filename; } },
+    monitorActivity: read => ({ poll: read, stop() {} }), stopUsageAccount() {}, claudeProvider: async () => null, refreshClaudeAccounts() {}, bindRemoteClaudeAccount() {}, ...names });
+  vm.runInContext(source.slice(source.indexOf('function followClaude('), source.indexOf('async function resetTerminalCodex(')), context);
+  return context;
+}
+
+test('a transcript bound before the meter exists keeps its sub-agents folder through startUsage', t => {
   // Synthetic absolute paths on every platform; nothing is read from them.
   const home = path.resolve('/synthetic-claude'), file = path.join(home, 'projects', 'project', 'session.jsonl');
   const s = { terminalId: 't', agent: 'claude', codexActive: true, recordRun() {} }, project = { id: 'p', kind: 'local', path: path.resolve('/synthetic-project') };
-  const context = vm.createContext({ path, os, fs: syncFs, sessions: new Map([['t', s]]), AgentCalls, UsageMeter, scheduleState() {}, send() {},
-    createInterventions: () => ({}), claudeConfigDir: () => home, prepareReading: async () => {}, TranscriptTail: class { constructor(filename) { this.filename = filename; } },
-    monitorActivity: () => ({ stop() {}, poll() {} }), stopUsageAccount() {}, claudeProvider: async () => null, refreshClaudeAccounts() {} });
-  vm.runInContext(source.slice(source.indexOf('function followClaude('), source.indexOf('async function resetTerminalCodex(')), context);
+  const context = mainSlice({ sessions: new Map([['t', s]]), claudeConfigDir: () => home });
   context.followClaude(project, s, { sessionId: 'session', transcriptPath: file });
   const folder = path.join(home, 'projects', 'project', 'session', 'subagents');
   assert.equal(s.calls?.folder, folder, 'the hook binds the folder although no meter exists yet');
   context.startUsage(project, s, { cwd: project.path });
   t.after(() => s.calls.dispose());
   assert.equal(s.usage.calls, s.calls); assert.equal(s.calls.folder, folder);
+});
+
+// The id and the result as Claude Code 2.1.3xx's Agent tool reports a background launch, with placeholder values.
+const REMOTE_ID = 'a0123456789abcdef';
+const launched = id => result(id, { status: 'async_launched', isAsync: true, agentId: REMOTE_ID, description: 'Exact remote', resolvedModel: 'claude-opus-5-5', prompt: 'Placeholder prompt.', outputFile: '/tmp/placeholder.output' });
+
+test('over SSH the running sub-agents the host named are asked for, and their compacted records give the local rate', async t => {
+  const { folder, calls: local } = await workspace(t);
+  await claudeFile(folder, REMOTE_ID, await jsonFixture('claude-subagent-ssh.jsonl'), 'toolu_launch');
+  local.apply(use('toolu_launch', 'Agent', { model: 'opus', run_in_background: true })); await local.work;
+  assert.deepEqual(local.snapshot()[0].rate, expected(75, 5000, 2, 8));
+  assert.deepEqual(local.remoteSubagents(), [], 'a local terminal reads its own files');
+  const calls = new AgentCalls({ local: false }), compact = await jsonFixture('claude-subagent-ssh.compact.jsonl');
+  t.after(() => calls.dispose());
+  calls.apply(use('toolu_launch', 'Agent', { model: 'opus', description: 'Exact remote', run_in_background: true }));
+  assert.deepEqual(calls.remoteSubagents(), [], 'no id before the launch result names one');
+  calls.apply(launched('toolu_launch'));
+  assert.deepEqual(calls.remoteSubagents(), [REMOTE_ID]);
+  assert.equal(calls.snapshot()[0].model, 'claude-opus-5-5'); assert.equal(calls.snapshot()[0].rate, null);
+  calls.remoteRecords({ [REMOTE_ID]: { records: compact.slice(0, 3), reset: true, partial: false }, other: { records: compact, reset: true, partial: false } });
+  assert.deepEqual(calls.snapshot()[0].rate, expected(45, 2000, 1, 3));
+  calls.remoteRecords({ [REMOTE_ID]: { records: compact.slice(3), reset: false, partial: false } });
+  assert.deepEqual(calls.snapshot()[0].rate, local.snapshot()[0].rate, 'the compacted records give the rate the full ones give');
+  calls.remoteRecords({ [REMOTE_ID]: { records: compact.slice(3), reset: true, partial: true } });
+  assert.deepEqual(calls.snapshot()[0].rate, emptyRate(true), 'a restart without the file start counts afresh, marked partial');
+  calls.apply(notice('toolu_launch'));
+  assert.deepEqual(calls.remoteSubagents(), [], 'an ended sub-agent is no longer asked for');
+});
+
+test('over SSH at most the newest 16 named sub-agents are asked for, and only ids the host can take', t => {
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.dispose());
+  for (let index = 0; index < 20; index++) {
+    calls.apply(use(`toolu_${index}`, 'Agent', { model: 'opus', run_in_background: true }));
+    calls.apply(result(`toolu_${index}`, { status: 'async_launched', isAsync: true, agentId: `a${index}` }));
+  }
+  calls.apply(use('toolu_long', 'Agent', { model: 'opus', run_in_background: true }));
+  calls.apply(result('toolu_long', { status: 'async_launched', isAsync: true, agentId: 'a'.repeat(101) }));
+  assert.deepEqual(calls.remoteSubagents(), Array.from({ length: 16 }, (_, index) => `a${index + 4}`));
+});
+
+test('over SSH the poll asks for the running sub-agents and counts their records before a completion in the same answer', async t => {
+  // Timestamps after the calls' own start, so the completion is a live one that is recorded.
+  const shift = Date.now() + 60000 - Date.parse(at(0)), later = record => ({ ...record, timestamp: new Date(Date.parse(record.timestamp) + shift).toISOString() });
+  const finished = [], requests = [], answers = [];
+  const s = { terminalId: 't', agent: 'claude', codexActive: true, recordRun: (_call, event) => finished.push(event),
+    conversation: { beginHistory() {}, endHistory() {}, reset() {} }, actions: { reset() {} },
+    // A copy made here: what main builds belongs to the script context.
+    terminal: { request: async (op, args) => { requests.push([op, JSON.parse(JSON.stringify(args))]); return answers.shift(); } } };
+  const project = { id: 'p', kind: 'ssh', path: '/srv/project' }, file = '/srv/claude/projects/-srv-project/session.jsonl';
+  const context = mainSlice({ sessions: new Map([['t', s]]), claudeConfigDir: () => assert.fail('SSH reads no local folder'),
+    noteSettings: (session, _agent, record) => session.usage?.apply(record), claudeConversation() {}, describeActions() {}, claudeRecord: () => [] });
+  context.startUsage(project, s, { cwd: project.path }); t.after(() => s.calls.dispose());
+  context.followClaude(project, s, { sessionId: 'session', transcriptPath: file, sentAt: 900 });
+  answers.push({ records: [use('toolu_launch', 'Agent', { model: 'opus', run_in_background: true }), launched('toolu_launch')].map(later), reset: true, historyDone: true });
+  await s.activityMonitor.poll();
+  assert.deepEqual(requests[0], ['claude-status', { path: file, since: 900 }], 'nothing is asked for before a sub-agent is named');
+  const compact = await jsonFixture('claude-subagent-ssh.compact.jsonl');
+  answers.push({ records: [later(notice('toolu_launch'))], reset: false, historyDone: true, subagents: { [REMOTE_ID]: { records: compact.map(later), reset: true, partial: false } } });
+  await s.activityMonitor.poll();
+  assert.deepEqual(requests[1][1].subagents, [REMOTE_ID]);
+  assert.equal(finished.length, 1);
+  const { model, outputTokens, activeMs } = finished[0];
+  assert.deepEqual({ model, outputTokens, activeMs }, { model: 'claude-opus-5-5', outputTokens: 75, activeMs: 5000 });
 });
 
 test('child truncation, file rotation, partial lines and agentId rebinding reset only that worker', async t => {
