@@ -80,4 +80,4 @@ class AgentsManager {
   }
 }
 
-module.exports = { AGENT_PACKAGES, AgentsManager, onPath };
+module.exports = { AGENT_PACKAGES, AgentsManager, claudeState, onPath };

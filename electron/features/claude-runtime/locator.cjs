@@ -8,7 +8,7 @@ const REQUIRED = '2.1.317', MINIMUM = REQUIRED.split('.').map(Number), VERSION_T
 // Every `via` a found CLI can have (claude-runtime/BOUNDARY.md).
 const VIAS = Object.freeze(['path', 'npm', 'platform-package', 'local-bin', 'claude-local', 'winget', 'registry-path', 'system']);
 // A throttled refresh (window focus) searches with the stored Windows PATH at most this often; a check that printed no
-// version is trusted this long before it is run again.
+// version is trusted this long before a locate or a throttled refresh runs it again (an explicit refresh always does).
 const REFRESH_MS = 60000, FAILURE_RETRY_MS = 10000;
 const VERSION = /\b(\d+)\.(\d+)\.(\d+)\b/;
 // npm's package ships bin/claude.exe as a shell-script placeholder of a few hundred bytes; its postinstall puts the
@@ -102,10 +102,11 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
   const versions = new Map();
   let stored = null, lastFull = null, last = null, running = null, trailing = null;
 
-  // The version a file printed, run once per file, size and mtime; one that printed none is run again after a while.
-  async function version(real, stat, env) {
+  // The version a file printed, run once per file, size and mtime; one that printed none is run again after a while,
+  // or at once for an explicit refresh (`retry`).
+  async function version(real, stat, env, retry) {
     const key = `${real}\0${stat.size}\0${stat.mtimeMs}`, cached = versions.get(key);
-    if (cached && (cached.ok || now() - cached.at < FAILURE_RETRY_MS)) return cached.run;
+    if (cached && (cached.ok || !retry && now() - cached.at < FAILURE_RETRY_MS)) return cached.run;
     const run = await readVersion(probe, real, env, timeoutMs, graceMs);
     versions.set(key, { run, ok: run.stdout !== undefined && VERSION.test(run.stdout), at: now() });
     return run;
@@ -143,7 +144,7 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
     return { packages: [...dirs], shimFirst, outdated };
   }
 
-  async function search({ env, platform, arch, home }) {
+  async function search({ env, platform, arch, home }, retry) {
     const path = platform === 'win32' ? nodePath.win32 : nodePath.posix, windows = platform === 'win32';
     const shown = file => { const relative = path.relative(home, file); return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? path.join('~', relative) : file; };
     const inherited = variable(env, 'PATH') || '';
@@ -170,7 +171,7 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
         for (const copy of platformCopies(dir, platform, arch, path)) await check(copy, generic(via) ? 'platform-package' : via);
         return;
       }
-      const { stdout, ...run } = await version(real, stat, env);
+      const { stdout, ...run } = await version(real, stat, env, retry);
       const match = stdout === undefined ? null : VERSION.exec(stdout);
       if (!match) { failure ||= { reason: 'unreadable', ...run, found: real }; return; }
       const kind = generic(via) && NPM_BIN.test(real) ? 'npm' : via;
@@ -221,7 +222,7 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
     }
     const key = JSON.stringify([options.platform, options.home, options.arch, variable(options.env, 'PATH') || '', stored]);
     if (!full && last?.key === key && await stands()) return last.result;
-    last = { key, result: await search(options), at: now() };
+    last = { key, result: await search(options, mode === 'refresh'), at: now() };
     return last.result;
   }
   const normalized = ({ env = process.env, platform = process.platform, arch = process.arch, home = os.homedir() } = {}) => ({ env, platform, arch, home });

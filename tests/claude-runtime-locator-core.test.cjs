@@ -162,7 +162,7 @@ test('a refresh reads the stored Windows PATH and searches; a throttled one does
   await createLocator({ files, probe, storedPath: async () => assert.fail('only Windows stores a PATH') }).refresh({ ...options, platform: 'linux', env: { PATH: '/usr/bin' } });
 });
 
-test('a failed check is trusted for ten seconds: a locate after that searches and runs the CLI again', async () => {
+test('a failed check is trusted for ten seconds by a locate and a focus refresh, and an explicit refresh runs the CLI again at once', async () => {
   let clock = 0, answer = null;
   const exe = 'D:\\bin\\claude.exe', files = fakeFiles({ [exe]: { size: NATIVE } }), runs = [];
   // The first check hangs (a timeout); the next prints the version.
@@ -176,12 +176,12 @@ test('a failed check is trusted for ten seconds: a locate after that searches an
   assert.equal(await locator.locate(options), first); assert.equal(runs.length, 1);
   clock = 10000;
   assert.equal((await locator.locate(options)).native.file, exe); assert.equal(runs.length, 2);
-  // Within ten seconds a refresh trusts the failed check too: the file is not run again until then.
+  // Within ten seconds a focus refresh trusts the failed check too; the connection test right after a timeout runs it again.
   answer = null; files.put(exe, { size: NATIVE, mtimeMs: 2 });
   clock = 20000; assert.equal((await locator.refresh(options)).reason, 'timeout'); assert.equal(runs.length, 3);
   answer = '2.1.322 (Claude Code)';
-  clock = 25000; assert.equal((await locator.refresh(options)).reason, 'timeout'); assert.equal(runs.length, 3);
-  clock = 30000; assert.equal((await locator.refresh(options)).reason, null); assert.equal(runs.length, 4);
+  clock = 25000; assert.equal((await locator.refresh(options, { throttled: true })).reason, 'timeout'); assert.equal(runs.length, 3);
+  clock = 25001; assert.equal((await locator.refresh(options)).reason, null); assert.equal(runs.length, 4);
 });
 
 test('a refresh asked for while one runs is done once after it, however many ask, and a refresh after a running locate follows it', async () => {
@@ -238,4 +238,24 @@ test('POSIX: npm, its placeholder, the native installer and the system folders, 
   assert.deepEqual(await inspect({ [own]: { size: NATIVE } }, '/usr/bin'), ok(own, 'local-bin'));
   assert.deepEqual(await inspect({ '/usr/local/bin/claude': { size: NATIVE } }, ''), ok('/usr/local/bin/claude', 'system'));
   assert.deepEqual((await inspect({}, '/usr/bin')).searched, ['~/.local/bin', '~/.claude/local', '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin']);
+});
+
+test("main tells the agents' state again whenever what it says of Claude Code changes: an npm install found without its native program is pushed", async () => {
+  const fs = require('node:fs'), vm = require('node:vm'), { claudeState } = require('../electron/agents.cjs');
+  const node = 'D:\\nodejs22', bin = W.join(node, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+  const files = fakeFiles({}), claudeLocator = createLocator({ files, probe: fakeProbe().probe, storedPath: async () => null });
+  let pushes = 0;
+  const options = { env: { PATH: node }, platform: 'win32', arch: 'x64', home };
+  // main's own inspectClaude and checkClaude, over a locator of fake files.
+  const context = vm.createContext({ claudeLocator, claudeState, agents: { changed: () => { pushes++; } }, claudeRuntime: undefined,
+    inspectClaudeExecutable: settings => inspectClaudeExecutable({ ...settings, ...options }) });
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), start = source.indexOf('async function inspectClaude(');
+  const check = source.indexOf('function checkClaude(', start);
+  vm.runInContext(source.slice(start, source.indexOf('\n}', check) + 2), context);
+  assert.equal((await context.checkClaude('refresh')).reason, 'not_found'); assert.equal(pushes, 1, 'the first answer');
+  await context.checkClaude('refresh'); assert.equal(pushes, 1, 'the same answer again is no news');
+  // The reason stays not_found, but the agents' state now says incomplete: it is pushed.
+  files.put(W.join(node, 'claude.cmd'), { text: NPM_SHIM }); files.put(bin, { size: STUB });
+  assert.equal((await context.checkClaude('refresh')).incomplete, W.dirname(W.dirname(bin))); assert.equal(pushes, 2);
+  assert.deepEqual(claudeState(claudeLocator.peek()), { installed: true, incomplete: true });
 });

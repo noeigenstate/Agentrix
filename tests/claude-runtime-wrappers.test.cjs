@@ -42,14 +42,17 @@ test('PowerShell wrapper runs the Claude Code Agentrix chose while it exists, an
   const root = fixture(t), bin = path.join(root, 'nodejs22'), native = path.join(bin, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
   const chosen = path.join(root, 'chosen', 'claude.exe');
   for (const file of [path.join(bin, 'claude.cmd'), native, chosen]) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, ''); }
-  const bootstrap = path.join(root, 'bootstrap.json'), script = path.join(root, 'probe.ps1');
+  const bootstrap = path.join(root, 'bootstrap.json'), script = path.join(root, 'probe.ps1'), copied = path.join(root, 'integration');
   fs.writeFileSync(bootstrap, JSON.stringify({ projectPath: root, projectId: 't', sessionKey: 'key', pipeName: 'unused' }));
-  fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. '${integration.replace(/'/g, "''")}\\bootstrap.ps1'\nWrite-Output "CLAUDE=$global:AgentrixClaudeCommand|$global:AgentrixClaudeExecutable"\n`);
-  // The stored PATH the terminal merges is a stand-in (refresh-path.ps1's AGENTRIX_TEST_STORED_PATH): this computer's
-  // registry is never read.
+  // bootstrap.ps1 loads refresh-path.ps1 from its own folder: its copy here runs beside a stand-in that merges the case's
+  // stored PATH through the real refresh-path.ps1, so this computer's registry is never read.
+  const quoted = file => `'${file.replace(/'/g, "''")}'`;
+  fs.mkdirSync(copied); fs.copyFileSync(path.join(integration, 'bootstrap.ps1'), path.join(copied, 'bootstrap.ps1'));
+  fs.writeFileSync(path.join(copied, 'refresh-path.ps1'), `. ${quoted(path.join(integration, 'refresh-path.ps1'))} -ReadPath { param($Scope) (ConvertFrom-Json $env:PROBE_STORED_PATH).$Scope }\n`);
+  fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. ${quoted(path.join(copied, 'bootstrap.ps1'))}\nWrite-Output "CLAUDE=$global:AgentrixClaudeCommand|$global:AgentrixClaudeExecutable"\n`);
   const run = async (hint, PATH = `${bin};${path.join(process.env.SystemRoot, 'System32')}`, stored = { Machine: '', User: '' }) => {
     const env = { ...isolatedEnvironment(root), AGENTRIX_BOOTSTRAP: bootstrap, PATH, AGENTRIX_CLAUDE_EXECUTABLE: hint,
-      AGENTRIX_TEST_STORED_PATH: JSON.stringify(stored), PSModuleAnalysisCachePath: path.join(root, 'module-cache') };
+      PROBE_STORED_PATH: JSON.stringify(stored), PSModuleAnalysisCachePath: path.join(root, 'module-cache') };
     delete env.Path;
     const { stdout } = await exec(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
       { cwd: root, env, windowsHide: true, timeout: 20000 * timeoutScale });

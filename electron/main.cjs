@@ -106,7 +106,7 @@ const { ReadingHistory } = require('./reading-history.cjs');
 const { conversationBatchDelay, pollAfterSubmission } = require('./conversation-timing.cjs');
 const { listAgentCommands, isLocalAgentCommand } = require('./agent-commands.cjs');
 const { claudeConfigDir, findClaudeSession } = require('./claude-sessions.cjs');
-const { AgentsManager, onPath } = require('./agents.cjs');
+const { AgentsManager, claudeState, onPath } = require('./agents.cjs');
 const { macShell, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
 
 const root = path.join(__dirname, '..');
@@ -208,9 +208,9 @@ const agents = new AgentsManager({ onChange: state => send('agents:changed', sta
   claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh') });
 // The CLI the native path runs, from the locator. `mode`: 'locate' only stats what it chose; 'refresh' (start-up, the
 // connection test, an install) reads the stored Windows PATH and searches again; 'focus' does that at most once a
-// minute. The agents' state is told again when the terminal's file, its version, its via or the outcome changed.
+// minute. The agents' state is told again whenever what it says of Claude Code changed.
 async function inspectClaude(mode) {
-  const seen = () => { const found = claudeLocator.peek(), terminal = found?.terminal; return [terminal?.file, terminal?.version, terminal?.via, found?.reason].join('\0'); };
+  const seen = () => { const found = claudeLocator.peek(); return found && JSON.stringify(claudeState(found)); };
   const before = seen();
   try { return await inspectClaudeExecutable({ locator: claudeLocator, fresh: mode !== 'locate', throttled: mode === 'focus' }); }
   finally { if (seen() !== before) agents.changed(); }
