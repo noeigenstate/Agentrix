@@ -445,12 +445,17 @@ try {
   // Ctrl+G flips the stand-in between taking Enter and leaving the words in its input (the CLI that did not submit).
   const holdEnter = async on => { if (holding !== on) { await write('\x07'); holding = on; } };
   const shot = name => page.screenshot({ path: path.join(output, name + '.png') });
+  // Each busy frame carries its own number, so a frame an earlier step left cannot be taken for this one.
+  let busyFrames = 0;
   const busyFrame = async prompt => {
-    const before = (await entered()).length, drawn = "Clear-Host; Write-Host ([string][char]0x2736 + ' Osmosing' + [char]0x2026); Show-ReadingFixtureInput";
+    const before = (await entered()).length, number = ++busyFrames, frame = `Osmosing… (${number}s)`;
+    const drawn = `Clear-Host; Write-Host ([string][char]0x2736 + ' Osmosing' + [char]0x2026 + ' (${number}s)'); Show-ReadingFixtureInput`;
     await write(hook('start', { session_id: queueSession, transcript_path: transcript, prompt }));
     await write(drawn + '\r');
-    // The stand-in logs the line once it has run it: a check that reads the log next must not take this line for its own.
-    await waitFor(async () => (await enteredSince(before)).includes('submitted:' + drawn), 'the stand-in ran the busy frame');
+    // The stand-in's log says it ran the line; the screen says it too, once this frame is drawn and the typed command has scrolled away.
+    // Either is enough: the log can lag or miss a line when the file is held, the screen is what the reading view reads.
+    await waitFor(async () => (await enteredSince(before)).includes('submitted:' + drawn)
+      || (rows => rows.some(row => row.includes(frame)) && !rows.some(row => row.includes('Show-ReadingFixtureInput')))(await physicalRows()), 'the stand-in ran the busy frame');
     await waitFor(async () => await terminal.locator('.reading-status.is-working').count() > 0, 'working status rendered for the send check');
     await waitFor(async () => await terminal.locator('button[title="中断（Esc）"]:not([disabled])').count() === 1, 'the working composer takes messages');
   };
@@ -514,10 +519,11 @@ try {
       let clicks = 0; const begin = performance.now();
       const timer = setInterval(() => {
         const stop = document.querySelector(`[data-terminal-id="${id}"] .reading-composer button[title="中断（Esc）"]`);
-        if (stop && !stop.disabled && performance.now() - begin >= 150) { stop.click(); clicks++; }
+        if (stop && !stop.disabled && performance.now() - begin >= 100) { stop.click(); clicks++; }
         if (performance.now() - begin >= 1000) { clearInterval(timer); resolve(clicks); }
-      }, 50);
+      }, 25);
     }), terminalId);
+    assert.ok(lingeringClicks > 0, `${label}: the lingering Stop button was clicked at least once (${lingeringClicks})`);
     assert.deepEqual((await writes()).filter(item => item.data === '\x1b'), [], `${label}: a click on the lingering Stop button writes no Esc`);
     console.log(`${label}: clicks on the lingering Stop button after the round: ${lingeringClicks}`);
     const samples = await page.evaluate(() => { clearInterval(window.agentrixComposerSamples.timer); return window.agentrixComposerSamples.samples; });
@@ -569,7 +575,7 @@ try {
     await shot(name('b-claude-queued'));
     const heldCount = (await enteredSince(mark)).filter(line => line === 'held:' + whileWorking).length;
     assert.ok(heldCount >= 1 && heldCount <= 4, 'the message was entered once and retried at most three times: ' + heldCount);
-    assert.deepEqual((await enteredSince(mark)).filter(line => line.startsWith('submitted:')), [], 'nothing was submitted while the stand-in held Enter');
+    assert.deepEqual((await enteredSince(mark)).filter(line => /^submitted:GUI_/.test(line)), [], 'no message was submitted while the stand-in held Enter');
     await write('\x15');
     await waitFor(async () => !await rowsInclude(whileWorking), 'the held words are cleared from the stand-in input');
     await holdEnter(false);

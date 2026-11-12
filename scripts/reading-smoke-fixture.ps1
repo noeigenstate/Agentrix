@@ -5,6 +5,16 @@ if ((Get-Command Set-PSReadLineOption).Parameters.ContainsKey('PredictionSource'
     Set-PSReadLineOption -PredictionSource None
 }
 $global:ReadingFixtureInputRow = $null
+# The smoke reads this log from the other side while an antivirus or indexer may hold it for a moment: a failed append is tried again
+# (Add-Content only reports a non-terminating error and the line is lost, so the smoke waits for it until its timeout).
+function global:Write-ReadingFixtureLog {
+    param([string]$Line)
+    if (-not $env:READING_FIXTURE_ENTER_LOG) { return }
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        try { [IO.File]::AppendAllText($env:READING_FIXTURE_ENTER_LOG, $Line + [Environment]::NewLine, [Text.UTF8Encoding]::new($false)); return }
+        catch { Start-Sleep -Milliseconds 25 }
+    }
+}
 function global:prompt {
     if ($global:ReadingFixtureClearOnPrompt) {
         Clear-Host
@@ -52,8 +62,11 @@ function global:Stream-ReadingFixtureWork {
         $step++
         Start-Sleep -Milliseconds $IntervalMs
     }
+    # The round is over: Claude Code replaces the spinner line with its summary, which has no ellipsis.
+    [Console]::SetCursorPosition(0, 0)
+    Write-Host ([char]0x273B + ' Worked for ' + [int]$Seconds + 's' + (' ' * 40)) -NoNewline
     [Console]::SetCursorPosition(1, [int]$global:ReadingFixtureInputRow)
-    if ($env:READING_FIXTURE_ENTER_LOG) { Add-Content -LiteralPath $env:READING_FIXTURE_ENTER_LOG -Value 'stream:done' }
+    Write-ReadingFixtureLog 'stream:done'
 }
 # Actual local payload execution precedes the CLI-shaped result. Echo is not a no-output command.
 function global:!echo {
@@ -79,9 +92,7 @@ Set-PSReadLineKeyHandler -Key Enter -ScriptBlock {
     $line = $null
     $cursor = 0
     [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$line, [ref]$cursor)
-    if ($env:READING_FIXTURE_ENTER_LOG) {
-        Add-Content -LiteralPath $env:READING_FIXTURE_ENTER_LOG -Value ($(if ($global:ReadingFixtureHoldEnter) { 'held' } else { 'submitted' }) + ':' + $line)
-    }
+    Write-ReadingFixtureLog ($(if ($global:ReadingFixtureHoldEnter) { 'held' } else { 'submitted' }) + ':' + $line)
     if ($global:ReadingFixtureHoldEnter -and $line -ne 'exit') { return } # the smoke's cleanup must always be able to end the shell
     $global:ReadingFixtureSlashSubmitted = $line.StartsWith('/')
     [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
