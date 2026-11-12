@@ -43,6 +43,8 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   // The Codex of a project on another computer (SSH) runs there, on that computer's app-server: whether this computer has Codex is none of its business.
   const remote = kind === 'ssh', runsHere = (agent: Agent) => !(remote && agent === 'codex');
   const missing = (agent: Agent) => runsHere(agent) && !!agents && !agents[agent].installed;
+  // npm put Claude Code there without its native program: installing again changes nothing. With a key saved the connection test says why (the run-mode page, its test button in focus); without one the test cannot be clicked, and the page with the installer's command opens.
+  const incomplete = (agent: Agent) => agent === 'claude' && runsHere(agent) && !!agents?.claude.incomplete;
   useEffect(() => {
     let active = true;
     void window.agentrix.agentHistory(terminalId).then(result => {
@@ -82,6 +84,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
       await onAction(window.agentrix.startTerminal(terminalId));
       onOpenTerminal(terminalId);
     }
+    else if (incomplete(what)) window.dispatchEvent(new CustomEvent('agentrix:open-settings', { detail: runtime?.keySaved === false ? { section: 'agents' } : { section: 'runtime', focus: true } }));
     else if (missing(what) && !agents?.npm) await onAction(window.agentrix.openNode());
     else {
       const installed = missing(what) ? await onAction(window.agentrix.installAgent(what)) : agents;
@@ -95,6 +98,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   };
   const note = (agent: Agent) => {
     if (runsHere(agent) && agents?.installing === agent) return t('正在安装…');
+    if (incomplete(agent)) return runtime?.keySaved === false ? t('安装不完整 · 点击查看') : t('安装不完整 · 去测试连接查看');
     if (missing(agent)) return agents!.npm ? t('未安装 · 点击一键安装') : t('未安装 · 需要先安装 Node.js');
     if (chosen === 'new') return t('开始新的对话');
     if (!history) return t('正在查找开发记录…');
@@ -105,7 +109,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   };
   // Where a click would run the agent, said beside the choice when it is not the terminal it always was.
   const routeNote = (agent: Agent) => {
-    if (missing(agent)) return null;
+    if (missing(agent) || incomplete(agent)) return null;
     const route = routeOf(agent);
     if (route.how === 'native') return agent === 'claude' ? t('API · 原生模式') : t('原生模式');
     return route.how === 'blocked' ? t('需先保存 API key') : route.reason ? t('没有 API key，改用终端') : null;

@@ -21,6 +21,7 @@
 .agent-launcher-agent.is-codex { --agent: var(--agent-codex); }
 .agent-launcher-agent b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; }
 .agent-launcher-agent small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-2); }
+:root[data-theme="light"] .agent-launcher-agent small { color: var(--text-3); } /* the light --text-2 is 4.51:1 on a hovered card; --text-3 is the darker of the two there */
 .agent-launcher-more { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; }
 .agent-launcher-more .text-button { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
 .agent-launcher-running { font-size: 12px; color: var(--text-2); }

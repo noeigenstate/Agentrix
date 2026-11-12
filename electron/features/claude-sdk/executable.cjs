@@ -1,74 +1,25 @@
-const fs = require('node:fs/promises');
-const path = require('node:path');
-const os = require('node:os');
-const { execFile } = require('node:child_process');
-const REQUIRED = '2.1.317', MINIMUM = REQUIRED.split('.').map(Number), VERSION_TIMEOUT_MS = 10000, CLOSE_GRACE_MS = 1500;
-const VERSION = /\b(\d+)\.(\d+)\.(\d+)\b/;
-const meets = match => {
-  const version = match.slice(1, 4).map(Number), first = version.findIndex((part, index) => part !== MINIMUM[index]);
-  return first < 0 || version[first] > MINIMUM[first];
-};
-const failed = error => {
-  const code = typeof error?.code === 'number' ? `exit ${error.code}` : typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code) ? error.code : null;
-  return code ? { reason: 'failed', error: code } : { reason: 'failed' };
-};
+const { createLocator, REQUIRED } = require('../claude-runtime/locator.cjs');
 
-// The deadline and the grace after it each wait one more turn of the event loop before they act: when the main
-// process was busy past them, the exit or close already waiting to be read wins, so a CLI that answered in time is
-// not taken for one that hung. The grace lets the output close; a descendant still holding it open must not hold
-// the check. A version printed before the kill still counts.
-function readVersion(probe, file, env, timeoutMs, graceMs) {
-  return new Promise(resolve => {
-    const started = Date.now();
-    let child, timer, done = false, killed = false;
-    const settle = value => { if (done) return; done = true; clearTimeout(timer); resolve(value); };
-    const timedOut = () => ({ reason: 'timeout', elapsedMs: Date.now() - started });
-    timer = setTimeout(() => setImmediate(() => {
-      if (done) return;
-      if (child && child.exitCode === null && child.signalCode === null) {
-        killed = true;
-        try { child.kill('SIGKILL'); } catch { }
-      }
-      timer = setTimeout(() => setImmediate(() => {
-        if (done) return;
-        try { child?.stdout?.destroy(); child?.stderr?.destroy(); } catch { }
-        settle(killed ? timedOut() : { reason: 'unreadable' });
-      }), graceMs);
-    }), timeoutMs);
-    try {
-      child = probe(file, ['--version'], { maxBuffer: 65536, windowsHide: true, shell: false, env },
-        (error, stdout) => {
-          const text = String(stdout ?? '');
-          settle(killed ? VERSION.test(text) ? { stdout: text } : timedOut() : error ? failed(error) : { stdout: text });
-        });
-    } catch (error) { settle(failed(error)); }
-  });
-}
-
+// The CLI the native path runs, from claude-runtime's locator: `locator` is main's shared one (`fresh` asks it to read
+// the stored Windows PATH and search again first, `throttled` at most once a minute); without one, a locator of these
+// options searches afresh.
 // `missing` keeps its meaning for every caller: no usable native CLI. `reason` says why: `not_found`, or a file was
 // found (`found`) whose version check timed out (`elapsedMs`), failed to run (`error` names how) or printed no version.
-async function inspectClaudeExecutable({ env = process.env, platform = process.platform, home = os.homedir(), probe = execFile,
-  timeoutMs = VERSION_TIMEOUT_MS, graceMs = CLOSE_GRACE_MS } = {}) {
-  const name = platform === 'win32' ? 'claude.exe' : 'claude';
-  const folders = [...(env.PATH || env.Path || '').split(path.delimiter), path.join(home, '.local/bin'), ...(platform === 'win32' ? [] : ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'])];
-  const checked = new Set();
-  let outdated = null, failure = null;
-  for (const folder of new Set(folders.filter(value => value && path.isAbsolute(value)))) {
-    let file;
-    try {
-      file = await fs.realpath(path.join(folder, name));
-      if (checked.has(file) || !(await fs.stat(file)).isFile()) continue;
-      await fs.access(file, platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK);
-    } catch { continue; } // A broken candidate must not hide another installed native executable.
-    checked.add(file);
-    const { stdout, ...run } = await readVersion(probe, file, env, timeoutMs, graceMs);
-    const match = stdout === undefined ? null : VERSION.exec(stdout);
-    if (match && meets(match)) return { status: 'ok', version: match[0], required: REQUIRED, file };
-    if (match) outdated ||= match[0];
-    else failure ||= { reason: 'unreadable', ...run, found: file };
+// A `not_found` also says where it looked: how many PATH folders (inherited and stored) and the install folders by
+// name, home written as ~; `incomplete` names an npm package found without its native program. One found says where
+// (`via`, `fileShown`); when the terminal runs another, older one, `notice` says so and `split` describes it.
+async function inspectClaudeExecutable({ locator, fresh = !locator, throttled = false, ...options } = {}) {
+  const using = locator || createLocator(options);
+  const found = await (fresh ? using.refresh(options, { throttled }) : using.locate(options));
+  const { native, terminal } = found;
+  if (native) {
+    return { status: 'ok', version: native.version, required: REQUIRED, file: native.file, via: native.via, fileShown: native.fileShown,
+      ...(found.reason === 'cli_split_versions' ? { notice: found.reason, split: { terminal: { version: terminal.version, via: terminal.via, fileShown: terminal.fileShown } } } : {}) };
   }
-  if (outdated) return { status: 'too_old', version: outdated, required: REQUIRED, file: null };
-  return { status: 'missing', version: null, required: REQUIRED, file: null, ...(failure || { reason: 'not_found' }) };
+  if (found.reason === 'too_old') return { status: 'too_old', version: found.version, required: REQUIRED, file: null };
+  const missing = { status: 'missing', version: null, required: REQUIRED, file: null };
+  if (found.reason !== 'not_found') return { ...missing, ...found.failure };
+  return { ...missing, reason: 'not_found', pathFolders: found.pathFolders, searched: found.searched, ...(found.incomplete ? { incomplete: found.incomplete } : {}) };
 }
 async function resolveClaudeExecutable(options) {
   const result = await inspectClaudeExecutable(options);

@@ -13,15 +13,34 @@ function onPath(name, env, platform = process.platform) {
   }));
 }
 
+// The agents' word on Claude Code from claude-runtime's locate: installed whenever one was found, also one that cannot
+// run natively (`reason`: too old, or its check timed out, failed or printed no version) and an npm install whose native
+// program is missing (`incomplete`); a version split names the copy the native path runs.
+const found = candidate => ({ version: candidate.version, via: candidate.via, fileShown: candidate.fileShown });
+function claudeState({ terminal, native, reason, version, failure, incomplete }) {
+  const state = { installed: !!terminal || !!failure?.found || reason === 'too_old' || !!incomplete, ...(terminal ? found(terminal) : {}) };
+  if (reason === 'too_old') Object.assign(state, { reason, version: state.version ?? version ?? null });
+  if (failure) state.reason = failure.reason;
+  if (incomplete) state.incomplete = true;
+  if (reason === 'cli_split_versions') Object.assign(state, { notice: reason, native: found(native) });
+  return state;
+}
+
 class AgentsManager {
-  constructor({ env = process.env, platform = process.platform, detect = onPath, launch = spawn, onChange = () => {}, translate = text => text, timeout = 10 * 60 * 1000 } = {}) {
-    Object.assign(this, { env, platform, detect, launch, onChange, t: translate, timeout });
+  // `claude` gives claude-runtime's last locate (locator.peek()), never running a search: the program the terminal
+  // runs, its version and where it was found. Before the first search the PATH check stands in. `refreshClaude`
+  // searches again after Claude Code is installed.
+  constructor({ env = process.env, platform = process.platform, detect = onPath, claude = () => null, refreshClaude = async () => {}, launch = spawn,
+    onChange = () => {}, translate = text => text, timeout = 10 * 60 * 1000 } = {}) {
+    Object.assign(this, { env, platform, detect, located: claude, refreshClaude, launch, onChange, t: translate, timeout });
     this.installing = null; this.message = ''; this.error = '';
   }
   getState() {
     // Existing isolated desktop checks should not depend on tools installed on the test host.
     const isolated = !!this.env.AGENTRIX_DATA_DIR && this.env.AGENTRIX_TEST_AGENTS !== '1';
-    return { codex: { installed: isolated || this.detect('codex', this.env) }, claude: { installed: isolated || this.detect('claude', this.env) }, npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
+    const located = isolated ? null : this.located();
+    const claude = located ? claudeState(located) : { installed: isolated || this.detect('claude', this.env) };
+    return { codex: { installed: isolated || this.detect('codex', this.env) }, claude, npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
   }
   changed() { const state = this.getState(); this.onChange(state); return state; }
   install(agent) {
@@ -37,7 +56,8 @@ class AgentsManager {
         finished = true; clearTimeout(timer); this.installing = null;
         this.error = error ? `${error}${output ? '\n' + output : ''}` : '';
         this.message = error ? '' : this.t('安装完成，请重启项目的终端；新终端会识别新命令。');
-        resolve(this.changed());
+        // A Claude Code just installed is searched for before the state is told, so it reads as installed.
+        Promise.resolve(!error && agent === 'claude' ? this.refreshClaude() : null).catch(() => {}).then(() => resolve(this.changed()));
       };
       try {
         // Only the fixed map reaches cmd.exe; renderer input is never part of a shell command.
@@ -60,4 +80,4 @@ class AgentsManager {
   }
 }
 
-module.exports = { AGENT_PACKAGES, AgentsManager, onPath };
+module.exports = { AGENT_PACKAGES, AgentsManager, claudeState, onPath };

@@ -637,14 +637,14 @@ test('the launch route follows the settings: native by default, the terminal whe
 
 // A stand-in for the main process on `window.agentrix`, for the launcher.
 // `kind`: the project's kind; `codexHere`: whether this computer has Codex installed; `startError`: what a start is refused with. `errors`: what the card shows of a refusal.
-function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null } } = {}) {
+function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null }, claude = { installed: true } } = {}) {
   const bridge = {
     getSettings: async () => ({ ok: true, value: runtime.settings }), keyStatus: async () => ({ ok: true, value: { saved: runtime.saved } }),
     start: async (...args) => { calls.push(['start', ...args]); return startError ? { ok: false, error: startError } : { ok: true, value: { runtimeSessionId: 'rs1' } }; },
   };
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {
-    getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude: { installed: true } } }), onAgents: () => () => {},
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { dispatchEvent: event => { calls.push(['event', event.type, event.detail]); return true; }, agentrix: {
+    getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude } }), onAgents: () => () => {},
     startTerminal: async id => { calls.push(['terminal', id]); return { ok: true, value: null }; },
     installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
     agentHistory: async () => ({ ok: true, value: history }),
@@ -681,6 +681,35 @@ test('the launcher starts a native session or a terminal by the settings, says w
       assert.deepEqual(calls, expected, `${agent} ${JSON.stringify(runtime)}`);
       if (!expected.length) assert.match(view.text(), /只用 API 运行，但还没有保存 API key/, 'and it says why nothing started');
     } finally { view.done(); }
+  }
+});
+
+test('an incomplete npm install of Claude Code is not installed again: the card says so and a click opens the run-mode page of the settings; a failed check or an old version still starts', async () => {
+  const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
+  const calls = [], view = launcher(runtime, calls, { claude: { installed: true, incomplete: true } });
+  try {
+    view.render(); await settle();
+    assert.equal(view.note('claude'), '安装不完整 · 去测试连接查看', 'no route words either: nothing would start');
+    assert.doesNotMatch(view.button('claude').props.className, /is-missing/, 'the card can be clicked and looks like one that can, no dimming');
+    view.button('claude').props.onClick(); await settle();
+    assert.deepEqual(calls, [['event', 'agentrix:open-settings', { section: 'runtime', focus: true }]], 'no npm install, no session, and the settings open on 运行方式, asking to focus the test or the key');
+  } finally { view.done(); }
+  // With no key saved the connection test cannot be clicked: the card says only that there is something to see; the click is the same.
+  const noKeyCalls = [], noKey = launcher({ ...runtime, saved: false }, noKeyCalls, { claude: { installed: true, incomplete: true } });
+  try {
+    noKey.render(); await settle(); assert.equal(noKey.note('claude'), '安装不完整 · 点击查看');
+    noKeyCalls.length = 0; noKey.button('claude').props.onClick(); await settle();
+    assert.deepEqual(noKeyCalls, [['event', 'agentrix:open-settings', { section: 'agents' }]], 'the page with the installer command opens, nothing to focus');
+  } finally { noKey.done(); }
+  // Installed but not passing its check (or old): not treated as missing, so nothing is installed over it, and the click starts as before.
+  for (const reason of ['too_old', 'timeout', 'failed', 'unreadable']) {
+    const started = [], other = launcher(runtime, started, { claude: { installed: true, reason } });
+    try {
+      other.render(); await settle();
+      assert.equal(other.note('claude'), '开始新的对话 · API · 原生模式', reason);
+      other.button('claude').props.onClick(); await settle();
+      assert.deepEqual(started, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], reason);
+    } finally { other.done(); }
   }
 });
 
@@ -1860,6 +1889,32 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   assert.equal(cliLine({ reason: 'unreadable', found: file }).hint, `找到 ${file}，但它没有输出版本号。 请重新安装 Claude Code，或检查安全软件是否拦截。`);
   assert.equal(cliLine({ reason: 'failed' }).hint, '检查 Claude Code 时出错，请重试。');
   assert.deepEqual([cliLine({ reason: 'not_found' }).text, cliLine({ reason: 'not_found' }).title], ['未找到', null]);
+  // None found says where main looked; an npm package without its native program says why and how to install the native one.
+  const searched = ['~\\.local\\bin', '~\\.claude\\local', '~\\AppData\\Local\\Microsoft\\WinGet\\Links'];
+  assert.equal(cliLine({ reason: 'not_found', pathFolders: 14, searched }).hint,
+    '请安装 Claude Code（需要 ≥ 2.1.317）。 已查找 PATH 里的 14 个目录，以及 ~\\.local\\bin、~\\.claude\\local、~\\AppData\\Local\\Microsoft\\WinGet\\Links。');
+  assert.equal(cliLine({ reason: 'not_found', searched: ['~/.local/bin'] }).hint, '请安装 Claude Code（需要 ≥ 2.1.317）。 已查找 ~/.local/bin。');
+  const incomplete = 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code', npm = cliLine({ reason: 'not_found', pathFolders: 14, searched, incomplete });
+  assert.deepEqual([npm.text, npm.title, npm.tone], ['安装不完整', incomplete, 'bad']);
+  assert.equal(npm.hint, `找到用 npm 安装的 Claude Code（${incomplete}），但里面没有原生程序：npm 跳过了它的安装步骤（npm 12 默认跳过，--ignore-scripts 或 --omit=optional 也会）。请改用官方安装器安装原生版：在 PowerShell 运行 irm https://claude.ai/install.ps1 | iex，装好后重新测试连接。`);
+  assert.match(cliLine({ reason: 'not_found', incomplete: '~/.npm-global/lib/node_modules/@anthropic-ai/claude-code' }).hint, /在终端运行 curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash，/);
+  // A found CLI says where it came from and its file (main writes home as ~); a via this view does not know is shown as given.
+  const okLine = cli => connectionLines({ ...good, cli: { status: 'ok', version: '2.1.322', required, ...cli } })[2];
+  const home = String.raw`~\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`, tools = String.raw`C:\Tools\claude.exe`;
+  assert.deepEqual([okLine({}).text, okLine({}).hint, okLine({}).tone], ['版本 2.1.322（满足 ≥ 2.1.317）', null, 'ok']);
+  const npmLine = okLine({ via: 'npm', fileShown: home });
+  assert.deepEqual([npmLine.text, npmLine.hint, npmLine.title, npmLine.tone], ['版本 2.1.322（满足 ≥ 2.1.317） · 来自 npm 全局安装', home, home, 'ok']);
+  assert.deepEqual(['path', 'npm', 'platform-package', 'local-bin', 'claude-local', 'winget', 'registry-path', 'system', 'someday'].map(via => okLine({ via }).text.split(' · ')[1]),
+    ['来自 PATH', '来自 npm 全局安装', '来自 npm 平台包', '来自 官方安装器', '来自 旧版本地安装', '来自 WinGet', '来自 系统 PATH（注册表）', '来自 系统目录', '来自 someday']);
+  // The terminal runs another install than native mode: a warning whose main line is the native one, the reason in a sentence,
+  // and each install a block of its own (label, version and way, file on its own line).
+  const split = okLine({ via: 'local-bin', fileShown: '~/.local/bin/claude', notice: 'cli_split_versions', split: { terminal: { version: '2.1.200', via: 'path', fileShown: tools } } });
+  assert.deepEqual([split.tone, split.text], ['warn', '原生 · 版本 2.1.322（满足 ≥ 2.1.317） · 来自 官方安装器']);
+  assert.equal(split.hint, '终端和原生用的不是同一个 Claude Code：终端的版本低于 2.1.317，原生改用了另一份安装');
+  assert.deepEqual(split.blocks, [{ label: '终端', text: '版本 2.1.200 · 来自 PATH', file: tools }, { label: '原生', text: '版本 2.1.322 · 来自 官方安装器', file: '~/.local/bin/claude' }]);
+  assert.equal(okLine({ via: 'path', fileShown: 'x', split: { terminal: { version: null, via: 'path', fileShown: 'y' } } }).blocks, undefined, 'a split without the notice is not announced');
+  assert.deepEqual(okLine({ notice: 'cli_split_versions', split: { terminal: { version: null, via: 'npm', fileShown: 'y' } } }).blocks.map(block => [block.label, block.text, block.file]),
+    [['终端', '版本未知 · 来自 npm 全局安装', 'y'], ['原生', '版本 2.1.322', null]]);
   assert.equal(connectionLines({ ...good, cli: { status: 'missing', version: null, required, reason: 'failed' }, path: 'terminal', reason: 'native_cli_unverified' })[3].text,
     '终端（订阅） · Claude Code 检查没有通过，无法通过 API 运行');
   // The billing line says why and what to check; the path line only the consequence, so the card says the reason once.

@@ -218,33 +218,31 @@ test('G7 rate-limit events carry restrictions without inventing an API credit ba
   assert.equal(limits.billingRoute, 'api'); assert.deepEqual(limits.limitsById, {}); assert.equal(limits.resetCredits, null);
   assert.equal(limits.ordinaryUsageAllowed, false); assert.equal(limits.notice.resetsAtMs, 123000);
 });
-test('native executable discovery never searches relative directories or accepts wrappers', async t => {
+// The executable checks run on a fake file system in Windows path rules (tests/helpers/claude-files.cjs): no real CLI
+// or profile is touched, on any host. Where each install puts Claude Code is tests/claude-runtime-locator-core.test.cjs.
+const W = path.win32, { fakeFiles, NATIVE } = require('./helpers/claude-files.cjs'), cliHome = 'D:\\Users\\u';
+test('native executable discovery never searches relative directories or accepts wrappers', async () => {
   const { resolveClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');
-  const dir = directory(t); fs.writeFileSync(path.join(dir, 'claude.cmd'), 'not executable');
+  const dir = 'D:\\agx', files = fakeFiles({ [W.join(dir, 'claude.cmd')]: { text: 'not executable' }, [W.resolve('relative', 'claude.exe')]: { size: NATIVE } });
   let probes = 0;
   // The probe keeps its own deadline: execFile's would kill a CLI that answered while main was busy.
   const probe = (_file, _args, options, callback) => { probes++; assert.equal(options.shell, false); assert.equal(options.timeout, undefined); callback(null, '2.1.317 (Claude Code)'); };
-  assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe }), null);
-  fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
-  for (const version of ['2.1.316', '2.0.999']) {
-    await assert.rejects(resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
-      probe: (_file, _args, _options, callback) => callback(null, version) }), /2\.1\.317/);
-  }
-  const resolved = await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, probe });
-  assert.equal(resolved, await fs.promises.realpath(resolved));
-  assert.equal(await fs.promises.realpath(resolved), await fs.promises.realpath(path.join(dir, 'claude.exe')));
+  const resolve = (answer = probe) => resolveClaudeExecutable({ env: { PATH: `relative;${dir}` }, platform: 'win32', home: cliHome, files, probe: answer, storedPath: async () => null });
+  assert.equal(await resolve(), null);
+  files.put(W.join(dir, 'claude.exe'), { size: NATIVE });
+  for (const version of ['2.1.316', '2.0.999']) await assert.rejects(resolve((_file, _args, _options, callback) => callback(null, version)), /2\.1\.317/);
+  assert.equal(await resolve(), W.join(dir, 'claude.exe'));
   assert.equal(probes, 1);
-  for (const version of ['2.2.0', '3.0.0']) assert.equal(await resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir,
-    probe: (_file, _args, _options, callback) => callback(null, version) }), resolved);
+  for (const version of ['2.2.0', '3.0.0']) assert.equal(await resolve((_file, _args, _options, callback) => callback(null, version)), W.join(dir, 'claude.exe'));
 });
 test('a native executable whose version check fails is reported with the reason and file, never as not found', async t => {
   const { inspectClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');
-  const dir = directory(t), other = path.join(dir, 'other'); fs.mkdirSync(other);
-  const inspect = (probe, PATH = dir) => inspectClaudeExecutable({ env: { PATH }, platform: 'win32', home: dir, probe, timeoutMs: 20, graceMs: 20 });
+  const dir = 'D:\\agx', other = W.join(dir, 'other'), files = fakeFiles();
+  const inspect = (probe, PATH = dir) => inspectClaudeExecutable({ env: { PATH }, platform: 'win32', home: cliHome, files, probe, storedPath: async () => null, timeoutMs: 20, graceMs: 20 });
   const missing = { status: 'missing', version: null, required: '2.1.317', file: null };
-  assert.deepEqual(await inspect(() => assert.fail('nothing to run')), { ...missing, reason: 'not_found' });
-  fs.writeFileSync(path.join(dir, 'claude.exe'), 'fake');
-  const found = await fs.promises.realpath(path.join(dir, 'claude.exe'));
+  assert.deepEqual(await inspect(() => assert.fail('nothing to run')), { ...missing, reason: 'not_found', pathFolders: 1, searched: ['~\\.local\\bin', '~\\.claude\\local'] });
+  const found = W.join(dir, 'claude.exe'), ok = { status: 'ok', version: '2.1.322', required: '2.1.317', file: found, via: 'path', fileShown: found };
+  files.put(found, { size: NATIVE });
   // A hung CLI is killed; its close then ends the check as a timeout that says how long it took.
   const child = (fields = {}) => {
     const value = { exitCode: null, signalCode: null, killed: 0, destroyed: 0, stderr: { destroy() {} },
@@ -263,7 +261,7 @@ test('a native executable whose version check fails is reported with the reason 
   assert.deepEqual(await inspect(run(exited)), { ...missing, reason: 'unreadable', found }); assert.equal(exited.destroyed, 1);
   // A version the CLI printed before the kill still counts.
   const late = child({ kill() { this.killed++; this.callback(Object.assign(new Error('killed'), { signal: 'SIGKILL' }), '2.1.322 (Claude Code)\n'); } });
-  assert.deepEqual(await inspect(run(late)), { status: 'ok', version: '2.1.322', required: '2.1.317', file: found }); assert.equal(late.killed, 1);
+  assert.deepEqual(await inspect(run(late)), ok); assert.equal(late.killed, 1);
   // The grace yields a turn as the deadline does: main is busy past it (from the moment the deadline finds the CLI
   // exited) and the close is already waiting when the grace comes due; the close wins.
   let busy = false;
@@ -276,22 +274,21 @@ test('a native executable whose version check fails is reported with the reason 
     return 0;
   } });
   assert.equal((await inspect(run(slow))).status, 'ok'); assert.equal(slow.destroyed, 0);
-  // The same file reached through two PATH spellings is checked once.
+  // The same file reached through other PATH spellings is checked once.
   let probes = 0;
-  await inspect((_file, _args, _options, callback) => { probes++; callback(null, ''); }, [dir, `${dir}${path.sep}`].join(path.delimiter)); assert.equal(probes, 1);
-  await assert.rejects(require('../electron/features/claude-sdk/executable.cjs').resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: dir, timeoutMs: 20,
+  await inspect((_file, _args, _options, callback) => { probes++; callback(null, ''); }, [dir, `${dir}\\`, dir.toLowerCase()].join(';')); assert.equal(probes, 1);
+  await assert.rejects(require('../electron/features/claude-sdk/executable.cjs').resolveClaudeExecutable({ env: { PATH: dir }, platform: 'win32', home: cliHome, files, storedPath: async () => null, timeoutMs: 20,
     probe: (_file, _args, _options, callback) => callback(null, '') }), error => error.code === 'native_cli_required' && error.unverified === true && /检查没有通过/.test(error.message));
   // A session that cannot start on such a CLI says so in the same words, before any input.
-  const fake = fakeSdk(), events = [], runtime = createClaudeRuntime({ directory: path.join(dir, 'state'), safeStorage, loadSdk: async () => fake.sdk,
+  const state = directory(t), fake = fakeSdk(), events = [], runtime = createClaudeRuntime({ directory: path.join(state, 'state'), safeStorage, loadSdk: async () => fake.sdk,
     resolveExecutable: async () => { throw Object.assign(new Error('x'), { code: 'native_cli_required', unverified: true }); } });
   runtime.credentials.save(key);
-  const session = runtime.create({ cwd: dir, worktree: dir, agent: 'claude', owner: 'gui', terminalId: 't', projectId: 'p', runtimeSessionId: randomUUID(), env: { PATH: '' } }, event => events.push(event));
+  const session = runtime.create({ cwd: state, worktree: state, agent: 'claude', owner: 'gui', terminalId: 't', projectId: 'p', runtimeSessionId: randomUUID(), env: { PATH: '' } }, event => events.push(event));
   t.after(() => session.close());
   await assert.rejects(session.start(), error => error.beforeInput === true && error.message === 'Claude Code 检查没有通过，无法通过 API 运行');
   assert.ok(events.some(event => event.type === 'error' && event.payload.message === 'Claude Code 检查没有通过，无法通过 API 运行'));
   // Main was busy past the deadline while the CLI had already exited: its answer, read late within the grace, still counts.
-  assert.deepEqual(await inspect((_file, _args, _options, callback) => { setTimeout(() => callback(null, '2.1.322 (Claude Code)'), 25); return { exitCode: 0, signalCode: null, kill: () => assert.fail('an exited CLI is not killed') }; }),
-    { status: 'ok', version: '2.1.322', required: '2.1.317', file: found });
+  assert.deepEqual(await inspect((_file, _args, _options, callback) => { setTimeout(() => callback(null, '2.1.322 (Claude Code)'), 25); return { exitCode: 0, signalCode: null, kill: () => assert.fail('an exited CLI is not killed') }; }), ok);
   for (const [error, code] of [[Object.assign(new Error(key), { code: 'EPERM' }), 'EPERM'], [Object.assign(new Error('x'), { code: 1 }), 'exit 1'], [new Error(key), undefined]]) {
     const value = await inspect((_file, _args, _options, callback) => callback(error, ''));
     assert.deepEqual(value, { ...missing, reason: 'failed', found, ...(code ? { error: code } : {}) }); assert.ok(!JSON.stringify(value).includes(key));
@@ -299,10 +296,10 @@ test('a native executable whose version check fails is reported with the reason 
   assert.deepEqual(await inspect(() => { throw new Error('spawn broke'); }), { ...missing, reason: 'failed', found });
   assert.deepEqual(await inspect((_file, _args, _options, callback) => callback(null, 'no version here')), { ...missing, reason: 'unreadable', found });
   // A failed candidate does not hide a working one later on the path, and an outdated one still reads as too old.
-  fs.writeFileSync(path.join(other, 'claude.exe'), 'fake');
-  const byFolder = answers => (file, _args, _options, callback) => callback(null, answers[path.dirname(file) === path.dirname(found) ? 0 : 1]);
-  assert.equal((await inspect(byFolder(['', '2.1.317']), [dir, other].join(path.delimiter))).status, 'ok');
-  assert.deepEqual(await inspect(byFolder(['', '2.1.300']), [dir, other].join(path.delimiter)), { ...missing, status: 'too_old', version: '2.1.300' });
+  files.put(W.join(other, 'claude.exe'), { size: NATIVE });
+  const byFolder = answers => (file, _args, _options, callback) => callback(null, answers[W.dirname(file) === dir ? 0 : 1]);
+  assert.equal((await inspect(byFolder(['', '2.1.317']), [dir, other].join(';'))).status, 'ok');
+  assert.deepEqual(await inspect(byFolder(['', '2.1.300']), [dir, other].join(';')), { ...missing, status: 'too_old', version: '2.1.300' });
 });
 test('GUI and helper cannot resume the same Claude session concurrently', async t => {
   const { session, runtime, fake, spec } = setup(t, { auto: false }); await session.start(); session.send({ clientMessageId: randomUUID(), text: 'hold session' });

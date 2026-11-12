@@ -121,3 +121,33 @@ test('a timed out install kills its process and reports an error instead of succ
   const result = await manager.install('codex');
   assert.equal(fake.children[0].killed, true); assert.equal(result.error, '安装超时，请重试。'); assert.equal(result.message, ''); assert.equal(result.installing, null);
 });
+
+test('Claude Code reads as installed from the locator\'s last search, never a search of its own, and an install searches again', async t => {
+  const { env, add } = fixture(t); add('npm'); add('claude');
+  const file = 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe', terminal = { file, fileShown: file, version: '2.1.322', via: 'npm' };
+  let located = null, refreshes = 0;
+  const fake = fakeLaunch(), manager = new AgentsManager({ env, launch: fake.launch, claude: () => located,
+    refreshClaude: async () => { refreshes++; located = { terminal, native: terminal }; } });
+  // Before the first search the PATH check stands in; a search that found nothing (a placeholder shim) reads as missing.
+  assert.deepEqual(manager.getState().claude, { installed: true });
+  located = { terminal: null, native: null, reason: 'not_found' };
+  assert.deepEqual(manager.getState().claude, { installed: false });
+  const pending = manager.install('claude'); fake.children[0].emit('close', 0);
+  assert.deepEqual((await pending).claude, { installed: true, version: '2.1.322', via: 'npm', fileShown: file }); assert.equal(refreshes, 1);
+  // A failed install searches nothing; an isolated desktop check reads neither.
+  const failed = manager.install('claude'); fake.children[1].emit('close', 1); await failed; assert.equal(refreshes, 1);
+  assert.deepEqual(new AgentsManager({ env: { ...env, AGENTRIX_DATA_DIR: 'x' }, claude: () => assert.fail('not read') }).getState().claude, { installed: true });
+});
+
+test('an installed Claude Code that cannot run natively still reads as installed, with why, and a version split names the native copy', t => {
+  const { env } = fixture(t), file = 'D:\\bin\\claude.exe';
+  const old = { file, fileShown: file, version: '2.1.300', via: 'path' }, fresh = { file: 'D:\\new\\claude.exe', fileShown: 'D:\\new\\claude.exe', version: '2.1.322', via: 'npm' };
+  const state = located => new AgentsManager({ env, claude: () => located }).getState().claude;
+  assert.deepEqual(state({ terminal: null, native: null, reason: 'timeout', failure: { reason: 'timeout', found: file } }), { installed: true, reason: 'timeout' });
+  assert.deepEqual(state({ terminal: old, native: null, reason: 'too_old', version: '2.1.300' }), { installed: true, version: '2.1.300', via: 'path', fileShown: file, reason: 'too_old' });
+  assert.deepEqual(state({ terminal: null, native: null, reason: 'too_old', version: '2.1.100' }), { installed: true, version: '2.1.100', reason: 'too_old' }, 'an old JavaScript package');
+  assert.deepEqual(state({ terminal: null, native: null, reason: 'not_found', incomplete: 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code' }), { installed: true, incomplete: true });
+  assert.deepEqual(state({ terminal: null, native: null, reason: 'not_found' }), { installed: false });
+  assert.deepEqual(state({ terminal: old, native: fresh, reason: 'cli_split_versions' }),
+    { installed: true, version: '2.1.300', via: 'path', fileShown: file, notice: 'cli_split_versions', native: { version: '2.1.322', via: 'npm', fileShown: 'D:\\new\\claude.exe' } });
+});

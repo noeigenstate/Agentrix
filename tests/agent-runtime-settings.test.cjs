@@ -149,6 +149,15 @@ test('测试连接 waits for a saved key and for the owner’s click, shows its 
     assert.deepEqual(['is-ok', 'is-bad', 'is-warn'].map(tone => html.includes(`<li class="${tone}"`)), [true, true, true], 'each line has a tone class beside its mark');
     assert.equal((html.match(/runtime-test-mark/g) ?? []).length, 3, 'and a mark, so tone is not colour alone');
     assert.deepEqual(calls, [[undefined]], 'the call carries no key (only the project in use, none here): the key stays in the main process'); assert.ok(!html.includes(SECRET));
+    // A line that compares two installs lays each out as a block: label, words, and the file on a line of its own.
+    const TOOLS = String.raw`C:\Tools\claude.exe`;
+    view.button('测试连接').props.onClick(); await settle();
+    finish(answer([{ id: 'cli', tone: 'warn', label: 'Claude Code', text: '原生 · 版本 2.1.322', hint: '不是同一个', title: null,
+      blocks: [{ label: '终端', text: '版本 2.1.300 · 来自 PATH', file: TOOLS }, { label: '原生', text: '版本 2.1.322 · 来自 官方安装器', file: null }] }])); await settle();
+    const split = view.html();
+    assert.ok(split.includes(`<span class="runtime-test-block"><b>终端</b><span>版本 2.1.300 · 来自 PATH<span class="runtime-test-file">${TOOLS}</span></span></span>`), 'the file sits in its own element under the words');
+    assert.ok(split.includes('<span class="runtime-test-block"><b>原生</b><span>版本 2.1.322 · 来自 官方安装器</span></span>'), 'a block without a file has none');
+    assert.equal((split.match(/runtime-test-split/g) ?? []).length, 1);
   } finally { view.done(); }
 });
 
@@ -235,7 +244,7 @@ test('the key goes only to keySave and is never read back, logged or stored; the
   const dialog = code('src/features/settings/SettingsDialog.tsx');
   assert.match(dialog, /id: 'runtime', title: t\('运行方式'\)/); assert.match(dialog, /<AgentRuntimeSettings[ >]/);
   // The project in view reaches the page, so the connection test and the usage numbers are read for its scope.
-  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
+  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} focusOnOpen=\{focusOnOpen\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
 });
 
 test('Codex’s automatic reset is a switch that is off by default, saves alone without a path change or a stale test, and a refusal leaves it as it was', async () => {
@@ -314,3 +323,78 @@ test('the page says a change applies to running sessions, counts those waiting f
   try { none.render(); await settle(); assert.doesNotMatch(none.html(), /在等待切换/, 'a failed read claims nothing'); } finally { none.done(); }
 });
 const elementsText = node => (Array.isArray(node) ? node.map(elementsText).join('') : React.isValidElement(node) ? elementsText(node.props.children) : typeof node === 'string' ? node : '');
+// The agents page over a fake main: `saved` is what keyStatus answers (null: it cannot say); Windows or not decides the installer's command.
+function agentsPage(saved, { windows = true, visible = true } = {}) {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window'), reads = [];
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: {} } });
+  const bridge = { keyStatus: async () => { reads.push(1); return saved === null ? { ok: false, error: 'x' } : { ok: true, value: { saved } }; } };
+  const harness = hookHarness('src/features/agents/AgentsSettings.tsx', { './i18n': { t: fill }, './platform': { isWindows: windows },
+    './native-words': { viaWords: via => via, installerCommand: win => (win ? 'irm-installer' : 'curl-installer') }, './native-bridge.ts': { nativeBridge: () => bridge } });
+  // The first render starts the key read, the second shows its answer.
+  const render = async claude => {
+    const props = { agents: { codex: { installed: true }, claude, npm: true, installing: null, message: '', error: '' }, onChange() {}, visible };
+    harness.render('AgentsSettings', props); await settle();
+    const section = elements(harness.render('AgentsSettings', props).result).filter(node => node.props?.className === 'agent-setting')[1];
+    const inside = elements(section.props.children);
+    return { status: elementsText(inside.find(node => node.type === 'small' && node.props.role === 'status').props.children), title: inside.find(node => node.type === 'small' && node.props.role === 'status').props.title,
+      hint: inside.filter(node => node.type === 'small' && !node.props.role).map(node => elementsText(node.props.children))[0] ?? null,
+      command: elementsText(inside.find(node => node.type === 'code')?.props.children), install: inside.some(node => node.type === 'button') };
+  };
+  return { render, reads, done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
+}
+const NPM_COMMAND = 'npm install -g @anthropic-ai/claude-code';
+
+test('the agents page says where Claude Code was found beside 已安装, and only 已安装 when main gave nothing more', async () => {
+  const view = agentsPage(true);
+  try {
+    assert.deepEqual(await view.render({ installed: true }), { status: '已安装', title: undefined, hint: null, command: NPM_COMMAND, install: false });
+    const found = await view.render({ installed: true, version: '2.1.322', via: 'npm', fileShown: '~/x/claude.exe' });
+    assert.deepEqual([found.status, found.title, found.hint], ['已安装 · 版本 2.1.322 · 来自 npm', '~/x/claude.exe', null]);
+    assert.deepEqual(await view.render({ installed: false }), { status: '未安装', title: undefined, hint: null, command: NPM_COMMAND, install: true });
+  } finally { view.done(); }
+});
+
+test('a split, an old install, a failed check and an incomplete npm install are told with a step the owner can take: the connection test with a key saved, without one the installer or saving the key', async () => {
+  const test = '到「运行方式 › 测试连接」查看原因。', saveFirst = '检查没有通过。先在「运行方式」里保存 API 密钥，再点「测试连接」查看原因。';
+  const split = { installed: true, version: '2.1.300', via: 'path', fileShown: 'x', notice: 'cli_split_versions', native: { version: '2.1.322', via: 'local-bin', fileShown: 'y' } };
+  for (const saved of [true, false, null]) {
+    const view = agentsPage(saved);
+    try {
+      const label = `key saved: ${saved}`;
+      assert.deepEqual([(await view.render(split)).status, (await view.render(split)).hint], ['已安装 · 终端用版本 2.1.300 · 来自 path', '原生用的是另一份：版本 2.1.322 · 来自 local-bin'], label);
+      assert.deepEqual(await view.render({ installed: true, version: '2.1.300', via: 'path', reason: 'too_old' }), { status: '版本 2.1.300 过低 · 来自 path', title: undefined, hint: '请升级 Claude Code。', command: NPM_COMMAND, install: false }, label);
+      for (const reason of ['timeout', 'failed', 'unreadable']) {
+        const failed = await view.render({ installed: true, reason });
+        assert.deepEqual([failed.status, failed.hint, failed.install], ['已安装 · 检查未通过', saved === false ? saveFirst : test, false], `${label} ${reason}`);
+      }
+      // Incomplete: the page no longer offers the npm command that made it, but the official installer's; without a key it is in the hint too.
+      const incomplete = await view.render({ installed: true, incomplete: true });
+      assert.deepEqual([incomplete.status, incomplete.command, incomplete.install], ['安装不完整', 'irm-installer', false], label);
+      assert.equal(incomplete.hint, saved === false ? 'npm 装了，但里面没有原生程序。请用官方安装器重新安装：irm-installer' : `npm 装了，但里面没有原生程序。${test}`, label);
+    } finally { view.done(); }
+  }
+  const other = agentsPage(false, { windows: false });
+  try { assert.equal((await other.render({ installed: true, incomplete: true })).command, 'curl-installer', 'elsewhere the shell installer'); } finally { other.done(); }
+});
+
+test('the agents page reads the saved key when it is shown, and not while it is hidden', async () => {
+  const hidden = agentsPage(true, { visible: false });
+  try { await hidden.render({ installed: true }); assert.equal(hidden.reads.length, 0); } finally { hidden.done(); }
+  const shown = agentsPage(true);
+  try { await shown.render({ installed: true }); assert.equal(shown.reads.length, 1); } finally { shown.done(); }
+});
+
+test('a page opened to deal with the connection gives its focus to the test button, or to the key field when no key is saved, and only when asked', async () => {
+  for (const [saved, expected] of [[true, 'test'], [false, 'key']]) {
+    const bridge = fake(), props = {}, view = page(bridge, wordsStub, props), focused = [];
+    bridge.state.saved = saved;
+    try {
+      view.render(); await settle();
+      // The refs belong to elements that are on screen once rendered: stand in for them, then ask for the focus.
+      view.secret().props.ref.current = { focus: () => focused.push('key') }; view.button('测试连接').props.ref.current = { focus: () => focused.push('test') };
+      view.render(); assert.deepEqual(focused, [], 'a page opened by the menu takes no focus');
+      props.focusOnOpen = true; view.render();
+      assert.deepEqual(focused, [expected], `key saved: ${saved}`);
+    } finally { view.done(); }
+  }
+});

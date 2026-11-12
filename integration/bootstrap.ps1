@@ -26,7 +26,9 @@ function global:Find-AgentrixProgram {
     }
 }
 $global:AgentrixCodexCommand = Find-AgentrixProgram codex
-$global:AgentrixClaudeCommand = Find-AgentrixProgram claude
+# Claude Code is the one Agentrix chose for this terminal (AGENTRIX_CLAUDE_EXECUTABLE, claude-runtime's locator) while
+# that file is there; otherwise the first on PATH as above.
+$global:AgentrixClaudeCommand = if ($env:AGENTRIX_CLAUDE_EXECUTABLE -and [IO.File]::Exists($env:AGENTRIX_CLAUDE_EXECUTABLE)) { $env:AGENTRIX_CLAUDE_EXECUTABLE } else { Find-AgentrixProgram claude }
 $global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand
 if ($global:AgentrixClaudeCommand -and [IO.Path]::GetExtension($global:AgentrixClaudeCommand) -in @('.ps1', '.cmd', '')) {
     $nativeClaude = Join-Path (Split-Path $global:AgentrixClaudeCommand -Parent) 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'

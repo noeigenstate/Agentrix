@@ -101,9 +101,11 @@ test('real main assembly reports terminal-only Claude subscription usage without
     shellPathReady: Promise.resolve(), createTerminalEnvironment: () => ({}), withoutAppImage: value => value, process: { env: {} },
     store: { projects: [{ id: 'p', kind: 'local' }], findTerminal: () => ({ project: { id: 'p', kind: 'local' }, record: { restore: {} } }) },
     randomUUID: require('node:crypto').randomUUID, queueMicrotask, wholeThread: require('../electron/terminal-title.cjs').wholeThread,
-    app: { getPath: () => directory, isPackaged: false }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
+    app: { getPath: () => directory, isPackaged: false, on() {} }, subscriptionLimits, createNativeSessions, registerClaudeWorker,
     createClaudeRuntime: options => createClaudeRuntime({ ...options, request: forbidden, resolveExecutable: forbidden, inspectCli: forbidden }),
     createSdkLoader: () => forbidden, inspectClaudeExecutable: async () => ({ status: cli }), netRequest: () => forbidden, electronNet: {},
+    // main's own checkClaude (read below) runs over this stand-in for the locator's check.
+    inspectClaude: () => context.inspectClaudeExecutable(),
     codexExecutable: async () => codexInstalled ? 'fixture-codex' : null,
     generatedImages: { render: forbidden, settle: forbidden }, nativeSpec: forbidden, quitting: false, send() {}, scheduleState() {}, t: value => value,
     require: name => {
@@ -123,6 +125,8 @@ test('real main assembly reports terminal-only Claude subscription usage without
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
+  const check = source.indexOf('function checkClaude(');
+  vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
   // Execute the actual main composition and callbacks; substitute only dynamic module loading at the process boundary.
   vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('function startTerminal('))
     .replaceAll('await import(', 'await importFixture('), context);

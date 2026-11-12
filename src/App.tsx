@@ -65,7 +65,7 @@ export function App() {
   // Native full screen (F11, ⌃⌘F or an expanded project): the title bar auto-hides there.
   const [fullScreen, setFullScreen] = useState(false);
   const [agentsDismissed, setAgentsDismissed] = useState(false);
-  const [settingsSection, setSettingsSection] = useState('appearance');
+  const [settingsSection, setSettingsSection] = useState('appearance'), [settingsFocus, setSettingsFocus] = useState(false);
   const [updates, setUpdates] = useState<AppUpdateState | null>(null);
   const [query, setQuery] = useState('');
   // With only a few projects the search box is a single icon; Ctrl+K or a click opens it.
@@ -195,6 +195,12 @@ export function App() {
     const clock = setInterval(() => setNow(Date.now()), 5000);
     return () => { offState(); offFocus(); offError(); offUpdates(); offAgents(); offFullScreen(); offAuth(); offEditor(); clearInterval(clock); if (errorTimer.current) clearTimeout(errorTimer.current); };
   }, [focusProject, perform, reportError, allowNavigation]);
+  // A card that sends the owner to a settings page (the launcher's incomplete Claude Code) asks with this event.
+  useEffect(() => {
+    const open = (event: Event) => { const { section, focus } = (event as CustomEvent<{ section: string; focus?: boolean }>).detail; setSettingsSection(section); setSettingsFocus(!!focus); setSettingsOpen(true); };
+    window.addEventListener('agentrix:open-settings', open);
+    return () => window.removeEventListener('agentrix:open-settings', open);
+  }, []);
   useEffect(() => {
     if (focusedId && workspace && !workspace.projects.some(p => p.id === focusedId)) returnToGrid();
   }, [workspace, focusedId, returnToGrid]);
@@ -400,7 +406,7 @@ export function App() {
     {error && <div className="error-toast" role="alert"><Info size={18} /><span>{error}</span><IconButton label={t('关闭提示')} onClick={() => setError(null)}><X size={16} /></IconButton></div>}
     {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} nativeTitlebar={nativeTitlebar} onClose={closeGuide} />}
     {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={closeGuide} />}
-    {settingsOpen && <SettingsDialog settings={settings} projects={workspace.projects} projectId={focus?.id} desktopGlass={workspace.desktopGlass} uiZoom={workspace.uiZoom} localShell={workspace.localShell ?? null} agents={agents} onAgents={setAgents} initialSection={settingsSection} updates={updates} onGuide={() => { setSettingsOpen(false); setSettingsSection('appearance'); startTour(); }} onCheckUpdate={() => { perform(api.checkForUpdates()); }} onInstallUpdate={installUpdate} onDownloadPage={() => { perform(api.openDownloadPage()); }} close={() => { setSettingsOpen(false); setSettingsSection('appearance'); }} update={setPreference} quit={() => perform(api.quit())} />}
+    {settingsOpen && <SettingsDialog settings={settings} projects={workspace.projects} projectId={focus?.id} desktopGlass={workspace.desktopGlass} uiZoom={workspace.uiZoom} localShell={workspace.localShell ?? null} agents={agents} onAgents={setAgents} initialSection={settingsSection} focusOnOpen={settingsFocus} updates={updates} onGuide={() => { setSettingsOpen(false); setSettingsSection('appearance'); startTour(); }} onCheckUpdate={() => { perform(api.checkForUpdates()); }} onInstallUpdate={installUpdate} onDownloadPage={() => { perform(api.openDownloadPage()); }} close={() => { setSettingsOpen(false); setSettingsSection('appearance'); setSettingsFocus(false); }} update={setPreference} quit={() => perform(api.quit())} />}
     {addOpen && <AddProjectDialog onClose={() => setAddOpen(false)} onAdded={() => setQuery('')} onError={reportError} />}
     {sshAuth[0] && <SSHAuthDialog key={sshAuth[0].id} request={sshAuth[0]} />}
     <VoiceOverlay />

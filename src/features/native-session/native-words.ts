@@ -6,6 +6,7 @@
 // file changes `changes[{ path, kind, diff }]` or `path`, `kind`, `diff`; tools `name` or `tool`, `server`, `path`, `output` (or `result`), and `input` or `arguments`
 // only to name a step by (never shown); an assistant picture `generated { path, prompt, copied, copyNote, deferred }` and `images`. Quota windows are `{ usedPercent, windowDurationMins, resetsAtMs }` with `resetsAtMs` in milliseconds.
 import { t } from '../../shared/i18n';
+import type { ClaudeFound } from '../../shared/types';
 import type { ResultFacts } from '../reading/feed-parts';
 import type { AgentConnection, ConnectionTest, LimitWindow, NativeAgent, SwitchState } from './native-bridge.ts';
 import type { LimitNotice, NativeItem, Payload, TurnEnd } from './native-model.ts';
@@ -95,6 +96,7 @@ const REASON_WORDS: Record<string, string> = {
   billing_identity_mismatch: 'Claude Code 没有使用这个密钥', billing_unconfirmed: '无法确认 Claude Code 的计费来源',
   settings: '按设置运行', user: '你选择了终端',
   codex_cli_required: '未找到 Codex 命令行，无法使用原生模式', unsupported_codex_version: '这个 Codex 版本不支持原生模式', terminal_selected: '按设置使用终端',
+  cli_split_versions: '终端和原生用的 Claude Code 版本不同',
   terminal_agent_exited: 'Claude Code 在终端里启动后就退出了', terminal_start_failed: '终端里的 Claude Code 没有启动成功',
 };
 
@@ -213,7 +215,9 @@ const KEY_HINTS: Record<string, string> = {
   rate_limited: '请求太频繁，稍后再测试。', unreachable: '请检查网络或代理设置后重试。', error: '请稍后重试。',
 };
 const MODELS_SHOWN = 5;
-export type TestLine = { id: 'key' | 'models' | 'cli' | 'billing' | 'path'; tone: 'ok' | 'warn' | 'bad'; label: string; text: string; hint: string | null; title: string | null };
+// `blocks` lay out what a line compares (the terminal's install beside the native one), each as a label, its words and its file.
+export type TestLine = { id: 'key' | 'models' | 'cli' | 'billing' | 'path'; tone: 'ok' | 'warn' | 'bad'; label: string; text: string; hint: string | null; title: string | null;
+  blocks?: { label: string; text: string; file: string | null }[] };
 const BILLING_SOURCES = new Set(['ANTHROPIC_API_KEY', 'apiKeyHelper', '/login managed key', 'none', 'user', 'project', 'org', 'temporary', 'oauth']);
 const BILLING_TOKENS = new Set(['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN']);
 const BILLING_NAMES = new Set([...BILLING_SOURCES, ...BILLING_TOKENS, 'claude.ai', 'CLAUDE_CODE_OAUTH_TOKEN']);
@@ -234,9 +238,31 @@ function billingLine(test: ConnectionTest): TestLine {
     hint: ok ? null : mismatch && !test.path ? `${why} ${t('当前设置不允许启动新会话。')}` : why };
 }
 
-// Why a CLI that may be installed did not pass its check; `not_found` (or an older main that gives no reason) asks for an install.
-function cliHint({ reason, found: file, error, elapsedMs, required }: ConnectionTest['cli']) {
-  if (!reason || reason === 'not_found') return t('请安装 Claude Code（需要 ≥ {required}）。', { required });
+// Where Claude Code was found (main's ClaudeVia); a value this view does not know is shown as given.
+const VIA_WORDS: Record<string, string> = {
+  path: 'PATH', npm: 'npm 全局安装', 'platform-package': 'npm 平台包', 'local-bin': '官方安装器', 'claude-local': '旧版本地安装',
+  winget: 'WinGet', 'registry-path': '系统 PATH（注册表）', system: '系统目录',
+};
+export const viaWords = (via: string) => (VIA_WORDS[via] ? t(VIA_WORDS[via]) : via);
+// One install in a line: its version (未知 when it has none) and where it came from; its file goes on a line of its own.
+const foundWords = ({ version, via }: Partial<ClaudeFound>) => [version ? t('版本 {version}', { version }) : t('版本未知'), via && t('来自 {via}', { via: viaWords(via) })].filter(Boolean).join(' · ');
+
+// The official installer's command, bare, for a place that shows it as a command (the sentence below says it for a hint).
+export const installerCommand = (windows: boolean) => (windows ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash');
+// The official installer's command. Main writes the package path with its own separators, so a backslash means Windows.
+const installCommand = (dir: string) => dir.includes('\\')
+  ? t('在 PowerShell 运行 irm https://claude.ai/install.ps1 | iex') : t('在终端运行 curl -fsSL https://claude.ai/install.sh | bash');
+
+// Why a CLI that may be installed did not pass its check; `not_found` (or an older main that gives no reason) asks for
+// an install and says where main looked, or why the npm package it found cannot run.
+function cliHint({ reason, found: file, error, elapsedMs, required, pathFolders, searched, incomplete }: ConnectionTest['cli']) {
+  if (incomplete) return t('找到用 npm 安装的 Claude Code（{dir}），但里面没有原生程序：npm 跳过了它的安装步骤（npm 12 默认跳过，--ignore-scripts 或 --omit=optional 也会）。请改用官方安装器安装原生版：{command}，装好后重新测试连接。',
+    { dir: incomplete, command: installCommand(incomplete) });
+  if (!reason || reason === 'not_found') {
+    const install = t('请安装 Claude Code（需要 ≥ {required}）。', { required }), places = searched?.join('、');
+    if (!places) return install;
+    return `${install} ${typeof pathFolders === 'number' ? t('已查找 PATH 里的 {n} 个目录，以及 {places}。', { n: pathFolders, places }) : t('已查找 {places}。', { places })}`;
+  }
   if (!file) return t('检查 Claude Code 时出错，请重试。');
   if (reason === 'timeout') return typeof elapsedMs === 'number'
     ? t('找到 {file}，但运行 claude --version {seconds} 秒后仍没有结束，请稍后重试。', { file, seconds: Math.round(elapsedMs / 1000) })
@@ -258,14 +284,20 @@ export function connectionLines(test: ConnectionTest): TestLine[] {
   const modelHint = test.modelsForbidden ? [t('这个密钥不能读取模型列表，但能正常通过验证。'),
     test.unavailableModel ? t('模型 {model} 对这个密钥不可用。', { model: test.unavailableModel }) : null, anthropicSays(test.modelsError)].filter(Boolean).join(' ') : null;
   const required = cli.required, version = cli.version, unverified = cli.status === 'missing' && !!cli.reason && cli.reason !== 'not_found';
-  const cliText = cli.status === 'ok' ? (version ? t('版本 {version}（满足 ≥ {required}）', { version, required }) : t('已找到（需要 ≥ {required}）', { required }))
-    : unverified ? t('检查失败') : cli.status === 'missing' ? t('未找到')
+  const split = cli.status === 'ok' && cli.notice === 'cli_split_versions' ? cli.split?.terminal ?? null : null;
+  const nativeWord = split ? `${t('原生')} · ` : '';
+  const cliText = cli.status === 'ok' ? nativeWord + (version ? t('版本 {version}（满足 ≥ {required}）', { version, required }) : t('已找到（需要 ≥ {required}）', { required }))
+    + (cli.via ? ` · ${t('来自 {via}', { via: viaWords(cli.via) })}` : '')
+    : unverified ? t('检查失败') : cli.status === 'missing' ? cli.incomplete ? t('安装不完整') : t('未找到')
       : version ? t('版本 {version} 过低（需要 ≥ {required}）', { version, required }) : t('版本过低（需要 ≥ {required}）', { required });
   const pathText = test.path === 'api' ? 'API' : test.path === 'terminal' ? t('终端（订阅）') : t('未知');
   return [
     { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: key.detail },
     { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: modelHint, title: models?.join('\n') || null },
-    { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: cli.found ?? null },
+    { id: 'cli', tone: cli.status !== 'ok' ? 'bad' : split ? 'warn' : 'ok', label: 'Claude Code', text: cliText, title: cli.found ?? cli.incomplete ?? cli.fileShown ?? null,
+      hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。')
+        : split ? t('终端和原生用的不是同一个 Claude Code：终端的版本低于 {required}，原生改用了另一份安装', { required }) : cli.fileShown ?? null,
+      ...(split ? { blocks: [{ label: t('终端'), ...split }, { label: t('原生'), ...cli }].map(({ label, version, via, fileShown }) => ({ label, text: foundWords({ version, via }), file: fileShown ?? null })) } : {}) },
     // Older callers without the new field retain their rows; the settings page renders absent billing as unknown.
     ...(test.billing ? [billingLine(test)] : []),
     { id: 'path', tone: test.path ? 'ok' : 'warn', label: t('新会话将使用'), text: [pathText, reasonWords(test.reason)].filter(Boolean).join(' · '), hint: null, title: null },
