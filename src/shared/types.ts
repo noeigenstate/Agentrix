@@ -167,9 +167,11 @@ export type ConnectionTest = {
   // `unavailableModel` the model the count asked about when the key may not use it.
   modelsForbidden?: boolean; modelsError?: string | null; unavailableModel?: string;
   // A missing CLI says why: none found, or the file `found` whose version check timed out (after `elapsedMs`), failed
-  // (`error`) or printed no version.
+  // (`error`) or printed no version. None found says where it looked (`pathFolders` on PATH, the install folders
+  // `searched`) and names an npm package found without its native program (`incomplete`).
   cli: { status: 'ok' | 'missing' | 'too_old'; version: string | null; required: string;
-    reason?: 'not_found' | 'timeout' | 'failed' | 'unreadable'; found?: string; error?: string; elapsedMs?: number };
+    reason?: 'not_found' | 'timeout' | 'failed' | 'unreadable'; found?: string; error?: string; elapsedMs?: number;
+    pathFolders?: number; searched?: string[]; incomplete?: string };
   billing: { status: 'ok' | 'mismatch' | 'unknown'; source: string | null };
   path: 'api' | 'terminal' | null; reason: string | null;
 };

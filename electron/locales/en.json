@@ -3061,5 +3061,11 @@
   "新安装首次启动时跟随系统的浅色或深色外观，已有设置不变。": "A fresh install follows the system light or dark appearance on first launch; existing settings are unchanged.",
   "Linux 的 AppImage 文件名不再带 linux，并且从 1.4.1 起可以用 AppImageUpdate 等工具更新。": "The Linux AppImage file name no longer contains \"linux\", and from 1.4.1 it can be updated with tools such as AppImageUpdate.",
   "复制路径": "Copy path",
-  "在回复里的文件链接上点右键，可以复制它的完整路径；生成的图片复制的是项目里那份的路径。": "Right-click a file link in a reply to copy its full path; for a generated image, the path copied is that of the copy in the project."
+  "在回复里的文件链接上点右键，可以复制它的完整路径；生成的图片复制的是项目里那份的路径。": "Right-click a file link in a reply to copy its full path; for a generated image, the path copied is that of the copy in the project.",
+  "在 PowerShell 运行 irm https://claude.ai/install.ps1 | iex": "in PowerShell run irm https://claude.ai/install.ps1 | iex",
+  "在终端运行 curl -fsSL https://claude.ai/install.sh | bash": "in a terminal run curl -fsSL https://claude.ai/install.sh | bash",
+  "找到用 npm 安装的 Claude Code（{dir}），但里面没有原生程序：npm 跳过了它的安装步骤（npm 12 默认跳过，--ignore-scripts 或 --omit=optional 也会）。请改用官方安装器安装原生版：{command}，装好后重新测试连接。": "Found Claude Code installed with npm ({dir}), but its native program is missing: npm skipped its install step (npm 12 does by default, as do --ignore-scripts and --omit=optional). Install the native version with the official installer instead: {command}, then test the connection again.",
+  "已查找 PATH 里的 {n} 个目录，以及 {places}。": "Searched {n} folders on PATH, and {places}.",
+  "已查找 {places}。": "Searched {places}.",
+  "安装不完整": "Incomplete install"
 }

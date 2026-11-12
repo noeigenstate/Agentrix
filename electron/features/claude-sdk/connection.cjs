@@ -96,8 +96,14 @@ function cliResult(value) {
   const cli = { status, version: typeof value.version === 'string' && /^\d+\.\d+\.\d+$/.test(value.version) ? value.version : null, required };
   if (status !== 'missing') return cli;
   cli.reason = CLI_REASONS.has(value.reason) ? value.reason : 'not_found';
-  if (cli.reason === 'not_found') return cli;
-  if (typeof value.found === 'string' && value.found.length <= 1024) cli.found = value.found;
+  const place = text => typeof text === 'string' && text.length <= 1024;
+  if (cli.reason === 'not_found') {
+    if (Number.isSafeInteger(value.pathFolders) && value.pathFolders >= 0) cli.pathFolders = value.pathFolders;
+    if (Array.isArray(value.searched) && value.searched.length <= 16 && value.searched.every(place)) cli.searched = value.searched;
+    if (place(value.incomplete)) cli.incomplete = value.incomplete;
+    return cli;
+  }
+  if (place(value.found)) cli.found = value.found;
   if (typeof value.error === 'string' && /^[\w ]{1,64}$/.test(value.error)) cli.error = value.error;
   if (cli.reason === 'timeout' && Number.isSafeInteger(value.elapsedMs) && value.elapsedMs >= 0) cli.elapsedMs = value.elapsedMs;
   return cli;

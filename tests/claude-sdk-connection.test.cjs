@@ -320,6 +320,11 @@ test('a CLI check that failed says how, and only in fields of a known shape', as
   assert.deepEqual(await cliOf({ status: 'missing', reason: 'unreadable', found, error: '<script>' }), { ...missing, reason: 'unreadable', found });
   assert.deepEqual(await cliOf({ status: 'missing', reason: 'odd', found }), { ...missing, reason: 'not_found' });
   assert.deepEqual(await cliOf({ status: 'missing', version: null }), { ...missing, reason: 'not_found' });
+  // None found says where it looked and which npm package lacks its native program; a field of another shape is dropped.
+  const searched = ['~\\.local\\bin', '~\\.claude\\local'], incomplete = 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code';
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'not_found', pathFolders: 12, searched, incomplete, found }), { ...missing, reason: 'not_found', pathFolders: 12, searched, incomplete });
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'not_found', pathFolders: -1, searched: [1], incomplete: 'x'.repeat(1025) }), { ...missing, reason: 'not_found' });
+  assert.deepEqual(await cliOf({ status: 'missing', reason: 'timeout', found, pathFolders: 3, searched, incomplete }), { ...missing, reason: 'timeout', found });
   assert.deepEqual(await cliOf({ status: 'ok', version: '2.1.320', reason: 'timeout', found }), { status: 'ok', version: '2.1.320', required: '2.1.317' });
 });
 

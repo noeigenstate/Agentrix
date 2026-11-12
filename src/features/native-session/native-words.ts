@@ -227,9 +227,20 @@ function billingLine(test: ConnectionTest): TestLine {
       : t('无法确认 Claude Code 的计费来源，请重试。') };
 }
 
-// Why a CLI that may be installed did not pass its check; `not_found` (or an older main that gives no reason) asks for an install.
-function cliHint({ reason, found: file, error, elapsedMs, required }: ConnectionTest['cli']) {
-  if (!reason || reason === 'not_found') return t('请安装 Claude Code（需要 ≥ {required}）。', { required });
+// The official installer's command. Main writes the package path with its own separators, so a backslash means Windows.
+const installCommand = (dir: string) => dir.includes('\\')
+  ? t('在 PowerShell 运行 irm https://claude.ai/install.ps1 | iex') : t('在终端运行 curl -fsSL https://claude.ai/install.sh | bash');
+
+// Why a CLI that may be installed did not pass its check; `not_found` (or an older main that gives no reason) asks for
+// an install and says where main looked, or why the npm package it found cannot run.
+function cliHint({ reason, found: file, error, elapsedMs, required, pathFolders, searched, incomplete }: ConnectionTest['cli']) {
+  if (incomplete) return t('找到用 npm 安装的 Claude Code（{dir}），但里面没有原生程序：npm 跳过了它的安装步骤（npm 12 默认跳过，--ignore-scripts 或 --omit=optional 也会）。请改用官方安装器安装原生版：{command}，装好后重新测试连接。',
+    { dir: incomplete, command: installCommand(incomplete) });
+  if (!reason || reason === 'not_found') {
+    const install = t('请安装 Claude Code（需要 ≥ {required}）。', { required }), places = searched?.join('、');
+    if (!places) return install;
+    return `${install} ${typeof pathFolders === 'number' ? t('已查找 PATH 里的 {n} 个目录，以及 {places}。', { n: pathFolders, places }) : t('已查找 {places}。', { places })}`;
+  }
   if (!file) return t('检查 Claude Code 时出错，请重试。');
   if (reason === 'timeout') return typeof elapsedMs === 'number'
     ? t('找到 {file}，但运行 claude --version {seconds} 秒后仍没有结束，请稍后重试。', { file, seconds: Math.round(elapsedMs / 1000) })
@@ -252,13 +263,13 @@ export function connectionLines(test: ConnectionTest): TestLine[] {
     test.unavailableModel ? t('模型 {model} 对这个密钥不可用。', { model: test.unavailableModel }) : null, anthropicSays(test.modelsError)].filter(Boolean).join(' ') : null;
   const required = cli.required, version = cli.version, unverified = cli.status === 'missing' && !!cli.reason && cli.reason !== 'not_found';
   const cliText = cli.status === 'ok' ? (version ? t('版本 {version}（满足 ≥ {required}）', { version, required }) : t('已找到（需要 ≥ {required}）', { required }))
-    : unverified ? t('检查失败') : cli.status === 'missing' ? t('未找到')
+    : unverified ? t('检查失败') : cli.status === 'missing' ? cli.incomplete ? t('安装不完整') : t('未找到')
       : version ? t('版本 {version} 过低（需要 ≥ {required}）', { version, required }) : t('版本过低（需要 ≥ {required}）', { required });
   const pathText = test.path === 'api' ? 'API' : test.path === 'terminal' ? t('终端（订阅）') : t('未知');
   return [
     { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: key.detail },
     { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: modelHint, title: models?.join('\n') || null },
-    { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: cli.found ?? null },
+    { id: 'cli', tone: cli.status === 'ok' ? 'ok' : 'bad', label: 'Claude Code', text: cliText, hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。') : null, title: cli.found ?? cli.incomplete ?? null },
     // Older callers without the new field retain their rows; the settings page renders absent billing as unknown.
     ...(test.billing ? [billingLine(test)] : []),
     { id: 'path', tone: test.path ? 'ok' : 'warn', label: t('新会话将使用'), text: [pathText, reasonWords(test.reason)].filter(Boolean).join(' · '), hint: null, title: null },

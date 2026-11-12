@@ -1797,6 +1797,15 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   assert.equal(cliLine({ reason: 'unreadable', found: file }).hint, `找到 ${file}，但它没有输出版本号。 请重新安装 Claude Code，或检查安全软件是否拦截。`);
   assert.equal(cliLine({ reason: 'failed' }).hint, '检查 Claude Code 时出错，请重试。');
   assert.deepEqual([cliLine({ reason: 'not_found' }).text, cliLine({ reason: 'not_found' }).title], ['未找到', null]);
+  // None found says where main looked; an npm package without its native program says why and how to install the native one.
+  const searched = ['~\\.local\\bin', '~\\.claude\\local', '~\\AppData\\Local\\Microsoft\\WinGet\\Links'];
+  assert.equal(cliLine({ reason: 'not_found', pathFolders: 14, searched }).hint,
+    '请安装 Claude Code（需要 ≥ 2.1.317）。 已查找 PATH 里的 14 个目录，以及 ~\\.local\\bin、~\\.claude\\local、~\\AppData\\Local\\Microsoft\\WinGet\\Links。');
+  assert.equal(cliLine({ reason: 'not_found', searched: ['~/.local/bin'] }).hint, '请安装 Claude Code（需要 ≥ 2.1.317）。 已查找 ~/.local/bin。');
+  const incomplete = 'D:\\nodejs22\\node_modules\\@anthropic-ai\\claude-code', npm = cliLine({ reason: 'not_found', pathFolders: 14, searched, incomplete });
+  assert.deepEqual([npm.text, npm.title, npm.tone], ['安装不完整', incomplete, 'bad']);
+  assert.equal(npm.hint, `找到用 npm 安装的 Claude Code（${incomplete}），但里面没有原生程序：npm 跳过了它的安装步骤（npm 12 默认跳过，--ignore-scripts 或 --omit=optional 也会）。请改用官方安装器安装原生版：在 PowerShell 运行 irm https://claude.ai/install.ps1 | iex，装好后重新测试连接。`);
+  assert.match(cliLine({ reason: 'not_found', incomplete: '~/.npm-global/lib/node_modules/@anthropic-ai/claude-code' }).hint, /在终端运行 curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash，/);
   assert.equal(connectionLines({ ...good, cli: { status: 'missing', version: null, required, reason: 'failed' }, path: 'terminal', reason: 'native_cli_unverified' })[3].text,
     '终端（订阅） · Claude Code 检查没有通过，无法通过 API 运行');
   assert.doesNotMatch(JSON.stringify([lines, bad, odd]), /sk-ant/);
