@@ -20,6 +20,7 @@ import { useWelcomeStarting } from './reading-welcome';
 import { ReadingTerminalPopup } from './ReadingTerminalPopup';
 import { setChoiceVisible } from './reading-mode';
 import { hasEditingFocus, isTyping, markTyping } from './typing';
+import { useHeldTrue } from './useHeldTrue';
 import { useStickToBottom } from './useStickToBottom';
 import { useReadingHistory } from './useReadingConversation';
 import { blocks, useVisibleTail } from './useVisibleTail';
@@ -169,6 +170,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const inputBlocked = preview || !live || !!handoff?.locked;
   // As in its terminal, a busy agent takes a message: only a dialog, a menu or the popup holds one back.
   const deliveryBlocked = !state.accepting || terminalPopup !== null;
+  // What the message box shows is steadier than the frames it is read from: a half-drawn redraw (no input box, no spinner row)
+  // must not blink the hint, the interrupt button or its enabled state. A dialog, a menu or the popup shows at once.
+  const showOpen = state.waiting || terminalPopup !== null;
+  const shownBlocked = !useHeldTrue(state.accepting, showOpen), shownWorking = useHeldTrue(working, state.waiting || !live);
   const canWrite = useRef(state.canDeliver); canWrite.current = state.canDeliver;
   choiceVisible.current = hasChoice || terminalPopup !== null;
   const focusAfterPopup = useRef(false);
@@ -676,16 +681,18 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
   };
   // What the agent is doing, written at the end of the conversation the way its CLI writes it, never in a corner.
-  const statusRunning = working;
+  // The line and what a round settles into (its result card, the hint after it, the feed's liveness) are display: they follow the
+  // held shownWorking, so a half-drawn redraw does not blink them, and a round's result waits out the hold. Notifications and
+  // confirmations are the main process's and never read this.
   const status = hasChoice && screen.choice?.kind === 'question' ? <div className="reading-status is-waiting" role="status">{t('等待你回答问题')}</div>
     // Without a choice to answer here (one the reading view cannot lay out), the terminal is a click away.
     : hasChoice && state.message != null ? <div className="reading-status is-waiting" role="status"><span>{t('等待你确认：{message}', { message: state.message })}</span>
       {!screen.choice && <button type="button" className="text-button" onClick={onShowTerminal}>{t('切换到终端')}</button>}</div>
-    : statusRunning ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
+    : shownWorking ? <WorkingLine key={terminal.sessionId} agent={kind} label={terminal.action ? t('正在{step}', { step: actionText(terminal.action) }) : t('{agent} 正在思考', { agent })} />
     : null;
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
   // works or waits, and nothing for earlier rounds.
-  const settled = !status && !statusRunning && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
+  const settled = !shownWorking && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
   const result = useMemo(() => latestResult(entries, { idle: settled, interrupted }), [entries, settled, interrupted]);
   // Only the owner's click on a message's 引用 gets here, so only it moves the keyboard to the message box.
   const quoteMessage = (who: string, text: string) => {
@@ -704,19 +711,19 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const lastBlock = grouped.at(-1);
   const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);
   const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
-    {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={statusRunning ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
+    {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={shownWorking ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
   const beforeFeed = terminal.agentCommand ? <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />
     : !entries.length && !cards.prompts.length ? <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} /> : <>
     {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
     {historyPage.error && <p role="status">{t(historyPage.error)}</p>}</>;
-  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: statusRunning, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: shownWorking, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
     quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage },
     frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: beforeFeed } }}>
       <ConversationFeed entries={terminal.agentCommand ? [] : entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
     </ConversationDecorations.Provider>;
   // The hint, longest first: the box shows the first that fits its width, so a narrow composer gets a short hint instead of a cut-off one.
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
-  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续')] : preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : deliveryBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
+  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续')] : preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : shownBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent })]
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
@@ -747,7 +754,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       <textarea ref={input} rows={1} disabled={inputBlocked} onPaste={pasteImage} onSelect={mentions.trackCaret} aria-label={t('给 {agent} 的消息', { agent })} {...composerAria(palette, mentions)} placeholder={hint} {...fullHint} value={draft} onChange={event => edit(event.target.value)} onKeyDown={keys}
         onCompositionStart={() => dictationSend.cancel()} onFocus={() => window.agentrix.terminalFocus(terminal.id, false)} />
       <VoiceButton terminalId={terminal.id} sessionId={terminal.sessionId} name={agent} size={15} disabled={inputBlocked} onError={onError} />
-      {working && <button type="button" className="icon-button" disabled={inputBlocked || deliveryBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
+      {shownWorking && <button type="button" className="icon-button" disabled={inputBlocked || shownBlocked} title={t('中断（Esc）')} aria-label={t('中断（Esc）')} onClick={interrupt}><Stop size={15} weight="fill" /></button>}
       <button type="button" className="icon-button reading-send" title={t('发送')} aria-label={t('发送')} disabled={inputBlocked || (!draft.trim() && !attachedCount) || !terminal.sessionId} onClick={() => void send()}><PaperPlaneRight size={15} weight="fill" /></button>
     </div>
   </div>;

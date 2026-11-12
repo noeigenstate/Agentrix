@@ -32,7 +32,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     writeTerminal: (...args) => writes.push(args), pasteTerminal: async (...args) => { pastes.push(args); return { ok: true }; },
   } };
   function ReadingTerminalPopup() {} function ConversationFeed() {}
-  const noop = () => null, compact = async () => {}, entries = [];
+  const noop = () => null, compact = async () => {}; let entries = [];
   // Commit the mock DOM before layout effects; a disabled textarea must reject focus until that commit.
   const runtime = Object.fromEntries(['jsx', 'jsxs'].map(name => [name, (...args) => {
     const tree = jsx[name](...args);
@@ -73,7 +73,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     './MentionPalette': { MentionPalette: noop }, './PendingPromptEntries': { PendingPromptEntries: noop, UserImages: noop },
     './Timeline': { TimelineStep: noop, AgentMark: noop },
     './ResultCard': { ResultActions: noop, ResultChecks: noop, ResultStatus: noop, WorkingLine: noop },
-    './result-round': { latestResult: () => null }, './AgentCommandRun': { AgentCommandRun: noop },
+    './result-round': require('../src/features/reading/result-round.ts'), './AgentCommandRun': { AgentCommandRun: noop },
     './voice-input': { dictateInto: () => () => {} },
     './VoiceButton': { VoiceButton() { return null; } },
     './i18n': { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) },
@@ -90,6 +90,8 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     if (previous.textarea === undefined) delete global.HTMLTextAreaElement; else global.HTMLTextAreaElement = previous.textarea; });
   render();
   return { props, view, node, writes, pastes, render, tree: () => tree,
+    // The conversation the view reads; the next render sees it.
+    setEntries(list) { entries = list; },
     popup: () => elements(tree).find(element => element.type === ReadingTerminalPopup),
     waiting: () => elements(tree).find(element => element.type?.name === 'WaitingCard'),
     edit(value) { node.focus(); elements(tree).find(element => element.type === 'textarea').props.onChange({ target: { value } }); render(); },
