@@ -118,8 +118,9 @@ test('connection tests use the saved key and new-session options without changin
   await session.start(); await session.send({ clientMessageId: 'm', text: 'synthetic work' });
   for (let n = 0; n < 100 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 2));
   const probe = fake.calls[0].options, actual = fake.calls[1].options;
-  assert.equal(probe.maxBudgetUsd, 10, 'billing preflight uses the monthly allowance without a five-dollar ceiling');
-  for (const field of ['cwd', 'model', 'effort', 'pathToClaudeCodeExecutable', 'env', 'permissionMode', 'includePartialMessages', 'settingSources', 'systemPrompt', 'maxBudgetUsd']) {
+  assert.equal(Object.hasOwn(probe, 'maxBudgetUsd'), false, 'the billing preflight sends no input, so it takes no budget cap');
+  assert.equal(actual.maxBudgetUsd, 10, 'the session itself uses the monthly allowance without a five-dollar ceiling');
+  for (const field of ['cwd', 'model', 'effort', 'pathToClaudeCodeExecutable', 'env', 'permissionMode', 'includePartialMessages', 'settingSources', 'systemPrompt']) {
     assert.deepEqual(probe[field], actual[field], field);
   }
   assert.deepEqual(settings[0], settings[1]); assert.equal(fs.existsSync(probe.settings), false, 'preflight settings are removed on close');
@@ -507,4 +508,77 @@ test('a session started with no saved key says so, before any input', async t =>
   await assert.rejects(session.start(), error => error.beforeInput === true && error.code === 'sdk_startup_failed' && error.message === expected);
   assert.equal(events.find(event => event.type === 'error').payload.message, expected); assert.equal(fake.inputs.length, 0);
   assert.ok(Object.hasOwn(en, expected));
+});
+
+// Anthropic's refusal when the console balance has run out; real Claude Code 2.1.317 shortens it to "Credit balance is too low".
+const creditRefusal = { type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } };
+const CREDITS = '控制台余额不足，请到 Claude Console 的 Billing 充值。';
+const exited = () => Object.assign(new Error('Claude Code process exited with code 1'), { errorClass: 'process_exited_nonzero', exitCode: 1 });
+async function settled(check) {
+  for (let n = 0; n < 500 && !check(); n++) await new Promise(resolve => setTimeout(resolve, 2));
+  assert.ok(check(), 'offline session did not settle');
+}
+
+test('a console balance that has run out is named on the key line and moves new sessions to the terminal, never in Anthropic\'s words', async t => {
+  const listRefused = { '/v1/models': [400, creditRefusal] };
+  const countRefused = { '/v1/models': [403, refusal('list refused')], '/v1/messages/count_tokens': [400, creditRefusal] };
+  for (const routes of [listRefused, countRefused]) for (const mode of ['api-then-terminal', 'api-only']) {
+    const root = directory(t), fake = fakeSdk(), directoryPath = path.join(root, 'data');
+    const factory = createClaudeRuntime({ directory: directoryPath, safeStorage, inspectCli: cli, loadSdk: async () => fake.sdk,
+      request: api(routes).request, resolveExecutable: async () => 'synthetic-only', connectionSpec: () => specOf(root) });
+    t.after(() => factory.close()); factory.credentials.save(key);
+    fs.writeFileSync(path.join(directoryPath, 'settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: null }));
+    const result = await createNativeSessions({ directory: directoryPath, claude: factory }).testConnection();
+    assert.deepEqual(result.key, { status: 'ok', detail: CREDITS, latencyMs: result.key.latencyMs, error: null }, 'the key was accepted; the account cannot pay');
+    assert.deepEqual(result.billing, { status: 'ok', source: 'ANTHROPIC_API_KEY' });
+    assert.equal(result.path, mode === 'api-only' ? null : 'terminal'); assert.equal(result.reason, CREDITS);
+    assert.doesNotMatch(JSON.stringify(result), /credit balance/i);
+    assert.deepEqual(factory.apiState(null), { status: 'credits_exhausted', reason: CREDITS });
+  }
+  assert.ok(Object.hasOwn(en, CREDITS));
+});
+
+test('a start whose stderr says the console balance ran out names that cause, before input, in the billing check and in a session', async t => {
+  const failure = startupFailure(exited(), { key,
+    stderr: 'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}\n' });
+  assert.deepEqual({ code: failure.code, message: failure.message, beforeInput: failure.beforeInput }, { code: 'credits_exhausted', message: CREDITS, beforeInput: true });
+  const root = directory(t), refusing = { query: ({ options }) => {
+    options.stderr('Credit balance is too low\n');
+    return { initializationResult: async () => { throw exited(); }, close() {}, async *[Symbol.asyncIterator]() {} };
+  } };
+  const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, inspectCli: cli, request: http(200).request,
+    loadSdk: async () => refusing, resolveExecutable: async () => 'synthetic-only', connectionSpec: () => specOf(root) });
+  t.after(() => factory.close()); factory.credentials.save(key);
+  const result = await factory.testConnection();
+  assert.deepEqual(result.billing.detail, { text: CREDITS, values: {} }); assert.doesNotMatch(JSON.stringify(result), /credit balance|退出码/i);
+  assert.deepEqual(factory.apiState(null), { status: 'credits_exhausted', reason: CREDITS });
+  factory.resetAvailability();
+  const events = [], session = factory.create({ ...specOf(root), projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, event => events.push(event));
+  await session.start();
+  await assert.rejects(session.send({ clientMessageId: 'm', text: 'never sent' }),
+    error => error.code === 'credits_exhausted' && error.message === CREDITS && error.beforeInput === true);
+  assert.equal(events.find(event => event.type === 'error')?.payload.message, CREDITS);
+  assert.deepEqual(factory.apiState(null, 'p'), { status: 'credits_exhausted', reason: CREDITS });
+  await session.close();
+});
+
+for (const fallback of [false, true]) test(`a turn the console balance refused is told by its cause${fallback ? ' and the coming switch' : ''}, never in the CLI's words`, async t => {
+  const root = directory(t), fake = fakeSdk({ auto: false });
+  const factory = createClaudeRuntime({ directory: path.join(root, 'data'), safeStorage, inspectCli: cli, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only' });
+  t.after(() => factory.close()); factory.credentials.save(key);
+  const events = [], session = factory.create({ ...specOf(root), projectId: 'p', terminalId: 't', runtimeSessionId: 'r', quotaFallback: () => fallback }, event => events.push(event));
+  await session.start(); await session.send({ clientMessageId: 'm', text: 'refused offline' });
+  await settled(() => fake.inputs.length === 1);
+  // What real Claude Code 2.1.317 emits for that refusal from a local service.
+  fake.emit({ type: 'assistant', uuid: 'refusal', error: 'billing_error', message: { id: 'refusal', model: '<synthetic>', content: [{ type: 'text', text: 'Credit balance is too low' }] } });
+  fake.emit({ type: 'result', uuid: 'refused-result', subtype: 'success', is_error: true, result: 'Credit balance is too low', terminal_reason: 'api_error',
+    total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {}, queued_turn_count: 0 });
+  await settled(() => events.some(event => event.type === 'turn.completed'));
+  assert.equal(events.find(event => event.type === 'turn.completed').payload.error, CREDITS);
+  assert.equal(events.find(event => event.type === 'error' && event.payload.code === 'credits_required').payload.message,
+    fallback ? `${CREDITS}本轮结束后将转到 Claude Code 终端。` : CREDITS);
+  assert.deepEqual(factory.apiState(null, 'p'), { status: 'credits_exhausted', reason: CREDITS });
+  assert.doesNotMatch(JSON.stringify(events), /credit balance/i);
+  assert.ok(Object.hasOwn(en, `${CREDITS}本轮结束后将转到 Claude Code 终端。`));
+  await session.close();
 });

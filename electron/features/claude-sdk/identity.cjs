@@ -18,6 +18,12 @@ function routeFailure(code, file) {
   routeFailures.add(error); return error;
 }
 
+// Anthropic refuses a key whose console balance has run out with "Your credit balance is too low to access the Anthropic API", which
+// Claude Code shortens to "Credit balance is too low" (real 2.1.317 on a local service: a billing_error reply). Wherever it shows up
+// (model list, token count, stderr, a turn), the owner is told its cause instead of the raw text.
+const CREDITS_LOW = '控制台余额不足，请到 Claude Console 的 Billing 充值。';
+const creditsLow = text => /credit balance is too low/i.test(String(text ?? ''));
+
 const whyText = ({ text, values }) => text.replace(/\{(\w+)\}/g, (match, name) => name in values ? String(values[name]) : match);
 // What the owner can check for each credential Claude Code reported in place of the saved key, as a template the view
 // translates; the first match wins. The native API channel clears a user apiKeyHelper and ANTHROPIC_AUTH_TOKEN in its
@@ -82,10 +88,13 @@ function startupFailure(error, { stderr = '', key = null } = {}) {
       : error.code === 'project_api_key_override' ? '项目 Claude 配置不能覆盖应用保存的 API 密钥。' : '无法读取 Claude 路由配置。';
     return Object.assign(new Error(message), { code: error.code, beforeInput: true });
   }
+  if (creditsLow(stderr) || creditsLow(error?.message)) {
+    return Object.assign(new Error(CREDITS_LOW), { code: 'credits_exhausted', beforeInput: true, why: { text: CREDITS_LOW, values: {} } });
+  }
   const why = startWhy(error, stderr, key);
   return Object.assign(new Error(whyText(why)), {
     code: error?.code === 'sdk_initialization_timeout' ? 'sdk_initialization_timeout' : 'sdk_startup_failed', beforeInput: true, why,
   });
 }
 
-module.exports = { billingIdentityError, billingSource, startupFailure, routeFailure, whyText };
+module.exports = { billingIdentityError, billingSource, startupFailure, routeFailure, whyText, CREDITS_LOW, creditsLow };

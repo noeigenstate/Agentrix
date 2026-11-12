@@ -4,9 +4,9 @@ const { createNormalizer } = require('./normalize.cjs');
 const { TokenRates } = require('../agents/token-rate.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
-const { billingIdentityError, startupFailure } = require('./identity.cjs');
+const { billingIdentityError, startupFailure, CREDITS_LOW } = require('./identity.cjs');
 const { stderrCollector } = require('../agents/start-failure.cjs');
-const { inputQueue, queryOptions, readBillingIdentity } = require('./query.cjs');
+const { inputQueue, queryOptions, openQuery, readBillingIdentity } = require('./query.cjs');
 const { turnResult, tokensOf, hasModelReply } = require('./result.cjs');
 const { rateLimits } = require('./limits.cjs');
 const { claudeCommands } = require('./commands.cjs');
@@ -94,16 +94,17 @@ function createClaudeSession(spec, emit, dependencies) {
   }
   function unavailable(message, run) {
     const observed = rateLimits(message, limits, spec.scopeId || spec.runtimeSessionId, now());
-    const quota = ['credits_required', 'spend_limit'].includes(observed?.notice?.code);
+    const quota = ['credits_required', 'spend_limit'].includes(observed?.notice?.code), balance = observed?.notice?.message === CREDITS_LOW;
     if (quota && spec.quotaFallback?.()) observed.notice = { code: observed.notice.code, resetsAtMs: observed.notice.resetsAtMs,
-      message: 'API 额度已用完，本轮结束后将转到 Claude Code 终端。' };
+      message: balance ? `${CREDITS_LOW}本轮结束后将转到 Claude Code 终端。` : 'API 额度已用完，本轮结束后将转到 Claude Code 终端。' };
     if (observed) { limits = observed; publish('limits.updated', limits); }
     if (quota) run.quotaRejected = true;
+    if (balance) run.balanceLow = true;
     const reason = observed?.notice ? quota && !(spec.owner === 'dispatch' && observed.notice.code === 'spend_limit') ? 'credits_exhausted' : 'rate_limited'
       : message.error === 'authentication_failed' ? 'invalid_key' : null;
     if (!reason) return;
     // Owner fallback follows quota evidence only. Workers retain their previous routing.
-    if (spec.owner === 'dispatch' ? reason !== 'credits_exhausted' : reason !== 'rate_limited') onFailure(reason, null, run.generation);
+    if (spec.owner === 'dispatch' ? reason !== 'credits_exhausted' : reason !== 'rate_limited') onFailure(reason, balance ? new Error(CREDITS_LOW) : null, run.generation);
     if (observed) publish('error', { code: observed.notice.code, message: observed.notice.message, retryable: false, willRetry: false, stage: 'turn' });
     else publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
       state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
@@ -240,6 +241,7 @@ function createClaudeSession(spec, emit, dependencies) {
           && /^\/model\s+(\S+)\s*$/.exec(modelInput?.text?.trim() || '');
         if (modelChoice) { defaultModelReset = modelChoice[1] === 'default'; spec.model = defaultModelReset ? null : modelChoice[1]; }
         if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
+        else if (run.balanceLow && outcome.error) outcome.error = outcome.message = CREDITS_LOW;
         if (!run.interrupted && !run.modelReplied && (message.is_error === true || outcome.status === 'failed')) {
           for (const id of run.shellInputs || []) shells.get(id)?.reject(null, { completedTurn: true,
             switching: spec.quotaFallback?.() && (run.quotaRejected || budgetBlocked) });
@@ -247,7 +249,7 @@ function createClaudeSession(spec, emit, dependencies) {
         for (const id of run.shellInputs || []) delete shells.get(id)?.reject;
         publish('turn.completed', outcome);
         run.turnInputs = []; run.shellInputs = null; run.modelReplied = false; run.executed = false; run.synthetic = false; run.quotaRejected = false;
-        run.interrupted = false;
+        run.interrupted = false; run.balanceLow = false;
         run.compactionStarted = false; run.compactFailure = null;
         rates.nativeEnd(); turnId = null; stream.turn(null);
         if (interrupted) unknownInput();
@@ -326,15 +328,20 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed) throw new Error('会话已停止。');
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
-    const maxBudgetUsd = spec.monthlyBudgetUsd == null ? undefined : usage.available(spec.monthlyBudgetUsd) / 1e6;
+    // A month with nothing left starts no Claude Code: its cause is told before any input, never as a CLI that exited.
+    const budget = spec.monthlyBudgetUsd ?? null, allowanceUsd = budget === null ? undefined : usage.allowanceUsd(budget);
     const run = { key, reservation: null, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
-      remainingBudgetUsd: maxBudgetUsd ?? Infinity, busy: false, background: new Map(), stderr: stderrCollector() };
+      remainingBudgetUsd: allowanceUsd ?? Infinity, busy: false, background: new Map(), stderr: stderrCollector() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     try {
+      if (!prepareOnly) {
+        run.reservation = usage.reserve(budget, { sessionId: providerId, resume: !!providerId });
+        run.remainingBudgetUsd = run.reservation.maxBudgetUsd ?? Infinity;
+      }
       const options = queryOptions(spec, { key, executable, abort: run.abort,
-        providerSessionId: providerId, maxBudgetUsd, policy,
+        providerSessionId: providerId, maxBudgetUsd: budget === null ? undefined : run.remainingBudgetUsd, policy,
         canUseTool: async (name, input, context) => {
           if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
           if (name === 'AskUserQuestion') return requests.open(name, input, context);
@@ -345,12 +352,7 @@ function createClaudeSession(spec, emit, dependencies) {
       });
       // A start that fails before its initialize answer is told with the end of the CLI's stderr.
       options.stderr = run.stderr.push;
-      if (!prepareOnly) {
-        run.reservation = usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId });
-        options.maxBudgetUsd = run.reservation.maxBudgetUsd;
-        run.remainingBudgetUsd = options.maxBudgetUsd ?? Infinity;
-      }
-      run.query = sdk.query({ prompt: run.queue, options });
+      run.query = openQuery(sdk, run.queue, options);
       opening = run;
       // The pinned SDK initializes its control channel without consuming a user prompt.
       // Check this account snapshot before allowing input; stream init remains an independent guard.

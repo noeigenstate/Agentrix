@@ -1,5 +1,5 @@
 const https = require('node:https');
-const { billingSource } = require('./identity.cjs');
+const { billingSource, CREDITS_LOW, creditsLow } = require('./identity.cjs');
 const { probeBillingIdentity } = require('./billing.cjs');
 const { VIAS, REQUIRED: required } = require('../claude-runtime/locator.cjs');
 const details = { ok: 'API 密钥验证成功。', missing: '还没有保存 API key。', invalid: 'API 密钥无效。',
@@ -56,9 +56,13 @@ function describe(error, key) {
 }
 const withError = (value, error, key) => { const words = describe(error, key); return words ? { ...value, error: words } : value; };
 
+// A refusal for want of console balance comes only after the key was accepted: the key works, and the account cannot pay.
+const balanceRefused = error => creditsLow(error?.message);
 async function listModels(key, options) {
   const { statusCode, text } = await callApi(key, '/v1/models?limit=100', options), status = statusOf(statusCode);
-  if (status !== 'ok') return withError({ status, models: null }, text && errorOf(text), key);
+  const error = status === 'ok' ? null : text && errorOf(text);
+  if (balanceRefused(error)) return { status: 'ok', models: null, credits: true };
+  if (status !== 'ok') return withError({ status, models: null }, error, key);
   try {
     const value = JSON.parse(text);
     if (!Array.isArray(value.data) || value.data.length > 100) throw new Error();
@@ -73,6 +77,7 @@ async function countTokens(key, model, options) {
   const error = text && errorOf(text);
   // The model is looked up only for a key the API accepted: the key works, and this model is not one it may use.
   if (statusCode === 404 && error?.type === 'not_found_error') return { status: 'ok', unavailableModel: model };
+  if (balanceRefused(error)) return { status: 'ok', credits: true };
   const status = statusOf(statusCode);
   return status === 'ok' ? { status } : withError({ status }, error, key);
 }
@@ -87,7 +92,7 @@ async function checkKey(key, model, options, now) {
   const counted = await countTokens(key, model, options), latencyMs = Math.max(0, now() - started);
   if (counted.status !== 'ok') return { status: counted.status, models: null, latencyMs, error: counted.error || listed.error };
   return { status: 'ok', models: null, latencyMs, modelsForbidden: true, modelsError: listed.error,
-    ...(counted.unavailableModel ? { unavailableModel: counted.unavailableModel } : {}) };
+    ...(counted.unavailableModel ? { unavailableModel: counted.unavailableModel } : {}), ...(counted.credits ? { credits: true } : {}) };
 }
 // Only the fields the view words a CLI check with, each of a known shape.
 function cliResult(value) {
@@ -138,8 +143,10 @@ function billingSkippedWhy(key, cli, keyStatus) {
   return null;
 }
 
+// A console balance that has run out, seen by the key check or the CLI, is told through `onCredits`, after the billing probe: a
+// probe that reads the key is not proof the account can pay.
 function createConnectionTest({ credentials, inspectCli, request, probeBilling = async () => ({ status: 'unknown', source: null }), sessionModel = () => null,
-  availabilityGeneration = () => undefined, now = Date.now, timeoutMs = 5000 }) {
+  onCredits = () => {}, availabilityGeneration = () => undefined, now = Date.now, timeoutMs = 5000 }) {
   const pending = new Map();
   async function check(config) {
     const checkedAt = now(), generation = availabilityGeneration();
@@ -154,17 +161,19 @@ function createConnectionTest({ credentials, inspectCli, request, probeBilling =
     try { cli = cliResult(await inspectCli()); } catch { cli = { status: 'missing', version: null, required, reason: 'failed' }; }
     // The billing line says why billing is not this key or could not be read, and what to check (`detail`); the path's
     // reason only names the consequence, so the card does not say the same sentence twice.
-    let billing = { status: 'unknown', source: null };
+    let billing = { status: 'unknown', source: null }, credits = observed.credits === true;
     const skipped = billingSkippedWhy(key, cli, observed.status);
     if (skipped) billing.detail = skipped;
     else {
       try {
         const value = await probeBilling(key, config, generation), source = billingSource(value.source);
+        credits ||= value.credits === true;
         billing = { status: value.status === 'mismatch' ? 'mismatch' : source === 'ANTHROPIC_API_KEY' && value.status === 'ok' ? 'ok' : 'unknown', source,
           ...(value.status === 'mismatch' && value.reported ? { reported: value.reported } : {}), ...(value.why ? { detail: value.why } : {}) };
       } catch { billing.detail = { text: '检查 Claude Code 的计费来源时出错，请重试。', values: {} }; }
     }
-    return { checkedAt, key: { status: observed.status, detail: details[observed.status], latencyMs: observed.latencyMs, error: observed.error || null },
+    if (credits) onCredits(config, generation);
+    return { checkedAt, key: { status: observed.status, detail: observed.credits ? CREDITS_LOW : details[observed.status], latencyMs: observed.latencyMs, error: observed.error || null },
       models: observed.models, ...(observed.modelsForbidden ? { modelsForbidden: true, modelsError: observed.modelsError || null,
         ...(observed.unavailableModel ? { unavailableModel: observed.unavailableModel } : {}) } : {}), cli,
       billing, path: null, reason: { mismatch: 'billing_identity_mismatch', unknown: 'billing_unconfirmed' }[billing.status] ?? null };

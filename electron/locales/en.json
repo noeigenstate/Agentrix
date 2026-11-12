@@ -3172,5 +3172,10 @@
   "只用保存的密钥": "Saved key only",
   "原生模式只用 Agentrix 里保存的 API 密钥，Claude Code 设置里的 apiKeyHelper 不会再让 API 通道无法使用；终端里的 Claude Code 不受影响。": "Native mode uses only the API key saved in Agentrix, so an apiKeyHelper in Claude Code settings no longer makes the API channel unusable; Claude Code in the terminal is unaffected.",
   "视图已切换，这条消息还没写进终端，已留在原会话的待发消息里。": "The view changed before this message reached the terminal; it waits among that conversation's unsent messages.",
-  "终端还没准备好，这条命令没有输入，请稍后再发送。": "The terminal was not ready, so the command was not typed. Send it again in a moment."
+  "终端还没准备好，这条命令没有输入，请稍后再发送。": "The terminal was not ready, so the command was not typed. Send it again in a moment.",
+  "控制台余额不足，请到 Claude Console 的 Billing 充值。": "Your Claude Console credit balance is too low. Add credits under Billing in the Claude Console.",
+  "控制台余额不足，请到 Claude Console 的 Billing 充值。本轮结束后将转到 Claude Code 终端。": "Your Claude Console credit balance is too low. Add credits under Billing in the Claude Console. This session will move to the Claude Code terminal after the turn ends.",
+  "API 月预算设为 0，原生会话不使用 API。": "The monthly API budget is set to 0, so native sessions do not use the API.",
+  "本月剩余的 API 预算被其他会话占用，或有会话的花费还未确认。": "The rest of this month's API budget is held by other sessions, or a session's spending is not confirmed yet.",
+  "API 预算上限无效，未启动 Claude Code。": "The API budget cap is invalid, so Claude Code was not started."
 }

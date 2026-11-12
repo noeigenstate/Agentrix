@@ -21,7 +21,15 @@ function validUsage(value) {
     [value.reservations, value.estimates || {}].every(entries => object(entries) &&
       Object.values(entries).every(value => object(value) && /^\d{4}-\d{2}$/.test(value.month) && count(value.micros) !== null));
 }
-function createUsage({ file, now = Date.now }) {
+// A signal-0 probe: only a process that does not exist refuses it with ESRCH.
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
+}
+// Why a month budget leaves a new query nothing, in the owner's words.
+const REFUSALS = { zero: 'API 月预算设为 0，原生会话不使用 API。', spent: '本月 API 预算已用完。',
+  held: '本月剩余的 API 预算被其他会话占用，或有会话的花费还未确认。' };
+const refused = (cause, extra = {}) => Object.assign(new Error(REFUSALS[cause]), { code: 'budget_exhausted', refusal: cause, ...extra });
+function createUsage({ file, now = Date.now, pid = process.pid, alive = processAlive }) {
   let data = readJson(file, { version: 1, days: {}, sessions: {}, reservations: {}, unknownDays: [] }, { validate: validUsage });
   data.unknownDays ||= [];
   data.estimates ||= {};
@@ -30,6 +38,24 @@ function createUsage({ file, now = Date.now }) {
   const spent = (month = monthOf()) => Object.entries(data.days).filter(([day]) => day.startsWith(month)).reduce((sum, [, value]) => sum + value, 0);
   const pending = value => [...Object.values(value.reservations), ...Object.values(value.estimates)];
   const held = (month = monthOf()) => pending(data).filter(value => value.month === month).reduce((sum, value) => sum + value.micros, 0);
+  // A held entry lasts for its month and its process. An earlier month no longer counts. One left by a process that no longer runs
+  // (or by a version that recorded none) can spend no more: it holds nothing and stays an uncertain marker of its session and day,
+  // so that day's spend reads as unknown and the session's next cumulative result still settles it against its baseline.
+  function adopt() {
+    const next = structuredClone(data), month = monthOf(), marker = (entries, lease) => entries === next.estimates && lease.pid === undefined && lease.micros === 0;
+    let changed = false;
+    for (const entries of [next.reservations, next.estimates]) {
+      for (const [id, lease] of Object.entries(entries)) {
+        const ended = lease.pid !== pid && !(Number.isSafeInteger(lease.pid) && alive(lease.pid));
+        if (lease.month >= month && (!ended || marker(entries, lease))) continue;
+        delete entries[id]; changed = true;
+        if (lease.month >= month) next.estimates[id] = { month: lease.month, micros: 0, sessionId: lease.sessionId ?? null,
+          baseline: lease.baseline ?? null, day: lease.day || utcDay(now()), uncertain: true };
+      }
+    }
+    if (changed) commit(next);
+  }
+  adopt();
   function uncertain(next, id) {
     const lease = next.reservations[id];
     if (!lease) return;
@@ -47,16 +73,27 @@ function createUsage({ file, now = Date.now }) {
       const own = data.reservations[reservationId];
       return budget === null ? Infinity : Math.max(0, micros(budget) - spent() - held() + (own?.month === monthOf() ? own.micros : 0));
     },
+    // Why nothing is left for a new query (zero, spent or held), or null while some is.
+    refusal(budget) {
+      if (this.available(budget) > 0) return null;
+      return micros(budget) === 0 ? 'zero' : spent() >= micros(budget) ? 'spent' : 'held';
+    },
+    // The allowance a new query may use, in USD; none left is refused with its cause before any CLI starts.
+    allowanceUsd(budget) {
+      const cause = this.refusal(budget);
+      if (cause) throw refused(cause, { beforeInput: true });
+      return budget === null ? undefined : this.available(budget) / 1e6;
+    },
     currentReservation(id) { return data.reservations[id]?.month === monthOf(); },
     reserve(budget, { sessionId = null, resume = false, maxBudgetUsd = Infinity } = {}) {
-      const available = this.available(budget);
-      if (available <= 0) throw Object.assign(new Error('本月 API 预算已用完。'), { code: 'budget_exhausted' });
+      const available = this.available(budget), cause = this.refusal(budget);
+      if (cause) throw refused(cause);
       const cap = maxBudgetUsd === Infinity ? Infinity : micros(maxBudgetUsd);
       const id = randomUUID(), amount = budget === null ? 0 : Math.min(available, cap ?? 0);
       if (budget !== null && amount <= 0) throw Object.assign(new Error('API 预算上限已用完。'), { code: 'budget_exhausted' });
       const baseline = sessionId && data.sessions[sessionId] ? data.sessions[sessionId].cost : resume ? null : 0;
       const next = structuredClone(data);
-      next.reservations[id] = { month: monthOf(), micros: amount, sessionId, baseline, day: utcDay(now()) };
+      next.reservations[id] = { month: monthOf(), micros: amount, sessionId, baseline, day: utcDay(now()), pid };
       commit(next);
       return { id, maxBudgetUsd: budget === null ? undefined : amount / 1e6 };
     },
@@ -137,4 +174,4 @@ function createUsage({ file, now = Date.now }) {
     baseline: id => data.sessions[id]?.cost ?? null,
   };
 }
-module.exports = { createUsage, snapshotOf };
+module.exports = { createUsage, snapshotOf, REFUSALS };

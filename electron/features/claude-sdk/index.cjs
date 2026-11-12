@@ -4,7 +4,8 @@ const { createCredentials } = require('./credentials.cjs');
 const { createSdkLoader } = require('./runtime.cjs');
 const { resolveClaudeExecutable, inspectClaudeExecutable } = require('./executable.cjs');
 const { createConnectionTest, probeBillingIdentity, netRequest } = require('./connection.cjs');
-const { createUsage } = require('./usage.cjs');
+const { createUsage, REFUSALS } = require('./usage.cjs');
+const { CREDITS_LOW } = require('./identity.cjs');
 const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
 const { rememberClaudeSource } = require('../../prompt-queue.cjs');
@@ -51,7 +52,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       unavailable.set(scope, { reason, detail: error.message, until: null });
     }
     else if (reason === 'credits_exhausted' && unavailable.get(scope)?.reason !== 'billing_identity_mismatch') {
-      unavailable.set(scope, { reason, until: null, retryAt: now() + 600000, trial: null });
+      unavailable.set(scope, { reason, until: null, retryAt: now() + 600000, trial: null, ...(error?.message ? { detail: error.message } : {}) });
     }
     else if (unavailable.get(scope)?.until !== null && ['rate_limited', 'invalid_key'].includes(reason)) unavailable.set(scope, { reason, until: now() + 60000 });
     else return;
@@ -72,10 +73,10 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     onAvailabilityChange(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     testConnection: createConnectionTest({ credentials, inspectCli: checkedCli, request, now, availabilityGeneration,
       sessionModel: (config = {}) => connectionSpec(config.projectId).model,
+      onCredits: (config = {}, observedGeneration) => onFailure(config.projectId || '', 'credits_exhausted', new Error(CREDITS_LOW), observedGeneration),
       probeBilling: async (key, config = {}, observedGeneration) => {
         const scope = config.projectId || '';
-        const result = await probeBillingIdentity({ key, spec: connectionSpec(config.projectId), loadSdk, resolveExecutable,
-          maxBudgetUsd: config.monthlyBudgetUsd == null ? undefined : usage.available(config.monthlyBudgetUsd) / 1e6, timeoutMs: initializationTimeoutMs });
+        const result = await probeBillingIdentity({ key, spec: connectionSpec(config.projectId), loadSdk, resolveExecutable, timeoutMs: initializationTimeoutMs });
         if (result.status === 'mismatch') onFailure(scope, 'billing_identity_mismatch', { message: result.reason }, observedGeneration);
         else if (result.status === 'ok') onIdentity(scope, observedGeneration, true);
         return result;
@@ -89,7 +90,9 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     },
     apiState(budget, projectId = '', trial = null, owner = 'gui') {
       if (!credentials.status().saved) return { status: 'no_key' };
-      if (usage.available(budget) <= 0) return { status: 'budget_exhausted' };
+      // A cause other than spending names itself; spending is what the code already says.
+      const refusal = usage.refusal(budget);
+      if (refusal) return { status: 'budget_exhausted', ...(refusal === 'spent' ? {} : { reason: REFUSALS[refusal] }) };
       const failure = unavailable.get(projectId);
       if (owner === 'dispatch' && failure?.reason === 'credits_exhausted') return { status: 'ready' };
       if (trial && failure?.trial === trial) return { status: 'ready' };

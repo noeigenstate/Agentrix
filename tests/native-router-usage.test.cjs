@@ -153,7 +153,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
   assert.equal(value.agents.claude.path, null); assert.equal(value.agents.claude.connection.kind, 'subscription');
   assert.equal(value.apiRecords, false); assert.ok(!JSON.stringify(value).includes(fakeKey));
   handlers.get('native:settings-set')({ monthlyBudgetUsd: 0 });
-  assert.equal((await usage()).agents.claude.next.reason, 'budget_exhausted');
+  assert.equal((await usage()).agents.claude.next.reason, 'API 月预算设为 0，原生会话不使用 API。', 'a zero budget names itself rather than reading as spent');
   handlers.get('native:settings-set')({ monthlyBudgetUsd: null });
   cli = 'too_old'; assert.equal((await usage()).agents.claude.next.reason, 'cli_too_old');
   cli = 'missing'; assert.equal((await usage()).agents.claude.next.reason, 'cli_missing');

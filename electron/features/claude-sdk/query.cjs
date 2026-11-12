@@ -73,6 +73,17 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudg
   };
 }
 
+// Every SDK query starts here, so whoever built its options, its cap is checked. Claude Code refuses a --max-budget-usd that is not a
+// positive number and exits before initialize (real 2.1.317: exit 1 for 0 and -1, while 0.000001 runs), so a cap is a positive finite
+// amount or absent; anything else is a host error, refused before the CLI starts.
+function openQuery(sdk, prompt, options) {
+  const cap = options.maxBudgetUsd;
+  if (cap !== undefined && !(Number.isFinite(cap) && cap > 0)) {
+    throw Object.assign(new Error('API 预算上限无效，未启动 Claude Code。'), { code: 'invalid_budget', beforeInput: true });
+  }
+  return sdk.query({ prompt, options });
+}
+
 // The deadline yields one turn of the event loop before it fails: an initialize answer already waiting while main was
 // busy wins, so a busy main is not taken for a slow CLI. The failure says how long it waited.
 async function readBillingIdentity(query, { signal, timeoutMs = 30000 }) {
@@ -95,4 +106,4 @@ async function readBillingIdentity(query, { signal, timeoutMs = 30000 }) {
   return source;
 }
 
-module.exports = { inputQueue, queryOptions, readBillingIdentity, NATIVE_CONTEXT, IDENTITY_CONTEXT };
+module.exports = { inputQueue, queryOptions, openQuery, readBillingIdentity, NATIVE_CONTEXT, IDENTITY_CONTEXT };
