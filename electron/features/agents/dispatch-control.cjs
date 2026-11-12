@@ -46,6 +46,8 @@ function frames(socket, receive, disconnected) {
   return send;
 }
 
+// resolveRun: main's binding for a registration, or null. It must name the run's agent (from its board entry): the
+// channel does not look it up, and only a run bound to 'claude' may request a Claude SDK run.
 // accountKey: this process's key for naming Codex accounts (accountScopeId). Only a run main's resolver marks local
 // receives it, so a local helper names a worker's account as main does; an SSH host's account keeps its own channel.
 function createDispatchControl({ resolveRun, accountKey = processAccountKey, now = Date.now }) {
@@ -107,7 +109,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
       // A's provider owns disconnect cleanup; application exit keeps today's worker policy.
       try { void Promise.resolve(client.control?.({ type: 'disconnect' })).catch(() => {}); } catch {}
     });
-    // Longer than a helper's 2 s registration wait, so main's own lookup decides the outcome, never this idle limit.
+    // The helper gives up on registration after 2 s; this idle limit is longer, so the helper's wait is the one that ends it.
     socket.setTimeout(2500, () => socket.destroy());
     if (registration) void handle(registration).catch(() => socket.destroy());
   }

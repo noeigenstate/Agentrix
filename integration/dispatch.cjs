@@ -204,8 +204,9 @@ async function teamCommand(argv, stdout) {
   }
 }
 
-// The planner is told once per helper process that Agentrix did not receive its events: the worker runs on regardless.
-let undeliveredNoted = false;
+// The planner is told once per helper process, on run()'s output, that Agentrix did not receive its events: the worker
+// runs on regardless.
+let undeliveredNoted = false, plannerOutput = process.stdout;
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
 function eventSink(filename) {
   let bootstrap;
@@ -228,7 +229,7 @@ function eventSink(filename) {
     socket.once('close', () => {
       if (!written && !undeliveredNoted) {
         undeliveredNoted = true;
-        process.stdout.write(`[dispatch] events not delivered to Agentrix (${failure || 'closed'})\n`);
+        plannerOutput.write(`[dispatch] events not delivered to Agentrix (${failure || 'closed'})\n`);
       }
       sending = false; drain();
     });
@@ -499,6 +500,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     stdout.write(USAGE); return 0;
   }
   if (['minutes', 'consolidate', 'stop'].includes(argv[0])) return teamCommand(argv, stdout);
+  plannerOutput = stdout;
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   const workerEnv = workerEnvironment(env);

@@ -204,8 +204,8 @@
     "id": "electron/features/ssh/runtime.cjs:79bbec512d97c859e141b177"
   },
   {
-    "text": "execFile('git', ['rev-parse', '--git-common-dir'],\n    { cwd, encoding: 'utf8', windowsHide: true }, (error, stdout) => resolve(error ? null : path.resolve(cwd, String(stdout).trim())))",
-    "id": "electron/features/team/team-locate.cjs:3d8280cd448839466cdbd3d2"
+    "text": "execFile('git', ['rev-parse', '--git-common-dir'],\n    { cwd, encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS }, (error, stdout) => resolve(error ? null : path.resolve(cwd, String(stdout).trim())))",
+    "id": "electron/features/team/team-locate.cjs:e0a4179524d43dc804f6e6d9"
   },
   {
     "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 })",

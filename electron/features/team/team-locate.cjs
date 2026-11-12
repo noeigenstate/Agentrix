@@ -4,15 +4,16 @@ const path = require('node:path');
 const { execFile: nodeExecFile } = require('node:child_process');
 const { teamAt } = require('./team.cjs');
 
-const COMMON_DIR_TTL_MS = 30000;
+const COMMON_DIR_TTL_MS = 30000, GIT_TIMEOUT_MS = 10000;
 
 // Only Git's common directory is remembered, by the directory's real path for 30 s. Whether the team folder exists is
-// checked on every lookup, so a team the helper has just created is found at once; a failed lookup is never kept.
+// checked on every lookup, so a team the helper has just created is found at once; a failed lookup, Git taking longer
+// than 10 s among them, is never kept.
 // execFile has node:child_process's signature, so a test can delay or fail Git.
 function createTeamLocator({ execFile = nodeExecFile, now = Date.now } = {}) {
   const commons = new Map();
   const commonOf = cwd => new Promise(resolve => execFile('git', ['rev-parse', '--git-common-dir'],
-    { cwd, encoding: 'utf8', windowsHide: true }, (error, stdout) => resolve(error ? null : path.resolve(cwd, String(stdout).trim()))));
+    { cwd, encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS }, (error, stdout) => resolve(error ? null : path.resolve(cwd, String(stdout).trim()))));
   return async function locateTeam(cwd) {
     let real;
     try { real = await fs.realpath(cwd); } catch { return null; }
@@ -29,4 +30,4 @@ function createTeamLocator({ execFile = nodeExecFile, now = Date.now } = {}) {
 
 const locateTeam = createTeamLocator();
 
-module.exports = { locateTeam, createTeamLocator, COMMON_DIR_TTL_MS };
+module.exports = { locateTeam, createTeamLocator };

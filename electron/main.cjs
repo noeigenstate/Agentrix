@@ -1912,7 +1912,10 @@ function registerUnavailableNative(handle) {
   handle('native:settings-get', () => ({ ...settings }));
   handle('native:snapshot', id => { findProject(id); return null; });
   handle('native:usage', async projectId => {
-    const connections = await readNativeConnections(projectId), limits = readNativeSubscriptionLimits(projectId);
+    // Codex is the project's reading, where a dispatched worker's report counts. Nothing reads a project's Claude account
+    // without the native runtime, so Claude keeps the global reading.
+    const connections = await readNativeConnections(projectId);
+    const limits = { claude: readNativeSubscriptionLimits().claude, codex: readNativeSubscriptionLimits(projectId).codex };
     const summary = claudeRuntime?.usage.summary() || { month: new Date().toISOString().slice(0, 7),
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
     return { ...summary, budgetUsd: null, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
