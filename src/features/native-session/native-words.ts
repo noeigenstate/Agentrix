@@ -86,7 +86,7 @@ export type Receipt = { status: string; reason?: string | null };
 export function receiptLine({ status, reason }: Receipt) {
   if (status !== 'rejected') return receiptWord(status) ?? t('送达状态未知');
   if (reason && Object.hasOwn(REJECTION_WORDS, reason)) return t(REJECTION_WORDS[reason]);
-  return `${t('未送达')} · ${reason && !CODE.test(reason) ? reason : t('工作者未提供原因。')}`;
+  return `${t('未送达')} · ${reason && !CODE.test(reason) ? t(reason) : t('工作者未提供原因。')}`;
 }
 
 // The route codes the main process gives for a switch; one it does not know is shown as given, never hidden.
@@ -106,9 +106,9 @@ export function shortPath(path: string, max = 32) {
   const separator = path.includes('\\') ? '\\' : '/', parts = path.split(/[\\/]+/).filter(Boolean);
   return `…${separator}${parts.slice(-2).join(separator)}`;
 }
-// A reason in words: a code we know says it; a sentence main wrote for the owner is shown as it is; a code we do not know is not shown, and neither is no reason.
+// A reason in words: a code we know says it; a sentence main wrote for the owner is translated like any interface text (one without an English line stays as written); a code we do not know is not shown, and neither is no reason.
 const CODE = /^[a-z][a-z0-9_.-]*$/i;
-export const reasonWords = (reason: string | null | undefined) => (!reason ? null : REASON_WORDS[reason] ? t(REASON_WORDS[reason]) : CODE.test(reason) ? null : reason);
+export const reasonWords = (reason: string | null | undefined) => (!reason ? null : REASON_WORDS[reason] ? t(REASON_WORDS[reason]) : CODE.test(reason) ? null : t(reason));
 
 export const routeWord = (route: string | null | undefined) => (route === 'api' ? 'API' : route === 'terminal' ? t('终端') : route === 'native' ? t('原生模式') : route === 'subscription' ? t('订阅') : t('未知'));
 
@@ -277,7 +277,7 @@ export function connectionLines(test: ConnectionTest): TestLine[] {
   const { key, models, cli } = test, keyTone = key.status === 'ok' ? 'ok' : key.status === 'rate_limited' ? 'warn' : 'bad';
   const latency = key.status === 'ok' && typeof key.latencyMs === 'number' ? ` · ${Math.round(key.latencyMs)} ms` : '';
   const keyHint = key.status === 'ok' ? null
-    : [t(KEY_HINTS[key.status] ?? KEY_HINTS.error), key.status === 'error' ? key.detail : null, anthropicSays(key.error)].filter(Boolean).join(' ');
+    : [t(KEY_HINTS[key.status] ?? KEY_HINTS.error), key.status === 'error' ? sentence(key.detail) : null, anthropicSays(key.error)].filter(Boolean).join(' ');
   const shown = models?.slice(0, MODELS_SHOWN) ?? [];
   const modelText = test.modelsForbidden ? t('无列表权限') : !models ? t('未知') : !models.length ? t('没有可用模型')
     : shown.join('、') + (models.length > shown.length ? ` ${t('等 {n} 个', { n: models.length })}` : '');
@@ -292,7 +292,7 @@ export function connectionLines(test: ConnectionTest): TestLine[] {
       : version ? t('版本 {version} 过低（需要 ≥ {required}）', { version, required }) : t('版本过低（需要 ≥ {required}）', { required });
   const pathText = test.path === 'api' ? 'API' : test.path === 'terminal' ? t('终端（订阅）') : t('未知');
   return [
-    { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: key.detail },
+    { id: 'key', tone: keyTone, label: t('密钥'), text: (KEY_WORDS[key.status] ? t(KEY_WORDS[key.status]) : t('检查出错')) + latency, hint: keyHint, title: sentence(key.detail) },
     { id: 'models', tone: models?.length ? 'ok' : 'warn', label: t('可用模型'), text: modelText, hint: modelHint, title: models?.join('\n') || null },
     { id: 'cli', tone: cli.status !== 'ok' ? 'bad' : split ? 'warn' : 'ok', label: 'Claude Code', text: cliText, title: cli.found ?? cli.incomplete ?? cli.fileShown ?? null,
       hint: cli.status === 'missing' ? cliHint(cli) : cli.status === 'too_old' ? t('请升级 Claude Code。')

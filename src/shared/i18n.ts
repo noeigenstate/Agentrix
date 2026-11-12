@@ -7,7 +7,9 @@ import type { Settings } from './types';
 // (an error, progress or status text from the main process) is also matched against those templates.
 const dictionary: Record<string, string> = en;
 const fill = (template: string, values: Record<string, string | number>) => template.replace(/\{(\w+)\}/g, (match, key) => (key in values ? String(values[key]) : match));
-const patterns = Object.keys(dictionary).filter(key => /\{\w+\}/.test(key)).map(key => {
+// The template with the most fixed text is tried first, so a long sentence is not taken by a short template such as "{role} {title}，{state}".
+const fixedLength = (key: string) => key.replace(/\{\w+\}/g, '').length;
+const patterns = Object.keys(dictionary).filter(key => /\{\w+\}/.test(key)).sort((a, b) => fixedLength(b) - fixedLength(a)).map(key => {
   const names: string[] = [];
   const source = key.split(/(\{\w+\})/).map(part => {
     const name = /^\{(\w+)\}$/.exec(part)?.[1];

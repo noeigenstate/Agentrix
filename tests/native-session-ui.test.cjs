@@ -1929,6 +1929,25 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   assert.doesNotMatch(JSON.stringify([lines, bad, odd]), /sk-ant/);
 });
 
+test('in English the sentences main writes for a budget, a console balance and a billing mismatch are English wherever they show', () => {
+  const words = load('features/native-session/native-words.ts'), i18n = load('shared/i18n.ts'), zh = /[一-鿿]/;
+  const zero = 'API 月预算设为 0，原生会话不使用 API。', spent = '本月 API 预算已用完。', credits = '控制台余额不足，请到 Claude Console 的 Billing 充值。';
+  const mismatch = 'Claude API 计费身份不符（apiKeySource=missing）。', managed = 'Claude Code 没有使用 API 密钥，可能在用 claude.ai 登录或云服务商的凭据。请检查 Claude Code 的登录方式和环境变量。（apiKeySource=none）';
+  const test = patch => ({ checkedAt: 1, key: { status: 'ok', detail: null, latencyMs: 1 }, models: ['m'], cli: { status: 'ok', version: '2.1.317', required: '2.1.317' }, path: 'terminal', reason: null, ...patch });
+  i18n.applyLanguage('en');
+  try {
+    assert.deepEqual([zero, spent, credits, mismatch, managed].map(words.reasonWords), ['The monthly API budget is set to 0, so native sessions do not use the API.', 'This month\'s API budget is exhausted.',
+      'Your Claude Console credit balance is too low. Add credits under Billing in the Claude Console.', 'Claude API billing identity mismatch (apiKeySource=missing).',
+      'Claude Code uses no API key; it may be using a claude.ai login or a cloud provider\'s credentials. Check how Claude Code signs in and its environment variables. (apiKeySource=none)']);
+    const failed = words.switchNote({ phase: 'stable', outcome: 'failed', current: 'api', reason: spent });
+    assert.doesNotMatch(failed, zh, 'a failed switch tells the budget in English');
+    const balance = words.connectionLines(test({ key: { status: 'error', detail: credits, latencyMs: null }, path: 'terminal', reason: credits }));
+    assert.doesNotMatch(JSON.stringify(balance), zh, 'the balance line, its hint, its tooltip and the path line are English');
+    const billed = words.connectionLines(test({ billing: { status: 'mismatch', source: 'none', reported: { apiKeySource: 'none' }, detail: { text: 'Claude API 计费身份不符（{detail}）。', values: { detail: 'apiKeySource=none' } } }, path: null, reason: 'billing_identity_mismatch' }));
+    assert.equal(billed[3].hint, 'Claude API billing identity mismatch (apiKeySource=none). The current settings allow no new session.');
+  } finally { i18n.applyLanguage('zh'); }
+});
+
 test('when main gives no usage (a read that failed or has not come back, a project it cannot answer for, no bridge) the current session’s context, bars and tokens stay, and the connection and the allowance read 未知', async () => {
   const future = Date.now() + 3600_000, round = { input: 496000, cached: 476000, output: 5100 };
   const session = { id: 't1', agent: 'claude', codexActive: true, sessionId: null, agentStartedAt: 1, agentUsage: { provider: null, limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code', context: { used: 170000, window: 1000000 }, round, total: null } };
