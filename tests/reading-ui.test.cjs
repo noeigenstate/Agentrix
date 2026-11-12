@@ -445,12 +445,12 @@ test('the reading composer uses the shared microphone beside send, with the same
   h.props.handoff.locked = false; h.render(); assert.equal(microphone().disabled, false);
 });
 
-const outboxTexts = h => elements(h.tree()).find(node => node.props.className === 'reading-outbox')?.props.children[1].props.children.map(item => item.props.children[0]) ?? [];
+const outboxTexts = h => elements(h.tree()).find(node => node.props.className === 'reading-outbox')?.props.children[1].props.children.map(item => item.props.children[0].props.children) ?? [];
 // The notice for our own words left unsubmitted in the CLI's input: its words and its buttons by label.
 function leftoverNotice(h) {
   const notice = elements(h.tree()).find(node => node.props.className === 'reading-leftover'), item = notice?.props.children[1].props.children;
-  return item && { title: notice.props.children[0].props.children, text: item.props.children[0],
-    actions: Object.fromEntries(item.props.children.filter(child => child?.type === 'button').map(button => [button.props.children, button.props])) };
+  return item && { title: notice.props.children[0].props.children, text: item.props.children[0].props.children,
+    actions: Object.fromEntries(elements(item).filter(child => child.type === 'button').map(button => [button.props.children, button.props])) };
 }
 
 function workingComposerHarness(t, agent, overrides = {}) {
@@ -532,7 +532,7 @@ for (const agent of ['claude', 'codex']) {
     h.edit('queued instruction'); h.press('Enter');
     delete h.view.rows; h.view.working = false; h.render(); h.render(); await h.tick(0);
     assert.equal(h.pasted.length, 1);
-    const takeBack = elements(h.tree()).find(node => node.props.className === 'reading-outbox').props.children[1].props.children[0].props.children.at(-1);
+    const takeBack = elements(h.tree()).find(node => node.props.className === 'reading-outbox').props.children[1].props.children[0].props.children.at(-1).props.children;
     assert.equal(takeBack.props.disabled, true); takeBack.props.onClick(); h.render(); assert.equal(h.node.value, '');
     h.remount(); h.view.draft = ''; h.render();
     await h.tick(1000); await h.tick(30000);

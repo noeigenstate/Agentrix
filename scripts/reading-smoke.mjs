@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import net from 'node:net';
 import { _electron as electron } from 'playwright-core';
-import { waitFor, terminalsSettled } from './wait.mjs';
+import { waitFor, terminalsSettled, timeoutScale } from './wait.mjs';
 import { setMode } from './mode-switch.mjs';
 import { guiCodexEnvironment, windowsCodexStandIn } from './gui-codex-env.mjs';
 import { claudeHook } from '../tests/helpers/desktop-task-fixture.mjs';
@@ -38,10 +38,19 @@ for (const window of Object.values(cachedUsage.cachedUsageUtilization.utilizatio
 await fs.writeFile(usageFile, JSON.stringify(cachedUsage));
 await fs.writeFile(path.join(project.path, '.claude/commands/fix-issue.md'), '---\ndescription: 修复问题\n---\nFix issue $ARGUMENTS.\n');
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, announce: false, language: 'zh' } }));
-const env = { ...process.env, ...guiCodexEnvironment(), AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
-// The codex typed at the end of this check is the app-server stand-in, first on PATH.
+// Nothing here may reach the owner's Claude Code, Codex or their settings: the user directories point into this run, and
+// PATH keeps no folder that holds a claude or codex program (the stand-in below is the only codex).
+const userDirectory = path.join(output, 'user');
+const sandbox = { HOME: userDirectory, USERPROFILE: userDirectory, APPDATA: path.join(userDirectory, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(userDirectory, 'AppData', 'Local') };
+for (const directory of [sandbox.APPDATA, sandbox.LOCALAPPDATA]) await fs.mkdir(directory, { recursive: true });
+const env = { ...process.env, ...guiCodexEnvironment(), ...sandbox, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome, READING_FIXTURE_ENTER_LOG: path.join(output, 'enter.log') }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const bin = path.join(output, 'bin'), pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path');
-await fs.mkdir(bin); await windowsCodexStandIn(bin); env[pathKey] = bin + path.delimiter + env[pathKey];
+const holdsCli = async folder => (await Promise.all(['claude', 'codex'].flatMap(name => ['.exe', '.cmd', '.bat', '.ps1', ''].map(extension => fs.access(path.join(folder, name + extension)).then(() => true, () => false))))).some(Boolean);
+const realFolders = [];
+for (const folder of env[pathKey].split(path.delimiter).filter(Boolean)) if (!await holdsCli(folder)) realFolders.push(folder);
+// The codex typed at the end of this check is the app-server stand-in, first on PATH.
+await fs.mkdir(bin); await windowsCodexStandIn(bin); env[pathKey] = [bin, ...realFolders].join(path.delimiter);
+for (const folder of env[pathKey].split(path.delimiter)) if (folder !== bin) assert.equal(await holdsCli(folder), false, `${folder} holds no real claude or codex`);
 const packaged = process.argv.includes('--packaged'), errors = [], checks = [], commandTargets = [];
 let app, page, terminalId = project.id, failure;
 const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(terminal => terminal.id === terminalId);
@@ -425,6 +434,216 @@ try {
   await terminal.locator('.reading-outbox').waitFor({ state: 'detached' });
   await renderIdle('typed-over confirmation ended'); await composer.fill('');
   checks.push('a confirmation arriving while typing opens a terminal without focusing it or answering; input return drains its queue');
+  // Sending while Claude Code works: the terminal takes the message, Claude Code queues it, and only our own unsubmitted
+  // words, a choice or the terminal popup hold the next one. The wording is the one thing a copy change touches.
+  const SEND_TEXT = { leftoverTitle: '终端输入框里还有一段文字，新消息排在它后面', delivered: '终端输入框里留着已发送的文字', sendLeftover: '先发送终端里这段', clearLeftover: '清空它，再发送新消息', waiting: '等待终端输入就绪后发送', behindLeftover: '排在终端输入框里那段文字后面', retrieve: '取回' };
+  const enterLog = path.join(output, 'enter.log');
+  const entered = async () => (await fs.readFile(enterLog, 'utf8').catch(() => '')).split(/\r?\n/).filter(Boolean);
+  const enteredSince = async mark => (await entered()).slice(mark);
+  const leftover = terminal.locator('.reading-leftover'), outbox = terminal.locator('.reading-outbox:not(.reading-leftover)');
+  let holding = false;
+  // Ctrl+G flips the stand-in between taking Enter and leaving the words in its input (the CLI that did not submit).
+  const holdEnter = async on => { if (holding !== on) { await write('\x07'); holding = on; } };
+  const shot = name => page.screenshot({ path: path.join(output, name + '.png') });
+  const busyFrame = async prompt => {
+    const before = (await entered()).length, drawn = "Clear-Host; Write-Host ([string][char]0x2736 + ' Osmosing' + [char]0x2026); Show-ReadingFixtureInput";
+    await write(hook('start', { session_id: queueSession, transcript_path: transcript, prompt }));
+    await write(drawn + '\r');
+    // The stand-in logs the line once it has run it: a check that reads the log next must not take this line for its own.
+    await waitFor(async () => (await enteredSince(before)).includes('submitted:' + drawn), 'the stand-in ran the busy frame');
+    await waitFor(async () => await terminal.locator('.reading-status.is-working').count() > 0, 'working status rendered for the send check');
+    await waitFor(async () => await terminal.locator('button[title="中断（Esc）"]:not([disabled])').count() === 1, 'the working composer takes messages');
+  };
+  // The notices above the message box stand in the composer's column, the words above their buttons, the buttons set apart by 8px and at least 32px high.
+  const assertNotice = (found, label) => {
+    assert.ok(Math.abs(found.node.x - found.composer.x) <= 0.5 && Math.abs(found.node.w - found.composer.w) <= 0.5, `${label}: the notice has the composer's left and right edges`);
+    assert.ok(found.buttons.every(button => button.h >= 32), `${label}: every button is at least 32px high`);
+    assert.ok(found.buttons.every(button => button.y >= found.text.y + found.text.h), `${label}: the buttons are below the words, not behind them`);
+    assert.ok(found.buttons.every(button => parseFloat(button.border) > 0), `${label}: every button has a visible edge`);
+    assert.equal(found.ringInside, true, `${label}: the buttons' focus rings fit inside the scrolling list`);
+    assert.equal(found.numbered, false, `${label}: one entry carries no number`);
+    assert.equal(found.listStyleType, 'none');
+    assert.equal(found.text.hoverText.length > 0, true, `${label}: the full words show on hover`);
+    if (found.buttons.length > 1) assert.ok(found.sameRow ? found.gapBetweenButtons === 8 : found.rowGap === 8, `${label}: the buttons are 8px apart (${found.gapBetweenButtons} / ${found.rowGap})`);
+  };
+  const rowsInclude = async text => (await physicalRows()).some(row => row.includes(text));
+  const layout = (root, names) => root.evaluate((node, labels) => {
+    const box = rect => { const r = rect.getBoundingClientRect(); return { x: +r.left.toFixed(1), y: +r.top.toFixed(1), w: +r.width.toFixed(1), h: +r.height.toFixed(1) }; };
+    const buttons = labels.map(label => {
+      const button = [...node.querySelectorAll('button')].find(item => item.textContent === label), style = getComputedStyle(button);
+      return { label, ...box(button), fontSize: style.fontSize, color: style.color, border: style.borderTopWidth, background: style.backgroundColor, display: style.display, padding: style.padding };
+    });
+    const style = getComputedStyle(node), composer = document.querySelector('.reading-composer'), text = node.querySelector('.reading-notice-text'), title = node.firstElementChild;
+    const textStyle = getComputedStyle(text), titleStyle = getComputedStyle(title), listStyle = getComputedStyle(node.querySelector('li')), actions = node.querySelector('.reading-notice-actions');
+    return { node: box(node), composer: box(composer), title: { ...box(title), color: titleStyle.color, fontSize: titleStyle.fontSize }, text: { ...box(text), color: textStyle.color, fontSize: textStyle.fontSize, overflow: textStyle.textOverflow, whiteSpace: textStyle.whiteSpace, hoverText: text.title },
+      actions: { ...box(actions), gap: getComputedStyle(actions).gap, display: getComputedStyle(actions).display, wrap: getComputedStyle(actions).flexWrap }, listStyleType: listStyle.listStyleType, listCount: node.querySelectorAll('li').length, numbered: /^\s*\d+[.)]\s/m.test(node.innerText),
+      fontSize: style.fontSize, color: style.color, padding: style.padding, border: style.borderTopWidth + ' ' + style.borderTopColor, radius: style.borderTopLeftRadius, buttons,
+      gapBetweenButtons: buttons[1] ? +(buttons[1].x - (buttons[0].x + buttons[0].w)).toFixed(1) : null, rowGap: buttons[1] ? +(buttons[1].y - (buttons[0].y + buttons[0].h)).toFixed(1) : null,
+      sameRow: buttons[1] ? Math.abs(buttons[0].y - buttons[1].y) < 1 : null,
+      // A focus ring is 2px wide at a 2px offset: it must fit in the list's own padding, which scrolls with it and clips nothing.
+      ringInside: (() => { const list = box(node.querySelector('ul')); return buttons.every(button => button.x - 4 >= list.x - 0.5 && button.y - 4 >= list.y - 0.5 && button.x + button.w + 4 <= list.x + list.w + 0.5 && button.y + button.h + 4 <= list.y + list.h + 0.5); })(), composerTop: +composer.getBoundingClientRect().top.toFixed(1) };
+  }, names);
+  // Claude Code records each message it takes; without that record the safety net sends an unconfirmed message again once the agent has been idle for five seconds.
+  const acknowledge = text => queueRows([{ type: 'user', uuid: randomUUID(), message: { content: [{ type: 'text', text }] } }]);
+  await acknowledge('先别批准');
+  const sendLayouts = {}, flicker = {}, clearedWordsReturned = {}, strict = process.argv.includes('--strict');
+  // The composer while Claude Code works for about five seconds: what each part of it shows, sampled every 50 ms. The
+  // light stream redraws the spinner every 100 ms; the heavy one repaints the whole live region every 30 ms, as Claude Code's renderer does.
+  const sampleWhileWorking = async (label, streamArguments) => {
+    await holdEnter(false); await write(hook('start', { session_id: queueSession, transcript_path: transcript, prompt: label })); await renderIdle(`${label} start`);
+    const mark = (await entered()).length;
+    await page.evaluate(id => {
+      const log = window.agentrixComposerSamples = { samples: [], timer: 0 }, begin = performance.now();
+      log.timer = setInterval(() => {
+        const box = document.querySelector(`[data-terminal-id="${id}"] .reading-composer`), area = box?.querySelector('textarea');
+        const stop = box?.querySelector('button[title="中断（Esc）"]'), send = box?.querySelector('button.reading-send');
+        log.samples.push({ at: Math.round(performance.now() - begin), placeholder: area?.placeholder ?? null, textareaDisabled: area?.disabled ?? null,
+          interrupt: !stop ? 'absent' : stop.disabled ? 'disabled' : 'enabled', sendDisabled: send?.disabled ?? null, composerClass: box?.className ?? null,
+          composerHeight: box ? Math.round(box.getBoundingClientRect().height * 10) / 10 : null, textareaHeight: area ? Math.round(area.getBoundingClientRect().height * 10) / 10 : null });
+      }, 50);
+    }, terminalId);
+    await write(`Stream-ReadingFixtureWork -Seconds 5 ${streamArguments}\r`);
+    await waitFor(async () => (await enteredSince(mark)).includes('stream:done'), 'the stand-in finished its five seconds of work', 30000);
+    const samples = await page.evaluate(() => { clearInterval(window.agentrixComposerSamples.timer); return window.agentrixComposerSamples.samples; });
+    const summary = {};
+    for (const field of ['placeholder', 'textareaDisabled', 'interrupt', 'sendDisabled', 'composerClass', 'composerHeight', 'textareaHeight']) {
+      const transitions = {}; let flips = 0;
+      for (let index = 1; index < samples.length; index++) if (samples[index][field] !== samples[index - 1][field]) {
+        flips++; const key = `${JSON.stringify(samples[index - 1][field])} -> ${JSON.stringify(samples[index][field])} at ${samples[index].at} ms`; transitions[key] = (transitions[key] ?? 0) + 1;
+      }
+      summary[field] = { flips, values: [...new Set(samples.map(sample => sample[field]))], transitions };
+    }
+    summary.sampleCount = samples.length; summary.spanMs = samples.at(-1)?.at ?? 0;
+    flicker[label] = summary;
+    await fs.writeFile(path.join(output, `composer-samples-${label}.json`), JSON.stringify({ summary, samples }, null, 1));
+    console.log(`Composer while Claude Code works, ${label} (50 ms samples):`, JSON.stringify(summary));
+    await renderIdle(`${label} done`); await composer.fill('');
+  };
+  await sampleWhileWorking('light-stream', '-IntervalMs 100');
+  await sampleWhileWorking('heavy-stream', '-IntervalMs 30 -Redraw');
+  for (const theme of ['mono', 'light']) {
+    await page.evaluate(settings => window.agentrix.settings(settings), { theme });
+    await waitFor(async () => (await page.evaluate(() => document.documentElement.dataset.theme)) === theme, `${theme} theme applied`);
+    const name = label => `send-${theme}-${label}`;
+    // a. A message sent while Claude Code works goes straight into the terminal; it does not wait in the outbox.
+    await holdEnter(false); await busyFrame(`Send check ${theme}`);
+    await holdEnter(true);
+    let mark = (await entered()).length; const whileWorking = `GUI_WHILE_WORKING_${theme}`;
+    await composer.fill(whileWorking); await resetWrites(); await composer.press('Enter');
+    await waitFor(async () => (await enteredSince(mark)).includes('held:' + whileWorking), 'the terminal received the message while Claude works');
+    // The words are written once a parsed frame shows the input (a paste waits up to two seconds for one): until then the outbox shows them, sending.
+    await waitFor(async () => await outbox.count() === 0, 'a working Claude Code takes the message; nothing stays in the outbox', 10000);
+    assert.equal(await terminal.getByText(SEND_TEXT.waiting, { exact: true }).count(), 0);
+    assert.equal(await leftover.count(), 0);
+    assert.equal(await composer.inputValue(), '', 'the message left the box');
+    assert.ok(await rowsInclude(whileWorking), 'the words are in the terminal input');
+    await shot(name('a-sent-while-working'));
+    // b. Claude Code's own queue receipt.
+    const queued = terminal.locator('.reading-pending.is-queued', { hasText: whileWorking });
+    await queueRows([{ type: 'queue-operation', operation: 'enqueue', content: whileWorking }]);
+    await queued.waitFor();
+    assert.equal(await leftover.count(), 0, 'what Claude Code queued is not a leftover input');
+    assert.equal(await outbox.count(), 0);
+    await shot(name('b-claude-queued'));
+    const heldCount = (await enteredSince(mark)).filter(line => line === 'held:' + whileWorking).length;
+    assert.ok(heldCount >= 1 && heldCount <= 4, 'the message was entered once and retried at most three times: ' + heldCount);
+    assert.deepEqual((await enteredSince(mark)).filter(line => line.startsWith('submitted:')), [], 'nothing was submitted while the stand-in held Enter');
+    await write('\x15');
+    await waitFor(async () => !await rowsInclude(whileWorking), 'the held words are cleared from the stand-in input');
+    await holdEnter(false);
+    await acknowledge(whileWorking);
+    await queued.waitFor({ state: 'detached' });
+    // c. Words of ours left in the input hold the next message; the two actions.
+    for (const action of ['sendLeftover', 'clearLeftover']) {
+      await holdEnter(false); await busyFrame(`Leftover ${action} ${theme}`);
+      await holdEnter(true);
+      const first = `GUI_LEFTOVER_${action}_${theme}`, second = `GUI_NEXT_${action}_${theme}`;
+      mark = (await entered()).length;
+      await composer.fill(first); await composer.press('Enter');
+      await waitFor(async () => await rowsInclude(first), 'the first message sits unsubmitted in the input');
+      // The next message is sent once the first send has finished (it leaves the outbox); sent earlier it only waits behind it.
+      await waitFor(async () => await outbox.count() === 0, 'the first send finished', 10000);
+      await composer.fill(second); await resetWrites(); await composer.press('Enter');
+      await waitFor(async () => await leftover.count() > 0 && await outbox.count() > 0, 'the next message was held behind the words in the input');
+      assert.ok((await leftover.locator('li').first().innerText()).includes(first), 'the notice shows the words in the input');
+      assert.ok((await leftover.innerText()).includes(SEND_TEXT.leftoverTitle));
+      assert.deepEqual(await leftover.getByRole('button').allInnerTexts(), [SEND_TEXT.sendLeftover, SEND_TEXT.clearLeftover]);
+      assert.match(await outbox.innerText(), new RegExp(second), 'the new message waits in the outbox');
+      assert.equal(await rowsInclude(second), false, 'no character of the new message reached the terminal');
+      assert.deepEqual((await writes()).filter(item => item.data !== '\r'), [], 'nothing typed over the leftover');
+      assert.equal(await composer.inputValue(), '');
+      assert.equal(await popup.count(), 0, 'the old "terminal input still has an earlier message" popup is gone');
+      sendLayouts[`${theme}-${action}`] = await layout(leftover, [SEND_TEXT.sendLeftover, SEND_TEXT.clearLeftover]);
+      assertNotice(sendLayouts[`${theme}-${action}`], `${theme} ${action}`);
+      sendLayouts[`${theme}-${action}-outbox`] = await layout(outbox, [SEND_TEXT.retrieve]); assertNotice(sendLayouts[`${theme}-${action}-outbox`], `${theme} ${action} outbox`);
+      if (action === 'sendLeftover') {
+        await shot(name('c-leftover'));
+        // The same notice in a 320px wide card, the width of a card in a crowded grid.
+        const card = terminal.locator('xpath=ancestor::*[@data-project-id][1]');
+        await card.evaluate(node => { node.dataset.smokeStyle = node.getAttribute('style') ?? ''; node.style.width = '320px'; node.style.maxWidth = '320px'; node.style.flex = 'none'; });
+        await terminalsSettled(page);
+        sendLayouts[`${theme}-narrow`] = { ...await layout(leftover, [SEND_TEXT.sendLeftover, SEND_TEXT.clearLeftover]), cardWidth: await card.evaluate(node => node.getBoundingClientRect().width) };
+        assertNotice(sendLayouts[`${theme}-narrow`], `${theme} 320px card`);
+        sendLayouts[`${theme}-narrow-outbox`] = await layout(outbox, [SEND_TEXT.retrieve]);
+        assertNotice(sendLayouts[`${theme}-narrow-outbox`], `${theme} 320px card, outbox`);
+        await shot(name('c-leftover-narrow'));
+        await card.evaluate(node => { node.setAttribute('style', node.dataset.smokeStyle); delete node.dataset.smokeStyle; });
+        await terminalsSettled(page);
+      }
+      await holdEnter(false);
+      const before = (await entered()).length;
+      await leftover.getByRole('button', { name: SEND_TEXT[action], exact: true }).click();
+      if (action === 'sendLeftover') {
+        await waitFor(async () => (await enteredSince(before)).includes('submitted:' + first), 'the words in the input were submitted');
+        await write(idle); // The stand-in ran them as a command; Claude Code would show its input again.
+      }
+      await waitFor(async () => (await enteredSince(before)).includes('submitted:' + second), 'the waiting message reached the terminal');
+      await leftover.waitFor({ state: 'detached' }); await outbox.waitFor({ state: 'detached' });
+      if (action === 'sendLeftover') await acknowledge(first);
+      await acknowledge(second);
+      if (action === 'clearLeftover') {
+        // The cleared words were never taken by Claude Code, so their echo has no record. Once the agent has been idle for five seconds the
+        // safety net sends an unconfirmed message again: that must not bring back words the owner chose to clear.
+        await write(hook('stop', { session_id: queueSession, transcript_path: transcript }));
+        await waitFor(async () => (await state()).cliState?.state === 'idle', `Stop publishes idle (${theme})`);
+        const until = Date.now() + 15000 * timeoutScale; let resent = false;
+        while (!resent && Date.now() < until) { resent = (await enteredSince(before)).includes('submitted:' + first); if (!resent) await new Promise(resolve => setTimeout(resolve, 100)); }
+        clearedWordsReturned[theme] = resent;
+        if (resent) console.error(`PRODUCT FINDING: the words cleared with "${SEND_TEXT.clearLeftover}" (${first}) were sent to the terminal again by the five-second safety net`);
+        if (strict) assert.equal(resent, false, 'cleared words are never sent again');
+        await acknowledge(first);
+      }
+      await renderIdle(`after ${action}`);
+      const received = (await enteredSince(before)).filter(line => /^(submitted|held):GUI_/.test(line));
+      assert.deepEqual(received, action === 'sendLeftover' ? ['submitted:' + first, 'submitted:' + second] : ['submitted:' + second], `${action}: the terminal received each message once, in order`);
+      if (action === 'clearLeftover') assert.ok((await writes()).some(item => item.data === '\x15'), 'the input was cleared with Ctrl+U');
+      await composer.fill('');
+      await shot(name(action === 'sendLeftover' ? 'c-after-send-input' : 'c-after-clear'));
+    }
+    // d. A confirmation holds a message even while Claude Code works.
+    await holdEnter(false); await busyFrame(`Choice check ${theme}`);
+    const heldByChoice = `GUI_HELD_BY_CHOICE_${theme}`; mark = (await entered()).length;
+    await write('Clear-Host; ' + permissionRows.map(row => "Write-Host '" + row.replace(/'/g, "''") + "'").join('; ') + '; $global:ReadingFixtureClearOnPrompt = $true; Start-Sleep -Seconds 4\r');
+    await popup.waitFor();
+    await waitFor(async () => await rowsInclude('Do you want to create hello.txt?'), 'the confirmation is drawn in the terminal');
+    await composer.fill(heldByChoice); await resetWrites(); await composer.press('Enter');
+    await outbox.waitFor();
+    assert.match(await outbox.innerText(), new RegExp(heldByChoice));
+    assert.deepEqual(await writes(), [], 'not one character reached the terminal while the choice was open');
+    assert.equal(await rowsInclude(heldByChoice), false);
+    await shot(name('d-choice-holds'));
+    await write(idle);
+    await popup.waitFor({ state: 'detached', timeout: 10000 });
+    await waitFor(async () => (await enteredSince(mark)).includes('submitted:' + heldByChoice), 'the held message is sent once the choice ends');
+    await outbox.waitFor({ state: 'detached' });
+    assert.equal((await enteredSince(mark)).filter(line => line === 'submitted:' + heldByChoice).length, 1);
+    await acknowledge(heldByChoice);
+    await renderIdle(`choice ended ${theme}`); await composer.fill('');
+  }
+  await page.evaluate(settings => window.agentrix.settings(settings), { theme: 'mono' });
+  await fs.writeFile(path.join(output, 'send-layout.json'), JSON.stringify(sendLayouts, null, 1));
+  await fs.writeFile(path.join(output, 'composer-flicker.json'), JSON.stringify({ flicker, clearedWordsReturned }, null, 1));
+  checks.push('sending while Claude works: the terminal takes the message, Claude Code queues it, a leftover input and a choice hold the next one, both leftover actions deliver exactly once; composer samples recorded (both themes)');
   // Switching providers switches the whole input. Codex has no terminal run: typed once Claude Code has left the shell
   // (a terminal with a running agent refuses another), it takes this terminal's place as a native session (the
   // app-server stand-in), whose box is no terminal frame and whose commands are Codex's own.
