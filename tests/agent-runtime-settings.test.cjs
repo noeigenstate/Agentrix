@@ -367,7 +367,7 @@ test('the agents page says how Codex was found and which file it runs, why its c
     assert.doesNotMatch(JSON.stringify([missing.hints, everywhere.hints]), /PATH。|加入 PATH/, 'no manual PATH step');
     // A scan a limit or its deadline cut short never claims every drive was searched.
     const partial = await codex({ installed: false, scan: 'partial', reason: reason('codex.not_found', { params: { pathFolders: 3, searched: places.join('; ') } }) });
-    assert.deepEqual([partial.status, partial.hints, partial.paths], ['未安装', ['没有找到 Codex。已查找 PATH 里的 3 个目录，以及以下位置。', '已搜索部分本地磁盘，下次启动会继续搜索。'], places]);
+    assert.deepEqual([partial.status, partial.hints, partial.paths], ['未安装', ['没有找到 Codex。已查找 PATH 里的 3 个目录，以及以下位置。', '已搜索部分本地磁盘，下次启动会再搜索一次。用下面的命令安装，装好后 Agentrix 会自己发现。'], places]);
     assert.doesNotMatch(JSON.stringify(partial.hints), /所有本地磁盘/);
     const scanned = await codex({ installed: true, version: '0.166.0', via: 'drive-scan', fileShown: 'E:\\my tools\\codex\\codex.exe' });
     assert.equal(scanned.status, '已安装 · 版本 0.166.0 · 来自本地磁盘搜索');

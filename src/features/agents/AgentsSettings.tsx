@@ -77,7 +77,7 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
       const words = agents?.[agent].installed ? installedWords(agent, agents, keySaved) : null, hint = words ? words.hint : notFound ? reasonWords(notFound) : null;
       const places = missing ? placesOf(notFound) : [], step = !missing ? null
         : codex?.scan === 'done' ? t('也搜索了所有本地磁盘。用下面的命令安装，装好后 Agentrix 会自己发现。')
-          : codex?.scan === 'partial' ? t('已搜索部分本地磁盘，下次启动会继续搜索。') : t('用下面的命令安装，装好后 Agentrix 会自己发现。');
+          : codex?.scan === 'partial' ? t('已搜索部分本地磁盘，下次启动会再搜索一次。用下面的命令安装，装好后 Agentrix 会自己发现。') : t('用下面的命令安装，装好后 Agentrix 会自己发现。');
       const file = codex?.installed ? codex.fileShown : null, settled = !!agents && agents.installing !== agent;
       return <div className="agent-setting" key={agent}>
       <div className="setting-row"><span className="agent-info"><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" className="agent-status" title={agents?.[agent].fileShown}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : scanning ? t('正在搜索所有本地磁盘…') : t('未安装')}</small>
