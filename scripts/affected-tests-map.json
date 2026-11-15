@@ -362,7 +362,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "f9d1a9ef99550c41757eaa19e75dc30456488fb7b9c1a5eeee529a6b63ed52b3",
+      "digest": "cc0620be3ed138467cbc6f282782dd3a7462f7ba13414d1192ce9361cf291fe7",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -376,7 +376,8 @@
         "electron/features/dashboard/records-routing.cjs",
         "electron/features/skills/worker-proposals.cjs",
         "electron/features/codex-app-server/index.cjs",
-        "electron/features/agents/dispatch-control.cjs"
+        "electron/features/agents/dispatch-control.cjs",
+        "electron/features/codex-runtime/locator.cjs"
       ],
       "reason": "All dynamic runtime paths point into the carried electron tree."
     },

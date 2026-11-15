@@ -3210,5 +3210,7 @@
   "API 请求达到速率限制，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。": "The API rate limit has been reached. This session has moved to the Claude Code terminal; the unsent message has been kept, so check the terminal input before continuing.",
   "Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端。": "The Claude account or organization has reached its API spend limit. This session has moved to the Claude Code terminal.",
   "Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。": "The Claude account or organization has reached its API spend limit. This session has moved to the Claude Code terminal; the unsent message has been kept, so check the terminal input before continuing.",
-  "你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入 API 花费估算。": "Commands run in your own API session can read the key; any spending they incur is excluded from the API spend estimate."
+  "你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入 API 花费估算。": "Commands run in your own API session can read the key; any spending they incur is excluded from the API spend estimate.",
+  "npm 或 pnpm 命令": "npm or pnpm command",
+  "npm 全局目录（.npmrc）": "npm global folder (.npmrc)"
 }
