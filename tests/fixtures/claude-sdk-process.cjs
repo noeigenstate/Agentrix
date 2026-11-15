@@ -1,4 +1,7 @@
 // Offline child used by packaged provider smokes. It cannot discover credentials or call a network API.
+// Stand-in contract (tests/fake-cli-contract.test.cjs): --version answers at once and writes nothing; AGENTRIX_STAND_IN_ECHO names the file that gets the arguments, --settings and hooks it was given.
+if (process.env.AGENTRIX_STAND_IN_ECHO) require('./stand-in-echo.cjs')();
+if (process.argv.includes('--version')) { console.log(process.argv[2] === 'claude' ? '2.1.317 (Claude Code)' : 'codex-cli 0.166.0'); process.exit(0); }
 const readline = require('node:readline');
 const mode = process.argv[2];
 readline.createInterface({ input: process.stdin }).on('line', line => {

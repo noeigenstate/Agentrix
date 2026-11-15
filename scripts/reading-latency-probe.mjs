@@ -21,7 +21,9 @@ const app = await electron.launch({ executablePath: require('electron'), args: [
 const page = await app.firstWindow();
 const state = async index => (await page.evaluate(() => window.agentrix.getState())).value.projects[index];
 const write = (id, data) => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id, data });
-const hook = (kind, payload) => `'${JSON.stringify(payload)}' | & $global:AgentrixSession.powershellPath -NoProfile -ExecutionPolicy Bypass -File $global:AgentrixSession.claudeHookPath -PipeName $global:AgentrixSession.pipeName -ProjectId $global:AgentrixSession.projectId -SessionKey $global:AgentrixSession.sessionKey -Kind ${kind}\r`;
+// A Claude Code hook typed into the terminal, over the channel its session names (tests/helpers/claude-hook-client.cjs).
+const { hookText } = require('../tests/helpers/claude-hook-client.cjs');
+const hook = (kind, payload) => hookText(kind, payload) + '\r';
 const median = values => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 // The time from appending a record until its words are on screen in that project's reading view.
 async function measure(project, file, record, words) {

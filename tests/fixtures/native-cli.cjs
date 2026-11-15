@@ -1,4 +1,7 @@
 // Harmless stand-in executable. It never loads CLI accounts or calls a model/network service.
+// Stand-in contract (tests/fake-cli-contract.test.cjs): --version answers at once and writes nothing; AGENTRIX_STAND_IN_ECHO names the file that gets the arguments, --settings and hooks it was given.
+if (process.env.AGENTRIX_STAND_IN_ECHO) require('./stand-in-echo.cjs')();
+if (process.argv.includes('--version')) { console.log(process.argv.includes('app-server') ? 'codex-cli 0.166.0' : '2.1.317 (Claude Code)'); process.exit(0); }
 const readline = require('node:readline');
 const codex = process.argv.includes('app-server');
 let sequence = 0;

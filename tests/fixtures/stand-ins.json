@@ -1,0 +1,77 @@
+{
+  "note": "Every program in tests/ and scripts/ that stands in for the Claude Code or Codex CLI (found by tests/helpers/stand-ins.cjs, checked by tests/fake-cli-contract.test.cjs). A new stand-in is found by what it says and fails the guard until it is listed here.",
+  "contract": {
+    "version": "Every stand-in answers --version at once, with nothing written to its folder (Claude: '<n.n.n> (Claude Code)'; Codex: 'codex-cli <n.n.n>').",
+    "echo": "With AGENTRIX_STAND_IN_ECHO naming a file, a node stand-in writes there the arguments it was given, the --settings it was given and the hooks in them (tests/fixtures/stand-in-echo.cjs).",
+    "appServer": "A stand-in that answers thread/start answers the sandbox and approvals it was asked for, as Codex does."
+  },
+  "standIns": {
+    "tests/fixtures/codex-app-server.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "codex" }],
+      "appServer": ["app-server", "--listen", "stdio://"],
+      "deliberate": {
+        "SYNTHETIC_CODEX_MODE=windows-sandbox": "answers read-only until the request carries the unelevated Windows sandbox, for the retry tests",
+        "SYNTHETIC_CODEX_MODE=sandbox-persist": "keeps the sandbox of an earlier start for a resume that asks none, for the stored-policy test"
+      }
+    },
+    "tests/fixtures/gui-codex-app-server.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "codex" }],
+      "appServer": ["app-server", "--listen", "stdio://"]
+    },
+    "tests/fixtures/question-codex-app-server.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "codex" }, { "args": ["claude", "--version"], "product": "claude" }],
+      "appServer": ["app-server", "--listen", "stdio://"]
+    },
+    "tests/fixtures/claude-sdk-cli.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["claude", "--version"], "product": "claude" }, { "args": ["codex", "--version"], "product": "codex" }],
+      "appServer": ["codex", "app-server", "--listen", "stdio://"]
+    },
+    "tests/fixtures/native-cli.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "claude" }, { "args": ["app-server", "--version"], "product": "codex" }]
+    },
+    "tests/fixtures/codex-app-server-env.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "claude" }],
+      "note": "A Claude Code print-mode stand-in (it reads the prompt from its input), named for the folder it began in."
+    },
+    "tests/fixtures/codex-app-server-scope.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "claude" }],
+      "note": "A Claude Code print-mode stand-in that edits files for the dispatch scope tests."
+    },
+    "tests/fixtures/claude-sdk-process.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["claude", "--version"], "product": "claude" }, { "args": ["codex", "--version"], "product": "codex" }]
+    },
+    "tests/fixtures/multi-codex.cs": {
+      "build": "csc",
+      "launches": [{ "args": ["--version"], "product": "codex" }],
+      "note": "Compiled program: it answers --version and has no echo."
+    },
+    "tests/fixtures/argv-recorder.cs": {
+      "build": "csc",
+      "recorder": true,
+      "note": "Not a CLI: it appends the exact arguments it was started with to ARGV_RECORDER_FILE and exits 7, which is its whole echo."
+    },
+    "tests/fixtures/dispatch-worker.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "codex" }],
+      "appServer": ["app-server", "--listen", "stdio://"],
+      "note": "Stands in for either CLI in the dispatch tests; a version probe is answered before any fixture is read."
+    },
+    "tests/fixtures/restore-codex.cs": {
+      "build": "csc",
+      "launches": [{ "args": ["--version"], "product": "codex" }, { "args": ["-V"], "product": "codex" }],
+      "note": "Compiled program: it answers --version and -V before anything else and has no echo."
+    }
+  },
+  "notStandIns": {
+    "tests/fixtures/claude-sdk.cjs": "an in-process fake of the Agent SDK's query(), not a program the product starts",
+    "tests/fixtures/claude-sdk-launcher.cjs": "C# source of a launcher that forwards every argument, --version and --settings included, to AGENTRIX_FAKE_CLI, which is claude-sdk-cli.cjs"
+  }
+}

@@ -1,4 +1,7 @@
 // Desktop protocol peer. Only fixture-owned files under the injected CODEX_HOME/cwd are read.
+// Stand-in contract (tests/fake-cli-contract.test.cjs): --version answers at once and writes nothing; AGENTRIX_STAND_IN_ECHO names the file that gets the arguments, --settings and hooks it was given.
+if (process.env.AGENTRIX_STAND_IN_ECHO) require('./stand-in-echo.cjs')();
+if (process.argv.includes('--version')) { console.log('codex-cli 0.166.0'); process.exit(0); }
 const fs = require('node:fs'), path = require('node:path'), readline = require('node:readline'), { randomUUID } = require('node:crypto');
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const cwd = process.cwd(), folder = path.join(process.env.CODEX_HOME, 'sessions');

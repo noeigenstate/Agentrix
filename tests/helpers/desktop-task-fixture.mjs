@@ -2,13 +2,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+
+const { hookText, sendHook } = createRequire(import.meta.url)('./claude-hook-client.cjs');
 
 const quote = value => "'" + value.replaceAll("'", "''") + "'";
 
-// One of Claude Code's hooks, as a PowerShell command for an Agentrix terminal: the real hook script with the hook's
-// JSON on its input, which is how Claude Code runs it.
-export const claudeHook = (kind, payload) => `${quote(JSON.stringify(payload))} | & $global:AgentrixSession.powershellPath -NoProfile -ExecutionPolicy Bypass -File $global:AgentrixSession.claudeHookPath -PipeName $global:AgentrixSession.pipeName -ProjectId $global:AgentrixSession.projectId -SessionKey $global:AgentrixSession.sessionKey -Kind ${kind}`;
+// One of Claude Code's hooks, as a PowerShell statement for an Agentrix terminal (tests/helpers/claude-hook-client.cjs):
+// the terminal's own session decides whether it goes over HTTP or through the hook script.
+export const claudeHook = (kind, payload) => hookText(kind, payload);
 
 // A terminal's own session file (its pipe, its key and the hook script), from the profile's runtime folder.
 export async function terminalBootstrap(dataDir, sessionId) {
@@ -16,16 +18,9 @@ export async function terminalBootstrap(dataDir, sessionId) {
   return JSON.parse(await fs.readFile(path.join(dataDir, runtime, `${sessionId}.json`), 'utf8'));
 }
 
-// The same hook from outside the terminal, for an agent that occupies its shell: the real hook script as a process of
-// its own, as Claude Code starts it.
-export function sendClaudeHook(bootstrap, kind, payload) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(bootstrap.powershellPath, ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', bootstrap.claudeHookPath,
-      '-PipeName', bootstrap.pipeName, '-ProjectId', bootstrap.projectId, '-SessionKey', bootstrap.sessionKey, '-Kind', kind], { windowsHide: true, stdio: ['pipe', 'ignore', 'ignore'] });
-    child.once('error', reject); child.once('exit', resolve);
-    child.stdin.end(JSON.stringify(payload));
-  });
-}
+// The same hook from outside the terminal, for an agent that occupies its shell: sent over the channel the terminal's
+// bootstrap names, as Claude Code sends it.
+export const sendClaudeHook = (bootstrap, kind, payload) => sendHook(bootstrap, kind, payload);
 
 // One round of an agent in a terminal, without the agent's CLI or a model. Claude Code is the agent a terminal runs
 // (Codex opens in native mode): the shell reports it as the wrapper does and stays occupied, the real hook script

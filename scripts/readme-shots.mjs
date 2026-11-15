@@ -159,7 +159,8 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
       { type: 'user', uuid: randomUUID(), parentUuid: null, timestamp: stamp(), cwd: projects[3].path, sessionId: sessions[3].thread, message: { role: 'user', content: docsPrompt } },
       { type: 'assistant', uuid: randomUUID(), timestamp: stamp(), cwd: projects[3].path, sessionId: sessions[3].thread, effort: 'high', message: { id: 'docs-reply', role: 'assistant', model: 'claude-sonnet-5-5', content: [{ type: 'text', text: '我先读一下现有的部署文档结构，再补齐回滚前检查、执行和验证步骤。' }], usage: { input_tokens: 1200, cache_read_input_tokens: 42000, output_tokens: 340, speed: 'standard' } } },
     ]));
-    const hook = `${quote(JSON.stringify({ session_id: sessions[3].thread, transcript_path: claudeFile, prompt: docsPrompt }))} | & $global:AgentrixSession.powershellPath -NoProfile -ExecutionPolicy Bypass -File $global:AgentrixSession.claudeHookPath -PipeName $global:AgentrixSession.pipeName -ProjectId $global:AgentrixSession.projectId -SessionKey $global:AgentrixSession.sessionKey -Kind start`;
+    const { hookText } = require('../tests/helpers/claude-hook-client.cjs');
+    const hook = hookText('start', { session_id: sessions[3].thread, transcript_path: claudeFile, prompt: docsPrompt });
     for (let index = 0; index < projects.length; index++) {
       // A plain shell is hidden on a small card; start it through the API, then authenticate its fixture agent.
       const started = await page.evaluate(id => window.agentrix.startTerminal(id), projects[index].id);

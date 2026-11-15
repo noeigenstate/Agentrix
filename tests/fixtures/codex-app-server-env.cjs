@@ -1,3 +1,6 @@
+// Stand-in contract (tests/fake-cli-contract.test.cjs): --version answers at once and writes nothing; AGENTRIX_STAND_IN_ECHO names the file that gets the arguments, --settings and hooks it was given.
+if (process.env.AGENTRIX_STAND_IN_ECHO) require('./stand-in-echo.cjs')();
+if (process.argv.includes('--version')) { console.log('2.1.317 (Claude Code)'); process.exit(0); }
 let input = '';
 process.stdin.on('data', chunk => { input += chunk; });
 process.stdin.on('end', () => {
