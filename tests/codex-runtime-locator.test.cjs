@@ -168,17 +168,27 @@ test('a locate keeps the answer when PATH spells its folder in another case or r
   }
 });
 
-test('a package a link takes out of its folder or to a network share is never run; a junction that moves both is followed', async () => {
+test("a package a link takes elsewhere on this machine is followed; one really on another share is never run", async () => {
   const prefix = 'D:\\nodejs', pnpm = W.join(local, 'pnpm'), nested = ['node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'];
   const npmShim = { [W.join(prefix, 'codex.cmd')]: { text: '"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
   const pnpmShim = { [W.join(pnpm, 'codex.cmd')]: { text: '"%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
-  const cases = [[prefix, npmShim, W.join(prefix, 'node_modules', '@openai', 'codex')], [pnpm, pnpmShim, W.join(pnpm, 'global', '5', 'node_modules', '@openai', 'codex')]];
-  // A local folder's package that a link takes to a share, elsewhere on the machine or above the folder.
-  for (const [folder, shims, dir] of cases) for (const target of ['\\\\server\\share\\codex', 'D:\\elsewhere\\codex', W.join(W.dirname(folder), 'codex')]) {
-    const { found, runs } = await find({ ...shims, [dir]: { link: target }, [W.join(target, ...nested)]: { size: NATIVE } }, { PATH: folder });
-    assert.deepEqual([found.file, runs], [null, []], `${dir} -> ${target}`);
+  const cases = [[prefix, npmShim, W.join(prefix, 'node_modules', '@openai', 'codex'), 'npm-vendor'], [pnpm, pnpmShim, W.join(pnpm, 'global', '5', 'node_modules', '@openai', 'codex'), 'npm-shim']];
+  // A local folder's package that a link (a junction, npm link) takes elsewhere on the machine runs; one it takes to a
+  // share is passed over, and Codex is then not found rather than incomplete.
+  for (const [folder, shims, dir, via] of cases) for (const target of ['D:\\elsewhere\\codex', W.join(W.dirname(folder), 'codex'), '\\\\server\\share\\codex']) {
+    const program = W.join(target, ...nested), { found, runs } = await find({ ...shims, [dir]: { link: target }, [program]: { size: NATIVE } }, { PATH: folder });
+    if (target.startsWith('\\\\')) assert.deepEqual([found.file, found.reason.code, runs], [null, 'codex.not_found', []], `${dir} -> ${target}`);
+    else assert.deepEqual(picked(found), { file: program, path: W.join(folder, 'codex.CMD'), via, version: '0.166.0', reason: null }, `${dir} -> ${target}`);
   }
-  // nvm-windows: the folder on PATH is a junction, so the package really is inside where the folder really is.
+  // npm's globals moved off C: by a junction, %APPDATA%\npm\node_modules -> D:\npm\node_modules: on PATH, or npm's
+  // default prefix off it.
+  const name = 'npm11-global-0.166.0', moved = 'D:\\npm', globals = W.join(roaming, 'npm'), entries = install(name, moved);
+  for (const shim of Object.keys(layouts.installs[name].shims)) { entries[W.join(globals, shim)] = entries[W.join(moved, shim)]; delete entries[W.join(moved, shim)]; }
+  entries[W.join(globals, 'node_modules', '@openai', 'codex')] = { link: W.join(moved, 'node_modules', '@openai', 'codex') };
+  for (const PATH of [globals, '']) {
+    assert.deepEqual(picked((await find(entries, { PATH })).found), { file: exeOf(name, moved), path: W.join(globals, 'codex.ps1'), via: PATH ? 'npm-vendor' : 'npm-prefix', version: '0.166.0', reason: null }, PATH || 'off PATH');
+  }
+  // nvm-windows: the folder on PATH is a junction, and so is where its package really is.
   const nvm = W.join(roaming, 'nvm', 'v22.11.0'), program = W.join(nvm, 'node_modules', '@openai', 'codex', ...nested);
   const { found } = await find({ ...npmShim, [prefix]: { link: nvm }, [W.join(prefix, 'node_modules', '@openai', 'codex')]: { link: W.join(nvm, 'node_modules', '@openai', 'codex') }, [program]: { size: NATIVE } }, { PATH: prefix });
   assert.deepEqual(picked(found), { file: program, path: W.join(prefix, 'codex.CMD'), via: 'npm-vendor', version: '0.166.0', reason: null });
@@ -194,7 +204,7 @@ test('a package a link takes out of its folder or to a network share is never ru
   }
 });
 
-test("a package whose program moved to a layout no table knows is found in its vendor tree, within bounds and its folder", async () => {
+test("a package whose program moved to a layout no table knows is found in its vendor tree, within bounds and off foreign shares", async () => {
   // Codex once moved vendor/<triple>/codex/codex.exe to vendor/<triple>/bin/codex.exe; a later move is still found.
   const prefix = 'D:\\nodejs', moved = (name, ...parts) => {
     const entries = install(name, prefix), exe = exeOf(name, prefix);
@@ -211,11 +221,13 @@ test("a package whose program moved to a layout no table knows is found in its v
   const bare = moved('npm11-global-0.166.0', 'newdir', 'codex.exe');
   for (const shim of ['codex', 'codex.cmd', 'codex.ps1']) delete bare.entries[W.join(prefix, shim)];
   assert.equal((await find({ ...bare.entries, [bare.file]: { size: NATIVE } }, { PATH: prefix })).found.path, bare.file);
-  // Deeper than that, or a link out of the folder or to a share, is not run: the package is incomplete.
+  // A link from there elsewhere on this machine is followed; deeper than three folders, or really on a share, is not
+  // run: the package is incomplete.
   const deeper = moved('npm11-global-0.166.0', 'a', 'b', 'c', 'd', 'codex.exe'), linked = moved('npm11-global-0.166.0', 'newdir', 'codex.exe');
+  const elsewhere = 'D:\\elsewhere\\codex.exe';
+  assert.equal((await find({ ...linked.entries, [linked.file]: { link: elsewhere }, [elsewhere]: { size: NATIVE } }, { PATH: prefix })).found.file, elsewhere);
   for (const [entries, label] of [[{ ...deeper.entries, [deeper.file]: { size: NATIVE } }, 'four folders below'],
-    [{ ...linked.entries, [linked.file]: { link: '\\\\server\\share\\codex.exe' }, '\\\\server\\share\\codex.exe': { size: NATIVE } }, 'a share'],
-    [{ ...linked.entries, [linked.file]: { link: 'D:\\elsewhere\\codex.exe' }, 'D:\\elsewhere\\codex.exe': { size: NATIVE } }, 'out of the folder']]) {
+    [{ ...linked.entries, [linked.file]: { link: '\\\\server\\share\\codex.exe' }, '\\\\server\\share\\codex.exe': { size: NATIVE } }, 'a share']]) {
     const { found, runs } = await find(entries, { PATH: prefix });
     assert.deepEqual([found.file, found.reason.code, runs], [null, 'codex.incomplete', []], label);
   }
@@ -244,6 +256,34 @@ test('a Codex that prints no version is still found and used, with why', async (
   assert.equal(runs.length, 4);
   // It is what the helper runs.
   assert.deepEqual(executable('codex', ['app-server'], env, unreadable.file), { file: exe, args: ['app-server'] });
+});
+
+test('peek() says the file chosen while a slow --version runs, with no reason yet, and an answer that stands keeps its own', async () => {
+  // Each check waits until the test answers it (Defender scanning a cold codex.exe can take longer than main's gate).
+  const exe = 'D:\\Tools\\codex.exe', options = { env: windowsEnv({ PATH: 'D:\\Tools' }), platform: 'win32', arch: 'x64' };
+  let started;
+  const check = () => new Promise(resolve => { started = resolve; });
+  const locator = createCodexLocator({ files: codexFiles({ [exe]: { size: NATIVE } }), probe: (_file, _args, _options, done) => started(done), storedPath: async () => null });
+  let checking = check();
+  const first = locator.refresh(options), answerFirst = await checking;
+  assert.deepEqual(picked(locator.peek()), { file: exe, path: exe, via: 'path', version: null, reason: null }, 'known before its version');
+  assert.equal(locator.locate(options), first, 'a locate meanwhile shares the search');
+  answerFirst(null, '');
+  const unreadable = await first;
+  assert.deepEqual([locator.peek(), unreadable.reason.code], [unreadable, 'codex.unreadable']);
+  // A refresh runs the check again: the answer for the same file stands, reason and all, until the check settles.
+  checking = check();
+  const second = locator.refresh(options), answerSecond = await checking;
+  assert.equal(locator.peek(), unreadable);
+  answerSecond(null, 'codex-cli 0.170.0');
+  assert.deepEqual(picked(await second), { file: exe, path: exe, via: 'path', version: '0.170.0', reason: null });
+  assert.equal(locator.peek(), await second);
+});
+
+test('each place a search looked is said once', async () => {
+  // The user's .npmrc names npm's default prefix, %APPDATA%\npm, as well.
+  const { found } = await find({ [W.join(home, '.npmrc')]: { text: `prefix=${W.join(roaming, 'npm')}\n` } });
+  assert.deepEqual([found.searched, found.reason.params.searched], [windowsSearched, windowsSearched.join('; ')]);
 });
 
 test('the terminal, the helper and native mode get the same file', async () => {

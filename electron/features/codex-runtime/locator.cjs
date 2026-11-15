@@ -69,28 +69,33 @@ function packageBinaries(dir, arch, path) {
   });
 }
 
-// A package a shim names, and where a link takes it, stays inside the shim's folder (for node_modules\.bin, the
-// node_modules it sits in): never above it, and never a UNC path unless the folder itself is on that share (a mapped
-// drive's real path is one).
+// The share (\\server\share\) a path is on, or null for a local one.
+const shareOf = (file, path) => (/^[\\/]{2}/.test(file) ? path.parse(path.resolve(file)).root.toLowerCase() : null);
+// A package a shim names stays inside the shim's folder (for node_modules\.bin, the node_modules it sits in): never
+// above it, and never a UNC path unless the folder itself is on that share. This is the guard: whoever can plant a
+// link in the folder can as well write its shim.
 function inside(folder, target, path) {
   const root = path.basename(folder).toLowerCase() === '.bin' ? path.dirname(folder) : folder, relative = path.relative(root, target);
-  const unc = file => /^[\\/]{2}/.test(file);
-  return (!unc(target) || unc(root)) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+  return (!shareOf(target, path) || !!shareOf(root, path)) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
+// Where a link really leads may be anywhere on this machine (npm's globals moved to D: by a junction, `npm link`), but
+// not onto a share unless the folder really is on that same share (a mapped drive).
+const onShareOf = (folder, real, path) => !shareOf(real, path) || shareOf(real, path) === shareOf(folder, path);
 
-// One Codex locator per process, for the terminal, the dispatch helper and native mode alike (codex-runtime/BOUNDARY.md).
-// A refresh reads the stored Windows PATH and searches; a throttled refresh does that at most once a minute; a locate
-// keeps the last answer while it stands. `--version` runs once per file, size and mtime.
+// Main's one Codex locator serves the terminal and native mode alike; the dispatch helper builds its own
+// (codex-runtime/BOUNDARY.md). A refresh reads the stored Windows PATH and searches; a throttled refresh does that at
+// most once a minute; a locate keeps the last answer while it stands. `--version` runs once per file, size and mtime.
 function createCodexLocator({ probe = execFile, files = fs, storedPath = readStoredPath, readNpmPrefix, now = Date.now } = {}) {
   const versions = new Map();
-  let stored = null, lastFull = null, last = null, running = null, trailing = null;
+  let stored = null, lastFull = null, last = null, latest = null, running = null, trailing = null;
 
   // The version a file printed, run once per file, size and mtime. One that printed none is run again only by a search
   // a refresh started (`retry`): the check never changes which file runs, and a hanging Codex must not gain a process
-  // on every locate.
-  async function version(real, stat, env, retry) {
+  // on every locate. `starting` is told just before the check runs.
+  async function version(real, stat, env, retry, starting) {
     const key = `${real}\0${stat.size}\0${stat.mtimeMs}`, cached = versions.get(key);
     if (cached && (cached.version || !retry)) return cached;
+    starting();
     const run = await readVersion(probe, real, env);
     versions.set(key, run);
     return run;
@@ -116,7 +121,9 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     return found;
   }
 
-  async function search({ env, platform, arch, home, prefer }, retry) {
+  // `found` is told the file chosen, without its version, while a check runs: what a terminal is told need not wait
+  // for a slow `--version` (Defender scanning a cold codex.exe).
+  async function search({ env, platform, arch, home, prefer }, retry, found) {
     const windows = platform === 'win32', path = windows ? nodePath.win32 : nodePath.posix;
     const shown = file => { const relative = home && path.relative(home, file); return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? path.join('~', relative) : file; };
     const inherited = variable(env, 'PATH') || '';
@@ -125,7 +132,8 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     const fromStored = new Set(windows && stored ? effective.split(';').slice(mergePath(inherited, [], env).split(';').filter(Boolean).length) : []);
     const places = installFolders({ env, platform }, await (readNpmPrefix ?? (options => npmPrefixes(options, files, path)))({ env, platform, home }), path);
     const pathHash = createHash('sha256').update(JSON.stringify([platform, home, effective, places, prefer ?? null])).digest('hex').slice(0, 16);
-    const searched = places.map(([place]) => shown(place)), folders = new Set();
+    // An npm prefix the .npmrc names may be %APPDATA%\npm as well: each place is said once.
+    const searched = [...new Set(places.map(([place]) => shown(place)))], folders = new Set();
     let pathFolders = 0, incomplete = null;
 
     // What one folder offers, in the wrapper's order, as [file, via, path] (`path` is what a terminal is told: the shim
@@ -150,11 +158,11 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       }
       const shim = first && !native(first) ? first : null, npm = [], kept = [];
       const within = await files.realpath(folder).catch(() => folder);
-      // A package behind a link (pnpm's store) finds its platform package beside where it really is, which stays
-      // inside where the folder really is (a junction such as nvm-windows' moves both).
+      // A package behind a link (pnpm's store, a junction to D:\npm\node_modules) finds its platform package beside
+      // where it really is. One really on a share the folder is not on is passed over, and so is not incomplete either.
       for (const [dir, shimVia] of packages) {
         const real = await files.realpath(dir).catch(() => dir);
-        if (!inside(within, real, path)) continue;
+        if (!onShareOf(within, real, path)) continue;
         const layouts = packageBinaries(real, arch, path).map(([file, layout]) => [file, via ?? shimVia ?? layout, shim ?? file]);
         npm.push(...layouts);
         kept.push({ dir, vendors: [...new Map(layouts.map(([file, layoutVia]) => [path.dirname(path.dirname(file)), layoutVia]))] });
@@ -183,16 +191,17 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       // A PATH folder that is an install folder takes its name; npm's prefix on PATH is told by its layout instead.
       const named = place || places.find(([placeFolder, via]) => via !== 'npm-prefix' && path.relative(placeFolder, folder) === '')?.[1];
       const { candidates, packages, shim, within } = await offered(folder, named ?? null, only);
-      // The answer for a candidate that runs; one a vendor tree turned up must really be where the folder is.
+      // The answer for a candidate that runs (told to `found` without a version while its check runs); one a vendor
+      // tree turned up is not really on a share the folder is not on.
       const take = async ([file, layoutVia, at], confined) => {
-        const found = await runnable(file, windows);
-        if (!found || confined && !inside(within, found.real, path)) return null;
-        const run = await version(found.real, found.stat, env, retry);
-        return { file: found.real, path: at, fileShown: shown(found.real), version: run.version ?? null,
+        const program = await runnable(file, windows);
+        if (!program || confined && !onShareOf(within, program.real, path)) return null;
+        const said = run => ({ file: program.real, path: at, fileShown: shown(program.real), version: run.version ?? null,
           via: layoutVia ?? (fromStored.has(entry) ? 'registry-path' : 'path'),
-          fingerprint: { file: found.real, size: found.stat.size, mtimeMs: found.stat.mtimeMs, pathHash },
-          reason: run.version ? null : reason(`codex.${run.failure}`, { source: SOURCE, ...(run.detail ? { detail: run.detail } : {}) }),
-          searched, pathFolders };
+          fingerprint: { file: program.real, size: program.stat.size, mtimeMs: program.stat.mtimeMs, pathHash },
+          reason: run.failure ? reason(`codex.${run.failure}`, { source: SOURCE, ...(run.detail ? { detail: run.detail } : {}) }) : null,
+          searched, pathFolders });
+        return said(await version(program.real, program.stat, env, retry, () => found(said({}))));
       };
       for (const candidate of candidates) { const result = await take(candidate); if (result) return result; }
       // An npm package whose program no known layout holds: its vendor trees, before it is called incomplete.
@@ -230,10 +239,13 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     }
     const key = JSON.stringify([options.platform, options.home, options.arch, variable(options.env, 'PATH') || '', stored, options.prefer ?? null]);
     if (!full && last?.key === key && await stands()) return last.result;
-    const result = await search(options, full);
+    // A file chosen while its check runs is what peek() says, unless it already says that file: a terminal restored at
+    // start-up is told it, and an answer that stands keeps its version and reason until the check settles.
+    const result = await search(options, full, chosen => { if (latest?.file !== chosen.file || latest?.path !== chosen.path) latest = chosen; });
     // Where `path` leads now, through a junction such as nvm-windows' C:\Program Files\nodejs, is what stands means.
     const leads = result.path && await files.realpath(result.path).catch(() => null);
     last = { key, result, leads, windows: options.platform === 'win32' };
+    latest = result;
     return result;
   }
   const normalized = ({ env = process.env, platform = process.platform, arch = process.arch, home, prefer } = {}) =>
@@ -254,12 +266,13 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     locate: options => shared(options, 'locate'),
     // `throttled` (window focus) searches anew at most once a minute; an explicit refresh always does.
     refresh: (options, { throttled = false } = {}) => shared(options, throttled ? 'throttled' : 'refresh'),
-    // The last result, for synchronous readers; null before the first search.
-    peek: () => last?.result ?? null,
+    // The last result, for synchronous readers, or the file a first search chose while its check runs; null before.
+    peek: () => latest,
   };
 }
 
-// The locator of a process no host injects one into: the dispatch helper, or a runtime built without a resolver.
+// The locator of a process no host injects one into: a codex-app-server runtime built without a resolver. (The
+// dispatch helper builds its own, helperLocator in integration/dispatch.cjs.)
 const processLocator = createCodexLocator();
 // The Codex file to run in this environment, or null: what this process's locator found.
 const codexExecutable = async (env = process.env, platform = process.platform) => (await processLocator.locate({ env, platform })).file;
