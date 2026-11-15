@@ -43,12 +43,12 @@ function context(local: Record<string, unknown>): { hero: Panel['hero']; groups:
 }
 
 function cost(local: Record<string, unknown>): { hero: Panel['hero']; groups: PanelGroup[] } {
-  const total = money(local.costUsdMicros), month = object(local.month), spent = money(month.spentMicros), budget = typeof month.budgetUsd === 'number' ? month.budgetUsd : null;
-  const caption = [t('API 计费'), spent === null ? null : t('本月已用 {value}', { value: dollars(spent) + (budget === null ? '' : ` / $${budget}`) })].filter(Boolean).join(' · ');
+  const total = money(local.costUsdMicros), month = object(local.month), spent = money(month.spentMicros);
+  const caption = [t('API 计费'), spent === null ? null : t('本月已用 {value}', { value: dollars(spent) })].filter(Boolean).join(' · ');
   const times = [{ label: t('总用时'), value: number(local.durationMs) }, { label: t('API 用时'), value: number(local.apiDurationMs) }].filter(row => row.value !== null);
   const models = array(local.models).map(object).flatMap((row): Row[] => word(row.model) ? [{ label: row.model as string, value: dollars(money(row.costUsdMicros)),
     note: [number(row.input) === null ? null : t('输入 {value}', { value: compact(number(row.input)) }), number(row.output) === null ? null : t('输出 {value}', { value: compact(number(row.output)) })].filter(Boolean).join(' · ') || undefined }] : []);
-  return { hero: { value: dollars(total), caption, percent: share(spent, budget === null ? null : budget * 1e6) }, groups: [
+  return { hero: { value: dollars(total), caption, percent: null }, groups: [
     ...(times.length ? [{ kind: 'rows', title: t('用时（本次打开以来）'), rows: times.map(row => ({ label: row.label, value: duration(row.value) })) } as const] : []),
     ...(models.length ? [{ kind: 'rows', title: t('按模型'), rows: models } as const] : []),
   ] };
@@ -73,7 +73,7 @@ const NOTICES: Record<string, () => string> = { credits_required: () => t('API �
 const windowName = (id: string) => id === 'five_hour' ? t('5 小时') : id === 'seven_day' ? t('每周') : id;
 
 function usage(local: Record<string, unknown>, now: number): { hero: Panel['hero']; groups: PanelGroup[]; alert?: Panel['alert'] } {
-  const month = object(local.month), spent = money(month.spentMicros), budget = typeof month.budgetUsd === 'number' ? month.budgetUsd : null, notice = object(local.notice);
+  const month = object(local.month), spent = money(month.spentMicros), notice = object(local.notice);
   const windows = array(local.limits).map(object).flatMap((row): (Quota & { resetsAtMs: number | null })[] => {
     const raw = typeof row.usedPercent === 'number' && Number.isFinite(row.usedPercent) ? row.usedPercent : null, percent = raw === null ? null : Math.min(100, Math.max(0, raw)), full = percent === 100;
     const at = number(row.resetsAtMs), time = at === null ? null : resetWords(at, now);
@@ -85,7 +85,7 @@ function usage(local: Record<string, unknown>, now: number): { hero: Panel['hero
     : blocked ? { strong: t('{name}额度已用完', { name: blocked.name }), text: blocked.resetsAtMs === null ? t('，恢复时间未知') : t('，{time} 恢复', { time: resetWords(blocked.resetsAtMs, now) }) } : undefined;
   const tokens = object(local.tokens), counts = [[t('输入'), tokens.input], [t('输出'), tokens.output], [t('缓存读取'), tokens.cacheRead], [t('缓存写入'), tokens.cacheWrite]] as const;
   const used = counts.flatMap(([label, value]): Row[] => number(value) === null ? [] : [{ label, value: grouped(number(value)) }]);
-  return { alert, hero: { value: dollars(spent), unit: budget === null ? undefined : `/ $${budget}`, caption: t('本月 API 花费'), percent: share(spent, budget === null ? null : budget * 1e6) }, groups: [
+  return { alert, hero: { value: dollars(spent), caption: t('本月 API 花费'), percent: null }, groups: [
     ...(windows.length ? [{ kind: 'quota', title: t('用量限额'), quotas: windows.map(({ resetsAtMs, ...rest }) => rest) } as const] : []),
     { kind: 'rows', title: t('花费'), rows: [{ label: t('今天'), value: dollars(money(object(local.today).spentMicros)) }, { label: t('本月'), value: dollars(spent) }] },
     ...(used.length ? [{ kind: 'rows', title: t('本会话 token'), rows: used } as const] : []),

@@ -7,7 +7,7 @@ export type { NativeAnswer, NativeSnapshot, NativeDraft, NativeHandoff, NativeHa
 
 export type NativeAgent = 'claude' | 'codex';
 export type ClaudePath = 'api-then-terminal' | 'api-only' | 'terminal-only';
-export type NativeSettings = { claudePath: ClaudePath; monthlyBudgetUsd: number | null; codexAutoReset: boolean };
+export type NativeSettings = { claudePath: ClaudePath; codexAutoReset: boolean };
 
 // One quota window (Codex's 5 hours or week, an API rate limit); a value the provider did not give is null, never 0.
 export type LimitWindow = { usedPercent: number | null; windowDurationMins: number | null; resetsAtMs: number | null };
@@ -28,7 +28,7 @@ export type AgentPathState = { path: 'api' | 'native' | 'terminal' | null; reaso
 export type KeyCheck = ConnectionTest['key']['status'];
 export type { ConnectionTest };
 export type NativeUsage = {
-  month: string; apiRecords: boolean; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true; budgetUsd: number | null;
+  month: string; apiRecords: boolean; todayUsdMicros: number | null; monthUsdMicros: number | null; estimated: true;
   agents: Record<NativeAgent, AgentPathState>;
   // Owner sessions still on their way to a changed run mode, counted by main; absent from an older main.
   switches?: { waiting: number } | null;
@@ -67,7 +67,7 @@ export interface NativeBridge {
 // a missing key is why), or not at all (the API only, and no key). Settings not read yet or a window without the bridge mean the terminal.
 export type Launch = { how: 'native' } | { how: 'terminal'; reason: 'no_key' | null } | { how: 'blocked'; reason: 'no_key' };
 export function launchRoute(agent: NativeAgent, settings: NativeSettings | null, keySaved: boolean | null): Launch {
-  // Codex runs on app-server only; nothing about Claude's key or budget touches it.
+  // Codex runs on app-server only; nothing about Claude's key touches it.
   if (agent === 'codex') return { how: 'native' };
   if (!settings) return { how: 'terminal', reason: null };
   if (settings.claudePath === 'terminal-only') return { how: 'terminal', reason: null };

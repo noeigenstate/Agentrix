@@ -1,7 +1,7 @@
 // The activity pane's second block, 运行方式与额度: per agent how it is connected and what it has left. Everything that measures sits in the agent it belongs to:
 //   - the agent of the current session leads with its context length and ends with this round's (and this conversation's) tokens; the other agent has neither;
-//   - a subscription shows its 5-hour and weekly bars and where they come from (Codex also its limit resets), never API spend or a budget;
-//   - an API connection shows the API spend and the monthly budget (a bar when one is set), never the subscription windows;
+//   - a subscription shows its 5-hour and weekly bars and where they come from (Codex also its limit resets), never API spend;
+//   - an API connection shows the API spend (today and this month, one row, information only: nothing reads it to decide anything), never the subscription windows;
 //   - Claude on the API also has a link to the console's billing page (the spend is an estimate; the console has the bill); a balance rejection brings the same button next to its notice, never two;
 //   - the provider's own notice that a limit was reached is said under the agent it belongs to, with when it recovers only if the provider said;
 //   - not connected, or not known, says "额度 未知";
@@ -126,17 +126,9 @@ function QuotaMetrics({ limits, current, usage }: { limits: LimitsPayload | null
   </>;
 }
 
-// The monthly budget: a bar when one is set, else "未设置". The spend row is not shown (it is still recorded);
-function ApiMetrics({ usage }: { usage: NativeUsage }) {
-  const { budgetUsd, monthUsdMicros } = usage;
-  const share = budgetUsd && typeof monthUsdMicros === 'number' ? Math.round(monthUsdMicros / (budgetUsd * 1e6) * 100) : null;
-  return <>
-    {budgetUsd === null
-      ? <Metric className="activity-tokens" label={t('月预算')} note={t('未设置')} />
-      : <Metric className="activity-figure" label={t('月预算')} percent={share ?? undefined} value={share === null ? t('未知') : `${share}%`} meterLabel={t('月预算已用 {percent}', { percent: `${share}%` })}
-        note={`${t('本月 {amount}', { amount: money(monthUsdMicros) })} / $${budgetUsd.toFixed(2)}`} />}
-  </>;
-}
+// The API spend, today and this month, as one row of information. Agentrix sets no limit of its own to measure it against, so it has no bar.
+const ApiSpend = ({ usage }: { usage: NativeUsage }) =>
+  <Metric className="activity-tokens" label={t('API 花费')} note={`${t('今天')} ${money(usage.todayUsdMicros)} · ${t('本月 {amount}', { amount: money(usage.monthUsdMicros) })}`} />;
 
 function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgent; usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) {
   const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind, notice = noticeWords(state?.limits?.notice);
@@ -152,8 +144,8 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   const plan = kind === 'subscription' || (kind !== 'api' && current && windowsFromScreen(tokens).length > 0), shown = plan || kind === 'api';
   // The console button is the owner's way to check a rejection for balance, shown only next to the notice that says it.
   const checkNotice = !!notice && !!projectId && consoleCheck(state?.limits?.notice);
-  // Only Claude on the API has a budget to show; Codex on the API has nothing of its own, so no empty block.
-  const budgeted = agent === 'claude' && kind === 'api' && !!usage;
+  // Only Claude on the API, and only once main has a spend record, has a spend row; Codex on the API has nothing of its own, so no empty block.
+  const spend = agent === 'claude' && kind === 'api' && !!usage?.apiRecords;
   const source = plan ? quotaSource(agent, state?.limits, current, tokens) : null;
   return <section className="api-agent" aria-label={NAMES[agent]}>
     <h4 className="api-agent-title">{NAMES[agent]}</h4>
@@ -162,10 +154,10 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
       <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
       {!shown && <Row label={t('额度')}><span>{t('未知')}</span></Row>}
     </dl>
-    {(current || plan || budgeted) && <div className="activity-metrics">
+    {(current || plan || spend) && <div className="activity-metrics">
       {current && <ContextMetric usage={tokens} />}
       {plan && <QuotaMetrics limits={state?.limits} current={current} usage={tokens} />}
-      {budgeted && <ApiMetrics usage={usage} />}
+      {spend && <ApiSpend usage={usage} />}
       {current && rows.map(([label, counted]) => counted && <TokenMetric key={label} label={label} tokens={counted} />)}
     </div>}
     {notice && <p className="activity-note" role="status">{[notice.text, notice.resets].filter(Boolean).join(' · ')}</p>}
