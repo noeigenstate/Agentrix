@@ -6,6 +6,7 @@ import { UserAvatar } from '../../shared/UserAvatar';
 import { modelName } from '../../shared/model-name.ts';
 import { stepVerb } from '../agents/action-text';
 import { showPopup } from '../files/file-popup.ts';
+import { withoutDelivery } from '../home/delivery.ts';
 import { Markdown } from './Markdown';
 import { PathText } from './PathText';
 import { useReadingPaths } from './useReadingPaths';
@@ -91,22 +92,25 @@ type PathOf = (target: string) => Promise<string | null>;
 
 // A message card with the right-click menu (引用 / 复制, and 复制路径 on a reply's file link when pathOf is given). A message
 // with words of its own can be quoted; one that was left out for size, or holds only a picture, has no menu.
-function Message({ entry, who, className, pathOf, onError, children }: { entry: ConversationEntry; who: string; className: string; pathOf?: PathOf; onError: (message: string) => void; children: ReactNode }) {
+function Message({ entry, text = entry.text, who, className, pathOf, onError, children }: { entry: ConversationEntry; text?: string; who: string; className: string; pathOf?: PathOf; onError: (message: string) => void; children: ReactNode }) {
   const quote = useContext(ConversationDecorations)?.quote;
-  return <MessageCard id={entry.id} className={className} text={entry.omitted ? undefined : entry.text} who={who} quote={quote} pathOf={pathOf} onError={onError}>{children}</MessageCard>;
+  return <MessageCard id={entry.id} className={className} text={entry.omitted ? undefined : text} who={who} quote={quote} pathOf={pathOf} onError={onError}>{children}</MessageCard>;
 }
 
 // A reply card inside its agent's turn, with the local pictures, pages and videos it names shown under it
 // (the agents are told they can show one this way: reading-note.cjs).
 function AssistantReply({ entry, agent, projectId, result = false, pathOf, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; pathOf?: PathOf; onError: (message: string) => void }) {
+  // The closing 【交付】 block is read by the homework card, not shown here; what is shown is also what 复制 and 引用 take.
+  const shown = useMemo(() => withoutDelivery(entry.text || ''), [entry.text]);
+  // File cards come from the whole reply: agents name their deliverables in the block's 结果.
   const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
-  const words = entry.text ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : entry.text} /> : null;
+  const words = shown ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : shown} /> : null;
   // The latest result shows its picture first with the words under it; anywhere else the words come first. A picture
   // waiting to be read back shows its button in place of the words that say so.
   const deferred = !entry.images?.[0] && entry.generated?.deferred;
   const picture = entry.generated && entry.images?.[0] ? <GeneratedImage src={entry.images[0]} picture={entry.generated} projectId={projectId} result={result} onError={onError}>{result && words}</GeneratedImage>
     : deferred ? <DeferredPicture picture={entry.generated!} projectId={projectId} result={result} onError={onError} /> : null;
-  return <Message entry={entry} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} pathOf={pathOf} onError={onError}>{result && picture}{!(result && picture) && !deferred && words}
+  return <Message entry={entry} text={shown} who={agent === 'claude' ? 'Claude Code' : 'Codex'} className={`reading-assistant is-${agent}`} pathOf={pathOf} onError={onError}>{result && picture}{!(result && picture) && !deferred && words}
       {entry.generated && !picture && <GeneratedCopy picture={entry.generated} projectId={projectId} onError={onError} />}
       {named.length > 0 && <FileCards projectId={projectId} files={named} excludeImages={picture && entry.generated ? [entry.generated.path] : []} renderMarkdown={text => <Markdown text={text} />} onError={onError} quiet />}
       {!result && picture}</Message>;

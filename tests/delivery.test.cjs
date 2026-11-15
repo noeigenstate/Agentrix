@@ -28,3 +28,10 @@ test('English labels, the last summary when there are several, and nothing for a
   assert.equal(parseDelivery('回滚步骤已补上，测试全部通过。'), null);
   assert.equal(parseDelivery(''), null);
 });
+
+test('a reply that is nothing but its 交付 block keeps it, so the reading card is never empty', () => {
+  const { withoutDelivery } = require('../src/features/home/delivery.ts');
+  const only = '【交付】\n问题：A\n原因：B\n结果：C';
+  assert.equal(withoutDelivery(only), only);
+  assert.equal(withoutDelivery(`Done.\n\n${only}`), 'Done.');
+});
