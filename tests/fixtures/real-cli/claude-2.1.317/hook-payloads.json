@@ -1,0 +1,2652 @@
+{
+ "claudeCodeVersion": "2.1.317",
+ "capturedBy": "K0b lab (w0-k0b): real claude.exe in a PTY, fake key, throwaway profile, local Anthropic stub; hooks delivered over HTTP to a local receiver that answers {}",
+ "platform": "win32-x64",
+ "hookEventNamesInBinary": 33,
+ "events": {
+  "PreToolUse": {
+   "fired": true,
+   "count": 37,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "any tool call",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "mcp_server",
+    "permission_mode",
+    "prompt_id",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "tool_use_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 762,
+    "max": 950
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-3>",
+     "permission_mode": "default",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Write",
+     "tool_input": {
+      "file_path": "<CWD>\\write1.txt",
+      "content": "lab\n"
+     },
+     "tool_use_id": "<toolu-1>"
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-4>",
+     "permission_mode": "default",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Bash",
+     "tool_input": {
+      "command": "env | sort > bash-env.txt",
+      "description": "Record the environment"
+     },
+     "tool_use_id": "<toolu-2>"
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-5>",
+     "permission_mode": "default",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Read",
+     "tool_input": {
+      "file_path": "<CWD>\\missing-file.txt"
+     },
+     "tool_use_id": "<toolu-3>"
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-6>",
+     "permission_mode": "default",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "AskUserQuestion",
+     "tool_input": {
+      "questions": [
+       {
+        "question": "Pick a color?",
+        "header": "Color",
+        "options": [
+         {
+          "label": "Red",
+          "description": "warm"
+         },
+         {
+          "label": "Blue",
+          "description": "cool"
+         }
+        ],
+        "multiSelect": false
+       }
+      ]
+     },
+     "tool_use_id": "<toolu-4>"
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-7>",
+     "permission_mode": "default",
+     "hook_event_name": "PreToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "Lab sub task",
+      "prompt": "SCN:SUBTASK reply SUB_DONE",
+      "subagent_type": "general-purpose"
+     },
+     "tool_use_id": "<toolu-5>"
+    }
+   ]
+  },
+  "PostToolUse": {
+   "fired": true,
+   "count": 28,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a tool that succeeded",
+   "fields": [
+    "cwd",
+    "duration_ms",
+    "hook_event_name",
+    "mcp_server",
+    "permission_mode",
+    "prompt_id",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "tool_response",
+    "tool_use_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 880,
+    "max": 1333
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-3>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Write",
+     "tool_input": {
+      "file_path": "<CWD>\\write1.txt",
+      "content": "lab\n"
+     },
+     "tool_response": {
+      "type": "create",
+      "filePath": "<CWD>\\write1.txt",
+      "content": "lab\n",
+      "structuredPatch": [],
+      "originalFile": null,
+      "userModified": false
+     },
+     "tool_use_id": "<toolu-1>",
+     "duration_ms": 77
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-4>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Bash",
+     "tool_input": {
+      "command": "env | sort > bash-env.txt",
+      "description": "Record the environment"
+     },
+     "tool_response": {
+      "stdout": "",
+      "stderr": "\nShell cwd was reset to <CWD>",
+      "interrupted": false,
+      "isImage": false,
+      "noOutputExpected": false
+     },
+     "tool_use_id": "<toolu-2>",
+     "duration_ms": 4406
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-6>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "AskUserQuestion",
+     "tool_input": {
+      "questions": [
+       {
+        "question": "Pick a color?",
+        "header": "Color",
+        "options": [
+         {
+          "label": "Red",
+          "description": "warm"
+         },
+         {
+          "label": "Blue",
+          "description": "cool"
+         }
+        ],
+        "multiSelect": false
+       }
+      ],
+      "answers": {
+       "Pick a color?": "Red"
+      },
+      "annotations": {}
+     },
+     "tool_response": {
+      "questions": [
+       {
+        "question": "Pick a color?",
+        "header": "Color",
+        "options": [
+         {
+          "label": "Red",
+          "description": "warm"
+         },
+         {
+          "label": "Blue",
+          "description": "cool"
+         }
+        ],
+        "multiSelect": false
+       }
+      ],
+      "answers": {
+       "Pick a color?": "Red"
+      },
+      "annotations": {}
+     },
+     "tool_use_id": "<toolu-4>",
+     "duration_ms": 1
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-7>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "Agent",
+     "tool_input": {
+      "description": "Lab sub task",
+      "prompt": "SCN:SUBTASK reply SUB_DONE",
+      "subagent_type": "general-purpose"
+     },
+     "tool_response": {
+      "isAsync": true,
+      "status": "async_launched",
+      "agentId": "<agent-id-1>",
+      "description": "Lab sub task",
+      "resolvedModel": "claude-sonnet-4-5",
+      "prompt": "SCN:SUBTASK reply SUB_DONE",
+      "outputFile": "<TEMP>\\claude\\885d4c12d0b649cb\\<uuid-1>\\tasks\\<agent-id-1>.output",
+      "canReadOutputFile": true,
+      "canContinueAgent": true
+     },
+     "tool_use_id": "<toolu-5>",
+     "duration_ms": 10
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-8>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolUse",
+     "tool_name": "ToolSearch",
+     "tool_input": {
+      "query": "select:SendMessage",
+      "max_results": 1
+     },
+     "tool_response": {
+      "matches": [
+       "SendMessage"
+      ],
+      "query": "select:SendMessage",
+      "total_deferred_tools": 17
+     },
+     "tool_use_id": "<toolu-6>",
+     "duration_ms": 1
+    }
+   ]
+  },
+  "PostToolUseFailure": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a Read of a file that does not exist",
+   "fields": [
+    "cwd",
+    "duration_ms",
+    "error",
+    "hook_event_name",
+    "is_interrupt",
+    "permission_mode",
+    "prompt_id",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "tool_use_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 1138,
+    "max": 1144
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-5>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolUseFailure",
+     "tool_name": "Read",
+     "tool_input": {
+      "file_path": "<CWD>\\missing-file.txt"
+     },
+     "tool_use_id": "<toolu-3>",
+     "error": "File does not exist. Note: your current working directory is <CWD>.",
+     "is_interrupt": false,
+     "duration_ms": 16
+    },
+    {
+     "session_id": "<uuid-9>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\evc317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-9>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\evc317\\w",
+     "prompt_id": "<uuid-10>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolUseFailure",
+     "tool_name": "Read",
+     "tool_input": {
+      "file_path": "<LAB>/runs/<RUN>\\runs\\evc317\\w\\missing-file.txt"
+     },
+     "tool_use_id": "<toolu-7>",
+     "error": "File does not exist. Note: your current working directory is <LAB>/runs/<RUN>\\runs\\evc317\\w.",
+     "is_interrupt": false,
+     "duration_ms": 12
+    }
+   ]
+  },
+  "PostToolBatch": {
+   "fired": true,
+   "count": 33,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "the end of a batch of tool calls",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "permission_mode",
+    "prompt_id",
+    "session_id",
+    "tool_calls",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 823,
+    "max": 2076
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-3>",
+     "permission_mode": "default",
+     "hook_event_name": "PostToolBatch",
+     "tool_calls": [
+      {
+       "tool_name": "Write",
+       "tool_input": {
+        "file_path": "<CWD>\\write1.txt",
+        "content": "lab\n"
+       },
+       "tool_use_id": "<toolu-1>",
+       "tool_response": "File created successfully at: <CWD>\\write1.txt (file state is current in your context — no need to Read it back)"
+      }
+     ]
+    }
+   ]
+  },
+  "Notification": {
+   "fired": true,
+   "count": 6,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a permission dialog waiting, an elicitation dialog and an idle prompt (notification_type tells which)",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "message",
+    "notification_type",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 694,
+    "max": 720
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-11>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-11>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-12>",
+     "hook_event_name": "Notification",
+     "message": "Claude is waiting for your input",
+     "notification_type": "idle_prompt"
+    },
+    {
+     "session_id": "<uuid-9>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\evc317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-9>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\evc317\\w",
+     "prompt_id": "<uuid-13>",
+     "hook_event_name": "Notification",
+     "message": "Claude needs your permission",
+     "notification_type": "permission_prompt"
+    },
+    {
+     "session_id": "<uuid-14>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\el317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-14>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\el317\\w",
+     "prompt_id": "<uuid-15>",
+     "hook_event_name": "Notification",
+     "message": "Elicitation response for server \"probe\": cancel",
+     "notification_type": "elicitation_response"
+    }
+   ]
+  },
+  "UserPromptSubmit": {
+   "fired": true,
+   "count": 47,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "typing a prompt and Enter (also fires for the turn that answers a sub-agent notification)",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "permission_mode",
+    "prompt",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 670,
+    "max": 1488
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-16>",
+     "permission_mode": "default",
+     "hook_event_name": "UserPromptSubmit",
+     "prompt": "SCN:PLAIN hello"
+    }
+   ]
+  },
+  "UserPromptExpansion": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a custom slash command (/labcmd arg) from .claude/commands",
+   "fields": [
+    "command_args",
+    "command_name",
+    "command_source",
+    "cwd",
+    "expansion_type",
+    "hook_event_name",
+    "permission_mode",
+    "prompt",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 786,
+    "max": 790
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-17>",
+     "permission_mode": "default",
+     "hook_event_name": "UserPromptExpansion",
+     "expansion_type": "slash_command",
+     "command_name": "labcmd",
+     "command_args": "arg",
+     "command_source": "projectSettings",
+     "prompt": "/labcmd arg"
+    }
+   ]
+  },
+  "SessionStart": {
+   "fired": true,
+   "count": 3,
+   "transports": [
+    "cmd"
+   ],
+   "trigger": "start-up and /compact, and only to COMMAND hooks: an http hook configured for SessionStart is never called",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "model",
+    "prompt_id",
+    "session_id",
+    "source",
+    "transcript_path"
+   ],
+   "requestHeaders": {},
+   "bodyBytes": {
+    "min": 585,
+    "max": 664
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-9>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\evc317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-9>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\evc317\\w",
+     "hook_event_name": "SessionStart",
+     "source": "startup",
+     "model": "claude-sonnet-4-5"
+    },
+    {
+     "session_id": "<uuid-9>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\evc317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-9>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\evc317\\w",
+     "prompt_id": "<uuid-18>",
+     "hook_event_name": "SessionStart",
+     "source": "compact",
+     "model": "claude-opus-4-5"
+    },
+    {
+     "session_id": "<uuid-19>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\evc317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-19>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\evc317\\w",
+     "hook_event_name": "SessionStart",
+     "source": "clear"
+    }
+   ]
+  },
+  "SessionEnd": {
+   "fired": true,
+   "count": 6,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "/exit and /clear",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "prompt_id",
+    "reason",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 630,
+    "max": 646
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-20>",
+     "hook_event_name": "SessionEnd",
+     "reason": "clear"
+    },
+    {
+     "session_id": "<uuid-11>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-11>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-21>",
+     "hook_event_name": "SessionEnd",
+     "reason": "prompt_input_exit"
+    }
+   ]
+  },
+  "Stop": {
+   "fired": true,
+   "count": 40,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "the end of every turn",
+   "fields": [
+    "background_tasks",
+    "cwd",
+    "effort",
+    "hook_event_name",
+    "last_assistant_message",
+    "permission_mode",
+    "prompt_id",
+    "session_crons",
+    "session_id",
+    "stop_hook_active",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 733,
+    "max": 862
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-16>",
+     "permission_mode": "default",
+     "hook_event_name": "Stop",
+     "stop_hook_active": false,
+     "last_assistant_message": "ANSWER_PLAIN_0 ANSWER_PLAIN_1 ANSWER_PLAIN_2 ANSWER_PLAIN_3",
+     "background_tasks": [],
+     "session_crons": []
+    }
+   ]
+  },
+  "StopFailure": {
+   "fired": true,
+   "count": 1,
+   "transports": [
+    "http"
+   ],
+   "trigger": "the stub answered the model request with HTTP 400 and 401",
+   "fields": [
+    "cwd",
+    "error",
+    "hook_event_name",
+    "last_assistant_message",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 695,
+    "max": 695
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-22>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\fl317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-22>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\fl317\\w",
+     "prompt_id": "<uuid-23>",
+     "hook_event_name": "StopFailure",
+     "error": "unknown",
+     "last_assistant_message": "API Error: 400 Lab stub failure 400"
+    }
+   ]
+  },
+  "SubagentStart": {
+   "fired": true,
+   "count": 6,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "the Agent tool",
+   "fields": [
+    "agent_id",
+    "agent_type",
+    "cwd",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 678,
+    "max": 682
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-7>",
+     "agent_id": "<agent-id-1>",
+     "agent_type": "general-purpose",
+     "hook_event_name": "SubagentStart"
+    }
+   ]
+  },
+  "SubagentStop": {
+   "fired": true,
+   "count": 8,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "the end of an Agent tool run",
+   "fields": [
+    "agent_id",
+    "agent_transcript_path",
+    "agent_type",
+    "background_tasks",
+    "cwd",
+    "effort",
+    "hook_event_name",
+    "last_assistant_message",
+    "permission_mode",
+    "prompt_id",
+    "session_crons",
+    "session_id",
+    "stop_hook_active",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 1219,
+    "max": 1315
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-7>",
+     "permission_mode": "default",
+     "agent_id": "<agent-id-1>",
+     "agent_type": "general-purpose",
+     "hook_event_name": "SubagentStop",
+     "stop_hook_active": false,
+     "agent_transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>\\subagents\\agent-<agent-id-1>.jsonl",
+     "last_assistant_message": "SUB_DONE",
+     "background_tasks": [
+      {
+       "id": "<agent-id-1>",
+       "type": "subagent",
+       "status": "running",
+       "description": "Lab sub task",
+       "agent_type": "general-purpose"
+      }
+     ],
+     "session_crons": []
+    }
+   ]
+  },
+  "PreCompact": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "/compact",
+   "fields": [
+    "custom_instructions",
+    "cwd",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "transcript_path",
+    "trigger"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 659,
+    "max": 663
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-24>",
+     "hook_event_name": "PreCompact",
+     "trigger": "manual",
+     "custom_instructions": null
+    }
+   ]
+  },
+  "PostCompact": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "/compact",
+   "fields": [
+    "compact_summary",
+    "cwd",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "transcript_path",
+    "trigger"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 684,
+    "max": 688
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-24>",
+     "hook_event_name": "PostCompact",
+     "trigger": "manual",
+     "compact_summary": "<summary>LAB SUMMARY</summary>"
+    }
+   ]
+  },
+  "PreModelSwitch": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "/model claude-opus-4-5",
+   "fields": [
+    "cache_ttl",
+    "context_tokens",
+    "cwd",
+    "estimated_cache_write_usd",
+    "from_model",
+    "hook_event_name",
+    "pricing",
+    "prompt_cache_warm",
+    "prompt_id",
+    "requested_model",
+    "session_id",
+    "source",
+    "to_model",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 851,
+    "max": 855
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-25>",
+     "hook_event_name": "PreModelSwitch",
+     "from_model": "claude-sonnet-4-5",
+     "to_model": "claude-opus-4-5",
+     "requested_model": "claude-opus-4-5",
+     "source": "command",
+     "context_tokens": 11,
+     "prompt_cache_warm": true,
+     "cache_ttl": "5m",
+     "estimated_cache_write_usd": 0.0001,
+     "pricing": "catalog"
+    }
+   ]
+  },
+  "PostModelSwitch": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "/model claude-opus-4-5",
+   "fields": [
+    "cache_ttl",
+    "context_tokens",
+    "cwd",
+    "estimated_cache_write_usd",
+    "from_model",
+    "hook_event_name",
+    "pricing",
+    "prompt_cache_warm",
+    "prompt_id",
+    "requested_model",
+    "session_id",
+    "source",
+    "to_model",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 852,
+    "max": 856
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-25>",
+     "hook_event_name": "PostModelSwitch",
+     "from_model": "claude-sonnet-4-5",
+     "to_model": "claude-opus-4-5",
+     "requested_model": "claude-opus-4-5",
+     "source": "command",
+     "context_tokens": 11,
+     "prompt_cache_warm": true,
+     "cache_ttl": "5m",
+     "estimated_cache_write_usd": 0.0001,
+     "pricing": "catalog"
+    }
+   ]
+  },
+  "PermissionRequest": {
+   "fired": true,
+   "count": 15,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a Write or Bash call that needs the owner (dialog)",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "mcp_server",
+    "permission_mode",
+    "permission_suggestions",
+    "prompt_id",
+    "session_id",
+    "tool_input",
+    "tool_name",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 860,
+    "max": 998
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-3>",
+     "permission_mode": "default",
+     "hook_event_name": "PermissionRequest",
+     "tool_name": "Write",
+     "tool_input": {
+      "file_path": "<CWD>\\write1.txt",
+      "content": "lab\n"
+     },
+     "permission_suggestions": [
+      {
+       "type": "setMode",
+       "mode": "acceptEdits",
+       "destination": "session"
+      }
+     ]
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-4>",
+     "permission_mode": "default",
+     "hook_event_name": "PermissionRequest",
+     "tool_name": "Bash",
+     "tool_input": {
+      "command": "env | sort > bash-env.txt",
+      "description": "Record the environment"
+     },
+     "permission_suggestions": [
+      {
+       "type": "addRules",
+       "rules": [
+        {
+         "toolName": "Bash",
+         "ruleContent": "env"
+        }
+       ],
+       "behavior": "allow",
+       "destination": "localSettings"
+      }
+     ]
+    },
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-6>",
+     "permission_mode": "default",
+     "hook_event_name": "PermissionRequest",
+     "tool_name": "AskUserQuestion",
+     "tool_input": {
+      "questions": [
+       {
+        "question": "Pick a color?",
+        "header": "Color",
+        "options": [
+         {
+          "label": "Red",
+          "description": "warm"
+         },
+         {
+          "label": "Blue",
+          "description": "cool"
+         }
+        ],
+        "multiSelect": false
+       }
+      ]
+     }
+    },
+    {
+     "session_id": "<uuid-14>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\el317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-14>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\el317\\w",
+     "prompt_id": "<uuid-26>",
+     "permission_mode": "default",
+     "hook_event_name": "PermissionRequest",
+     "tool_name": "mcp__probe__request_input",
+     "tool_input": {},
+     "permission_suggestions": [
+      {
+       "type": "addRules",
+       "rules": [
+        {
+         "toolName": "mcp__probe__request_input"
+        }
+       ],
+       "behavior": "allow",
+       "destination": "localSettings"
+      }
+     ],
+     "mcp_server": {
+      "name": "probe",
+      "source": "dynamic"
+     }
+    }
+   ]
+  },
+  "PermissionDenied": {
+   "fired": false,
+   "trigger": "NOT FIRED. Tried: Esc on the dialog, a PermissionRequest hook answering deny, a PreToolUse hook answering deny, --permission-mode dontAsk, --permission-mode auto (the dialog still appeared; the stub cannot act as the auto-mode classifier). The binary documents it as fired by the auto-mode classifier only",
+   "tried": "NOT FIRED. Tried: Esc on the dialog, a PermissionRequest hook answering deny, a PreToolUse hook answering deny, --permission-mode dontAsk, --permission-mode auto (the dialog still appeared; the stub cannot act as the auto-mode classifier). The binary documents it as fired by the auto-mode classifier only"
+  },
+  "Setup": {
+   "fired": false,
+   "trigger": "NOT FIRED. Tried: claude --init and claude --maintenance with command hooks (the hook never ran)",
+   "tried": "NOT FIRED. Tried: claude --init and claude --maintenance with command hooks (the hook never ran)"
+  },
+  "TeammateIdle": {
+   "fired": false,
+   "trigger": "NOT FIRED. Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) were not started",
+   "tried": "NOT FIRED. Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS) were not started"
+  },
+  "TaskCreated": {
+   "fired": true,
+   "count": 3,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a TaskCreate tool call",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "task_description",
+    "task_id",
+    "task_subject",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 696,
+    "max": 700
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-27>",
+     "hook_event_name": "TaskCreated",
+     "task_id": "1",
+     "task_subject": "Lab task",
+     "task_description": "Lab task description"
+    }
+   ]
+  },
+  "TaskCompleted": {
+   "fired": true,
+   "count": 3,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a TaskUpdate tool call with status completed",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "task_description",
+    "task_id",
+    "task_subject",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 698,
+    "max": 702
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-27>",
+     "hook_event_name": "TaskCompleted",
+     "task_id": "1",
+     "task_subject": "Lab task",
+     "task_description": "Lab task description"
+    }
+   ]
+  },
+  "Elicitation": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http"
+   ],
+   "trigger": "an MCP tool (scripts/native-approval-mcp.cjs request_input) asking for a form",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "mcp_server_name",
+    "message",
+    "mode",
+    "prompt_id",
+    "requested_schema",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 848,
+    "max": 848
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-14>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\el317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-14>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\el317\\w",
+     "prompt_id": "<uuid-26>",
+     "hook_event_name": "Elicitation",
+     "mcp_server_name": "probe",
+     "message": "Complete the local probe form",
+     "mode": "form",
+     "requested_schema": {
+      "type": "object",
+      "properties": {
+       "name": {
+        "type": "string",
+        "minLength": 1
+       },
+       "approved": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "name",
+       "approved"
+      ]
+     }
+    }
+   ]
+  },
+  "ElicitationResult": {
+   "fired": true,
+   "count": 1,
+   "transports": [
+    "http"
+   ],
+   "trigger": "the form answered by the Elicitation hook, or cancelled in the dialog",
+   "fields": [
+    "action",
+    "cwd",
+    "hook_event_name",
+    "mcp_server_name",
+    "mode",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 678,
+    "max": 678
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-14>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\el317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-14>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\el317\\w",
+     "prompt_id": "<uuid-15>",
+     "hook_event_name": "ElicitationResult",
+     "mcp_server_name": "probe",
+     "mode": "form",
+     "action": "cancel"
+    }
+   ]
+  },
+  "ConfigChange": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a settings.local.json written into the project while the session ran",
+   "fields": [
+    "cwd",
+    "file_path",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "source",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 818,
+    "max": 823
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-28>",
+     "hook_event_name": "ConfigChange",
+     "source": "local_settings",
+     "file_path": "<CWD>\\.claude\\settings.local.json"
+    }
+   ]
+  },
+  "WorktreeCreate": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "claude --worktree <name> in a git repository with one commit. The hook replaces the default creation, so the lab (which answered {} or nothing) got no worktree and the CLI stopped after this event",
+   "fields": [
+    "cwd",
+    "hook_event_name",
+    "name",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 579,
+    "max": 580
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-29>",
+     "transcript_path": "<LAB>/runs/<RUN>\\runs\\wt317\\h\\.claude\\projects\\<encoded-cwd>\\<uuid-29>.jsonl",
+     "cwd": "<LAB>/runs/<RUN>\\runs\\wt317\\w",
+     "hook_event_name": "WorktreeCreate",
+     "name": "wt1"
+    }
+   ]
+  },
+  "WorktreeRemove": {
+   "fired": false,
+   "trigger": "NOT FIRED. No worktree was ever created because WorktreeCreate has to return the path itself",
+   "tried": "NOT FIRED. No worktree was ever created because WorktreeCreate has to return the path itself"
+  },
+  "InstructionsLoaded": {
+   "fired": true,
+   "count": 12,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "start-up (CLAUDE.md in the project)",
+   "fields": [
+    "cwd",
+    "file_path",
+    "hook_event_name",
+    "load_reason",
+    "memory_type",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 782,
+    "max": 838
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "hook_event_name": "InstructionsLoaded",
+     "file_path": "<CWD>\\CLAUDE.md",
+     "memory_type": "Project",
+     "load_reason": "session_start"
+    }
+   ]
+  },
+  "CwdChanged": {
+   "fired": false,
+   "trigger": "NOT FIRED. Tried: Bash calls \"cd .claude && pwd\" and \"cd .. && pwd\" (the Bash tool resets its cwd after each call)",
+   "tried": "NOT FIRED. Tried: Bash calls \"cd .claude && pwd\" and \"cd .. && pwd\" (the Bash tool resets its cwd after each call)"
+  },
+  "FileChanged": {
+   "fired": true,
+   "count": 4,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "a file named by the hook matcher (watched.txt) written twice from outside",
+   "fields": [
+    "cwd",
+    "event",
+    "file_path",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 788,
+    "max": 796
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-28>",
+     "hook_event_name": "FileChanged",
+     "file_path": "<CWD>\\watched.txt",
+     "event": "add"
+    }
+   ]
+  },
+  "DirectoryAdded": {
+   "fired": true,
+   "count": 2,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "/add-dir",
+   "fields": [
+    "cwd",
+    "directory",
+    "hook_event_name",
+    "prompt_id",
+    "session_id",
+    "source",
+    "transcript_path"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 793,
+    "max": 798
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-28>",
+     "hook_event_name": "DirectoryAdded",
+     "directory": "<LAB>/runs/<RUN>\\extra",
+     "source": "slash_command"
+    }
+   ]
+  },
+  "MessageDisplay": {
+   "fired": true,
+   "count": 40,
+   "transports": [
+    "http",
+    "cmd"
+   ],
+   "trigger": "every message the terminal shows",
+   "fields": [
+    "cwd",
+    "delta",
+    "final",
+    "hook_event_name",
+    "index",
+    "message_id",
+    "prompt_id",
+    "session_id",
+    "transcript_path",
+    "turn_id"
+   ],
+   "requestHeaders": {
+    "content-type": "application/json",
+    "user-agent": "axios/1.15.2"
+   },
+   "bodyBytes": {
+    "min": 756,
+    "max": 816
+   },
+   "samples": [
+    {
+     "session_id": "<uuid-1>",
+     "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+     "cwd": "<CWD>",
+     "prompt_id": "<uuid-16>",
+     "hook_event_name": "MessageDisplay",
+     "turn_id": "<uuid-30>",
+     "message_id": "<uuid-31>",
+     "index": 0,
+     "final": true,
+     "delta": "ANSWER_PLAIN_0 ANSWER_PLAIN_1 ANSWER_PLAIN_2 ANSWER_PLAIN_3 "
+    }
+   ]
+  }
+ },
+ "notFired": [
+  "PermissionDenied",
+  "Setup",
+  "TeammateIdle",
+  "WorktreeRemove",
+  "CwdChanged"
+ ],
+ "sendMessageContinuation": {
+  "observed": true,
+  "sendMessagePreToolUse": {
+   "session_id": "<uuid-1>",
+   "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+   "cwd": "<CWD>",
+   "prompt_id": "<uuid-8>",
+   "permission_mode": "default",
+   "hook_event_name": "PreToolUse",
+   "tool_name": "SendMessage",
+   "tool_input": {
+    "to": "<agent-id-1>",
+    "summary": "continue the lab task",
+    "message": "SCN:SUBTASK continue SUB_DONE",
+    "type": "message",
+    "recipient": "<agent-id-1>",
+    "recipient_kind": "agent",
+    "content": "SCN:SUBTASK continue SUB_DONE"
+   },
+   "tool_use_id": "<toolu-8>"
+  },
+  "sendMessagePostToolUse": {
+   "session_id": "<uuid-1>",
+   "transcript_path": "<HOME>\\.claude\\projects\\<encoded-cwd>\\<uuid-1>.jsonl",
+   "cwd": "<CWD>",
+   "prompt_id": "<uuid-8>",
+   "permission_mode": "default",
+   "hook_event_name": "PostToolUse",
+   "tool_name": "SendMessage",
+   "tool_input": {
+    "to": "<agent-id-1>",
+    "summary": "continue the lab task",
+    "message": "SCN:SUBTASK continue SUB_DONE"
+   },
+   "tool_response": {
+    "success": true,
+    "message": "Resuming agent adc25bb",
+    "resumedAgentId": "<agent-id-1>",
+    "revivedAgentId": "<agent-id-1>",
+    "pin": {
+     "id": "<agent-id-1>",
+     "name": "<agent-id-1>",
+     "ref": "498653"
+    }
+   },
+   "tool_use_id": "<toolu-8>",
+   "duration_ms": 45
+  },
+  "agentIdsStartedMoreThanOnce": 3,
+  "note": "SubagentStart/SubagentStop for the continued agent are in the events table; agent_id equals the id in the Agent tool result."
+ },
+ "hookTimeline": [
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Read"
+  },
+  {
+   "event": "PostToolUseFailure",
+   "tool": "Read"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "AskUserQuestion"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "AskUserQuestion"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "AskUserQuestion"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Agent"
+  },
+  {
+   "event": "SubagentStart",
+   "agent": "<agent-id-1>"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Agent"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "<agent-id-1>"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "ToolSearch"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "ToolSearch"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "SendMessage"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "SendMessage"
+  },
+  {
+   "event": "SubagentStart",
+   "agent": "<agent-id-1>"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "<agent-id-1>"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "TaskCreate"
+  },
+  {
+   "event": "TaskCreated"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "TaskCreate"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "TaskUpdate"
+  },
+  {
+   "event": "TaskCompleted"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "TaskUpdate"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "PreModelSwitch"
+  },
+  {
+   "event": "PostModelSwitch"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "UserPromptExpansion"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "DirectoryAdded"
+  },
+  {
+   "event": "FileChanged"
+  },
+  {
+   "event": "FileChanged"
+  },
+  {
+   "event": "ConfigChange"
+  },
+  {
+   "event": "PreCompact"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "ab21e27e930d5a12e"
+  },
+  {
+   "event": "PostCompact"
+  },
+  {
+   "event": "SessionEnd"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "Notification",
+   "nt": "idle_prompt"
+  },
+  {
+   "event": "SessionEnd"
+  },
+  {
+   "event": "SessionStart"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Read"
+  },
+  {
+   "event": "PostToolUseFailure",
+   "tool": "Read"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "Notification",
+   "nt": "permission_prompt"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "Notification",
+   "nt": "permission_prompt"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "AskUserQuestion"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "AskUserQuestion"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "AskUserQuestion"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Agent"
+  },
+  {
+   "event": "SubagentStart",
+   "agent": "a7a51e59841151492"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Agent"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "a7a51e59841151492"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "ToolSearch"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "ToolSearch"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "SendMessage"
+  },
+  {
+   "event": "SubagentStart",
+   "agent": "a7a51e59841151492"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "SendMessage"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "a7a51e59841151492"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "TaskCreate"
+  },
+  {
+   "event": "TaskCreated"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "TaskCreate"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "TaskUpdate"
+  },
+  {
+   "event": "TaskCompleted"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "TaskUpdate"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "PreModelSwitch"
+  },
+  {
+   "event": "PostModelSwitch"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "UserPromptExpansion"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "DirectoryAdded"
+  },
+  {
+   "event": "FileChanged"
+  },
+  {
+   "event": "FileChanged"
+  },
+  {
+   "event": "ConfigChange"
+  },
+  {
+   "event": "PreCompact"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "aba1731bfcddd1514"
+  },
+  {
+   "event": "SessionStart"
+  },
+  {
+   "event": "PostCompact"
+  },
+  {
+   "event": "SessionEnd"
+  },
+  {
+   "event": "SessionStart"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Notification",
+   "nt": "idle_prompt"
+  },
+  {
+   "event": "SessionEnd"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "StopFailure"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "mcp__probe__request_input"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "mcp__probe__request_input"
+  },
+  {
+   "event": "Elicitation"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "mcp__probe__request_input"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "mcp__probe__request_input"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "mcp__probe__request_input"
+  },
+  {
+   "event": "Elicitation"
+  },
+  {
+   "event": "ElicitationResult"
+  },
+  {
+   "event": "Notification",
+   "nt": "elicitation_response"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "mcp__probe__request_input"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Agent"
+  },
+  {
+   "event": "SubagentStart",
+   "agent": "ade99394761d44082"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Agent"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "ade99394761d44082"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "ToolSearch"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "ToolSearch"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "SendMessage"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "SendMessage"
+  },
+  {
+   "event": "SubagentStart",
+   "agent": "ade99394761d44082"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "SubagentStop",
+   "agent": "ade99394761d44082"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "TaskCreate"
+  },
+  {
+   "event": "TaskCreated"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "TaskCreate"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "TaskUpdate"
+  },
+  {
+   "event": "TaskCompleted"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "TaskUpdate"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Write"
+  },
+  {
+   "event": "Notification",
+   "nt": "permission_prompt"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Write"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "PreToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PermissionRequest",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolUse",
+   "tool": "Bash"
+  },
+  {
+   "event": "PostToolBatch"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "SessionEnd"
+  },
+  {
+   "event": "InstructionsLoaded"
+  },
+  {
+   "event": "UserPromptSubmit"
+  },
+  {
+   "event": "Stop"
+  },
+  {
+   "event": "MessageDisplay"
+  },
+  {
+   "event": "SessionEnd"
+  },
+  {
+   "event": "WorktreeCreate"
+  },
+  {
+   "event": "WorktreeCreate"
+  }
+ ]
+}

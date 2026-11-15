@@ -1,0 +1,284 @@
+{
+ "item": 7,
+ "question": "With a recording proxy set, do command hooks reach main over the named pipe while the proxy sees no hook bytes?",
+ "answer": "YES",
+ "versions": {
+  "2.1.317": {
+   "runs": {
+    "cmd-sync": {
+     "hookMode": "cmd",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 0,
+     "hookEventsFromCommandOutputFile": 10,
+     "hookEventsOverHttp": 0,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 6,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 0,
+     "bytesTheProxyCaptured": 386787,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 0,
+      "transcript_path": 0,
+      "agent-activity": 0,
+      "permission_mode": 0,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 0,
+     "modelRequests": 4
+    },
+    "http-control": {
+     "hookMode": "http",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 0,
+     "hookEventsFromCommandOutputFile": 0,
+     "hookEventsOverHttp": 9,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 15,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 9,
+     "bytesTheProxyCaptured": 396778,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 9,
+      "transcript_path": 9,
+      "agent-activity": 0,
+      "permission_mode": 9,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 27,
+     "modelRequests": 4
+    },
+    "ps-async": {
+     "hookMode": "psasync",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 10,
+     "hookEventsFromCommandOutputFile": 0,
+     "hookEventsOverHttp": 0,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 6,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 0,
+     "bytesTheProxyCaptured": 386787,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 0,
+      "transcript_path": 0,
+      "agent-activity": 0,
+      "permission_mode": 0,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 0,
+     "modelRequests": 4
+    },
+    "ps-sync": {
+     "hookMode": "ps",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 10,
+     "hookEventsFromCommandOutputFile": 0,
+     "hookEventsOverHttp": 0,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 6,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 0,
+     "bytesTheProxyCaptured": 386769,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 0,
+      "transcript_path": 0,
+      "agent-activity": 0,
+      "permission_mode": 0,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 0,
+     "modelRequests": 4
+    }
+   },
+   "positiveControl": "http-control: the same session with http hooks and the same proxy puts hook_event_name and transcript_path into the proxy capture once per hook request, so the markers are detectable."
+  },
+  "2.1.322": {
+   "runs": {
+    "cmd-sync": {
+     "hookMode": "cmd",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 0,
+     "hookEventsFromCommandOutputFile": 10,
+     "hookEventsOverHttp": 0,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 6,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 0,
+     "bytesTheProxyCaptured": 387331,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 0,
+      "transcript_path": 0,
+      "agent-activity": 0,
+      "permission_mode": 0,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 0,
+     "modelRequests": 4
+    },
+    "http-control": {
+     "hookMode": "http",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 0,
+     "hookEventsFromCommandOutputFile": 0,
+     "hookEventsOverHttp": 9,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 15,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 9,
+     "bytesTheProxyCaptured": 397322,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 9,
+      "transcript_path": 9,
+      "agent-activity": 0,
+      "permission_mode": 9,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 27,
+     "modelRequests": 4
+    },
+    "ps-async": {
+     "hookMode": "psasync",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 10,
+     "hookEventsFromCommandOutputFile": 0,
+     "hookEventsOverHttp": 0,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 6,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 0,
+     "bytesTheProxyCaptured": 387331,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 0,
+      "transcript_path": 0,
+      "agent-activity": 0,
+      "permission_mode": 0,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 0,
+     "modelRequests": 4
+    },
+    "ps-sync": {
+     "hookMode": "ps",
+     "proxyVariablesSet": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY"
+     ],
+     "hookEventsOverNamedPipe": 10,
+     "hookEventsFromCommandOutputFile": 0,
+     "hookEventsOverHttp": 0,
+     "eventNames": [
+      "PostToolBatch",
+      "PostToolUse",
+      "PreToolUse",
+      "SessionStart",
+      "Stop",
+      "UserPromptSubmit"
+     ],
+     "proxyRequests": 6,
+     "proxyRequestsToModelApi": 4,
+     "proxyRequestsToHookReceiver": 0,
+     "bytesTheProxyCaptured": 387313,
+     "hookOnlyMarkerHitsInThoseBytes": {
+      "hook_event_name": 0,
+      "transcript_path": 0,
+      "agent-activity": 0,
+      "permission_mode": 0,
+      "hookEvent": 0,
+      "sentAt": 0
+     },
+     "markerHitsTotal": 0,
+     "modelRequests": 4
+    }
+   },
+   "positiveControl": "http-control: the same session with http hooks and the same proxy puts hook_event_name and transcript_path into the proxy capture once per hook request, so the markers are detectable."
+  }
+ },
+ "summary": "Yes in both versions. HTTP_PROXY, HTTPS_PROXY and ALL_PROXY were all set to the recording proxy with no NO_PROXY. The product command hook (claude-hook.ps1), synchronous and async, delivered every event over the named pipe; a node command hook delivered every event through its own output file; the proxy captured only the model API requests and the CLI start-up traffic, and none of the markers that only a hook payload carries (hook_event_name, transcript_path, permission_mode, agent-activity, hookEvent, sentAt). The http control run proves the markers would show up if hook data did pass through the proxy.",
+ "caveats": [
+  "Windows only: the named pipe is a Windows pipe. The bash and zsh wrappers use a different transport (a socket or file) and were not run here; E1 must not enable command-async on POSIX until a CI capture covers them.",
+  "Proxy bytes were captured for plain-http traffic and for the bytes sent inside CONNECT tunnels; a TLS tunnel is opaque, but no hook traffic used a tunnel (the proxy log lists the targets)."
+ ]
+}
