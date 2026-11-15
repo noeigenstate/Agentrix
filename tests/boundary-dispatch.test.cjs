@@ -48,6 +48,9 @@ test('dispatch tests start workers only through an injected fake CLI', () => {
         const call = body.slice(match.index, end);
         runs++;
         assert.match(call, /\b(?:launch|resolveExecutable)\s*:/, `${name}: ${call.slice(0, 120)}… runs the helper without an injected CLI`);
+        // A launcher alone leaves the Codex search to the machine (a Codex in /usr/local/bin or /opt/homebrew/bin is found whatever PATH says): such a call names its `locate`.
+        // A launcher that only fails the test (help, stop, minutes and the like never start a worker) needs none.
+        if (!/\bresolveExecutable\s*:/.test(call) && !/\blaunch\s*:\s*\(\s*\)\s*=>\s*assert\.fail/.test(call)) assert.match(call, /\blocate\s*:/, `${name}: ${call.slice(0, 120)}… injects a launcher but searches the machine for Codex`);
       }
       // Starting the helper's own entrypoint resolves the CLI from PATH, so that PATH must be the test's fake bin alone.
       for (const match of body.matchAll(/spawn(?:Sync)?\(\s*process\.execPath\s*,\s*\[\s*(\w+)\s*,\s*\.\.\./g)) {

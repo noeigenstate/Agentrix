@@ -151,6 +151,76 @@ test('one fingerprint runs --version once', async () => {
   assert.deepEqual(runs, [exe, exe]);
 });
 
+test('a locate keeps the answer when PATH spells its folder in another case or reaches it through a junction', async () => {
+  // nvm-windows puts C:\Program Files\nodejs on PATH as a junction to the active version; PATH may spell it in any case.
+  const name = 'npm11-global-0.166.0', nodejs = 'C:\\Program Files\\nodejs', shim = W.join(nodejs, 'codex.ps1');
+  const options = { env: windowsEnv({ PATH: nodejs.toLowerCase() }), platform: 'win32', arch: 'x64' };
+  for (const junction of [{}, { link: W.join(roaming, 'nvm', 'v22.11.0', 'codex.ps1') }]) {
+    const entries = install(name, nodejs), text = entries[shim].text;
+    entries[shim] = { text, ...junction };
+    const { locator, files } = windowsLocator(entries);
+    const found = await locator.refresh(options);
+    assert.equal(found.file, exeOf(name, nodejs));
+    assert.equal(await locator.locate(options), found, `the answer stands, not searched again (${junction.link ?? 'case'})`);
+    // A shim that now leads elsewhere is searched again.
+    files.put(shim, { text, link: 'D:\\Elsewhere\\codex.ps1' });
+    assert.notEqual(await locator.locate(options), found);
+  }
+});
+
+test('a package a link takes out of its folder or to a network share is never run; a junction that moves both is followed', async () => {
+  const prefix = 'D:\\nodejs', pnpm = W.join(local, 'pnpm'), nested = ['node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'];
+  const npmShim = { [W.join(prefix, 'codex.cmd')]: { text: '"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
+  const pnpmShim = { [W.join(pnpm, 'codex.cmd')]: { text: '"%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
+  const cases = [[prefix, npmShim, W.join(prefix, 'node_modules', '@openai', 'codex')], [pnpm, pnpmShim, W.join(pnpm, 'global', '5', 'node_modules', '@openai', 'codex')]];
+  // A local folder's package that a link takes to a share, elsewhere on the machine or above the folder.
+  for (const [folder, shims, dir] of cases) for (const target of ['\\\\server\\share\\codex', 'D:\\elsewhere\\codex', W.join(W.dirname(folder), 'codex')]) {
+    const { found, runs } = await find({ ...shims, [dir]: { link: target }, [W.join(target, ...nested)]: { size: NATIVE } }, { PATH: folder });
+    assert.deepEqual([found.file, runs], [null, []], `${dir} -> ${target}`);
+  }
+  // nvm-windows: the folder on PATH is a junction, so the package really is inside where the folder really is.
+  const nvm = W.join(roaming, 'nvm', 'v22.11.0'), program = W.join(nvm, 'node_modules', '@openai', 'codex', ...nested);
+  const { found } = await find({ ...npmShim, [prefix]: { link: nvm }, [W.join(prefix, 'node_modules', '@openai', 'codex')]: { link: W.join(nvm, 'node_modules', '@openai', 'codex') }, [program]: { size: NATIVE } }, { PATH: prefix });
+  assert.deepEqual(picked(found), { file: program, path: W.join(prefix, 'codex.CMD'), via: 'npm-vendor', version: '0.166.0', reason: null });
+  // A folder on a share (on PATH as such, or a mapped drive whose real path is the share) runs its own package there;
+  // a link from it to another share is refused.
+  const share = '\\\\server\\share\\npm', onShare = W.join(share, 'node_modules', '@openai', 'codex'), shareShim = { [W.join(share, 'codex.cmd')]: npmShim[W.join(prefix, 'codex.cmd')] };
+  assert.equal((await find({ ...shareShim, [W.join(onShare, ...nested)]: { size: NATIVE } }, { PATH: share })).found.file, W.join(onShare, ...nested));
+  const mapped = 'Z:\\npm', mappedShim = { [W.join(mapped, 'codex.cmd')]: npmShim[W.join(prefix, 'codex.cmd')] };
+  for (const [target, runs] of [[onShare, true], ['\\\\other\\share\\codex', false]]) {
+    const program = W.join(target, ...nested);
+    const { found } = await find({ ...mappedShim, [mapped]: { link: share }, [W.join(mapped, 'node_modules', '@openai', 'codex')]: { link: target }, [program]: { size: NATIVE } }, { PATH: mapped });
+    assert.equal(found.file, runs ? program : null, `${mapped} (really ${share}) -> ${target}`);
+  }
+});
+
+test("a package whose program moved to a layout no table knows is found in its vendor tree, within bounds and its folder", async () => {
+  // Codex once moved vendor/<triple>/codex/codex.exe to vendor/<triple>/bin/codex.exe; a later move is still found.
+  const prefix = 'D:\\nodejs', moved = (name, ...parts) => {
+    const entries = install(name, prefix), exe = exeOf(name, prefix);
+    delete entries[exe];
+    return { entries, file: W.join(W.dirname(W.dirname(exe)), ...parts) };
+  };
+  for (const [name, via] of [['npm11-global-0.166.0', 'npm-vendor'], ['npm10-global-hoisted-0.166.0', 'npm-hoisted']]) {
+    const { entries, file } = moved(name, 'newdir', 'codex.exe');
+    assert.deepEqual(picked((await find({ ...entries, [file]: { size: NATIVE } }, { PATH: prefix })).found), { file, path: W.join(prefix, 'codex.ps1'), via, version: '0.166.0', reason: null }, name);
+  }
+  const deepest = moved('npm11-global-0.166.0', 'a', 'b', 'c', 'codex.exe');
+  assert.equal((await find({ ...deepest.entries, [deepest.file]: { size: NATIVE } }, { PATH: prefix })).found.file, deepest.file, 'three folders below');
+  // Without a shim the terminal is told the program itself.
+  const bare = moved('npm11-global-0.166.0', 'newdir', 'codex.exe');
+  for (const shim of ['codex', 'codex.cmd', 'codex.ps1']) delete bare.entries[W.join(prefix, shim)];
+  assert.equal((await find({ ...bare.entries, [bare.file]: { size: NATIVE } }, { PATH: prefix })).found.path, bare.file);
+  // Deeper than that, or a link out of the folder or to a share, is not run: the package is incomplete.
+  const deeper = moved('npm11-global-0.166.0', 'a', 'b', 'c', 'd', 'codex.exe'), linked = moved('npm11-global-0.166.0', 'newdir', 'codex.exe');
+  for (const [entries, label] of [[{ ...deeper.entries, [deeper.file]: { size: NATIVE } }, 'four folders below'],
+    [{ ...linked.entries, [linked.file]: { link: '\\\\server\\share\\codex.exe' }, '\\\\server\\share\\codex.exe': { size: NATIVE } }, 'a share'],
+    [{ ...linked.entries, [linked.file]: { link: 'D:\\elsewhere\\codex.exe' }, 'D:\\elsewhere\\codex.exe': { size: NATIVE } }, 'out of the folder']]) {
+    const { found, runs } = await find(entries, { PATH: prefix });
+    assert.deepEqual([found.file, found.reason.code, runs], [null, 'codex.incomplete', []], label);
+  }
+});
+
 test('a Codex that prints no version is still found and used, with why', async () => {
   const exe = 'D:\\Tools\\codex.exe', env = windowsEnv({ PATH: 'D:\\Tools' });
   let clock = 0;
@@ -160,11 +230,16 @@ test('a Codex that prints no version is still found and used, with why', async (
   const options = { env, platform: 'win32', arch: 'x64' };
   const unreadable = await locator.refresh(options);
   assert.deepEqual(picked(unreadable), { file: exe, path: exe, via: 'path', version: null, reason: 'codex.unreadable' });
-  assert.equal(await locator.locate(options), unreadable, 'trusted for ten seconds by a locate');
-  clock = 10000;
-  const failed = await locator.locate(options);
+  // The check never changes which file runs, so a locate keeps it however long: main's native starts, usage reads and
+  // account reads never give a hanging Codex another process.
+  for (clock of [10000, 30000, 600000]) assert.equal(await locator.locate(options), unreadable, `kept by a locate at ${clock} ms`);
+  assert.equal(runs.length, 1);
+  // A refresh runs it again: an explicit one at once, window focus once its minute is up.
+  const failed = await locator.refresh(options);
   assert.deepEqual([failed.file, failed.reason.code, failed.reason.detail], [exe, 'codex.failed', 'exit 3']);
-  assert.deepEqual(picked(await locator.refresh(options)), { file: exe, path: exe, via: 'path', version: null, reason: 'codex.timeout' }, 'an explicit refresh runs it again at once');
+  assert.equal(await locator.refresh(options, { throttled: true }), failed, 'focus within the minute answers as a locate');
+  clock += 60000;
+  assert.deepEqual(picked(await locator.refresh(options, { throttled: true })), { file: exe, path: exe, via: 'path', version: null, reason: 'codex.timeout' });
   assert.deepEqual(picked(await locator.refresh(options)), { file: exe, path: exe, via: 'path', version: '0.169.0', reason: null });
   assert.equal(runs.length, 4);
   // It is what the helper runs.

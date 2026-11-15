@@ -9,7 +9,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const { createDispatchControl, connectDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
 const { projectTeam } = require('../electron/features/team/team.cjs');
-const { run } = require('../integration/dispatch.cjs');
+const { run, locateCodex } = require('../integration/dispatch.cjs');
 
 test('persistent channel authenticates a binding, streams events and deduplicates control receipts', async t => {
   const id = randomUUID(), controls = [];
@@ -121,6 +121,8 @@ for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${actio
       SYNTHETIC_CODEX_MODE: action === 'npm' ? 'normal' : 'worker',
       ...(action === 'npm' ? { AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_GUI_CODEX_RPC: path.join(__dirname, 'fixtures/codex-app-server.cjs') } : {}) },
     stdout: { write: text => { stdout += text; } },
+    // The npm case searches the fake bin with the real locator, by name; the others inject their resolver.
+    locate: locateCodex,
     ...(action === 'npm' ? {} : { resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server.cjs'), ...args] }) }),
     launch: (file, args, options) => lifetime.child(spawn(file, args, options)),
   }).finally(() => { finished = true; });

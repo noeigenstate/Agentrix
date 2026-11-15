@@ -4,6 +4,8 @@ const path = require('node:path');
 const { setTimeout: delay } = require('node:timers/promises');
 
 async function main() {
+  // A version probe is not a worker run: the version alone, no fixture read, no capture.
+  if (process.argv[2] === '--version') return void process.stdout.write('codex-cli 0.166.0\n');
   const fixture = JSON.parse(fs.readFileSync(process.env.DISPATCH_FIXTURE, 'utf8'));
   if (process.argv[2] === 'app-server') return appServer(fixture);
   let brief = '';

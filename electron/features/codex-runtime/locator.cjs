@@ -8,9 +8,10 @@ const { SHIM_MARKER } = require('../../shared/agentrix-shims.cjs');
 // Every `via` a found Codex can have (codex-runtime/BOUNDARY.md).
 const VIAS = Object.freeze(['path', 'npm-shim', 'npm-vendor', 'npm-hoisted', 'npm-prefix', 'registry-path', 'official-installer', 'winget', 'system']);
 const VERSION = /\b\d+\.\d+\.\d+(?:-[\w.]+)?/, VERSION_TIMEOUT_MS = 10000, SHIM_BYTES = 65536, SOURCE = 'codex-runtime locator';
-// A throttled refresh (window focus) searches with the stored Windows PATH at most this often; a check that printed no
-// version is trusted this long before a locate or a throttled refresh runs it again (an explicit refresh always does).
-const REFRESH_MS = 60000, FAILURE_RETRY_MS = 10000;
+// A throttled refresh (window focus) searches with the stored Windows PATH at most this often.
+const REFRESH_MS = 60000;
+// How many folders below vendor/<triple> a package's program is looked for when no known layout holds it.
+const VENDOR_DEPTH = 3;
 // The Windows CPUs npm ships a platform package for, and the target triple of each one's binary.
 const TRIPLES = { x64: 'x86_64-pc-windows-msvc', arm64: 'aarch64-pc-windows-msvc' };
 // The package a shim runs, relative to the shim's folder: npm's `%dp0%\node_modules\@openai\codex` (a global prefix) or
@@ -68,11 +69,13 @@ function packageBinaries(dir, arch, path) {
   });
 }
 
-// A package a shim names stays inside the shim's folder (for node_modules\.bin, the node_modules it sits in): never a
-// UNC path, never above it.
+// A package a shim names, and where a link takes it, stays inside the shim's folder (for node_modules\.bin, the
+// node_modules it sits in): never above it, and never a UNC path unless the folder itself is on that share (a mapped
+// drive's real path is one).
 function inside(folder, target, path) {
   const root = path.basename(folder).toLowerCase() === '.bin' ? path.dirname(folder) : folder, relative = path.relative(root, target);
-  return !/^[\\/]{2}/.test(target) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+  const unc = file => /^[\\/]{2}/.test(file);
+  return (!unc(target) || unc(root)) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 // One Codex locator per process, for the terminal, the dispatch helper and native mode alike (codex-runtime/BOUNDARY.md).
@@ -82,13 +85,14 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
   const versions = new Map();
   let stored = null, lastFull = null, last = null, running = null, trailing = null;
 
-  // The version a file printed, run once per file, size and mtime; one that printed none is run again after a while,
-  // or at once for an explicit refresh (`retry`).
+  // The version a file printed, run once per file, size and mtime. One that printed none is run again only by a search
+  // a refresh started (`retry`): the check never changes which file runs, and a hanging Codex must not gain a process
+  // on every locate.
   async function version(real, stat, env, retry) {
     const key = `${real}\0${stat.size}\0${stat.mtimeMs}`, cached = versions.get(key);
-    if (cached && (cached.run.version || !retry && now() - cached.at < FAILURE_RETRY_MS)) return cached.run;
+    if (cached && (cached.version || !retry)) return cached;
     const run = await readVersion(probe, real, env);
-    versions.set(key, { run, at: now() });
+    versions.set(key, run);
     return run;
   }
   const present = file => files.stat(file).then(stat => stat.isFile(), () => false);
@@ -101,6 +105,15 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       await files.access(real, windows ? fs.constants.F_OK : fs.constants.X_OK);
       return { real, stat };
     } catch { return null; }
+  }
+  // codex.exe in `folder` or at most VENDOR_DEPTH folders below it: a package's program after a layout change no
+  // table knows yet.
+  async function moved(folder, path, depth = 0) {
+    let names;
+    try { names = await files.readdir(folder); } catch { return []; }
+    const program = name => name.toLowerCase() === 'codex.exe', found = names.filter(program).map(name => path.join(folder, name));
+    if (depth < VENDOR_DEPTH) for (const name of names.filter(name => !program(name))) found.push(...await moved(path.join(folder, name), path, depth + 1));
+    return found;
   }
 
   async function search({ env, platform, arch, home, prefer }, retry) {
@@ -116,9 +129,10 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     let pathFolders = 0, incomplete = null;
 
     // What one folder offers, in the wrapper's order, as [file, via, path] (`path` is what a terminal is told: the shim
-    // the wrapper takes, or the file itself), and the npm packages it holds or its shims run. `only` limits the folder
-    // to one of its files. A shim the wrapper takes before codex.exe puts its packages first. WinGet's links folder
-    // offers its package's own program before the link, which may be a link or a launcher.
+    // the wrapper takes, or the file itself), and the npm packages it holds or its shims run, each with the
+    // vendor/<triple> folders its layouts name as [folder, via]. `only` limits the folder to one of its files. A shim
+    // the wrapper takes before codex.exe puts its packages first. WinGet's links folder offers its package's own
+    // program before the link, which may be a link or a launcher. `within` is where the folder really is.
     async function offered(folder, via, only) {
       if (!windows) return { candidates: [[only ?? path.join(folder, 'codex'), via, only ?? path.join(folder, 'codex')]], packages: [] };
       const names = only ? [only] : ['.ps1', ...(variable(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean), ''].map(suffix => path.join(folder, `codex${suffix}`));
@@ -134,11 +148,16 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
           if (inside(folder, dir, path) && !packages.has(dir)) packages.set(dir, 'npm-shim');
         }
       }
-      const shim = first && !native(first) ? first : null, npm = [];
-      // A package behind a link (pnpm's store) finds its platform package beside where it really is.
+      const shim = first && !native(first) ? first : null, npm = [], kept = [];
+      const within = await files.realpath(folder).catch(() => folder);
+      // A package behind a link (pnpm's store) finds its platform package beside where it really is, which stays
+      // inside where the folder really is (a junction such as nvm-windows' moves both).
       for (const [dir, shimVia] of packages) {
         const real = await files.realpath(dir).catch(() => dir);
-        npm.push(...packageBinaries(real, arch, path).map(([file, layout]) => [file, via ?? shimVia ?? layout, shim ?? file]));
+        if (!inside(within, real, path)) continue;
+        const layouts = packageBinaries(real, arch, path).map(([file, layout]) => [file, via ?? shimVia ?? layout, shim ?? file]);
+        npm.push(...layouts);
+        kept.push({ dir, vendors: [...new Map(layouts.map(([file, layoutVia]) => [path.dirname(path.dirname(file)), layoutVia]))] });
       }
       const own = (only ? [only] : [path.join(folder, 'codex.exe')]).filter(native).map(file => [file, via, file]);
       let winget = [];
@@ -151,7 +170,7 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
             .map(file => [file, via, at ?? file]);
         } catch { }
       }
-      return { candidates: [...winget, ...(shim ? [...npm, ...own] : [...own, ...npm])], packages: [...packages.keys()] };
+      return { candidates: [...winget, ...(shim ? [...npm, ...own] : [...own, ...npm])], packages: kept, shim, within };
     }
 
     // The preferred file first (the terminal's choice, for the helper), then PATH in its order, then the install folders.
@@ -163,33 +182,44 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       if (await present(path.join(folder, SHIM_MARKER))) continue;
       // A PATH folder that is an install folder takes its name; npm's prefix on PATH is told by its layout instead.
       const named = place || places.find(([placeFolder, via]) => via !== 'npm-prefix' && path.relative(placeFolder, folder) === '')?.[1];
-      const { candidates, packages } = await offered(folder, named ?? null, only);
-      for (const [file, layoutVia, at] of candidates) {
+      const { candidates, packages, shim, within } = await offered(folder, named ?? null, only);
+      // The answer for a candidate that runs; one a vendor tree turned up must really be where the folder is.
+      const take = async ([file, layoutVia, at], confined) => {
         const found = await runnable(file, windows);
-        if (!found) continue;
+        if (!found || confined && !inside(within, found.real, path)) return null;
         const run = await version(found.real, found.stat, env, retry);
         return { file: found.real, path: at, fileShown: shown(found.real), version: run.version ?? null,
           via: layoutVia ?? (fromStored.has(entry) ? 'registry-path' : 'path'),
           fingerprint: { file: found.real, size: found.stat.size, mtimeMs: found.stat.mtimeMs, pathHash },
           reason: run.version ? null : reason(`codex.${run.failure}`, { source: SOURCE, ...(run.detail ? { detail: run.detail } : {}) }),
           searched, pathFolders };
+      };
+      for (const candidate of candidates) { const result = await take(candidate); if (result) return result; }
+      // An npm package whose program no known layout holds: its vendor trees, before it is called incomplete.
+      for (const { dir, vendors } of packages) {
+        if (!await present(path.join(dir, 'bin', 'codex.js'))) continue;
+        for (const [vendor, layoutVia] of vendors) for (const file of await moved(vendor, path)) {
+          const result = await take([file, layoutVia, shim ?? file], true);
+          if (result) return result;
+        }
+        incomplete ??= dir;
       }
-      for (const dir of packages) if (!incomplete && await present(path.join(dir, 'bin', 'codex.js'))) incomplete = dir;
     }
     return { file: null, path: null, fileShown: null, version: null, via: null, fingerprint: null, searched, pathFolders,
       reason: incomplete ? reason('codex.incomplete', { source: SOURCE, detail: shown(incomplete) })
         : reason('codex.not_found', { source: SOURCE, params: { pathFolders, searched: searched.join('; ') } }) };
   }
 
-  // Whether the last answer still stands for a locate: nothing found until the next refresh; a found file while a link
-  // to it still leads there at the same size and mtime, and one that printed no version for a short while.
+  // Whether the last answer still stands for a locate: nothing found until the next refresh; a found file, with or
+  // without a version, while its `path` still leads where it led (a shim to itself, a link to the file) and the file
+  // keeps its size and mtime. Windows paths compare as Windows does, whatever their letter case.
   async function stands() {
-    const { result, at } = last;
+    const { result, leads, windows } = last;
     if (!result.file) return true;
-    if (result.reason && now() - at >= FAILURE_RETRY_MS) return false;
     try {
       const real = await files.realpath(result.path), stat = await files.stat(result.file);
-      return (real === result.file || real === result.path) && stat.size === result.fingerprint.size && stat.mtimeMs === result.fingerprint.mtimeMs;
+      const same = windows ? nodePath.win32.relative(real, leads) === '' : real === leads;
+      return same && stat.size === result.fingerprint.size && stat.mtimeMs === result.fingerprint.mtimeMs;
     } catch { return false; }
   }
   async function answer(options, mode) {
@@ -200,8 +230,11 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     }
     const key = JSON.stringify([options.platform, options.home, options.arch, variable(options.env, 'PATH') || '', stored, options.prefer ?? null]);
     if (!full && last?.key === key && await stands()) return last.result;
-    last = { key, result: await search(options, mode === 'refresh'), at: now() };
-    return last.result;
+    const result = await search(options, full);
+    // Where `path` leads now, through a junction such as nvm-windows' C:\Program Files\nodejs, is what stands means.
+    const leads = result.path && await files.realpath(result.path).catch(() => null);
+    last = { key, result, leads, windows: options.platform === 'win32' };
+    return result;
   }
   const normalized = ({ env = process.env, platform = process.platform, arch = process.arch, home, prefer } = {}) =>
     ({ env, platform, arch, home: home ?? variable(env, platform === 'win32' ? 'USERPROFILE' : 'HOME') ?? null, prefer });
