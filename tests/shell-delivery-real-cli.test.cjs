@@ -19,14 +19,13 @@ async function terminalResume(f, providerId, beforePrompt) {
   child.send({ type: 'start', cli: process.env.AGENTRIX_REAL_CLAUDE, cwd: f.cwd, env, args: ['--resume', providerId], capture: false });
   await ready; beforePrompt(); child.send({ type: 'input', text: 'AFTER_SHELL_FAILURE' });
 }
-for (const mode of ['credit-400', 'server-500', 'generic-400', 'budget', 'success', 'owner-stop']) {
+for (const mode of ['credit-400', 'server-500', 'generic-400', 'success', 'owner-stop']) {
   test(`shell delivery real CLI ${mode} preserves output and reports only unanswered failures`, { skip, timeout: 45000 }, async t => {
     const bodies = [], raw = [], events = []; let healthy = false;
     const f = await harness(t, data => {
       bodies.push(data);
       if (mode === 'owner-stop') return { events: [opening(data)], hold: true };
       if (healthy || mode === 'success') return [opening(data), ...textBlock(0, 'SHELL_REPLY'), ...finish('end_turn')];
-      if (mode === 'budget') return [opening(data), ...finish('end_turn')];
       return { status: mode === 'server-500' ? 500 : 400, body: { type: 'error', error: {
         type: mode === 'server-500' ? 'api_error' : 'invalid_request_error',
         message: mode === 'credit-400' ? 'Credit balance is too low' : 'OFFLINE_SHELL_REFUSED',
@@ -43,17 +42,17 @@ for (const mode of ['credit-400', 'server-500', 'generic-400', 'budget', 'succes
       safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
     f.cleanup(() => runtime.close()); runtime.credentials.save(f.env.ANTHROPIC_API_KEY);
     const spec = { owner: 'gui', projectId: 'shell-project', terminalId: 't', cwd: f.cwd, env: f.env, runtimeSessionId: 'shell-delivery' };
-    const budget = mode === 'budget' ? 0.000001 : null, fallback = ['credit-400', 'budget'].includes(mode);
+    const fallback = mode === 'credit-400';
     let router, session, opened, committed = false, draft;
     if (fallback) {
       router = require('../electron/features/native-session/router.cjs').createRouter({ claude: runtime, codex: {}, emit: event => events.push(event),
-        resolveSpec: () => spec, settings: { get: () => ({ claudePath: 'api-then-terminal', monthlyBudgetUsd: budget }) }, terminal() { assert.fail('no startup fallback'); },
+        resolveSpec: () => spec, settings: { get: () => ({ claudePath: 'api-then-terminal' }) }, terminal() { assert.fail('no startup fallback'); },
         prepareTerminal: async (terminalSpec, handoff) => ({ session: { identity: {}, spec: terminalSpec, path: 'terminal' }, cancel() {},
           commit() { draft = handoff.draft; assert.ok(events.some(event => event.payload.code === 'shell_context_rejected')); committed = true; },
           send() { assert.fail('fallback must not execute !command twice'); } }) });
       f.cleanup(() => router.close()); opened = await router.start('t', { agent: 'claude' });
       session = { shell: (id, command) => router.shell('t', opened.runtimeSessionId, id, command) };
-    } else { session = runtime.create({ ...spec, monthlyBudgetUsd: budget }, event => events.push(event)); await session.start(); }
+    } else { session = runtime.create(spec, event => events.push(event)); await session.start(); }
     if (mode === 'generic-400') {
       healthy = true; await session.send({ clientMessageId: 'previous-reply', text: 'Warm up' });
       for (let n = 0; n < 500 && session.snapshot().state !== 'idle'; n++) await pause(20);
@@ -81,9 +80,9 @@ for (const mode of ['credit-400', 'server-500', 'generic-400', 'budget', 'succes
       assert.match(notices[0].payload.message, /命令已执行，但输出未发送给模型/);
       assert.ok(events.indexOf(notices[0]) < events.findIndex(event => event.type === 'turn.completed'), 'notice precedes completion and any fallback');
       assert.equal(events.slice(0, events.findIndex(event => event.type === 'turn.completed')).filter(event => event.type === 'error').at(-1).payload.code,
-        'shell_context_rejected', 'a later budget notice cannot hide the shell delivery explanation');
+        'shell_context_rejected', 'a later switch notice cannot hide the shell delivery explanation');
     }
-    if (mode !== 'budget') assert.match(JSON.stringify(bodies.at(-1).messages), /SHELL_DELIVERY_OUTPUT/);
+    assert.match(JSON.stringify(bodies.at(-1).messages), /SHELL_DELIVERY_OUTPUT/);
     if (fallback) {
       assert.match(notices[0].payload.message, /切换到终端后会随下一条消息发送给模型/);
       for (let n = 0; n < 500 && router.switchState('t')?.phase !== 'preparing'; n++) await pause(20);
