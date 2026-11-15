@@ -2,6 +2,8 @@
   "{agent} 正在等待你确认权限。请先在终端中处理，再发送这条消息。": "{agent} is waiting for your permission. Answer in the terminal before this message can be sent.",
   "{agent} 正在等待你回答问题。请先在终端中回答。": "{agent} is waiting for your answer. Answer the question in the terminal first.",
   "终端中打开了菜单。请先关闭菜单，再发送这条消息。": "A terminal menu is open. Close it before this message can be sent.",
+  "{agent} 已报告正在等待回答。请先在终端中作答。": "{agent} reported it is waiting for an answer; answer in the terminal first.",
+  "终端弹窗已打开。请先处理或关闭弹窗，再发送这条消息。": "The terminal popup is open. Finish or close it before sending this message.",
   "{agent} 已将这条消息排队，会在当前工作结束后读取。": "{agent} has queued this message and will read it after the current work.",
   "Agentrix 尚未确认终端可以安全接收输入，因此还没有发送这条消息。": "Agentrix has not sent this message because it cannot yet confirm a safe terminal input.",
   "终端输入框中还有未发送的草稿。请先发送或清空草稿。": "The terminal contains an unsent draft. Send or clear that draft first.",

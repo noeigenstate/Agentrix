@@ -38,7 +38,7 @@ function loadUI(name, overrides = {}) {
     const key = name.startsWith('.') ? './' + path.basename(name) : name;
     if (name === 'react' && overrides.react) return { ...React, ...overrides.react };
     // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
-    if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, subscribeScreen: () => () => {}, ...overrides[key] };
+    if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, subscribeScreen: () => () => {}, subscribeParsed: () => () => {}, ...overrides[key] };
     if (Object.hasOwn(overrides, key) && key === './agent-screen') { const { choiceIdentity, waitingTitle } = require('../src/features/agents/agent-screen.ts'); return { choiceIdentity, waitingTitle, ...overrides[key] }; }
     if (Object.hasOwn(overrides, key)) return overrides[key];
     if (name.endsWith('.css')) return {};
@@ -469,11 +469,16 @@ function workingComposerHarness(t, agent, overrides = {}) {
     ...(view.working ? [agent === 'claude' ? '✶ Swooping… (12s)' : '• Working (12s · esc to interrupt)'] : []),
     ...fixture.flatMap((row, index) => index === inputRow ? view.draft.split(/\r?\n/).map((line, part) => (part ? '  ' : agent === 'claude' ? '❯ ' : '› ') + line) : [row]),
   ];
-  const listeners = new Set(); let revision = 1, h;
-  const frame = () => ({ rows: rows(), pending: view.pending, parsed: view.parsed, revision, epoch: view.epoch ?? 1, sessionId: h?.props.terminal.sessionId ?? 'session' });
-  const parsed = (render = true) => { revision++; for (const listener of listeners) listener(frame()); if (render) h?.render(); };
+  const listeners = new Set(); let revision = 0, parse = 1, cached, h;
+  const capture = () => { const next = rows(); if (JSON.stringify(next) !== JSON.stringify(cached)) revision++; cached = next; };
+  const frame = () => {
+    if (!cached || !view.pending) capture();
+    return { rows: cached, pending: !!view.pending, parsed: true, parse, revision, epoch: view.epoch ?? 1, sessionId: h?.props.terminal.sessionId ?? 'session' };
+  };
+  const parsed = (render = true) => { capture(); parse++; for (const listener of listeners) listener(frame()); if (render) h?.render(); };
+  const subscribe = (_id, listener) => { listeners.add(listener); return () => listeners.delete(listener); };
   h = dictationHarness(t, {
-    './terminal-screen': { useScreen: frame, readScreen: frame, subscribeScreen: (_id, listener) => { listeners.add(listener); return () => listeners.delete(listener); } },
+    './terminal-screen': { useScreen: frame, readScreen: frame, subscribeScreen: subscribe, subscribeParsed: subscribe },
     './agent-screen': { parseAgentScreen },
     './useReadingConversation': { useReadingHistory: () => historySnapshot(view.records) },
     './usePendingPrompts': { usePendingPrompts: () => {
@@ -498,6 +503,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
   };
   h.render();
   return { ...h, view, parsed,
+    async drain() { const pending = view.pending; view.pending = false; parsed(false); for (let i = 0; i < 24; i++) await Promise.resolve(); view.pending = pending; },
     async tick(ms) { clock += ms; if (!view.pending || view.parsed) parsed(); await h.tick(ms); },
     async advance(ms, notify = true) { clock += ms; if (notify && (!view.pending || view.parsed)) parsed(false); await h.advance(ms); } };
 }
@@ -702,7 +708,8 @@ test('a staged message queues during a long tool call despite continuous redraws
   assert.deepEqual(outboxTexts(h), ['send during SendMessage']);
   h.popup()?.props.onClose(); delete h.view.rows;
   h.view.pending = true; h.view.parsed = true; h.render(); h.parsed();
-  await h.tick(0); await h.tick(400); await h.tick(700);
+  await h.tick(0); assert.equal(h.pasted.length, 0, 'admission does not authorize a paste over pending bytes');
+  await h.drain(); await h.tick(400); await h.drain(); await h.tick(700);
   for (let i = 0; i < 160; i++) await h.tick(100);
   assert.equal(h.view.working, true);
   assert.deepEqual(h.view.records.map(record => [record.text, record.queued]), [['send during SendMessage', true]]);
@@ -754,6 +761,92 @@ test('a dialog arriving before paste or Enter prevents that write', async t => {
 });
 
 const outboxReason = h => elements(h.tree()).find(node => node.props.className === 'reading-outbox')?.props.children[0].props.children;
+test('queued unparsed dialog bytes block Enter and retries until a drained parse', async t => {
+  for (const stage of ['Enter', 'retry']) await t.test(stage, async t => {
+    const h = workingComposerHarness(t, 'claude');
+    h.view.accept = false;
+    if (stage === 'retry') h.view.working = false;
+    h.edit('do not answer a dialog'); h.press('Enter'); await h.tick(0);
+    if (stage === 'retry') await h.tick(400);
+    const before = h.written.length;
+    h.view.pending = true;
+    h.view.rows = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'];
+    await h.advance(stage === 'Enter' ? 400 : 700, false);
+    assert.deepEqual(h.written.slice(before), [], 'the last parsed input is stale once newer bytes arrive');
+    for (let i = 0; i < 5; i++) await h.advance(500, false);
+    assert.deepEqual(h.written.slice(before), [], 'a bounded wait never authorizes the stale input');
+    assert.equal(h.pasted.length, 1);
+    h.view.pending = false; h.parsed(false); await h.advance(0);
+    assert.deepEqual(h.written.slice(before), [], 'the completed dialog also gets no Enter');
+  });
+});
+
+test('pending output blocks Ctrl+U and paste even after admission', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.draft = 'terminal draft'; h.render(); h.render();
+  h.view.pending = true;
+  h.view.rows = ['Settings', 'Esc to close'];
+  h.edit('new message'); h.press('Enter'); await h.advance(0, false);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  await h.advance(2000, false);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+  h.view.pending = false; h.parsed(false); await h.advance(0, false);
+  assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
+});
+
+test('parse admission advances a staged message without a UI notification', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['streaming output']; h.render(); await h.tick(600);
+  h.edit('admit on the parse channel'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), ['admit on the parse channel']);
+  delete h.view.rows; h.view.pending = true; h.parsed(false);
+  await h.advance(0, false); assert.equal(h.pasted.length, 0);
+  await h.drain(); assert.equal(h.pasted.length, 1, 'the raw parse channel advances despite the stale UI frame');
+  await h.tick(400); await h.drain(); h.render(); await h.tick(700);
+  assert.deepEqual(h.view.records.map(record => [record.text, record.queued]), [['admit on the parse channel', true]]);
+  assert.deepEqual(outboxTexts(h), []);
+});
+
+test('an automatic outbox send shows sending until uncertainty is known', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+  h.edit('one send'); h.press('Enter'); await h.tick(0);
+  h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
+  assert.equal(h.pasted.length, 1);
+  assert.equal(outboxReason(h), en['发送中']);
+  h.view.pending = true;
+  await h.tick(400); for (let i = 0; i < 5; i++) await h.tick(500);
+  assert.equal(outboxReason(h), 'Delivery is not confirmed. Check the terminal before sending this message again.');
+  assert.equal(h.pasted.length, 1);
+});
+
+test('a retry drain timeout retains uncertainty without a later paste', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.accept = false; h.view.working = false;
+  h.edit('uncertain retry'); h.press('Enter'); await h.tick(0); await h.tick(400);
+  h.view.pending = true; await h.advance(700, false); await h.advance(500, false); h.render();
+  assert.deepEqual(outboxTexts(h), ['uncertain retry']);
+  assert.equal(outboxReason(h), 'Delivery is not confirmed. Check the terminal before sending this message again.');
+  h.view.pending = false; h.view.draft = ''; h.render();
+  await h.tick(30000); await h.tick(30000);
+  assert.equal(h.pasted.length, 1, 'the pending-prompt safety net cannot re-paste after a drain timeout');
+});
+
+test('a reported host wait and an owner terminal popup have their own reasons', async t => {
+  await t.test('reported wait', async t => {
+    const h = workingComposerHarness(t, 'claude');
+    h.props.terminal.cliState = { sessionId: 'session', revision: 3, state: 'waiting', updatedAt: Date.now() };
+    h.render(); h.render(); h.edit('waiting'); h.press('Enter'); await h.tick(0);
+    assert.equal(outboxReason(h), 'Claude Code reported it is waiting for an answer; answer in the terminal first.');
+  });
+  await t.test('owner popup', async t => {
+    const h = workingComposerHarness(t, 'claude');
+    h.command('/status'); await h.tick(0); await h.tick(60); await h.tick(150);
+    h.edit('after the popup'); h.press('Enter'); await h.tick(0);
+    assert.equal(outboxReason(h), 'The terminal popup is open. Finish or close it before sending this message.');
+  });
+});
+
 test('turn end retains uncertain delivery without another paste', async t => {
   const h = workingComposerHarness(t, 'claude');
   h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
@@ -3105,7 +3198,7 @@ for (const via of ['Esc', 'Stop']) test(`claude: ${via} interrupts only a parsed
   h.view.rows = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel']; h.view.pending = false;
   await h.advance(50);
   assert.deepEqual(h.written, [], 'a dialog drawn meanwhile gets no Esc'); assert.deepEqual(errors, [en['终端还没准备好，这次没有中断，请稍后再试。']]);
-  delete h.view.rows; h.view.pending = true; h.render();
+  delete h.view.rows; h.view.pending = true; h.parsed(false); h.render();
   stop(); await h.advance(0); h.view.pending = false; await h.advance(50);
   assert.deepEqual(h.written.map(item => item.text), ['\x1b'], 'the parsed working frame takes it');
 });

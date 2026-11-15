@@ -5,6 +5,8 @@ export const termWords: Record<string, string> = {
   'term.waiting_permission': '{agent} 正在等待你确认权限。请先在终端中处理，再发送这条消息。',
   'term.waiting_question': '{agent} 正在等待你回答问题。请先在终端中回答。',
   'term.menu_open': '终端中打开了菜单。请先关闭菜单，再发送这条消息。',
+  'term.reported_waiting': '{agent} 已报告正在等待回答。请先在终端中作答。',
+  'term.popup_open': '终端弹窗已打开。请先处理或关闭弹窗，再发送这条消息。',
   'term.queued_behind_turn': '{agent} 已将这条消息排队，会在当前工作结束后读取。',
   'term.turn_running': '上一轮还在进行中',
   'term.cli_not_ready': 'Agentrix 尚未确认终端可以安全接收输入，因此还没有发送这条消息。',

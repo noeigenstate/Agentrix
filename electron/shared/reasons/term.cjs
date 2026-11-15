@@ -5,6 +5,8 @@ module.exports = {
     waiting_permission: { params: ['agent'] },
     waiting_question: { params: ['agent'] },
     menu_open: {},
+    reported_waiting: { params: ['agent'] },
+    popup_open: {},
     queued_behind_turn: { params: ['agent'] },
     turn_running: {},
     cli_not_ready: {},

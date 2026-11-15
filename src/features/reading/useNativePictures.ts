@@ -1,21 +1,23 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { t } from '../../shared/i18n';
 import { isWindows } from '../../shared/platform';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { parseAgentScreen } from '../agents/agent-screen';
-import { readScreen, subscribeScreen, type Screen } from '../terminal/terminal-screen';
+import { readScreen, subscribeParsed, type Screen } from '../terminal/terminal-screen';
 import { cliDialogShown, cliInputDraft, hasCliInput } from './cli-panel';
 import { imageRemoval, inputImageLabels } from './image-input';
 
 export type NativeImage = { id: number; src: string };
 type Paste = { before?: string[]; label?: string; ready?: Promise<void>; conflicted?: boolean };
 type Options = { owner: string; terminalId: string; sessionId: string | null; agent: 'claude' | 'codex'; sending: RefObject<boolean>; interaction: RefObject<number>;
-  blocked: (frame?: Screen) => boolean; preserveDraft: (text: string) => boolean; onError: (message: string) => void };
+  onParsed: () => void; blocked: (frame?: Screen) => boolean; preserveDraft: (text: string) => boolean; onError: (message: string) => void };
 
-export function useNativePictures({ owner, terminalId, sessionId, agent, sending, interaction, blocked, preserveDraft, onError }: Options) {
+export function useNativePictures({ owner, terminalId, sessionId, agent, sending, interaction, onParsed, blocked, preserveDraft, onError }: Options) {
   const sequence = useRef(0), lifetime = useRef({ owner, alive: true, pastes: new Map<number, Paste>() });
   if (lifetime.current.owner !== owner) lifetime.current = { owner, alive: true, pastes: new Map() };
   const context = lifetime.current, valid = () => lifetime.current === context && context.alive;
+  const parsed = useRef(onParsed); parsed.current = onParsed;
+  useEffect(() => subscribeParsed(terminalId, () => parsed.current()), [terminalId, context]);
   const [snapshot, setSnapshot] = useState<{ context: typeof context; images: NativeImage[] }>({ context, images: [] });
   const images = snapshot.context === context ? snapshot.images : [];
   useLayoutEffect(() => {
@@ -28,15 +30,15 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
     context.pastes.delete(id);
     setSnapshot(previous => previous.context === context ? { context, images: previous.images.filter(image => image.id !== id) } : previous);
   };
-  const readInput = () => {
+  const readInput = (admit = false) => {
     const current = readScreen(terminalId);
-    if (!valid() || !current || current.sessionId != null && current.sessionId !== sessionId || current.pending && !current.parsed || blocked(current)) return null;
+    if (!valid() || !current || current.sessionId != null && current.sessionId !== sessionId || current.pending && (!admit || !current.parsed) || blocked(current)) return null;
     const screen = parseAgentScreen(agent, current.rows);
     if (!hasCliInput(agent, current.rows, screen) || cliDialogShown(agent, current.rows, screen)) return null;
-    return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen), epoch: current.epoch, revision: current.revision };
+    return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen), epoch: current.epoch, parse: current.parse };
   };
-  // A completed parse stays readable while more output is queued. Never read a partially parsed buffer.
-  const parsing = () => { const frame = readScreen(terminalId); return !!frame?.pending && !frame.parsed; };
+  // A cached parse may admit a message; every mutation requires all queued output to have parsed first.
+  const parsing = () => !!readScreen(terminalId)?.pending;
   // A parsed frame showing a dialog, a menu or a picker.
   const dialogShown = () => {
     const shown = readScreen(terminalId);
@@ -44,7 +46,7 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
   };
   // The input on the first parsed frame that draws it: a busy agent's redraw can leave it out for a moment. Nothing once
   // a dialog takes its place, the caller lets go, or it stays away past the limit.
-  const awaitInput = (owns: () => boolean, limit = 2000) => new Promise<ReturnType<typeof readInput>>(resolve => {
+  const awaitInput = (owns: () => boolean, limit = 2000, admit = false) => new Promise<ReturnType<typeof readInput>>(resolve => {
     let off = () => {}, timer: ReturnType<typeof setTimeout> | undefined, done = false;
     const finish = (input: ReturnType<typeof readInput>) => {
       if (done) return;
@@ -52,20 +54,20 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
     };
     const look = () => {
       if (!valid() || !owns()) { finish(null); return; }
-      const current = readInput();
+      const current = readInput(admit);
       if (current || dialogShown() || blocked()) finish(current);
     };
-    off = subscribeScreen(terminalId, look);
+    off = subscribeParsed(terminalId, look);
     if (done) off();
     else { timer = setTimeout(() => finish(null), limit); look(); }
   });
   const settle = (owns: () => boolean, limit = 500) => awaitInput(owns, limit);
   // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
-  const clearInput = async (owns: () => boolean) => {
+  const clearInput = async (owns: () => boolean, epoch = readScreen(terminalId)?.epoch) => {
     for (let tries = 0; owns(); tries++) {
       if (parsing()) await settle(owns);
       const current = owns() ? readInput() : null;
-      if (!current) return false;
+      if (!current || current.epoch !== epoch) return false;
       if (!current.text) return true;
       if (tries === 30) return false;
       window.agentrix.writeTerminal(terminalId, '\x15'); await new Promise(resolve => setTimeout(resolve, 80));

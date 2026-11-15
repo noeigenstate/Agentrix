@@ -28,7 +28,6 @@ test('session replacement clears subscriber snapshots and preserves their subscr
   const beforeReplace = frames.length;
   const next = terminal(['new prompt']), offTwo = screen.registerScreen('replace', next, 'two'); t.after(offTwo);
   assert.deepEqual(frames[beforeReplace].rows, []); assert.equal(frames[beforeReplace].sessionId, 'two');
-  assert.deepEqual(frames.at(-1).rows, ['new prompt'], 'the replacement publishes its parsed frame immediately');
   offOne(); first.draw(['late old write']); t.mock.timers.tick(100);
   assert.deepEqual(frames.at(-1).rows, ['new prompt']); assert.equal(frames.at(-1).sessionId, 'two'); assert.ok(frames.at(-1).revision > oldRevision);
   offTwo(); assert.deepEqual(frames.at(-1).rows, []); assert.equal(frames.at(-1).sessionId, null);
@@ -53,21 +52,42 @@ test('a completed parse publishes readiness even when the rows are unchanged', t
   const term = terminal(['────', '❯ ', '────']), writes = [], frames = [];
   term.write = (_data, done) => writes.push(done);
   const dispose = screen.registerScreen('parsed', term, 'one'); t.after(dispose);
-  const off = screen.subscribeScreen('parsed', frame => frames.push(frame)); t.after(off);
+  const off = screen.subscribeParsed('parsed', frame => frames.push(frame)); t.after(off);
   const first = screen.readScreen('parsed');
   screen.writeScreen('parsed', 'spinner one'); screen.writeScreen('parsed', 'spinner two');
   term.paint(['half drawn input']);
   assert.deepEqual(screen.readScreen('parsed').rows, first.rows, 'pending output never exposes a partially drawn input');
   term.paint(first.rows);
   writes.shift()();
-  assert.ok(frames.at(-1).revision > first.revision, 'a completed parse publishes immediately, with more output queued');
+  assert.ok(frames.at(-1).parse > first.parse, 'a completed parse publishes immediately, with more output queued');
   assert.equal(frames.at(-1).parsed, true);
   assert.equal(screen.readScreen('parsed').pending, true, 'approval still knows about outstanding writes');
   const second = frames.at(-1);
   writes.shift()();
-  assert.ok(frames.at(-1).revision > second.revision, 'identical rows are a new completed parse');
+  assert.ok(frames.at(-1).parse > second.parse, 'identical rows are a new completed parse');
+  assert.equal(frames.at(-1).revision, first.revision, 'unchanged rows retain their revision');
   assert.deepEqual(frames.at(-1).rows, first.rows);
   assert.equal(screen.readScreen('parsed').revision, frames.at(-1).revision, 'cached reads invent no parse');
   dispose(); const replacement = screen.registerScreen('parsed', term, 'one'); t.after(replacement);
   assert.notEqual(screen.readScreen('parsed').epoch, first.epoch, 'a remount of the same session is another terminal epoch');
+});
+
+test('parse notifications see every completion while UI notifications coalesce', t => {
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
+  const before = global.window; global.window = { setTimeout }; t.after(() => { global.window = before; });
+  const term = terminal(['────', '❯ ', '────']), ui = [], parses = [], writes = [];
+  term.write = (_data, done) => writes.push(done);
+  const dispose = screen.registerScreen('burst', term, 'one'); t.after(dispose);
+  t.after(screen.subscribeScreen('burst', frame => ui.push(frame)));
+  t.after(screen.subscribeParsed('burst', frame => parses.push(frame)));
+  t.mock.timers.tick(100); ui.length = 0; parses.length = 0;
+  const initial = screen.readScreen('burst');
+  for (let i = 0; i < 30; i++) { screen.writeScreen('burst', 'spinner'); writes.shift()(); }
+  assert.equal(ui.length, 0, 'no UI work on individual completions');
+  assert.equal(parses.length, 30);
+  assert.ok(parses.every(frame => frame.pending === false), 'pending zero is published inside the completion callback');
+  assert.equal(parses.at(-1).revision, initial.revision, 'unchanged rows do not bump the screen revision');
+  assert.ok(parses.at(-1).parse > initial.parse);
+  t.mock.timers.tick(99); assert.equal(ui.length, 0);
+  t.mock.timers.tick(1); assert.equal(ui.length, 1);
 });

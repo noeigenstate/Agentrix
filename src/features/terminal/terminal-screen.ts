@@ -8,16 +8,18 @@ export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 
 // What a terminal shows right now, as text rows: the agent's own screen (its welcome lines, footer, mode and the
 // choices it is asking about) for the reading view to present without switching to the terminal. Each
-// TerminalPane registers its xterm; each completed parse publishes a stable frame, even for an unchanged spinner.
-export type Screen = { rows: string[]; sessionId: string | null; epoch?: number; revision: number; updatedAt: number; stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; approval?: ApprovalStamp | null; instances?: Record<ScreenAgent, number> };
-type Entry = { terminal: Terminal; listeners: Set<(screen: Screen) => void>; dispose: () => void; frame?: Screen; epoch: number;
-  sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; updatedAt: number;
+// UI updates coalesce over 100 ms. Delivery observes every completed parse, including the instant pending reaches zero.
+// parsed describes the cached rows, not permission to write: pending must be false before any mutation.
+export type Screen = { rows: string[]; sessionId: string | null; epoch?: number; revision: number; parse?: number; updatedAt: number; stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; approval?: ApprovalStamp | null; instances?: Record<ScreenAgent, number> };
+type Entry = { id: string; terminal: Terminal; listeners: Set<(screen: Screen) => void>; parses: Set<(screen: Screen) => void>; timer: number; dispose: () => void; frame?: Screen; epoch: number;
+  sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; parse: number; updatedAt: number;
   states: Partial<Record<ScreenAgent, string | null>>; stateUpdatedAt: Record<ScreenAgent, number>;
   identities: Partial<Record<ScreenAgent, string | null>>; instances: Record<ScreenAgent, number>; rowsKey: string };
 const entries = new Map<string, Entry>();
 let incarnation = 0;
 let frameRevision = 0;
 const pending = new Map<string, Set<(screen: Screen) => void>>();
+const pendingParses = new Map<string, Set<(screen: Screen) => void>>();
 
 function read(terminal: Terminal): Pick<Screen, 'rows'> {
   const buffer = terminal.buffer.active, rows: string[] = [];
@@ -29,10 +31,10 @@ function read(terminal: Terminal): Pick<Screen, 'rows'> {
 
 function capture(entry: Entry): Screen {
   const screen = read(entry.terminal);
-  entry.revision = ++frameRevision;
   // State timestamps advance only when the observed state changes, never for spinner or background output.
   const rowsKey = JSON.stringify(screen.rows);
   if (rowsKey !== entry.rowsKey) {
+    entry.revision = ++frameRevision;
     entry.updatedAt = Date.now();
     entry.rowsKey = rowsKey;
     for (const agent of ['claude', 'codex'] as const) {
@@ -43,7 +45,7 @@ function capture(entry: Entry): Screen {
       if (entry.identities[agent] !== identity) { entry.identities[agent] = identity; entry.instances[agent] = ++incarnation; }
     }
   }
-  return entry.frame = { ...screen, sessionId: entry.sessionId ?? null, epoch: entry.epoch, revision: entry.revision, updatedAt: entry.updatedAt, parsed: true,
+  return entry.frame = { ...screen, sessionId: entry.sessionId ?? null, epoch: entry.epoch, revision: entry.revision, parse: ++entry.parse, updatedAt: entry.updatedAt, parsed: true,
     stateUpdatedAt: { ...entry.stateUpdatedAt }, approval: entry.pending ? null : entry.approval, instances: { ...entry.instances } };
 }
 
@@ -54,28 +56,39 @@ function snapshot(entry: Entry): Screen {
 function publish(entry: Entry) {
   capture(entry);
   const frame = snapshot(entry);
-  entry.listeners.forEach(listener => listener(frame));
+  entry.parses.forEach(listener => listener(frame));
+  if (entry.timer || !entry.listeners.size) return;
+  entry.timer = window.setTimeout(() => {
+    entry.timer = 0;
+    if (entries.get(entry.id) !== entry) return;
+    const current = snapshot(entry);
+    entry.listeners.forEach(listener => listener(current));
+  }, 100);
 }
 
 export function registerScreen(id: string, terminal: Terminal, sessionId?: string) {
   const previous = entries.get(id), listeners = previous?.listeners ?? pending.get(id) ?? new Set(); pending.delete(id);
+  const parses = previous?.parses ?? pendingParses.get(id) ?? new Set(); pendingParses.delete(id);
   previous?.dispose();
-  const entry: Entry = { terminal, listeners, dispose: () => {}, epoch: ++incarnation, sessionId, approval: null, writes: 0, pending: 0,
+  const entry: Entry = { id, terminal, listeners, parses, timer: 0, dispose: () => {}, epoch: ++incarnation, sessionId, approval: null, writes: 0, pending: 0, parse: 0,
     revision: ++frameRevision, updatedAt: Date.now(), states: {}, stateUpdatedAt: { claude: 0, codex: 0 }, identities: {}, instances: { claude: ++incarnation, codex: ++incarnation }, rowsKey: '' };
   const notify = () => {
     if (entries.get(id) === entry) publish(entry);
   };
   const written = terminal.onWriteParsed(notify), resized = terminal.onResize(notify);
-  entry.dispose = () => { written.dispose(); resized.dispose(); };
+  entry.dispose = () => { written.dispose(); resized.dispose(); clearTimeout(entry.timer); };
   capture(entry);
   entries.set(id, entry);
   listeners.forEach(listener => listener({ rows: [], sessionId: sessionId ?? null, revision: entry.revision, updatedAt: entry.updatedAt }));
+  parses.forEach(listener => listener(snapshot(entry)));
   notify();
   return () => {
     if (entries.get(id) !== entry) return;
     entry.dispose(); entries.delete(id);
     entry.listeners.forEach(listener => listener({ rows: [], sessionId: null, revision: ++frameRevision, updatedAt: Date.now() }));
+    entry.parses.forEach(listener => listener({ rows: [], sessionId: null, revision: frameRevision, updatedAt: Date.now() }));
     if (entry.listeners.size) pending.set(id, entry.listeners);
+    if (entry.parses.size) pendingParses.set(id, entry.parses);
   };
 }
 
@@ -105,13 +118,17 @@ export function screenChoice(agent: ScreenAgent, screen: Screen | null): ScreenC
 }
 
 // Subscribers stay attached across a terminal being remounted (its pane re-creates the xterm).
-export function subscribeScreen(id: string, listener: (screen: Screen) => void) {
-  const set = entries.get(id)?.listeners ?? pending.get(id) ?? new Set();
-  if (!entries.has(id)) pending.set(id, set);
+export function subscribeScreen(id: string, listener: (screen: Screen) => void, parsed = false) {
+  const waiting = parsed ? pendingParses : pending;
+  const set = entries.get(id)?.[parsed ? 'parses' : 'listeners'] ?? waiting.get(id) ?? new Set();
+  if (!entries.has(id)) waiting.set(id, set);
   set.add(listener);
   const current = readScreen(id); if (current) listener(current);
-  return () => { set.delete(listener); if (!set.size && pending.get(id) === set) pending.delete(id); };
+  return () => { set.delete(listener); if (!set.size && waiting.get(id) === set) waiting.delete(id); };
 }
+
+// Delivery callbacks do no UI work until a message can actually advance.
+export const subscribeParsed = (id: string, listener: (screen: Screen) => void) => subscribeScreen(id, listener, true);
 
 export function useScreen(id: string, sessionId?: string | null) {
   const [value, setValue] = useState(() => ({ id, screen: readScreen(id) }));
