@@ -173,6 +173,7 @@ test('a package a link takes out of its folder or to a network share is never ru
   const npmShim = { [W.join(prefix, 'codex.cmd')]: { text: '"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
   const pnpmShim = { [W.join(pnpm, 'codex.cmd')]: { text: '"%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
   const cases = [[prefix, npmShim, W.join(prefix, 'node_modules', '@openai', 'codex')], [pnpm, pnpmShim, W.join(pnpm, 'global', '5', 'node_modules', '@openai', 'codex')]];
+  // A local folder's package that a link takes to a share, elsewhere on the machine or above the folder.
   for (const [folder, shims, dir] of cases) for (const target of ['\\\\server\\share\\codex', 'D:\\elsewhere\\codex', W.join(W.dirname(folder), 'codex')]) {
     const { found, runs } = await find({ ...shims, [dir]: { link: target }, [W.join(target, ...nested)]: { size: NATIVE } }, { PATH: folder });
     assert.deepEqual([found.file, runs], [null, []], `${dir} -> ${target}`);
@@ -181,6 +182,16 @@ test('a package a link takes out of its folder or to a network share is never ru
   const nvm = W.join(roaming, 'nvm', 'v22.11.0'), program = W.join(nvm, 'node_modules', '@openai', 'codex', ...nested);
   const { found } = await find({ ...npmShim, [prefix]: { link: nvm }, [W.join(prefix, 'node_modules', '@openai', 'codex')]: { link: W.join(nvm, 'node_modules', '@openai', 'codex') }, [program]: { size: NATIVE } }, { PATH: prefix });
   assert.deepEqual(picked(found), { file: program, path: W.join(prefix, 'codex.CMD'), via: 'npm-vendor', version: '0.166.0', reason: null });
+  // A folder on a share (on PATH as such, or a mapped drive whose real path is the share) runs its own package there;
+  // a link from it to another share is refused.
+  const share = '\\\\server\\share\\npm', onShare = W.join(share, 'node_modules', '@openai', 'codex'), shareShim = { [W.join(share, 'codex.cmd')]: npmShim[W.join(prefix, 'codex.cmd')] };
+  assert.equal((await find({ ...shareShim, [W.join(onShare, ...nested)]: { size: NATIVE } }, { PATH: share })).found.file, W.join(onShare, ...nested));
+  const mapped = 'Z:\\npm', mappedShim = { [W.join(mapped, 'codex.cmd')]: npmShim[W.join(prefix, 'codex.cmd')] };
+  for (const [target, runs] of [[onShare, true], ['\\\\other\\share\\codex', false]]) {
+    const program = W.join(target, ...nested);
+    const { found } = await find({ ...mappedShim, [mapped]: { link: share }, [W.join(mapped, 'node_modules', '@openai', 'codex')]: { link: target }, [program]: { size: NATIVE } }, { PATH: mapped });
+    assert.equal(found.file, runs ? program : null, `${mapped} (really ${share}) -> ${target}`);
+  }
 });
 
 test("a package whose program moved to a layout no table knows is found in its vendor tree, within bounds and its folder", async () => {

@@ -70,10 +70,12 @@ function packageBinaries(dir, arch, path) {
 }
 
 // A package a shim names, and where a link takes it, stays inside the shim's folder (for node_modules\.bin, the
-// node_modules it sits in): never a UNC path, never above it.
+// node_modules it sits in): never above it, and never a UNC path unless the folder itself is on that share (a mapped
+// drive's real path is one).
 function inside(folder, target, path) {
   const root = path.basename(folder).toLowerCase() === '.bin' ? path.dirname(folder) : folder, relative = path.relative(root, target);
-  return !/^[\\/]{2}/.test(target) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+  const unc = file => /^[\\/]{2}/.test(file);
+  return (!unc(target) || unc(root)) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
 }
 
 // One Codex locator per process, for the terminal, the dispatch helper and native mode alike (codex-runtime/BOUNDARY.md).
