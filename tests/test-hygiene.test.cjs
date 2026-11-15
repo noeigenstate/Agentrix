@@ -42,10 +42,123 @@ test('the rules see each kind of violation and none of the allowed waits', () =>
   assert.deepEqual(violationsIn('// await sleep(100)\nconst wait = ms => new Promise(resolve => setTimeout(resolve, ms));\nt.mock.timers.tick(3000);'), {});
 });
 
+// The most each file may have been allowed when this guard was written (1.5.0). The allowlist file holds the live counts
+// and may only go down from here; raising an entry, or adding a file or rule, takes a visible change to this table.
+const CEILING = {
+  'about-channel.test.cjs': { setImmediate: 1 },
+  'activity-usage-observation.test.cjs': { setImmediate: 1 },
+  'agent-calls-liveness.test.cjs': { 'fixed-sleep': 2, setImmediate: 1 },
+  'agent-runtime-settings.test.cjs': { setImmediate: 1 },
+  'backend-activity.test.cjs': { 'fixed-sleep': 1 },
+  'boundary-terminal.test.cjs': { setImmediate: 1 },
+  'builtin-skills.test.cjs': { 'fixed-sleep': 1 },
+  'claude-account-usage.test.cjs': { setImmediate: 1 },
+  'claude-parity-real-cli.test.cjs': { 'fixed-sleep': 6 },
+  'claude-sdk-connection.test.cjs': { 'busy-loop': 1, setImmediate: 2 },
+  'claude-sdk-real-cli.test.cjs': { 'fixed-sleep': 5 },
+  'claude-sdk-replay-tools.test.cjs': { setImmediate: 1 },
+  'claude-sdk-rereview2.test.cjs': { setImmediate: 2 },
+  'claude-sdk-review3.test.cjs': { setImmediate: 1 },
+  'claude-sdk-review4.test.cjs': { setImmediate: 1 },
+  'claude-sdk-runtime.test.cjs': { setImmediate: 2 },
+  'claude-sdk-switch.test.cjs': { setImmediate: 7 },
+  'claude-sdk-wire.test.cjs': { 'fixed-sleep': 1 },
+  'claude-sessions.test.cjs': { setImmediate: 5 },
+  'codex-account-usage-native.test.cjs': { setImmediate: 1 },
+  'codex-account-usage.test.cjs': { setImmediate: 2 },
+  'codex-activity.test.cjs': { 'elapsed-bound': 1, setImmediate: 1 },
+  'codex-auto-reset-runtime.test.cjs': { 'fixed-sleep': 3 },
+  'codex-only-main.test.cjs': { setImmediate: 1 },
+  'codex-slash.test.cjs': { setImmediate: 2 },
+  'completion-history.test.cjs': { setImmediate: 2 },
+  'dashboard-ui.test.cjs': { 'fixed-sleep': 1, setImmediate: 1 },
+  'dashboard-window.test.cjs': { setImmediate: 1 },
+  'dispatch-codex-usage.test.cjs': { 'elapsed-bound': 1, 'fixed-sleep': 1 },
+  'dispatch-control.test.cjs': { 'fixed-sleep': 1 },
+  'dispatch-interventions.test.cjs': { 'fixed-sleep': 2 },
+  'dispatch-team.test.cjs': { 'fixed-sleep': 2 },
+  'dispatch.test.cjs': { 'elapsed-bound': 2, 'fixed-sleep': 1 },
+  'file-cards.test.cjs': { 'fixed-sleep': 2 },
+  'generated-images.test.cjs': { setImmediate: 1 },
+  'lab-engine-window.test.cjs': { setImmediate: 5 },
+  'lab-engine.test.cjs': { 'fixed-sleep': 1 },
+  'lab-oss.test.cjs': { setImmediate: 2 },
+  'lab-sandbox-win32.test.cjs': { 'fixed-sleep': 3, setImmediate: 1 },
+  'lab-session.test.cjs': { 'elapsed-bound': 2 },
+  'lab-ui.test.cjs': { 'fixed-sleep': 2 },
+  'linux-integration.test.cjs': { 'fixed-sleep': 1 },
+  'native-approvals.test.cjs': { 'fixed-sleep': 2 },
+  'native-autocompact-claude.test.cjs': { 'fixed-sleep': 1 },
+  'native-autocompact-codex.test.cjs': { 'fixed-sleep': 1 },
+  'native-claude-panel.test.cjs': { setImmediate: 1 },
+  'native-codex-status.test.cjs': { 'fixed-sleep': 1 },
+  'native-commands-codex.test.cjs': { 'fixed-sleep': 1 },
+  'native-commands-real-cli.test.cjs': { 'fixed-sleep': 1 },
+  'native-commands.test.cjs': { setImmediate: 1 },
+  'native-parity-backend.test.cjs': { setImmediate: 1 },
+  'native-parity-review.test.cjs': { 'elapsed-bound': 1, 'fixed-sleep': 4 },
+  'native-project-accounts.test.cjs': { setImmediate: 1 },
+  'native-rate-real-cli.test.cjs': { 'fixed-sleep': 1 },
+  'native-router-runtime.test.cjs': { setImmediate: 1 },
+  'native-router-worker.test.cjs': { setImmediate: 1 },
+  'native-session-ui.test.cjs': { 'fixed-sleep': 9, setImmediate: 2 },
+  'native-switch-ipc.test.cjs': { setImmediate: 1 },
+  'native-switch-long-thread.test.cjs': { setImmediate: 1 },
+  'native-switch-main.test.cjs': { setImmediate: 2 },
+  'native-switch-review.test.cjs': { 'fixed-sleep': 1, setImmediate: 1 },
+  'native-switch-router.test.cjs': { setImmediate: 1 },
+  'native-switch-runtime.test.cjs': { setImmediate: 1 },
+  'native-switch-structured.test.cjs': { setImmediate: 1 },
+  'native-worker-claude.test.cjs': { 'fixed-sleep': 1 },
+  'native-worker-finish.test.cjs': { 'fixed-sleep': 1, setImmediate: 1 },
+  'project-image-ui.test.cjs': { setImmediate: 1 },
+  'project-reorder-release.test.cjs': { setImmediate: 1 },
+  'r13-review2.test.cjs': { 'fixed-sleep': 1 },
+  'reading-paths.test.cjs': { setImmediate: 4 },
+  'reading-smoke-fixture.test.cjs': { 'fixed-sleep': 3 },
+  'reading-ui.test.cjs': { setImmediate: 2 },
+  'send-to-agent.test.cjs': { 'fixed-sleep': 1, setImmediate: 1 },
+  'session-files.test.cjs': { 'fixed-sleep': 1 },
+  'skills-settings.test.cjs': { setImmediate: 1 },
+  'skills.test.cjs': { 'fixed-sleep': 3, setImmediate: 1 },
+  'ssh-connection.test.cjs': { 'fixed-sleep': 1, setImmediate: 2 },
+  'subagent-pane.test.cjs': { setImmediate: 1 },
+  'team-locate.test.cjs': { setImmediate: 3 },
+  'terminal-cleanup.test.cjs': { setImmediate: 3 },
+  'terminal-theme.test.cjs': { 'fixed-sleep': 1 },
+  'terminal-visibility.test.cjs': { setImmediate: 3 },
+  'token-rate.test.cjs': { 'elapsed-bound': 1 },
+  'undeclared-names.test.cjs': { setImmediate: 1 },
+  'updates.test.cjs': { setImmediate: 2 },
+  'usage-observation.test.cjs': { setImmediate: 1 },
+  'usage-refresh.test.cjs': { 'fixed-sleep': 1, setImmediate: 1 },
+  'voice-motion.test.cjs': { setImmediate: 1 },
+  'voice.test.cjs': { setImmediate: 1 },
+  'watch-folder-windows.test.cjs': { 'fixed-sleep': 1 },
+  'watch-folder.test.cjs': { setImmediate: 1 },
+  'windows-integration.test.cjs': { setImmediate: 2 },
+  'zsh-integration.test.cjs': { 'fixed-sleep': 1 },
+};
+const raised = allowed => allowed.flatMap(({ file, rule, count }) => {
+  const most = CEILING[file.replace('tests/', '')]?.[rule] || 0;
+  return count > most ? [`${file} ${rule}: ${count} allowed, at most ${most} was ever frozen. The allowlist can only shrink.`] : [];
+});
+
+test('the allowlist can be lowered but never raised or extended past the frozen ceiling', () => {
+  const frozen = Object.entries(CEILING).flatMap(([file, rules]) => Object.entries(rules).map(([rule, count]) => ({ file: `tests/${file}`, rule, count })));
+  assert.deepEqual(raised(frozen), []);
+  assert.deepEqual(raised(frozen.map(entry => ({ ...entry, count: entry.count - 1 }))), []);
+  assert.equal(raised([{ ...frozen[0], count: frozen[0].count + 1 }]).length, 1, 'a raised count is refused');
+  assert.equal(raised([{ file: 'tests/new-thing.test.cjs', rule: 'setImmediate', count: 1 }]).length, 1, 'a new file is refused');
+  const [file] = Object.entries(CEILING).find(([, rules]) => !rules['busy-loop']);
+  assert.equal(raised([{ file: `tests/${file}`, rule: 'busy-loop', count: 1 }]).length, 1, 'a new rule on a listed file is refused');
+});
+
 test('no test waits on setImmediate chains, busy loops, fixed sleeps or elapsed-time bounds outside the frozen allowlist, which can only shrink', () => {
   const allowed = JSON.parse(fs.readFileSync(path.join(root, allowFile), 'utf8')).entries;
   assert.deepEqual(allowed.map(key), [...allowed.map(key)].sort(), 'the allowlist is sorted by file, then rule');
   assert.equal(new Set(allowed.map(key)).size, allowed.length, 'every file and rule appears once');
+  assert.deepEqual(raised(allowed), []);
   const found = new Map(scanTests().map(entry => [key(entry), entry.count]));
   const problems = [];
   for (const [name, count] of found) {

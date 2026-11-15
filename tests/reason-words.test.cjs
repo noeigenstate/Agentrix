@@ -13,9 +13,7 @@ const tableOf = ns => require(`../electron/shared/reasons/${ns}.cjs`).codes;
 const placeholders = text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
 const HAN = /[一-鿿]/;
 
-// English comes from en.json, or from a lane's locale-additions*.json that integration has not merged yet.
-const english = Object.assign({}, require('../electron/locales/en.json'), ...fs.readdirSync(root)
-  .filter(name => /^locale-additions.*\.json$/.test(name)).map(name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'))));
+const english = require('../electron/locales/en.json');
 
 test('every code in every namespace has Chinese words and an English entry, and main builds no user-facing sentence', () => {
   for (const ns of NAMESPACES) {
@@ -62,9 +60,10 @@ test('the sentence scan sees a Chinese literal in a reason call or detail, and n
 });
 
 test('reason() builds a Reason from a known code and refuses anything else', () => {
-  const built = reason('codex.account_read_failed', { source: 'main', stage: 'rpc', params: { code: -32600, retry: false, home: null }, observedAt: 7 });
-  assert.deepEqual(built, { code: 'codex.account_read_failed', source: 'main', stage: 'rpc', params: { code: -32600, retry: false, home: null }, observedAt: 7 });
+  const built = reason('codex.account_read_failed', { source: 'main', stage: 'rpc', observedAt: 7 });
+  assert.deepEqual(built, { code: 'codex.account_read_failed', source: 'main', stage: 'rpc', observedAt: 7 });
   assert.ok(isReason(built));
+  for (const params of [{ variable: 'ALL_PROXY', source: 'settings' }, { variable: 7, source: false }, { variable: null }, {}]) assert.ok(isReason(reason('term.hooks_command_proxy', { source: 'main', params })), JSON.stringify(params));
   assert.equal(codesOf('term').includes('term.hooks_command_proxy'), true);
   for (const [code, fields] of [
     ['term.not_a_code', { source: 'main' }], ['nothing', { source: 'main' }], ['term.constructor', { source: 'main' }], [7, { source: 'main' }],
@@ -74,6 +73,20 @@ test('reason() builds a Reason from a known code and refuses anything else', () 
   assert.throws(() => codesOf('budget'), /Unknown reason namespace/);
   assert.equal(isReason({ ...built, code: 'claude.budget_spent' }), false);
   assert.equal(isReason(null), false);
+});
+
+// The words come from the code alone, so a Reason carries no sentence of its own and no fact the table does not name.
+test('a Reason has only the declared fields and the params its code declares', () => {
+  const built = reason('codex.not_found', { source: 'main', params: { searched: 'a; b', pathFolders: 'c' }, observedAt: 7 });
+  for (const [code, fields] of [
+    ['codex.not_found', { source: 'main', params: { bogus: 'y' } }],
+    ['codex.not_found', { source: 'main', params: { searched: 'a', bogus: 'y' } }],
+    ['codex.failed', { source: 'main', params: { searched: 'a' } }],
+    ['codex.not_found', { source: 'main', message: '中文句子' }],
+  ]) assert.throws(() => reason(code, fields), /Invalid reason/, `${code} ${JSON.stringify(fields)}`);
+  assert.equal(isReason({ ...built, message: '中文句子' }), false);
+  assert.equal(isReason({ ...built, params: { bogus: 'y' } }), false);
+  assert.equal(isReason(built), true);
 });
 
 test('a reason detail is one redacted line of at most 300 characters', () => {
