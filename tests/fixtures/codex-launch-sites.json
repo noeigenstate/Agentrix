@@ -40,7 +40,7 @@
     "id": "electron/features/agents/codex-account-usage.cjs:88e087e71550c1efedf0cb78"
   },
   {
-    "text": "run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => resolve(error ? null : Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')))",
+    "text": "run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\r\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => resolve(error ? null : Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')))",
     "id": "electron/features/claude-runtime/path-env.cjs:efd579f4e757ba5afe754b99"
   },
   {
@@ -78,6 +78,14 @@
   {
     "text": "spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,\r\n              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
     "id": "electron/features/codex-app-server/index.cjs:736ac26a2e0e631385a05a1a"
+  },
+  {
+    "text": "run(path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\r\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\r\n          const drives = error ? [] : String(stdout).trim().split(';').filter(drive => /^[A-Za-z]:$/.test(drive)).map(drive => `${drive.toUpperCase()}\\\\`);\r\n          resolve(drives.length ? drives : fallback);\r\n        })",
+    "id": "electron/features/codex-runtime/drive-scan.cjs:5eed9e352c69a3abb86b5cbf"
+  },
+  {
+    "text": "run(nodePath.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\r\n        if (error) return resolve(null);\r\n        const found = { files: [], folders: [] };\r\n        for (const line of Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')) {\r\n          const [kind, raw] = line.split('\\t'), value = raw?.trim().replace(/^\"(.*)\"$/, '$1');\r\n          if (value && nodePath.win32.isAbsolute(value) && (kind === 'file' || kind === 'folder')) found[`${kind}s`].push(value);\r\n        }\r\n        resolve(found);\r\n      })",
+    "id": "electron/features/codex-runtime/locator.cjs:5e1cb0fd74fce32e757a5400"
   },
   {
     "text": "execFile('git', ['-C', project.path, ...args], { windowsHide: true, timeout: 3000 }, (error, stdout) => done(error ? '' : stdout.trim()))",
@@ -212,7 +220,7 @@
     "id": "electron/features/ssh/runtime.cjs:79bbec512d97c859e141b177"
   },
   {
-    "text": "execFile('git', ['rev-parse', '--git-common-dir'],\n    { cwd, encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS }, (error, stdout) => resolve(error ? null : path.resolve(cwd, String(stdout).trim())))",
+    "text": "execFile('git', ['rev-parse', '--git-common-dir'],\r\n    { cwd, encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS }, (error, stdout) => resolve(error ? null : path.resolve(cwd, String(stdout).trim())))",
     "id": "electron/features/team/team-locate.cjs:e0a4179524d43dc804f6e6d9"
   },
   {
@@ -544,12 +552,12 @@
     "id": "src/features/reading/ReadingView.tsx:ca741eacdbbf1b21d8843c29"
   },
   {
-    "text": "window.agentrix.writeTerminal(terminal.id, value)",
-    "id": "src/features/reading/ReadingView.tsx:2d9b7b9ed2dd2748ada7121a"
-  },
-  {
     "text": "window.agentrix.writeTerminal(terminal.id, '\\r')",
     "id": "src/features/reading/ReadingView.tsx:81dbc1794ce4071708a2609a"
+  },
+  {
+    "text": "window.agentrix.writeTerminal(terminal.id, value)",
+    "id": "src/features/reading/ReadingView.tsx:2d9b7b9ed2dd2748ada7121a"
   },
   {
     "text": "window.agentrix.writeTerminal(terminal.id, '\\x1b[Z')",
@@ -588,8 +596,8 @@
     "id": "src/features/terminal/AgentLauncher.tsx:bd8744828cefec3360d570db"
   },
   {
-    "text": "entry.terminal.write(data, () => {\r\n    if (entries.get(id) !== entry) return;\r\n    entry.pending--;\r\n    if (serial === entry.writes && approval && approval.sessionId === entry.sessionId) entry.approval = { ...approval };\r\n    snapshot(entry);\r\n  })",
-    "id": "src/features/terminal/terminal-screen.ts:d655f6d1543ed1f1247c9499"
+    "text": "entry.terminal.write(data, () => {\r\n    if (entries.get(id) !== entry) return;\r\n    entry.pending--;\r\n    if (serial === entry.writes && approval && approval.sessionId === entry.sessionId) entry.approval = { ...approval };\r\n    publish(entry);\r\n  })",
+    "id": "src/features/terminal/terminal-screen.ts:1383c5db210645a6d9b7bc25"
   },
   {
     "text": "terminal.input(terminalColorReply(slot), false)",

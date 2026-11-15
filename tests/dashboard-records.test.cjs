@@ -272,7 +272,7 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
     app: { on: (_, listener) => { handler = listener; }, quit: () => { quits++; notifyQuit(); } }, process: { platform: 'win32' }, dashboard: records, labWindow,
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
     updateManager: null, projectAccounts: { close() {} }, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
-    usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, dispatchControl: null,
+    usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, hookServer: null, dispatchControl: null,
     nativeSessions: { close: () => { cleanups++; } }, claudeRuntime: null, tray: null, cleanupAskpass() {}, runtimeDir: null,
   });
   const first = records.append('runs', { index: 1 });
