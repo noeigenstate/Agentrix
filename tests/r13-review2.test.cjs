@@ -26,12 +26,13 @@ test('N4 only a real compact boundary suppresses this turn compact feedback', ()
   normalize(local('done')); assert.equal(visible.length, 1);
   normalize({ type: 'result' }); normalize(local('failed-next')); assert.equal(visible.length, 2);
 });
-for (const mode of ['unavailable', 'reserve']) test(`N6 shell output survives ${mode} model delivery failure and says it was not delivered`, async t => {
-  const root = folder(t), fake = fakeSdk(), events = [];
+// Delivery is refused two ways: the session may not continue (send returns rejected), or the query that would carry the
+// output cannot start, here because its billing identity is not the saved key (send throws).
+for (const mode of ['unavailable', 'startup']) test(`N6 shell output survives ${mode} model delivery failure and says it was not delivered`, async t => {
+  const root = folder(t), fake = fakeSdk(mode === 'startup' ? { preflightSource: 'user' } : {}), events = [];
   const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: root, loadSdk: async () => fake.sdk,
     resolveExecutable: async () => 'fake-only', safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   t.after(() => runtime.close()); runtime.credentials.save('sk-ant-offline-review-output-only');
-  if (mode === 'reserve') runtime.usage.reserve = () => { throw new Error('NO_BUDGET'); };
   const session = runtime.create({ owner: 'gui', cwd: root, env: { ...process.env, GIT_CEILING_DIRECTORIES: root }, mayContinue: () => mode !== 'unavailable' }, event => events.push(event));
   await session.start();
   await assert.rejects(session.shell('shell', 'printf PRESERVED_OUTPUT'), /输出未发送给模型/, 'the shell RPC must refuse delivery so the composer always shows the reason');
@@ -39,6 +40,7 @@ for (const mode of ['unavailable', 'reserve']) test(`N6 shell output survives ${
   assert.match(card.payload.content.output, /PRESERVED_OUTPUT/); assert.equal(card.payload.content.exitCode, 0);
   assert.equal(card.payload.status, 'completed'); assert.equal(card.payload.content.modelDelivery, 'rejected');
   assert.ok(events.some(event => event.type === 'error' && event.payload.code === 'shell_context_rejected'));
+  assert.equal(fake.inputs.length, 0, 'no input reached the model');
 });
 test('N7 a returned background job outlives its foreground timeout, but close can reap it', { timeout: 10000 }, async t => {
   const root = folder(t), abort = new AbortController();

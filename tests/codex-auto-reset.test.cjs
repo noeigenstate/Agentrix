@@ -105,11 +105,14 @@ test('disposing the service aborts only its pending reset client without consumi
   assert.equal(f.rows().filter(row => row.method.endsWith('/consume')).length, 0);
 });
 
-test('legacy settings retain existing routes and budget while auto-reset defaults on and persists off', t => {
+test('legacy settings retain existing routes and drop the retired budget while auto-reset defaults off and persists off', t => {
   const f = fixture(t), file = path.join(f.root, 'settings.json');
   fs.writeFileSync(file, JSON.stringify({ claudePath: 'terminal-only', codexView: 'terminal', monthlyBudgetUsd: 12 }));
-  const settings = createSettings(file); assert.equal(settings.get().codexAutoReset, false, 'the owner turns this on; a reset cannot be undone'); assert.equal(settings.get().monthlyBudgetUsd, 12);
+  const settings = createSettings(file); assert.equal(settings.get().codexAutoReset, false, 'the owner turns this on; a reset cannot be undone');
+  assert.equal(settings.get().claudePath, 'terminal-only');
+  assert.equal(Object.hasOwn(settings.get(), 'monthlyBudgetUsd'), false, 'Agentrix sets no budget on the native API');
   settings.set({ codexAutoReset: false }); assert.equal(createSettings(file).get().codexAutoReset, false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { claudePath: 'terminal-only', codexAutoReset: false }, 'the next write drops the retired keys');
   assert.throws(() => settings.set({ codexAutoReset: 1 }));
 });
 

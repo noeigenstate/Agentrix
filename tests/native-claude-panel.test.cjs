@@ -106,9 +106,9 @@ test('a read-only question whose query cannot start says so and leaves the sessi
   const before = events.length, status = (await session.send({ clientMessageId: 's0', text: '/status' })).local;
   assert.deepEqual([status.context, status.errors, status.account], [null, [{ source: 'context', reason: '原因未知' }], { kind: 'unknown' }]);
   await assert.rejects(session.send({ clientMessageId: 'c0', text: '/context' }), /无法读取上下文用量/);
-  assert.deepEqual([session.snapshot().state, events.length, f.runtime.apiState(10).status], ['idle', before, 'ready'], 'no failed session, no error event, no route marked unavailable');
+  assert.deepEqual([session.snapshot().state, events.length, f.runtime.apiState().status], ['idle', before, 'ready'], 'no failed session, no error event, no route marked unavailable');
   await assert.rejects(session.send({ clientMessageId: 'one', text: 'first' }));
-  assert.deepEqual([session.snapshot().state, events.some(event => event.type === 'error' && event.payload.code === 'billing_identity_mismatch'), f.runtime.apiState(10).status],
+  assert.deepEqual([session.snapshot().state, events.some(event => event.type === 'error' && event.payload.code === 'billing_identity_mismatch'), f.runtime.apiState().status],
     ['failed', true, 'billing_identity_mismatch'], 'the same failure is recorded once something is really sent');
 });
 

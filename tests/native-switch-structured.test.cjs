@@ -7,6 +7,7 @@ const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.c
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { createNativeUsage } = require('../electron/features/native-session/agent-usage.cjs');
 const { turnResult, reasons } = require('../electron/features/claude-sdk/result.cjs');
+const { LIMIT_MESSAGES } = require('../electron/features/claude-sdk/identity.cjs');
 const { createEvents } = require('../electron/features/codex-app-server/events.cjs');
 const { tokenUsage } = require('../electron/features/codex-app-server/account.cjs');
 const { validEvent } = require('../electron/features/native-session/validate.cjs');
@@ -41,8 +42,12 @@ for (const subtype of ['success', 'error_during_execution']) test(`G4 stop with 
 });
 test('G6 terminal_reason controls the outcome even when subtype is success, and absent data remains unknown', () => {
   assert.equal(turnResult({ subtype: 'success', terminal_reason: 'completed' }).status, 'completed');
-  for (const reason of ['tool_deferred', 'max_turns', 'budget_exhausted', 'background_requested', 'stop_hook_prevented']) {
+  for (const reason of ['tool_deferred', 'max_turns', 'background_requested', 'stop_hook_prevented']) {
     assert.equal(turnResult({ subtype: 'success', terminal_reason: reason }).status, 'interrupted', reason);
+  }
+  // Agentrix passes no budget cap, so the CLI's budget stop is not a reason it explains: like any unclassified end it stays unknown.
+  for (const result of [{ subtype: 'success', terminal_reason: 'budget_exhausted' }, { subtype: 'error_max_budget_usd' }]) {
+    assert.deepEqual([turnResult(result).status, turnResult(result).error], ['unknown', null], JSON.stringify(result));
   }
   for (const reason of ['api_error', 'prompt_too_long', 'image_error', 'turn_setup_failed']) assert.equal(turnResult({ subtype: 'success', terminal_reason: reason }).status, 'failed', reason);
   for (const reason of Object.keys(reasons)) assert.match(turnResult({ terminal_reason: reason }).message, /。$/);
@@ -73,7 +78,8 @@ test('G7 SDK rate events preserve reset evidence and reject credits without expo
   f.fake.emit({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', errorCode: 'credits_required', resetsAt: reset } }); await tick();
   const rejected = f.events.filter(event => event.type === 'limits.updated').at(-1).payload;
   assert.equal(rejected.ordinaryUsageAllowed, false); assert.equal(rejected.notice.code, 'credits_required'); assert.equal(rejected.notice.resetsAtMs, reset * 1000);
-  assert.match(rejected.notice.message, /服务端拒绝/); assert.match(rejected.notice.message, /所属的组织/);
+  // One message per provider code, never the provider's words.
+  assert.equal(rejected.notice.message, LIMIT_MESSAGES.credits_exhausted); assert.doesNotMatch(rejected.notice.message, /credits_required|credit balance|rejected/i);
   assert.equal(rejected.notice.action, 'check-console'); assert.equal(f.meter.snapshot().limits[0].percent, 80);
 });
 test('G8 Codex structured tokens and in-flight commands use observations, never fixed windows or guessed dollars', () => {

@@ -60,7 +60,7 @@ function claudeUser(message) {
       error: 'billing_error', message: { id: randomUUID(), role: 'assistant', model: '<synthetic>',
         content: [{ type: 'text', text: 'Credit balance is too low' }], usage: { input_tokens: 0, output_tokens: 0 } } });
     send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: 'error_during_execution', terminal_reason: 'api_error', is_error: true,
-      result: 'Credit balance is too low', user_message_uuid: message.uuid, user_message_uuids: [message.uuid], queued_turn_count: 0,
+      result: 'Credit balance is too low', errors: ['Credit balance is too low'], user_message_uuid: message.uuid, user_message_uuids: [message.uuid], queued_turn_count: 0,
       total_cost_usd: total, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} });
     return;
   }

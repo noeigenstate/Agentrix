@@ -23,15 +23,14 @@ function fixture(t) {
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save('sk-ant-offline-parity-fixture-only');
   t.after(async () => { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  // A query keeps the month's remaining allowance, with no per-round cap: only a changed allowance renews it at the
-  // next send. Another session's spend is such a change.
-  let spent = 0;
-  const renew = () => runtime.usage.record('other-session', { uuid: randomUUID(), total_cost_usd: ++spent, modelUsage: {} });
-  return { root, fake, runtime, renew };
+  // An owner query stays open at idle and no spend renews it. A key saved again retires it at the next send, which
+  // resumes the conversation in a new query: that query must carry the acknowledged choices.
+  const resume = () => runtime.credentials.save('sk-ant-offline-parity-fixture-only');
+  return { root, fake, runtime, resume };
 }
 
-test('run options read is lazy; acknowledged choices survive budget renewal', async t => {
-  const f = fixture(t), session = f.runtime.create({ owner: 'gui', cwd: f.root, env: { PATH: '' }, runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10 }, () => {});
+test('run options read is lazy; acknowledged choices survive a resumed query', async t => {
+  const f = fixture(t), session = f.runtime.create({ owner: 'gui', cwd: f.root, env: { PATH: '' }, runtimeSessionId: randomUUID() }, () => {});
   await session.start(); assert.equal((await session.runOptions({})).model, null); assert.equal(f.fake.calls.length, 0);
   assert.deepEqual((await session.models())[0].efforts, ['low', 'high']);
   await session.send({ clientMessageId: 'one', text: 'first' }); await tick();
@@ -40,22 +39,26 @@ test('run options read is lazy; acknowledged choices survive budget renewal', as
   await assert.rejects(session.runOptions({ fast: true }), /Claude Agent SDK 目前不支持快速模式/);
   assert.equal((await session.runOptions({})).fast, false);
   await session.runOptions({ model: 'fake-next', effort: 'low', fast: false });
-  f.renew(); await session.send({ clientMessageId: 'two', text: 'second' }); await tick();
+  const queries = f.fake.calls.length;
+  f.resume(); await session.send({ clientMessageId: 'two', text: 'second' }); await tick();
+  assert.equal(f.fake.calls.length, queries + 1, 'the second message runs in a resumed query');
   assert.equal(f.fake.calls.at(-1).options.model, 'fake-next'); assert.equal(f.fake.calls.at(-1).options.effort, 'low');
   assert.equal(JSON.parse(fs.readFileSync(f.fake.calls.at(-1).options.settings)).fastMode, false);
   assert.equal(f.fake.calls.at(-1).options.resume, f.fake.inputs[0].session_id || session.snapshot().events.find(event => event.providerSessionId)?.providerSessionId);
   assert.equal((await session.runOptions({ model: null })).model, 'fake-model');
-  f.renew(); await session.send({ clientMessageId: 'default', text: 'default model' }); await tick();
+  f.resume(); await session.send({ clientMessageId: 'default', text: 'default model' }); await tick();
   assert.equal(f.fake.calls.at(-1).options.model, undefined);
 });
 
 test('rapid option updates serialize and a following send sees the last acknowledged choice', async t => {
-  const f = fixture(t), session = f.runtime.create({ owner: 'gui', cwd: f.root, env: { PATH: '' }, runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10 }, () => {});
+  const f = fixture(t), session = f.runtime.create({ owner: 'gui', cwd: f.root, env: { PATH: '' }, runtimeSessionId: randomUUID() }, () => {});
   await session.start();
   const values = await Promise.all(['first', 'second', 'last'].map(model => session.runOptions({ model })));
   assert.deepEqual(values.map(value => value.model), ['first', 'second', 'last']);
   await session.send({ clientMessageId: 'after-options', text: 'go' }); await tick();
-  f.renew(); await session.send({ clientMessageId: 'renew-options', text: 'continue' }); await tick();
+  const queries = f.fake.calls.length;
+  f.resume(); await session.send({ clientMessageId: 'resume-options', text: 'continue' }); await tick();
+  assert.equal(f.fake.calls.length, queries + 1, 'the next message runs in a resumed query');
   assert.equal(f.fake.calls.at(-1).options.model, 'last');
 });
 
