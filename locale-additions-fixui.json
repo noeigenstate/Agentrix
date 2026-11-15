@@ -1,3 +1,0 @@
-{
-  "你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入 API 花费估算。": "Commands run in your own API session can read the key; any spending they incur is excluded from the API spend estimate."
-}
