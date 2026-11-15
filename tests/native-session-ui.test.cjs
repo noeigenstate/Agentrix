@@ -131,14 +131,15 @@ test('Claude /context: the number and its bar, the three biggest parts and the r
 });
 
 test('Claude /cost: the spend of the session with the month beside it, the time and the models; what is not there is 未知 or left out', () => {
-  const local = { command: 'cost', costUsdMicros: 1840000, durationMs: 1390000, apiDurationMs: 402000, month: { spentMicros: 36520000, budgetUsd: 100 },
+  const local = { command: 'cost', costUsdMicros: 1840000, durationMs: 1390000, apiDurationMs: 402000, month: { spentMicros: 36520000 },
     models: [{ model: 'claude-opus-5-5', costUsdMicros: 1620000, input: 412000, output: 9800, cacheRead: null, cacheWrite: null }, { model: 'claude-haiku-5-5', costUsdMicros: 220000, input: 188000, output: 4100, cacheRead: null, cacheWrite: null }] };
   const panel = readPanel('claude', local);
-  assert.deepEqual([panel.title, panel.command, panel.hero.value, panel.hero.caption, panel.hero.percent], ['本会话花费', '/cost', '$1.84', 'API 计费 · 本月已用 $36.52 / $100', 36.52]);
+  assert.deepEqual([panel.title, panel.command, panel.hero.value, panel.hero.caption, panel.hero.percent], ['本会话花费', '/cost', '$1.84', 'API 计费 · 本月已用 $36.52', null], 'the month is information: no limit, no share');
+  assert.equal(readPanel('claude', { ...local, month: { spentMicros: 36520000, budgetUsd: 100 } }).hero.caption, 'API 计费 · 本月已用 $36.52', 'a limit an older main still sends is ignored');
   assert.deepEqual(panel.groups.map(group => group.title), ['用时（本次打开以来）', '按模型']);
   assert.deepEqual(rowsOf(panel.groups[0]), [['总用时', '23 分 10 秒', undefined], ['API 用时', '6 分 42 秒', undefined]]);
   assert.deepEqual(rowsOf(panel.groups[1]), [['claude-opus-5-5', '$1.62', '输入 412k · 输出 9.8k'], ['claude-haiku-5-5', '$0.22', '输入 188k · 输出 4.1k']]);
-  const bare = readPanel('claude', { command: 'cost', costUsdMicros: null, durationMs: null, apiDurationMs: null, models: [], month: { spentMicros: null, budgetUsd: null } });
+  const bare = readPanel('claude', { command: 'cost', costUsdMicros: null, durationMs: null, apiDurationMs: null, models: [], month: { spentMicros: null } });
   assert.deepEqual([bare.hero.value, bare.hero.caption, bare.hero.percent, bare.groups], ['未知', 'API 计费', null, []], 'no spend is not $0.00, and nothing else is invented');
   assert.equal(readPanel('claude', { ...local, costUsdMicros: 3000 }).hero.value, '<$0.01');
 });
@@ -155,16 +156,16 @@ test('Claude /status and /usage: the session and account rows, the spend of the 
   assert.deepEqual(rowsOf(failed.groups[0]).map(row => row[1]), ['未知', '未知', '未知', '未知'], 'what the session does not know is not left out of the core rows, and the optional ones are');
   assert.equal(rowsOf(failed.groups[1])[0][1], '未知');
 
-  const local = { command: 'usage', month: { spentMicros: 36520000, budgetUsd: 100 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
+  const local = { command: 'usage', month: { spentMicros: 36520000 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
     limits: [{ id: 'five_hour', usedPercent: 100, resetsAtMs: NOW }, { id: 'seven_day', usedPercent: 40, resetsAtMs: NOW + 3600000 }] };
   const usage = readPanel('claude', local);
-  assert.deepEqual([usage.title, usage.command, usage.hero.value, usage.hero.unit, usage.hero.caption, usage.hero.percent], ['Claude 用量', '/usage', '$36.52', '/ $100', '本月 API 花费', 36.52]);
+  assert.deepEqual([usage.title, usage.command, usage.hero.value, usage.hero.unit, usage.hero.caption, usage.hero.percent], ['Claude 用量', '/usage', '$36.52', undefined, '本月 API 花费', null]);
   assert.equal(usage.alert.strong, '5 小时额度已用完');
   assert.deepEqual(usage.groups.map(group => group.title), ['用量限额', '花费', '本会话 token']);
   assert.deepEqual(usage.groups[0].quotas.map(row => [row.name, row.used, row.full]), [['5 小时', '100%', true], ['每周', '40%', false]]);
   assert.deepEqual([rowsOf(usage.groups[1]).map(row => row.slice(0, 2)), rowsOf(usage.groups[2]).map(row => row.slice(0, 2))], [[['今天', '$1.84'], ['本月', '$36.52']], [['输入', '600,000'], ['输出', '13,900']]]);
   assert.deepEqual(readPanel('claude', { ...local, limits: [], notice: { code: 'credits_required', resetsAtMs: null } }).alert, { strong: 'API 余额不足', text: '' }, 'the notice the SDK gave is told in our words');
-  const none = readPanel('claude', { command: 'usage', month: { spentMicros: null, budgetUsd: null }, today: { spentMicros: null }, tokens: {}, limits: [], notice: null });
+  const none = readPanel('claude', { command: 'usage', month: { spentMicros: null }, today: { spentMicros: null }, tokens: {}, limits: [], notice: null });
   assert.deepEqual([none.hero.value, none.hero.unit, none.hero.percent, none.alert, none.groups.map(group => group.title)], ['未知', undefined, null, undefined, ['花费']]);
 });
 
@@ -490,13 +491,13 @@ test('a reasoning summary is no part of the model, a diff and a plan are replace
     ev('item.delta', { channel: 'reasoning-summary', text: 'first ', index: 0 }, { itemId: 'th' }),
     ev('turn.diff', { diff: '+one' }), ev('turn.diff', { diff: '+one\n+two' }),
     ev('plan.updated', { explanation: 'x', steps: [{ step: 'A', status: 'pending' }] }), ev('plan.updated', { explanation: null, steps: [{ step: 'A', status: 'completed' }, { step: 'B', status: null }] }),
-    ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'budget_exhausted' }),
+    ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'credits_exhausted' }),
     ev('error', { code: 'rate', message: 'Too many requests', retryable: true, willRetry: true, stage: 'turn' }),
   ]).model;
   assert.deepEqual([model.items.th, model.order], [undefined, []], 'a thinking summary is kept nowhere: the conversation does not show it');
   assert.equal(model.diff, '+one\n+two');
   assert.deepEqual(model.plan, { explanation: null, steps: [{ text: 'A', status: 'completed' }, { text: 'B', status: null }] });
-  assert.deepEqual([model.path.selected, model.path.reason, model.error.willRetry, model.turn.running], ['terminal', 'budget_exhausted', true, true]);
+  assert.deepEqual([model.path.selected, model.path.reason, model.error.willRetry, model.turn.running], ['terminal', 'credits_exhausted', true, true]);
   const ended = applyEvents(model, [ev('turn.completed', { status: 'interrupted', error: null })]).model;
   assert.deepEqual([ended.turn, ended.error], [{ running: false, status: 'interrupted', error: null, end: { reason: null, message: null, durationMs: null, costUsdMicros: null, costEstimated: null, tokens: null } }, model.error]);
   assert.deepEqual([ended.diff === model.diff, ended.plan === model.plan], [true, true], 'the end of a turn keeps its diff and plan to read');
@@ -518,8 +519,8 @@ test('words: receipts, routes, money and quota windows say what is known and "�
   const words = load('features/native-session/native-words.ts'), item = (kind, content = {}, extra = {}) => ({ id: 'i', kind, status: null, content, turnId: null, at: null, deltas: { text: '', output: '', plan: '' }, ...extra });
   assert.deepEqual(['queued', 'delivered', 'consumed', 'rejected', 'unknown', 'mystery', null].map(words.receiptWord), ['已排队', '已送达', '已被读取', '未送达', '送达状态未知', null, null]);
   assert.deepEqual([null, undefined, 0, 5, 1_234_567].map(words.money), ['未知', '未知', '$0.00', '<$0.01', '$1.23'], 'unknown is not zero, and zero is not unknown');
-  assert.deepEqual(['budget_exhausted', 'native_cli_required', 'no_key', 'something_new', 'a.b-c', null, '输入框里有未发送的文字', 'process exited'].map(words.reasonWords),
-    ['本月 API 预算已用完', '未找到原生 Claude Code，无法通过 API 运行', '还没有保存 API key', null, null, null, '输入框里有未发送的文字', 'process exited'],
+  assert.deepEqual(['credits_exhausted', 'rate_limited', 'account_limit', 'native_cli_required', 'no_key', 'something_new', 'a.b-c', null, '输入框里有未发送的文字', 'process exited'].map(words.reasonWords),
+    ['API 额度已用完', 'API 被限流', 'API 用量已达上限', '未找到原生 Claude Code，无法通过 API 运行', '还没有保存 API key', null, null, null, '输入框里有未发送的文字', 'process exited'],
     'a code we know is said in words, a code nobody mapped is not shown, and a sentence main wrote for the owner is shown as it is');
   assert.deepEqual(words.windowWords({ usedPercent: 40, windowDurationMins: 300, resetsAtMs: null }), { span: '5 小时', used: '40%', resets: '未知' });
   assert.deepEqual([words.windowWords(null), words.windowWords({ usedPercent: null, windowDurationMins: 10080, resetsAtMs: null }).used], [null, '未知']);
@@ -626,7 +627,7 @@ test('a project’s usage change reaches only that project’s revision; a malfo
 
 // ---- how a session starts -----------------------------------------------------------------------------------------------------------
 test('the launch route follows the settings: native by default, the terminal when chosen, the reason when a missing key is why, and nothing for API-only without a key', () => {
-  const { launchRoute } = load('features/native-session/native-bridge.ts'), set = claudePath => ({ claudePath, monthlyBudgetUsd: null });
+  const { launchRoute } = load('features/native-session/native-bridge.ts'), set = claudePath => ({ claudePath });
   const native = { how: 'native' }, terminal = (reason = null) => ({ how: 'terminal', reason });
   assert.deepEqual([launchRoute('claude', null, null), launchRoute('codex', null, true)], [terminal(), native], 'settings not read: Claude waits on the terminal, Codex has only app-server');
   assert.deepEqual([launchRoute('claude', set('api-then-terminal'), true), launchRoute('claude', set('api-then-terminal'), null), launchRoute('claude', set('api-only'), true)], [native, native, native]);
@@ -664,7 +665,7 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
 }
 
 test('the launcher starts a native session or a terminal by the settings, says where the click goes, and a missing key never starts a hidden terminal', async () => {
-  const set = claudePath => ({ claudePath, monthlyBudgetUsd: null });
+  const set = claudePath => ({ claudePath });
   const cases = [
     ['claude', { settings: set('api-then-terminal'), saved: true }, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], '开始新的对话 · API · 原生模式'],
     ['claude', { settings: set('terminal-only'), saved: true }, [['launch', 't1', 'claude', 'new']], '开始新的对话'],
@@ -685,7 +686,7 @@ test('the launcher starts a native session or a terminal by the settings, says w
 });
 
 test('an incomplete npm install of Claude Code is not installed again: the card says so and a click opens the run-mode page of the settings; a failed check or an old version still starts', async () => {
-  const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
+  const runtime = { settings: { claudePath: 'api-then-terminal' }, saved: true };
   const calls = [], view = launcher(runtime, calls, { claude: { installed: true, incomplete: true } });
   try {
     view.render(); await settle();
@@ -714,7 +715,7 @@ test('an incomplete npm install of Claude Code is not installed again: the card 
 });
 
 test('the launcher of an SSH project offers Codex and a plain terminal only; Codex starts at once whether or not this computer has it: no 未安装, no install, no Node.js; a local project is unchanged', async () => {
-  const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
+  const runtime = { settings: { claudePath: 'api-then-terminal' }, saved: true };
   const calls = [], remote = launcher(runtime, calls, { kind: 'ssh', codexHere: false });
   const agents = view => elements(view.render()).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent')).map(node => node.props.className.split(' ')[1]);
   try {
@@ -738,7 +739,7 @@ test('the launcher of an SSH project offers Codex and a plain terminal only; Cod
 });
 
 test('the history of an SSH project can always be chosen: it is asked after the click, which resumes and says main’s reason if there is none', async () => {
-  const runtime = { settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true };
+  const runtime = { settings: { claudePath: 'api-then-terminal' }, saved: true };
   const radio = view => elements(view.render()).find(node => node.props?.role === 'radio' && node.props.children === '继承开发历史');
   const calls = [], remote = launcher(runtime, calls, { kind: 'ssh', codexHere: false });
   try {
@@ -765,7 +766,7 @@ test('the history of an SSH project can always be chosen: it is asked after the 
 });
 
 test('the launcher offers no terminal mode for Codex, and Codex starts natively whatever the settings say', async () => {
-  const calls = [], view = launcher({ settings: { claudePath: 'api-then-terminal', monthlyBudgetUsd: null }, saved: true }, calls);
+  const calls = [], view = launcher({ settings: { claudePath: 'api-then-terminal' }, saved: true }, calls);
   try {
     view.render(); await settle();
     assert.deepEqual(elements(view.render()).filter(node => node.props.role === 'radio').map(node => node.props.children), ['开始新开发', '继承开发历史']);
@@ -1560,7 +1561,7 @@ test('terminal fallback exposes unsent text for copying without submitting it or
     ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'already sent' } }, { itemId: 'old' }),
     ev('item.upsert', { kind: 'user-message', status: 'interrupted', content: { text, clientMessageId: 'draft', unsent: true } }, { itemId: 'draft' }),
     ev('input.receipt', { clientMessageId: 'draft', status: 'rejected' }),
-    ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'budget_exhausted' }),
+    ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'credits_exhausted' }),
   ]).model;
   const entry = { model, dismissed: null, noteDismissed: false, handoff: null };
   const harness = hookHarness('src/features/native-session/NativePathNote.tsx', {
@@ -1644,7 +1645,7 @@ test('Codex falling back to the terminal leaves its reason where the native view
 // ---- the API usage card -------------------------------------------------------------------------------------------------------------
 const words = () => load('features/native-session/native-words.ts');
 const usageOf = (patch = {}) => ({
-  month: '2026-11', apiRecords: true, todayUsdMicros: 1_230_000, monthUsdMicros: 12_400_000, estimated: true, budgetUsd: 50,
+  month: '2026-11', apiRecords: true, todayUsdMicros: 1_230_000, monthUsdMicros: 12_400_000, estimated: true,
   agents: {
     claude: { path: 'api', reason: null, next: { path: 'api', reason: null }, connection: { kind: 'api', source: 'session init: ANTHROPIC_API_KEY', observedAt: 1 }, limits: { state: 'ready', limitsById: {}, ordinaryUsageAllowed: true } },
     codex: { path: 'native', reason: null, next: { path: 'native', reason: null }, connection: { kind: 'subscription', source: 'account/read: ChatGPT login', observedAt: 1 }, limits: { state: 'ready', ordinaryUsageAllowed: true, limitsById: { codex: { limitName: 'Codex', primary: { usedPercent: 40, windowDurationMins: 300, resetsAtMs: Date.now() + 3600_000 }, secondary: { usedPercent: 10, windowDurationMins: 10080, resetsAtMs: null } } } } },
@@ -1729,7 +1730,7 @@ test('Codex billing keeps ChatGPT subscriptions while legacy terminal snapshots 
   }
 });
 
-test('the usage block groups Claude and Codex separately: only a connection row, spend and a set budget as a bar under an API connection, the subscription bars under a subscription, the last switch under its agent', async () => {
+test('the usage block groups Claude and Codex separately: only a connection row, and one spend row under an API connection, the subscription bars under a subscription, the last switch under its agent', async () => {
   const asked = [];
   const html = await usageHtml({ usage: async projectId => { asked.push(projectId); return { ok: true, value: usageOf() }; } });
   const claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
@@ -1745,55 +1746,53 @@ test('the usage block groups Claude and Codex separately: only a connection row,
   assert.doesNotMatch(html, /新会话/, 'the new-session row is gone, and so is the route it showed');
   assert.ok(claude.includes(connectionRow('session init: ANTHROPIC_API_KEY', '已连接 API')), 'the connection source stays in its tooltip, with when it was observed');
   assert.ok(codex.includes(connectionRow('account/read: ChatGPT login', 'ChatGPT 订阅')));
-  // An API connection: the budget as a bar (a share of the month's spend) and the spend, never the subscription windows.
-  assert.match(claude, /<span class="activity-metric-label">月预算<\/span><span class="activity-meter[^"]*" role="meter"[^>]*aria-valuenow="25"[^>]*>[\s\S]*?<b>25%<\/b><small>本月 \$12\.40 \/ \$50\.00<\/small>/);
-  assert.doesNotMatch(claude, /API 花费|今日|估算|在控制台核对/, 'the spend row and the standalone console button are not shown');
+  // An API connection: the spend of today and this month as one row of information, with no bar and no limit, never the subscription windows.
+  assert.match(claude, /<span class="activity-metric-label">API 花费<\/span><small>今天 \$1\.23 · 本月 \$12\.40<\/small>/);
+  assert.doesNotMatch(claude, /role="meter"|月预算|未设置|今日|估算|在控制台核对/, 'no budget, no bar, and no standalone console button');
   assert.doesNotMatch(claude, /5 小时额度|每周额度|额度来自/);
-  // A subscription: the two windows as the same bars, never spend or a budget.
+  // A subscription: the two windows as the same bars, never spend.
   assert.match(codex, /<span class="activity-metric-label">5 小时额度<\/span>[\s\S]*?aria-valuenow="40"[\s\S]*?<b[^>]*>40%<\/b><small>[^<]+ 重置<\/small>/);
   assert.match(codex, /<span class="activity-metric-label">每周额度<\/span>[\s\S]*?aria-valuenow="10"[\s\S]*?<b[^>]*>10%<\/b>/);
-  assert.doesNotMatch(codex, /API 花费|月预算|最近切换/);
+  assert.doesNotMatch(codex, /API 花费|最近切换/);
 });
 
 test('the usage block says 未知 for what nobody gave and keeps a real zero as $0.00', async () => {
   // Connection not known (an older main, or nothing running): the connection and the allowance both say so, and nothing is measured.
-  const unknown = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ todayUsdMicros: 0, monthUsdMicros: null, budgetUsd: null, agents: {
+  const unknown = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ todayUsdMicros: 0, monthUsdMicros: null, agents: {
     claude: { path: null, reason: null, next: { path: null, reason: null }, limits: null }, codex: { path: 'terminal', reason: null, limits: { state: 'rate_limited' } } } }) }) });
   for (const agent of ['Claude', 'Codex']) {
     const section = usageSection(unknown, agent);
     assert.match(section, /<dt>连接<\/dt><dd><span>未知<\/span><\/dd>/);
     assert.match(section, /<dt>额度<\/dt><dd><span>未知<\/span><\/dd>/, 'not connected or not known: 额度 未知');
-    assert.doesNotMatch(section, /activity-metrics|role="meter"|API 花费|月预算|5 小时额度/);
+    assert.doesNotMatch(section, /activity-metrics|role="meter"|API 花费|5 小时额度/);
   }
   assert.doesNotMatch(unknown, /最近切换|还没有切换过|新会话/);
-  // An API connection: a real zero is $0.00; a missing amount is 未知; a budget with no known spend has no share and no bar; no budget says 未设置.
+  // An API connection: a real zero is $0.00; a missing amount is 未知; the spend never has a bar.
   const api = patch => usageHtml({ usage: async () => ({ ok: true, value: usageOf({ ...patch }) }) });
-  const none = await api({ todayUsdMicros: 0, monthUsdMicros: null, budgetUsd: null });
-  assert.doesNotMatch(none, /今日|估算/); assert.match(none, /<span class="activity-metric-label">月预算<\/span><small>未设置<\/small>/); assert.doesNotMatch(usageSection(none, 'Claude'), /role="meter"/);
-  const noShare = await api({ monthUsdMicros: null });
-  assert.match(noShare, /<span class="activity-metric-label">月预算<\/span><b[^>]*>未知<\/b><small>本月 未知 \/ \$50\.00<\/small>/); assert.doesNotMatch(usageSection(noShare, 'Claude'), /role="meter"/, 'no spend, no share, no bar');
-  assert.doesNotMatch(await api({ todayUsdMicros: null, monthUsdMicros: null }), /今日|估算|API 花费/, 'no spend row, whatever the amounts');
-  // The warning colour only from 90%.
-  assert.doesNotMatch(usageSection(await api({ monthUsdMicros: 44_000_000 }), 'Claude'), /is-warn/); assert.match(await api({ monthUsdMicros: 45_000_000 }), /activity-metric is-warn activity-figure/);
+  const none = await api({ todayUsdMicros: 0, monthUsdMicros: null });
+  assert.match(none, /<span class="activity-metric-label">API 花费<\/span><small>今天 \$0\.00 · 本月 未知<\/small>/); assert.doesNotMatch(usageSection(none, 'Claude'), /role="meter"|月预算|未设置/);
+  assert.match(await api({ todayUsdMicros: null, monthUsdMicros: 12_400_000 }), /<small>今天 未知 · 本月 \$12\.40<\/small>/);
+  // However large the month is, nothing turns it into a share or a warning: nothing is measured against a limit.
+  assert.doesNotMatch(usageSection(await api({ monthUsdMicros: 4_500_000_000 }), 'Claude'), /is-warn|role="meter"/);
   // A rate-limited subscription with no window says so rather than a number.
   const limited = usageOf({  }); limited.agents.codex.limits = { state: 'rate_limited', limitsById: {} };
   assert.match(usageSection(await usageHtml({ usage: async () => ({ ok: true, value: limited }) }), 'Codex'), /<small>已限流，恢复时间未知<\/small>/);
 });
 
 test('the usage block distinguishes no API records from records with unknown or zero spend, and Codex on the API has none to show', async () => {
-  const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ apiRecords: false, todayUsdMicros: null, monthUsdMicros: null, budgetUsd: null }) }) });
+  const html = await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ apiRecords: false, todayUsdMicros: null, monthUsdMicros: null }) }) });
   assert.doesNotMatch(usageSection(html, 'Claude'), /API 花费|API 用量记录|估算|今日|本月|role="meter"|最近切换/);
   assert.doesNotMatch(usageSection(html, 'Codex'), /API 用量记录/);
-  // Codex through the API: the same words and no budget (there is no spend record to measure one against).
+  // Codex through the API: the same words and no spend row (there is no spend record of its own).
   const codexApi = usageOf({  }); codexApi.agents.codex.connection = { kind: 'api', source: 'account/read: API key', observedAt: 1 };
   const codex = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: codexApi }) }), 'Codex');
-  assert.doesNotMatch(codex, /API 花费|API 用量记录|月预算|5 小时额度|每周额度|role="meter"/);
+  assert.doesNotMatch(codex, /API 花费|API 用量记录|5 小时额度|每周额度|role="meter"/);
 });
 
 test('the allowance of each agent follows its connection: the current session’s agent leads with the context and ends with the round, windows come from main with the session’s own as fallback', async () => {
   const future = Date.now() + 3600_000, tokens = { input: 496000, cached: 476000, output: 5100 };
   const current = (agent, extra = {}) => ({ id: 't1', agent, codexActive: true, sessionId: 's1', agentStartedAt: 1, agentUsage: { provider: null, limits: [], context: { used: 170000, window: 1000000 }, round: tokens, total: null, ...extra } });
-  const usage = usageOf({ budgetUsd: null }), sub = { kind: 'subscription', source: null, observedAt: 1 };
+  const usage = usageOf(), sub = { kind: 'subscription', source: null, observedAt: 1 };
   usage.agents.claude = { ...usage.agents.claude, connection: sub, limits: null };
   // The session's agent without windows from main falls back to what its own records gave; the other agent has neither context nor round.
   const fallback = await usageHtml({ usage: async () => ({ ok: true, value: usage }) }, current('claude', { limits: [{ minutes: 300, percent: 20, resetsAt: future }, { minutes: 10080, percent: 26, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code' }));
@@ -1801,7 +1800,7 @@ test('the allowance of each agent follows its connection: the current session’
   const order = ['上下文长度', '5 小时额度', '每周额度', '>本轮<', '额度来自 Claude Code'].map(text => claude.indexOf(text));
   assert.ok(order.every((position, i) => position >= 0 && (!i || position > order[i - 1])), 'context, the two windows, the round, then where the numbers come from');
   assert.match(claude, /aria-valuenow="20"/); assert.match(claude, /aria-valuenow="26"/); assert.match(claude, /aria-valuenow="17"/);
-  assert.doesNotMatch(claude, /API 花费|月预算/, 'a subscription has no spend or budget');
+  assert.doesNotMatch(claude, /API 花费/, 'a subscription has no spend');
   assert.doesNotMatch(codex, /上下文长度|>本轮<|>本次对话</, 'the other agent has no context or round');
   assert.match(codex, /5 小时额度/);
   // Windows from main come first: the session's own numbers do not replace them.
@@ -1848,7 +1847,7 @@ test('an account signed in while the agent has no main session names its plan an
   assert.match(claude, /<dd><span[^>]*>API<\/span><\/dd>/); assert.match(codex, /<dd><span[^>]*>ChatGPT 订阅<\/span><\/dd>/);
   assert.doesNotMatch(html, /未开会话/, 'a sub-agent may be running on this account, so no session is not something the pane can say');
   assert.match(codex, /5 小时额度[\s\S]*?aria-valuenow="40"/); assert.match(codex, /每周额度/); assert.match(codex, /额度来自 Codex/);
-  assert.match(claude, /月预算/); assert.doesNotMatch(claude, /API 花费/);
+  assert.match(claude, /API 花费/); assert.doesNotMatch(claude, /月预算/);
   assert.doesNotMatch(html, /上下文长度|本轮|本次对话|<dt>额度<\/dt>/, 'no session: no context, no round, no empty row');
   const signed = { ...base.agents.codex, connection: c('api', false) }, codexApi = usageSection(await usageHtml({ usage: async () => ({ ok: true, value: usageOf({ agents: { ...base.agents, codex: signed } }) }) }), 'Codex');
   assert.doesNotMatch(codexApi, /API 用量记录|API 花费|activity-metrics/);
@@ -1929,18 +1928,18 @@ test('a connection test reads as four lines, each with a tone and a next step fo
   assert.doesNotMatch(JSON.stringify([lines, bad, odd]), /sk-ant/);
 });
 
-test('in English the sentences main writes for a budget, a console balance and a billing mismatch are English wherever they show', () => {
+test('in English the sentences main writes for a console balance and a billing mismatch are English wherever they show', () => {
   const words = load('features/native-session/native-words.ts'), i18n = load('shared/i18n.ts'), zh = /[一-鿿]/;
-  const zero = 'API 月预算设为 0，原生会话不使用 API。', spent = '本月 API 预算已用完。', credits = '控制台余额不足，请到 Claude Console 的 Billing 充值。';
+  const credits ='控制台余额不足，请到 Claude Console 的 Billing 充值。';
   const mismatch = 'Claude API 计费身份不符（apiKeySource=missing）。', managed = 'Claude Code 没有使用 API 密钥，可能在用 claude.ai 登录或云服务商的凭据。请检查 Claude Code 的登录方式和环境变量。（apiKeySource=none）';
   const test = patch => ({ checkedAt: 1, key: { status: 'ok', detail: null, latencyMs: 1 }, models: ['m'], cli: { status: 'ok', version: '2.1.317', required: '2.1.317' }, path: 'terminal', reason: null, ...patch });
   i18n.applyLanguage('en');
   try {
-    assert.deepEqual([zero, spent, credits, mismatch, managed].map(words.reasonWords), ['The monthly API budget is set to 0, so native sessions do not use the API.', 'This month\'s API budget is exhausted.',
+    assert.deepEqual([credits, mismatch, managed].map(words.reasonWords), [
       'Your Claude Console credit balance is too low. Add credits under Billing in the Claude Console.', 'Claude API billing identity mismatch (apiKeySource=missing).',
       'Claude Code uses no API key; it may be using a claude.ai login or a cloud provider\'s credentials. Check how Claude Code signs in and its environment variables. (apiKeySource=none)']);
-    const failed = words.switchNote({ phase: 'stable', outcome: 'failed', current: 'api', reason: spent });
-    assert.doesNotMatch(failed, zh, 'a failed switch tells the budget in English');
+    const failed = words.switchNote({ phase: 'stable', outcome: 'failed', current: 'api', reason: credits });
+    assert.doesNotMatch(failed, zh, 'a failed switch tells the balance in English');
     const balance = words.connectionLines(test({ key: { status: 'error', detail: credits, latencyMs: null }, path: 'terminal', reason: credits }));
     assert.doesNotMatch(JSON.stringify(balance), zh, 'the balance line, its hint, its tooltip and the path line are English');
     const billed = words.connectionLines(test({ billing: { status: 'mismatch', source: 'none', reported: { apiKeySource: 'none' }, detail: { text: 'Claude API 计费身份不符（{detail}）。', values: { detail: 'apiKeySource=none' } } }, path: null, reason: 'billing_identity_mismatch' }));
@@ -2298,7 +2297,7 @@ test('the draft that arrives is read from the entry and handed over by take', ()
 
 test('a failed switch is told in the path note whichever transport the card is on, until the owner closes it; the move-to-terminal note is still the terminal’s only', () => {
   const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream(), store = load('features/native-session/native-store.ts');
-  const model = applyEvents(emptyModel(), [ev('session.state', { state: 'idle' }), ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'budget_exhausted' })]).model;
+  const model = applyEvents(emptyModel(), [ev('session.state', { state: 'idle' }), ev('path.changed', { previous: 'api', selected: 'terminal', reason: 'credits_exhausted' })]).model;
   const entry = { model, dismissed: null, noteDismissed: false, handoff: null }, dismissed = []; let shown = true;
   const harness = hookHarness('src/features/native-session/NativePathNote.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './native-session.css': {}, './native-words': words(), './native-bridge.ts': { copyNativeText: async () => ({ ok: true }) }, './SwitchNotice': load('features/native-session/SwitchNotice.tsx'),
@@ -2424,7 +2423,7 @@ test('a draft waits while the box cannot take it', t => {
 
 // ---- the structured end of a turn, the provider's notice, command phrases ------------------------------------------------------------
 const mainWords = {
-  completed: '本轮已完成。', tool_deferred: '这次工具调用被钩子推迟，没有执行。', max_turns: '已达到本轮最大执行次数。', budget_exhausted: 'API 预算上限已用完。',
+  completed: '本轮已完成。', tool_deferred: '这次工具调用被钩子推迟，没有执行。', max_turns: '已达到本轮最大执行次数。',
   api_error: 'API 请求失败，本轮未能完成。', owner: '本轮已中断。',
 };
 // One finished round of a session: your message, a reply (unless `reply` is false) and the turn.completed the provider sent.
@@ -2470,7 +2469,7 @@ test('turn facts: the duration main measured, this turn’s spend as an estimate
   assert.equal(noticeWords(notice({ resetsAtMs: at - 1 }), at), null, 'a notice whose recovery has passed is over'); assert.equal(noticeWords(null), null);
 });
 
-test('the result row draws what the provider said: completed with duration, spend and tokens; deferred, over budget, stopped and API errors are never drawn as done', async () => {
+test('the result row draws what the provider said: completed with duration, spend and tokens; deferred, out of turns, stopped and API errors are never drawn as done', async () => {
   const claudeDone = resultRow(await endedRound({ status: 'completed', error: null, terminalReason: 'completed', message: mainWords.completed, durationMs: 83000, costUsdMicros: 120000, costEstimated: true,
     tokens: { input: 1200, cachedInput: 50000, cacheWrite: 800, output: 300, reasoning: null } }));
   assert.match(claudeDone, /class="result-status" role="status" aria-label="已完成"/); assert.match(claudeDone, /<span class="result-took"> · 用时 1 分 23 秒 · 约 \$0\.12 · 输入 52,000 · 输出 300<\/span>/);
@@ -2480,7 +2479,7 @@ test('the result row draws what the provider said: completed with duration, spen
   assert.match(codexDone, /<span class="result-took"> · 用时 5 秒 · 输入 1,000 · 输出 50<\/span>/); assert.doesNotMatch(codexDone, /约|\$/, 'Codex has no spend');
   const bare = resultRow(await endedRound({ status: 'completed', error: null }));
   assert.match(bare, /aria-label="已完成"/); assert.doesNotMatch(bare, /约|\$|输入|输出/, 'a result with no facts writes none');
-  const cases = [['tool_deferred', 'interrupted', '已中断'], ['max_turns', 'interrupted', '已中断'], ['budget_exhausted', 'interrupted', '已中断'], ['owner', 'interrupted', '已中断'], ['api_error', 'failed', '失败']];
+  const cases = [['tool_deferred', 'interrupted', '已中断'], ['max_turns', 'interrupted', '已中断'], ['owner', 'interrupted', '已中断'], ['api_error', 'failed', '失败']];
   for (const [reason, status, label] of cases) {
     const html = await endedRound({ status, error: mainWords[reason], terminalReason: reason === 'owner' ? null : reason, message: mainWords[reason], durationMs: 2000, costUsdMicros: null, costEstimated: true, tokens: null }), row = resultRow(html);
     assert.match(row, new RegExp(`class="result-status is-failed" role="status" aria-label="${label}"`), reason); assert.doesNotMatch(row, /aria-label="已完成"|[0-9:]+ 完成/, `${reason} is never drawn as done`);
@@ -2879,9 +2878,9 @@ test('a step its provider could not settle (a tool left open by a lost frame, a 
   assert.doesNotMatch(only('broken', 'lost-frame'), /data-icon="Question"/, 'a failure in the group is the group’s mark');
 });
 
-const costLocal = { command: 'cost', costUsdMicros: 1840000, durationMs: 60000, apiDurationMs: 30000, models: [], month: { spentMicros: null, budgetUsd: null } };
+const costLocal = { command: 'cost', costUsdMicros: 1840000, durationMs: 60000, apiDurationMs: 30000, models: [], month: { spentMicros: null } };
 const answerOf = (agent, command) => agent === 'codex' ? statusLocal({ command }) : { context: contextLocal, cost: costLocal, status: { command: 'status', context: null, errors: [], account: { kind: 'api' }, session: {} },
-  usage: { command: 'usage', month: { spentMicros: 0, budgetUsd: null }, today: { spentMicros: 0 }, tokens: {}, limits: [], notice: null } }[command];
+  usage: { command: 'usage', month: { spentMicros: 0 }, today: { spentMicros: 0 }, tokens: {}, limits: [], notice: null } }[command];
 
 const windowFlow = async (agent, commands) => {
   const sends = [], answers = [];

@@ -113,7 +113,7 @@
 .activity-metric.is-warn > b { color: var(--warning); }
 .activity-metric.is-warn .activity-meter i { background: var(--warning); }
 /* 运行方式与额度 (ApiUsage): one section per agent, 20px apart: its name, then 连接 (and 额度 未知 when there is nothing to measure) as rows on the metrics' 88px label column, then the bars:
-   the same Metric for the context, the quota windows and a set budget, 28px high and 4px apart; a value with no bar (spend, an unset budget, tokens) is a label and one quiet line. */
+   the same Metric for the context, the quota windows, 28px high and 4px apart; a value with no bar (spend, tokens) is a label and one quiet line. */
 .api-agents { gap: 20px; }
 .api-agent { display: grid; gap: 8px; min-width: 0; }
 .api-agent-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }

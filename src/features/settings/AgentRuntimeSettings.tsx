@@ -1,8 +1,8 @@
 // 运行方式: how Claude and Codex run — Claude on the Anthropic API key in the app's own view, falling back to the terminal when the API's
-// quota is used up; Codex always on app-server, with nothing to choose — and the monthly API budget. The key is write-only here: it is sent to the
-// main process, the field is emptied, and only "saved or not" ever comes back.
+// quota is used up; Codex always on app-server, with nothing to choose. The key is write-only here: it is sent to the main process, the field is
+// emptied, and only "saved or not" ever comes back.
 import { useEffect, useRef, useState } from 'react';
-import { ArrowCounterClockwise, CheckCircle, CircleNotch, CurrencyDollar, Key, PlugsConnected, Robot, Info, ShieldCheck, WarningCircle, XCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CheckCircle, CircleNotch, Key, PlugsConnected, Robot, Info, ShieldCheck, WarningCircle, XCircle } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import type { Settings } from '../../shared/types';
@@ -30,21 +30,13 @@ const failure = (error: unknown) => ({ ok: false as const, error: error instance
 // Sessions main counts as not yet on the new path; absent from an older main, then nothing is claimed.
 const waitingOf = (usage: NativeUsage) => (typeof usage.switches?.waiting === 'number' ? usage.switches.waiting : null);
 
-// A budget is dollars above zero, or empty for none. null is "none"; undefined is "not a budget".
-export function parseBudget(text: string): number | null | undefined {
-  const value = text.trim();
-  if (!value) return null;
-  const amount = Number(value);
-  return Number.isFinite(amount) && amount > 0 ? Math.round(amount * 100) / 100 : undefined;
-}
-
 // projectId: the project the owner is working in, whose scope the connection test and the usage numbers are read for.
 // focusOnOpen: the page was opened to deal with the connection (the launcher's incomplete Claude Code): the test button takes the focus, or the key field when no key is saved.
 // codexPermissions / onCodexPermissions: the window's own setting (not the native session store's), written through the usual settings update.
 export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPermissions, onCodexPermissions }: { projectId?: string; focusOnOpen?: boolean; codexPermissions?: unknown; onCodexPermissions?: (value: CodexPermissions) => void }) {
   const bridge = nativeBridge(), revision = useUsageRevision();
   const [settings, setSettings] = useState<NativeSettings | null>(null), [saved, setSaved] = useState<boolean | null>(null);
-  const [key, setKey] = useState(''), [budget, setBudget] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
+  const [key, setKey] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
   const [test, setTest] = useState<ConnectionTest | null>(null), [testing, setTesting] = useState(false), [testError, setTestError] = useState<string | null>(null);
   const [waiting, setWaiting] = useState<number | null>(null);
   const keyField = useRef<HTMLInputElement>(null), testButton = useRef<HTMLButtonElement>(null);
@@ -54,7 +46,7 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
     let active = true;
     void Promise.all([bridge.getSettings(), bridge.keyStatus()]).then(([found, status]) => {
       if (!active) return;
-      if (found.ok) { setSettings(found.value); setBudget(found.value.monthlyBudgetUsd === null ? '' : String(found.value.monthlyBudgetUsd)); } else setError(found.error);
+      if (found.ok) setSettings(found.value); else setError(found.error);
       if (status.ok) setSaved(status.value.saved);
     });
     return () => { active = false; };
@@ -98,11 +90,6 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
     setKey('');
     void run(() => bridge.keySave(secret), () => void refreshKey());
   };
-  const saveBudget = () => {
-    const amount = parseBudget(budget);
-    if (amount === undefined) { setError(t('月预算要大于 0；留空表示不限。')); return; }
-    if (amount !== settings?.monthlyBudgetUsd) void change({ monthlyBudgetUsd: amount });
-  };
 
   const permissionOptions = CODEX_PERMISSIONS(), permission = codexPermissionOf(codexPermissions);
   return <>
@@ -110,7 +97,7 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
     <p className="settings-note"><Info size={15} /><span>{t('修改运行方式、保存或清除 API key，都会同时应用到正在运行的会话：空闲的立刻切换，工作中的等本轮结束，有后台任务的先问你。')}</span></p>
     {waiting !== null && waiting > 0 && <p className="settings-note" role="status"><Info size={15} /><span>{t('有 {count} 个会话在等待切换', { count: waiting })}</span></p>}
     <p className="settings-note"><Info size={15} /><span>{t('派发的工作者看不到你的 API 密钥。')}</span></p>
-    <p className="settings-note"><Info size={15} /><span>{t('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的预算估算。')}</span></p>
+    <p className="settings-note"><Info size={15} /><span>{t('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的花费估算。')}</span></p>
     <div className="setting-row runtime-key-row"><span><Key size={19} /><span><b>{t('Anthropic API key')}</b><small role="status">{saved === null ? t('正在读取…') : saved ? t('已保存') : t('未保存')}</small></span></span>
       <span className="runtime-key">
         <input ref={keyField} type="password" autoComplete="off" spellCheck={false} aria-label={t('Anthropic API key')} placeholder={saved ? t('输入新的 key 以替换') : 'sk-ant-…'} value={key} disabled={busy || testing}
@@ -135,11 +122,6 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
       <Select label={t('Codex 权限')} className="runtime-select" value={permission} disabled={!onCodexPermissions} options={permissionOptions} onChange={value => onCodexPermissions?.(codexPermissionOf(value))} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
       <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
-    <div className="setting-row"><span><CurrencyDollar size={19} /><span><b>{t('API 月预算（美元）')}</b><small>{t('按 UTC 自然月累计的估算；用完后 Claude 按上面的选择处理。留空表示不限')}</small></span></span>
-      <span className="runtime-budget">
-        <input type="text" inputMode="decimal" autoComplete="off" aria-label={t('API 月预算（美元）')} placeholder={t('不限')} value={budget} disabled={!settings || busy}
-          onChange={event => setBudget(event.target.value)} onBlur={saveBudget} onKeyDown={event => { if (event.key === 'Enter') saveBudget(); }} />
-      </span></div>
     {error && <p className="form-error runtime-error" role="alert">{error}</p>}
   </>;
 }

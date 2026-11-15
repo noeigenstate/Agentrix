@@ -163,7 +163,7 @@ async function runtimeSmoke(output, stages) {
     const fakeKey = 'sk-ant-api03-packaged-offline-only-not-a-real-key';
     await stage('save isolated fake key and settings', async () => {
       assert.equal((await page.evaluate(key => window.agentrix.nativeSession.keySave(key), fakeKey)).ok, true);
-      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only', monthlyBudgetUsd: 10 }))).ok, true);
+      assert.equal((await page.evaluate(() => window.agentrix.nativeSession.setSettings({ claudePath: 'api-only' }))).ok, true);
     });
     // The stub replaces the channel main gives the connection test (Electron net); a unit test keeps the two in step.
     const { stubModelListNet } = require('../tests/fixtures/connection-net-stub.cjs');
@@ -216,8 +216,7 @@ async function runtimeSmoke(output, stages) {
       const first = await stage(`start fake ${agent === 'claude' ? 'claude SDK' : 'codex app-server'}`, () => page.evaluate(({ terminalId, agent }) => window.agentrix.nativeSession.start(terminalId, { agent }), { terminalId, agent }), 30000);
       assert.equal(first.ok, true, JSON.stringify(first));
       let id = first.value.runtimeSessionId;
-      const texts = agent === 'claude' ? ['first', 'second', 'BUDGET_TURN', 'BUDGET_TURN', 'BUDGET_TURN'] : ['first', 'second'];
-      for (const text of texts) {
+      for (const text of ['first', 'second']) {
         const marker = agent === 'claude' ? 'PACKAGED_CLAUDE_OK' : 'PACKAGED_CODEX_OK';
         const messageId = randomUUID();
         const sent = await stage(`${agent} send ${text}`, () => page.evaluate(p => window.agentrix.nativeSession.send(p.terminalId, p.id, p.messageId, p.text), { terminalId, id, messageId, text }));
@@ -227,7 +226,7 @@ async function runtimeSmoke(output, stages) {
           return value.ok && value.value?.state === 'idle' && value.value.events.some(event => event.type === 'item.upsert' && event.payload.content.text === marker);
         }, `${agent} real main received the fake provider result`, 20000), 25000);
         const completed = await stage(`${agent} read completion`, () => page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId));
-        assert.equal(completed.value.events.findLast(event => event.type === 'turn.completed').payload.status, 'completed', `${agent} turn must not hit a stale cumulative query cap`);
+        assert.equal(completed.value.events.findLast(event => event.type === 'turn.completed').payload.status, 'completed', `${agent} turn must complete`);
         if (text === 'first') {
           const state = await stage(`${agent} read native terminal usage`, () => page.evaluate(() => window.agentrix.getState()));
           const usage = state.value.projects[0].terminals.find(item => item.id === terminalId).agentUsage;
@@ -329,7 +328,6 @@ async function runtimeSmoke(output, stages) {
       const snapshot = await stage(`${agent} read stopped state`, () => page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId));
       assert.equal(snapshot.value.state, 'stopped');
       checks.push(`${agent}: main IPC, native executable discovery, wire handshake, send, resume and stop`);
-      if (agent === 'claude') checks.push('fresh turn reservations exceed $5 across one logical owner session without a stale query cap');
     }
     const claude = (await fs.readFile(path.join(runtime, 'claude-wire.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
     assert.ok(claude.some(row => row.control === 'initialize'), 'the packaged SDK performs its real initialize handshake');
@@ -385,9 +383,9 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
     categories: [{ id: 'free-space', name: 'Free space', tokens: 941600, kind: 'free' }, { id: 'messages', name: 'Messages', tokens: 25800, kind: 'used' }, { id: 'system-prompt', name: 'System prompt', tokens: 14200, kind: 'used' },
       { id: 'system-tools', name: 'System tools', tokens: 12100, kind: 'used' }, { id: 'memory-files', name: 'Memory files', tokens: 6300, kind: 'used' }],
     memory: [{ name: 'MEMORY.md', tokens: 3100 }], mcp: [{ name: 'playwright', tokens: 6800 }], skills: [{ name: 'model-routing', tokens: 2400 }] } };
-  const claudeCost = { command: 'cost', costUsdMicros: 1840000, durationMs: 1390000, apiDurationMs: 402000, month: { spentMicros: 36520000, budgetUsd: 100 },
+  const claudeCost = { command: 'cost', costUsdMicros: 1840000, durationMs: 1390000, apiDurationMs: 402000, month: { spentMicros: 36520000 },
     models: [{ model: 'claude-opus-5-5', costUsdMicros: 1620000, input: 412000, output: 9800, cacheRead: null, cacheWrite: null }, { model: 'claude-haiku-5-5', costUsdMicros: 220000, input: 188000, output: 4100, cacheRead: null, cacheWrite: null }] };
-  const claudeUsage = { command: 'usage', month: { spentMicros: 36520000, budgetUsd: 100 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
+  const claudeUsage = { command: 'usage', month: { spentMicros: 36520000 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
     limits: [{ id: 'five_hour', usedPercent: 100, resetsAtMs: now + 2 * HOUR }, { id: 'seven_day', usedPercent: 40, resetsAtMs: now + 2 * DAY }] };
   const claudeStatus = { command: 'status', context: claudeContext.context, errors: [], account: { kind: 'api' }, session: { model: 'claude-opus-5-5', effort: 'high', cwd: 'C:\\work', sessionId: 'abc-123', version: '2.1.318', permission: 'default', mcp: [{ name: 'playwright', status: 'connected' }] } };
 
@@ -604,7 +602,7 @@ async function recheckApp(output, stages) {
     const answers = value => app.evaluate((_e, list) => { globalThis.__re.answers = list; }, value);
     const interrupts = () => app.evaluate(() => globalThis.__re.interrupts.slice());
     const now = Date.now(), later = now + 3 * 86400000, soon = now + 10 * 60000;
-    const claudeUsage = (five, seven) => ({ command: 'usage', month: { spentMicros: 36520000, budgetUsd: 100 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
+    const claudeUsage = (five, seven) => ({ command: 'usage', month: { spentMicros: 36520000 }, today: { spentMicros: 1840000 }, tokens: { input: 600000, output: 13900, cacheRead: null, cacheWrite: null }, notice: null,
       limits: [{ id: 'five_hour', usedPercent: 100, resetsAtMs: five }, { id: 'seven_day', usedPercent: 40, resetsAtMs: seven }] });
     const freshStatus = { command: 'status', context: null, errors: [], account: { kind: 'unknown' }, session: { model: null, effort: null, cwd: null, sessionId: null, version: null, permission: null, mcp: [] } };
     const open = async (index, command) => {
@@ -831,7 +829,7 @@ async function run(output, stages) {
     assert.equal(await settings.locator('input[type="password"]').count(), 1);
     assert.ok((await settings.locator('.select-trigger').count()) >= 2, 'Claude’s path and Codex’s view');
     await waitFor(async () => /已保存|未保存/.test(await settings.locator('.runtime-key-row small[role="status"]').innerText()), 'the key status has been read');
-    await settings.getByText('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的预算估算。', { exact: true }).waitFor();
+    await settings.getByText('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的花费估算。', { exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, 'native-settings.png') });
     checks.push('运行方式 settings page');
     assert.deepEqual(errors, []);

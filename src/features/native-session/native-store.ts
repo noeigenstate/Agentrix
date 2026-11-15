@@ -36,7 +36,7 @@ function bumpProject(change: { projectId?: unknown } | null | undefined) {
   projectRevisions.set(change.projectId, (projectRevisions.get(change.projectId) ?? 0) + 1);
   listeners.forEach(listener => listener());
 }
-// A change the main process already knows about (a key, a path, a budget): the usage card reads again without waiting for its timer.
+// A change the main process already knows about (a key, a path): the usage card reads again without waiting for its timer.
 export const usageChanged = bump;
 
 function resync(terminalId: string) {

@@ -24,7 +24,7 @@ function fixture(t, context = async () => CONTEXT, sdkOptions = {}) {
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save('sk-ant-offline-panel-fixture-only');
   t.after(async () => { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, fake, runtime, session: (emit = () => {}) => runtime.create({ owner: 'gui', cwd: root, env: { PATH: '' }, runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10, effort: 'high' }, emit) };
+  return { root, fake, runtime, session: (emit = () => {}) => runtime.create({ owner: 'gui', cwd: root, env: { PATH: '' }, runtimeSessionId: randomUUID(), effort: 'high' }, emit) };
 }
 
 test('only the four exact words are panel commands', () => {
@@ -116,14 +116,14 @@ test('/cost and /usage come from the results the session saw and from the usage 
   const f = fixture(t), session = f.session();
   await session.start();
   const empty = (await session.send({ clientMessageId: 'c0', text: '/cost' })).local;
-  assert.deepEqual([empty.costUsdMicros, empty.durationMs, empty.models, empty.month], [null, null, [], { spentMicros: null, budgetUsd: 10 }], 'before any result: not known, not zero');
+  assert.deepEqual([empty.costUsdMicros, empty.durationMs, empty.models, empty.month], [null, null, [], { spentMicros: null }], 'before any result: not known, not zero');
   assert.equal(f.fake.calls.length, 0, 'no query was started to answer');
   await session.send({ clientMessageId: 'one', text: 'first' }); await settle();
   assert.equal(f.fake.inputs.length, 1);
   const cost = (await session.send({ clientMessageId: 'c1', text: '/cost' })).local;
-  assert.deepEqual([cost.command, cost.costUsdMicros, cost.models.map(model => [model.model, model.costUsdMicros, model.input, model.output]), cost.month], ['cost', 100000, [['fake', null, 10, 4]], { spentMicros: 100000, budgetUsd: 10 }]);
+  assert.deepEqual([cost.command, cost.costUsdMicros, cost.models.map(model => [model.model, model.costUsdMicros, model.input, model.output]), cost.month], ['cost', 100000, [['fake', null, 10, 4]], { spentMicros: 100000 }]);
   const usage = (await session.send({ clientMessageId: 'u1', text: '/usage' })).local;
-  assert.deepEqual([usage.command, usage.month, usage.today, usage.tokens, usage.limits, usage.notice], ['usage', { spentMicros: 100000, budgetUsd: 10 }, { spentMicros: 100000 }, { input: 10, output: 4, cacheRead: 2, cacheWrite: 3 }, [], null]);
+  assert.deepEqual([usage.command, usage.month, usage.today, usage.tokens, usage.limits, usage.notice], ['usage', { spentMicros: 100000 }, { spentMicros: 100000 }, { input: 10, output: 4, cacheRead: 2, cacheWrite: 3 }, [], null]);
   assert.equal(f.fake.inputs.length, 1, 'the reads were no input of the model');
 });
 

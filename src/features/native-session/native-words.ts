@@ -91,7 +91,7 @@ export function receiptLine({ status, reason }: Receipt) {
 
 // The route codes the main process gives for a switch; one it does not know is shown as given, never hidden.
 const REASON_WORDS: Record<string, string> = {
-  budget_exhausted: '本月 API 预算已用完', credits_exhausted: 'API 额度已用完', rate_limited: 'API 被限流', no_key: '还没有保存 API key',
+  credits_exhausted: 'API 额度已用完', rate_limited: 'API 被限流', account_limit: 'API 用量已达上限', no_key: '还没有保存 API key',
   native_cli_required: '未找到原生 Claude Code，无法通过 API 运行', native_cli_unverified: 'Claude Code 检查没有通过，无法通过 API 运行',
   billing_identity_mismatch: 'Claude Code 没有使用这个密钥', billing_unconfirmed: '无法确认 Claude Code 的计费来源',
   settings: '按设置运行', user: '你选择了终端',
