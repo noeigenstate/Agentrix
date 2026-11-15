@@ -3227,5 +3227,20 @@
   "状态汇报更快": "Faster status reports",
   "本机终端里，Claude Code 现在通过本地连接把状态（工作中、等待授权、完成）告诉 Agentrix。以前每个事件都要启动一次 PowerShell，约需 0.6 秒。现在等待提示灯和一轮的结束更快跟上命令行，Claude Code 在步骤之间也不再等 Agentrix。": "In a local terminal, Claude Code now reports its status (working, waiting for permission, done) to Agentrix over a local connection. Before, each event started a PowerShell, which took about 0.6 s. The waiting light and the end of a round now follow the CLI sooner, and Claude Code no longer waits on Agentrix between steps.",
   "有代理时沿用旧法": "Old way with a proxy",
-  "如果代理（HTTP_PROXY 或 HTTPS_PROXY）会接管这条本地连接，终端会沿用原来的方式（在 Windows 上，状态汇报在后台运行），并写明原因。SSH 项目不变。": "If a proxy (HTTP_PROXY or HTTPS_PROXY) would carry that local connection, the terminal keeps the old way (on Windows, the status reports run in the background) and says why. SSH projects are unchanged."
+  "如果代理（HTTP_PROXY 或 HTTPS_PROXY）会接管这条本地连接，终端会沿用原来的方式（在 Windows 上，状态汇报在后台运行），并写明原因。SSH 项目不变。": "If a proxy (HTTP_PROXY or HTTPS_PROXY) would carry that local connection, the terminal keeps the old way (on Windows, the status reports run in the background) and says why. SSH projects are unchanged.",
+  "正在搜索所有本地磁盘…": "Searching every local drive…",
+  "也搜索了所有本地磁盘。用下面的命令安装，装好后 Agentrix 会自己发现。": "Every local drive was searched too. Install it with the command below; Agentrix will notice it by itself.",
+  "用下面的命令安装，装好后 Agentrix 会自己发现。": "Install it with the command below; Agentrix will notice it by itself.",
+  "来自 Scoop": "from Scoop",
+  "来自 Chocolatey": "from Chocolatey",
+  "来自 Volta": "from Volta",
+  "来自 Bun": "from Bun",
+  "来自 pnpm": "from pnpm",
+  "来自 Yarn": "from Yarn",
+  "来自 nvm-windows": "from nvm-windows",
+  "来自 fnm": "from fnm",
+  "来自 VS Code 扩展": "from a VS Code extension",
+  "来自已安装的程序（注册表）": "from the installed programs (registry)",
+  "来自本地磁盘搜索": "from a search of the local drives",
+  "已搜索部分本地磁盘，下次启动会继续搜索。": "Part of the local drives was searched; Agentrix keeps looking at the next start."
 }
