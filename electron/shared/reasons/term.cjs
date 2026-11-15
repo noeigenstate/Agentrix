@@ -12,7 +12,8 @@ module.exports = {
     receipt_missing: {},
     hooks_silent: {},
     hooks_down: {},
-    // variable: HTTPS_PROXY, HTTP_PROXY, ALL_PROXY or settings; source: where it was found.
+    // variable: HTTPS_PROXY or HTTP_PROXY (the hook client ignores ALL_PROXY); source: where it was set, environment,
+    // user, project, local or managed (Claude Code's settings files), or terminal (the wrapper's live check).
     hooks_command_proxy: { params: ['variable', 'source'] },
     hooks_command_ssh: {},
     transcript_behind: {},

@@ -1,5 +1,12 @@
 const path = require('node:path');
 
+// The hook events the pipe's claude-hook.ps1 kinds stood for (C-2), by the state claudeActivity takes.
+const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', Notification: 'attention', PermissionRequest: 'attention',
+  Elicitation: 'attention', PreToolUse: 'progress', PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress',
+  ElicitationResult: 'progress' };
+// The notifications that mean Claude waits for an answer; an idle one must not turn a finished round back into a waiting one.
+const ATTENTION_NOTICES = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog'];
+
 // A terminal's Claude Code and Codex activity: hook events, the transcript Claude writes and the turn snapshots
 // readers produce become the CLI state, the lights and the completion alert. `deps` is the app shell (main.cjs),
 // read on every call so its late values are current; these functions are among its members and reach each other
@@ -200,8 +207,9 @@ function createClaudeActivity(deps) {
     broadcast();
   }
 
-  // Claude Code hooks: UserPromptSubmit -> working, Stop -> complete (integration/claude-hook.ps1). SessionStart -> the
-  // conversation Claude writes from now on: after /clear or /resume the reading view follows the new file at once.
+  // Claude Code hooks (HTTP through claudeHook, commands through claude-hook.ps1 and agent-event.cjs): UserPromptSubmit ->
+  // working, Stop -> complete. SessionStart, always a command -> the conversation Claude writes from now on: after /clear
+  // or /resume the reading view follows the new file at once.
   // Notification -> attention while Claude waits for a permission answer in its own screen; that only
   // sets the waiting indicator and never changes the round's lifecycle.
   function claudeActivity(project, s, event) {
@@ -211,6 +219,15 @@ function createClaudeActivity(deps) {
     const at = Number.isFinite(event.sentAt) ? event.sentAt + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0) : Date.now();
     const bound = s.cliProviderId || s.claudeSessionId || s.claudeResumeId;
     if (at < Math.max(s.activitySince || 0, s.cliStateMeta?.at || 0) || s.cliStateMeta?.events.has(event.eventId) || event.state !== 'session' && bound && bound !== event.sessionId) return;
+    // Every hook names the prompt whose turn it belongs to. Async command hooks (a proxied Windows terminal) can arrive out
+    // of order, and their send times follow PowerShell's start-up: a Stop for a prompt older than the newest one seen
+    // ended a turn that is already over. A dequeued prompt is new without a UserPromptSubmit, so first sight counts.
+    const prompts = s.claudePrompts ||= [];
+    if (typeof event.promptId === 'string' && !prompts.includes(event.promptId)) {
+      prompts.push(event.promptId);
+      if (prompts.length > 32) prompts.shift();
+    }
+    if (event.state === 'complete' && prompts.includes(event.promptId) && prompts.at(-1) !== event.promptId) return;
     const evidence = { at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
     // Hook eventId is an event identity, not a native approval request ID. A different observed event invalidates
     // actions conservatively, even if its message is identical. Duplicate events leave the epoch alone.
@@ -260,7 +277,22 @@ function createClaudeActivity(deps) {
     } else applyActivity(project, s, snapshot);
   }
 
-  return { followClaude, followClaudeSession, publishCliState, applyActivity, claudeActivity };
+  // An HTTP hook event (hook-ingest.cjs) as the event claude-hook.ps1 sends over the pipe, until the session machine (T2)
+  // reads hook events itself. An event that lost its payload to the size limit belongs to the session the terminal follows.
+  function claudeHook(hookEvent) {
+    const { sessions, store, claudeActivity } = deps;
+    const s = sessions.get(hookEvent.terminalId), project = s && store.projects.find(item => item.id === s.projectId);
+    const state = HOOK_STATES[hookEvent.event], { payload } = hookEvent;
+    if (!project || !state || hookEvent.event === 'Notification' && !ATTENTION_NOTICES.includes(payload.notification_type)) return;
+    const sessionId = hookEvent.sessionId || s.claudeSessionId || '';
+    claudeActivity(project, s, { state, sessionId, eventId: `${sessionId}:${hookEvent.at}-${hookEvent.seq}`, sentAt: hookEvent.at,
+      hookEvent: hookEvent.event, transcriptPath: hookEvent.transcriptPath, promptId: hookEvent.promptId,
+      message: state === 'attention' ? String(payload.message ?? payload.tool_name ?? '').slice(0, 300) : null,
+      prompt: state === 'working' && payload.prompt ? payload.prompt : null,
+      ...(hookEvent.toolUseId ? { requestId: hookEvent.toolUseId } : {}) });
+  }
+
+  return { followClaude, followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook };
 }
 
 module.exports = { createClaudeActivity };

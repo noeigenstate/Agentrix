@@ -29,8 +29,10 @@ if [[ $__pg_user_zdotdir == $HOME && -z $AGENTRIX_USER_ZDOTDIR ]]; then unset ZD
 typeset -g __pg_socket=$AGENTRIX_SOCKET __pg_project=$AGENTRIX_PROJECT_ID __pg_key=$AGENTRIX_SESSION_KEY
 typeset -g __pg_node=$AGENTRIX_NODE __pg_helper=$AGENTRIX_EVENT_HELPER __pg_start=$AGENTRIX_START_DIR __pg_note=$AGENTRIX_READING_NOTE
 typeset -g __pg_note_file=$AGENTRIX_READING_NOTE_FILE
+typeset -g __pg_hook_port=$AGENTRIX_HOOK_PORT __pg_hook_channel=$AGENTRIX_HOOK_CHANNEL __pg_hook_settings=$AGENTRIX_HOOK_SETTINGS __pg_hook_fallback=$AGENTRIX_HOOK_FALLBACK
 typeset -gi __pg_sequence=0
 unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_USER_ZDOTDIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
+unset AGENTRIX_HOOK_PORT AGENTRIX_HOOK_CHANNEL AGENTRIX_HOOK_SETTINGS AGENTRIX_HOOK_FALLBACK
 
 __pg_reading_note() {
   if [[ -n $__pg_note_file && -r $__pg_note_file ]]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi
@@ -142,8 +144,31 @@ codex() {
   return 0
 }
 
-# Claude Code reports each turn through hooks passed with --settings, which merge with the user's own settings
-# instead of replacing them. Claude runs a hook command with sh, so every word is quoted for it.
+# The proxy variable that would carry this terminal's HTTP hooks to port $1, by hook-channel.cjs's rule over the live
+# environment, in REPLY; fails when none would. HTTPS_PROXY or HTTP_PROXY in either case, unless every NO_PROXY and
+# no_proxy that is set exempts 127.0.0.1.
+__pg_hook_proxy() {
+  emulate -L zsh
+  local name value entry exempted=false
+  REPLY=
+  for name in HTTPS_PROXY https_proxy HTTP_PROXY http_proxy; do
+    if [[ -n ${(P)name-} ]]; then REPLY=${(U)name}; break; fi
+  done
+  [[ -n $REPLY ]] || return 1
+  for name in NO_PROXY no_proxy; do
+    value=${(P)name-}
+    [[ -n $value ]] || continue
+    for entry in ${=value//,/ }; do
+      [[ $entry == '*' || $entry == 127.0.0.1 || $entry == "127.0.0.1:$1" || ( $entry == .* && 127.0.0.1 == *"$entry" ) ]] && { exempted=true; continue 2; }
+    done
+    return 0
+  done
+  ! $exempted
+}
+
+# Claude Code reports each turn through the hooks main wrote for this terminal (hook-channel.cjs), passed with --settings,
+# which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
+# carry them. A proxy set in this terminal (by the user's start-up files, say) falls back too, and main is told why.
 claude() {
   emulate -L zsh
   local -a program
@@ -152,15 +177,10 @@ claude() {
     return 127
   fi
   program=("${reply[@]}")
-  local hook="ELECTRON_RUN_AS_NODE=1 ${(qq)__pg_node} ${(qq)__pg_helper} claude-hook ${(qq)__pg_socket} ${(qq)__pg_project} ${(qq)__pg_key}"
-  local start stop notify session progress permission
-  __pg_json "$hook start"; start=$REPLY
-  __pg_json "$hook stop"; stop=$REPLY
-  __pg_json "$hook notify"; notify=$REPLY
-  __pg_json "$hook progress"; progress=$REPLY
-  __pg_json "$hook permission"; permission=$REPLY
-  __pg_json "$hook session ${(qq)__pg_note_file}"; session=$REPLY
-  local settings="{\"hooks\":{\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":$start,\"timeout\":10}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":$stop,\"timeout\":10}]}],\"Notification\":[{\"hooks\":[{\"type\":\"command\",\"command\":$notify,\"timeout\":10}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":$session,\"timeout\":10}]}],\"PreToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10,\"async\":true}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10,\"async\":true}]}],\"PostToolUseFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10,\"async\":true}]}],\"PermissionDenied\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10,\"async\":true}]}],\"ElicitationResult\":[{\"hooks\":[{\"type\":\"command\",\"command\":$progress,\"timeout\":10,\"async\":true}]}],\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":$permission,\"timeout\":10}]}],\"Elicitation\":[{\"hooks\":[{\"type\":\"command\",\"command\":$permission,\"timeout\":10}]}]}}"
+  local settings=$__pg_hook_fallback
+  if [[ $__pg_hook_channel == http ]]; then
+    if __pg_hook_proxy $__pg_hook_port; then __pg_send hook-channel 0 claude $REPLY; else settings=$__pg_hook_settings; fi
+  fi
   __pg_send codex-started 0 claude "$(__pg_command "$@")"
   # What the reading view can show; a later --append-system-prompt of the user's wins.
   local -a note=()

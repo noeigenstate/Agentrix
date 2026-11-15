@@ -92,6 +92,8 @@ try {
     }
     if ($hook.turn_id -is [string]) { $eventData.turnId = $hook.turn_id }
     if ($hook.tool_use_id -is [string]) { $eventData.requestId = $hook.tool_use_id }
+    # The prompt whose turn this is: with async hooks a late Stop of an older prompt cannot end a newer turn.
+    if ($hook.prompt_id -is [string]) { $eventData.promptId = $hook.prompt_id }
     $eventData = $eventData | ConvertTo-Json -Compress
     $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::Out)
     try {

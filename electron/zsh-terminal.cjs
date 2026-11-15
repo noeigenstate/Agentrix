@@ -28,13 +28,16 @@ function prepareZshStartup(folder, integrationDir) {
 }
 
 // The environment of one terminal: what the integration needs, plus a UTF-8 locale. Programs started from
-// the Dock have no LANG, and zsh, git and Codex would then treat Chinese text as unknown bytes.
-function shellEnvironment(env, { socket, projectId, sessionKey, node, helper, startDir, locale, loginFiles }) {
+// the Dock have no LANG, and zsh, git and Codex would then treat Chinese text as unknown bytes. `hooks` is the terminal's
+// Claude Code hook channel and both settings (terminal-events/hook-channel.cjs), which the claude wrapper chooses between.
+function shellEnvironment(env, { socket, projectId, sessionKey, node, helper, startDir, locale, loginFiles, hooks }) {
   return {
     ...env,
     ...(!env.LANG && !env.LC_ALL && !env.LC_CTYPE ? { LANG: locale || 'en_US.UTF-8' } : {}),
     AGENTRIX_SOCKET: socket, AGENTRIX_PROJECT_ID: projectId, AGENTRIX_SESSION_KEY: sessionKey,
     AGENTRIX_NODE: node, AGENTRIX_EVENT_HELPER: helper, AGENTRIX_START_DIR: startDir,
+    ...(hooks ? { AGENTRIX_HOOK_PORT: String(hooks.port ?? ''), AGENTRIX_HOOK_CHANNEL: hooks.channel,
+      AGENTRIX_HOOK_SETTINGS: hooks.settings.http ?? '', AGENTRIX_HOOK_FALLBACK: hooks.settings.fallback } : {}),
     ...(loginFiles ? { AGENTRIX_LOGIN_FILES: '1', BASH_SILENCE_DEPRECATION_WARNING: '1' } : {}),
   };
 }
