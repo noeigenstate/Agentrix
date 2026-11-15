@@ -23,7 +23,7 @@ const { TASK_KINDS, taskKind, routingVerdict: strictRoutingVerdict } = require(p
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
-const { processLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
+const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
@@ -446,9 +446,11 @@ class CodexRollout {
   }
 }
 
+// The helper never uses the version `codex --version` prints, so its locator's probe answers at once with none and runs no Codex.
+const helperLocator = createCodexLocator({ probe: (_file, _args, _options, done) => { done(null, ''); } });
 // The Codex file a worker runs: the one the terminal was told (AGENTRIX_CODEX_EXECUTABLE) while it is there, resolved
 // to its program the way main's locator resolves it, else codex-runtime's own search; null when there is none.
-const locateCodex = (env, locator = processLocator) => locator.locate({ env,
+const locateCodex = (env, locator = helperLocator) => locator.locate({ env,
   prefer: Object.entries(env).find(([key]) => key.toUpperCase() === 'AGENTRIX_CODEX_EXECUTABLE')?.[1] || undefined }).then(found => found.file);
 
 // The command for a worker's CLI, never through a shell: Codex is the file locateCodex found (`codex`, the bare name,
@@ -504,7 +506,7 @@ function workerInput(event, controls, resumeIds, resumeInputId) {
   return { entryId: `u:${event.itemId}`, inputId, origin: direct ? 'owner' : 'planner', ownerMessageIds };
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
+async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, locate = locateCodex, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
@@ -1046,8 +1048,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (options.agent === 'codex') {
           codexAccountKey = controlClient?.accountKey || null;
-          // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none.
-          const codex = resolveExecutable === executable ? await locateCodex(env) : null;
+          // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none (a test injecting only `launch` names its `locate`).
+          const codex = resolveExecutable === executable ? await locate(env) : null;
           activeRuntime = createCodexRuntime({ accountKey: codexAccountKey || undefined, resolveExecutable: async () => 'codex', spawnProcess: (_file, _args, spawnOptions) => {
             const command = resolveExecutable('codex', commandOf(effective), env, codex); return launch(command.file, command.args, spawnOptions);
           } }).create(spec, acceptNative);

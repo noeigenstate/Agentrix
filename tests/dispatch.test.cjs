@@ -427,7 +427,7 @@ test('no session, timeout and spawn failure print failed-start once and end unco
   const { run } = require('../integration/dispatch.cjs');
   const f = await fixture(t); await f.finished;
   let stdout = '';
-  const code = await run(f.args, { env: {}, stdout: { write: value => { stdout += value; } }, launch: (_, args, options) => spawn(path.join(f.directory, 'missing-executable'), args, options) });
+  const code = await run(f.args, { env: {}, stdout: { write: value => { stdout += value; } }, locate: async () => null, launch: (_, args, options) => spawn(path.join(f.directory, 'missing-executable'), args, options) });
   assert.notEqual(code, 0); assert.match(stdout, /failed to start .*ENOENT/);
 });
 
@@ -498,7 +498,7 @@ test('exit or timeout emits the unconfirmed pair before still-open stdout closes
     child.stdin.resume();
     let completed = false;
     const running = run(f.args, { env: { CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: path.join(f.directory, 'bootstrap.json') },
-      stdout: { write() {} }, startTimeout: cause === 'timeout' ? 20 : 30000,
+      stdout: { write() {} }, startTimeout: cause === 'timeout' ? 20 : 30000, locate: async () => null,
       launch: () => {
         if (cause === 'exit') queueMicrotask(() => { child.exitCode = 0; child.emit('exit', 0); });
         return child;
@@ -575,6 +575,37 @@ test('Codex rollout metering is exactly TokenRates, excluding tools and deduplic
   output.record({ type: 'turn.completed', usage: { output_tokens: 150 } });
   assert.equal(output.outputTokens, 150); assert.equal(output.activeMs, 4000);
   assert.equal(output.outputTokens, meter.snapshot().outputTokens); assert.equal(output.activeMs, meter.snapshot().activeMs);
+});
+
+test('a worker start runs no `codex --version`: the helper locates Codex with a probe that runs nothing', async t => {
+  const folder = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-locate-')));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const windows = process.platform === 'win32', file = path.join(folder, windows ? 'codex.exe' : 'codex');
+  await fs.writeFile(file, '', { mode: 0o755 });
+  const childProcess = require('node:child_process'), original = childProcess.execFile, probes = [];
+  const cached = Object.keys(require.cache).filter(key => /[\\/]integration[\\/]dispatch\.cjs$|[\\/]codex-runtime[\\/]locator\.cjs$/.test(key));
+  const saved = cached.map(key => [key, require.cache[key]]);
+  // The locator takes execFile when it is loaded, so both modules are loaded again over a recording stand-in that runs nothing.
+  childProcess.execFile = (program, args, ...rest) => {
+    if (!Array.isArray(args) || !args.includes('--version')) return original(program, args, ...rest);
+    probes.push([program, args]); rest.at(-1)?.(new Error('not run'), '');
+  };
+  for (const key of cached) delete require.cache[key];
+  t.after(() => { childProcess.execFile = original; for (const key of cached) delete require.cache[key]; for (const [key, entry] of saved) require.cache[key] = entry; });
+  const { locateCodex } = require('../integration/dispatch.cjs');
+  const env = { PATH: folder, PATHEXT: '.EXE', HOME: folder, USERPROFILE: folder, APPDATA: folder, LOCALAPPDATA: folder, SystemRoot: process.env.SystemRoot };
+  assert.equal(await locateCodex(env), file);
+  assert.deepEqual(probes, []);
+});
+
+test('a stand-in Codex answers --version with the version alone: no capture, no fixture, no input', async t => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-version-'));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const capture = path.join(folder, 'capture.json');
+  const { stdout } = await require('node:util').promisify(require('node:child_process').execFile)(process.execPath, [worker, '--version'],
+    { cwd: folder, env: { ...process.env, DISPATCH_CAPTURE: capture, DISPATCH_FIXTURE: path.join(folder, 'missing.json') }, windowsHide: true, timeout: 20000 });
+  assert.equal(stdout, 'codex-cli 0.166.0\n');
+  assert.deepEqual(await fs.readdir(folder), []);
 });
 
 test('a real helper entrypoint resolves a fake executable without evaluating path or brief text', async t => {

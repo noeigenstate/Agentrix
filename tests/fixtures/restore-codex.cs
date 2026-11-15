@@ -8,6 +8,8 @@ using System.Web.Script.Serialization;
 class RestoreCodexFixture {
     static void Main(string[] args) {
         Console.InputEncoding = new UTF8Encoding(false); Console.OutputEncoding = new UTF8Encoding(false);
+        // A version probe (the host runs it from wherever it starts) is not a launch: the version alone, no receipt, no sample lines, no key read.
+        if (args.Length > 0 && (args[0] == "--version" || args[0] == "-V")) { Console.WriteLine("codex-cli 0.166.0"); return; }
         if (args.Length > 0 && args[0] == "app-server") {
             var driver = Environment.GetEnvironmentVariable("AGENTRIX_GUI_CODEX_RPC");
             var node = Environment.GetEnvironmentVariable("AGENTRIX_FAKE_NODE");
@@ -26,8 +28,7 @@ class RestoreCodexFixture {
         }
         Console.OutputEncoding = new UTF8Encoding(false);
         var receipt = new { cwd = Directory.GetCurrentDirectory(), args = args };
-        // A version probe (the host runs it from wherever it starts) is not a launch; only a launch leaves a receipt in its project.
-        if (!(args.Length > 0 && (args[0] == "--version" || args[0] == "-V"))) File.WriteAllText(Path.Combine(Directory.GetCurrentDirectory(), "resume-receipt.json"), new JavaScriptSerializer().Serialize(receipt), new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(Directory.GetCurrentDirectory(), "resume-receipt.json"), new JavaScriptSerializer().Serialize(receipt), new UTF8Encoding(false));
         Console.WriteLine("COPY_SAMPLE_START");
         for (int i = 0; i < 150; i++) Console.WriteLine("scrollback line " + i);
         Console.WriteLine("COPY_SAMPLE_END 中文可复制");
