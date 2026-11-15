@@ -128,28 +128,10 @@ test('unknown resume baselines never charge historical totals', t => {
   assert.equal(usage.record('old', { uuid: 'one', total_cost_usd: 20 }, { resume: true }).deltaUsdMicros, null);
   assert.equal(usage.summary().monthUsdMicros, null);
 });
-test('concurrent reservations and crash leftovers cannot spend the budget twice', t => {
-  const file = path.join(directory(t), 'usage.json'), usage = createUsage({ file });
-  const one = usage.reserve(6);
-  assert.equal(one.maxBudgetUsd, 6); assert.throws(() => usage.reserve(6));
-  assert.equal(usage.available(6, one.id), 6000000, 'only the owning query may count its own held allowance');
-  assert.equal(createUsage({ file }).available(6), 0);
-  usage.release(one.id); assert.equal(usage.available(6), 6000000);
-  const partial = usage.reserve(6, { maxBudgetUsd: 2 }), remainder = usage.reserve(6);
-  assert.equal(partial.maxBudgetUsd, 2); assert.equal(remainder.maxBudgetUsd, 4);
-  assert.throws(() => usage.reserve(6));
-});
-test('an explicitly capped reservation leaves the rest of the month available to another query', t => {
-  const file = path.join(directory(t), 'usage.json'), usage = createUsage({ file });
-  const one = usage.reserve(12, { maxBudgetUsd: 7 }), two = usage.reserve(12);
-  assert.equal(one.maxBudgetUsd, 7); assert.equal(two.maxBudgetUsd, 5); assert.throws(() => usage.reserve(12));
-  assert.equal(createUsage({ file }).available(12), 0);
-  usage.release(one.id); assert.equal(usage.available(12), 7000000);
-});
-test('UTC month rollover keeps key-independent prior spend and a zero budget blocks API', t => {
+test('UTC month rollover keeps key-independent prior spend', t => {
   let now = Date.UTC(2026, 10, 30, 23, 59); const usage = createUsage({ file: path.join(directory(t), 'usage.json'), now: () => now });
   usage.record('s', { uuid: 'r', total_cost_usd: 1 }); assert.equal(usage.summary().month, '2026-11');
-  now = Date.UTC(2026, 11, 1); assert.equal(usage.summary().monthUsdMicros, 0); assert.equal(usage.available(0), 0); assert.throws(() => usage.reserve(0));
+  now = Date.UTC(2026, 11, 1); assert.equal(usage.summary().monthUsdMicros, 0);
 });
 test('normalizer merges delta and final snapshots and associates tool results', () => {
   const events = [], normalize = createNormalizer((type, payload, extra) => events.push({ type, payload, ...extra }));
@@ -185,7 +167,7 @@ test('read-only workers deny edits and shell and require exact SKILL authorizati
   assert.equal(createPolicy({ owner: 'dispatch', cwd: dir, allow: ['**'] })('Edit', { file_path: path.join(dir, 'SKILL.md') }).reasonCode, 'skill_not_authorized');
 });
 
-test('a fresh reservation resumes the same SDK session only on the next explicit send', async t => {
+test('a generic failed turn keeps the same SDK query for the next explicit send', async t => {
   const dir = directory(t), sessionId = randomUUID(), first = fakeSdk({ auto: false, sessionId });
   let loads = 0; const events = [];
   const runtime = createClaudeRuntime({ directory: dir, safeStorage, resolveExecutable: async () => process.execPath, loadSdk: async () => { loads++; return first.sdk; } });
@@ -193,11 +175,11 @@ test('a fresh reservation resumes the same SDK session only on the next explicit
   const session = runtime.create({ agent: 'claude', owner: 'gui', cwd: dir, projectId: 'p', terminalId: 't', runtimeSessionId: 'runtime', monthlyBudgetUsd: 10 }, event => events.push(event));
   t.after(() => session.close()); await session.start();
   const id = randomUUID(); session.send({ clientMessageId: id, text: 'first task' }); await until(() => first.inputs.length === 1);
-  first.emit({ type: 'result', uuid: 'one', user_message_uuid: id, is_error: true, subtype: 'error_max_budget_usd', total_cost_usd: 5, modelUsage: {} });
+  first.emit({ type: 'result', uuid: 'one', user_message_uuid: id, is_error: true, subtype: 'error_during_execution', total_cost_usd: 5, modelUsage: {} });
   await until(() => events.some(event => event.type === 'turn.completed') && session.snapshot().state === 'idle');
   assert.equal(loads, 1);
   await session.send({ clientMessageId: randomUUID(), text: 'next explicit task' }); await until(() => first.inputs.length === 2);
-  assert.equal(first.calls[1].options.resume, sessionId); assert.equal(first.inputs[1].message.content, 'next explicit task');
+  assert.equal(first.calls.length, 1); assert.equal(first.inputs[1].message.content, 'next explicit task');
   first.emit({ type: 'result', uuid: 'two', total_cost_usd: 5.1, modelUsage: {}, subtype: 'success' });
   await until(() => runtime.usage.summary().monthUsdMicros === 5100000);
   assert.equal(session.snapshot().runtimeSessionId, 'runtime');
@@ -238,7 +220,19 @@ test('native executable discovery never searches relative directories or accepts
 test('a native executable whose version check fails is reported with the reason and file, never as not found', async t => {
   const { inspectClaudeExecutable } = require('../electron/features/claude-sdk/executable.cjs');
   const dir = 'D:\\agx', other = W.join(dir, 'other'), files = fakeFiles();
-  const inspect = (probe, PATH = dir) => inspectClaudeExecutable({ env: { PATH }, platform: 'win32', home: cliHome, files, probe, storedPath: async () => null, timeoutMs: 20, graceMs: 20 });
+  let clock = 0, waiting;
+  const pending = [];
+  const timers = { now: () => clock, setTimeout(callback, delay) {
+    const job = { callback, delay, cancelled: false }; pending.push(job); waiting?.(); return job;
+  }, clearTimeout(job) { if (job) job.cancelled = true; } };
+  const nextTimer = async () => {
+    while (!pending.some(job => !job.cancelled)) await new Promise(resolve => { waiting = resolve; });
+    waiting = null;
+    while (pending[0]?.cancelled) pending.shift();
+    return pending.shift();
+  };
+  const fire = job => { clock += job.delay; if (!job.cancelled) job.callback(); };
+  const inspect = (probe, PATH = dir) => inspectClaudeExecutable({ env: { PATH }, platform: 'win32', home: cliHome, files, probe, storedPath: async () => null, timeoutMs: 20, graceMs: 20, timers });
   const missing = { status: 'missing', version: null, required: '2.1.317', file: null };
   assert.deepEqual(await inspect(() => assert.fail('nothing to run')), { ...missing, reason: 'not_found', pathFolders: 1, searched: ['~\\.local\\bin', '~\\.claude\\local'] });
   const found = W.join(dir, 'claude.exe'), ok = { status: 'ok', version: '2.1.322', required: '2.1.317', file: found, via: 'path', fileShown: found };
@@ -251,29 +245,24 @@ test('a native executable whose version check fails is reported with the reason 
     return value;
   };
   const run = value => (_file, _args, _options, callback) => { value.callback = callback; return value; };
-  const hung = child(), timedOut = await inspect(run(hung));
-  assert.deepEqual({ ...timedOut, elapsedMs: undefined }, { ...missing, reason: 'timeout', found, elapsedMs: undefined }); assert.ok(timedOut.elapsedMs >= 20);
+  const hung = child(), timedOutTask = inspect(run(hung));
+  const deadline = await nextTimer(); assert.equal(deadline.delay, 20); fire(deadline);
+  assert.deepEqual(await timedOutTask, { ...missing, reason: 'timeout', found, elapsedMs: 20 });
   assert.equal(hung.killed, 1); assert.equal(hung.destroyed, 0);
-  // One whose close never comes (a descendant holds its output open) still ends after a short grace, its streams let go:
-  // killed, it timed out; already exited, its output was never read.
-  const deaf = child({ kill() { this.killed++; } }), exited = child({ exitCode: 0, kill: () => assert.fail('an exited CLI is not killed') });
-  assert.equal((await inspect(run(deaf))).reason, 'timeout'); assert.deepEqual([deaf.killed, deaf.destroyed], [1, 1]);
-  assert.deepEqual(await inspect(run(exited)), { ...missing, reason: 'unreadable', found }); assert.equal(exited.destroyed, 1);
-  // A version the CLI printed before the kill still counts.
-  const late = child({ kill() { this.killed++; this.callback(Object.assign(new Error('killed'), { signal: 'SIGKILL' }), '2.1.322 (Claude Code)\n'); } });
-  assert.deepEqual(await inspect(run(late)), ok); assert.equal(late.killed, 1);
-  // The grace yields a turn as the deadline does: main is busy past it (from the moment the deadline finds the CLI
-  // exited) and the close is already waiting when the grace comes due; the close wins.
-  let busy = false;
-  const slow = child({ kill: () => assert.fail('an exited CLI is not killed') });
-  Object.defineProperty(slow, 'exitCode', { get() {
-    if (!busy) {
-      busy = true;
-      setImmediate(() => { const end = Date.now() + 60; while (Date.now() < end); setImmediate(() => slow.callback(null, '2.1.322 (Claude Code)')); });
-    }
-    return 0;
-  } });
-  assert.equal((await inspect(run(slow))).status, 'ok'); assert.equal(slow.destroyed, 0);
+  const deaf = child({ kill() { this.killed++; } }), deafTask = inspect(run(deaf));
+  fire(await nextTimer()); assert.equal(deaf.killed, 1); assert.equal(deaf.destroyed, 0);
+  const grace = await nextTimer(); assert.equal(grace.delay, 20); fire(grace);
+  assert.equal((await deafTask).reason, 'timeout'); assert.equal(deaf.destroyed, 1);
+  const exited = child({ exitCode: 0, kill: () => assert.fail('an exited CLI is not killed') }), exitedTask = inspect(run(exited));
+  fire(await nextTimer()); fire(await nextTimer());
+  assert.deepEqual(await exitedTask, { ...missing, reason: 'unreadable', found }); assert.equal(exited.destroyed, 1);
+  const late = child({ kill() { this.killed++; this.callback(Object.assign(new Error('killed'), { signal: 'SIGKILL' }), '2.1.322 (Claude Code)'); } });
+  const lateTask = inspect(run(late)); fire(await nextTimer()); assert.deepEqual(await lateTask, ok); assert.equal(late.killed, 1);
+  // The exited child's close is read before the queued grace callback. Its answer wins.
+  const slow = child({ exitCode: 0, kill: () => assert.fail('an exited CLI is not killed') });
+  const slowTask = inspect(run(slow)); fire(await nextTimer()); const queuedGrace = await nextTimer();
+  slow.callback(null, '2.1.322 (Claude Code)'); fire(queuedGrace);
+  assert.deepEqual(await slowTask, ok); assert.equal(slow.destroyed, 0);
   // The same file reached through other PATH spellings is checked once.
   let probes = 0;
   await inspect((_file, _args, _options, callback) => { probes++; callback(null, ''); }, [dir, `${dir}\\`, dir.toLowerCase()].join(';')); assert.equal(probes, 1);
@@ -287,8 +276,6 @@ test('a native executable whose version check fails is reported with the reason 
   t.after(() => session.close());
   await assert.rejects(session.start(), error => error.beforeInput === true && error.message === 'Claude Code 检查没有通过，无法通过 API 运行');
   assert.ok(events.some(event => event.type === 'error' && event.payload.message === 'Claude Code 检查没有通过，无法通过 API 运行'));
-  // Main was busy past the deadline while the CLI had already exited: its answer, read late within the grace, still counts.
-  assert.deepEqual(await inspect((_file, _args, _options, callback) => { setTimeout(() => callback(null, '2.1.322 (Claude Code)'), 25); return { exitCode: 0, signalCode: null, kill: () => assert.fail('an exited CLI is not killed') }; }), ok);
   for (const [error, code] of [[Object.assign(new Error(key), { code: 'EPERM' }), 'EPERM'], [Object.assign(new Error('x'), { code: 1 }), 'exit 1'], [new Error(key), undefined]]) {
     const value = await inspect((_file, _args, _options, callback) => callback(error, ''));
     assert.deepEqual(value, { ...missing, reason: 'failed', found, ...(code ? { error: code } : {}) }); assert.ok(!JSON.stringify(value).includes(key));
@@ -307,11 +294,6 @@ test('GUI and helper cannot resume the same Claude session concurrently', async 
   const worker = runtime.create({ ...spec, owner: 'dispatch', monthlyBudgetUsd: null, providerSessionId: fake.sessionId }, () => {}); t.after(() => worker.close());
   await assert.rejects(worker.start()); assert.equal(fake.calls.length, 1);
   await session.close(); await worker.start(); await worker.send({ clientMessageId: randomUUID(), text: 'resumed worker' }); assert.equal(fake.calls.length, 2);
-});
-test('unknown reported cost preserves uncertainty and never refunds its reservation', t => {
-  const usage = createUsage({ file: path.join(directory(t), 'usage.json') }), lease = usage.reserve(5);
-  usage.record('s', { uuid: 'unknown', modelUsage: {} }, { reservationId: lease.id }); usage.release(lease.id);
-  assert.equal(usage.summary().monthUsdMicros, null); assert.equal(usage.available(5), 0);
 });
 test('worker paths resolve junctions before checking the authorized root', t => {
   const root = directory(t), outside = directory(t), link = path.join(root, 'link');
@@ -337,7 +319,7 @@ test('an accounting write failure cannot prevent stopping the SDK child', async 
   const { createClaudeSession } = require('../electron/features/claude-sdk/session.cjs'), fake = fakeSdk({ auto: false }), dir = directory(t);
   const session = createClaudeSession({ agent: 'claude', owner: 'gui', cwd: dir, projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, () => {}, {
     loadSdk: async () => fake.sdk, resolveExecutable: async () => process.execPath, credentials: { read: () => key },
-    usage: { reserve: () => ({ id: 'reservation' }), unverified() { throw new Error('offline fake disk failure'); }, release() {} },
+    usage: { record() { throw new Error('offline fake disk failure'); } },
   });
   await session.start(); session.send({ clientMessageId: randomUUID(), text: 'pending' }); await until(() => fake.inputs.length === 1);
   await session.close(); assert.equal(fake.calls[0].options.abortController.signal.aborted, true); assert.equal(session.snapshot().state, 'stopped');

@@ -52,9 +52,9 @@ for (const filename of ['settings.json', 'settings.local.json']) test(`B3 invali
   const session = f.create(); await session.start();
   await session.send({ clientMessageId: 'first', text: 'first' }); await tick();
   await session.send({ clientMessageId: 'second', text: 'second' }); await tick(); await session.close();
-  assert.equal(f.fake.inputs.length, 2); assert.equal(f.runtime.usage.available(10), 9800000);
+  assert.equal(f.fake.inputs.length, 2);
   const ledger = JSON.parse(fs.readFileSync(path.join(f.directory, 'state/usage.json'), 'utf8'));
-  assert.deepEqual(ledger.reservations, {});
+  assert.equal(Object.hasOwn(ledger, 'reservations'), false);
 });
 
 for (const cause of ['user config', 'SDK throws']) test(`B3 startup failure (${cause}) leaves no persisted reservation`, async t => {
@@ -63,7 +63,7 @@ for (const cause of ['user config', 'SDK throws']) test(`B3 startup failure (${c
   else f.fake.sdk.query = () => { throw new Error('offline startup failure'); };
   const session = f.create(); await session.start();
   await assert.rejects(session.send({ clientMessageId: 'first', text: 'never delivered' }));
-  await session.close(); assert.equal(f.runtime.usage.available(10), 10000000);
+  await session.close();
   const ledgerFile = path.join(f.directory, 'state/usage.json');
   if (fs.existsSync(ledgerFile)) assert.deepEqual(JSON.parse(fs.readFileSync(ledgerFile, 'utf8')).reservations, {});
 });
@@ -106,7 +106,7 @@ test('B7 project and local API-key replacements fail before any query or budget 
   const f = fixture(t); fs.writeFileSync(path.join(f.cwd, '.claude/settings.local.json'), JSON.stringify({ env: { anthropic_api_key: 'untrusted-key' } }));
   assert.throws(() => routeSettings(f.spec), /项目.*密钥/);
   const session = f.create(); await session.start(); await assert.rejects(session.send({ clientMessageId: 'first', text: 'never sent' }));
-  assert.equal(f.fake.calls.length, 0); assert.equal(f.runtime.usage.available(10), 10000000);
+  assert.equal(f.fake.calls.length, 0);
 });
 
 test('image-only input passes IPC and Claude receives an image block without empty text', async t => {

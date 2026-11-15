@@ -26,45 +26,45 @@ function setup(t, options = {}) {
       projectId: 'p', terminalId: randomUUID(), runtimeSessionId: randomUUID(), monthlyBudgetUsd: 10, env: {} }, event => events.push(event));
     return { session, events };
   }
-  return { fake, factory, create, ledger: () => JSON.parse(fs.readFileSync(path.join(directory, 'usage.json'), 'utf8')) };
+  return { fake, factory, create, ledger: () => fs.existsSync(path.join(directory, 'usage.json')) ? JSON.parse(fs.readFileSync(path.join(directory, 'usage.json'), 'utf8')) : {} };
 }
 const send = session => session.send({ clientMessageId: randomUUID(), text: 'offline work' });
 const result = (cost, extra = {}) => ({ type: 'result', uuid: randomUUID(), subtype: 'success', total_cost_usd: cost, modelUsage: {}, queued_turn_count: 0, ...extra });
 
-test('N2 owner idle releases its lease without closing the query and accepts a background automatic turn', async t => {
+test('N2 owner idle keeps the query and accepts a background automatic turn', async t => {
   const { fake, factory, create, ledger } = setup(t), { session, events } = create();
   await session.start(); await send(session); await until(() => fake.inputs.length === 1);
   fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'offline-monitor', run_id: '1' }] });
   fake.emit(result(0.1)); await until(() => session.snapshot().state === 'idle');
-  assert.equal(fake.closes.length, 0); assert.equal(factory.usage.available(10), 9900000);
-  assert.deepEqual(ledger().reservations, {});
+  assert.equal(fake.closes.length, 0);
+  assert.equal(Object.hasOwn(ledger(), 'reservations'), false);
   fake.emit({ type: 'assistant', uuid: randomUUID(), message: { content: [{ type: 'text', text: 'background finished' }] } });
   await until(() => events.some(event => event.type === 'turn.started' && event.payload.origin === 'automatic'));
-  assert.equal(session.snapshot().state, 'running'); assert.ok(factory.usage.available(10) < 9900000);
+  assert.equal(session.snapshot().state, 'running');
   fake.emit(result(0.2)); await until(() => session.snapshot().state === 'idle');
   await send(session); await until(() => fake.inputs.length === 2);
   assert.equal(fake.calls.length, 1); assert.equal(fake.closes.length, 0);
   fake.emit(result(0.3)); await until(() => session.snapshot().state === 'idle');
-  assert.equal(factory.usage.available(10), 9700000);
+
 });
 
 test('N2 dispatch idle still retires the query and resumes only for the next explicit send', async t => {
   const { fake, create, ledger } = setup(t), { session } = create('dispatch');
   await session.start(); await send(session); await until(() => fake.inputs.length === 1);
   fake.emit(result(0.1, { user_message_uuid: fake.inputs[0].uuid })); await until(() => session.snapshot().state === 'idle');
-  assert.equal(fake.closes.length, 1); assert.deepEqual(ledger().reservations, {});
+  assert.equal(fake.closes.length, 1); assert.equal(Object.hasOwn(ledger(), 'reservations'), false);
   await send(session); await until(() => fake.inputs.length === 2);
   assert.equal(fake.calls.length, 2); assert.equal(fake.calls[1].options.resume, fake.sessionId);
   fake.emit(result(0.2, { user_message_uuid: fake.inputs[1].uuid })); await until(() => session.snapshot().state === 'idle');
 });
 
-test('N2 an owner query reopens at a message boundary only when another session reduces its available cap', async t => {
+test('N2 another session spend does not renew an owner query', async t => {
   const { fake, factory, create } = setup(t), { session } = create();
   await session.start(); await send(session); await until(() => fake.inputs.length === 1);
   fake.emit(result(0.1)); await until(() => session.snapshot().state === 'idle');
   factory.usage.record('other', result(7));
   await send(session); await until(() => fake.inputs.length === 2);
-  assert.equal(fake.calls.length, 2); assert.equal(fake.calls[1].options.maxBudgetUsd, 2.9);
+  assert.equal(fake.calls.length, 1);
   fake.emit(result(0.2)); await until(() => session.snapshot().state === 'idle');
 });
 
@@ -78,47 +78,47 @@ test('N3 owner and dispatch environments override inherited scrub settings and p
   assert.equal(owner.ANTHROPIC_API_KEY, fakeKey); assert.equal(inherited.ANTHROPIC_API_KEY, undefined);
 });
 
-test('N4 two mid-turn stops collect interrupt usage and do not consume two full monthly allowances', async t => {
+test('N4 two mid-turn stops collect observed interrupt usage independently', async t => {
   const { fake, factory, create, ledger } = setup(t, { uniqueSessions: true });
   for (let index = 1; index <= 2; index++) {
     const { session } = create(); await session.start(); await send(session);
     await until(() => fake.inputs.length === index); await session.close();
   }
-  assert.equal(fake.interrupts.length, 2); assert.deepEqual(ledger().reservations, {});
+  assert.equal(fake.interrupts.length, 2); assert.equal(Object.hasOwn(ledger(), 'reservations'), false);
   assert.equal(Object.keys(ledger().sessions).length, 2);
-  assert.deepEqual(ledger().estimates, {}); assert.equal(factory.usage.available(10), 10000000);
+  assert.equal(Object.hasOwn(ledger(), 'estimates'), false);
   const { session } = create(); await session.start(); await send(session);
   await until(() => fake.inputs.length === 3); assert.equal(fake.calls.length, 3);
 });
 
-test('N4 stop before init releases its reservation without creating an unresolvable estimate', async t => {
+test('N4 stop before init creates no spend record', async t => {
   const { fake, factory, create, ledger } = setup(t, { init: false }), { session } = create();
   await session.start(); await send(session); await until(() => fake.inputs.length === 1);
   await session.close();
-  assert.equal(fake.interrupts.length, 0); assert.equal(factory.usage.available(10), 10000000);
-  assert.deepEqual(ledger().reservations, {}); assert.deepEqual(ledger().estimates, {});
+  assert.equal(fake.interrupts.length, 0);
+  assert.equal(Object.hasOwn(ledger(), 'reservations'), false); assert.equal(Object.hasOwn(ledger(), 'estimates'), false);
 });
 
-test('N4 the final interrupt result charges observed spend and releases the unused part of its cap', async t => {
+test('N4 the final interrupt result records observed spend', async t => {
   const { fake, factory, create, ledger } = setup(t, { interruptResult: { total_cost_usd: 0.15 } });
   const { session } = create(); await session.start(); await send(session); await until(() => fake.inputs.length === 1);
   await session.close();
-  assert.equal(factory.usage.available(10), 9850000); assert.equal(factory.usage.summary().monthUsdMicros, 150000);
-  assert.deepEqual(ledger().reservations, {}); assert.deepEqual(ledger().estimates, {});
+   assert.equal(factory.usage.summary().monthUsdMicros, 150000);
+  assert.equal(Object.hasOwn(ledger(), 'reservations'), false); assert.equal(Object.hasOwn(ledger(), 'estimates'), false);
 });
 
-test('N4 a timed-out interrupt closes within a bound and converts only the proved remaining cap to an estimate', async t => {
+test('N4 an unconfirmed interrupt leaves observed spend until later accounting evidence', async t => {
   const { fake, factory, create, ledger } = setup(t, { interruptResult: false }), { session } = create();
   await session.start(); await send(session); await until(() => fake.inputs.length === 1);
   fake.emit(result(0.1)); await until(() => session.snapshot().state === 'idle');
   await send(session); await until(() => fake.inputs.length === 2);
-  const started = Date.now(); await session.close(); assert.ok(Date.now() - started < 2500);
-  assert.deepEqual(ledger().reservations, {});
-  assert.equal(fake.calls[0].options.maxBudgetUsd, 10); assert.equal(fake.calls.length, 1);
-  assert.equal(Object.values(ledger().estimates)[0].micros, 9900000);
-  assert.equal(factory.apiState(10).status, 'budget_exhausted', 'unknown spend keeps the full remaining allowance reserved');
+  await session.close();
+  assert.equal(Object.hasOwn(ledger(), 'reservations'), false);
+   assert.equal(fake.calls.length, 1);
+  assert.equal(Object.hasOwn(ledger(), 'estimates'), false);
+  assert.equal(factory.apiState().status, 'ready');
   factory.usage.record(fake.sessionId, result(0.15), { resume: true });
-  assert.equal(factory.usage.available(10), 9850000); assert.deepEqual(ledger().estimates, {});
+   assert.equal(Object.hasOwn(ledger(), 'estimates'), false);
 });
 
 test('N8 an installed old Claude produces an upgrade instruction instead of a missing-executable message', async t => {

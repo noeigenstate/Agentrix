@@ -13,7 +13,7 @@ const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { terminalPreparation, completeSwitch } = require('./fixtures/native-switch.cjs');
 
 for (const setting of ['api-then-terminal', 'api-only', 'terminal-only']) test(`Claude routing obeys ${setting} for available and unavailable API`, () => {
-  for (const status of ['ready', 'no_key', 'budget_exhausted', 'rate_limited', 'credits_exhausted', 'native_cli_required']) {
+  for (const status of ['ready', 'no_key', 'account_limit', 'rate_limited', 'credits_exhausted', 'native_cli_required']) {
     const expected = setting === 'terminal-only' ? 'terminal' : status === 'ready' ? 'api' : setting === 'api-only' ? null : 'terminal';
     assert.equal(choosePath({ agent: 'claude', claudePath: setting, apiState: { status } }).path, expected);
   }
@@ -66,7 +66,7 @@ test('missing native Claude falls back only under api-then-terminal', async () =
 });
 test('fallback at a message boundary never replays the submitted text', async () => {
   const { router, claude, terminals, created } = fixture(); const first = await router.start('t', { agent: 'claude' });
-  claude.apiState = () => ({ status: 'budget_exhausted' });
+  claude.apiState = () => ({ status: 'account_limit' });
   const receipt = await router.send('t', first.runtimeSessionId, { clientMessageId: 'message', text: 'must not replay' });
   assert.equal(receipt.status, 'rejected'); assert.equal(terminals.length, 0); assert.ok(!JSON.stringify(terminals).includes('must not replay'));
   assert.equal(created[0].runtime.snapshot().state, 'idle', 'the old path remains alive until handoff and readiness');
@@ -80,7 +80,7 @@ test('settings validate exact fields and persist independently of workspace sett
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-native-settings-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'settings.json'), settings = createSettings(file);
   assert.equal(settings.get().claudePath, 'api-then-terminal');
-  settings.set({ monthlyBudgetUsd: 0, claudePath: 'api-only' }); assert.equal(createSettings(file).get().monthlyBudgetUsd, 0);
+  settings.set({ claudePath: 'api-only' }); assert.equal(createSettings(file).get().claudePath, 'api-only');
   for (const patch of [{ env: {} }, { claudePath: 'subscription-first' }, { monthlyBudgetUsd: NaN }, { monthlyBudgetUsd: -1 }, { key: 'not-allowed' }]) assert.throws(() => settings.set(patch));
 });
 test('native IPC denies extra options and accepts only bound structured answers', () => {

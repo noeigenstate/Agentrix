@@ -55,7 +55,7 @@ for (const tokenSource of ['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN', 'claude.ai', 
   const unsafe = ['apiKeyHelper', 'ANTHROPIC_AUTH_TOKEN'].includes(tokenSource);
   if (unsafe) {
     await assert.rejects(session.send({ clientMessageId: 'm', text: 'unsent' }), error => error.beforeInput === true && error.message.includes(`tokenSource=${tokenSource}`));
-    assert.equal(f.fake.inputs.length, 0); assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+    assert.equal(f.fake.inputs.length, 0); assert.equal(f.factory.apiState('p').status, 'billing_identity_mismatch');
     f.factory.resetAvailability();
   } else {
     await session.send({ clientMessageId: 'm', text: 'synthetic work' });
@@ -87,7 +87,7 @@ for (const failure of ['timeout', 'query_refused', 'cli_refused']) for (const mo
       assert.equal(f.events.some(event => event.type === 'error' || event.type === 'session.state' && event.payload.state === 'failed'), false);
       assert.equal(f.native.snapshot('t').events.findLast(event => event.type === 'path.changed').payload.selected, 'terminal');
     }
-    assert.equal(f.fake.inputs.length, 0); assert.equal(f.factory.usage.available(10), 10000000);
+    assert.equal(f.fake.inputs.length, 0);
     assert.equal(JSON.stringify(f.events).includes(key), false);
     assert.doesNotMatch(JSON.stringify(f.events), /org_pin_api_key_conflict|cwd_unavailable/);
   });
@@ -98,7 +98,7 @@ for (const reset of ['key_save', 'key_clear', 'settings', 'cli_version']) test(`
   const first = await f.native.start('t', { agent: 'claude' });
   await f.native.send('t', first.runtimeSessionId, { clientMessageId: 'm', text: 'unsent' });
   f.advance();
-  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState('p').status, 'billing_identity_mismatch');
   assert.equal((await f.native.usage('p')).agents.claude.next.path, 'terminal');
   await f.native.start('next', { agent: 'claude' });
   assert.equal(f.fake.calls.length, 1, 'a later session does not wait for and reject its first message again');
@@ -108,10 +108,10 @@ for (const reset of ['key_save', 'key_clear', 'settings', 'cli_version']) test(`
   assert.equal(workerEvents[0].payload.selected, 'terminal'); assert.equal(f.fake.calls.length, 1);
   if (reset === 'key_save') f.handlers.get('native:key-save')('sk-ant-api03-replacement-offline-only');
   else if (reset === 'key_clear') {
-    await f.handlers.get('native:key-clear')(); assert.equal(f.factory.apiState(10, 'p').status, 'no_key'); f.factory.credentials.save(key);
+    await f.handlers.get('native:key-clear')(); assert.equal(f.factory.apiState('p').status, 'no_key'); f.factory.credentials.save(key);
   } else if (reset === 'settings') f.handlers.get('native:settings-set')({ claudePath: 'api-only' });
   else { f.version('2.1.319'); await f.factory.refreshAvailability(); }
-  assert.equal(f.factory.apiState(10, 'p').status, 'ready');
+  assert.equal(f.factory.apiState('p').status, 'ready');
 });
 
 test('late session identity failures cannot rearm an old-key availability result', async t => {
@@ -123,13 +123,13 @@ test('late session identity failures cannot rearm an old-key availability result
   for (let n = 0; n < 100 && !resolve; n++) await new Promise(done => setTimeout(done, 1));
   f.factory.credentials.save('sk-ant-api03-newer-offline-key');
   resolve({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' } });
-  await assert.rejects(sending, /tokenSource=apiKeyHelper/); assert.equal(f.factory.apiState(10, 'p').status, 'ready');
+  await assert.rejects(sending, /tokenSource=apiKeyHelper/); assert.equal(f.factory.apiState('p').status, 'ready');
 });
 
 test('a connection result for the old saved key cannot rearm availability after a key change during HTTP validation', async t => {
   const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } });
   const checking = f.factory.testConnection({ projectId: 'p' }); f.factory.credentials.save('sk-ant-api03-newer-offline-key');
-  assert.equal((await checking).billing.status, 'mismatch'); assert.equal(f.factory.apiState(10, 'p').status, 'ready');
+  assert.equal((await checking).billing.status, 'mismatch'); assert.equal(f.factory.apiState('p').status, 'ready');
 });
 
 test('an SDK exception cannot expose raw text by naming a public billing error code', async t => {
@@ -152,15 +152,15 @@ test('rejected key and settings changes do not clear a cached billing mismatch',
   const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } }); await f.factory.testConnection({ projectId: 'p' });
   assert.throws(() => f.factory.credentials.save('invalid'));
   assert.throws(() => f.handlers.get('native:settings-set')({ monthlyBudgetUsd: -1 }));
-  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState('p').status, 'billing_identity_mismatch');
 });
 
 test('N1/N2: a successful scoped connection probe clears only that project and subsequent usage follows it immediately', async t => {
   const f = fixture(t, { sdkOptions: { tokenSource: 'apiKeyHelper' } });
   await f.factory.testConnection({ projectId: 'p' }); await f.factory.testConnection({ projectId: 'other' });
-  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
-  assert.equal(f.factory.apiState(10, 'other').status, 'billing_identity_mismatch');
-  assert.equal(f.factory.apiState(10, 'third').status, 'ready');
+  assert.equal(f.factory.apiState('p').status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState('other').status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState('third').status, 'ready');
   const query = f.fake.sdk.query;
   f.fake.sdk.query = input => ({ ...query(input), initializationResult: async () => ({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none' } }) });
   assert.equal((await f.native.testConnection('p')).billing.status, 'ok');
@@ -177,7 +177,7 @@ test('N2: concurrent connection tests for different projects never share a pendi
   } }) }; };
   const [a, b] = await Promise.all([f.factory.testConnection({ projectId: 'p' }), f.factory.testConnection({ projectId: 'other' })]);
   assert.equal(a.billing.status, 'mismatch'); assert.equal(b.billing.status, 'ok'); assert.equal(queries, 2);
-  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch'); assert.equal(f.factory.apiState(10, 'other').status, 'ready');
+  assert.equal(f.factory.apiState('p').status, 'billing_identity_mismatch'); assert.equal(f.factory.apiState('other').status, 'ready');
 });
 
 test('N1: a late successful pre-check cannot erase a newer failure, while a fresh successful pre-check clears it', async t => {
@@ -193,7 +193,7 @@ test('N1: a late successful pre-check cannot erase a newer failure, while a fres
   for (let i = 0; i < 100 && !release; i++) await new Promise(resolve => setTimeout(resolve, 1));
   await assert.rejects(second.send({ clientMessageId: 'denied', text: 'Unsent' }), /tokenSource=apiKeyHelper/);
   release({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'none' } }); await pending;
-  assert.equal(f.factory.apiState(10, 'p').status, 'billing_identity_mismatch');
+  assert.equal(f.factory.apiState('p').status, 'billing_identity_mismatch');
   const third = f.factory.create({ ...f.spec, terminalId: 'third', runtimeSessionId: 'third' }, () => {});
   f.factory.resetAvailability(); await third.start();
   // Keep this lazy session open while another, newer observation records the failure.
@@ -201,7 +201,7 @@ test('N1: a late successful pre-check cannot erase a newer failure, while a fres
   f.fake.sdk.query = input => ({ ...original(input), initializationResult: async () => ({ account: { apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'apiKeyHelper' } }) });
   await f.factory.testConnection({ projectId: 'p' }); f.fake.sdk.query = original;
   await third.send({ clientMessageId: 'fresh', text: 'Fresh pre-check' });
-  assert.equal(f.factory.apiState(10, 'p').status, 'ready');
+  assert.equal(f.factory.apiState('p').status, 'ready');
 });
 
 // A session that fails before any input says what failed, on its card (the error event) and in the path's reason

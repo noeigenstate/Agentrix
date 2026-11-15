@@ -12,9 +12,9 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
     const spec = { agent: 'claude', owner: 'dispatch', runtimeSessionId, terminalId: run.runId, projectId: run.projectId, runId: run.runId,
       cwd: run.cwd, worktree: run.worktree || run.cwd, allow: run.allow, readOnly: run.readOnly, roundtable: run.roundtable,
       model: payload.model, effort: payload.effort, fast: payload.fast, context: context(run), env: runtimeEnv,
-      monthlyBudgetUsd: settings().monthlyBudgetUsd, providerSessionId: payload.resume || null };
+      providerSessionId: payload.resume || null };
     await claude.refreshAvailability?.();
-    const config = settings(), apiState = claude.apiState(config.monthlyBudgetUsd, run.projectId, null, 'dispatch');
+    const config = settings(), apiState = claude.apiState(run.projectId, null, 'dispatch');
     const selection = choosePath({ agent: 'claude', ...config, apiState });
     const pathEvent = reason => createEventStream(spec, event => stream.emit(event)).publish('path.changed', { previous: null, selected: 'terminal', reason });
     if (selection.path === 'terminal') { pathEvent(selection.reason); return; }

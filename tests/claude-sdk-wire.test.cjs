@@ -58,9 +58,7 @@ test('B3 the real SDK launches a fake native CLI whose helper, hook, MCP and tra
     const file = path.join(home, relative); if (fs.statSync(file).isFile()) assert.ok(!fs.readFileSync(file).includes(Buffer.from(key)), relative);
   }
 });
-for (const budget of [null, 10]) test(budget === null
-  ? 'N2 a real SDK owner query keeps its fake native process alive across idle turns'
-  : 'M1 real SDK keeps the full monthly allowance across more than five dollars in one owner session', {
+test('a real SDK owner keeps its fake native process alive until provider credits refuse a turn', {
   skip: !sdkModule && 'SDK dependency is not installed in this isolated worktree', timeout: 30000,
 }, async t => {
   const scope = fixtureProcesses(t, 'agx-owner-wire-'), { directory } = scope;
@@ -81,23 +79,21 @@ for (const budget of [null, 10]) test(budget === null
     AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_FAKE_CLI: cli, AGENTRIX_FAKE_OUTPUT: directory,
     ...(process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}) };
   const session = factory.create({ agent: 'claude', owner: 'gui', cwd: directory, env, projectId: 'p', terminalId: 't',
-    runtimeSessionId: randomUUID(), monthlyBudgetUsd: budget }, () => {});
+    runtimeSessionId: randomUUID() }, () => {});
   await session.start();
+  const { waitFor } = await import('../scripts/wait.mjs');
   const wire = () => fs.readFileSync(path.join(directory, 'claude-wire.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
   for (let count = 1; count <= 3; count++) {
-    const cost = budget === null ? count * 10000 : count * 2000000;
-    await session.send({ clientMessageId: randomUUID(), text: budget === null ? 'first' : 'BUDGET_TURN' });
-    const deadline = Date.now() + 10000;
-    while ((session.snapshot().state !== 'idle' || factory.usage.summary().monthUsdMicros !== cost) && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
-    assert.equal(session.snapshot().state, 'idle');
-    assert.equal(factory.usage.available(10), 10000000 - cost);
+    await session.send({ clientMessageId: randomUUID(), text: 'first' });
+    await waitFor(() => session.snapshot().state === 'idle' && factory.usage.summary().monthUsdMicros === count * 10000, 'fake owner result');
     const spawned = wire().filter(row => row.spawn); assert.equal(spawned.length, 1);
     assert.equal(spawned.at(-1).scrub, false); assert.doesNotThrow(() => process.kill(spawned.at(-1).pid, 0));
-    if (budget !== null) assert.ok(spawned.at(-1).args.includes('--max-budget-usd=10'));
+    assert.equal(spawned.at(-1).args.some(arg => arg.startsWith('--max-budget-usd')), false);
   }
   assert.ok(wire().filter(row => row.childResults).every(row => row.childResults.every(child => child.keyPresent)));
+  await session.send({ clientMessageId: randomUUID(), text: 'CREDITS_TURN' });
+  await waitFor(() => factory.apiState('p').status === 'credits_exhausted' && session.snapshot().state === 'idle', 'provider credit refusal');
+  assert.equal(factory.usage.summary().monthUsdMicros, 30000);
   await session.close();
 });
 

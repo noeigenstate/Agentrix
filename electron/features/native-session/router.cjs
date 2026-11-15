@@ -22,12 +22,11 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     }).finally(() => { if (historyReads.get(id) === entry) historyReads.delete(id); });
     historyReads.set(id, entry); return entry.task;
   }
-  function selection(spec, runtime, allowBudget = false, retained = false) {
+  function selection(spec, retained = false) {
     const config = { ...settings.get() };
     if (retained && switches.retained(spec.terminalId)) config.claudePath = 'api-only';
-    let apiState = claude.apiState(config.monthlyBudgetUsd, spec.projectId, spec.apiTrial, spec.owner);
-    if (spec.agent === 'claude' && config.claudePath === 'api-only' && apiState.status === 'credits_exhausted') return { path: 'api', reason: 'credits_exhausted' };
-    if (apiState.status === 'budget_exhausted' && (allowBudget || runtime?.hasAllowance?.())) apiState = { status: 'ready' };
+    const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner);
+    if (spec.agent === 'claude' && config.claudePath === 'api-only' && ['credits_exhausted', 'rate_limited', 'account_limit'].includes(apiState.status)) return { path: 'api', reason: apiState.status };
     return choosePath({ agent: spec.agent, ...config, apiState });
   }
   function pathChanged(agent, path, reason) {
@@ -59,7 +58,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       forward(record, event);
     };
     if (agent === 'claude') {
-      spec.mayContinue = () => selection(spec, record.runtime, true, true).path === 'api';
+      spec.mayContinue = () => selection(spec, true).path === 'api';
       spec.quotaFallback = () => spec.owner !== 'dispatch' && settings.get().claudePath === 'api-then-terminal';
     }
     record.runtime = restoreFactory ? restoreFactory(spec, receive) : (agent === 'claude' ? claude : codex).create(spec, receive);
@@ -108,7 +107,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     busy.add(id);
     try {
       const config = settings.get(), resolved = resolveSpec(id, agent, resume, false, agent === 'codex' ? launch : null);
-      const spec = { ...resolved, agent, runtimeSessionId: randomUUID(), monthlyBudgetUsd: config.monthlyBudgetUsd };
+      const spec = { ...resolved, agent, runtimeSessionId: randomUUID() };
       if (agent === 'codex' && resume && !launch) spec.preserveRunOptions = true;
       if (resume && !spec.providerSessionId) {
         spec.providerSessionId = (await history(id))?.[agent]?.id || null;
@@ -125,7 +124,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (previous) { await previous.runtime.close(); if (previous.lock) occupied.delete(previous.lock); sessions.delete(id); }
       if (agent === 'claude') await claude.refreshAvailability?.();
       if (agent === 'claude' && spec.owner !== 'dispatch' && spec.kind !== 'ssh' && config.claudePath === 'api-then-terminal') spec.apiTrial = claude.claimApiRetry?.(spec.projectId);
-      const apiState = claude.apiState(config.monthlyBudgetUsd, spec.projectId, spec.apiTrial, spec.owner);
+      const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner);
       const selection = choosePath({ agent, ...config, apiState });
       if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
       if (selection.path === 'terminal') {
@@ -192,7 +191,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   const switches = createSwitches({
     ...switchOptions,
     list: localSessions,
-    choose: session => session.record?.fallbackReason ? { path: 'terminal', reason: session.record.fallbackReason } : selection(session.spec, session.record?.runtime),
+    choose: session => session.record?.fallbackReason ? { path: 'terminal', reason: session.record.fallbackReason } : selection(session.spec),
     observe: session => session.record?.fallbackReason ? { state: 'idle', background: { known: true, count: 0 } } : session.record ? { state: session.record.runtime.snapshot().state,
       pending: [...session.record.inputs.values()].some(status => status === 'queued'),
       background: session.record.runtime.activity?.() || { known: true, count: 0 } } : observeTerminal(session),
@@ -224,7 +223,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       const hasHistory = session.spec.hasHistory || [...(old?.inputs.values() || [])].some(status => ['delivered', 'consumed', 'unknown'].includes(status))
         || previousStream?.snapshot().events.some(event => event.type === 'item.upsert' && event.payload.content?.unsent !== true);
       if (!session.spec.providerSessionId && hasHistory) throw new Error('missing_resume_identity');
-      const spec = { ...session.spec, runtimeSessionId: randomUUID(), monthlyBudgetUsd: settings.get().monthlyBudgetUsd, allowFreshResume: !hasHistory };
+      const spec = { ...session.spec, runtimeSessionId: randomUUID(), allowFreshResume: !hasHistory };
       if (target === 'terminal') {
         if (!prepareTerminal) throw new Error('terminal_preparation_unavailable');
         const prepared = await prepareTerminal(spec, handoff, currentChange, transition);
@@ -238,7 +237,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           carryHistory(previousStream, stream);
           let reason = old?.fallbackReason || null;
           if (spec.agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
-            && claude.apiState(settings.get().monthlyBudgetUsd, spec.projectId).status === 'credits_exhausted') {
+            && ['credits_exhausted', 'rate_limited', 'account_limit'].includes(claude.apiState(spec.projectId).status)) {
             reason = 'API 额度已用完，已转到 Claude Code 终端。';
             const refused = old?.runtime.fallbackInput?.();
             if (refused && !old.fallbackTaken) {
@@ -391,10 +390,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         return unsent(record, message, 'switch_in_progress');
       }
       if (record.spec.agent === 'claude') {
-        // Settings are current, while a running query keeps its existing reservation until a safe input boundary.
-        // The SDK's normal idle renewal then removes an old cap when the owner clears the monthly budget.
-        if (record.spec.owner !== 'dispatch') record.spec.monthlyBudgetUsd = settings.get().monthlyBudgetUsd;
-        const selected = selection(record.spec, record.runtime, false, true);
+        const selected = selection(record.spec, true);
         if (selected.path !== 'api') {
           reconcile();
           if (observation) throw new Error('Claude API 暂时不可用，不能读取。');
@@ -453,14 +449,14 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           snapshot[agent].path = running?.path || null;
           snapshot[agent].reason = running?.record?.stream.snapshot().events.findLast(event => event.type === 'path.changed')?.payload.reason || null;
         }
-        snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(config.monthlyBudgetUsd, projectId) : null, cli[agent]);
+        snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(projectId) : null, cli[agent]);
         snapshot[agent].limits ||= structuredClone(limits[agent] || null);
         if (snapshot[agent].limits?.billingRoute === limits[agent]?.billingRoute &&
           Number.isFinite(limits[agent]?.observedAtMs) && limits[agent].observedAtMs > (snapshot[agent].limits.observedAtMs ?? -Infinity)) {
           snapshot[agent].limits = structuredClone(retainLimits(snapshot[agent].limits, limits[agent]));
         }
       }
-      return { ...claude.usage.summary(), budgetUsd: config.monthlyBudgetUsd, agents: snapshot, switches: { waiting: switches.waiting() } };
+      return { ...claude.usage.summary(), agents: snapshot, switches: { waiting: switches.waiting() } };
     },
     keyClear() {
       // Retain an in-memory rollback capability before deleting the saved key, even for a lazy idle query.

@@ -29,7 +29,7 @@ test('SDK switch preparation initializes a real resumed query with zero input an
   const f = fixture(t); await f.session.resume(); assert.equal(f.fake.calls.length, 0, 'resume is still lazy for ordinary starts');
   await f.session.prepareResume();
   assert.equal(f.fake.calls.length, 1); assert.equal(f.fake.calls[0].options.resume, f.fake.sessionId); assert.equal(f.fake.inputs.length, 0);
-  assert.equal(f.runtime.usage.available(5), 5000000);
+
   assert.ok(f.events.filter(event => event.type === 'item.upsert').every(event => event.replay));
   assert.equal(f.events.some(event => event.type === 'turn.started' || event.type === 'input.receipt'), false);
 });

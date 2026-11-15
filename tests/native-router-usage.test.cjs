@@ -155,9 +155,6 @@ test('real main assembly reports terminal-only Claude subscription usage without
   assert.deepEqual(value.agents.claude.next, { path: 'api', reason: null });
   assert.equal(value.agents.claude.path, null); assert.equal(value.agents.claude.connection.kind, 'subscription');
   assert.equal(value.apiRecords, false); assert.ok(!JSON.stringify(value).includes(fakeKey));
-  handlers.get('native:settings-set')({ monthlyBudgetUsd: 0 });
-  assert.equal((await usage()).agents.claude.next.reason, 'API 月预算设为 0，原生会话不使用 API。', 'a zero budget names itself rather than reading as spent');
-  handlers.get('native:settings-set')({ monthlyBudgetUsd: null });
   cli = 'too_old'; assert.equal((await usage()).agents.claude.next.reason, 'cli_too_old');
   cli = 'missing'; assert.equal((await usage()).agents.claude.next.reason, 'cli_missing');
   codexInstalled = false; assert.equal((await usage()).agents.codex.next.reason, 'cli_missing');
@@ -193,9 +190,6 @@ test('API records distinguish an empty ledger from zero spend and survive reload
   const file = path.join(directory, 'usage.json');
   const usage = createUsage({ file });
   assert.equal(usage.summary().apiRecords, false); assert.equal(usage.summary().todayUsdMicros, null);
-  const lease = usage.reserve(10);
-  assert.equal(usage.summary().apiRecords, false, 'a reservation alone is not an API session record');
-  usage.release(lease.id);
   usage.record('fixture-session', { uuid: 'result', total_cost_usd: 0 });
   assert.equal(usage.summary().apiRecords, true); assert.equal(usage.summary().todayUsdMicros, 0);
   assert.equal(createUsage({ file }).summary().apiRecords, true);

@@ -8,7 +8,7 @@ const { stderrCollector } = require('../agents/start-failure.cjs');
 
 const unknown = why => ({ status: 'unknown', source: null, why, reason: whyText(why) });
 
-// The probe sends no input, so it spends nothing and takes no budget cap: a month with nothing left still has its billing source read.
+// The billing probe sends no model input and does not record spend.
 async function probeBillingIdentity({ key, spec, loadSdk, resolveExecutable, timeoutMs }) {
   const prompt = inputQueue(), abort = new AbortController(), stderr = stderrCollector();
   let query;

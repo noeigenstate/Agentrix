@@ -30,24 +30,25 @@ const failed = error => {
 // process was busy past them, the exit or close already waiting to be read wins, so a CLI that answered in time is
 // not taken for one that hung. The grace lets the output close; a descendant still holding it open must not hold
 // the check. A version printed before the kill still counts.
-function readVersion(probe, file, env, timeoutMs, graceMs) {
+function readVersion(probe, file, env, timeoutMs, graceMs, timers) {
   return new Promise(resolve => {
-    const started = Date.now();
+    const started = timers.now();
     let child, timer, done = false, killed = false;
-    const settle = value => { if (done) return; done = true; clearTimeout(timer); resolve(value); };
-    const timedOut = () => ({ reason: 'timeout', elapsedMs: Date.now() - started });
-    timer = setTimeout(() => setImmediate(() => {
+    const settle = value => { if (done) return; done = true; timers.clearTimeout(timer); resolve(value); };
+    const timedOut = () => ({ reason: 'timeout', elapsedMs: timers.now() - started });
+    timer = timers.setTimeout(() => {
       if (done) return;
       if (child && child.exitCode === null && child.signalCode === null) {
         killed = true;
         try { child.kill('SIGKILL'); } catch { }
       }
-      timer = setTimeout(() => setImmediate(() => {
+      if (done) return;
+      timer = timers.setTimeout(() => {
         if (done) return;
         try { child?.stdout?.destroy(); child?.stderr?.destroy(); } catch { }
         settle(killed ? timedOut() : { reason: 'unreadable' });
-      }), graceMs);
-    }), timeoutMs);
+      }, graceMs);
+    }, timeoutMs);
     try {
       child = probe(file, ['--version'], { maxBuffer: 65536, windowsHide: true, shell: false, env },
         (error, stdout) => {
@@ -98,6 +99,7 @@ const generic = via => via === 'path' || via === 'registry-path' || via === 'npm
 // (claude-runtime/BOUNDARY.md). A refresh reads the stored Windows PATH and searches; a throttled refresh does that at
 // most once a minute; a locate keeps the last answer while it stands. `--version` runs once per file, size and mtime.
 function createLocator({ probe = execFile, files = fs, storedPath = readStoredPath, now = Date.now,
+  timers = { setTimeout: (callback, delay) => setTimeout(() => setImmediate(callback), delay), clearTimeout, now: Date.now },
   timeoutMs = VERSION_TIMEOUT_MS, graceMs = CLOSE_GRACE_MS } = {}) {
   const versions = new Map();
   let stored = null, lastFull = null, last = null, running = null, trailing = null;
@@ -107,7 +109,7 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
   async function version(real, stat, env, retry) {
     const key = `${real}\0${stat.size}\0${stat.mtimeMs}`, cached = versions.get(key);
     if (cached && (cached.ok || !retry && now() - cached.at < FAILURE_RETRY_MS)) return cached.run;
-    const run = await readVersion(probe, real, env, timeoutMs, graceMs);
+    const run = await readVersion(probe, real, env, timeoutMs, graceMs, timers);
     versions.set(key, { run, ok: run.stdout !== undefined && VERSION.test(run.stdout), at: now() });
     return run;
   }
