@@ -3,18 +3,38 @@ require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http');
-const { once } = require('node:events');
-const { spawn } = require('node:child_process');
+const { once, EventEmitter } = require('node:events');
+const { spawn, spawnSync } = require('node:child_process');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
+const { resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
+const { timeoutScale } = require('../scripts/wait.mjs');
 
 test('real app-server: each permissions choice starts as asked, and /permissions changes the running thread from its next turn', {
-  skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX', timeout: 90000,
+  skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX', timeout: 90000 * timeoutScale,
 }, async t => {
+  const lifetime = resources(t), childCloses = [];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-perm-real-')), cwd = path.join(root, 'project');
+  lifetime.defer('remove profile after CLI close', async () => {
+    await lifetime.wait(Promise.all(childCloses), 'CLI close receipts');
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  });
   fs.mkdirSync(cwd);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^(SystemRoot|WINDIR|COMSPEC|PATH|PATHEXT)$/i.test(name)));
-  for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'CODEX_HOME']) { env[name] = path.join(root, name); fs.mkdirSync(env[name]); }
+  const env = {};
+  for (const name of ['SystemRoot', 'WINDIR', 'COMSPEC', 'PATHEXT']) if (process.env[name]) env[name] = process.env[name];
+  for (const name of ['HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'AGENTRIX_DATA_DIR']) { env[name] = path.join(root, name); fs.mkdirSync(env[name]); }
+  const system = env.SystemRoot || env.SYSTEMROOT || env.WINDIR || 'C:\\Windows';
+  const bin = path.join(root, 'bin'); fs.mkdirSync(bin);
+  fs.copyFileSync(process.execPath, path.join(bin, process.platform === 'win32' ? 'node.exe' : 'node'));
+  env.PATH = (process.platform === 'win32' ? [bin, path.join(system, 'System32'), path.join(system, 'System32/WindowsPowerShell/v1.0')]
+    : [bin, '/usr/bin', '/bin']).join(path.delimiter);
+  for (const name of ['codex', 'claude']) {
+    const found = spawnSync(process.platform === 'win32' ? path.join(system, 'System32/where.exe') : '/usr/bin/which', [name],
+      { cwd, env, encoding: 'utf8', windowsHide: true, timeout: 10000 * timeoutScale });
+    assert.ifError(found.error); assert.equal(found.status, 1, `${name} must be unreachable through the isolated PATH`);
+  }
   env.STANDIN_API_KEY = 'offline-key'; env.CI = '1'; env.GIT_CEILING_DIRECTORIES = root;
+  const version = spawnSync(process.env.AGENTRIX_REAL_CODEX, ['--version'], { cwd, env, encoding: 'utf8', windowsHide: true, timeout: 10000 * timeoutScale });
+  assert.ifError(version.error); assert.equal(version.status, 0); assert.match(version.stdout, /\b0\.167\.0\b/);
   // The stand-in model asks for one harmless write inside the project when the message says so, then answers.
   const server = http.createServer((request, response) => {
     let body = ''; request.on('data', chunk => { body += chunk; }); request.on('end', () => {
@@ -33,29 +53,32 @@ test('real app-server: each permissions choice starts as asked, and /permissions
       response.writeHead(200, { 'content-type': 'text/event-stream' }).end(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(''));
     });
   });
-  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  lifetime.defer('close local service', async () => {
+    server.closeAllConnections(); if (server.listening) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  });
+  const listening = once(server, 'listening', { signal: t.signal }); server.listen(0, '127.0.0.1'); await listening;
   // No [windows] sandbox setting: a writable request on Windows comes back read-only unless it is retried unelevated.
   fs.writeFileSync(path.join(env.CODEX_HOME, 'config.toml'), `model = "gpt-6.1-sol"\nmodel_provider = "local"\n[model_providers.local]\nname = "Local"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nenv_key = "STANDIN_API_KEY"\n`);
-  const children = [];
   const factory = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX, optionsHome: root,
-    spawnProcess: (file, args, options) => { const child = spawn(file, args, options); children.push(child); return child; } });
-  const sessions = [];
-  t.after(async () => {
-    for (const session of sessions) await session.close();
-    for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill();
-    server.close(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
-  });
+    spawnProcess: (file, args, options) => {
+      const child = lifetime.child(spawn(file, args, options)); childCloses.push(new Promise(resolve => child.once('close', resolve))); return child;
+    } });
   const open = async permissions => {
-    const events = [], session = factory.create({ owner: 'gui', projectId: 'p', terminalId: permissions, cwd, env, permissions }, event => events.push(event));
-    sessions.push(session); await session.start(); return { session, events };
+    const events = [], signals = new EventEmitter();
+    const session = factory.create({ owner: 'gui', projectId: 'p', terminalId: permissions, cwd, env, permissions }, event => { events.push(event); signals.emit(event.type, event); });
+    // EventEmitter's error channel is used by once() below; a startup error must also be observed before turn() subscribes.
+    signals.on('error', () => {});
+    lifetime.defer('close ' + permissions + ' session', () => session.close());
+    await session.start(); return { session, events, signals };
   };
-  const turn = async ({ session, events }, text) => {
-    const before = events.filter(event => event.type === 'turn.completed').length;
-    await session.send({ clientMessageId: 'm' + Math.random().toString(36).slice(2), text });
-    for (let n = 0; n < 1500 && events.filter(event => event.type === 'turn.completed').length === before; n++) {
-      const request = session.snapshot().requests[0];
-      if (request) await session.cancel(request.requestId); else await new Promise(resolve => setTimeout(resolve, 20));
-    }
+  const turn = async ({ session, signals }, text) => {
+    const completed = once(signals, 'turn.completed', { signal: t.signal }); completed.catch(() => {});
+    const cancel = event => { Promise.resolve(session.cancel(event.payload.requestId)).catch(error => signals.emit('error', error)); };
+    signals.on('request.opened', cancel);
+    try {
+      await session.send({ clientMessageId: 'm' + Math.random().toString(36).slice(2), text });
+      const [event] = await completed; assert.equal(event.payload.status, 'completed');
+    } finally { signals.off('request.opened', cancel); }
   };
 
   const full = await open('full');

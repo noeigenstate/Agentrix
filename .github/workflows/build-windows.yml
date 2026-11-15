@@ -195,17 +195,26 @@ jobs:
           retention-days: 30
 
       - name: Real Claude CLI contract (offline)
-        if: needs.reuse.outputs['build-only'] != 'true' && steps.affected.outputs.real == 'true'
+        if: needs.reuse.outputs['build-only'] != 'true'
         shell: bash
         env:
           AGENTRIX_REQUIRE_REAL_CLI: '1'
+          AFFECTED_CLAUDE_REAL: ${{ steps.affected.outputs.real }}
         run: |
-          version=$(node -p "require('./package-lock.json').packages['node_modules/@anthropic-ai/claude-agent-sdk-win32-x64'].version")
-          npm install --ignore-scripts --no-save --prefix "$RUNNER_TEMP/claude-contract" --no-audit --no-fund "@anthropic-ai/claude-agent-sdk-win32-x64@$version"
-          export AGENTRIX_REAL_CLAUDE="$RUNNER_TEMP/claude-contract/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"
-          test -f "$AGENTRIX_REAL_CLAUDE"
-          "$AGENTRIX_REAL_CLAUDE" --version
-          node scripts/affected-tests.mjs --plan .test-output/affected-tests.json --run --kind real --locked-prefix "$RUNNER_TEMP/claude-contract"
+          # Keep the existing contract step and release gate; Codex's minimum-version install above stays unchanged.
+          prefix="$RUNNER_TEMP/codex-permissions"
+          npm install --ignore-scripts --prefix "$prefix" --no-audit --no-fund @openai/codex@0.167.0
+          mapfile -t codex_files < <(find "$prefix/node_modules/@openai" -type f -name codex.exe)
+          if [ "${#codex_files[@]}" -ne 1 ]; then echo 'Expected one private Codex executable.' >&2; exit 1; fi
+          AGENTRIX_REAL_CODEX="${codex_files[0]}" node --test tests/codex-permissions-real-cli.test.cjs
+          if [ "${AFFECTED_CLAUDE_REAL:-true}" != 'false' ]; then
+            version=$(node -p "require('./package-lock.json').packages['node_modules/@anthropic-ai/claude-agent-sdk-win32-x64'].version")
+            npm install --ignore-scripts --no-save --prefix "$RUNNER_TEMP/claude-contract" --no-audit --no-fund "@anthropic-ai/claude-agent-sdk-win32-x64@$version"
+            export AGENTRIX_REAL_CLAUDE="$RUNNER_TEMP/claude-contract/node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe"
+            test -f "$AGENTRIX_REAL_CLAUDE"
+            "$AGENTRIX_REAL_CLAUDE" --version
+            node scripts/affected-tests.mjs --plan .test-output/affected-tests.json --run --kind real --locked-prefix "$RUNNER_TEMP/claude-contract"
+          fi
 
       - name: Run unit and integration tests
         if: needs.reuse.outputs['build-only'] != 'true' && steps.affected.outputs.full == 'true'

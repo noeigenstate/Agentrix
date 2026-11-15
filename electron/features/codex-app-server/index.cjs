@@ -55,6 +55,13 @@ function assertSandbox(requested, applied, place, phase = 'start') {
 // A failed /permissions request in the owner's words. One that reached Codex and was not answered may have been applied.
 function permissionsFailure(error, sent) {
   if (error.code === 'sandbox_mismatch' || error.code === 'closed') return error;
+  // Config validation can use the same RPC code as an unsupported field. Keep the policy cause, never its raw words.
+  if (/workspace-write|sandbox[_ ]mode/i.test(error.serverMessage || '')
+    && /not allowed|not permitted|disallowed|forbidden/i.test(error.serverMessage || '')
+    && /requirements|managed|policy|allowed values/i.test(error.serverMessage || '')) {
+    return Object.assign(new Error('Codex 的托管策略不允许所选沙箱，本会话权限未更改。请联系管理员或选择策略允许的权限。'),
+      { code: 'permissions_policy_refused', cause: error });
+  }
   const reason = error.code === 'rpc_timeout' ? sent ? 'Codex 没有及时确认权限更改，可能已经应用，请用 /status 查看。' : 'Codex 没有及时回应，本会话权限未更改。请稍后重试。'
     : [-32600, -32601, -32602].includes(error.code) ? '这个版本的 Codex 不支持在会话中切换权限，本会话权限未更改。请升级 Codex 或新建会话。'
       : Number.isInteger(error.code) ? 'Codex 拒绝了权限更改，本会话权限未更改。'
@@ -108,7 +115,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome, accountKey } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome, accountKey } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -167,13 +174,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let currentUsage = null;
       const events = createEvents(spec, event => { if (event.type === 'usage.updated') currentUsage = event.payload; emit(event); }, now, render, translate, settle), receipts = new Map(), finished = new Set();
       let rpc, child, requests, state = 'stopped', closed = false, sending = Promise.resolve(), origin = 'user', clientMessageId = null;
-      let lockKey, active = false, threadResponse, accountGeneration = 0, limitsRead = null;
+      let lockKey, active = false, threadResponse, permissionEvidence, accountGeneration = 0, limitsRead = null;
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let wireCwd = spec.cwd, wireHome;
       let accountRead = null;
       let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null, settingsSeen = null;
-      // Ephemeral threads this session started to read a permissions target; each is let go as soon as it is known and no read needs it.
-      let probing = false; const probeThreads = new Set();
+      // One target probe for this process's CLI home and request. A changed request or a provider close invalidates it.
+      let permissionProbe = null, probing = null, timedOutProbes = 0;
       // Whether this thread started with a writable sandbox Codex applied: on local Windows only such a thread has a Windows sandbox to run "ask" in.
       let startedWritable = false;
       // Run options belong to a thread: a change made while the session starts waits until the thread exists (or the session closes).
@@ -223,17 +230,23 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           method = 'item/completed'; params = { ...params, item: { ...params.msg.item, type: 'imageGeneration' } };
         }
         if (method === 'thread/started' && params.thread?.ephemeral === true && typeof params.thread.id === 'string') {
-          // Only a permissions read starts an ephemeral thread here; one announced after its read gave up is let go now.
-          if (probing) probeThreads.add(params.thread.id); else releaseThread(params.thread.id);
+          // A successful probe may be announced after its reply. Only a timed-out read abandons a late announcement.
+          if (probing) probing.add(params.thread.id);
+          else if (timedOutProbes && params.thread.id !== permissionProbe?.target.thread.id) { --timedOutProbes; releaseThread(params.thread.id); }
           return;
         }
+        if (['thread/closed', 'thread/unsubscribed'].includes(method) && params.threadId === permissionProbe?.target.thread.id) permissionProbe = null;
         if (params.threadId && params.threadId !== events.binding.providerSessionId) return;
         if (method === 'thread/settings/updated' && params.threadSettings) {
+          if (params.threadId !== events.binding.providerSessionId) return;
           const settings = params.threadSettings;
+          if (settings.sandboxPolicy || settings.approvalPolicy || Object.hasOwn(settings, 'approvalsReviewer')) {
+            permissionEvidence = [settings.sandboxPolicy, settings.approvalPolicy, settings.approvalsReviewer];
+          }
           threadResponse = { ...threadResponse, model: settings.model, reasoningEffort: settings.effort, serviceTier: settings.serviceTier,
             ...(settings.sandboxPolicy ? { sandbox: settings.sandboxPolicy } : {}), ...(settings.approvalPolicy ? { approvalPolicy: settings.approvalPolicy } : {}),
             ...(settings.approvalsReviewer ? { approvalsReviewer: settings.approvalsReviewer } : {}) };
-          settingsSeen?.();
+          settingsSeen?.(settings, params.threadId);
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
             effective: { model: settings.model ?? null, effort: settings.effort ?? null, fast: ['fast', 'priority'].includes(settings.serviceTier) }, observed: { model: null, effort: null, fast: null }, reason: null });
           return;
@@ -350,6 +363,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
               onRequest: message => requests.open(message), onDisconnect: reason => {
                 if (closed || reconnecting) return;
+                permissionProbe = null; permissionEvidence = null; timedOutProbes = 0;
                 requests?.cancelAll(); setState('disconnected', reason);
               } });
             requests = createRequests(rpc, events, setState);
@@ -409,6 +423,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
           assertOpen();
           bind(result.thread.id); threadResponse = result;
+          permissionEvidence = [result.sandbox, result.approvalPolicy, result.approvalsReviewer];
           choicesStore = optionStore(spec, [spec.kind || 'local', choiceScope, result.thread.id], optionsHome);
           if (!saved) {
             spec.model = result.model ?? spec.model ?? null;
@@ -427,7 +442,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         } catch (error) {
           error.stage ||= stage;
           // The reason is only added: working it out must never replace the error or skip the close below.
-          try { error.detail ||= startupDetail(error, await rpc?.diagnostics(), { hosts }); } catch { }
+          try { error.detail ||= startupDetail(error, await rpc?.diagnostics({ stop: close, timers }), { hosts }); } catch { }
           if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
           await close(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
         }
@@ -582,53 +597,71 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         changingOptions = task.then(() => {}, () => {}); return task;
       }
       // /permissions changes what this session's thread may do from its next turn (a turn already running keeps what it started with), never the
-      // Settings default. The target is what a new session with that choice would get, read from an ephemeral thread started with the same request:
+      // Settings default. The target is what a new session with that choice would get, read from an ephemeral thread for the same home and request:
       // the CLI's own configuration (writable roots, network, a managed policy) still applies, and a sandbox Codex will not apply is refused as it
       // stops a start. On local Windows "ask" is taken only by a thread that started writable (decided at its start, never by the configuration
       // read now): thread/settings/update carries no configuration, so another thread would report workspace-write without a Windows sandbox; the
       // target is read as that start read it, with the unelevated retry. The change is applied only when thread/settings/updated reports the target
       // with the user as the only approver; until then, or a deadline, it is not taken as done.
+      async function permissionsTarget(request) {
+        const key = JSON.stringify([wireHome || child?.remoteScope, request]);
+        if (permissionProbe?.key === key) return permissionProbe.target;
+        if (permissionProbe) { await releaseThread(permissionProbe.target.thread.id); permissionProbe = null; }
+        const announced = new Set(); probing = announced;
+        try {
+          let target = await rpc.request('thread/start', request);
+          const retry = unelevated(request, target);
+          if (retry) { announced.delete(target.thread?.id); await releaseThread(target.thread?.id); target = await rpc.request('thread/start', retry); }
+          assertOpen();
+          if (typeof target?.thread?.id !== 'string') throw Object.assign(new Error('invalid_thread'), { code: 'invalid_thread' });
+          permissionProbe = { key, target };
+          return target;
+        } catch (error) {
+          if (error.code === 'rpc_timeout' && error.uncertain === true && !announced.size) ++timedOutProbes;
+          throw error;
+        } finally {
+          probing = null;
+          for (const threadId of announced) if (threadId !== permissionProbe?.target.thread.id) {
+            if (permissionProbe && timedOutProbes) --timedOutProbes;
+            releaseThread(threadId);
+          }
+        }
+      }
       async function changePermissions(mode) {
         if (!ownPermissions()) throw new Error(translate('这个会话不能更改权限。'));
         if (!Object.hasOwn(PERMISSIONS, mode)) throw new Error(translate('无效的权限选项。'));
         const request = { cwd: wireCwd, ephemeral: true, approvalsReviewer: 'user', ...PERMISSIONS[mode] };
         if (request.sandbox === 'workspace-write' && windowsLocal() && !startedWritable) assertSandbox(request.sandbox, null, place(), 'change');
-        let target, sent = false, waiting;
+        let target, sent = false, updating = false, waiting, timer;
         try {
-          probing = true;
-          try {
-            target = await rpc.request('thread/start', request);
-            const retry = unelevated(request, target);
-            // The read-only probe is let go before its retry.
-            if (retry) { probeThreads.delete(target.thread?.id); releaseThread(target.thread?.id); target = await rpc.request('thread/start', retry); }
-          }
-          finally {
-            probing = false;
-            probeThreads.add(target?.thread?.id);
-            for (const threadId of probeThreads) if (typeof threadId === 'string') releaseThread(threadId);
-            probeThreads.clear();
-          }
+          target = await permissionsTarget(request);
           assertOpen();
           assertSandbox(request.sandbox, target.sandbox, place(), 'change');
-          const applied = () => JSON.stringify([threadResponse?.sandbox, threadResponse?.approvalPolicy, threadResponse?.approvalsReviewer])
+          const applied = () => JSON.stringify(permissionEvidence)
             === JSON.stringify([target.sandbox, target.approvalPolicy, 'user']);
           if (!applied()) {
-            // Every notice counts, before the answer and after it, until one reports the target.
+            // Confirm from this notice alone: a retained reviewer from an older snapshot is no proof.
             const confirmed = new Promise(resolve => {
-              const done = value => { clearTimeout(timer); settingsSeen = null; resolve(value); }, timer = setTimeout(() => done(false), spec.rpcTimeoutMs || 8000);
-              settingsSeen = () => (closed || applied()) && done(true);
-              waiting = () => done(false);
+              let settled = false;
+              waiting = value => { if (settled) return; settled = true; timers.clearTimeout(timer); settingsSeen = null; resolve(value); };
+              settingsSeen = (settings, threadId) => {
+                if (closed) waiting(false);
+                else if (sent && threadId === events.binding.providerSessionId
+                  && JSON.stringify([settings?.sandboxPolicy, settings?.approvalPolicy, settings?.approvalsReviewer])
+                    === JSON.stringify([target.sandbox, target.approvalPolicy, 'user'])) waiting(true);
+              };
             });
-            sent = true;
+            updating = true;
             await rpc.request('thread/settings/update', { threadId: events.binding.providerSessionId, approvalPolicy: target.approvalPolicy, approvalsReviewer: 'user',
-              ...(target.activePermissionProfile?.id ? { permissions: target.activePermissionProfile.id } : { sandboxPolicy: target.sandbox }) });
-            if (!applied() && !await confirmed) throw Object.assign(new Error('rpc_timeout'), { code: 'rpc_timeout' });
+              ...(target.activePermissionProfile?.id ? { permissions: target.activePermissionProfile.id } : { sandboxPolicy: target.sandbox }) }, undefined,
+            { timeoutFromWrite: true, onWritten() { sent = true; timer = timers.setTimeout(() => waiting(false), spec.rpcTimeoutMs || 8000); } });
+            if (!await confirmed) throw Object.assign(new Error('rpc_timeout'), { code: 'rpc_timeout' });
             assertOpen();
           }
           spec.permissions = mode;
         } catch (error) {
-          waiting?.();
-          const failure = permissionsFailure(error, sent);
+          waiting?.(false);
+          const failure = permissionsFailure(error, sent || updating && error.uncertain === true);
           if (failure !== error) failure.message = translate(failure.message);
           throw failure;
         }
