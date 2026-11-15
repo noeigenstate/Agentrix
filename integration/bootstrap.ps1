@@ -173,15 +173,22 @@ function global:claude {
     $currentNote = Get-AgentrixReadingNote
     $marker = ([string]$currentNote).IndexOf(' Agentrix skill delivery: ')
     if ($marker -ge 0) { $currentNote = $currentNote.Substring(0, $marker) + ' Agentrix delivers skill instructions through its SessionStart hook.' }
-    $readingNote = if ($currentNote) { @('--append-system-prompt', $currentNote) } else { @() }
-    $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
-    $sessionName = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' }
-    $settingsFile = Join-Path $sessionFolder ($sessionName + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')
-    [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
+    # An array even when empty: an if that yields @() gives $null, which splats as an empty argument.
+    $readingNote = @(if ($currentNote) { '--append-system-prompt', $currentNote })
+    # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
+    $settingsFile = $null
+    $settingsArgs = @()
+    if ($settings) {
+        $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
+        $sessionName = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' }
+        $settingsFile = Join-Path $sessionFolder ($sessionName + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')
+        [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
+        $settingsArgs = @('--settings', $settingsFile)
+    }
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        try { & $global:AgentrixClaudeCommand --settings $settingsFile @readingNote @args }
+        try { & $global:AgentrixClaudeCommand @settingsArgs @readingNote @args }
         finally {
-            Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue
+            if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
             Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude'
         }
         return
@@ -189,12 +196,12 @@ function global:claude {
     $claudeExit = 0
     try {
         # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
-        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable (@('--settings', $settingsFile) + $readingNote + @($args))
+        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($settingsArgs + $readingNote + @($args))
     } catch {
         Write-Error $_
         $claudeExit = 1
     } finally {
-        Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue
+        if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
         Send-AgentrixEvent 'codex-exited' $claudeExit -Agent 'claude'
         $global:LASTEXITCODE = $claudeExit
     }

@@ -18,7 +18,7 @@ function sameKey(expected, given) {
 // pipeline health; nothing is dropped silently.
 function createHookIngest({ keyOf, deliver, now = Date.now }) {
   let seq = 0, lastEventAt = null;
-  const counts = { received: 0, oversize: 0, unparsable: 0, failed: 0, refused: { path: 0, terminal: 0, key: 0 }, events: Object.create(null) };
+  const counts = { received: 0, oversize: 0, unparsable: 0, failed: 0, aborted: 0, refused: { path: 0, terminal: 0, key: 0 }, events: Object.create(null) };
 
   // Whether a request reaches a live terminal with that terminal's key; terminalId is null for a path that names none.
   function admit(terminalId, key) {
@@ -44,7 +44,7 @@ function createHookIngest({ keyOf, deliver, now = Date.now }) {
     try { Promise.resolve(deliver(hookEvent)).catch(() => { counts.failed++; }); } catch { counts.failed++; }
   }
 
-  return { admit, take, stats: () => ({ ...structuredClone(counts), lastEventAt }) };
+  return { admit, take, abort: () => { counts.aborted++; }, stats: () => ({ ...structuredClone(counts), lastEventAt }) };
 }
 
 module.exports = { createHookIngest };

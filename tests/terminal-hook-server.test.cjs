@@ -1,6 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const net = require('node:net');
 const { createHookServer, BODY_LIMIT } = require('../electron/features/terminal-events/hook-server.cjs');
 const { createHookIngest } = require('../electron/features/terminal-events/hook-ingest.cjs');
 
@@ -74,4 +75,24 @@ test('an unreadable body or a failing consumer is counted and the next event sti
   assert.equal(ingest.stats().failed, 1);
   ingest.take('t', 'constructor', '{}');
   assert.equal(ingest.stats().events.constructor, 1);
+});
+
+test('a request the CLI aborts before its body ends is counted and never taken', async t => {
+  const taken = [];
+  const ingest = createHookIngest({ keyOf: () => 'key', deliver: event => { taken.push(event); } });
+  let admitted, aborted;
+  const reached = new Promise(resolve => { admitted = resolve; }), counted = new Promise(resolve => { aborted = resolve; });
+  const { admit, abort } = ingest;
+  ingest.admit = (...args) => { admitted(); return admit(...args); };
+  ingest.abort = () => { abort(); aborted(); };
+  const server = await createHookServer(ingest);
+  t.after(() => server.close());
+  const socket = net.connect(server.port, '127.0.0.1');
+  socket.on('error', () => {});
+  socket.write('POST /h/terminal/Stop HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Agentrix-Key: key\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"session_id":');
+  await reached;
+  socket.destroy();
+  await counted;
+  assert.equal(ingest.stats().aborted, 1);
+  assert.deepEqual(taken, []);
 });

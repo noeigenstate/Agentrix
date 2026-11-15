@@ -189,14 +189,19 @@ claude() {
     current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
   fi
   [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
-  local session_folder=${__pg_note_file%/*} session_name=${__pg_note_file##*/} settings_file
-  [[ -n $__pg_note_file && $session_folder != "$__pg_note_file" ]] || session_folder=${TMPDIR:-/tmp}
-  session_name=${session_name%-skills.txt}
-  settings_file=$(mktemp "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX") || return 1
-  printf '%s' "$settings" > "$settings_file"
-  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" --settings "$settings_file" "${note[@]}" "$@"
+  # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
+  local session_folder=${__pg_note_file%/*} session_name=${__pg_note_file##*/} settings_file=
+  local -a settings_args=()
+  if [[ -n $settings ]]; then
+    [[ -n $__pg_note_file && $session_folder != "$__pg_note_file" ]] || session_folder=${TMPDIR:-/tmp}
+    session_name=${session_name%-skills.txt}
+    settings_file=$(mktemp "$session_folder/${session_name:-agentrix}-claude-settings-XXXXXX") || return 1
+    printf '%s' "$settings" > "$settings_file"
+    settings_args=(--settings "$settings_file")
+  fi
+  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" "${settings_args[@]}" "${note[@]}" "$@"
   local code=$?
-  rm -f -- "$settings_file"
+  [[ -n $settings_file ]] && rm -f -- "$settings_file"
   __pg_send codex-exited $code claude
   return $code
 }

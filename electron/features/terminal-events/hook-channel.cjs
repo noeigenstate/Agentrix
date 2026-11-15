@@ -11,6 +11,9 @@ const HTTP_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'Pos
   'Elicitation', 'ElicitationResult'];
 // A dialog's hook may stay open as long as the dialog does; the CLI gives up on every other hook after 10 s.
 const DIALOGS = ['PermissionRequest', 'Elicitation'];
+// The command hooks command-async runs without waiting: the status kinds K0b proved silent and out of the proxy's reach
+// (items 3 and 7). A dialog's hook stays synchronous, so its waiting light comes before the owner can answer.
+const ASYNC_KINDS = ['start', 'stop', 'notify', 'progress'];
 // The command hooks, by the kind claude-hook.ps1 and agent-event.cjs take: the fallback, and SessionStart always.
 const COMMAND_KINDS = { UserPromptSubmit: 'start', Stop: 'stop', Notification: 'notify', SessionStart: 'session', PreToolUse: 'progress',
   PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress', ElicitationResult: 'progress',
@@ -75,8 +78,8 @@ function claudeSettings({ url, key, command, async = () => false }) {
 
 // How a terminal's Claude Code reports to main (C-2), decided when the terminal starts: HTTP hooks to the hook server on
 // `port`, unless a proxy in its environment or in Claude Code's settings would carry them, or there is no server. Then
-// command hooks: async on Windows, where K0b proved them silent and out of the proxy's reach, synchronous elsewhere until a
-// capture covers bash and zsh. The wrapper re-checks its live environment and may only fall back (downgradeHooks).
+// command hooks: the status ones async on Windows (ASYNC_KINDS), synchronous elsewhere until a capture covers bash and
+// zsh. The wrapper re-checks its live environment and may only fall back (downgradeHooks).
 function terminalHooks({ port, terminalId, sessionKey, eventServer, env, cwd, shell, platform = process.platform, home = os.homedir(),
   read = file => fs.readFileSync(file, 'utf8') }) {
   const fallback = platform === 'win32' ? 'command-async' : 'command';
@@ -91,7 +94,7 @@ function terminalHooks({ port, terminalId, sessionKey, eventServer, env, cwd, sh
     : powershellHook({ ...shell, pipeName: eventServer.name, projectId: terminalId, sessionKey });
   return { url, port: port || null, key, channel: channelReason ? fallback : 'http', fallback, channelReason, settings: {
     http: url && claudeSettings({ url, key, command }),
-    fallback: claudeSettings({ command, async: kind => kind === 'progress' || fallback === 'command-async' && kind !== 'session' }),
+    fallback: claudeSettings({ command, async: kind => kind === 'progress' || fallback === 'command-async' && ASYNC_KINDS.includes(kind) }),
   } };
 }
 

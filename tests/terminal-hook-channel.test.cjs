@@ -119,7 +119,7 @@ test('with a proxy and no loopback NO_PROXY entry the terminal keeps command hoo
   assert.equal(downgradeHooks(null, 'HTTP_PROXY'), null);
 });
 
-test('the PowerShell claude wrapper passes the HTTP settings, or with a proxy set since the start the fallback, and reports it', { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
+test('the PowerShell claude wrapper passes the HTTP settings, or with a proxy set since the start the fallback, and reports it, and with none passes no --settings', { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
   const directory = folder(t);
   const hooks = terminalHooks({ port: PORT, terminalId: 't', sessionKey: 'key', eventServer: { name: 'agentrix-pipe' }, env: {}, cwd: directory,
     shell: { posix: false, powershellPath: powershell, script: path.join(integration, 'claude-hook.ps1') }, platform: 'win32', home: directory, read: () => '{}' });
@@ -133,12 +133,14 @@ $global:sent = @()
 function global:Send-AgentrixEvent { param([string]$Type, [int]$ExitCode = 0, [string]$Agent = 'codex', [string]$Command = '') $global:sent += "$Type|$Command" }
 $global:AgentrixSession = @{ hooks = (${psQuote(JSON.stringify(hooks))} | ConvertFrom-Json) }
 $global:AgentrixClaudeExecutable = $null
-$global:AgentrixClaudeCommand = { [IO.File]::ReadAllText($args[1]) }
+$global:AgentrixClaudeCommand = { if ($args[0] -eq '--settings') { [IO.File]::ReadAllText($args[1]) } else { 'none:' + ($args -join ' ') } }
 foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY')) { [Environment]::SetEnvironmentVariable($name, $null) }
 $plain = claude
 $env:HTTP_PROXY = 'http://proxy:1'
 $proxied = claude
-@{ plain = $plain; proxied = $proxied; sent = $global:sent } | ConvertTo-Json -Compress`;
+$global:AgentrixSession.hooks.settings.fallback = ''
+$bare = claude hello
+@{ plain = $plain; proxied = $proxied; bare = $bare; sent = $global:sent } | ConvertTo-Json -Compress`;
   const probe = path.join(folder(t), 'probe.ps1');
   fs.writeFileSync(probe, script);
   const { stdout } = await exec(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', probe],
@@ -146,12 +148,13 @@ $proxied = claude
   const result = JSON.parse(stdout);
   assert.equal(result.plain, hooks.settings.http);
   assert.equal(result.proxied, hooks.settings.fallback);
-  assert.deepEqual(result.sent, ['codex-started|', 'codex-exited|', 'hook-channel|HTTP_PROXY', 'codex-started|', 'codex-exited|']);
+  assert.equal(result.bare, 'none:hello', 'an empty settings value is no --settings and no empty file');
+  assert.deepEqual(result.sent, ['codex-started|', 'codex-exited|', 'hook-channel|HTTP_PROXY', 'codex-started|', 'codex-exited|', 'hook-channel|HTTP_PROXY', 'codex-started|', 'codex-exited|']);
   assert.deepEqual(fs.readdirSync(directory), [], 'each launch removes its settings file');
 });
 
 for (const [kind, shell, file] of [['bash', bash, 'bash-integration.bash'], ['zsh', zsh, 'zsh-integration.zsh']]) {
-  test(`the ${kind} claude wrapper passes the HTTP settings, or with a proxy set since the start the fallback, and reports it`, { skip: process.platform === 'win32' || !shell || !fs.existsSync(shell), timeout: 60000 }, async t => {
+  test(`the ${kind} claude wrapper passes the HTTP settings, or with a proxy set since the start the fallback, and reports it, and with none passes no --settings`, { skip: process.platform === 'win32' || !shell || !fs.existsSync(shell), timeout: 60000 }, async t => {
     const directory = folder(t), bin = path.join(directory, 'bin'), home = path.join(directory, 'home'), capture = path.join(directory, 'capture');
     for (const name of [bin, home, capture]) fs.mkdirSync(name);
     // zsh writes its reports from a subshell, so the report is awaited as an event, not after the shell exits.
@@ -160,7 +163,7 @@ for (const [kind, shell, file] of [['bash', bash, 'bash-integration.bash'], ['zs
     const server = await createEventServer(event => { if (event.type === 'hook-channel') reported(event); });
     t.after(() => server.close());
     const fake = path.join(directory, 'fake.cjs');
-    fs.writeFileSync(fake, `const fs = require('node:fs'), args = process.argv.slice(2); fs.writeFileSync(require('node:path').join(process.env.CAPTURE, String(fs.readdirSync(process.env.CAPTURE).length)), fs.readFileSync(args[args.indexOf('--settings') + 1], 'utf8'));`);
+    fs.writeFileSync(fake, `const fs = require('node:fs'), args = process.argv.slice(2); fs.writeFileSync(require('node:path').join(process.env.CAPTURE, String(fs.readdirSync(process.env.CAPTURE).length)), args.includes('--settings') ? fs.readFileSync(args[args.indexOf('--settings') + 1], 'utf8') : 'none:' + args.join(' '));`);
     fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nexec ${shQuote(process.execPath)} ${shQuote(fake)} "$@"\n`, { mode: 0o755 });
     const hooks = terminalHooks({ port: PORT, terminalId: 'project', sessionKey: 'key', eventServer: server, env: {}, cwd: directory,
       shell: { posix: true, node: process.execPath, helper: path.join(integration, 'agent-event.cjs'), noteFile: '' }, platform: process.platform, home, read: () => '{}' });
@@ -168,11 +171,12 @@ for (const [kind, shell, file] of [['bash', bash, 'bash-integration.bash'], ['zs
       AGENTRIX_SOCKET: server.address, AGENTRIX_PROJECT_ID: 'project', AGENTRIX_SESSION_KEY: 'key', AGENTRIX_NODE: process.execPath, AGENTRIX_EVENT_HELPER: path.join(integration, 'agent-event.cjs'),
       AGENTRIX_HOOK_PORT: String(PORT), AGENTRIX_HOOK_CHANNEL: hooks.channel, AGENTRIX_HOOK_SETTINGS: hooks.settings.http, AGENTRIX_HOOK_FALLBACK: hooks.settings.fallback };
     await new Promise((resolve, reject) => {
-      const child = spawn(shell, ['-c', 'source "$1" zshrc; claude; export HTTP_PROXY=http://proxy:1; claude', '_', path.join(integration, file)], { env, stdio: ['ignore', 'ignore', 'pipe'] });
+      const child = spawn(shell, ['-c', 'source "$1" zshrc; claude; export HTTP_PROXY=http://proxy:1; claude; __pg_hook_fallback=; claude hello', '_', path.join(integration, file)], { env, stdio: ['ignore', 'ignore', 'pipe'] });
       let errors = ''; child.stderr.on('data', bytes => { errors += bytes; }); child.once('error', reject);
       child.once('close', code => code === 0 ? resolve() : reject(new Error(errors)));
     });
-    assert.deepEqual([0, 1].map(index => fs.readFileSync(path.join(capture, String(index)), 'utf8')), [hooks.settings.http, hooks.settings.fallback]);
+    assert.deepEqual([0, 1, 2].map(index => fs.readFileSync(path.join(capture, String(index)), 'utf8')), [hooks.settings.http, hooks.settings.fallback, 'none:hello']);
+    assert.deepEqual(fs.readdirSync(directory).filter(name => name.includes('-claude-settings-')), [], 'no settings file is left, and none was written empty');
     const event = await report;
     assert.deepEqual([event.command, event.agent, event.sessionKey], ['HTTP_PROXY', 'claude', 'key']);
   });

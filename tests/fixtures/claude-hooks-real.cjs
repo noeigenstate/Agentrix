@@ -119,4 +119,4 @@ async function playTurn(session, text = 'HOOK_PROMPT one') {
   return enter;
 }
 
-module.exports = { HTTP_EVENTS, MODES, settingsFor, normalize, observe, startProxy, hooked, plainAnswer, submit, playTurn, opening, textBlock, finish };
+module.exports = { HTTP_EVENTS, ASYNC_OK, MODES, settingsFor, normalize, observe, startProxy, hooked, plainAnswer, submit, playTurn, opening, textBlock, finish };

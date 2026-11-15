@@ -205,3 +205,36 @@ test("a wrapper's hook-channel report moves the terminal to command hooks and sa
   h.context.onEvent({ projectId: 't', sessionKey: 'cap', type: 'hook-channel', command: 'HTTPS_PROXY', sequence: 3 });
   assert.equal(h.s.hooks, fallen);
 });
+
+test('under command-async a permission notice older than a tool hook of its prompt raises no waiting light, and a sync dialog hook still does', () => {
+  const h = fixture(); h.s.hooks = { channel: 'command-async' };
+  h.hook('working', { prompt: 'Task', promptId: 'p1' }); h.advance(10);
+  // The owner answered the dialog; the tool's hook is rejected as state, but its time is kept.
+  h.hook('progress', { hookEvent: 'PostToolUse', promptId: 'p1', requestId: 'tool' });
+  const revision = h.s.cliState.revision;
+  h.hook('attention', { hookEvent: 'Notification', promptId: 'p1', message: 'Claude needs your permission', sentAt: 2005 });
+  assert.equal(h.s.cliState.revision, revision); assert.equal(h.s.cliState.state, 'working'); assert.ok(!h.s.needsInput);
+  h.advance(); h.hook('attention', { hookEvent: 'PermissionRequest', promptId: 'p1', message: 'Bash' });
+  assert.equal(h.s.cliState.state, 'waiting');
+  h.advance(); h.hook('attention', { hookEvent: 'Notification', promptId: 'p1', message: 'Claude needs your permission' });
+  assert.equal(h.s.cliState.state, 'waiting', 'a notice newer than every tool hook still counts');
+});
+
+test('under command-async a late hook of a prompt whose Stop was applied changes nothing and never rearms completion', () => {
+  const h = fixture(); h.s.hooks = { channel: 'command-async' };
+  // A queued prompt's UserPromptSubmit carries the running prompt's id and comes before that prompt's Stop.
+  h.hook('working', { prompt: 'Task', promptId: 'p1' }); h.advance();
+  h.hook('working', { prompt: 'Queued', promptId: 'p1' }); h.advance();
+  assert.equal(h.s.cliState.state, 'working'); assert.equal(h.beginnings(), 2);
+  h.hook('complete', { promptId: 'p1' });
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.notifications(), 1);
+  const revision = h.s.cliState.revision;
+  for (const state of ['working', 'progress', 'attention']) { h.advance(); h.hook(state, { prompt: 'Task', promptId: 'p1', hookEvent: 'Notification', message: 'late' }); }
+  assert.equal(h.s.cliState.revision, revision); assert.equal(h.s.cliState.state, 'idle');
+  assert.equal(h.beginnings(), 2); assert.equal(h.notifications(), 1);
+  h.advance(); h.hook('complete', { promptId: 'p1' });
+  assert.equal(h.notifications(), 1);
+  // The next prompt is new and works as ever.
+  h.advance(); h.hook('working', { prompt: 'Next', promptId: 'p2' });
+  assert.equal(h.s.cliState.state, 'working'); assert.equal(h.beginnings(), 3);
+});

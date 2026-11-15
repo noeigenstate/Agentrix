@@ -50,7 +50,7 @@ test('the settings generators emit only http hooks but SessionStart, or the decl
       const [hook] = fallback.hooks[event][0].hooks;
       assert.equal(hook.type, 'command');
       assert.ok(hook.command.endsWith(kind === 'posix' ? ` ${commandKind}` : ` -Kind ${commandKind}`) || commandKind === 'session', `${label}: ${event}`);
-      assert.equal(hook.async === true, commandKind === 'progress' || platform === 'win32' && commandKind !== 'session', `${label}: ${event} async`);
+      assert.equal(hook.async === true, commandKind === 'progress' || platform === 'win32' && !['session', 'permission'].includes(commandKind), `${label}: ${event} async`);
     }
     sessionStart(fallback);
     assert.equal(hooks.settings.http.includes(hooks.key), true);
@@ -58,4 +58,19 @@ test('the settings generators emit only http hooks but SessionStart, or the decl
   }
   // The wrappers write no hook settings of their own: they pass one of the two main wrote.
   for (const file of wrappers) assert.doesNotMatch(read(file), /claude-hook|type\s*=\s*'command'|\\"hooks\\"|\\"timeout\\"/, file);
+});
+
+test('command-async runs asynchronously only what K0b proved, besides the progress hooks every command channel runs so, and never a dialog hook', () => {
+  // K0b's set, from the real-CLI tests' one definition.
+  const { ASYNC_OK } = require('./fixtures/claude-hooks-real.cjs');
+  const asyncOf = platform => {
+    const { settings } = terminalHooks({ terminalId: 't', sessionKey: 'k', eventServer: { name: 'pipe' }, env: {}, cwd: '/project', platform, home: '/home', read: () => '{}',
+      shell: { posix: false, powershellPath: 'C:\\Windows\\powershell.exe', script: 'C:\\agentrix\\claude-hook.ps1' } });
+    return new Set(Object.entries(JSON.parse(settings.fallback).hooks).filter(([, [entry]]) => entry.hooks[0].async).map(([event]) => event));
+  };
+  const command = asyncOf('linux'), commandAsync = asyncOf('win32');
+  // The command channel is 1.4's configuration: only the tool observations run async.
+  assert.deepEqual([...command].sort(), Object.keys(COMMAND_KINDS).filter(event => COMMAND_KINDS[event] === 'progress').sort());
+  assert.deepEqual([...commandAsync].sort(), [...new Set([...ASYNC_OK, ...command])].sort());
+  for (const event of ['PermissionRequest', 'Elicitation', 'SessionStart']) assert.equal(commandAsync.has(event), false, event);
 });

@@ -6,6 +6,9 @@ const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', Notificatio
   ElicitationResult: 'progress' };
 // The notifications that mean Claude waits for an answer; an idle one must not turn a finished round back into a waiting one.
 const ATTENTION_NOTICES = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog'];
+// How many prompts a terminal remembers for ordering its hooks.
+const PROMPTS_KEPT = 32;
+const keep = (list, value) => { list.push(value); if (list.length > PROMPTS_KEPT) list.shift(); };
 
 // A terminal's Claude Code and Codex activity: hook events, the transcript Claude writes and the turn snapshots
 // readers produce become the CLI state, the lights and the completion alert. `deps` is the app shell (main.cjs),
@@ -222,12 +225,19 @@ function createClaudeActivity(deps) {
     // Every hook names the prompt whose turn it belongs to. Async command hooks (a proxied Windows terminal) can arrive out
     // of order, and their send times follow PowerShell's start-up: a Stop for a prompt older than the newest one seen
     // ended a turn that is already over. A dequeued prompt is new without a UserPromptSubmit, so first sight counts.
-    const prompts = s.claudePrompts ||= [];
-    if (typeof event.promptId === 'string' && !prompts.includes(event.promptId)) {
-      prompts.push(event.promptId);
-      if (prompts.length > 32) prompts.shift();
+    const turns = s.claudeTurns ||= { prompts: [], ended: [], toolAt: new Map() };
+    const prompt = typeof event.promptId === 'string' ? event.promptId : null;
+    if (prompt && !turns.prompts.includes(prompt)) keep(turns.prompts, prompt);
+    if (event.state === 'complete' && prompt && turns.prompts.at(-1) !== prompt) return;
+    // A tool hook's time counts even when it changes no state: it dates the permission notices that came before it.
+    if (event.state === 'progress' && prompt) {
+      turns.toolAt.delete(prompt); turns.toolAt.set(prompt, Math.max(at, turns.toolAt.get(prompt) || 0));
+      if (turns.toolAt.size > PROMPTS_KEPT) turns.toolAt.delete(turns.toolAt.keys().next().value);
     }
-    if (event.state === 'complete' && prompts.includes(event.promptId) && prompts.at(-1) !== event.promptId) return;
+    // Only async hooks arrive late: a hook of a prompt whose Stop was applied, or a permission notice older than a tool
+    // hook of its prompt (the dialog it announced was answered), must not turn the light back to working or waiting.
+    if (s.hooks?.channel === 'command-async' && prompt && (event.state !== 'complete' && turns.ended.includes(prompt)
+      || event.state === 'attention' && event.hookEvent === 'Notification' && at < (turns.toolAt.get(prompt) || 0))) return;
     const evidence = { at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
     // Hook eventId is an event identity, not a native approval request ID. A different observed event invalidates
     // actions conservatively, even if its message is identical. Duplicate events leave the epoch alone.
@@ -258,8 +268,12 @@ function createClaudeActivity(deps) {
           s.completionWork?.begin(); store.expectCompletion(project.id);
         }
       }
-    } else if (event.state === 'complete' && s.claudeLocalCommand) { if (publishCliState(s, 'idle', evidence)) s.claudeLocalCommand = false; return; }
+    } else if (event.state === 'complete' && s.claudeLocalCommand) {
+      if (publishCliState(s, 'idle', evidence)) { s.claudeLocalCommand = false; if (prompt) keep(turns.ended, prompt); }
+      return;
+    }
     if (event.state === 'complete' && !publishCliState(s, 'idle', evidence)) return;
+    if (event.state === 'complete' && prompt) keep(turns.ended, prompt);
     const revision = s.cliState.revision;
     const turnId = event.eventId.slice(event.sessionId.length + 1);
     // Remember the conversation and whether its turn is still open, so a restart can resume it and continue.
