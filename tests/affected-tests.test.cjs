@@ -160,3 +160,25 @@ test('a CI baseline must have actually run all Windows tests; skipped groups and
   jobs[2].steps[0].conclusion = 'success'; checked = { ...run, run_attempt: 2 }; assert.equal(await findFullBetaBaseline(options), null);
   checked = run; assert.equal(await findFullBetaBaseline({ ...options, ancestor: () => false }), null);
 });
+
+test('the real CLI step runs only when the affected plan selects real tests, and the real Codex check only when the plan selects it', async t => {
+  const { parseWorkflow } = await import('../scripts/ci-preflight-core.mjs');
+  const workflow = parseWorkflow(fs.readFileSync(path.join(root, '.github/workflows/build-windows.yml'), 'utf8'));
+  const step = workflow.jobs.windows.steps.find(row => row.name === 'Real Claude CLI contract (offline)');
+  assert.equal(step.if, "needs.reuse.outputs['build-only'] != 'true' && steps.affected.outputs.real == 'true'");
+  assert.doesNotMatch(step.run, /:-true/, 'an empty plan output never runs the real CLI');
+  // The Codex check sits inside a gate on the plan; the gate itself is run here against three plans.
+  const gate = /^if node -e "([^"]+)"; then$/m.exec(step.run);
+  assert.ok(gate, 'the Codex check is gated by the plan');
+  const body = step.run.slice(gate.index, step.run.indexOf('\nfi', gate.index));
+  assert.match(body, /node --test tests\/codex-permissions-real-cli\.test\.cjs/);
+  const selects = plan => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-real-gate-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    if (plan) { fs.mkdirSync(path.join(directory, '.test-output')); fs.writeFileSync(path.join(directory, '.test-output/affected-tests.json'), JSON.stringify(plan)); }
+    return require('node:child_process').spawnSync(process.execPath, ['-e', gate[1]], { cwd: directory }).status === 0;
+  };
+  assert.equal(selects({ real: ['tests/claude-sdk-real-cli.test.cjs'] }), false, 'a Claude-only plan skips the Codex check');
+  assert.equal(selects({ real: ['tests/codex-permissions-real-cli.test.cjs'] }), true);
+  assert.equal(selects(null), true, 'the local full replica, which has no plan, runs it');
+});

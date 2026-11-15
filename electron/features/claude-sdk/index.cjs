@@ -13,9 +13,13 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs,
   connectionSpec = () => ({ agent: 'claude', owner: 'gui', cwd: process.cwd(), effort: 'high', fast: true }) } = {}) {
   const sessions = new Set(), leases = new Map(), unavailable = new Map(), observations = new Map(), listeners = new Set();
+  // A final rate limit belongs to the one session that received it: its card (terminalId -> until), so the terminal that
+  // replaces it keeps the terminal for that minute. Credits and account limits are the account's and stay in `unavailable`
+  // for the whole project.
+  const rateLimited = new Map();
   let generation = 0, observation = 0, cliIdentity = null, refreshing, credentialVersion = 0;
   const notify = () => { for (const listener of listeners) listener(); };
-  const resetAvailability = () => { unavailable.clear(); observations.clear(); generation++; notify(); };
+  const resetAvailability = () => { unavailable.clear(); rateLimited.clear(); observations.clear(); generation++; notify(); };
   const availabilityGeneration = () => ({ generation, sequence: ++observation });
   const currentObservation = (scope, value) => value?.generation === generation && value.sequence >= (observations.get(scope) || 0);
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage, onChange: () => { credentialVersion++; resetAvailability(); } });
@@ -44,9 +48,14 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     if (![...unavailable.values()].some(value => value.reason === 'billing_identity_mismatch')) return Promise.resolve();
     return refreshing ||= checkedCli().catch(() => {}).finally(() => { refreshing = null; });
   }
-  function onFailure(scope, reason, error, observedGeneration) {
+  function onFailure(scope, reason, error, observedGeneration, card = null) {
     if (observedGeneration?.generation !== generation) return;
-    if (reason === 'billing_identity_mismatch') {
+    if (reason === 'rate_limited') {
+      if (!card) return;
+      for (const [id, until] of rateLimited) if (until <= now()) rateLimited.delete(id);
+      rateLimited.set(card, now() + 60000);
+    }
+    else if (reason === 'billing_identity_mismatch') {
       if (!currentObservation(scope, observedGeneration)) return;
       observations.set(scope, observedGeneration.sequence);
       unavailable.set(scope, { reason, detail: error.message, until: null });
@@ -54,7 +63,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     else if (['credits_exhausted', 'account_limit'].includes(reason) && unavailable.get(scope)?.reason !== 'billing_identity_mismatch') {
       unavailable.set(scope, { reason, until: null, retryAt: now() + 600000, trial: null, ...(error?.message ? { detail: error.message } : {}) });
     }
-    else if (unavailable.get(scope)?.until !== null && ['rate_limited', 'invalid_key'].includes(reason)) unavailable.set(scope, { reason, until: now() + 60000 });
+    else if (unavailable.get(scope)?.until !== null && reason === 'invalid_key') unavailable.set(scope, { reason, until: now() + 60000 });
     else return;
     notify();
   }
@@ -88,12 +97,12 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       failure.retryAt = now() + 600000;
       return failure.trial = randomUUID();
     },
-    apiState(projectId = '', trial = null, owner = 'gui') {
+    // The API route for a project; given a session's card (terminalId), also that session's own final rate limit.
+    apiState(projectId = '', trial = null, owner = 'gui', card = null) {
       if (!credentials.status().saved) return { status: 'no_key' };
-      const failure = unavailable.get(projectId);
-      if (owner === 'dispatch' && failure?.reason === 'credits_exhausted') return { status: 'ready' };
-      if (trial && failure?.trial === trial) return { status: 'ready' };
-      if (failure && (failure.until === null || failure.until > now())) return { status: failure.reason, ...(failure.detail ? { reason: failure.detail } : {}) };
+      const failure = unavailable.get(projectId), excused = owner === 'dispatch' && failure?.reason === 'credits_exhausted' || trial && failure?.trial === trial;
+      if (!excused && failure && (failure.until === null || failure.until > now())) return { status: failure.reason, ...(failure.detail ? { reason: failure.detail } : {}) };
+      if (rateLimited.get(card) > now()) return { status: 'rate_limited' };
       return { status: 'ready' };
     },
     resetAvailability,
@@ -113,14 +122,15 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
         leases.set(id, owner); leasedId = id;
       }
       const release = () => { if (leasedId && leases.get(leasedId) === owner) leases.delete(leasedId); };
+      const card = spec.terminalId || spec.runtimeSessionId;
       const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials: rollbackCredentials || credentials, usage, now, onCost,
         availabilityGeneration, initializationTimeoutMs,
         credentialVersion: () => credentialVersion,
-        providerReady: () => runtimeApi.apiState(spec.projectId, spec.apiTrial).status === 'ready',
+        providerReady: () => runtimeApi.apiState(spec.projectId, spec.apiTrial, 'gui', card).status === 'ready',
         canContinue: () => spec.owner === 'dispatch' || credentials.status().saved && spec.mayContinue?.() !== false,
-        onFailure: (reason, error, observedGeneration) => onFailure(spec.projectId || '', reason, error, observedGeneration),
+        onFailure: (reason, error, observedGeneration) => onFailure(spec.projectId || '', reason, error, observedGeneration, card),
         onIdentity: observedGeneration => onIdentity(spec.projectId || '', observedGeneration),
-        onSuccess: observedGeneration => onIdentity(spec.projectId || '', observedGeneration, true),
+        onSuccess: observedGeneration => { rateLimited.delete(card); onIdentity(spec.projectId || '', observedGeneration, true); },
         onSession: id => { acquire(id); remember(id); onSession?.(spec, id); }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }) });
       let closing;
       const open = async () => {

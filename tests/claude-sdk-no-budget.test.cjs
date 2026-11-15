@@ -7,6 +7,12 @@ const { timeoutScale } = require('../scripts/wait.mjs');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() };
+// G6: a budget option in any spelling, as an SDK option or a CLI flag (extraArgs keys carry no dashes).
+const BUDGET = /max[-_]?budget/i;
+// Code that could launch Claude Code or decide on spend: modules, shell, PowerShell and batch scripts.
+const CODE = /\.(?:c?js|mjs|tsx?|ps1|sh|zsh|bash|cmd|bat)$/;
+const codeFiles = () => ['electron', 'src', 'integration', 'scripts'].flatMap(folder => fs.readdirSync(path.join(__dirname, '..', folder), { recursive: true })
+  .map(name => path.join(__dirname, '..', folder, name)).filter(file => CODE.test(file) && fs.statSync(file).isFile()));
 function fixture(t, options = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-provider-')), bus = new EventEmitter(), events = [];
   const fake = fakeSdk({ uniqueSessions: true, ...options });
@@ -40,10 +46,7 @@ test('no SDK option or CLI argument carries a budget cap', { timeout: 15000 * ti
   await probeBillingIdentity({ key: 'sk-ant-offline-probe', spec: { owner: 'gui', cwd: f.directory, env: { PATH: '' } },
     loadSdk: async () => f.fake.sdk, resolveExecutable: async () => 'offline-only' });
   assert.ok(f.fake.calls.length >= 5);
-  for (const { options } of f.fake.calls) {
-    assert.equal(Object.hasOwn(options, 'maxBudgetUsd'), false);
-    assert.doesNotMatch(JSON.stringify(options), /--max-budget-usd/);
-  }
+  for (const { options } of f.fake.calls) assert.doesNotMatch(JSON.stringify(options), BUDGET);
 });
 
 test('two native owner sessions and a native worker run at once with no allowance shared or held', { timeout: 15000 * timeoutScale }, async t => {
@@ -70,15 +73,23 @@ test('an old settings file with monthlyBudgetUsd and an old ledger with reservat
   assert.equal(usage.summary().monthUsdMicros, 3000000);
 });
 
-test('maxBudgetUsd, --max-budget-usd and monthlyBudgetUsd appear nowhere in electron/, src/ or integration/ code', () => {
-  const matches = [];
-  const visit = directory => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const file = path.join(directory, entry.name);
-    if (entry.isDirectory()) visit(file);
-    else if (/\.(cjs|js|ts|tsx)$/.test(file) && /maxBudgetUsd|--max-budget-usd|monthlyBudgetUsd/.test(fs.readFileSync(file, 'utf8'))) matches.push(file);
-  } };
-  for (const directory of ['electron', 'src', 'integration']) visit(path.join(__dirname, '..', directory));
-  assert.deepEqual(matches, []);
+test('a budget option in any spelling appears nowhere in electron/, src/, integration/ or scripts/ code, shell and batch files included', () => {
+  for (const options of [{ extraArgs: { 'max-budget-usd': '1' } }, { maxBudgetUsd: 1 }, { extraArgs: { max_budget_usd: '1' } }]) assert.match(JSON.stringify(options), BUDGET);
+  for (const name of ['launch.ps1', 'launch.sh', 'launch.zsh', 'launch.cmd', 'launch.mjs', 'launch.bat']) assert.match(name, CODE, name);
+  const root = path.join(__dirname, '..');
+  const matches = codeFiles().filter(file => BUDGET.test(fs.readFileSync(file, 'utf8')) || /monthlyBudgetUsd/.test(fs.readFileSync(file, 'utf8')));
+  assert.deepEqual(matches.map(file => path.relative(root, file)), []);
+});
+
+// B1 item 7: spend is information only. Today's and the month's spend are shown and never compared against a limit.
+test('no code path compares spend against a limit', () => {
+  const spend = String.raw`\b(?:todayUsdMicros|monthUsdMicros|spentMicros)\b`;
+  const compared = new RegExp(String.raw`${spend}[\s)\]?]*[<>]=?(?!>)|(?<![=-])[<>]=?\s*[\w.?()[\]]*${spend}|Math\.(?:min|max)\([^)]*${spend}`);
+  for (const line of ['if (summary.monthUsdMicros >= limit) stop();', 'if (cap > usage.todayUsdMicros) go();', 'Math.min(month.spentMicros, cap)']) assert.match(line, compared, line);
+  for (const line of ['const month = { spentMicros: count(summary.monthUsdMicros) };', "note={money(usage.todayUsdMicros)}", 'todayUsdMicros => show(todayUsdMicros)']) assert.doesNotMatch(line, compared, line);
+  const root = path.join(__dirname, '..');
+  const found = codeFiles().flatMap(file => fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(line => compared.test(line)).map(line => `${path.relative(root, file)}: ${line.trim()}`));
+  assert.deepEqual(found, []);
 });
 
 test('a ledger write failure retains observed spend in memory and retries on the next change', t => {

@@ -9,6 +9,8 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
   let counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0, stderrTail = '', processError = null, ending = false;
   // close follows exit and the last pipe data; subscribe before a startup request can fail.
   const processClosed = new Promise(resolve => child.once('close', () => { ending = true; resolve(); fail('process_exited'); }));
+  // Each of our pipe ends reports its own close, for a startup stop that released them (diagnostics below).
+  const pipes = [child.stdin, child.stdout, child.stderr], pipesClosed = pipes.map(pipe => pipe?.once ? new Promise(resolve => pipe.once('close', resolve)) : null);
   function fail(code = 'disconnected') {
     if (closed) return;
     closed = true;
@@ -99,8 +101,11 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     // A live server's protocol rejection needs no exit. A dying server's detail waits for its final stderr and close.
     async diagnostics({ stop, timers = globalThis } = {}) {
       if (ending) await new Promise((resolve, reject) => {
-        // A hung process or inherited pipe holder still needs the host's bounded cleanup. Detail follows close, not this timer.
-        const timer = stop && timers.setTimeout(() => { Promise.resolve().then(stop).catch(reject); }, 3000);
+        // A hung process or inherited pipe holder still needs the host's bounded cleanup. Detail follows close, or the end of
+        // that cleanup when close never comes (a remote channel's receipt may not): once the stop has settled and the pipe ends
+        // it released have closed, nothing more can be learned.
+        const released = () => Promise.all(pipes.map((pipe, index) => pipe?.destroyed ? pipesClosed[index] : null));
+        const timer = stop && timers.setTimeout(() => { Promise.resolve().then(stop).then(released).then(resolve, reject); }, 3000);
         processClosed.then(() => { timers.clearTimeout(timer); resolve(); });
       });
       return { stderr: stderrTail, processError: processError?.message || null, exitCode: child.exitCode ?? null, signal: child.signalCode ?? null };

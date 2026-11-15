@@ -5,6 +5,17 @@ const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
 const { retainLimits } = require('../agents/agent-usage.cjs');
+// What the owner is told when a provider limit moved a session to the terminal, chosen by the limit's code: [moved, moved with
+// the refused message kept in the composer]. Each is one whole sentence, so the translation table holds it as it is shown.
+const LIMIT_SWITCHED = {
+  credits_exhausted: ['控制台余额不足，请到 Claude Console 的 Billing 充值。已转到 Claude Code 终端。',
+    '控制台余额不足，请到 Claude Console 的 Billing 充值。已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
+  rate_limited: ['API 请求达到速率限制，已转到 Claude Code 终端。',
+    'API 请求达到速率限制，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
+  account_limit: ['Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端。',
+    'Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
+};
+const providerLimit = status => Object.hasOwn(LIMIT_SWITCHED, status);
 function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
@@ -25,8 +36,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
   function selection(spec, retained = false) {
     const config = { ...settings.get() };
     if (retained && switches.retained(spec.terminalId)) config.claudePath = 'api-only';
-    const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner);
-    if (spec.agent === 'claude' && config.claudePath === 'api-only' && ['credits_exhausted', 'rate_limited', 'account_limit'].includes(apiState.status)) return { path: 'api', reason: apiState.status };
+    const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner, spec.terminalId);
+    if (spec.agent === 'claude' && config.claudePath === 'api-only' && providerLimit(apiState.status)) return { path: 'api', reason: apiState.status };
     return choosePath({ agent: spec.agent, ...config, apiState });
   }
   function pathChanged(agent, path, reason) {
@@ -124,7 +135,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (previous) { await previous.runtime.close(); if (previous.lock) occupied.delete(previous.lock); sessions.delete(id); }
       if (agent === 'claude') await claude.refreshAvailability?.();
       if (agent === 'claude' && spec.owner !== 'dispatch' && spec.kind !== 'ssh' && config.claudePath === 'api-then-terminal') spec.apiTrial = claude.claimApiRetry?.(spec.projectId);
-      const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner);
+      const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner, id);
       const selection = choosePath({ agent, ...config, apiState });
       if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
       if (selection.path === 'terminal') {
@@ -236,9 +247,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           stream.provider(spec.providerSessionId); terminalStreams.set(id, stream);
           carryHistory(previousStream, stream);
           let reason = old?.fallbackReason || null;
-          if (spec.agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
-            && ['credits_exhausted', 'rate_limited', 'account_limit'].includes(claude.apiState(spec.projectId).status)) {
-            reason = 'API 额度已用完，已转到 Claude Code 终端。';
+          // This card's state: a rate limit is this session's own, credits and account limits the project's.
+          const limit = spec.agent === 'claude' && claude.apiState(spec.projectId, null, spec.owner, id).status;
+          if (settings.get().claudePath === 'api-then-terminal' && providerLimit(limit)) {
+            reason = LIMIT_SWITCHED[limit][0];
             const refused = old?.runtime.fallbackInput?.();
             if (refused && !old.fallbackTaken) {
               old.fallbackTaken = true;
@@ -255,7 +267,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
                 else for (const input of returned) {
                   if (!draft.undelivered.some(kept => kept.clientMessageId === input.clientMessageId)) draft.undelivered.push(input);
                 }
-                reason += ' 未自动发送的消息已保留，请检查终端输入框后继续。';
+                reason = LIMIT_SWITCHED[limit][1];
               }
             }
           }
@@ -293,11 +305,15 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       } };
     },
   });
-  let reconcileQueued = false, retryRequested = false;
+  let reconcileQueued = null, retryRequested = false;
+  // One pass per burst of requests. The promise is the settle point: it resolves once the pass has run and every change it
+  // started has settled, so a caller awaits it instead of counting event-loop turns.
   function reconcile(retryFailed = false) {
     retryRequested ||= retryFailed;
-    if (reconcileQueued) return;
-    reconcileQueued = true; queueMicrotask(() => { reconcileQueued = false; const retry = retryRequested; retryRequested = false; switches.reconcile(retry); });
+    return reconcileQueued ||= Promise.resolve().then(() => {
+      reconcileQueued = null; const retry = retryRequested; retryRequested = false;
+      switches.reconcile(retry); return switches.settled();
+    });
   }
   const unsubscribeAvailability = claude.onAvailabilityChange?.(() => reconcile());
   return { start,
