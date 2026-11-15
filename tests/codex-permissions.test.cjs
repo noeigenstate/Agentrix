@@ -11,6 +11,7 @@ const { PassThrough, Writable } = require('node:stream');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { timeoutScale } = require('../scripts/wait.mjs');
 
 const TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 // The CLI's own configuration in this stand-in: read-only, asking on request, under the built-in read-only profile (what 0.167 gives an untrusted folder).
@@ -19,7 +20,7 @@ const CONFIGURED = { sandbox: { type: 'readOnly', networkAccess: false }, approv
 // `apply(params)` is the sandbox the stand-in really applies to a thread request; `settle(params)` what it reports after a settings update (null
 // sends no notice), `reviewer` the approver it reports, `noise` notices it sends before its confirmation, `silentProbe` an ephemeral start it
 // announces but never answers, `reject` a method it refuses with that JSON-RPC code. As 0.167 does, it announces every thread it starts.
-function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox, settle, reviewer, noise = [], silentProbe = false, reject = {}, threadId = 'owner-thread' } = {}) {
+function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox, settle, reviewer, initialReviewer = 'user', noise = [], silentProbe = false, announceProbe = true, reject = {}, version = '0.167.0', onWrite = () => {}, threadId = 'owner-thread' } = {}) {
   const child = new EventEmitter(), wire = [], waits = [];
   let probes = 0, starts = 0;
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
@@ -29,34 +30,36 @@ function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.s
   child.stdin = new Writable({ write(bytes, _encoding, done) {
     for (const line of bytes.toString().trim().split('\n')) {
       const request = JSON.parse(line), p = request.params || {}; wire.push(request);
+      onWrite(request);
       for (const wait of waits.filter(wait => wait.test(request))) { waits.splice(waits.indexOf(wait), 1); wait.resolve(request); }
       if (request.id == null) continue;
       queueMicrotask(() => {
         if (['thread/resume', 'turn/start', 'turn/steer', 'turn/interrupt'].includes(request.method) && !p.threadId) return send({ id: request.id, error: { code: -32602, message: 'missing threadId' } });
-        if (Object.hasOwn(reject, request.method)) return send({ id: request.id, error: { code: reject[request.method], message: 'private server message' } });
+        if (Object.hasOwn(reject, request.method)) return send({ id: request.id, error: typeof reject[request.method] === 'number'
+          ? { code: reject[request.method], message: 'private server message' } : reject[request.method] });
         let result = {};
-        if (request.method === 'initialize') result = { userAgent: 'codex/0.167.0' };
+        if (request.method === 'initialize') result = { userAgent: 'codex/' + version };
         else if (['thread/start', 'thread/resume'].includes(request.method)) {
           const id = p.threadId || (p.ephemeral ? `probe-${++probes}` : ++starts === 1 ? threadId : `${threadId}-${starts}`), configured = !p.sandbox && !p.approvalPolicy;
           const thread = { id, turns: [], status: { type: 'idle' }, ephemeral: p.ephemeral === true };
-          if (request.method === 'thread/start') notify('thread/started', { thread });
+          if (request.method === 'thread/start' && (!p.ephemeral || announceProbe)) notify('thread/started', { thread });
           if (p.ephemeral && silentProbe) return;
           result = { thread, cwd: p.cwd, model: 'gpt-6.1-sol', reasoningEffort: 'high', serviceTier: null,
-            approvalPolicy: p.approvalPolicy || CONFIGURED.approvalPolicy, approvalsReviewer: p.approvalsReviewer, sandbox: apply(p),
+            approvalPolicy: p.approvalPolicy || CONFIGURED.approvalPolicy, ...(initialReviewer === null ? {} : { approvalsReviewer: initialReviewer }), sandbox: apply(p),
             activePermissionProfile: configured ? CONFIGURED.activePermissionProfile : null };
         } else if (request.method === 'thread/unsubscribe') result = { status: 'unsubscribed' };
         else if (request.method === 'thread/turns/list') result = { data: [], nextCursor: null, backwardsCursor: null };
         else if (request.method === 'turn/start') result = { turn: { id: 'turn-1', status: 'inProgress', items: [] } };
         else if (request.method === 'account/rateLimits/read') result = { rateLimits: { limitId: 'codex', primary: { usedPercent: 1, windowDurationMins: 300, resetsAt: 2000000000 } }, rateLimitsByLimitId: {} };
+        if (request.method === 'thread/settings/update') for (const [method, params] of noise) notify(method, params);
         send({ id: request.id, result });
         // A turn starts and keeps running until the test is over.
         if (request.method === 'turn/start') notify('turn/started', { threadId: p.threadId, turn: result.turn });
         // Codex answers a settings change first and confirms it with a notice of the thread's settings.
         if (request.method === 'thread/settings/update') {
-          for (const [method, params] of noise) notify(method, params);
           const sandboxPolicy = settle ? settle(p) : p.sandboxPolicy || (p.permissions === ':read-only' ? CONFIGURED.sandbox : { type: 'workspaceWrite' });
           if (sandboxPolicy) notify('thread/settings/updated', { threadId: p.threadId, threadSettings: { model: 'gpt-6.1-sol', effort: 'high', serviceTier: null,
-            approvalPolicy: p.approvalPolicy ?? CONFIGURED.approvalPolicy, approvalsReviewer: reviewer ?? p.approvalsReviewer, sandboxPolicy,
+            approvalPolicy: p.approvalPolicy ?? CONFIGURED.approvalPolicy, ...(reviewer === null ? {} : { approvalsReviewer: reviewer ?? p.approvalsReviewer }), sandboxPolicy,
             activePermissionProfile: p.permissions ? { id: p.permissions, extends: null } : null } });
         }
       });
@@ -74,10 +77,10 @@ function directory(t) {
   return root;
 }
 // A runtime over one stand-in, local or SSH. The SSH one reaches the stand-in through the injected remote launcher, as main's does.
-function runtime(t, { kind = 'local', platform = 'linux', server = codexServer(), spec = {} } = {}) {
+function runtime(t, { kind = 'local', platform = 'linux', server = codexServer(), spec = {}, timers } = {}) {
   const root = directory(t), remote = kind === 'ssh';
   if (remote) Object.assign(server.child, { remote: true, remoteScope: 'remote-scope' });
-  const factory = createCodexRuntime({ platform, optionsHome: root, resolveExecutable: async () => 'fake-only', spawnProcess: () => server.child,
+  const factory = createCodexRuntime({ platform, timers, optionsHome: root, resolveExecutable: async () => 'fake-only', spawnProcess: () => server.child,
     launchRemote: async () => ({ cwd: '/srv/project', child: server.child, hosts: [] }) });
   const session = factory.create({ owner: 'gui', projectId: 'p', terminalId: 't', ...(remote ? { kind: 'ssh', cwd: '/srv/project', env: {} } : { cwd: root, env: { CODEX_HOME: root, PATH: '' } }), ...spec }, () => {});
   t.after(() => session.close());
@@ -87,6 +90,18 @@ const policyOf = params => ({ sandbox: params.sandbox, approvalPolicy: params.ap
 const FULL = { sandbox: 'danger-full-access', approvalPolicy: 'never', approvalsReviewer: 'user' };
 const ASK = { sandbox: 'workspace-write', approvalPolicy: 'on-request', approvalsReviewer: 'user' };
 const CONFIG = { sandbox: undefined, approvalPolicy: undefined, approvalsReviewer: 'user' };
+
+function confirmationClock() {
+  let now = 0;
+  const pending = new Set(), scheduled = Promise.withResolvers();
+  return { scheduled: scheduled.promise, pending,
+    timers: {
+      setTimeout(fn, delay) { const task = { fn, at: now + delay }; pending.add(task); scheduled.resolve(task); return task; },
+      clearTimeout(task) { pending.delete(task); },
+    },
+    tick(ms) { now += ms; for (const task of [...pending]) if (task.at <= now) { pending.delete(task); task.fn(); } },
+  };
+}
 
 for (const kind of ['local', 'ssh']) {
   test(`${kind}: each Codex permissions choice gives its own thread/start and thread/resume parameters`, async t => {
@@ -172,16 +187,124 @@ test('the router names the sandbox Codex did not apply when a session fails to s
   assert.match(events.find(row => row.type === 'error').payload.message, /未应用完全访问权限/);
 });
 
+test('/permissions reuses a valid probe per CLI home', { timeout: 15000 * timeoutScale }, async t => {
+  const first = runtime(t, { spec: { permissions: 'ask' } }); await first.session.start();
+  await first.session.runOptions({ permissions: 'full' }); await first.session.runOptions({ permissions: 'full' });
+  const probes = () => first.server.wire.filter(row => row.method === 'thread/start' && row.params.ephemeral);
+  assert.equal(probes().length, 1);
+  assert.equal(first.server.wire.some(row => row.method === 'thread/unsubscribe'), false);
+  const other = runtime(t, { spec: { permissions: 'ask', cwd: first.root } }); await other.session.start();
+  await other.session.runOptions({ permissions: 'full' });
+  assert.equal(other.server.wire.filter(row => row.method === 'thread/start' && row.params.ephemeral).length, 1, 'a second CLI home reads its own target');
+  first.server.notify('thread/closed', { threadId: 'probe-1' });
+  await first.session.runOptions({ permissions: 'full' });
+  assert.equal(probes().length, 2, 'a provider-closed probe is no longer valid');
+  first.server.child.kill();
+  await assert.rejects(first.session.runOptions({ permissions: 'full' }), /连接已断开/, 'a disconnected process cannot reuse its old proof');
+});
+
+test('/permissions releases a late probe only after timeout', { timeout: 15000 * timeoutScale }, async t => {
+  const valid = runtime(t, { server: codexServer({ announceProbe: false }), spec: { permissions: 'ask' } });
+  await valid.session.start(); await valid.session.runOptions({ permissions: 'full' });
+  valid.server.notify('thread/started', { thread: { id: 'probe-1', ephemeral: true } });
+  assert.equal(valid.server.wire.some(row => row.method === 'thread/unsubscribe'), false, 'a late successful announcement keeps the reusable probe');
+  const late = codexServer({ silentProbe: true, announceProbe: false });
+  const lost = runtime(t, { server: late, spec: { permissions: 'ask', rpcTimeoutMs: 300 } }); await lost.session.start();
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const failure = assert.rejects(lost.session.runOptions({ permissions: 'full' }), /没有及时回应.*权限未更改/);
+  await late.written(row => row.method === 'thread/start' && row.params.ephemeral);
+  assert.equal(late.wire.some(row => row.method === 'thread/unsubscribe'), false);
+  t.mock.timers.tick(300); await failure;
+  late.notify('thread/started', { thread: { id: 'probe-1', ephemeral: true } });
+  await late.written(row => row.method === 'thread/unsubscribe' && row.params.threadId === 'probe-1');
+});
+
+test('/permissions waits past stale notices before the reply', { timeout: 15000 * timeoutScale }, async t => {
+  const clock = confirmationClock();
+  // This stale partial notice would inherit the startup reviewer if confirmation used the merged snapshot.
+  const noise = [['thread/settings/updated', { threadId: 'owner-thread', threadSettings: {
+    sandboxPolicy: { type: 'dangerFullAccess' }, approvalPolicy: 'never',
+  } }], ['thread/settings/updated', { threadSettings: {
+    sandboxPolicy: { type: 'dangerFullAccess' }, approvalPolicy: 'never', approvalsReviewer: 'user',
+  } }]];
+  const f = runtime(t, { timers: clock.timers, server: codexServer({ noise, settle: () => null }), spec: { permissions: 'ask' } });
+  await f.session.start();
+  const failure = assert.rejects(f.session.runOptions({ permissions: 'full' }), /可能已经应用/);
+  await clock.scheduled; clock.tick(8000); await failure;
+  assert.equal((await f.session.runOptions({})).permissions, 'ask');
+  const repeated = assert.rejects(f.session.runOptions({ permissions: 'full' }), /可能已经应用/);
+  await Promise.race([repeated, f.server.written(row => row.method === 'thread/settings/update'
+    && f.server.wire.filter(entry => entry.method === 'thread/settings/update').length === 2)]);
+  clock.tick(8000); await repeated;
+});
+
+test('/permissions starts confirmation timing at the request write', { timeout: 15000 * timeoutScale }, async t => {
+  const clock = confirmationClock();
+  const server = codexServer({ onWrite(request) { if (request.method === 'thread/settings/update') clock.tick(1000); } });
+  const f = runtime(t, { timers: clock.timers, server, spec: { permissions: 'ask', rpcTimeoutMs: 300 } }); await f.session.start();
+  const changed = f.session.runOptions({ permissions: 'full' }), timer = await clock.scheduled;
+  assert.equal(timer.at, 1300, 'the full confirmation interval follows the actual write');
+  assert.equal((await changed).permissions, 'full'); assert.equal(clock.pending.size, 0);
+});
+
+test('/permissions missing approvalsReviewer reports may have been applied', { timeout: 15000 * timeoutScale }, async t => {
+  for (const initialReviewer of [null, 'user']) {
+    const clock = confirmationClock();
+    const f = runtime(t, { timers: clock.timers, server: codexServer({ initialReviewer, reviewer: null }), spec: { permissions: 'ask' } });
+    await f.session.start();
+    const failure = assert.rejects(f.session.runOptions({ permissions: 'full' }), /可能已经应用.*\/status/);
+    await clock.scheduled; clock.tick(8000); await failure;
+    assert.equal((await f.session.runOptions({})).permissions, 'ask', 'neither an absent nor a retained old reviewer confirms this change');
+    const repeated = assert.rejects(f.session.runOptions({ permissions: 'full' }), /可能已经应用/);
+    await Promise.race([repeated, f.server.written(row => row.method === 'thread/settings/update'
+      && f.server.wire.filter(entry => entry.method === 'thread/settings/update').length === 2)]);
+    clock.tick(8000); await repeated;
+    assert.equal((await f.session.runOptions({})).permissions, 'ask', 'a repeat cannot confirm from the merged partial snapshot');
+  }
+});
+
+test('/permissions managed policy forbidding workspace-write reports a policy refusal', { timeout: 15000 * timeoutScale }, async t => {
+  for (const method of ['thread/start', 'thread/settings/update']) {
+    const reject = {}, server = codexServer({ reject }), f = runtime(t, { server, spec: { permissions: 'full' } });
+    await f.session.start();
+    reject[method] = { code: -32600, message: 'sandbox_mode workspace-write is not allowed by requirements.toml (allowed values: read-only); private policy text' };
+    await assert.rejects(f.session.runOptions({ permissions: 'ask' }), error => error.code === 'permissions_policy_refused'
+      && /托管策略不允许/.test(error.message) && !/private policy text|不支持在会话/.test(error.message));
+    assert.equal((await f.session.runOptions({})).permissions, 'full');
+  }
+});
+
+test('Codex 0.166 refuses /permissions through its unsupported-method path without changing the session', async t => {
+  const f = runtime(t, { server: codexServer({ version: '0.166.0', reject: { 'thread/settings/update': -32601 } }), spec: { permissions: 'ask' } });
+  await f.session.start();
+  await assert.rejects(f.session.runOptions({ permissions: 'full' }), /这个版本的 Codex 不支持在会话中切换权限/);
+  assert.equal((await f.session.runOptions({})).permissions, 'ask');
+});
+
+test('real permissions CI uses private Codex 0.167 while the minimum-version jobs keep 0.166', async () => {
+  const { parseWorkflow } = await import('../scripts/ci-preflight-core.mjs');
+  const workflow = parseWorkflow(fs.readFileSync(path.join(__dirname, '../.github/workflows/build-windows.yml'), 'utf8'));
+  const step = workflow.jobs.windows.steps.find(row => row.run?.includes('node --test tests/codex-permissions-real-cli.test.cjs'));
+  assert.ok(step, 'the release-gating Windows job runs the real permissions contract');
+  assert.match(step.run, /--prefix "\$prefix".*@openai\/codex@0\.167\.0/);
+  assert.match(step.run, /AGENTRIX_REAL_CODEX=/);
+  assert.match(step.run, /node --test tests\/codex-permissions-real-cli\.test\.cjs/);
+  assert.match(step.if, /build-only/);
+  const minimum = Object.values(workflow.jobs).flatMap(job => job.steps || []).filter(row => row.name === 'Install Codex CLI for offline startup checks');
+  assert.equal(minimum.length, 2);
+  for (const install of minimum) assert.match(install.run, /@openai\/codex@0\.166\.0/);
+});
+
 test('/permissions changes the running session only, from its next turn, with what a new session of that choice would get', async t => {
   for (const kind of ['local', 'ssh']) {
     const mine = runtime(t, { kind, spec: { permissions: 'ask' } }), other = runtime(t, { kind, server: codexServer({ threadId: 'other-thread' }), spec: { permissions: 'ask' } });
     await mine.session.start(); await other.session.start();
     const changed = await mine.session.runOptions({ permissions: 'full' });
     assert.equal(changed.permissions, 'full');
-    // The target is read from an ephemeral thread started exactly as a new "full" session would be, and that thread is let go.
+    // The target is read from an ephemeral thread started exactly as a new "full" session would be, retained for the same request.
     const probe = mine.server.wire.find(row => row.method === 'thread/start' && row.params.ephemeral);
     assert.deepEqual(policyOf(probe.params), FULL, kind);
-    assert.ok(mine.server.wire.some(row => row.method === 'thread/unsubscribe' && row.params.threadId === 'probe-1'));
+    assert.equal(mine.server.wire.some(row => row.method === 'thread/unsubscribe' && row.params.threadId === 'probe-1'), false);
     const update = mine.server.wire.find(row => row.method === 'thread/settings/update');
     assert.deepEqual(update.params, { threadId: 'owner-thread', approvalPolicy: 'never', approvalsReviewer: 'user', sandboxPolicy: { type: 'dangerFullAccess' } });
     assert.equal(mine.server.wire.filter(row => row.method === 'turn/start' && row.params.threadId).length, 0, 'changing permissions starts no turn');
@@ -283,11 +406,11 @@ test('/permissions during a running turn changes the thread for its next turn an
 });
 
 test('/permissions failures are told in the owner’s words, and a probe thread is let go even when its answer never comes', async t => {
-  // The probe never answers but is announced: it is let go, before and after the read gives up.
-  const lost = codexServer({ silentProbe: true }), stuck = runtime(t, { server: lost, spec: { permissions: 'ask', rpcTimeoutMs: 300 } });
+  // The probe never answers or announces itself until after its read gives up.
+  const lost = codexServer({ silentProbe: true, announceProbe: false }), stuck = runtime(t, { server: lost, spec: { permissions: 'ask', rpcTimeoutMs: 300 } });
   await stuck.session.start();
   await assert.rejects(stuck.session.runOptions({ permissions: 'full' }), /Codex 没有及时回应，本会话权限未更改/);
-  assert.ok(lost.wire.some(row => row.method === 'thread/unsubscribe' && row.params.threadId === 'probe-1'));
+  assert.equal(lost.wire.some(row => row.method === 'thread/unsubscribe'), false);
   lost.notify('thread/started', { thread: { id: 'probe-late', ephemeral: true, turns: [], status: { type: 'idle' } } });
   await lost.written(row => row.method === 'thread/unsubscribe' && row.params.threadId === 'probe-late');
   // An older Codex refuses the fields; another refusal is told as one; neither changes the session.

@@ -6,7 +6,9 @@ const STDERR_TAIL = 4096;
 // A write accepted by the stream is never retried, including after backpressure or timeout.
 function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onDisconnect = () => {}, onDropped = () => {}, timeout = 8000 } = {}) {
   const pending = new Map();
-  let counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0, stderrTail = '', processError = null;
+  let counter = 0, closed = false, blocked = false, queue = [], queuedBytes = 0, stderrTail = '', processError = null, ending = false;
+  // close follows exit and the last pipe data; subscribe before a startup request can fail.
+  const processClosed = new Promise(resolve => child.once('close', () => { ending = true; resolve(); fail('process_exited'); }));
   function fail(code = 'disconnected') {
     if (closed) return;
     closed = true;
@@ -21,6 +23,8 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
       try {
         if (entry.task) entry.task.sent = true;
         blocked = !child.stdin.write(entry.line);
+        if (entry.task?.armDeadline && pending.has(entry.key)) entry.task.armDeadline();
+        entry.task?.onWritten?.();
       } catch { fail('write_failed'); }
     }
   }
@@ -64,21 +68,26 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     if (!task || !HISTORY_READS.has(task.method)) onDropped(bytes);
   }, fail);
   child.stdout.on('data', read);
-  child.stdout.on('end', () => { read.end(); fail('disconnected'); });
+  child.stdout.on('end', () => { ending = true; read.end(); fail('disconnected'); });
   child.stdin.on('drain', () => { blocked = false; flush(); });
   child.stdin.on('error', error => fail(error.code === 'codex_cli_required' ? error.code : 'write_failed'));
-  child.on('error', error => { processError ||= error; fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required'].includes(error.code) ? error.code : 'process_failed'); });
-  child.once('exit', () => fail('process_exited'));
+  child.on('error', error => { ending = true; processError ||= error; fail(['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required'].includes(error.code) ? error.code : 'process_failed'); });
+  child.once('exit', () => { ending = true; fail('process_exited'); });
   // Only a bounded tail is kept, for a failed start's redacted reason (agents/start-failure.cjs); stderr is never forwarded as events.
   child.stderr?.setEncoding?.('utf8');
   child.stderr?.on('data', text => { stderrTail = (stderrTail + text).slice(-STDERR_TAIL); });
   return {
-    request(method, params, deadline = timeout) {
+    request(method, params, deadline = timeout, { onWritten, timeoutFromWrite = false } = {}) {
       return new Promise((resolve, reject) => {
-        const id = String(++counter), key = keyOf(id), task = { resolve, reject, sent: false, method };
-        task.timer = setTimeout(() => {
-          pending.delete(key); reject(Object.assign(new Error('rpc_timeout'), { code: 'rpc_timeout', uncertain: task.sent }));
-        }, deadline);
+        const id = String(++counter), key = keyOf(id), task = { resolve, reject, sent: false, method, onWritten };
+        const arm = () => {
+          clearTimeout(task.timer);
+          task.timer = setTimeout(() => {
+            pending.delete(key); reject(Object.assign(new Error('rpc_timeout'), { code: 'rpc_timeout', uncertain: task.sent }));
+          }, deadline);
+        };
+        if (timeoutFromWrite) task.armDeadline = arm;
+        arm();
         pending.set(key, task);
         try { write({ id, method, params }, task); } catch (error) { pending.delete(key); clearTimeout(task.timer); reject(error); }
       });
@@ -87,15 +96,12 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     respond: (id, result) => write({ id, result }),
     reject: (id, code = -32601) => write({ id, error: { code, message: 'Unsupported request' } }),
     close() { fail('closed'); read.clear(); try { child.stdin.end(); } catch {} },
-    // Its stdout can end before the exit is known, and the exit come before the last stderr: give both a moment.
-    async diagnostics() {
-      const stream = child.stderr;
-      const settled = () => (child.exitCode != null || child.signalCode != null) && (!stream || stream.readableEnded || stream.destroyed);
-      if (!settled()) await new Promise(resolve => {
-        const done = () => { clearTimeout(timer); child.off('exit', check); stream?.off('end', check); resolve(); };
-        const check = () => { if (settled()) done(); };
-        // A remote exit crosses the SSH channel after the host has drained the process's pipes.
-        const timer = setTimeout(done, child.remote ? 1000 : 250); child.on('exit', check); stream?.on('end', check);
+    // A live server's protocol rejection needs no exit. A dying server's detail waits for its final stderr and close.
+    async diagnostics({ stop, timers = globalThis } = {}) {
+      if (ending) await new Promise((resolve, reject) => {
+        // A hung process or inherited pipe holder still needs the host's bounded cleanup. Detail follows close, not this timer.
+        const timer = stop && timers.setTimeout(() => { Promise.resolve().then(stop).catch(reject); }, 3000);
+        processClosed.then(() => { timers.clearTimeout(timer); resolve(); });
       });
       return { stderr: stderrTail, processError: processError?.message || null, exitCode: child.exitCode ?? null, signal: child.signalCode ?? null };
     },

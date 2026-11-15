@@ -166,6 +166,35 @@ test('backpressure preserves one write per request and queued timeouts are not d
   child.stdin.emit('drain'); assert.equal(writes.length, 1, 'an expired queued input is not written after drain'); rpc.close();
 });
 
+test('RPC write receipts follow the actual write, including backpressure, and never fire for an expired queued request', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new EventEmitter(), writes = [], received = [];
+  child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new EventEmitter(); child.stdin.end = () => {};
+  child.stdin.write = line => { writes.push(JSON.parse(line)); return false; };
+  const rpc = createRpc(child, { timeout: 100 }); t.after(() => rpc.close());
+  const first = rpc.request('first', {}, 100, { onWritten: () => received.push(writes.at(-1).method) });
+  const second = rpc.request('second', {}, 100, { onWritten: () => received.push(writes.at(-1).method) });
+  assert.deepEqual(received, ['first']);
+  child.stdin.emit('drain'); assert.deepEqual(received, ['first', 'second']);
+  const expired = assert.rejects(rpc.request('expired', {}, 100, { onWritten: () => received.push('expired') }), error => error.uncertain === false);
+  const firstCheck = assert.rejects(first, error => error.uncertain === true), secondCheck = assert.rejects(second, error => error.uncertain === true);
+  t.mock.timers.tick(100); await Promise.all([firstCheck, secondCheck, expired]);
+  child.stdin.emit('drain'); assert.deepEqual(received, ['first', 'second']);
+});
+
+test('a permissions RPC gets its full response deadline after a queued write', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const child = new EventEmitter(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.stdin = new EventEmitter(); child.stdin.end = () => {}; child.stdin.write = () => false;
+  const rpc = createRpc(child, { timeout: 100 }); t.after(() => rpc.close());
+  const first = assert.rejects(rpc.request('first', {}), error => error.uncertain === true);
+  const changed = rpc.request('thread/settings/update', {}, 100, { timeoutFromWrite: true }); changed.catch(() => {});
+  t.mock.timers.tick(90); child.stdin.emit('drain');
+  t.mock.timers.tick(10); await first;
+  child.stdout.write(JSON.stringify({ id: '2', result: {} }) + '\n');
+  assert.deepEqual(await changed, {}, 'queueing did not consume the written request response interval');
+});
+
 test('EPIPE rejects written requests without rewriting them and truncated frames disconnect', async () => {
   const f = rpcFixture(), failed = assert.rejects(f.rpc.request('turn/start', {}), error => error.uncertain === true);
   f.child.stdin.emit('error', Object.assign(new Error('synthetic'), { code: 'EPIPE' })); await failed; assert.equal(f.writes.length, 1);
@@ -180,20 +209,55 @@ test('snapshot reconstructs an item after more than one event window of deltas',
   assert.equal(snapshot.events.length, 1); assert.equal(snapshot.events[0].payload.content.text.length, 500);
 });
 
+test('a failed start reaps an exited child whose inherited pipes keep close open', async t => {
+  const lifetime = resources(t), child = new EventEmitter(), initialized = Promise.withResolvers(), armed = Promise.withResolvers();
+  const timers = { setTimeout(fn, delay) { const task = { fn, delay }; armed.resolve(task); return task; }, clearTimeout() {} };
+  child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
+  child.stdin = new Writable({ write(_bytes, _encoding, done) { initialized.resolve(); done(); } });
+  let closed = false;
+  for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe.on('close', () => {
+    if (!closed && [child.stdin, child.stdout, child.stderr].every(stream => stream.destroyed)) { closed = true; child.emit('close', 127); }
+  });
+  const factory = createCodexRuntime({ timers, resolveExecutable: async () => 'synthetic-only', spawnProcess: () => lifetime.child(child) });
+  const session = factory.create({ projectId: 'p', terminalId: 't', cwd: os.tmpdir(), env: { PATH: '' } }, () => {});
+  lifetime.defer('close runtime', () => session.close());
+  const failure = assert.rejects(session.start(), error => /exit 127/.test(error.detail));
+  await initialized.promise; child.exitCode = 127; child.emit('exit', 127);
+  const timer = await armed.promise; assert.equal(timer.delay, 3000); timer.fn(); await failure;
+  assert.equal(closed, true, 'the host released the inherited pipes and received close before reporting the detail');
+});
+
 test('a failed start carries its stage, exit code and redacted stderr tail, and a protocol error its code and message', async t => {
-  const lifetime = resources(t), events = [];
+  const lifetime = resources(t);
   const stderr = 'early line one\nearly line two\n\x1b[31mERROR\x1b[0m config: token=abcdefsecret123 Authorization: Bearer sk-proj-abcdefghijklmn\n'
     + "/usr/bin/env: 'node': No such file or directory\n";
-  const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only',
-    spawnProcess: (_file, _args, options) => lifetime.child(spawn(process.execPath, ['-e', `process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 127;`],
-      { ...options, detached: false })) });
-  const runtime = factory.create({ projectId: 'project', terminalId: 'terminal', runtimeSessionId: 'runtime', cwd: os.tmpdir(), env: { PATH: '' } }, event => events.push(event));
-  lifetime.defer('close runtime', () => runtime.close());
-  const error = await runtime.start().then(() => assert.fail('the start must fail'), error => error);
-  assert.match(error.detail, /^initialize: (?:disconnected|process_exited) \(exit 127\) · stderr: /, 'stdout may end before the exit is seen');
-  assert.match(error.detail, /No such file or directory$/, 'the last stderr line, the one that names the cause, is kept');
-  assert.doesNotMatch(error.detail, /early line one|abcdefsecret123|sk-proj-abcdefghijklmn|\x1b/, 'three lines at most, secrets and colours removed');
-  assert.ok(!events.some(event => JSON.stringify(event).includes('No such file')), 'stderr is never published as an event');
+  const orders = [['stderr', 'stdout', 'exit'], ['stderr', 'exit', 'stdout'], ['stdout', 'stderr', 'exit'],
+    ['stdout', 'exit', 'stderr'], ['exit', 'stderr', 'stdout'], ['exit', 'stdout', 'stderr']];
+  for (const order of orders) {
+    const child = new EventEmitter(), initialized = Promise.withResolvers(), events = [];
+    let closed = false;
+    child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
+    child.stdin = new Writable({ write(_bytes, _encoding, done) { initialized.resolve(); done(); } });
+    child.kill = () => { child.exitCode = 127; child.emit('exit', 127); child.emit('close', 127); };
+    const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: () => lifetime.child(child) });
+    const runtime = factory.create({ projectId: 'project', terminalId: 'terminal', cwd: os.tmpdir(), env: { PATH: '' } }, event => events.push(event));
+    lifetime.defer('close runtime', () => runtime.close());
+    const failed = runtime.start().then(() => assert.fail('the start must fail'), error => {
+      assert.equal(closed, true, 'failure detail is finalized only after child close'); return error;
+    });
+    await initialized.promise;
+    for (const event of order) {
+      if (event === 'stderr') child.stderr.emit('data', stderr);
+      else if (event === 'stdout') child.stdout.emit('end');
+      else { child.exitCode = 127; child.emit('exit', 127); }
+    }
+    closed = true; child.emit('close', 127);
+    const error = await failed;
+    assert.match(error.detail, /^initialize: (?:disconnected|process_exited) \(exit 127\) · stderr: /, 'stdout may end before the exit is seen');
+    assert.match(error.detail, /No such file or directory$/, 'the last stderr line, the one that names the cause, is kept');
+    assert.doesNotMatch(error.detail, /early line one|abcdefsecret123|sk-proj-abcdefghijklmn|\x1b/, 'three lines at most, secrets and colours removed');
+    assert.ok(!events.some(event => JSON.stringify(event).includes('No such file')), 'stderr is never published as an event');
+  }
   const { startupDetail } = require('../electron/features/agents/start-failure.cjs');
   assert.equal(startupDetail(Object.assign(new Error('rpc_rejected'), { code: -32600, serverMessage: 'Invalid request: unknown variant `fast`', stage: 'thread_start' })),
     'thread_start: rpc -32600, Invalid request: unknown variant `fast`');
