@@ -197,8 +197,11 @@ const nativeSpecs = new Map();
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
 let shellPathReady = Promise.resolve();
-// The first look for Claude Code, started as soon as the app is ready; terminals restored at start-up wait for it.
-let claudeFirst = Promise.resolve();
+// The first looks for Claude Code and Codex, started as soon as the app is ready; terminals restored at start-up wait for both.
+let claudeFirst = Promise.resolve(), codexFirst = Promise.resolve();
+const startupWait = ms => new Promise(resolve => setTimeout(resolve, ms));
+// A restored local terminal is told the Claude Code and the Codex to run: both first looks are waited for, at most three seconds.
+function firstLooksSettled(wait = startupWait) { return Promise.race([Promise.all([claudeFirst, codexFirst]), wait(3000)]); }
 let activeTerminal = null;
 let activeFileTree = null;
 let fileOperations, filesIpc;
@@ -1655,7 +1658,7 @@ if (!app.requestSingleInstanceLock()) {
     // Claude Code and Codex are looked for now, again once a macOS or Linux login shell has given its PATH, and when the
     // window comes back at most once a minute, so one installed meanwhile is found without a restart.
     claudeFirst = checkClaude('refresh').catch(() => {});
-    checkCodex('refresh').catch(() => {});
+    codexFirst = checkCodex('refresh').catch(() => {});
     if (process.platform !== 'win32') void shellPathReady.then(() => Promise.all([checkClaude('refresh'), checkCodex('refresh')])).catch(() => {});
     app.on('browser-window-focus', () => { checkClaude('focus').catch(() => {}); checkCodex('focus').catch(() => {}); });
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'), { systemTheme: systemTheme() });
@@ -1754,8 +1757,7 @@ if (!app.requestSingleInstanceLock()) {
     for (const project of store.projects) projectImageAuto.enqueue(project);
     updateIndicators();
     if (!process.env.AGENTRIX_DATA_DIR) updateManager.start();
-    // A restored local terminal is told the Claude Code to run: the first look is waited for, at most three seconds.
-    await Promise.race([claudeFirst, new Promise(resolve => setTimeout(resolve, 3000))]);
+    await firstLooksSettled();
     restoreTerminals({ store, restorePlans, startupErrors, startTerminal: restoreTerminal, broadcast, isQuitting: () => quitting });
   }).catch(error => {
     dialog.showErrorBox(t('Agentrix 无法启动'), t(String(error?.stack || error)));
