@@ -1,0 +1,383 @@
+{
+ "generatedBy": "K0b lab (w0-k0b); real npm installs into a throwaway scratch folder, never run through the owner profile",
+ "platform": "win32-x64 (Windows 11)",
+ "installs": {
+  "npm-prefix-0.166.0": {
+   "kind": "private prefix (local install)",
+   "command": "npm install --prefix <dir> @openai/codex@0.166.0",
+   "npmVersion": "11.17.0",
+   "codexPackageVersion": "0.166.0",
+   "codexExeVersion": "codex-cli 0.166.0",
+   "platformPackage": "hoisted to the top node_modules",
+   "exe": "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+   ],
+   "exeFolder": "bin (vendor/<triple>/bin/codex.exe)",
+   "shims": {
+    "node_modules/.bin/codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/../@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/../@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "node_modules/.bin/codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\..\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "node_modules/.bin/codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": {
+    "layoutVersion": 1,
+    "version": "0.166.0",
+    "target": "x86_64-pc-windows-msvc",
+    "variant": "codex",
+    "entrypoint": "bin/codex.exe",
+    "resourcesDir": "codex-resources",
+    "pathDir": "codex-path"
+   },
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "node_modules/@openai/codex-win32-x64/package.json",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-package.json",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/package.json",
+    "package-lock.json",
+    "package.json"
+   ]
+  },
+  "npm-prefix-0.169.0": {
+   "kind": "private prefix (local install)",
+   "command": "npm install --prefix <dir> @openai/codex@latest",
+   "npmVersion": "11.17.0",
+   "codexPackageVersion": "0.169.0",
+   "codexExeVersion": "codex-cli 0.169.0",
+   "platformPackage": "hoisted to the top node_modules",
+   "exe": "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+   ],
+   "exeFolder": "bin (vendor/<triple>/bin/codex.exe)",
+   "shims": {
+    "node_modules/.bin/codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/../@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/../@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "node_modules/.bin/codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\..\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "node_modules/.bin/codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/../@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": {
+    "layoutVersion": 1,
+    "version": "0.169.0",
+    "target": "x86_64-pc-windows-msvc",
+    "variant": "codex",
+    "entrypoint": "bin/codex.exe",
+    "resourcesDir": "codex-resources",
+    "pathDir": "codex-path"
+   },
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "node_modules/@openai/codex-win32-x64/package.json",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-package.json",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/package.json",
+    "package-lock.json",
+    "package.json"
+   ]
+  },
+  "npm10-global-0.166.0": {
+   "kind": "global install with npm 10",
+   "command": "npm@10.9.10 install --global --prefix <dir> @openai/codex@0.166.0",
+   "npmVersion": "10.9.10",
+   "codexPackageVersion": "0.166.0",
+   "codexExeVersion": "codex-cli 0.166.0",
+   "platformPackage": "nested under @openai/codex/node_modules",
+   "exe": "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+   ],
+   "exeFolder": "bin (vendor/<triple>/bin/codex.exe)",
+   "shims": {
+    "codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": {
+    "layoutVersion": 1,
+    "version": "0.166.0",
+    "target": "x86_64-pc-windows-msvc",
+    "variant": "codex",
+    "entrypoint": "bin/codex.exe",
+    "resourcesDir": "codex-resources",
+    "pathDir": "codex-path"
+   },
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "codex",
+    "codex.cmd",
+    "codex.ps1",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+    "node_modules/@openai/codex/package.json"
+   ]
+  },
+  "npm10-global-0.169.0": {
+   "kind": "global install with npm 10",
+   "command": "npm@10.9.10 install --global --prefix <dir> @openai/codex@latest",
+   "npmVersion": "10.9.10",
+   "codexPackageVersion": "0.169.0",
+   "codexExeVersion": "codex-cli 0.169.0",
+   "platformPackage": "nested under @openai/codex/node_modules",
+   "exe": "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+   ],
+   "exeFolder": "bin (vendor/<triple>/bin/codex.exe)",
+   "shims": {
+    "codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": {
+    "layoutVersion": 1,
+    "version": "0.169.0",
+    "target": "x86_64-pc-windows-msvc",
+    "variant": "codex",
+    "entrypoint": "bin/codex.exe",
+    "resourcesDir": "codex-resources",
+    "pathDir": "codex-path"
+   },
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "codex",
+    "codex.cmd",
+    "codex.ps1",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+    "node_modules/@openai/codex/package.json"
+   ]
+  },
+  "npm10-global-hoisted-0.166.0": {
+   "kind": "global install with npm 10, hoisted platform package",
+   "command": "npm@10.9.10 install --global --prefix <dir> @openai/codex@0.166.0 \"@openai/codex-win32-x64@npm:@openai/codex@0.166.0-win32-x64\" (platform package requested next to the main one, so it sits at the top as well as nested)",
+   "npmVersion": "10.9.10",
+   "codexPackageVersion": "0.166.0",
+   "codexExeVersion": "codex-cli 0.166.0",
+   "platformPackage": "hoisted to the top node_modules",
+   "exe": "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+   ],
+   "exeFolder": "bin (vendor/<triple>/bin/codex.exe)",
+   "shims": {
+    "codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": {
+    "layoutVersion": 1,
+    "version": "0.166.0",
+    "target": "x86_64-pc-windows-msvc",
+    "variant": "codex",
+    "entrypoint": "bin/codex.exe",
+    "resourcesDir": "codex-resources",
+    "pathDir": "codex-path"
+   },
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "codex",
+    "codex.cmd",
+    "codex.ps1",
+    "node_modules/@openai/codex-win32-x64/package.json",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-package.json",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    "node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/package.json"
+   ]
+  },
+  "npm10-global-legacy-0.46.0": {
+   "kind": "global install with npm 10, legacy single package (binary inside @openai/codex)",
+   "command": "npm@10.9.10 install --global --prefix <dir> @openai/codex@0.46.0",
+   "npmVersion": "10.9.10",
+   "codexPackageVersion": "0.46.0",
+   "codexExeVersion": "codex-cli 0.46.0",
+   "platformPackage": "none: the binary ships inside @openai/codex/vendor",
+   "exe": "node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/codex/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/codex/codex.exe"
+   ],
+   "exeFolder": "codex (vendor/<triple>/codex/codex.exe)",
+   "shims": {
+    "codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": null,
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "codex",
+    "codex.cmd",
+    "codex.ps1",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/bin/rg",
+    "node_modules/@openai/codex/package.json",
+    "node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/codex/codex.exe",
+    "node_modules/@openai/codex/vendor/x86_64-pc-windows-msvc/path/rg.exe"
+   ]
+  },
+  "npm10-global-upgrade-0.46.0-to-0.166.0": {
+   "kind": "global install with npm 10, upgraded in place",
+   "command": "install 0.46.0 then npm@10.9.10 install --global @openai/codex@0.166.0 over it (in-place upgrade)",
+   "npmVersion": "10.9.10",
+   "codexPackageVersion": "0.166.0",
+   "codexExeVersion": "codex-cli 0.166.0",
+   "platformPackage": "nested under @openai/codex/node_modules",
+   "exe": "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+   ],
+   "exeFolder": "bin (vendor/<triple>/bin/codex.exe)",
+   "shims": {
+    "codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": {
+    "layoutVersion": 1,
+    "version": "0.166.0",
+    "target": "x86_64-pc-windows-msvc",
+    "variant": "codex",
+    "entrypoint": "bin/codex.exe",
+    "resourcesDir": "codex-resources",
+    "pathDir": "codex-path"
+   },
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "codex",
+    "codex.cmd",
+    "codex.ps1",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+    "node_modules/@openai/codex/package.json"
+   ]
+  },
+  "npm11-global-0.166.0": {
+   "kind": "global install with npm 11",
+   "command": "npm@11.17.0 install --global --prefix <dir> @openai/codex@0.166.0",
+   "npmVersion": "11.17.0",
+   "codexPackageVersion": "0.166.0",
+   "codexExeVersion": "codex-cli 0.166.0",
+   "platformPackage": "nested under @openai/codex/node_modules",
+   "exe": "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+   "exes": [
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+   ],
+   "exeFolder": "bin (vendor/<triple>/bin/codex.exe)",
+   "shims": {
+    "codex": "#!/bin/sh\nbasedir=$(dirname \"$(echo \"$0\" | sed -e 's,\\\\,/,g')\")\n\ncase `uname` in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=`cygpath -w \"$basedir\"`\n        fi\n    ;;\nesac\n\nif [ -x \"$basedir/node\" ]; then\n  exec \"$basedir/node\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nelse \n  exec node  \"$basedir/node_modules/@openai/codex/bin/codex.js\" \"$@\"\nfi\n",
+    "codex.cmd": "@ECHO off\nGOTO start\n:find_dp0\nSET dp0=%~dp0\nEXIT /b\n:start\nSETLOCAL\nCALL :find_dp0\n\nIF EXIST \"%dp0%\\node.exe\" (\n  SET \"_prog=%dp0%\\node.exe\"\n) ELSE (\n  SET \"_prog=node\"\n  SET PATHEXT=%PATHEXT:;.JS;=;%\n)\n\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\n",
+    "codex.ps1": "#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=\"\"\nif ($PSVersionTable.PSVersion -lt \"6.0\" -or $IsWindows) {\n  # Fix case when both the Windows and Linux builds of Node\n  # are installed in the same directory\n  $exe=\".exe\"\n}\n$ret=0\nif (Test-Path \"$basedir/node$exe\") {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"$basedir/node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  # Support pipeline input\n  if ($MyInvocation.ExpectingInput) {\n    $input | & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  } else {\n    & \"node$exe\"  \"$basedir/node_modules/@openai/codex/bin/codex.js\" $args\n  }\n  $ret=$LASTEXITCODE\n}\nexit $ret\n"
+   },
+   "codexPackageJson": {
+    "layoutVersion": 1,
+    "version": "0.166.0",
+    "target": "x86_64-pc-windows-msvc",
+    "variant": "codex",
+    "entrypoint": "bin/codex.exe",
+    "resourcesDir": "codex-resources",
+    "pathDir": "codex-path"
+   },
+   "jsEntry": "node_modules/@openai/codex/bin/codex.js",
+   "files": [
+    "codex",
+    "codex.cmd",
+    "codex.ps1",
+    "node_modules/@openai/codex/bin/codex.js",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex-code-mode-host.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin/codex.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-package.json",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-path/rg.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-command-runner.exe",
+    "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/codex-resources/codex-windows-sandbox-setup.exe",
+    "node_modules/@openai/codex/package.json"
+   ]
+  }
+ },
+ "synthetic": {
+  "note": "SYNTHETIC. No installer was run and nothing under the owner's LOCALAPPDATA was read. These are the shapes the plan's C-3 names plus the usual conventions of each tool, written down so the locator tests have a fixture. A CI machine that installs them for real should replace or confirm each entry.",
+  "official-installer": {
+   "synthetic": true,
+   "root": "%LOCALAPPDATA%\\Programs\\OpenAI\\Codex",
+   "files": [
+    "bin/codex.exe"
+   ],
+   "pathEntry": "%LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin",
+   "source": "plan C-3 (VIAS official-installer)"
+  },
+  "winget": {
+   "synthetic": true,
+   "linksFolder": "%LOCALAPPDATA%\\Microsoft\\WinGet\\Links",
+   "linkFiles": [
+    "codex.exe"
+   ],
+   "linkKind": "a symlink or small launcher that WinGet puts on the user PATH for a portable package",
+   "packagesFolder": "%LOCALAPPDATA%\\Microsoft\\WinGet\\Packages",
+   "packageFolderPattern": "OpenAI.Codex_Microsoft.Winget.Source_8wekyb3d8bbwe",
+   "packageFiles": [
+    "codex-x86_64-pc-windows-msvc.exe",
+    "codex-command-runner.exe",
+    "codex-windows-sandbox-setup.exe"
+   ],
+   "source": "plan C-3 (VIAS winget) plus the public winget-pkgs manifest: the package folder holds codex-x86_64-pc-windows-msvc.exe (not codex.exe), the alias codex.exe in Links points at it",
+   "manifest": "Read from the public winget-pkgs manifest OpenAI.Codex 0.166.0 (InstallerType zip, NestedInstallerType portable, PortableCommandAlias codex on codex-x86_64-pc-windows-msvc.exe). The folder shape below follows from that manifest; nothing was installed."
+  },
+  "scoop": {
+   "synthetic": true,
+   "shim": "%USERPROFILE%\\scoop\\shims\\codex.exe",
+   "shimCompanion": "%USERPROFILE%\\scoop\\shims\\codex.shim",
+   "app": "%USERPROFILE%\\scoop\\apps\\codex\\current\\codex.exe",
+   "source": "Scoop's standard layout; optional via, K0b may add it"
+  },
+  "volta": {
+   "synthetic": true,
+   "shim": "%LOCALAPPDATA%\\Volta\\bin\\codex.exe",
+   "image": "%LOCALAPPDATA%\\Volta\\tools\\image\\packages\\@openai\\codex\\<version>\\node_modules\\@openai\\codex",
+   "source": "Volta's standard layout; optional via"
+  },
+  "pnpm": {
+   "synthetic": true,
+   "shim": "%LOCALAPPDATA%\\pnpm\\codex.cmd",
+   "package": "%LOCALAPPDATA%\\pnpm\\global\\5\\node_modules\\@openai\\codex",
+   "markerFile": "node_modules/.modules.yaml",
+   "note": "bin/codex.js sets CODEX_MANAGED_BY_PNPM instead of CODEX_MANAGED_BY_NPM when it finds this marker (read from the real codex.js, isPnpmOwnedCodexInstall)",
+   "source": "pnpm's standard layout; optional via"
+  }
+ },
+ "entryResolution": {
+  "note": "How bin/codex.js (0.166.0 and 0.169.0, identical here) finds the binary and what it exports to the child",
+  "findExecutable": "function findCodexExecutable() {\n  let vendorRoot;\n  try {\n    const packageJsonPath = require.resolve(`${platformPackage}/package.json`);\n    vendorRoot = path.join(path.dirname(packageJsonPath), \"vendor\");\n  } catch {\n    vendorRoot = path.join(__dirname, \"..\", \"vendor\");\n  }\n\n  const codexExecutable = path.join(\n    vendorRoot,\n    targetTriple,\n    \"bin\",\n    process.platform === \"win32\" ? \"codex.exe\" : \"codex\",\n  );\n  if (existsSync(codexExecutable)) {",
+  "childEnvironment": "  return userAgent ? \"npm\" : null;\n}\n\nconst packageManager = detectPackageManager();\nconst packageManagerEnvVar =\n  packageManager === \"bun\"\n    ? \"CODEX_MANAGED_BY_BUN\"\n    : packageManager === \"pnpm\"\n      ? \"CODEX_MANAGED_BY_PNPM\"\n      : packageManager === \"vite-plus\"\n        ? \"CODEX_MANAGED_BY_VITE_PLUS\"\n        : \"CODEX_MANAGED_BY_NPM\";\nconst env = {\n  ...process.env,\n  CODEX_MANAGED_PACKAGE_ROOT: codexPackageRoot,\n};\ndelete env.CODEX_MANAGED_BY_NPM;\ndelete env.CODEX_MANAGED_BY_BUN;\ndelete env.CODEX_MANAGED_BY_PNPM;\ndelete env.CODEX_MANAGED_BY_VITE_PLUS;\nenv[packageManagerEnvVar] = \"1\";"
+ }
+}

@@ -1,0 +1,483 @@
+{
+ "item": 5,
+ "question": "Which proxy variables does the hook (http) client honour, and does an [::1] entry in NO_PROXY work?",
+ "versions": {
+  "2.1.317": [
+   {
+    "case": "p01-http-proxy",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51791"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p02-https-proxy",
+    "proxyVariables": {
+     "HTTPS_PROXY": "http://127.0.0.1:51815"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p03-all-proxy",
+    "proxyVariables": {
+     "ALL_PROXY": "http://127.0.0.1:51848"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p04-lower-http_proxy",
+    "proxyVariables": {
+     "http_proxy": "http://127.0.0.1:51861"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p05-lower-all_proxy",
+    "proxyVariables": {
+     "all_proxy": "http://127.0.0.1:64389"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p06-http-noproxy-127",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:50630",
+     "NO_PROXY": "127.0.0.1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p07-http-noproxy-localhost-hook127",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:50642",
+     "NO_PROXY": "localhost"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p08-all-noproxy-127",
+    "proxyVariables": {
+     "ALL_PROXY": "http://127.0.0.1:50655",
+     "NO_PROXY": "127.0.0.1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p09-http-v6-noproxy-bare",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51230",
+     "NO_PROXY": "::1"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p10-http-v6-noproxy-bracket",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51244",
+     "NO_PROXY": "[::1]"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p11-http-v6-noproxy-127-localhost",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:52949",
+     "NO_PROXY": "127.0.0.1,localhost"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p12-all-v6-noproxy-bracket",
+    "proxyVariables": {
+     "ALL_PROXY": "http://127.0.0.1:51263",
+     "NO_PROXY": "[::1]"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p13-https-localhost-noproxy-localhost",
+    "proxyVariables": {
+     "HTTPS_PROXY": "http://127.0.0.1:52975",
+     "NO_PROXY": "localhost"
+    },
+    "hookUrlHost": "localhost",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p14-http-localhost-no-noproxy",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:52996"
+    },
+    "hookUrlHost": "localhost",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p15-http-noproxy-star",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:60664",
+     "NO_PROXY": "*"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p16-http-v6-lower-no_proxy-bracket",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51271",
+     "no_proxy": "[::1]"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p17-no-proxy-at-all",
+    "proxyVariables": {},
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p18-http-lower-no_proxy-127",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:53621",
+     "no_proxy": "127.0.0.1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p19-http-noproxy-127-port",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:53635",
+     "NO_PROXY": "127.0.0.1:1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p20-http-noproxy-dot-suffix",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:53652",
+     "NO_PROXY": ".localhost"
+    },
+    "hookUrlHost": "localhost",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   }
+  ],
+  "2.1.322": [
+   {
+    "case": "p01-http-proxy",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51200"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p02-https-proxy",
+    "proxyVariables": {
+     "HTTPS_PROXY": "http://127.0.0.1:56619"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p03-all-proxy",
+    "proxyVariables": {
+     "ALL_PROXY": "http://127.0.0.1:51648"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p04-lower-http_proxy",
+    "proxyVariables": {
+     "http_proxy": "http://127.0.0.1:51663"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p05-lower-all_proxy",
+    "proxyVariables": {
+     "all_proxy": "http://127.0.0.1:51680"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p06-http-noproxy-127",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51691",
+     "NO_PROXY": "127.0.0.1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p07-http-noproxy-localhost-hook127",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51704",
+     "NO_PROXY": "localhost"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p08-all-noproxy-127",
+    "proxyVariables": {
+     "ALL_PROXY": "http://127.0.0.1:51719",
+     "NO_PROXY": "127.0.0.1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p09-http-v6-noproxy-bare",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:49467",
+     "NO_PROXY": "::1"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p10-http-v6-noproxy-bracket",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:49481",
+     "NO_PROXY": "[::1]"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p11-http-v6-noproxy-127-localhost",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51732",
+     "NO_PROXY": "127.0.0.1,localhost"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p12-all-v6-noproxy-bracket",
+    "proxyVariables": {
+     "ALL_PROXY": "http://127.0.0.1:49495",
+     "NO_PROXY": "[::1]"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p13-https-localhost-noproxy-localhost",
+    "proxyVariables": {
+     "HTTPS_PROXY": "http://127.0.0.1:51750",
+     "NO_PROXY": "localhost"
+    },
+    "hookUrlHost": "localhost",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p14-http-localhost-no-noproxy",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51763"
+    },
+    "hookUrlHost": "localhost",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p15-http-noproxy-star",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51779",
+     "NO_PROXY": "*"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p16-http-v6-lower-no_proxy-bracket",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:51216",
+     "no_proxy": "[::1]"
+    },
+    "hookUrlHost": "[::1]",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p17-no-proxy-at-all",
+    "proxyVariables": {},
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p18-http-lower-no_proxy-127",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:53588",
+     "no_proxy": "127.0.0.1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 0,
+    "hookRoute": "direct"
+   },
+   {
+    "case": "p19-http-noproxy-127-port",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:53598",
+     "NO_PROXY": "127.0.0.1:1"
+    },
+    "hookUrlHost": "127.0.0.1",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 2,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "through the proxy"
+   },
+   {
+    "case": "p20-http-noproxy-dot-suffix",
+    "proxyVariables": {
+     "HTTP_PROXY": "http://127.0.0.1:53611",
+     "NO_PROXY": ".localhost"
+    },
+    "hookUrlHost": "localhost",
+    "hookEventsReceived": 2,
+    "hookRequestsThroughProxy": 0,
+    "modelRequestsThroughProxy": 1,
+    "hookRoute": "direct"
+   }
+  ]
+ },
+ "findings": [
+  "HTTP_PROXY, HTTPS_PROXY and the lower-case http_proxy are honoured by the hook client: with one of them set and no matching NO_PROXY entry, every hook request goes through the proxy (both versions).",
+  "ALL_PROXY and all_proxy are NOT honoured by the hook client: the hook request goes direct although the model requests of the same CLI go through the proxy (both versions). So ALL_PROXY alone does not put hooks behind a proxy, though the C-2 channel rule may still treat it as a proxy to stay safe.",
+  "NO_PROXY is honoured for an exact host (127.0.0.1, localhost), for * and for a .suffix (.localhost matched the host localhost); the lower-case no_proxy is honoured too. A name does not match an address: NO_PROXY=localhost does not exempt a hook URL on 127.0.0.1.",
+  "An IPv6 loopback entry in NO_PROXY is NOT honoured: with NO_PROXY set to ::1 or [::1] (upper or lower case) the hook request to http://[::1]:port still goes through the proxy (both versions). The hook URL must therefore never use [::1].",
+  "A host:port entry that does not carry the real port does not match (case p19, a deliberately wrong port; no claim is made about matching a correct port)."
+ ],
+ "notes": [
+  "Each case is one plain turn with hooks for UserPromptSubmit and Stop on an http receiver on 127.0.0.1 and ::1. A forwarding recording proxy on 127.0.0.1 passes everything on, so the CLI works in every case, and logs the target of every request.",
+  "The model API stub is on 127.0.0.1 too, so cases without a NO_PROXY entry also send model requests through the proxy; that is why those columns differ."
+ ]
+}

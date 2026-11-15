@@ -1,0 +1,71 @@
+{
+ "item": 4,
+ "question": "Does an mcp_tool hook pointed at a hook-only stdio MCP server change the model request?",
+ "answer": "YES, it changes the request",
+ "decision": "REPORTED, NOT ADOPTED (plan item 4)",
+ "versions": {
+  "2.1.317": {
+   "requestsCompared": 4,
+   "identicalToNoHookBaseline": false,
+   "extraBytesPerRequest": [
+    164,
+    305,
+    305,
+    446
+   ],
+   "whatChanged": [
+    {
+     "request": 1,
+     "baseSnippet": "skGet\\nTaskList\\nTaskStop\\nTaskUpdate\\nWebFetch\\nWebSearch\\n</system-reminder>\"},{\"type\":\"text\",\"text\":\"<system-reminder>\\nAvailable agent types for the Agent t",
+     "thisSnippet": "skGet\\nTaskList\\nTaskStop\\nTaskUpdate\\nWebFetch\\nWebSearch\\nmcp__hookonly__record\\n</system-reminder>\"},{\"type\":\"text\",\"text\":\"<system-reminder>\\nAvailable agen"
+    }
+   ],
+   "hookCallsReceivedByTheServer": 9,
+   "eventsSeen": [
+    "PostToolBatch",
+    "PostToolUse",
+    "PreToolUse",
+    "Stop",
+    "UserPromptSubmit"
+   ],
+   "argumentsDelivered": "only the input object of the hook entry, with ${session_id} interpolated; not the hook payload",
+   "enterToFirstModelRequestMs": [
+    161,
+    46,
+    48
+   ]
+  },
+  "2.1.322": {
+   "requestsCompared": 4,
+   "identicalToNoHookBaseline": false,
+   "extraBytesPerRequest": [
+    164,
+    305,
+    305,
+    446
+   ],
+   "whatChanged": [
+    {
+     "request": 1,
+     "baseSnippet": "skGet\\nTaskList\\nTaskStop\\nTaskUpdate\\nWebFetch\\nWebSearch\\n</system-reminder>\"},{\"type\":\"text\",\"text\":\"<system-reminder>\\nAvailable agent types for the Agent t",
+     "thisSnippet": "skGet\\nTaskList\\nTaskStop\\nTaskUpdate\\nWebFetch\\nWebSearch\\nmcp__hookonly__record\\n</system-reminder>\"},{\"type\":\"text\",\"text\":\"<system-reminder>\\nAvailable agen"
+    }
+   ],
+   "hookCallsReceivedByTheServer": 9,
+   "eventsSeen": [
+    "PostToolBatch",
+    "PostToolUse",
+    "PreToolUse",
+    "Stop",
+    "UserPromptSubmit"
+   ],
+   "argumentsDelivered": "only the input object of the hook entry, with ${session_id} interpolated; not the hook payload",
+   "enterToFirstModelRequestMs": [
+    187,
+    97,
+    82
+   ]
+  }
+ },
+ "summary": "In both versions the hook-only MCP server registers its tool, and the model request changes: the tool name (mcp__hookonly__record) is added to the deferred-tool list that the CLI puts into the first user message (the first difference in every request), and the requests are 164 bytes longer on the first request and up to 446 bytes longer by the fourth, because the CLI also carries the extra server and tool listing forward. The server did receive the hook calls, but only the arguments written in the hook entry (input with ${session_id} interpolated), not the hook payload. Reported only; not adopted."
+}

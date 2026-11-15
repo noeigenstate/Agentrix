@@ -1,0 +1,428 @@
+{
+ "item": 3,
+ "question": "Are async:true command hooks for the status events non-blocking, and do they leave the model request byte-identical?",
+ "answer": "YES",
+ "versions": {
+  "2.1.317": {
+   "identicalRequestBodiesInEveryChannel": true,
+   "syncDelayVisibleInTiming": true,
+   "asyncIsNonBlocking": true,
+   "method": "The same scripted session (a plain turn, an allowed Bash tool call, a second plain turn) ran once per configuration against a local stub. Every /v1/messages body was normalised (per-profile device id and session id inside metadata.user_id, uuids, tool ids, timestamps, ports and the run folder name replaced) and compared with the no-hook run, request by request, byte for byte. The time from Enter to the first model request that follows it was read from one clock.",
+   "rows": {
+    "base1": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      148,
+      42,
+      61
+     ],
+     "medianMs": 61,
+     "hookEventsSeenByTheLab": 0,
+     "userPromptSubmit": 0,
+     "stop": 0,
+     "hookProcessRunMs": null,
+     "configuration": "no hooks"
+    },
+    "base2": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      131,
+      44,
+      57
+     ],
+     "medianMs": 57,
+     "hookEventsSeenByTheLab": 0,
+     "userPromptSubmit": 0,
+     "stop": 0,
+     "hookProcessRunMs": null,
+     "configuration": "no hooks, second run (the noise floor of the comparison)"
+    },
+    "http": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      155,
+      58,
+      56
+     ],
+     "medianMs": 58,
+     "hookEventsSeenByTheLab": 9,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": null,
+     "configuration": "http hooks for the C-2 event list, receiver answers {}"
+    },
+    "cmd": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      968,
+      524,
+      470
+     ],
+     "medianMs": 524,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 4,
+      "max": 6
+     },
+     "configuration": "node command hook, synchronous, no delay"
+    },
+    "cmdsync-d2": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      2575,
+      2486,
+      2502
+     ],
+     "medianMs": 2502,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 2007,
+      "max": 2021
+     },
+     "configuration": "node command hook, synchronous, the hook process stays alive 2000 ms"
+    },
+    "cmdasync-d2": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      170,
+      74,
+      123
+     ],
+     "medianMs": 123,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 2009,
+      "max": 2020
+     },
+     "configuration": "node command hook with async:true, stays alive 2000 ms, prints nothing"
+    },
+    "cmdasync-d2-json": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      171,
+      74,
+      63
+     ],
+     "medianMs": 74,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 2004,
+      "max": 2018
+     },
+     "configuration": "as above but prints {}"
+    },
+    "ps": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      835,
+      717,
+      757
+     ],
+     "medianMs": 757,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": null,
+     "configuration": "the product's integration/claude-hook.ps1 as today (UserPromptSubmit, Stop, Notification, PermissionRequest synchronous; tool events async)"
+    },
+    "psasync": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      174,
+      88,
+      80
+     ],
+     "medianMs": 88,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": null,
+     "configuration": "the product's claude-hook.ps1 with async:true on every C-2 event (what command-async would be)"
+    },
+    "mcptool": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": false,
+     "enterToFirstModelRequestMs": [
+      161,
+      46,
+      48
+     ],
+     "medianMs": 48,
+     "hookEventsSeenByTheLab": 0,
+     "userPromptSubmit": 0,
+     "stop": 0,
+     "hookProcessRunMs": null,
+     "configuration": "mcp_tool hook, see mcp-tool-hook.json"
+    }
+   },
+   "permissionDialogCheck": {
+    "note": "A second session with a Write that needs the owner (dialog) and key 1: with every C-2 event async the dialog still drew, the owner key still answered, and the four model requests are still identical to the no-hook run.",
+    "rows": {
+     "base1": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       188,
+       44,
+       49
+      ]
+     },
+     "cmdasync-d2": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       156,
+       72,
+       84
+      ]
+     },
+     "ps": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       835,
+       751,
+       854
+      ]
+     },
+     "psasync": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       185,
+       93,
+       66
+      ]
+     }
+    }
+   }
+  },
+  "2.1.322": {
+   "identicalRequestBodiesInEveryChannel": true,
+   "syncDelayVisibleInTiming": true,
+   "asyncIsNonBlocking": true,
+   "method": "The same scripted session (a plain turn, an allowed Bash tool call, a second plain turn) ran once per configuration against a local stub. Every /v1/messages body was normalised (per-profile device id and session id inside metadata.user_id, uuids, tool ids, timestamps, ports and the run folder name replaced) and compared with the no-hook run, request by request, byte for byte. The time from Enter to the first model request that follows it was read from one clock.",
+   "rows": {
+    "base1": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      181,
+      41,
+      66
+     ],
+     "medianMs": 66,
+     "hookEventsSeenByTheLab": 0,
+     "userPromptSubmit": 0,
+     "stop": 0,
+     "hookProcessRunMs": null,
+     "configuration": "no hooks"
+    },
+    "base2": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      171,
+      81,
+      96
+     ],
+     "medianMs": 96,
+     "hookEventsSeenByTheLab": 0,
+     "userPromptSubmit": 0,
+     "stop": 0,
+     "hookProcessRunMs": null,
+     "configuration": "no hooks, second run (the noise floor of the comparison)"
+    },
+    "http": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      270,
+      59,
+      59
+     ],
+     "medianMs": 59,
+     "hookEventsSeenByTheLab": 9,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": null,
+     "configuration": "http hooks for the C-2 event list, receiver answers {}"
+    },
+    "cmd": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      1808,
+      1147,
+      1137
+     ],
+     "medianMs": 1147,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 5,
+      "max": 7
+     },
+     "configuration": "node command hook, synchronous, no delay"
+    },
+    "cmdsync-d2": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      3156,
+      3172,
+      2954
+     ],
+     "medianMs": 3156,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 2007,
+      "max": 2022
+     },
+     "configuration": "node command hook, synchronous, the hook process stays alive 2000 ms"
+    },
+    "cmdasync-d2": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      294,
+      99,
+      90
+     ],
+     "medianMs": 99,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 2009,
+      "max": 2024
+     },
+     "configuration": "node command hook with async:true, stays alive 2000 ms, prints nothing"
+    },
+    "cmdasync-d2-json": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      223,
+      150,
+      112
+     ],
+     "medianMs": 150,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": {
+      "min": 2011,
+      "max": 2021
+     },
+     "configuration": "as above but prints {}"
+    },
+    "ps": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      1459,
+      1246,
+      878
+     ],
+     "medianMs": 1246,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": null,
+     "configuration": "the product's integration/claude-hook.ps1 as today (UserPromptSubmit, Stop, Notification, PermissionRequest synchronous; tool events async)"
+    },
+    "psasync": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": true,
+     "enterToFirstModelRequestMs": [
+      283,
+      142,
+      95
+     ],
+     "medianMs": 142,
+     "hookEventsSeenByTheLab": 10,
+     "userPromptSubmit": 3,
+     "stop": 3,
+     "hookProcessRunMs": null,
+     "configuration": "the product's claude-hook.ps1 with async:true on every C-2 event (what command-async would be)"
+    },
+    "mcptool": {
+     "requestsCompared": 4,
+     "identicalToNoHookBaseline": false,
+     "enterToFirstModelRequestMs": [
+      187,
+      97,
+      82
+     ],
+     "medianMs": 97,
+     "hookEventsSeenByTheLab": 0,
+     "userPromptSubmit": 0,
+     "stop": 0,
+     "hookProcessRunMs": null,
+     "configuration": "mcp_tool hook, see mcp-tool-hook.json"
+    }
+   },
+   "permissionDialogCheck": {
+    "note": "A second session with a Write that needs the owner (dialog) and key 1: with every C-2 event async the dialog still drew, the owner key still answered, and the four model requests are still identical to the no-hook run.",
+    "rows": {
+     "base1": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       145,
+       49,
+       36
+      ]
+     },
+     "cmdasync-d2": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       220,
+       70,
+       81
+      ]
+     },
+     "ps": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       1052,
+       716,
+       780
+      ]
+     },
+     "psasync": {
+      "identicalToNoHookBaseline": true,
+      "enterToFirstModelRequestMs": [
+       186,
+       90,
+       64
+      ]
+     }
+    }
+   }
+  }
+ },
+ "summary": "Yes in both versions. A command hook that stays alive for 2 s delays the model request by about 2 s when it is synchronous and by nothing measurable when async:true. The model requests of every hook configuration (http, sync command, async command, the product PowerShell hook sync and async) are identical to the no-hook run after normalisation, and the no-hook run is identical to a second no-hook run, so the comparison has no noise of its own. Output of {} from an async hook changes nothing either.",
+ "caveats": [
+  "Windows only: the product PowerShell hook and the named pipe do not exist elsewhere. E1 must not enable command-async on POSIX until a CI capture covers the bash and zsh wrappers.",
+  "Async hooks here print nothing or {}. A hook that prints systemMessage or additionalContext was not measured because Agentrix never does that for status events.",
+  "Milliseconds are observations from one Windows 11 machine, taken with nothing else running. They show an order of magnitude, they are not test bounds.",
+  "Normalisation hides only the per-profile device and session id; every other byte of the system prompt, the tool list and the messages was compared."
+ ]
+}
