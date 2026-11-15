@@ -13,6 +13,7 @@ const { claudeResumeCommand } = require('../electron/session-restore.cjs');
 const { HISTORY_WINDOW } = require('../electron/transcript-window.cjs');
 const { agentCommand } = require('../electron/features/agents/agent-command.cjs');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const user = content => ({ type: 'user', uuid: 'prompt', message: { content } });
 async function fixture(t, cwd = 'E:\\不负芳华\\project') {
@@ -123,7 +124,8 @@ function mainHarness(t, f) {
     // The handoff of earlier work is written on start (handoff.cjs, tested on its own).
     writeHandoff: async () => false, handoffFile: id => path.join(f.home, 'handoff', `${id}.md`), memoryDir: () => path.join(f.home, 'memory'), scrubProjectSkills: async () => [],
   });
-  vm.runInContext(main.slice(main.indexOf('function followClaude('), main.indexOf('// One place turns an agent')), context);
+  vm.runInContext(main.slice(main.indexOf('// Workspace broadcasts'), main.indexOf('async function openCodexFromShell(')), context);
+  defineMain(context, 'followClaude', 'followClaudeSession', 'publishCliState', 'acceptDispatchEvent');
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('function remoteFor(')), context);
   t.after(() => s.activityMonitor?.stop());
   return { project, s, store, sessions, context, restore, resets: () => resets };
@@ -140,7 +142,8 @@ function activityHarness(t, f) {
     memoryFolder: () => f.cwd, roundsOf: () => [], remember: async () => {},
     setTimeout: () => ({ unref() {} }),
   });
-  vm.runInContext(main.slice(main.indexOf('function applyActivity('), main.indexOf('function onEvent(')), h.context);
+  defineMain(h.context, 'applyActivity', 'claudeActivity');
+  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('function onEvent(')), h.context);
   return h;
 }
 
@@ -307,7 +310,7 @@ test('both Claude followers load a large session window and clear old consumers 
       { type: 'tool_use', id: 'recent-skill', name: 'Skill', input: { skill: 'recent-skill' } }] } }]);
   const h = mainHarness(t, f), described = [];
   h.context.skillDescription = async name => { described.push(name); return 'Recent skill description'; };
-  vm.runInContext(main.slice(main.indexOf('function describeActions('), main.indexOf('// Claude Code writes each tool call')), h.context);
+  vm.runInContext(main.slice(main.indexOf('function describeActions('), main.indexOf('// Workspace broadcasts')), h.context);
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'large'), true);
   for (let count = 0; h.s.claudeTranscript.historyPending && count < 8; count++) await h.s.activityMonitor.poll();
   assert.equal(h.s.claudeTranscript.historyPending, false);

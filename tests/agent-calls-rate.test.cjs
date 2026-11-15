@@ -9,6 +9,7 @@ const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { emptyRate } = require('../electron/features/agents/token-rate.cjs');
 const { HISTORY_WINDOW } = require('../electron/transcript-window.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const at = seconds => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
 const lines = records => records.map(record => JSON.stringify(record) + '\n').join('');
@@ -103,13 +104,14 @@ test('a group with no readable member has no rate, and one with only waiting mem
   assert.deepEqual(calls.snapshot().find(group => group.model === 'haiku').rate, emptyRate(false), 'a group whose only member waits waits');
 });
 
-// main.cjs from followClaude to the end of startUsage, with stand-ins for what lies outside it.
+// main.cjs's followClaude and its text to the end of startUsage, with stand-ins for what lies outside them.
 function mainSlice(names) {
   const source = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const context = vm.createContext({ path, os, fs: syncFs, AgentCalls, UsageMeter, scheduleState() {}, scheduleUsageRollover() {}, send() {},
     createInterventions: () => ({}), prepareReading: async () => {}, TranscriptTail: class { constructor(filename) { this.filename = filename; } },
     monitorActivity: read => ({ poll: read, stop() {} }), stopUsageAccount() {}, claudeProvider: async () => null, refreshClaudeAccounts() {}, bindRemoteClaudeAccount() {}, ...names });
-  vm.runInContext(source.slice(source.indexOf('function followClaude('), source.indexOf('async function resetTerminalCodex(')), context);
+  vm.runInContext(source.slice(source.indexOf('// Workspace broadcasts'), source.indexOf('async function resetTerminalCodex(')), context);
+  defineMain(context, 'followClaude');
   return context;
 }
 

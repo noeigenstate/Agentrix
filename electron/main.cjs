@@ -13,8 +13,11 @@ const { registerClipboardIpc } = require('./shared/clipboard-ipc.cjs');
 const { registerTerminalIpc } = require('./features/terminal/ipc.cjs');
 const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-guard.cjs');
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
+const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
+const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
+const { writeBootstrap } = require('./features/terminal-events/bootstrap-file.cjs');
 const { createNativeSessions, createNativeUsage } = require('./features/native-session/index.cjs');
-const { subscriptionLimits } = require('./features/native-session/usage.cjs');
+const { createHostInputs } = require('./features/native-session/host-inputs.cjs');
 const { createProjectAccounts } = require('./features/native-session/project-accounts.cjs');
 const { inspectClaudeExecutable, resolveClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
 const { createLocator } = require('./features/claude-runtime/locator.cjs');
@@ -43,6 +46,7 @@ const { READING_NOTE } = require('./features/agents/reading-note.cjs');
 const { writeHandoff, startupNote } = require('./features/agents/handoff.cjs');
 const { remember, roundsOf } = require('./features/agents/project-memory.cjs');
 const { agentSettings } = require('./features/agents/agent-settings.cjs');
+const { createDispatchIntake } = require('./features/agents/dispatch-intake.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles, readClaudeAccountCache } = require('./features/agents/agent-usage.cjs');
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
 const { DashboardRecords, quotaScope } = require('./features/dashboard/records.cjs');
@@ -198,6 +202,23 @@ let attentionTimer;
 const { allowEditorClose, affectsEditor, getEditorFile, registerEditorIpc } = createEditorGuard({ getWindow: () => window, showWindow, send, randomUUID, dialog, t });
 const { confirmTerminalClose, requestQuit, liveTerminalCount } = createCloseGuards({ app, dialog, getWindow: () => window,
   sessions, findProject, allowEditorClose, t, setQuitting: value => { quitting = value; } });
+// The modules carved out of main read the app shell through `host` on every call, the way main's own functions read
+// its scope, so its late values (the store, the event server, the native runtime) are current. Their functions join
+// it, which is how they reach each other.
+const host = {
+  sessions, nativeSpecs, projectAccounts, claudeAccounts, codexAccounts, randomUUID, send, broadcast, scheduleState, findProject,
+  startTerminal, disposeTerminal, launchCommand, callsOf, prepareReading, usageHistory, noteSettings, describeActions, notifyCompletion,
+  refreshClaudeAccounts, localClaudeMeters, checkClaude, codexExecutable, memoryFolder, memoryDir, scrubProjectSkills, remember, roundsOf,
+  summarizeTask, promptText, isLocalAgentCommand, rememberClaudeSource, claudeConfigDir, findClaudeSession, TranscriptTail, claudeRecord,
+  claudeConversation, monitorActivity, createTerminalEnvironment, withoutAppImage, writeBootstrap,
+  get store() { return store; }, get quitting() { return quitting; }, get eventServer() { return eventServer; },
+  get controlAddress() { return controlAddress; }, get claudeRuntime() { return claudeRuntime; }, get terminalInput() { return terminalInput; },
+  get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
+};
+Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host));
+const { followClaudeSession, publishCliState, applyActivity, claudeActivity, acceptDispatchEvent, clearDispatchAccount } = host;
+const { localSwitchSessions, observeSwitchTerminal, retainAgentState, prepareSwitchTerminal, retireTerminal, activateNative } = host;
+const { readNativeConnections, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment } = host;
 const clipboardWrites = new ClipboardWrites();
 const powershellPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const cmdPath = process.env.ComSpec || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
@@ -486,82 +507,6 @@ function refreshSkillNotes() {
     if (note !== s.skillNote) { writeFileAtomic(s.skillNoteFile, note); s.skillNote = note; }
   }
 }
-// Claude Code writes each tool call to its transcript; follow it while the session lasts.
-function followClaude(project, s, event) {
-  const remote = project.kind === 'ssh', paths = remote ? path.posix : path;
-  const file = typeof event.transcriptPath === 'string' && (!remote || paths.isAbsolute(event.transcriptPath)) ? paths.resolve(event.transcriptPath) : '';
-  if (!file || paths.basename(file) !== `${event.sessionId}.jsonl`) return;
-  // The worker checks remote paths against its own Claude projects folder before reading them.
-  if (!remote && !file.toLowerCase().startsWith(claudeConfigDir().toLowerCase() + path.sep)) return;
-  if (!remote) void prepareReading(s.terminalId, { agent: 'claude', threadId: event.sessionId }, file);
-  s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
-  s.claudeSessionId = event.sessionId;
-  s.approval?.context('claude-session', event.sessionId);
-  // The terminal's own calls, not the agent's meter: a hook can bind the transcript before startUsage builds the meter,
-  // and the meter it builds keeps these calls and their folder.
-  callsOf(s, project).setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
-  if (s.claudeTranscript?.filename !== file) {
-    let tail;
-    const readCurrent = () => sessions.get(s.terminalId) === s && (!tail || s.claudeTranscript === tail)
-      && (s.codexActive && s.agent === 'claude' || s.claudeResumeId === event.sessionId);
-    const onHistory = ready => {
-      if (ready) s.conversation.endHistory();
-      else { s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true); }
-      if (!ready && s.completionWork?.reset()) store.expectCompletion(project.id, false);
-      if (s.completionWork) s.completionWork.reading = !ready;
-      usageHistory(s, ready);
-    };
-    s.activitySnapshot = s.activityRawSnapshot = null;
-    tail = s.claudeTranscript = remote ? { filename: file } : new TranscriptTail(file, { onHistory: ready => { if (readCurrent()) onHistory(ready); }, catchUpHistory: true,
-      isCurrent: readCurrent,
-      onReset: partial => { if (readCurrent() && s.usage?.rates) s.usage.rates.partial = partial; }, onWorkRecord: record => onRecord({ ...record, workOnly: true }) });
-    s.activityMonitor?.stop();
-    const onRecord = record => {
-      if (!readCurrent()) return;
-      s.completionWork?.record(record, 'claude', remote ? s.activityClockOffset || 0 : 0);
-      // Finish this user round even if later background records replace the poll's final snapshot.
-      const endedAt = s.completionWork?.endedAt;
-      if (endedAt && endedAt >= (s.activitySince || 0) && endedAt > s.promptQueue.finishedAt) s.promptQueue.finish(endedAt);
-      if (record.workOnly) {
-        if (['queue-operation', 'user', 'attachment'].includes(record.type)) claudeConversation(s.conversation, record, project.path, { queueOnly: true });
-        return;
-      }
-      const turn = s.completionWork?.turn;
-      if (turn && turn.updatedAt >= Math.max(s.activitySince || 0, s.activityRawSnapshot?.updatedAt || 0)) {
-        s.activityRawSnapshot = { ...turn, threadId: s.claudeSessionId };
-      }
-      claudeConversation(s.conversation, record, project.path); describeActions(s, project.path, claudeRecord(s.actions, record, project.path));
-      noteSettings(s, 'claude', record);
-    };
-    const since = Number.isFinite(event.sentAt) ? event.sentAt : s.activitySince || Date.now();
-    const remoteStatus = value => {
-      if (!value || !readCurrent() || !s.activityMonitor) return null;
-      // The host reads the sub-agents after this transcript: their records go first, so a completion below ends a call
-      // whose replies are already counted. A reset answer carries none.
-      callsOf(s, project).remoteRecords(value.subagents);
-      if (value.reset) onHistory(false);
-      for (const record of Array.isArray(value.records) ? value.records : []) { try { onRecord(record); } catch { } }
-      if (value.historyDone) onHistory(true);
-      if (s.completionWork) s.completionWork.reading = !value.historyDone;
-      if (s.completionWork && value.completionUncertain) s.completionWork.uncertain = true;
-      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading, transcriptRead: true };
-    };
-    s.activityMonitor = monitorActivity(async () => {
-      if (remote) {
-        const subagents = callsOf(s, project).remoteSubagents();
-        return s.terminal.request('claude-status', { path: file, since, ...(subagents.length ? { subagents } : {}) }).then(remoteStatus);
-      }
-      await tail.read(onRecord);
-      if (!readCurrent()) return null;
-      if (s.completionWork) {
-        s.completionWork.reading = tail.historyPending || tail.offset < tail.fileSize || tail.buffer.length > 0;
-        s.completionWork.uncertain ||= tail.workHistory?.uncertain;
-      }
-      return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading, transcriptRead: true };
-    }, snapshot => applyActivity(project, s, snapshot), { interval: () => readEvery(s), watch: () => remote ? null : tail.filename });
-  } else void s.activityMonitor?.poll();
-}
-
 // Workspace broadcasts can happen while history is still reading: hold a clean snapshot until it finishes.
 function usageHistory(s, ready) {
   s.calls?.history(!ready);
@@ -792,177 +737,6 @@ function scheduleUsageRollover(skip) {
   usageRolloverTimer.unref?.();
 }
 
-// Restores know the id before Claude emits its next prompt hook.
-async function followClaudeSession(project, s, id) {
-  if (project.kind === 'ssh') return false;
-  const request = s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
-  const cwd = store.findTerminal(s.terminalId)?.record.restore?.cwd || project.path;
-  const file = await findClaudeSession(cwd, id);
-  if (!file || sessions.get(s.terminalId) !== s || (!s.codexActive && s.claudeResumeId !== id) || (s.codexActive && s.agent !== 'claude')) return false;
-  if (s.claudeFollowRequest !== request) return s.claudeSessionId === id && s.claudeTranscript?.filename === file;
-  followClaude(project, s, { sessionId: id, transcriptPath: file });
-  store.setRestore(s.terminalId, { threadId: id });
-  await s.activityMonitor?.poll();
-  return true;
-}
-
-
-// CLI interaction is independent of project completion: progress never arms another completion notification.
-function publishCliState(s, state, { at = Date.now(), threadId, turnId, requestId, eventId, message: detail, bind = false, progress = false, expectedRevision, newTurn = false } = {}) {
-  if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at)) return false;
-  if (!s.cliStateMeta || s.cliState?.sessionId !== s.sessionId) s.cliStateMeta = { at: 0, events: new Set(), closed: new Set(), turnId: null, requestId: null };
-  const meta = s.cliStateMeta, before = s.cliState;
-  if (expectedRevision != null && expectedRevision !== before?.revision) return false;
-  const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId : s.reportedThreadId || s.rootThreadId);
-  if (!bind && threadId && bound && threadId !== bound && !(s.agent === 'codex' && bound.length >= 8 && threadId.toLowerCase().startsWith(bound.toLowerCase()))) return false;
-  if (at < Math.max(s.activitySince || 0, s.activityInputAt || 0, meta.at)) return false;
-  if (eventId && meta.events.has(eventId)) return false;
-  if (!bind && turnId && (meta.closed.has(turnId) || state !== 'working' && meta.turnId && turnId !== meta.turnId)) return false;
-  // PermissionRequest/Elicitation have no tool_use_id in Claude 2.1.317. A sibling's
-  // asynchronous progress cannot prove that such a dialog has been answered. A tool
-  // observation only releases a matching wait; it cannot advance a working turn's watermark.
-  if (progress && (before?.state !== 'waiting' || !meta.requestId || requestId !== meta.requestId)) return false;
-  if (bind && threadId !== bound) { meta.closed.clear(); meta.turnId = null; }
-  if (newTurn) { if (meta.turnId) meta.closed.add(meta.turnId); meta.turnId = null; }
-  if (threadId) s.cliProviderId = threadId;
-  if (turnId && turnId !== meta.turnId) { if (meta.turnId) meta.closed.add(meta.turnId); meta.turnId = turnId; }
-  if (eventId) { meta.events.add(eventId); if (meta.events.size > 256) meta.events.delete(meta.events.values().next().value); }
-  meta.at = at;
-  if (state === 'idle' && turnId) meta.closed.add(turnId);
-  const message = state === 'waiting' ? String(detail ?? '').slice(0, 300) : undefined;
-  meta.requestId = state === 'waiting' ? requestId || null : null;
-  s.needsInput = state === 'waiting' ? { message, since: Date.now() } : null;
-  s.cliStateRevision = (s.cliStateRevision || 0) + 1;
-  s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
-    updatedAt: Date.now(), state, ...(message ? { message } : {}) };
-  s.observeNativeSwitch?.();
-  broadcast();
-  return true;
-}
-
-// One place turns an agent's turn state into lights and completion alerts, for Codex and Claude alike.
-function applyActivity(project, s, snapshot) {
-  if (sessions.get(s.terminalId) !== s || !s.codexActive) return;
-  if (snapshot.updatedAt < (s.activitySince || 0)) return;
-  const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId : s.reportedThreadId);
-  if (bound && snapshot.threadId && bound !== snapshot.threadId && !(s.agent === 'codex' && bound.length >= 8 && snapshot.threadId.toLowerCase().startsWith(bound.toLowerCase()))) return;
-  if (s.agent === 'codex' && snapshot.turnId && s.cliStateMeta?.closed.has(snapshot.turnId)
-    && (snapshot.state === 'working' || snapshot.turnId !== s.cliStateMeta.turnId)) return;
-  // Readers deduplicate snapshots. Retain even a completion hidden by provisional
-  // input so that expiring that submission can replay it without another record.
-  if (snapshot.updatedAt >= (s.activityRawSnapshot?.updatedAt || 0)) s.activityRawSnapshot = snapshot;
-  // Neither a polled result from before new input nor a result from before newer attention can end this interaction.
-  if (snapshot.updatedAt < Math.max(s.activityInputAt || 0, s.cliStateMeta?.at || 0)) return;
-  if (snapshot.ended || ['working', 'complete', 'interrupted'].includes(snapshot.state)) publishCliState(s, snapshot.state === 'working' ? 'working' : 'idle',
-    { at: snapshot.updatedAt, threadId: snapshot.threadId, turnId: s.agent === 'codex' ? snapshot.turnId : undefined,
-      eventId: `record:${snapshot.threadId}:${snapshot.turnId}:${snapshot.state}:${snapshot.updatedAt}` });
-  if (s.completionWork?.reading) { s.codexActivity = 'working'; scheduleState(); return; }
-  if (snapshot.ended || ['complete', 'interrupted'].includes(snapshot.state)) {
-    s.completionWork?.end(snapshot.updatedAt);
-    s.promptQueue.finish?.(snapshot.updatedAt);
-  }
-  s.activitySnapshot = snapshot;
-  const queued = s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
-  const state = s.completionWork?.state(snapshot, { queued })
-    || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
-  if (snapshot.ended && snapshot.state === 'unknown' || snapshot.state === 'interrupted' || state === 'interrupted') store.expectCompletion(project.id, false);
-  snapshot = { ...snapshot, state };
-  s.rootThreadId = snapshot.threadId;
-  s.approval?.context('activity', [snapshot.threadId, snapshot.turnId, snapshot.state]);
-  // Keep the last prompt that named work; bare continuations and background callbacks cannot replace it.
-  const task = summarizeTask(snapshot.prompt, { spoken: true });
-  if (task) { s.lastTask = task; s.lastTaskSummary = summarizeTask(snapshot.prompt); s.lastTaskTitle = snapshot.prompt; }
-  if (s.agent === 'codex') store.setRestore(s.terminalId, { threadId: snapshot.threadId });
-  s.codexActivity = snapshot.state;
-  if (s.agent === 'claude') {
-    s.claudeActivitySnapshot = snapshot;
-    if (snapshot.state === 'complete' && project.kind !== 'ssh') void refreshClaudeAccounts();
-    if (['complete', 'interrupted'].includes(snapshot.state)) {
-      // The last poll may still add tool calls. Settle both views afterward, unless another round has started.
-      const settle = () => {
-        if (sessions.get(s.terminalId) === s && s.codexActive && s.agent === 'claude' && s.claudeActivitySnapshot === snapshot && s.codexActivity !== 'working' && !(s.activityInputAt > snapshot.updatedAt)) {
-          s.actions.settle(); s.conversation.settle();
-        }
-      };
-      if (snapshot.transcriptRead || !s.activityMonitor) settle();
-      else void Promise.resolve(s.activityMonitor.poll()).then(settle);
-    }
-  }
-  if (snapshot.state === 'complete' && snapshot.turnId) {
-    s.lastCompletedAt = snapshot.updatedAt;
-    const allComplete = [...sessions.values()].filter(item => item.projectId === project.id || item.terminalId === project.id)
-      .every(item => !item.codexActive || item.codexActivity === 'complete');
-    if (allComplete && store.complete(project.id, `${snapshot.threadId}:${snapshot.turnId}`, snapshot.updatedAt)) notifyCompletion(project);
-  }
-  // The round that ended joins the folder's permanent memory (project-memory.cjs), here or over SSH alike. Claude's
-  // transcript is read a moment later, when its last reply has arrived.
-  if (['complete', 'interrupted'].includes(snapshot.state) && snapshot.threadId) {
-    const agent = s.agent === 'claude' ? 'claude' : 'codex', folder = memoryFolder(project, s);
-    setTimeout(() => { void remember(memoryDir(), folder, roundsOf(s.conversation.list, agent, snapshot.threadId)).catch(() => {}); }, 1500).unref?.();
-    if (project.kind !== 'ssh') void scrubProjectSkills(project).catch(() => {});
-  }
-  broadcast();
-}
-
-// Claude Code hooks: UserPromptSubmit -> working, Stop -> complete (integration/claude-hook.ps1). SessionStart -> the
-// conversation Claude writes from now on: after /clear or /resume the reading view follows the new file at once.
-// Notification -> attention while Claude waits for a permission answer in its own screen; that only
-// sets the waiting indicator and never changes the round's lifecycle.
-function claudeActivity(project, s, event) {
-  if (!s.codexActive || s.agent !== 'claude' || !['working', 'complete', 'attention', 'session', 'progress'].includes(event.state)) return;
-  if (typeof event.sessionId !== 'string' || !/^[\w-]{1,100}$/.test(event.sessionId) || typeof event.eventId !== 'string' || event.eventId.length > 200) return;
-  const at = Number.isFinite(event.sentAt) ? event.sentAt + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0) : Date.now();
-  const bound = s.cliProviderId || s.claudeSessionId || s.claudeResumeId;
-  if (at < Math.max(s.activitySince || 0, s.cliStateMeta?.at || 0) || s.cliStateMeta?.events.has(event.eventId) || event.state !== 'session' && bound && bound !== event.sessionId) return;
-  const evidence = { at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
-  // Hook eventId is an event identity, not a native approval request ID. A different observed event invalidates
-  // actions conservatively, even if its message is identical. Duplicate events leave the epoch alone.
-  s.approval?.context('claude-event', [event.sessionId, event.eventId, event.state]);
-  if (event.state === 'attention') { publishCliState(s, 'waiting', { ...evidence, message: event.message }); return; }
-  if (event.state === 'progress') { publishCliState(s, 'working', { ...evidence, progress: true }); return; }
-  if (event.state === 'session') {
-    if (publishCliState(s, event.sessionSource === 'compact' && s.cliState?.state === 'working' ? 'working' : 'idle', { ...evidence, bind: true })) {
-      s.claudeSessionSource = event.sessionSource; followClaude(project, s, event);
-    }
-    return;
-  }
-  if (s.usage && project.kind !== 'ssh') void refreshClaudeAccounts();
-  // Claude Code runs its prompt hooks for some local slash commands (/context, /doctor, /compact) too. They open a screen
-  // or print a line and no round follows, so they neither start a round nor end one; the card would stay "working".
-  if (event.state === 'working') {
-    if (typeof event.prompt === 'string' && promptText(event.prompt, event) === null) return;
-    const local = typeof event.prompt === 'string' && isLocalAgentCommand('claude', event.prompt);
-    if (local) { if (publishCliState(s, 'working', evidence)) s.claudeLocalCommand = true; return; }
-    if (!publishCliState(s, 'working', evidence)) return;
-    s.claudeLocalCommand = false;
-    // UserPromptSubmit is actual input, unlike a polled working snapshot or a Stop callback.
-    if (s.claudePromptEventId !== event.eventId) {
-      s.claudePromptEventId = event.eventId;
-      if (promptText(event.prompt, event) !== null) {
-        s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, at);
-        s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
-        s.completionWork?.begin(); store.expectCompletion(project.id);
-      }
-    }
-  } else if (event.state === 'complete' && s.claudeLocalCommand) { if (publishCliState(s, 'idle', evidence)) s.claudeLocalCommand = false; return; }
-  if (event.state === 'complete' && !publishCliState(s, 'idle', evidence)) return;
-  const revision = s.cliState.revision;
-  const turnId = event.eventId.slice(event.sessionId.length + 1);
-  // Remember the conversation and whether its turn is still open, so a restart can resume it and continue.
-  store.setRestore(s.terminalId, { threadId: event.sessionId, interrupted: event.state === 'working' });
-  followClaude(project, s, event);
-  const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' ? turnId : null, state: event.state, updatedAt: at, prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
-  // Stop can beat the last tool-result write. Read it before granting a completion,
-  // and let a newer turn/input win if it started while the read was in flight.
-  if (event.state === 'complete' && s.activityMonitor) {
-    const promptEvent = s.claudePromptEventId;
-    void Promise.resolve(s.activityMonitor.poll()).then(() => {
-      if (s.agent !== 'claude' || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
-      applyActivity(project, s, { ...snapshot, state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
-    }).catch(() => {});
-  } else applyActivity(project, s, snapshot);
-}
-
 async function openCodexFromShell(project, s, event) {
   try {
     const launch = require('./features/agents/agent-command.cjs').codexLaunch(event.args === undefined && !event.command ? [] : event.args);
@@ -990,21 +764,7 @@ function onEvent(event) {
   if (!s || event.sessionKey !== s.sessionKey) return;
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
-  if (event.type === 'dispatch-account') {
-    // An account report changes nothing the window state shows; the pane is told to read usage again. Only a call the
-    // session knows can report.
-    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project), payload => observeDispatchAccount(project, payload))) {
-      send('agents:usage-changed', { projectId: project.id });
-    }
-    return;
-  }
-  if (['dispatch-start', 'dispatch-routing', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'].includes(event.type)) {
-    if (require('./features/agents/dispatch-events.cjs').acceptDispatch(s, event, callsOf(s, project))) {
-      if (event.type === 'dispatch-start' && event.agent === 'claude' && event.unconfirmed !== true) rememberClaudeSource(event.sessionId, 'dispatch');
-      broadcast();
-    }
-    return;
-  }
+  if (acceptDispatchEvent(s, project, event)) return;
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
   if (event.type === 'codex-started' && event.agent !== 'claude') { void openCodexFromShell(project, s, event); return; }
@@ -1275,13 +1035,8 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     nativeSpecs.set(id, spec); return spec;
   }
   const bootstrapFile = path.join(runtimeDir, `${sessionId}.json`);
-  fs.writeFileSync(bootstrapFile, JSON.stringify({ projectId: id, projectPath: project.path, sessionKey,
-    controlAddress, controlCapability, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address }), { mode: 0o600 });
-  const env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
-  if (launch?.codexHome) {
-    for (const key of Object.keys(env)) if (key.toUpperCase() === 'CODEX_HOME') delete env[key];
-    env.CODEX_HOME = launch.codexHome;
-  }
+  writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability });
+  const env = nativeEnvironment(bootstrapFile, launch?.codexHome);
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
     skills.delivery(project, false, sessionId, { agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, context,
@@ -1356,181 +1111,6 @@ function structuredEvent(id, event) {
   scheduleState();
 }
 
-async function readNativeConnections(projectId) {
-  const result = {}, observed = new Map();
-  for (const agent of ['claude', 'codex']) {
-    const host = liveHost(projectId, agent);
-    if (!host) { result[agent] = projectAccounts.snapshot(projectId)?.[agent]?.connection || { kind: 'none', source: null, observedAt: null };
-      result[agent] = { ...result[agent], active: false }; continue; }
-    observed.set(agent, host);
-    if (host.nativeStructured) {
-      if (agent === 'claude') result[agent] = claudeRuntime.connection(host.nativeRuntimeSessionId);
-      else {
-        try { result[agent] = await host.nativeReadConnection?.(); } catch { }
-        result[agent] ||= { kind: 'unknown', source: 'codex-app-server account/read', observedAt: null };
-      }
-    } else if (agent === 'claude') result[agent] = { kind: 'subscription', source: 'Claude Code terminal login', observedAt: host.activitySince || null };
-    else {
-      // The existing terminal reader may have no login-mode evidence. Quota alone proves neither billing path.
-      const connection = host.terminalAccount?.connection;
-      // The reader names the account it read; the name goes with the kind it was read for.
-      const kind = ['api', 'subscription'].includes(connection?.kind) ? connection.kind : 'unknown';
-      result[agent] = { kind, source: 'codex-account-usage', observedAt: host.terminalAccount?.at || null,
-        ...(kind !== 'unknown' && connection.scopeId ? { scopeId: connection.scopeId } : {}) };
-    }
-  }
-  for (const agent of observed.keys()) result[agent] = { ...result[agent], active: true };
-  for (const [agent, host] of observed) if (sessions.get(host.terminalId) !== host || !host.codexActive || host.status === 'exited') result[agent] = { kind: 'none', active: false, source: null, observedAt: null };
-  return result;
-}
-
-// The agent's running session in a project (any project without one), the latest started.
-function liveHost(projectId, agent) {
-  return [...sessions.values()].reverse().find(s => (!projectId || s.projectId === projectId) && s.agent === agent && s.codexActive === true && s.status !== 'exited');
-}
-
-// Per local project, the newest account and quota a dispatched Codex worker's own app-server reported, as a limits
-// payload; it outlives the worker. SSH workers' accounts belong to their host's channel.
-const dispatchAccounts = new Map();
-function observeDispatchAccount(project, payload) {
-  if (project.kind === 'ssh' || payload.observedAtMs < (dispatchAccounts.get(project.id)?.observedAtMs ?? -Infinity)) return false;
-  dispatchAccounts.set(project.id, payload); return true;
-}
-// A planner in a terminal has no Codex session, so a dispatched worker's report is the pane's Codex reading — but only
-// where the project has none of its own: no running Codex session, and no account the project's read named, unless the
-// report names that same account. Another account's report never displaces the project's. Old reports read as stale.
-function dispatchReading(projectId, account, staleAfterMs) {
-  const payload = dispatchAccounts.get(projectId), named = account?.connection?.scopeId;
-  if (!payload || liveHost(projectId, 'codex') || named && payload.accountScopeId !== named) return null;
-  if (payload.state !== 'ready' || Date.now() - payload.observedAtMs <= staleAfterMs) return payload;
-  return Object.defineProperty({ ...payload, state: 'stale' }, 'accountConnection', { value: payload.accountConnection });
-}
-
-function readNativeSubscriptionLimits(projectId) {
-  const latest = candidates => candidates.filter(Boolean).sort((a, b) => (b.observedAtMs ?? -Infinity) - (a.observedAtMs ?? -Infinity))[0] || null;
-  const account = projectAccounts.snapshot(projectId);
-  const claude = [subscriptionLimits(account?.claude || (!projectId ? claudeAccounts.account : null), 'claude-account', 120000)];
-  // Meters also hold the existing local-cache fallback. Reading them must never refresh an account.
-  for (const s of localClaudeMeters()) if ((!projectId || s.projectId === projectId) && s.usage.limits.length) claude.push(subscriptionLimits({
-    limits: s.usage.limits, at: s.usage.limitsAt, source: s.usage.limitsFrom }, 'claude-account', 120000));
-  const codex = projectId ? [subscriptionLimits(account?.codex, 'codex-account', 2 * codexAccounts.interval), dispatchReading(projectId, account?.codex, 2 * codexAccounts.interval)]
-    : [...codexAccounts.entries].map(([key, entry]) => subscriptionLimits(entry.value, key, 2 * codexAccounts.interval));
-  return { claude: latest(claude), codex: latest(codex) };
-}
-
-async function readNativeUsageInputs(projectId) {
-  if (projectId) await shellPathReady;
-  const [claudeCli, codexFile] = await Promise.all([checkClaude(), codexExecutable()]);
-  const cli = { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } };
-  const project = store.projects.find(project => project.id === projectId);
-  if (project && project.kind !== 'ssh') {
-    if (!quitting && store.projects.includes(project)) await projectAccounts.read(project, { cli,
-      env: createTerminalEnvironment(withoutAppImage(process.env), '') });
-  }
-  return { cli, limits: readNativeSubscriptionLimits(projectId) };
-}
-
-function localSwitchSessions() {
-  const result = [];
-  for (const [id, current] of sessions) {
-    const s = current.switchPreviousHost || current, project = store.findTerminal(id)?.project;
-    if (!project || project.kind === 'ssh' || !s.codexActive || s.nativeStructured || s.status === 'exited' || s.agent !== 'claude') continue;
-    s.nativeRuntimeSessionId ||= randomUUID();
-    const providerSessionId = s.claudeSessionId || s.claudeResumeId || null;
-    result.push({ identity: s, path: 'terminal', spec: { owner: 'gui', agent: s.agent, kind: project.kind,
-      projectId: project.id, terminalId: id, runtimeSessionId: s.nativeRuntimeSessionId, providerSessionId,
-      sessionId: s.sessionId, sessionKey: s.sessionKey, controlCapability: s.controlCapability, bootstrapFile: s.bootstrapFile,
-      cwd: store.findTerminal(id)?.record.restore?.cwd || project.path, env: s.usageEnv, context: s.skillNote || '',
-      hasHistory: s.conversation?.list.some(entry => ['user', 'assistant'].includes(entry.role)),
-      model: s.agentSettings?.model || null, effort: s.agentSettings?.effort || 'high', fast: s.agentSettings?.fast ?? true } });
-  }
-  return result;
-}
-function observeSwitchTerminal(session) {
-  const s = session.identity;
-  const work = s.completionWork;
-  const tasks = new Set([...(work?.tasks?.values() || [])].map(task => task.id));
-  for (const id of work?.services || []) tasks.add(id);
-  for (const call of s.calls?.running?.() || []) tasks.add(call.id);
-  // A fresh CLI does not create its transcript until the first prompt. ENOENT here is an empty observation,
-  // whereas unreadable history, a resumed thread or a failed reader must still remain unknown.
-  const empty = s.agent === 'claude' && s.claudeSessionSource === 'startup' && s.claudeTranscript?.missing === true
-    && !s.claudeResumeId && !session.spec?.hasHistory && !s.activityInputAt;
-  return { state: s.cliState?.sessionId === s.sessionId && s.cliState.state === 'idle' ? 'idle' : 'working',
-    pending: !!s.nativeInputRequests?.size || s.promptQueue?.list().some(item => item.state === 'queued'),
-    draftBlocked: !!s.submissions?.hasText,
-    background: !work || work.uncertain || work.reading && !empty ? { known: false, count: null } : { known: true, count: tasks.size } };
-}
-function retainAgentState(target, source) {
-  target.plannerSessionId = source.plannerSessionId || source.sessionId;
-  target.switchBootstrapFiles = [...new Set([...(source.switchBootstrapFiles || []), source.bootstrapFile].filter(file => file && file !== target.bootstrapFile))];
-  for (const key of ['sessionKey', 'controlCapability', 'calls', 'completionWork', 'promptQueue', 'lastCompletedAt', 'lastTask', 'lastTaskSummary', 'lastTaskTitle',
-    'activityInputAt', 'activityConfirmedInputAt', 'activityPromptAt', 'claudePromptEventId', 'nativeMessages', 'switchState']) {
-    if (source[key] !== undefined) target[key] = source[key];
-  }
-  target.completionWork.changed = () => {
-    if (sessions.get(target.terminalId) === target && target.codexActive && target.activitySnapshot) applyActivity(findProject(target.terminalId), target, target.activitySnapshot);
-  };
-  target.promptQueue.changed = expired => {
-    if (sessions.get(target.terminalId) !== target) return;
-    if (expired?.length) target.activityInputAt = Math.max(target.activityConfirmedInputAt || 0, ...target.promptQueue.items.map(item => item.at));
-    scheduleState();
-  };
-}
-async function prepareSwitchTerminal(spec, _handoff, currentChange, transition = {}) {
-  const id = spec.terminalId, old = sessions.get(id);
-  if (!old?.nativeStructured || spec.agent !== 'claude') throw new Error('session_changed');
-  sessions.delete(id);
-  launchPlans.set(id, { agent: spec.agent, command: launchCommand(spec.agent, spec.providerSessionId ? { id: spec.providerSessionId } : null), threadId: spec.providerSessionId });
-  let staged;
-  const cancel = () => {
-    const owned = staged && sessions.get(id) === staged;
-    if (owned) disposeTerminal(id, { preserveSwitch: true });
-    launchPlans.delete(id);
-    if ((owned || !staged && currentChange()) && store.findTerminal(id)) { sessions.set(id, old); nativeSpecs.set(id, old.nativeSpec); }
-    broadcast();
-  };
-  try {
-    startTerminal(id, null, true, old); staged = sessions.get(id);
-    staged.nativeRuntimeSessionId = spec.runtimeSessionId;
-    Object.assign(spec, { sessionId: staged.sessionId, bootstrapFile: staged.bootstrapFile, env: staged.usageEnv || spec.env });
-    // OS/shell cold starts have no reliable wall-clock limit. Keep the source
-    // surface until the same CLI is ready; closing or changing the switch
-    // cancels this wait and disposes only the staged PTY.
-    while (currentChange() && sessions.get(id) === staged && staged.status !== 'exited') {
-      if (staged.error) throw new Error('terminal_start_failed');
-      if (staged.status === 'shell' && staged.ready && !staged.agentStarting && !launchPlans.has(id)) throw new Error('terminal_agent_exited');
-      const provider = staged.claudeSessionId;
-      const ready = staged.cliState?.state === 'idle';
-      if (provider && ready) {
-        if (spec.providerSessionId && provider !== spec.providerSessionId) throw new Error('terminal_resume_identity_mismatch');
-        spec.providerSessionId = provider; break;
-      }
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    if (!currentChange() || sessions.get(id) !== staged || staged.status === 'exited') throw new Error('session_changed');
-    return { session: { identity: staged, path: 'terminal', spec }, cancel,
-      async send(input) {
-        const tracker = staged.submissions;
-        if (!terminalInput || spec.agent !== 'claude' || sessions.get(id) !== staged || !currentChange()
-          || staged.cliState?.state !== 'idle' || !tracker || tracker.hasText || tracker.history || tracker.pasting
-          || !input.text || input.text.length > 4000 || /^[!/]/.test(input.text) || /[\x00-\x08\x0b-\x1f\x7f]/.test(input.text)) return { status: 'rejected' };
-        // Reuse the tracked terminal input path. Never clear or overwrite a CLI draft.
-        terminalInput.write(id, `\x1b[200~${input.text}\x1b[201~`);
-        await new Promise(resolve => setTimeout(resolve, 400));
-        if (sessions.get(id) !== staged || !currentChange() || staged.cliState?.state !== 'idle' || tracker.history
-          || tracker.text !== input.text) return { status: 'unknown' };
-        terminalInput.write(id, '\r');
-        return { status: 'delivered' };
-      },
-      commit() {
-        store.setRestore(id, { terminal: true, codex: true, agent: spec.agent, threadId: spec.providerSessionId, nativeTransport: null });
-        retainAgentState(staged, old); delete staged.switchPreviousHost; staged.nativeRuntimeSessionId = spec.runtimeSessionId; broadcast();
-        if (transition.discardBackground) staged.completionWork?.discardBackground?.();
-      } };
-  } catch (error) { cancel(); throw error; }
-}
-
 async function initializeNativeSessions() {
   // Load optional provider composition after app.ready; neither module starts a real account session here.
   const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
@@ -1549,11 +1129,7 @@ async function initializeNativeSessions() {
   claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,
     loadSdk: createSdkLoader({ packaged: app.isPackaged }), request: netRequest(electronNet),
     inspectCli: () => inspectClaude('refresh'), resolveExecutable: () => resolveClaudeExecutable({ locator: claudeLocator }),
-    connectionSpec: projectId => {
-      const project = projectId && store.projects.find(project => project.id === projectId);
-      if (projectId && (!project || project.kind === 'ssh')) throw new Error('原生会话仅支持本地项目。');
-      return { agent: 'claude', owner: 'gui', projectId, cwd: project?.path || process.cwd(), effort: 'high', fast: true };
-    },
+    connectionSpec,
     onCost: entry => {
       if (entry.spec.owner === 'dispatch') return;
       const project = store.findTerminal(entry.spec.terminalId)?.project; if (!project) return;
@@ -1633,26 +1209,7 @@ async function initializeNativeSessions() {
     },
     connections: readNativeConnections, usageInputs: readNativeUsageInputs,
     validateProject: projectId => { const project = projectId && store.projects.find(project => project.id === projectId); if (projectId && !project) throw new Error('项目已关闭。'); return project || null; },
-    terminalSessions: localSwitchSessions, observeTerminal: observeSwitchTerminal, prepareTerminal: prepareSwitchTerminal,
-    retireTerminal: (session, reason) => {
-      const host = sessions.get(session.spec.terminalId);
-      if (host !== session.identity) return;
-      host.status = 'exited'; host.codexActive = false; host.nativePathReason = reason;
-      store.setRestore(session.spec.terminalId, { codex: false }); broadcast();
-    },
-    activateNative: (spec, _handoff, transition = {}) => {
-      const old = sessions.get(spec.terminalId);
-      if (transition.newConversation) {
-        if (!old?.nativeStructured) throw new Error('session_changed');
-        spec.switchHost = old; nativeSpecs.set(spec.terminalId, spec); return;
-      }
-      if (!old || old.sessionId !== spec.sessionId || !transition.recovering && observeSwitchTerminal({ identity: old }).draftBlocked) throw new Error('session_changed');
-      if (spec.bootstrapFile && !fs.existsSync(spec.bootstrapFile)) fs.writeFileSync(spec.bootstrapFile, JSON.stringify({ projectId: spec.terminalId,
-        projectPath: spec.cwd, sessionKey: spec.sessionKey, controlAddress, controlCapability: spec.controlCapability,
-        pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address }), { mode: 0o600 });
-      spec.switchHost = old; disposeTerminal(spec.terminalId, { preserveSwitch: true }); nativeSpecs.set(spec.terminalId, spec);
-      if (transition.discardBackground) old.completionWork?.discardBackground?.();
-    },
+    terminalSessions: localSwitchSessions, observeTerminal: observeSwitchTerminal, prepareTerminal: prepareSwitchTerminal, retireTerminal, activateNative,
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
@@ -1705,11 +1262,9 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${sessionId}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
-  if (bootstrapFile) fs.writeFileSync(bootstrapFile, JSON.stringify({
-    projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability, pipeName: process.platform === 'win32' ? eventServer.name : eventServer.address,
+  if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
     powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath: path.join(integrationDir, 'claude-hook.ps1'),
-    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'),
-  }), { mode: 0o600 });
+    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs') });
   let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '');
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
@@ -1928,7 +1483,7 @@ function disposeTerminal(id, { preserveNative = false, preserveSwitch = false } 
 }
 
 function registerUnavailableNative(handle) {
-  const settings = { claudePath: 'terminal-only', monthlyBudgetUsd: null, codexAutoReset: false };
+  const settings = { claudePath: 'terminal-only', codexAutoReset: false };
   function start(id, options) {
     if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['agent', 'resume'].includes(key)) ||
       !['claude', 'codex'].includes(options.agent) || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
@@ -1951,7 +1506,7 @@ function registerUnavailableNative(handle) {
     const limits = { claude: readNativeSubscriptionLimits().claude, codex: readNativeSubscriptionLimits(projectId).codex };
     const summary = claudeRuntime?.usage.summary() || { month: new Date().toISOString().slice(0, 7),
       todayUsdMicros: null, monthUsdMicros: null, estimated: true, apiRecords: false };
-    return { ...summary, budgetUsd: null, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
+    return { ...summary, switches: { waiting: 0 }, agents: { claude: { path: 'terminal', reason: 'native_unavailable',
         next: { path: 'terminal', reason: 'native_unavailable' }, limits: limits.claude, connection: connections.claude },
         codex: { path: null, reason: 'native_unavailable', next: { path: null, reason: 'native_unavailable' }, limits: limits.codex, connection: connections.codex } } };
   });
@@ -1984,7 +1539,7 @@ function registerIpc() {
   }, getRecentProjects: () => store.recentProjects(), getRecentSSH: () => store.recentSSH(), forgetRecentSSH: (host, folder) => store.forgetSSH(host, folder), clearSSHHistory: () => store.clearSSHHistory(), existsSync: fs.existsSync,
     getRecentEntry: folder => store.recentEntry(folder), forgetRecent: folder => store.forget(folder), clearHistory: () => store.clearHistory(),
     getEditorFile, allowEditorClose, confirmTerminalClose, disposeProjectTerminals, findProject, closeProjectPreviews: id => previewResources.closeProject(id),
-    removeProject: id => { projectAccounts.close(id); codexAccounts.closeProject(id); dispatchAccounts.delete(id); store.remove(id); },
+    removeProject: id => { projectAccounts.close(id); codexAccounts.closeProject(id); clearDispatchAccount(id); store.remove(id); },
     forgetBranch, broadcast, acknowledgeProject: id => store.acknowledge(id), reorderProjects: ids => store.reorderProjects(ids), reorderTerminals,
     setProjectImage: (id, image, mode) => {
       store.setProjectImage(id, image, mode);

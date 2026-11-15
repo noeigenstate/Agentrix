@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const { codexLaunch, agentCommand } = require('../electron/features/agents/agent-command.cjs');
 const { shellEvent } = require('../integration/agent-event.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const thread = '11111111-1111-4111-8111-111111111111';
 
@@ -73,6 +74,7 @@ test('authenticated manual Codex events leave before any terminal agent tracking
   const f = host(); let accepted = 0;
   f.context.openCodexFromShell = () => { accepted++; };
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('\n// The agent chosen', main.indexOf('function onEvent('))), f.context);
+  defineMain(f.context, 'acceptDispatchEvent');
   const event = { type: 'codex-started', projectId: 't', sessionKey: 'key', sequence: 2, agent: 'codex', args: [] };
   f.context.onEvent({ ...event, sessionKey: 'wrong' }); assert.equal(accepted, 0);
   f.context.onEvent(event); assert.equal(accepted, 1);
@@ -86,9 +88,10 @@ for (const kind of ['local', 'ssh']) test(`${kind} native spec applies only the 
   const context = vm.createContext({ path, randomUUID: () => 'id', sessions: new Map([['t', { status: 'shell' }]]),
     findProject: () => project, disposeTerminal: () => { disposed++; }, store: { settings: { codexPermissions: 'full' }, findTerminal: () => ({ record: { restore: { agent: 'claude', threadId: 'other', cwd: 'old' } } }) },
     nativeSpecs: new Map(), runtimeDir: path.resolve('runtime'), eventServer: { name: 'pipe', address: '/socket' }, process: { platform: process.platform, env: {} },
-    fs: { writeFileSync() {} }, createTerminalEnvironment: () => ({ codex_home: 'old-home' }), withoutAppImage: value => value,
+    writeBootstrap() {}, createTerminalEnvironment: () => ({ codex_home: 'old-home' }), withoutAppImage: value => value,
     startupNote: () => 'context', READING_NOTE: 'reading', handoffFile: () => 'handoff', skills: { delivery() {} }, integrationDir: 'integration', controlAddress: 'control' });
   vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('\nfunction structuredEvent(')), context);
+  defineMain(context, 'nativeEnvironment');
   const cwd = kind === 'ssh' ? '/remote/project/sub' : path.resolve('project/sub');
   const spec = context.nativeSpec('t', 'codex', true, false, { cwd, providerSessionId: thread, model: 'fixture', effort: 'max', fast: false, codexHome: '/private/codex' });
   assert.equal(disposed, 1); assert.equal(spec.cwd, cwd); assert.equal(spec.providerSessionId, thread);

@@ -4,9 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { defineMain } = require('./helpers/main-modules.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-const names = new Set(['publishCliState', 'applyActivity', 'claudeActivity', 'onEvent']);
+const names = new Set(['onEvent']);
 const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text)).map(node => node.getText(ast)).join('\n');
 
 function fixture(agent = 'claude') {
@@ -23,6 +24,7 @@ function fixture(agent = 'claude') {
     promptText: require('../electron/prompt-queue.cjs').promptText, followClaude() {}, memoryFolder: () => '', memoryDir: () => '', roundsOf: () => [],
     remember: async () => {}, setTimeout: () => ({ unref() {} }), refreshClaudeAccounts() {}, scrubProjectSkills: async () => {} });
   vm.runInContext(functions, context);
+  defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'acceptDispatchEvent');
   let serial = 0;
   const hook = (state, extra = {}) => context.claudeActivity(project, s, { state, sessionId: 'provider', eventId: 'provider:hook-' + ++serial, sentAt: now, ...extra });
   return { s, frames, hook, context, project, advance(ms = 1) { now += ms; }, notifications: () => notifications, beginnings: () => beginnings,

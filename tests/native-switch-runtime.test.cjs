@@ -58,7 +58,7 @@ test('I3/I7: switch state updates and replay do not arm completion or expand a p
   const host = {}, calls = [];
   const context = { quitting: false, sessions: new Map([['t', host]]), scheduleState: () => calls.push('state') };
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
   const state = { changeId: 1, current: 'api', target: 'terminal', phase: 'preparing', background: { count: 0, known: true }, requestId: null, reason: null };
   context.structuredEvent('t', { type: 'switch.updated', payload: state, runtimeSessionId: 'r', replay: true });
   assert.equal(calls.length, 0);

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { defineMain } = require('./helpers/main-modules.cjs');
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 function fixture({ wrongIdentity = false } = {}) {
@@ -26,7 +27,7 @@ function fixture({ wrongIdentity = false } = {}) {
     publishCliState(host, state) { host.cliState = { sessionId: host.sessionId, state }; },
   };
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function localSwitchSessions('), source.indexOf('async function initializeNativeSessions(')), context);
+  defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal');
   vm.runInContext(source.slice(source.indexOf('function resolveIntervention('), source.indexOf('const interventions =')), context);
   return { context, old, saves, signals, sessions };
 }
@@ -129,6 +130,7 @@ test('after a failed switch the late exit and prompt reports of the staged termi
   const main = { sessions: f.sessions, store: { projects: [{ id: 'p' }] }, acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent };
   vm.createContext(main);
   vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('const launchPlans = new Map();')), main);
+  defineMain(main, 'acceptDispatchEvent');
   f.old.status = 'codex';
   // The staged shell reports under the key the host keeps: its CLI's exit, then its next prompt.
   main.onEvent({ projectId: 't', sessionKey: 'same-key', type: 'codex-exited', agent: 'claude', sequence: 4, exitCode: 2 });

@@ -7,6 +7,7 @@ const { RemoteConnection } = require('../electron/remote-connection.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { quotaScope } = require('../electron/features/dashboard/records.cjs');
 const { remoteClaudeResult, watchRemoteClaudeAccount } = require('../electron/features/ssh/claude-account.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const ready = (percent = 42, at = 100000) => ({ state: 'ready', account: { at, source: 'remote-private-diagnostic', token: 'secret',
   limits: [{ minutes: 300, percent, resetsAt: at + 300000, private: 'secret' }, { minutes: 10080, percent: 9, resetsAt: null }] } });
@@ -122,16 +123,14 @@ test('SSH Claude startUsage binds only the remote channel and quota scopes separ
 });
 
 test('SSH Claude attention events show the waiting notice without rearming completion or sending any input', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const cliState = source.slice(source.indexOf('function publishCliState('), source.indexOf('function applyActivity('));
-  const body = source.slice(source.indexOf('function claudeActivity('), source.indexOf('\nfunction onEvent('));
   const session = { terminalId: 't', sessionId: 'pty', codexActive: true, agent: 'claude', needsInput: null, codexActivity: 'complete' };
   const event = { state: 'attention', sessionId: 'fixture-session', eventId: 'fixture-session:notify:1', message: 'Claude needs your answer' };
   let broadcasts = 0;
-  vm.runInNewContext(cliState + body + '\nclaudeActivity(project, session, event);', { project: { kind: 'ssh' }, session, event,
+  const context = defineMain({ project: { kind: 'ssh' }, session, event,
     sessions: new Map([['t', session]]),
     broadcast() { broadcasts++; }, store: { expectCompletion() { assert.fail('attention cannot rearm completion'); } },
-    applyActivity() { assert.fail('attention cannot change round state'); }, followClaude() { assert.fail('attention cannot rebind the transcript'); } });
+    applyActivity() { assert.fail('attention cannot change round state'); }, followClaude() { assert.fail('attention cannot rebind the transcript'); } }, 'publishCliState', 'claudeActivity');
+  vm.runInContext('claudeActivity(project, session, event);', context);
   assert.equal(session.needsInput.message, event.message); assert.equal(session.codexActivity, 'complete'); assert.equal(broadcasts, 1);
 });
 
@@ -149,6 +148,7 @@ test('resuming SSH Claude rebinds its quota poller while preserving the existing
     bindRemoteClaudeAccount(value) { assert.equal(value, session); rebound++; } });
   // Extract the real event handler, ending before unrelated launcher declarations.
   vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('// The agent chosen on a new project')), context);
+  defineMain(context, 'acceptDispatchEvent');
   context.onEvent({ type: 'codex-started', projectId: project.id, sessionKey: 'fixture', agent: 'claude', cwd: project.path, sequence: 2 });
   assert.equal(rebound, 1); assert.equal(session.usage, usage);
   assert.deepEqual(session.usage.round, { input: 15, cached: 3, output: 9 });

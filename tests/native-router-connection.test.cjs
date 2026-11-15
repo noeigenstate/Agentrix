@@ -6,6 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
 const { accountConnection } = require('../electron/features/codex-app-server/account.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 for (const [mode, status, cli, expected] of [
   ['api-only', 'invalid', 'ok', null], ['api-then-terminal', 'invalid', 'ok', 'terminal'],
@@ -57,13 +58,12 @@ test('account/read sanitizes API and ChatGPT modes without retaining personal fi
   }
 });
 test('main connections use init and account evidence and discard a late result after terminal exit', async () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let finish;
   const claude = { terminalId: 'c', agent: 'claude', codexActive: true, status: 'codex', nativeStructured: true, nativeRuntimeSessionId: 'r' };
   const codex = { terminalId: 'x', agent: 'codex', codexActive: true, status: 'codex', nativeStructured: true,
     nativeReadConnection: () => new Promise(resolve => { finish = resolve; }) };
   const context = { projectAccounts: { snapshot: () => null }, sessions: new Map([['c', claude], ['x', codex]]), claudeRuntime: { connection: () => ({ kind: 'api', source: 'init', observedAt: 1 }) } };
-  vm.createContext(context); vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('async function initializeNativeSessions(')), context);
+  defineMain(context, 'readNativeConnections', 'liveHost');
   const pending = context.readNativeConnections(); codex.codexActive = false; finish({ kind: 'subscription', source: 'account/read', observedAt: 2 });
   const result = await pending; assert.equal(result.claude.kind, 'api'); assert.equal(result.codex.kind, 'none');
   codex.codexActive = true;

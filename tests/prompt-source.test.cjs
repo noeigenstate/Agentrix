@@ -11,6 +11,7 @@ const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
 const { WorkspaceStore } = require('../electron/state.cjs');
 const { SubmissionTracker } = require('../electron/terminal-input.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 function activityHarness(mode = 'codex') {
@@ -32,7 +33,8 @@ function activityHarness(mode = 'codex') {
   });
   const start = main.indexOf('  s.conversation = new ConversationLog(');
   vm.runInContext(main.slice(start, main.indexOf('\n  sessions.set(id, s);', start)), context);
-  vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function onEvent(')), context);
+  defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'acceptDispatchEvent', 'writeBootstrap', 'nativeEnvironment', 'retainAgentState');
+  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('function onEvent(')), context);
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
   vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('function startTerminal(')), context);
   const listeners = {};

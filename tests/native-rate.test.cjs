@@ -125,7 +125,7 @@ test('the actual main structured-event bridge supplies the provider rate to agen
     nativeSessions: { tokenRate(id, runtime) { reads++; assert.equal(id, 't'); assert.equal(runtime, 'r'); return sample; } } };
   vm.createContext(context);
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
   context.structuredEvent('t', { runtimeSessionId: 'r', type: 'session.state', payload: { state: 'starting' } });
   context.structuredEvent('t', { runtimeSessionId: 'r', type: 'usage.updated', payload: { input: 2, output: 20, cachedInput: 0, cacheWrite: 0 } });
   const snapshot = context.sessions.get('t').nativeUsage.snapshot();

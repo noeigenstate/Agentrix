@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 const { createEventServer } = require('../electron/events.cjs');
 const { isLocalAgentCommand } = require('../electron/agent-commands.cjs');
 
+const { defineMain } = require('./helpers/main-modules.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 // Exercise the actual event handlers without opening Electron or the user's terminals.
 function handlers() {
@@ -24,8 +25,8 @@ function handlers() {
   // onEvent owns account-query cleanup on real agent/shell exit. Include that
   // legitimate dependency, with an observable subscription instead of a PTY.
   vm.runInContext(main.slice(main.indexOf('function stopUsageAccount('), main.indexOf('let claudeAccountTimer =')), context);
-  vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function applyActivity(')), context);
-  vm.runInContext(main.slice(main.indexOf('function claudeActivity('), main.indexOf('async function resumeAfterPrompt(')), context);
+  defineMain(context, 'publishCliState', 'claudeActivity', 'acceptDispatchEvent');
+  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('async function resumeAfterPrompt(')), context);
   let eventSequence = 0;
   return { context, project, session, calls, send: event => context.onEvent({ projectId: 't', sessionKey: 'key', type: 'agent-activity', sessionId: 'session', eventId: `session:${++eventSequence}`, ...event }) };
 }

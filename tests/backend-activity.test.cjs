@@ -16,6 +16,7 @@ const { CompletionWork, LOST_WORK_TIMEOUT } = require('../electron/completion-wo
 const { CodexActivityReader, monitorActivity } = require('../electron/codex-activity.cjs');
 const { TranscriptTail } = require('../electron/agent-actions.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const main = syncFs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 async function harness(t, kind = 'local', agent = 'codex') {
@@ -45,10 +46,12 @@ async function harness(t, kind = 'local', agent = 'codex') {
     startSkillSession() {}, endSkillSession() {},
     restorePlans: new Map(), Date: class extends Date { static now() { return now; } },
   });
-  vm.runInContext(main.slice(main.indexOf('function publishCliState('), main.indexOf('function onEvent(')), context);
+  vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('function onEvent(')), context);
+  defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity');
   Object.assign(context, { findProject: () => project, scheduleState() {}, randomUUID: require('node:crypto').randomUUID,
     s, project, id: s.terminalId, PromptQueue, CompletionWork, queueMicrotask });
   vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('function startTerminal(')), context);
+  defineMain(context, 'writeBootstrap', 'nativeEnvironment');
   const setup = main.indexOf('  const refreshCompletion = () => {');
   vm.runInContext(main.slice(setup, main.indexOf('  // A prompt the agent', setup)), context);
   s.completionWork.now = s.promptQueue.now = () => now;
@@ -167,6 +170,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     },
   } });
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
+  defineMain(context, 'acceptDispatchEvent');
   const event = (type, sequence) => context.onEvent({ projectId: s.terminalId, sessionKey: 'old-cap', type, sequence, agent: 'codex', args: [], cwd: project.path, sentAt: 2300 });
   h.write('First task\r'); h.user('First task', 2000); h.apply('complete', 'first', 2100);
   assert.equal(h.alerts(), 1); h.store.acknowledge(project.id);
@@ -349,7 +353,7 @@ async function activityFeed(t, h, { clockOffset = h.project.kind === 'ssh' ? 100
     monitorActivity: (read, changed, options) => monitorActivity(read, snapshot => { changes++; changed(snapshot); }, { ...options, watch: null }),
   });
   if (s.agent === 'claude') {
-    vm.runInContext(main.slice(main.indexOf('function followClaude('), main.indexOf('// Workspace broadcasts')), context);
+    defineMain(context, 'followClaude');
     context.followClaude(project, s, { sessionId: 'session', transcriptPath: remote ? '/srv/claude/projects/session.jsonl' : file, sentAt: 1000 - s.activityClockOffset });
   } else {
     await append({ type: 'session_meta', timestamp: timestamp(1000), payload: { id: thread, cwd: project.path, source: 'cli' } });
@@ -1175,7 +1179,7 @@ test('local and remote Codex restoreTerminal routes continuation without a shell
 test('the local-only Claude session follower rejects SSH before accessing any local transcript', async t => {
   const h = await harness(t, 'ssh', 'claude');
   h.context.findClaudeSession = () => assert.fail('must not look for remote Claude sessions locally');
-  vm.runInContext(main.slice(main.indexOf('async function followClaudeSession('), main.indexOf('// One place turns an agent')), h.context);
+  defineMain(h.context, 'followClaudeSession');
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'remote-session'), false);
 });
 

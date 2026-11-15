@@ -8,6 +8,7 @@ const React = require('react');
 const vm = require('node:vm');
 const { ApprovalGuard, approvalStamp } = require('../electron/features/terminal/approval-guard.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
 const fixture = (agent, kind = 'permission') => fs.readFileSync(path.join(__dirname, `fixtures/screens/${agent}-${kind === 'menu' ? 'model-menu' : 'permission'}.txt`), 'utf8').split(/\r?\n/);
@@ -195,8 +196,7 @@ for (const agent of ['claude', 'codex']) {
     Object.assign(s, { activitySince: 0, activityInputAt: 0, promptQueue: {} });
     const context = vm.createContext({ sessions: new Map([['aba', s]]), summarizeTask: () => '',
       store: { setRestore() {} }, broadcast() {} });
-    const start = main.indexOf('function publishCliState(');
-    vm.runInContext(main.slice(start, main.indexOf('// Claude Code hooks:', start)), context);
+    defineMain(context, 'publishCliState', 'applyActivity');
     const observe = (threadId, turnId) => context.applyActivity({ id: 'p' }, s, { threadId, turnId, state: 'working', updatedAt: 100 });
     observe('thread-A', 'turn-A'); const first = s.approval.stamp();
     observe('thread-A', 'turn-A'); assert.deepEqual(s.approval.stamp(), first);

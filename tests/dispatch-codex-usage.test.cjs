@@ -21,6 +21,7 @@ const { createNativeSessions } = require('../electron/features/native-session/in
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
 const { subscriptionLimits } = require('../electron/features/native-session/usage.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const first = { type: 'chatgpt', email: 'first@example.invalid' }, second = { type: 'chatgpt', email: 'second@example.invalid' };
 const routing = { model: 'synthetic-model', effort: 'high', fast: null };
@@ -104,11 +105,14 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')), context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
   const check = source.indexOf('function checkClaude(');
   vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
-  vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('function startTerminal('))
+  defineMain(context, 'acceptDispatchEvent', 'readNativeConnections', 'liveHost', 'dispatchAccounts', 'dispatchReading', 'clearDispatchAccount', 'readNativeSubscriptionLimits',
+    'readNativeUsageInputs', 'connectionSpec', 'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal',
+    'retireTerminal', 'activateNative');
+  vm.runInContext(source.slice(source.indexOf('async function initializeNativeSessions('), source.indexOf('function startTerminal('))
     .replaceAll('await import(', 'await importFixture('), context);
   // The workspace's project removal, as main registers it.
   const removeProject = vm.runInContext(`(${/removeProject: (id => \{[^\n]*\}),/.exec(source)[1]})`, context);

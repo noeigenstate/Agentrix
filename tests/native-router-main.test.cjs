@@ -138,7 +138,7 @@ test('the raw view a native session replaced reaches no PTY: its replies are dro
     ActionLog: require('../electron/agent-actions.cjs').ActionLog, ConversationLog: require('../electron/conversation.cjs').ConversationLog };
   for (const name of ['handle', 'listen', 'findProject', 'startTerminal', 'confirmTerminalClose', 'disposeTerminal', 'broadcast', 'applyActivity', 'pollAfterSubmission', 'send']) context[name] = () => assert.fail(name);
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
   const registration = source.indexOf('terminalInput = registerTerminalIpc(');
   vm.runInContext(source.slice(registration, source.indexOf('registerClipboardIpc(', registration)), context);
   const reports = [], listeners = new Map(), webContents = { mainFrame: { url: 'agentrix://app/index.html' } };

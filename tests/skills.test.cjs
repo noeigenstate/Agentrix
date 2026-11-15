@@ -609,7 +609,7 @@ test('delivery is reused until relevant changes and successful reads publish usa
   store.setOptions(info.id, { trigger: 'always' });
   assert.notEqual(store.delivery(projects[0]), delivery);
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const notes = source.slice(source.indexOf('function refreshSkillNotes()'), source.indexOf('// Claude Code writes'));
+  const notes = source.slice(source.indexOf('function refreshSkillNotes()'), source.indexOf('// Workspace broadcasts'));
   const sessions = new Map([['one', { projectId: 'p1', terminalId: 'one', sessionId: 'first', skillNoteFile: 'one.txt' }], ['two', { projectId: 'p1', terminalId: 'two', sessionId: 'later', skillNoteFile: 'two.txt' }]]);
   let deliveries = 0, writes = 0;
   const refreshNotes = require('node:vm').runInNewContext('(' + notes + ')', { sessions, store: { projects }, skills: { delivery: (project, remote, sessionId) => { assert.equal(project.id, 'p1'); assert.equal(remote, false); assert.ok(['first', 'later'].includes(sessionId)); deliveries++; return {}; } }, startupNote: () => 'Current instructions.', path,

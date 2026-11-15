@@ -10,6 +10,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 // The CLI's own configuration in this stand-in: read-only, asking on request, under the built-in read-only profile (what 0.167 gives an untrusted folder).
@@ -344,9 +345,10 @@ for (const kind of ['local', 'ssh']) test(`${kind}: main hands a new Codex sessi
     const context = vm.createContext({ path, randomUUID: () => 'id', sessions: new Map(), findProject: () => project, disposeTerminal() {},
       store: { settings: { codexPermissions: stored }, findTerminal: () => ({ record: { restore: null } }) }, nativeSpecs: new Map(),
       runtimeDir: path.resolve('runtime'), eventServer: { name: 'pipe', address: '/socket' }, process: { platform: process.platform, env: {} },
-      fs: { writeFileSync() {} }, createTerminalEnvironment: () => ({}), withoutAppImage: value => value, startupNote: () => 'context', READING_NOTE: 'reading',
+      writeBootstrap() {}, createTerminalEnvironment: () => ({}), withoutAppImage: value => value, startupNote: () => 'context', READING_NOTE: 'reading',
       handoffFile: () => 'handoff', skills: { delivery() {} }, integrationDir: 'integration', controlAddress: 'control' });
     vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('\nfunction structuredEvent(')), context);
+    defineMain(context, 'nativeEnvironment');
     // Settings hold one of the three (state.cjs cleans the rest to full); the spec carries it as stored.
     assert.equal(context.nativeSpec('t', 'codex', false).permissions, stored);
     if (kind === 'local') assert.equal(Object.hasOwn(context.nativeSpec('t', 'claude', false), 'permissions'), false);

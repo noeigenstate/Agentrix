@@ -8,6 +8,7 @@ const { randomUUID } = require('node:crypto');
 const vm = require('node:vm');
 const { promptText, rememberClaudeSource } = require('../electron/prompt-queue.cjs');
 const { listClaudeSessions, encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 test('host identities distinguish default SDK owner messages from workers and unknown old records', () => {
   const owner = randomUUID(), worker = randomUUID();
@@ -53,6 +54,7 @@ test('only an authenticated confirmed dispatch start registers a live worker ide
     require: () => require('../electron/features/agents/dispatch-events.cjs') };
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'); vm.createContext(context);
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
+  defineMain(context, 'acceptDispatchEvent');
   const event = { type: 'dispatch-start', id, sessionId, projectId: 't', sessionKey: 'fake-session-key', agent: 'claude', role: '执行',
     model: 'claude-sonnet', effort: 'high', fast: false, title: 'Offline task', cwd: '/offline', brief: '/offline/brief', out: '/offline/out', startedAt: 1 };
   const record = { sessionId, turnOrigin: 'sdk', promptSource: 'sdk', entrypoint: 'agentrix-sdk' };

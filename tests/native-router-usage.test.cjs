@@ -12,6 +12,7 @@ const { nextPath, subscriptionLimits } = require('../electron/features/native-se
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 for (const [agent, config, status, cli, expected] of [
   ['claude', {}, 'no_key', 'ok', ['terminal', 'no_key']],
@@ -123,12 +124,14 @@ test('real main assembly reports terminal-only Claude subscription usage without
   };
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
-  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function readNativeConnections(')), context);
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
   const check = source.indexOf('function checkClaude(');
   vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
   // Execute the actual main composition and callbacks; substitute only dynamic module loading at the process boundary.
-  vm.runInContext(source.slice(source.indexOf('async function readNativeConnections('), source.indexOf('function startTerminal('))
+  defineMain(context, 'readNativeConnections', 'liveHost', 'dispatchAccounts', 'dispatchReading', 'readNativeSubscriptionLimits', 'readNativeUsageInputs', 'connectionSpec',
+    'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'retireTerminal', 'activateNative');
+  vm.runInContext(source.slice(source.indexOf('async function initializeNativeSessions('), source.indexOf('function startTerminal('))
     .replaceAll('await import(', 'await importFixture('), context);
   await context.initializeNativeSessions();
   t.after(() => context.nativeSessions.close());

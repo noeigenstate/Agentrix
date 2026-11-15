@@ -17,6 +17,7 @@ resolution and title tracking. Agentrix starts Codex only through app-server; te
 - `SubmissionTracker` (`electron/terminal-input.cjs`) — which writes submit a prompt; the file also exports isTerminalResponse, isLocalCommand and acceptShellEvent
 - `InputGate` (`electron/terminal-input.cjs`) — holds keys while PowerShell asks for the cursor; the file also exports PromptMarkers
 - `TerminalTitleTracker` (`electron/terminal-title.cjs`) — the Codex session ids a terminal's OSC title reports; the file also exports wholeThread
+- `createSwitchHost` (`electron/features/terminal/switch-host.cjs`) — the terminal side of a run-mode switch over the app shell's deps: the local Claude terminals a switch can take, what each is doing, the staged terminal, and retiring or replacing it
 - `sameThread` (`electron/terminal-title.cjs`) — whether a session id is the one a title reported, whole or cut short
 - `resolveTerminalLink` (`electron/terminal-links.cjs`) — what a clicked terminal link opens; the file also exports resolveRevealPath
 - `shellEnvironment` (`electron/zsh-terminal.cjs`) — the zsh and Bash environment, arguments, locale and shell choice of a local terminal

@@ -12,7 +12,7 @@ const { CompletionWork } = require('../electron/completion-work.cjs');
 const { ActionLog } = require('../electron/agent-actions.cjs');
 const { ConversationLog } = require('../electron/conversation.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
-const ts = require('typescript');
+const { defineMain } = require('./helpers/main-modules.cjs');
 const { timeoutScale } = require('../scripts/wait.mjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve)); };
@@ -32,17 +32,13 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
     PromptQueue, CompletionWork, ActionLog, ConversationLog, dashboard: { run() {} }, t: value => value };
   context.store.setRestore = () => {};
   vm.createContext(context);
-  vm.runInContext(main.slice(main.indexOf('function localSwitchSessions('), main.indexOf('async function initializeNativeSessions(')), context);
+  defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'activateNative', 'writeBootstrap');
   const gateStart = main.indexOf('  s.gate = new InputGate('), gateEnd = main.indexOf('  const refreshCompletion', gateStart);
   context.s = host; context.id = 't'; context.terminal = { write() {} };
   vm.runInContext(main.slice(gateStart, gateEnd), context);
   vm.runInContext(main.slice(main.indexOf('function disposeTerminal('), main.indexOf('function registerUnavailableNative(')), context);
-  vm.runInContext(main.slice(main.indexOf('function structuredEvent('), main.indexOf('async function readNativeConnections(')), context);
-  const tree = ts.createSourceFile('main.cjs', main, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-  let activate;
-  const visit = node => { if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'activateNative') activate = node.initializer.getText(tree); ts.forEachChild(node, visit); };
-  visit(tree); assert.ok(activate);
-  const activateNative = vm.runInContext(`(${activate})`, context);
+  vm.runInContext(main.slice(main.indexOf('function structuredEvent('), main.indexOf('async function initializeNativeSessions(')), context);
+  const { activateNative } = context; assert.ok(activateNative);
   const provider = { resetAvailability() {}, credentials: { status: () => ({ saved }), clear() { saved = false; return { saved }; }, save() { saved = true; return { saved }; } },
     usage: { summary: () => ({}) }, apiState: () => ({ status: saved ? 'ready' : 'no_key' }), create(spec, emit) {
       const stream = createEventStream(spec, emit); let state = 'idle';

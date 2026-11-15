@@ -5,6 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { acceptDispatch, validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const routing = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
 
@@ -226,10 +227,11 @@ test('the real event server and main handler authenticate dispatch without touch
   const calls = new AgentCalls({ changed: () => broadcasts++ }); t.after(() => calls.reset());
   const s = { terminalId: 'terminal', projectId: 'owner-project', sessionKey: 'test-key', calls, codexActivity: 'complete' };
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const handler = vm.runInNewContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')) + '\nonEvent;', {
+  const context = defineMain({
     sessions: new Map([['terminal', s]]), store: { projects: [{ id: 'owner-project' }] }, broadcast: () => broadcasts++, callsOf: session => session.calls,
     require: name => require(path.join(__dirname, '../electron', name)),
-  });
+  }, 'acceptDispatchEvent');
+  const handler = vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')) + '\nonEvent;', context);
   const server = await createEventServer(handler); t.after(() => server.close());
   const send = event => new Promise((resolve, reject) => {
     const socket = net.connect(server.address);
