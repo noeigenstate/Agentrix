@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const { execFile } = require('node:child_process'), { promisify } = require('node:util');
 const { createCodexLocator } = require('../electron/features/codex-runtime/locator.cjs');
-const { scanDrives } = require('../electron/features/codex-runtime/drive-scan.cjs');
+const { scanDrives, LIMITS } = require('../electron/features/codex-runtime/drive-scan.cjs');
+const { codexState } = require('../electron/agents.cjs');
 const { locateCodex, executable } = require('../integration/dispatch.cjs');
 const { fakeFiles, fakeProbe } = require('./helpers/claude-files.cjs');
 const { isolatedEnvironment } = require('../scripts/native-approval-probe.cjs');
@@ -42,6 +43,11 @@ function codexFiles(entries, rules = W) {
     files.reads++;
     const link = name => !!Object.entries(entries).find(([file, entry]) => entry.junction && rules.relative(rules.join(dir, name), file) === '');
     return options?.withFileTypes ? [...names].map(([name, folder]) => ({ name, isDirectory: () => folder, isFile: () => !folder, isSymbolicLink: () => link(name) })) : [...names.keys()];
+  };
+  files.opendir = async dir => {
+    const listed = await files.readdir(dir, { withFileTypes: true });
+    let next = 0;
+    return { read: async () => listed[next++] ?? null, close: async () => {} };
   };
   return files;
 }
@@ -287,87 +293,161 @@ test('each other installer is found after WinGet, with its own via, and the sear
   assert.deepEqual(none.searched, [...windowsSearched, '~\\scoop\\shims']);
 });
 
-// A fake drive scan over the fake files: its walk is drive-scan.cjs's own, its turns are free, and `scanned` counts runs.
-function scanning(entries, { store = null, now, drives = ['C:\\', 'E:\\'] } = {}) {
-  let told;
-  const changed = () => told?.(), scanned = [];
-  const settled = () => new Promise(resolve => { told = resolve; });
-  const { locator, files, runs } = windowsLocator(entries, { store, now, changed,
-    scan: walk => { scanned.push(walk); return scanDrives({ ...walk, drives, files, pause: async () => {} }); } });
-  return { locator, files, runs, scanned, settled };
+// A fake drive scan over the fake files: its walk is drive-scan.cjs's own, its turns are free, its deadlines never come
+// unless a test brings them, and `scanned` counts runs. `told()` resolves when a scan next tells the settings.
+const never = () => new Promise(() => {});
+function scanning(entries, { store = null, now, drives = ['C:\\', 'E:\\'], versions, scan, ...rest } = {}) {
+  let tell;
+  const scanned = [], told = () => new Promise(resolve => { tell = resolve; });
+  const { locator, files, runs } = windowsLocator(entries, { store, now, versions, wait: never, changed: () => tell?.(), ...rest,
+    scan: walk => { scanned.push(walk); return (scan ?? (options => scanDrives({ ...options, drives, files, pause: async () => {}, wait: never })))(walk); } });
+  return { locator, files, runs, scanned, told };
 }
-const memory = () => { const store = { hit: null, read: () => store.hit, write: value => { store.hit = value; } }; return store; };
+const memory = (value = null) => { const store = { value, read: () => store.value, write: next => { store.value = next; } }; return store; };
+const scanOptions = { env: windowsEnv(), platform: 'win32', arch: 'x64' };
 
 test('a Codex off PATH and every known place is found by a background scan of the local drives, kept, and found first from the store on the next start', async () => {
-  const exe = 'E:\\my tools\\codex\\codex.exe', entries = { [exe]: { size: NATIVE } }, store = memory(), options = { env: windowsEnv(), platform: 'win32', arch: 'x64' };
-  const first = scanning(entries, { store }), done = first.settled();
-  const before = await first.locator.refresh(options);
+  const exe = 'E:\\my tools\\codex\\codex.exe', entries = { [exe]: { size: NATIVE } }, store = memory();
+  const first = scanning(entries, { store }), told = first.told();
+  const before = await first.locator.refresh(scanOptions);
   assert.deepEqual([before.file, before.reason.code, before.scan], [null, 'codex.not_found', 'running'], 'the fast answer comes at once, saying a scan runs');
-  await done;
+  await told;
   const hit = first.locator.peek();
   assert.deepEqual(picked(hit), { file: exe, path: exe, via: 'drive-scan', version: '0.166.0', reason: null });
-  assert.equal(await first.locator.locate(options), hit, 'the hit stands for a locate');
-  assert.deepEqual(store.hit, { file: exe, path: exe, size: NATIVE, mtimeMs: 1 });
-  // The next start checks the kept hit before any scan.
+  assert.equal(await first.locator.locate(scanOptions), hit, 'the hit stands for a locate');
+  assert.deepEqual(store.value, { file: exe, path: exe, size: NATIVE, mtimeMs: 1 });
+  // The next start searches the kept hit's folder before any scan.
   const second = scanning(entries, { store });
-  assert.deepEqual(picked(await second.locator.refresh(options)), picked(hit));
+  assert.deepEqual(picked(await second.locator.refresh(scanOptions)), picked(hit));
   assert.deepEqual([second.scanned.length, second.runs], [0, [exe]]);
-  // An npm package off PATH is found by its prefix, and its own program runs.
-  const name = 'npm11-global-0.166.0', prefix = 'E:\\my tools\\npm', npm = scanning(install(name, prefix)), npmDone = npm.settled();
-  await npm.locator.refresh(options); await npmDone;
+  // An npm package off PATH is found by its prefix, and its own program runs; a project's own dependency is not taken.
+  const name = 'npm11-global-0.166.0', prefix = 'E:\\my tools\\npm', npm = scanning(install(name, prefix)), npmTold = npm.told();
+  await npm.locator.refresh(scanOptions); await npmTold;
   assert.deepEqual(picked(npm.locator.peek()), { file: exeOf(name, prefix), path: W.join(prefix, 'codex.ps1'), via: 'drive-scan', version: '0.166.0', reason: null });
+  const project = 'E:\\work\\app', pinned = scanning({ ...install(name, project), [W.join(project, 'package.json')]: { text: '{}' } }), pinnedTold = pinned.told();
+  await pinned.locator.refresh(scanOptions); await pinnedTold;
+  assert.deepEqual([pinned.locator.peek().file, pinned.locator.peek().scan, pinned.runs], [null, 'done', []]);
 });
 
-test('a kept hit that is gone or changed is dropped and the drives are searched again, at most hourly on focus and at once on an explicit refresh', async () => {
-  const exe = 'E:\\my tools\\codex\\codex.exe', options = { env: windowsEnv(), platform: 'win32', arch: 'x64' };
-  for (const [label, entries] of [['gone', {}], ['changed', { [exe]: { size: NATIVE + 1 } }]]) {
-    const store = memory();
-    store.hit = { file: exe, path: exe, size: NATIVE, mtimeMs: 1 };
-    const view = scanning(entries, { store }), done = view.settled();
-    assert.equal((await view.locator.refresh(options)).scan, 'running', label);
-    await done;
-    assert.deepEqual([view.scanned.length, view.locator.peek().file], [1, label === 'gone' ? null : exe], label);
-    assert.deepEqual(store.hit, label === 'gone' ? null : { file: exe, path: exe, size: NATIVE + 1, mtimeMs: 1 }, `${label}: dropped, or kept anew by the scan`);
-  }
-  // Still nothing: focus scans again an hour after the last, an explicit refresh at once; the answer says it looked everywhere.
+test("only a file whose --version reads as Codex's is taken from a scan or the registry; a stand-in's folder is skipped and the next candidate wins", async () => {
+  const other = 'E:\\a\\codex.exe', real = 'E:\\b\\codex.exe', marked = 'D:\\x\\bin\\codex.exe', output = 'D:\\agentrix\\.test-output\\run\\bin\\codex.exe';
+  const entries = { [other]: { size: NATIVE }, [real]: { size: NATIVE }, [marked]: { size: NATIVE }, 'D:\\x\\bin\\.agentrix-stand-in': { text: '' }, [output]: { size: NATIVE } };
+  const view = scanning(entries, { drives: ['D:\\', 'E:\\'], versions: { [other]: 'other-tool 1.2.3', [real]: 'codex-cli 0.170.0' } }), told = view.told();
+  await view.locator.refresh(scanOptions); await told;
+  assert.deepEqual(picked(view.locator.peek()), { file: real, path: real, via: 'drive-scan', version: '0.170.0', reason: null });
+  assert.deepEqual(view.runs, [other, real], 'the stand-ins never ran; the other program ran once and was passed over');
+  // The registry: read only once every other place found nothing, and its file taken only when it reads as Codex.
+  let reads = 0;
+  const registry = async () => { reads++; return { files: [other], folders: [] }; };
+  const viaRegistry = windowsLocator({ [other]: { size: NATIVE } }, { versions: { [other]: 'other-tool 1.2.3' }, registry });
+  assert.equal((await viaRegistry.locator.refresh(scanOptions)).file, null, 'a registry hit that is not Codex is not taken');
+  assert.equal(reads, 1);
+  const onPath = windowsLocator({ 'D:\\Tools\\codex.exe': { size: NATIVE } }, { registry });
+  assert.equal((await onPath.locator.refresh({ ...scanOptions, env: windowsEnv({ PATH: 'D:\\Tools' }) })).via, 'path');
+  assert.equal(reads, 1, 'Codex found elsewhere: the registry is never read');
+});
+
+test('a kept hit updated in place stays found; one that is gone is dropped and the drives are scanned at once', async () => {
+  const exe = 'E:\\my tools\\codex\\codex.exe', kept = { file: exe, path: exe, size: NATIVE, mtimeMs: 1 };
+  const store = memory({ ...kept }), updated = scanning({ [exe]: { size: NATIVE + 1, mtimeMs: 2 } }, { store });
+  assert.deepEqual(picked(await updated.locator.refresh(scanOptions)), { file: exe, path: exe, via: 'drive-scan', version: '0.166.0', reason: null });
+  assert.deepEqual([updated.scanned.length, store.value], [0, { ...kept, size: NATIVE + 1, mtimeMs: 2 }], 'found again in its folder and kept anew');
+  // Gone: dropped, and a scan begins at once, however recent the last one was.
+  const goneStore = memory({ ...kept }), gone = scanning({}, { store: goneStore, now: () => 0 }), told = gone.told();
+  assert.equal((await gone.locator.refresh(scanOptions)).scan, 'running');
+  await told;
+  assert.deepEqual([gone.scanned.length, gone.locator.peek().scan, goneStore.value], [1, 'done', { emptyAt: 0 }]);
+});
+
+test("the drives are scanned by themselves at most once a day, the last empty scan's time kept across starts, and at once when asked", async () => {
   let clock = 0;
-  const view = scanning({}, { now: () => clock });
-  let done = view.settled();
-  await view.locator.refresh(options); await done;
-  const after = view.locator.peek();
-  assert.deepEqual([after.file, after.reason.code, after.scan], [null, 'codex.not_found', 'done']);
-  clock = 60000;
-  assert.equal((await view.locator.refresh(options, { throttled: true })).scan, 'done', 'focus within the hour does not scan');
+  const store = memory(), now = () => clock, first = scanning({}, { store, now });
+  let told = first.told();
+  await first.locator.refresh(scanOptions); await told;
+  assert.deepEqual([first.scanned.length, store.value], [1, { emptyAt: 0 }]);
+  // The next start, an hour later: no scan, and the answer still says every drive was searched.
   clock = 3600000;
-  done = view.settled();
-  assert.equal((await view.locator.refresh(options, { throttled: true })).scan, 'running');
-  await done;
-  done = view.settled();
-  await view.locator.refresh(options); await done;
-  assert.equal(view.scanned.length, 3);
-  assert.equal((await view.locator.locate(options)).scan, 'done');
+  const next = scanning({}, { store, now });
+  assert.equal((await next.locator.refresh(scanOptions)).scan, 'done');
+  clock += 60000;
+  assert.equal((await next.locator.refresh(scanOptions, { throttled: true })).scan, 'done', 'nor on focus');
+  told = next.told();
+  assert.equal((await next.locator.refresh(scanOptions, { scan: true })).scan, 'running', 'asked for (after an install): at once');
+  await told;
+  // A day after that scan, the next start scans by itself.
+  clock += 24 * 3600000;
+  const later = scanning({}, { store, now });
+  told = later.told();
+  assert.equal((await later.locator.refresh(scanOptions)).scan, 'running');
+  await told;
+  assert.deepEqual([next.scanned.length, later.scanned.length], [1, 1]);
 });
 
-test('the drive scan keeps to its depth, skips what it must, and stops at its folder and time caps, yielding between folders', async () => {
-  const at = (...parts) => W.join('C:\\', ...parts), exe = (...parts) => ({ [at(...parts, 'codex.exe')]: { size: 1 } });
+test('a scan that never ends is stopped by its deadline, and the settings leave the scanning state', async () => {
+  let deadline;
+  const view = scanning({}, { scan: never, wait: () => new Promise(resolve => { deadline = resolve; }) }), told = view.told();
+  assert.equal((await view.locator.refresh(scanOptions)).scan, 'running');
+  deadline();
+  await told;
+  assert.deepEqual(codexState(view.locator.peek()), { installed: false, reason: view.locator.peek().reason, scan: 'done' });
+  // The walk races every listing against its own deadline: a drive whose folder never opens, or never reads, ends it.
+  for (const files of [{ opendir: never }, { opendir: async () => ({ read: never, close: async () => {} }) }]) {
+    let due;
+    const walk = scanDrives({ names: ['codex.exe'], accept: async () => null, drives: ['C:\\'], files, pause: async () => {}, wait: () => new Promise(resolve => { due = resolve; }) });
+    due();
+    assert.equal((await walk).stopped, 'time');
+  }
+});
+
+test("a scan that settles while a foreground search runs wins over that search's empty answer", async () => {
+  const exe = 'E:\\my tools\\codex\\codex.exe';
+  let open, storedRead = 0, release;
+  const gate = new Promise(resolve => { open = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const view = scanning({ [exe]: { size: NATIVE } }, { scan: walk => gate.then(() => walk.accept('E:\\my tools\\codex')).then(hit => ({ hit })),
+    storedPath: () => (storedRead++ === 0 ? Promise.resolve(null) : held) });
+  const told = view.told();
+  await view.locator.refresh(scanOptions);
+  const second = view.locator.refresh(scanOptions);
+  open(); await told;
+  assert.equal(view.locator.peek().file, exe);
+  release(null);
+  assert.deepEqual([(await second).file, view.locator.peek().file, view.scanned.length], [exe, exe, 1]);
+});
+
+test('the drive scan keeps to its depth, skips what it must, and stops at its folder, try and time caps, yielding between folders', async () => {
+  const at = (...parts) => W.join('C:\\', ...parts), exe = (...parts) => ({ [at(...parts, 'codex.exe')]: { size: 1 } }), npm = (...parts) => ({ [at(...parts, 'node_modules', '@openai', 'codex', 'bin', 'codex.js')]: { text: '' } });
   const entries = {
-    ...exe('a', 'b', 'c', 'd'), ...exe('a', 'b', 'c', 'd', 'e'), ...exe('Program Files', 'A', 'B', 'C'),
+    ...exe('a', 'b', 'c', 'd'), ...exe('a', 'b', 'c', 'd', 'e'), ...exe('Program Files', 'A', 'B', 'C', 'D', 'E'), ...exe('Program Files', 'A', 'B', 'C', 'D', 'E', 'F'), ...exe('tools', 'a', 'b', 'c', 'd', 'e'),
     ...exe('Users', 'u', 'AppData', 'Local', 'Programs', 'x', 'y', 'z'), ...exe('Users', 'u', 'AppData', 'Local', 'Programs', 'x', 'y', 'z', 'w'),
     ...exe('Windows', 'System32'), ...exe('$Recycle.Bin'), ...exe('System Volume Information'), ...exe('ProgramData', 'Microsoft'), ...exe('ProgramData', 'Other'),
-    ...exe('repo', '.git'), ...exe('proj', 'node_modules', 'tool'), [at('npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js')]: { text: '' },
+    ...exe('repo', '.git'), ...exe('proj', 'node_modules', 'tool'), ...exe('Downloads'), ...exe('repo', 'tests'), ...exe('repo', 'fixtures'), ...exe('repo', '.test-output'),
+    ...exe('tools', 'x', 'AppData', 'Local', 'Temp'), ...exe('tools', 'scratch'), ...npm('npm'), ...npm('proj'), [at('proj', 'package.json')]: { text: '{}' },
     ...exe('Agentrix', 'shims'), [at('Agentrix', 'shims', '.agentrix-shims')]: { text: '' }, [at('loop')]: { junction: true }, ...exe('loop', 'inside'),
   };
-  const files = codexFiles(entries), turns = [], walk = { names: ['codex.exe'], probes: [['node_modules', '@openai', 'codex', 'bin', 'codex.js']], skipFolder: names => names.includes('.agentrix-shims') };
-  const { hits, stopped, visited } = await scanDrives({ ...walk, drives: ['C:\\'], files, pause: async () => { turns.push(1); }, limits: { depth: 4, extraDepth: 3, folders: 20000, ms: 20000, hits: 50 } });
-  assert.deepEqual(hits.sort(), [at('a', 'b', 'c', 'd'), at('npm'), at('Program Files', 'A', 'B', 'C'), at('ProgramData', 'Other'), at('Users', 'u', 'AppData', 'Local', 'Programs', 'x', 'y', 'z')].sort());
+  const files = codexFiles(entries), turns = [], offered = [], limits = { ...LIMITS };
+  const walk = { names: ['codex.exe'], probes: [['node_modules', '@openai', 'codex', 'bin', 'codex.js']], skipFolder: names => names.includes('.agentrix-shims'), skipPaths: [at('tools', 'scratch')],
+    drives: ['C:\\'], files, accept: async folder => { offered.push(folder); return null; } };
+  const { stopped, visited } = await scanDrives({ ...walk, pause: async () => { turns.push(1); }, wait: never, limits: { ...limits, tries: 50 } });
+  assert.deepEqual(offered.sort(), [at('a', 'b', 'c', 'd'), at('npm'), at('Program Files', 'A', 'B', 'C', 'D', 'E'), at('ProgramData', 'Other'), at('tools', 'a', 'b', 'c', 'd', 'e'),
+    at('Users', 'u', 'AppData', 'Local', 'Programs', 'x', 'y', 'z')].sort());
   assert.equal(stopped, 'done');
   assert.ok(turns.length >= visited && visited > 0, 'it yields before each folder');
-  // The caps: the folders it may list, and the time it may take on the injected clock.
-  const capped = await scanDrives({ ...walk, drives: ['C:\\'], files, pause: async () => {}, limits: { depth: 4, extraDepth: 3, folders: 3, ms: 20000, hits: 50 } });
+  // Rejected candidates do not end the walk: the first accepted one does, however many came before it.
+  let tries = 0;
+  const accepted = await scanDrives({ ...walk, accept: async folder => (++tries === 6 ? folder : null), pause: async () => {}, wait: never });
+  assert.deepEqual([accepted.stopped, accepted.tried, !!accepted.hit], ['hit', 6, true]);
+  // The caps: the candidates it may try, the folders it may list, and the time it may take on the injected clock.
+  assert.deepEqual((({ stopped: s, tried }) => [s, tried])(await scanDrives({ ...walk, pause: async () => {}, wait: never, limits: { ...limits, tries: 2 } })), ['tries', 2]);
+  const capped = await scanDrives({ ...walk, pause: async () => {}, wait: never, limits: { ...limits, folders: 3 } });
   assert.deepEqual([capped.stopped, capped.visited], ['folders', 3]);
   let clock = 0;
-  const timed = await scanDrives({ ...walk, drives: ['C:\\'], files, now: () => clock, pause: async () => { clock += 1000; }, limits: { depth: 4, extraDepth: 3, folders: 20000, ms: 5000, hits: 50 } });
+  const timed = await scanDrives({ ...walk, now: () => clock, pause: async () => { clock += 1000; }, wait: never, limits: { ...limits, ms: 5000 } });
   assert.deepEqual([timed.stopped, timed.visited], ['time', 5]);
+  // A folder lists at most `entries` of its entries.
+  const many = codexFiles(Object.fromEntries(Array.from({ length: 30 }, (_, index) => [at('big', `d${String(index).padStart(2, '0')}`, 'codex.exe'), { size: 1 }])));
+  const seen = [];
+  await scanDrives({ ...walk, files: many, accept: async folder => { seen.push(folder); return null; }, pause: async () => {}, wait: never, limits: { ...limits, entries: 10, tries: 50 } });
+  assert.equal(seen.length, 10);
 });
 
 test('the drive scan walks a real folder tree, never through a link', async t => {
@@ -377,8 +457,9 @@ test('the drive scan walks a real folder tree, never through a link', async t =>
   for (const folder of ['tools\\codex', 'away\\deep']) fs.mkdirSync(path.join(root, folder), { recursive: true });
   fs.writeFileSync(path.join(root, 'tools', 'codex', 'codex.exe'), ''); fs.writeFileSync(path.join(root, 'away', 'deep', 'codex.exe'), '');
   fs.symlinkSync(path.join(root, 'away'), junction, 'junction');
-  const { hits } = await scanDrives({ names: ['codex.exe'], drives: [root], limits: { depth: 2, extraDepth: 2, folders: 100, ms: 20000, hits: 50 } });
-  assert.deepEqual(hits.sort(), [path.join(root, 'away', 'deep'), path.join(root, 'tools', 'codex')].sort(), 'the junction to away is not walked a second time');
+  const offered = [];
+  await scanDrives({ names: ['codex.exe'], drives: [root], accept: async folder => { offered.push(folder); return null; }, wait: never, limits: { ...LIMITS, depth: 2 } });
+  assert.deepEqual(offered.sort(), [path.join(root, 'away', 'deep'), path.join(root, 'tools', 'codex')].sort(), 'the junction to away is not walked a second time');
 });
 
 test('a Codex that prints no version is still found and used, with why', async () => {

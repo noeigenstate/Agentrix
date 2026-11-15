@@ -40,6 +40,8 @@ test('every way Codex can be found is in the locator, the shared type and the wo
   // needs no scan, does not carry it.
   assert.doesNotMatch(read('electron/features/codex-runtime/drive-scan.cjs'), /codex\.exe|codex\.js|@openai/i, 'the drive scan names no Codex layout');
   assert.ok(!Object.keys(require('../integration/dispatch.cjs').runtimeFiles()).some(file => file.endsWith('drive-scan.cjs')), 'the helper does not carry the drive scan');
+  // Agentrix's own Codex stand-in answers --version as Codex does: its folder is marked, so a scan never takes it.
+  assert.match(read('scripts/gui-codex-env.mjs'), /await writeFile\(path\.join\(bin, STAND_IN_MARKER\), ''\);[\s\S]*codex\.exe/, 'the stand-in is built beside the marker');
   const resolution = read('scripts/codex-cli-resolution.cjs');
   assert.match(resolution, /packageBinaries\(/); assert.doesNotMatch(resolution, /codex-win32-|windows-msvc/);
 });

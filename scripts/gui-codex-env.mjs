@@ -1,14 +1,20 @@
 import path from 'node:path';
+import { writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
+import shims from '../electron/shared/agentrix-shims.cjs';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
-const fixtures = fileURLToPath(new URL('../tests/fixtures/', import.meta.url)), protocol = path.join(fixtures, 'gui-codex-app-server.cjs');
+const fixtures = fileURLToPath(new URL('../tests/fixtures/', import.meta.url)), protocol = path.join(fixtures, 'gui-codex-app-server.cjs'), { STAND_IN_MARKER } = shims;
 export const guiCodexEnvironment = () => ({ AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_GUI_CODEX_RPC: protocol });
 
 // The app-server stand-in as codex.exe in `bin`, for a Windows PATH: started as an app-server it runs the protocol file
-// guiCodexEnvironment names. It never runs Codex and reaches no model.
-export const windowsCodexStandIn = bin => promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
-  ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(fixtures, 'restore-codex.cs')], { windowsHide: true });
+// guiCodexEnvironment names. It never runs Codex and reaches no model. Its folder holds STAND_IN_MARKER, so a drive
+// scan never takes it for the user's Codex.
+export const windowsCodexStandIn = async bin => {
+  await writeFile(path.join(bin, STAND_IN_MARKER), '');
+  return promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
+    ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(fixtures, 'restore-codex.cs')], { windowsHide: true });
+};
 
 // The same stand-in as the `codex` on a POSIX PATH. A shell script that names its interpreter and the .cjs file: Node
 // decides what a file without an extension is from its folder's package.json, and a test folder inside this
