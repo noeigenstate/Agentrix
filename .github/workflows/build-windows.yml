@@ -199,6 +199,7 @@ jobs:
         shell: bash
         env:
           AGENTRIX_REQUIRE_REAL_CLI: '1'
+          AGENTRIX_LATENCY_SAMPLES: '5'
         run: |
           # The real Codex permissions contract runs only when the affected plan selects it (the local full replica has no
           # plan and runs it), on a private Codex 0.167.0; Codex's minimum-version install above stays unchanged.
@@ -215,6 +216,15 @@ jobs:
           test -f "$AGENTRIX_REAL_CLAUDE"
           "$AGENTRIX_REAL_CLAUDE" --version
           node scripts/affected-tests.mjs --plan .test-output/affected-tests.json --run --kind real --locked-prefix "$RUNNER_TEMP/claude-contract"
+
+      - name: Upload terminal hook latency
+        if: needs.reuse.outputs['build-only'] != 'true' && steps.affected.outputs.real == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: terminal-events-latency
+          path: .test-output/terminal-events-latency.json
+          if-no-files-found: ignore
+          retention-days: 30
 
       - name: Run unit and integration tests
         if: needs.reuse.outputs['build-only'] != 'true' && steps.affected.outputs.full == 'true'

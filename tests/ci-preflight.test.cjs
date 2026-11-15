@@ -53,7 +53,7 @@ test('local plan replays the Windows build followed by every desktop shard in ma
   const ordered = [...parsed.jobs.windows.steps, ...desktop.strategy.matrix.include.flatMap(({ shard }) =>
     desktop.steps.filter(step => !step.if || step.if === 'always()' || step.if === 'contains(fromJSON(needs.windows.outputs.shards), matrix.shard)' || step.if.startsWith(`matrix.shard == '${shard}'`)))];
   assert.deepEqual(steps.map(step => step.name), ordered.map(step => step.name));
-  assert.equal(steps.length, 69);
+  assert.equal(steps.length, 70);
   assert.deepEqual(steps.map(step => step.number), Array.from({ length: steps.length }, (_, index) => index + 1));
   assert.equal(new Set(steps.map(step => step.key)).size, steps.length);
   const skipped = steps.filter(step => step.skip);
