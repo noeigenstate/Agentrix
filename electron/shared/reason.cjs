@@ -9,6 +9,7 @@ const TABLES = {
   codex: require('./reasons/codex.cjs'),
 };
 const DETAIL_LIMIT = 300;
+const FIELDS = ['code', 'params', 'detail', 'stage', 'source', 'observedAt'];
 
 const entryOf = code => {
   if (typeof code !== 'string') return null;
@@ -25,12 +26,17 @@ function codesOf(ns) {
 }
 
 // Why the field values are not a Reason of this code, or null.
-function problemOf(code, { params, detail, stage, source, observedAt }) {
+function problemOf(code, value) {
+  const { params, detail, stage, source, observedAt } = value;
   const entry = entryOf(code);
   if (!entry) return `unknown code ${code}`;
+  const extra = Object.keys(value).filter(name => !FIELDS.includes(name));
+  if (extra.length) return `${extra.join(', ')} is not a Reason field`;
   if (typeof source !== 'string' || !source) return 'source is missing';
   if (!Number.isFinite(observedAt)) return 'observedAt is not a time';
   if (params !== undefined && !isFlat(params)) return 'params is not a flat map of strings, numbers, booleans and null';
+  const undeclared = Object.keys(params || {}).filter(name => !entry.params?.includes(name));
+  if (undeclared.length) return `${undeclared.join(', ')} is not a param of ${code}`;
   if (detail !== undefined && (typeof detail !== 'string' || /[\r\n]/.test(detail) || detail.length > DETAIL_LIMIT)) return `detail is not one line of at most ${DETAIL_LIMIT} characters`;
   if (stage !== undefined && !entry.stages?.includes(stage)) return `stage ${stage} is not one of ${(entry.stages || []).join(', ') || 'none'}`;
   return null;
