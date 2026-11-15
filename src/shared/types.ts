@@ -155,8 +155,9 @@ export type CodexVia = 'path' | 'npm-shim' | 'npm-vendor' | 'npm-hoisted' | 'npm
   | 'scoop' | 'chocolatey' | 'volta' | 'bun' | 'pnpm' | 'yarn' | 'nvm' | 'fnm' | 'vscode-extension' | 'registry' | 'drive-scan';
 // An installed Codex says how it was found; `version` is null and `reason` says why when its check printed none. One
 // not found keeps the reason, which says where the search looked, and `scan` whether the local drives are being
-// searched ('running') or were ('done'). Before the first search only `installed` is known.
-export type CodexAgentState = { installed: boolean; version?: string | null; via?: CodexVia; fileShown?: string; reason?: Reason; scan?: 'running' | 'done' };
+// searched ('running'), were, all of them ('done'), or only in part ('partial'). Before the first search only
+// `installed` is known.
+export type CodexAgentState = { installed: boolean; version?: string | null; via?: CodexVia; fileShown?: string; reason?: Reason; scan?: 'running' | 'done' | 'partial' };
 export type AgentsState = { codex: CodexAgentState; claude: ClaudeAgentState; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }

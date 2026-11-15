@@ -1,4 +1,4 @@
-import { guiCodexEnvironment } from './gui-codex-env.mjs';
+import { guiCodexEnvironment, markStandIn } from './gui-codex-env.mjs';
 // Restore mixed agent sessions while the window answers PowerShell's cursor-position query late.
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
@@ -26,6 +26,7 @@ const packaged = process.argv.includes('--packaged');
 await fs.mkdir(bin, { recursive: true });
 await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'claude.exe')}`, path.join(root, 'tests/fixtures/restore-codex.cs')], { windowsHide: true });
 await fs.copyFile(path.join(bin, 'claude.exe'), path.join(bin, 'codex.exe'));
+await markStandIn(bin);
 
 async function receipt(project) {
   try { return JSON.parse(await fs.readFile(path.join(project.path, 'resume-receipt.json'), 'utf8')); }

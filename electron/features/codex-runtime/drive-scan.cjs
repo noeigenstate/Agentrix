@@ -29,9 +29,10 @@ async function scanDrives({ drives, names, probes = [], accept, skipFolder = () 
   const started = now(), deadline = wait(limits.ms).then(() => TIMEOUT), within = promise => Promise.race([promise, deadline]);
   // A folder's entries, at most `limits.entries` of them, or null when it cannot be read, or TIMEOUT.
   async function listing(folder) {
-    let dir;
-    try { dir = await within(files.opendir(folder)); } catch { return null; }
-    if (dir === TIMEOUT) return TIMEOUT;
+    let dir, opening;
+    try { opening = files.opendir(folder); dir = await within(opening); } catch { return null; }
+    // A folder that opens after the deadline is closed once it does.
+    if (dir === TIMEOUT) { opening.then(late => late.close()).catch(() => {}); return TIMEOUT; }
     const entries = [];
     try {
       while (entries.length < limits.entries) {

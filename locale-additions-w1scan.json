@@ -12,5 +12,6 @@
   "来自 fnm": "from fnm",
   "来自 VS Code 扩展": "from a VS Code extension",
   "来自已安装的程序（注册表）": "from the installed programs (registry)",
-  "来自本地磁盘搜索": "from a search of the local drives"
+  "来自本地磁盘搜索": "from a search of the local drives",
+  "已搜索部分本地磁盘，下次启动会继续搜索。": "Part of the local drives was searched; Agentrix keeps looking at the next start."
 }

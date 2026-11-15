@@ -1,3 +1,4 @@
+import { markStandIn } from './gui-codex-env.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -30,6 +31,7 @@ export async function createFixture(root, directory, mib) {
   await exec(path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
     ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, source], { windowsHide: true });
   await fs.copyFile(path.join(bin, 'codex.exe'), path.join(bin, 'claude.exe'));
+  await markStandIn(bin);
   const transcripts = {};
   const text = ('Generated **Markdown**, `code`, and an ordinary paragraph.\n\n').repeat(100);
   const output = 'Synthetic tool output without credentials.\n'.repeat(700);

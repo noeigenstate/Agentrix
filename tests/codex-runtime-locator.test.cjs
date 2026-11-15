@@ -389,7 +389,7 @@ test('a scan that never ends is stopped by its deadline, and the settings leave 
   assert.equal((await view.locator.refresh(scanOptions)).scan, 'running');
   deadline();
   await told;
-  assert.deepEqual(codexState(view.locator.peek()), { installed: false, reason: view.locator.peek().reason, scan: 'done' });
+  assert.deepEqual(codexState(view.locator.peek()), { installed: false, reason: view.locator.peek().reason, scan: 'partial' }, 'cut short, not everywhere');
   // The walk races every listing against its own deadline: a drive whose folder never opens, or never reads, ends it.
   for (const files of [{ opendir: never }, { opendir: async () => ({ read: never, close: async () => {} }) }]) {
     let due;
@@ -397,7 +397,55 @@ test('a scan that never ends is stopped by its deadline, and the settings leave 
     due();
     assert.equal((await walk).stopped, 'time');
   }
+  // A folder that opens only after the deadline is closed then.
+  let due, open, closed;
+  const closing = new Promise(resolve => { closed = resolve; });
+  const late = scanDrives({ names: ['codex.exe'], accept: async () => null, drives: ['C:\\'], pause: async () => {}, wait: () => new Promise(resolve => { due = resolve; }),
+    files: { opendir: () => new Promise(resolve => { open = resolve; }) } });
+  due();
+  assert.equal((await late).stopped, 'time');
+  open({ read: async () => null, close: async () => { closed('closed'); } });
+  assert.equal(await closing, 'closed');
 });
+
+test('a scan cut short by time, folders, tries or its deadline keeps no time, scans again at the next start and says it searched part of the drives; one that went everywhere waits a day', async () => {
+  const cases = [['time', { stopped: 'time' }], ['folders', { stopped: 'folders' }], ['tries', { stopped: 'tries' }], ['deadline', null], ['done', { stopped: 'done' }]];
+  for (const [label, outcome] of cases) {
+    let clock = 0, deadline;
+    const store = memory(), now = () => clock, scan = outcome ? async () => ({ hit: null, ...outcome }) : never;
+    const first = scanning({}, { store, now, scan, wait: () => new Promise(resolve => { deadline = resolve; }) }), told = first.told();
+    await first.locator.refresh(scanOptions);
+    if (!outcome) deadline();
+    await told;
+    const partial = label !== 'done';
+    assert.deepEqual([first.locator.peek().scan, store.value], [partial ? 'partial' : 'done', partial ? null : { emptyAt: 0 }], label);
+    // Within the hour focus does not scan again; an hour on it does, when the scan was cut short.
+    clock = 60000;
+    assert.equal((await first.locator.refresh(scanOptions, { throttled: true })).scan, partial ? 'partial' : 'done', label);
+    clock = 3600000;
+    assert.equal((await first.locator.refresh(scanOptions, { throttled: true })).scan, partial ? 'running' : 'done', `${label}: an hour on`);
+    // The next start scans again after a cut-short scan, and waits a day after a complete one.
+    const next = scanning({}, { store, now, scan: async () => ({ hit: null, stopped: 'done' }) });
+    assert.equal((await next.locator.refresh(scanOptions)).scan, partial ? 'running' : 'done', `${label}: the next start`);
+  }
+});
+
+test("a stand-in's folder is never taken from a scan, the registry or the kept hit, even when its --version reads as Codex's", async () => {
+  const marker = folder => ({ [W.join(folder, '.agentrix-stand-in')]: { text: '' } }), standIn = 'E:\\stand\\bin\\codex.exe';
+  const entries = { [standIn]: { size: NATIVE }, ...marker('E:\\stand\\bin') };
+  // The kept hit's folder and the registry's file.
+  const kept = scanning(entries, { store: memory({ file: standIn, path: standIn, size: NATIVE, mtimeMs: 1 }), scan: async () => ({ hit: null, stopped: 'done' }) }), keptTold = kept.told();
+  assert.equal((await kept.locator.refresh(scanOptions)).file, null);
+  await keptTold;
+  const viaRegistry = windowsLocator(entries, { registered: { files: [standIn], folders: [] } });
+  assert.equal((await viaRegistry.locator.refresh(scanOptions)).file, null);
+  // A package a scan finds whose platform package is a stand-in (dispatch-control builds one so).
+  const prefix = 'E:\\npm', name = 'npm11-global-0.166.0', packaged = { ...install(name, prefix), ...marker(W.dirname(exeOf(name, prefix))) };
+  const view = scanning(packaged), told = view.told();
+  await view.locator.refresh(scanOptions); await told;
+  assert.deepEqual([view.locator.peek().file, view.runs, kept.runs, viaRegistry.runs], [null, [], [], []], 'no stand-in ever ran');
+});
+
 
 test("a scan that settles while a foreground search runs wins over that search's empty answer", async () => {
   const exe = 'E:\\my tools\\codex\\codex.exe';

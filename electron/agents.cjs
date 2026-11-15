@@ -28,7 +28,8 @@ function claudeState({ terminal, native, reason, version, failure, incomplete })
 
 // The agents' word on Codex from codex-runtime's locate: installed when a file was found, with its version (null when
 // its check printed none, `reason` then says why) and how it was found; nothing found keeps the reason, which says
-// where the search looked, and `scan` whether the local drives are being searched ('running') or were ('done').
+// where the search looked, and `scan` whether the local drives are being searched ('running'), were ('done') or were
+// only in part ('partial').
 function codexState({ file, version, via, fileShown, reason, scan }) {
   return file ? { installed: true, version, via, fileShown, ...(reason ? { reason } : {}) } : { installed: false, reason, ...(scan ? { scan } : {}) };
 }

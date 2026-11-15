@@ -10,9 +10,10 @@ const VIAS = Object.freeze(['path', 'npm-shim', 'npm-vendor', 'npm-hoisted', 'np
   'scoop', 'chocolatey', 'volta', 'bun', 'pnpm', 'yarn', 'nvm', 'fnm', 'vscode-extension', 'registry', 'drive-scan']);
 const VERSION = /\b\d+\.\d+\.\d+(?:-[\w.]+)?/, VERSION_TIMEOUT_MS = 10000, SHIM_BYTES = 65536, SOURCE = 'codex-runtime locator';
 // A throttled refresh (window focus) searches with the stored Windows PATH at most this often. While nothing is found,
-// the local drives are scanned by themselves at most once a day (the last empty scan's time is kept across starts), and
-// a scan settles within SCAN_DEADLINE_MS whatever a drive does.
-const REFRESH_MS = 60000, SCAN_MS = 24 * 3600000, SCAN_DEADLINE_MS = 30000;
+// the local drives are scanned by themselves at most once a day after a scan that went everywhere (its time is kept
+// across starts), and within the hour, and at the next start, after one a limit or the deadline cut short. A scan
+// settles within SCAN_DEADLINE_MS whatever a drive does.
+const REFRESH_MS = 60000, SCAN_MS = 24 * 3600000, PARTIAL_SCAN_MS = 3600000, SCAN_DEADLINE_MS = 30000;
 // What the drive scan counts as a candidate: a codex.exe in a folder, or npm's package below it (the folder is its prefix).
 const SCAN_HITS = { names: ['codex.exe'], probes: [['node_modules', '@openai', 'codex', 'bin', 'codex.js']] };
 // A file only a scan or the registry named is Codex only when its --version reads as Codex's own: any program may be
@@ -167,7 +168,8 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
   const versions = new Map();
   let stored = null, registered = null, lastFull = null, last = null, latest = null, running = null, trailing = null;
   // The running scan, when this process last began one, and how many scans settled with what last (a hit or null).
-  let scanning = null, scannedAt = null, scansSettled = 0, scanAnswer = null;
+  // `scanOutcome` is how this process's last scan that found nothing ended: 'done' (everywhere) or 'partial'.
+  let scanning = null, scannedAt = null, scansSettled = 0, scanAnswer = null, scanOutcome = null;
   const save = value => Promise.resolve().then(() => store?.write(value)).catch(() => {});
   const keep = found => save({ file: found.file, path: found.path, size: found.fingerprint.size, mtimeMs: found.fingerprint.mtimeMs });
 
@@ -281,6 +283,7 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       const take = async ([file, layoutVia, at], confined) => {
         const program = await runnable(file, windows), strict = STRICT.has(layoutVia);
         if (!program || confined && !onShareOf(within, program.real, path)) return null;
+        if (strict && await present(path.join(path.dirname(program.real), STAND_IN_MARKER))) return null;
         const said = run => ({ file: program.real, path: at, fileShown: shown(program.real), version: run.version ?? null,
           via: layoutVia ?? (fromStored.has(entry) ? 'registry-path' : 'path'),
           fingerprint: { file: program.real, size: program.stat.size, mtimeMs: program.stat.mtimeMs, pathHash },
@@ -320,8 +323,9 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
   // Nothing found on Windows. The kept hit's folder is searched again as a scan's would be, so an in-place update keeps
   // Codex found (and kept anew); nothing that runs there drops it and scans at once. Otherwise a scan of the local
   // drives (`due`, which the caller starts once the answer is kept) begins when none runs and one was asked for
-  // (`scan`), or a full search finds the last one (this process's, or the empty one the store keeps) a day old or
-  // none at all. The answer says whether a scan is running or has looked everywhere.
+  // (`scan`), or a full search finds none yet, or the last one (this process's, or the complete empty one the store
+  // keeps) a day old, or an hour old when it was cut short. The answer says whether a scan is running, has looked
+  // everywhere ('done') or was cut short ('partial').
   async function unfound(options, mode, full, chosen, result) {
     const kept = await Promise.resolve().then(() => store?.read()).catch(() => null);
     let dropped = false;
@@ -335,23 +339,26 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       dropped = true;
     }
     const lastScan = scannedAt ?? (typeof kept?.emptyAt === 'number' ? kept.emptyAt : null);
-    const due = !scanning && (dropped || mode === 'scan' || full && (lastScan === null || now() - lastScan >= SCAN_MS));
-    const scanState = due || scanning ? 'running' : lastScan !== null ? 'done' : null;
+    const every = scannedAt !== null && scanOutcome === 'partial' ? PARTIAL_SCAN_MS : SCAN_MS;
+    const due = !scanning && (dropped || mode === 'scan' || full && (lastScan === null || now() - lastScan >= every));
+    const scanState = due || scanning ? 'running' : scannedAt !== null ? scanOutcome : lastScan !== null ? 'done' : null;
     return { result: scanState ? { ...result, scan: scanState } : result, due };
   }
   // The walk offers each candidate folder to the same search as any folder, with via `drive-scan`; the first that
-  // runs as Codex ends it, becomes the answer while nothing else was found meanwhile, and is kept, and an empty scan
-  // keeps its time. The scan settles by SCAN_DEADLINE_MS whatever a drive does, and `changed` is told.
+  // runs as Codex ends it, becomes the answer while nothing else was found meanwhile, and is kept. Only a walk that went
+  // everywhere (`stopped: 'done'`) keeps the time of its empty answer; one that a limit or the deadline cut short keeps
+  // nothing, so the next start scans again. The scan settles by SCAN_DEADLINE_MS whatever a drive does, and `changed`
+  // is told.
   function driveScan(options) {
     scannedAt = now();
     const accept = folder => search(options, true, () => {}, [[folder, 'drive-scan']]).then(found => found.file ? found : null);
     const walk = Promise.resolve().then(() => scan({ ...SCAN_HITS, accept, skipFolder: names => names.includes(SHIM_MARKER) || names.includes(STAND_IN_MARKER) }));
-    return Promise.race([walk.then(({ hit }) => hit ?? null), wait(SCAN_DEADLINE_MS).then(() => null)]).catch(() => null)
-      .then(async found => {
-        scanning = null; scansSettled++; scanAnswer = found;
-        await (found ? keep(found) : save({ emptyAt: now() }));
+    return Promise.race([walk, wait(SCAN_DEADLINE_MS).then(() => ({ stopped: 'deadline' }))]).catch(() => ({ stopped: 'failed' }))
+      .then(async ({ hit: found = null, stopped }) => {
+        scanning = null; scansSettled++; scanAnswer = found; scanOutcome = found ? null : stopped === 'done' ? 'done' : 'partial';
+        await (found ? keep(found) : save(scanOutcome === 'done' ? { emptyAt: now() } : null));
         if (!last || last.result.file) return;
-        last = found ? { ...last, result: found, leads: await files.realpath(found.path).catch(() => null) } : { ...last, result: { ...last.result, scan: 'done' } };
+        last = found ? { ...last, result: found, leads: await files.realpath(found.path).catch(() => null) } : { ...last, result: { ...last.result, scan: scanOutcome } };
         latest = last.result;
         changed();
       });
@@ -378,8 +385,8 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     }
     if (!result.file && windows && scan) {
       ({ result, due } = await unfound(options, mode, full, chosen, result));
-      // A scan that settled while this answer was made wins: its hit, or that it looked everywhere.
-      if (!result.file && scansSettled !== settledBefore) { due = false; result = scanAnswer ?? { ...result, scan: 'done' }; }
+      // A scan that settled while this answer was made wins: its hit, or how far it looked.
+      if (!result.file && scansSettled !== settledBefore) { due = false; result = scanAnswer ?? { ...result, scan: scanOutcome }; }
     }
     // Where `path` leads now, through a junction such as nvm-windows' C:\Program Files\nodejs, is what stands means.
     const leads = result.path && await files.realpath(result.path).catch(() => null);

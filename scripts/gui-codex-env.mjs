@@ -7,11 +7,14 @@ import { fileURLToPath } from 'node:url';
 const fixtures = fileURLToPath(new URL('../tests/fixtures/', import.meta.url)), protocol = path.join(fixtures, 'gui-codex-app-server.cjs'), { STAND_IN_MARKER } = shims;
 export const guiCodexEnvironment = () => ({ AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_GUI_CODEX_RPC: protocol });
 
+// Marks `bin` as the folder of a stand-in CLI: a Codex drive scan never takes a codex.exe there for the user's Codex.
+// Every script or test that builds or copies a stand-in codex.exe calls it (tests/codex-runtime-guards.test.cjs).
+export const markStandIn = bin => writeFile(path.join(bin, STAND_IN_MARKER), '');
+
 // The app-server stand-in as codex.exe in `bin`, for a Windows PATH: started as an app-server it runs the protocol file
-// guiCodexEnvironment names. It never runs Codex and reaches no model. Its folder holds STAND_IN_MARKER, so a drive
-// scan never takes it for the user's Codex.
+// guiCodexEnvironment names. It never runs Codex and reaches no model.
 export const windowsCodexStandIn = async bin => {
-  await writeFile(path.join(bin, STAND_IN_MARKER), '');
+  await markStandIn(bin);
   return promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
     ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(fixtures, 'restore-codex.cs')], { windowsHide: true });
 };
