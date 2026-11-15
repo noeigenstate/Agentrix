@@ -11,13 +11,13 @@ const cases = [
   ['stream', { type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Partial reply' } } }, false],
   ['tool', reply([{ type: 'tool_use', id: 'tool', name: 'Read', input: {} }]), false],
 ];
-async function check(t, message, rejected, result = {}, interrupt = false) {
+async function check(t, message, rejected, result = {}, interrupt = false, extra = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-shell-delivery-')), fake = fakeSdk({ auto: false }), events = [];
   const runtime = require('../electron/features/claude-sdk/index.cjs').createClaudeRuntime({ directory: root, loadSdk: async () => fake.sdk,
     resolveExecutable: async () => 'fake-only', safeStorage: { isEncryptionAvailable: () => true, encryptString: Buffer.from, decryptString: value => value.toString() } });
   t.after(async () => { await runtime.close(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 }); });
   runtime.credentials.save('sk-ant-offline-shell-delivery-only');
-  const session = runtime.create({ owner: 'gui', cwd: root, env: { ...process.env, GIT_CEILING_DIRECTORIES: root }, runtimeSessionId: 'shell-test' }, event => events.push(event));
+  const session = runtime.create({ owner: 'gui', cwd: root, env: { ...process.env, GIT_CEILING_DIRECTORIES: root }, runtimeSessionId: 'shell-test', ...extra }, event => events.push(event));
   await session.start(); await session.shell('shell', 'echo OUTPUT');
   if (message) fake.emit(message);
   if (interrupt) await session.interrupt();
@@ -29,6 +29,7 @@ async function check(t, message, rejected, result = {}, interrupt = false) {
   assert.equal(card.payload.content.modelDelivery === 'rejected', rejected);
   assert.equal(events.filter(event => event.type === 'error' && event.payload.code === 'shell_context_rejected').length, rejected ? 1 : 0);
   if (rejected) assert.equal(events.filter(event => event.type === 'error').at(-1).payload.code, 'shell_context_rejected');
+  return events;
 }
 test('shell delivery none distinguishes parent reply from CLI errors', { timeout: 20000 }, t => check(t, null, true));
 test('owner interrupt retains shell output without a delivery failure warning', { timeout: 20000 }, t => check(t, null, false, {}, true));
@@ -38,3 +39,10 @@ test('shell budget notice remains visible after final result', { timeout: 20000 
 for (const [name, message, rejected] of cases.filter(([name]) => name !== 'none')) {
   test(`shell delivery ${name} distinguishes parent reply from CLI errors`, { timeout: 20000 }, t => check(t, message, rejected));
 }
+test('a refused shell delivery is told in one whole sentence: not sent, or kept for the terminal the session moves to', { timeout: 20000 }, async t => {
+  const notice = events => events.find(event => event.type === 'error' && event.payload.code === 'shell_context_rejected').payload.message;
+  assert.equal(notice(await check(t, null, true)), '命令已执行，但输出未发送给模型。请检查 API 后重试。');
+  const credits = { type: 'assistant', error: 'billing_error', message: { model: '<synthetic>', content: [{ type: 'text', text: 'Credit balance is too low' }] } };
+  assert.equal(notice(await check(t, credits, true, {}, false, { quotaFallback: () => true })),
+    '命令已执行，但输出未发送给模型。命令输出保留在本次会话历史中，切换到终端后会随下一条消息发送给模型，无需重新执行命令。');
+});

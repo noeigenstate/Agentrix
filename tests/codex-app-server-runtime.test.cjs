@@ -227,6 +227,19 @@ test('a failed start reaps an exited child whose inherited pipes keep close open
   assert.equal(closed, true, 'the host released the inherited pipes and received close before reporting the detail');
 });
 
+test('startup diagnostics end when the bounded stop settles, even when the exited child never reports close', async () => {
+  const child = new EventEmitter(), armed = Promise.withResolvers(), stopped = Promise.withResolvers();
+  child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough(); child.exitCode = null;
+  const timers = { setTimeout(fn, delay) { const task = { fn, delay }; armed.resolve(task); return task; }, clearTimeout() {} };
+  const rpc = createRpc(child);
+  child.stderr.emit('data', 'last words before exit'); child.exitCode = 1; child.emit('exit', 1);
+  const diagnostics = rpc.diagnostics({ stop: () => stopped.promise, timers });
+  const timer = await armed.promise; assert.equal(timer.delay, 3000);
+  timer.fn(); stopped.resolve();
+  // The settle point is the stop itself: an inherited pipe holder may keep close from ever arriving.
+  assert.deepEqual(await diagnostics, { stderr: 'last words before exit', processError: null, exitCode: 1, signal: null });
+});
+
 test('a failed start carries its stage, exit code and redacted stderr tail, and a protocol error its code and message', async t => {
   const lifetime = resources(t);
   const stderr = 'early line one\nearly line two\n\x1b[31mERROR\x1b[0m config: token=abcdefsecret123 Authorization: Bearer sk-proj-abcdefghijklmn\n'

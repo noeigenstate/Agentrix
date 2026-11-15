@@ -164,6 +164,11 @@ function createSwitches({ list, choose, observe, prepare, publish, retire = asyn
     handoff: id => entries.get(id)?.handoff || null,
     recovering: id => !!entries.get(id)?.recovery,
     waiting: () => [...entries.values()].filter(entry => entry.state.phase !== 'stable').length,
+    // Resolves once no change is running, including one a running change started again. A change waiting for the owner,
+    // a turn or a retry timer is not running.
+    async settled() {
+      for (let tasks; (tasks = [...entries.values()].map(entry => entry.task).filter(Boolean)).length;) await Promise.allSettled(tasks);
+    },
     input(id, runtimeSessionId) {
       const entry = entries.get(id);
       if (!entry || ![entry.session.spec.runtimeSessionId, entry.pendingSession?.spec.runtimeSessionId].includes(runtimeSessionId)) return;

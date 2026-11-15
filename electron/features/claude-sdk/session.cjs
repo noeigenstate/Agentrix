@@ -4,7 +4,7 @@ const { createNormalizer } = require('./normalize.cjs');
 const { TokenRates } = require('../agents/token-rate.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
-const { billingIdentityError, startupFailure } = require('./identity.cjs');
+const { billingIdentityError, startupFailure, LIMIT_MESSAGES, LIMIT_SWITCHING } = require('./identity.cjs');
 const { stderrCollector } = require('../agents/start-failure.cjs');
 const { inputQueue, queryOptions, openQuery, readBillingIdentity } = require('./query.cjs');
 const { turnResult, tokensOf, hasModelReply } = require('./result.cjs');
@@ -79,6 +79,12 @@ function createClaudeSession(spec, emit, dependencies) {
       limits = observed; publish('limits.updated', limits);
       if (observed.notice && message.type !== 'rate_limit_event') run.limitCandidate = observed.notice;
     }
+    // A key revoked mid-session leaves the route unavailable, so the next message takes the run mode's fallback.
+    if (message.error === 'authentication_failed') {
+      onFailure('invalid_key', null, run.generation);
+      publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
+        state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'invalid_key' });
+    }
     // A warning or a retry is only an observation. The CLI owns retries; only its final refusal stops input.
     if (message.type !== 'result' || message.is_error !== true || run.interrupted) return;
     const notice = run.limitCandidate;
@@ -86,7 +92,7 @@ function createClaudeSession(spec, emit, dependencies) {
     run.limitReason = refusalReason(notice.code); run.limitMessage = notice.message; run.quotaRejected = true;
     providerFailure = Object.assign(new Error(notice.message), { code: run.limitReason, beforeInput: true });
     if (spec.owner !== 'dispatch' || run.limitReason !== 'credits_exhausted') onFailure(run.limitReason, providerFailure, run.generation);
-    const messageText = notice.message + (spec.quotaFallback?.() ? '本轮结束后将转到 Claude Code 终端。' : '');
+    const messageText = (spec.quotaFallback?.() ? LIMIT_SWITCHING : LIMIT_MESSAGES)[run.limitReason];
     publish('error', { code: notice.code, message: messageText, retryable: false, willRetry: false, stage: 'turn' });
   }
   function observeBackground(run, message) {
@@ -185,7 +191,10 @@ function createClaudeSession(spec, emit, dependencies) {
             safe: !!(inputs.length === 1 && rejected && sent.get(inputs[0].clientMessageId) === 'consumed'
             && message.usage?.input_tokens === 0 && message.usage?.output_tokens === 0 && !run.interrupted) } : null;
         }
-        if (spec.owner !== 'dispatch' && !message.is_error && !run.quotaRejected && Object.values(tokensOf(message.usage) || {}).some(value => value > 0)) dependencies.onSuccess?.(run.generation);
+        // A refusal stops only the turn it ended. A later turn the provider accepted, automatic or a worker's, clears it.
+        const limited = run.quotaRejected, accepted = !message.is_error && !limited && Object.values(tokensOf(message.usage) || {}).some(value => value > 0);
+        if (accepted) providerFailure = null;
+        if (accepted && spec.owner !== 'dispatch') dependencies.onSuccess?.(run.generation);
         const entry = usage.record(providerId, message, { resume: !!run.resumeId, rejected });
         resultCost = message.total_cost_usd;
         tally.result(message);
@@ -222,7 +231,7 @@ function createClaudeSession(spec, emit, dependencies) {
         run.compactionStarted = false; run.compactFailure = null;
         rates.nativeEnd(); turnId = null; stream.turn(null);
         if (interrupted) unknownInput();
-        if (providerFailure) {
+        if (limited) {
           run.busy = false; run.onStoppedResult?.(); unknownInput();
           if (run.background.size) { setState('idle'); continue; }
           idle = !stopping; cancelQuery(run, 'provider_limit'); break;
@@ -519,14 +528,15 @@ function createClaudeSession(spec, emit, dependencies) {
       savedOutput = output; savedExitCode = exitCode;
       publish('item.upsert', { kind: 'command', status, content: { command, cwd: spec.cwd, output, exitCode, ...extra } }, { itemId });
     };
-    const notSent = '命令已执行，但输出未发送给模型。请检查 API后重试。';
+    // Whole sentences, so the translation table holds each notice exactly as it is shown.
+    const notSent = '命令已执行，但输出未发送给模型。请检查 API 后重试。';
+    const notSentSwitching = '命令已执行，但输出未发送给模型。命令输出保留在本次会话历史中，切换到终端后会随下一条消息发送给模型，无需重新执行命令。';
     const rejected = (error, { completedTurn = false, switching = false } = {}) => {
       if (!notified) {
         notified = true;
         delete shells.get(clientMessageId)?.reject;
         card(savedExitCode === 0 ? 'completed' : savedExitCode === null ? 'interrupted' : 'failed', savedOutput, savedExitCode, { modelDelivery: 'rejected' });
-        const retained = switching ? '命令输出保留在本次会话历史中，切换到终端后会随下一条消息发送给模型，无需重新执行命令。' : '';
-        publish('error', { code: 'shell_context_rejected', message: notSent + (retained ? '\n' + retained : ''), retryable: false, willRetry: false, stage: completedTurn ? 'turn' : 'input' });
+        publish('error', { code: 'shell_context_rejected', message: switching ? notSentSwitching : notSent, retryable: false, willRetry: false, stage: completedTurn ? 'turn' : 'input' });
       }
       const detail = typeof error?.message === 'string' ? clean(error.message) : '';
       return new Error(notSent + (detail && detail !== notSent ? '\n' + detail : ''));

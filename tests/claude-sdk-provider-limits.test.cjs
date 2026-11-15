@@ -34,7 +34,7 @@ test('credits exhausted, a final rate limit and an account spend limit each stop
     ['rate_limit', 'Too many requests', 'rate_limited', 'rate_limited'],
     ['spend_limit', 'enforced_spend_limit_reached', 'spend_limit', 'account_limit'],
   ]) {
-    const f = fixture(t, { auto: false }), session = f.create(); await session.start();
+    const terminalId = randomUUID(), f = fixture(t, { auto: false }), session = f.create('gui', { terminalId }); await session.start();
     const completed = f.wait(event => event.type === 'turn.completed');
     const consumed = f.wait(event => event.type === 'routing.updated');
     await session.send({ clientMessageId: 'refused', text: 'offline input' }); await consumed;
@@ -42,7 +42,8 @@ test('credits exhausted, a final rate limit and an account spend limit each stop
     f.fake.emit({ type: 'result', uuid: randomUUID(), user_message_uuid: 'refused', subtype: 'error_during_execution', is_error: true,
       result: text, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
     const result = await completed;
-    assert.equal(f.runtime.apiState('p').status, reason);
+    assert.equal(f.runtime.apiState('p', null, 'gui', terminalId).status, reason);
+    assert.equal(f.runtime.apiState('p').status, reason === 'rate_limited' ? 'ready' : reason, 'a rate limit is the session’s own; credits and account limits are the project’s');
     assert.doesNotMatch(result.payload.message, /Credit balance|Too many requests|enforced_spend/);
     assert.equal(f.events.filter(event => event.type === 'error' && event.payload.code === code).length, 1);
     assert.equal(session.fallbackInput().safe, true);
@@ -108,4 +109,44 @@ test('startup provider codes select their safe message independently of provider
     const failure = startupFailure({ code, message: 'untrusted provider words' });
     assert.equal(failure.code, code); assert.equal(failure.message, LIMIT_MESSAGES[code]); assert.equal(failure.beforeInput, true);
   }
+});
+
+test('each provider limit is told in one whole sentence chosen by its code, naming the move to the terminal when API, then terminal applies', { timeout: 20000 * timeoutScale }, async t => {
+  const words = {
+    credits_required: ['控制台余额不足，请到 Claude Console 的 Billing 充值。', '控制台余额不足，请到 Claude Console 的 Billing 充值。本轮结束后将转到 Claude Code 终端。'],
+    rate_limited: ['API 请求达到速率限制，请稍后重试。', 'API 请求达到速率限制，本轮结束后将转到 Claude Code 终端。'],
+    spend_limit: ['Claude 账号或组织的 API 用量已达上限，请检查控制台的用量限制。', 'Claude 账号或组织的 API 用量已达上限，请检查控制台的用量限制。本轮结束后将转到 Claude Code 终端。'],
+  };
+  for (const [error, code] of [['billing_error', 'credits_required'], ['rate_limit', 'rate_limited'], ['spend_limit', 'spend_limit']]) {
+    for (const moving of [false, true]) {
+      const f = fixture(t, { auto: false }), session = f.create('gui', { quotaFallback: () => moving }); await session.start();
+      const consumed = f.wait(event => event.type === 'routing.updated'), told = f.wait(event => event.type === 'error');
+      await session.send({ clientMessageId: 'refused', text: 'offline input' }); await consumed;
+      f.fake.emit({ type: 'assistant', error, user_message_uuid: 'refused', message: { model: '<synthetic>', content: [{ type: 'text', text: 'provider words' }] } });
+      f.fake.emit({ type: 'result', uuid: randomUUID(), user_message_uuid: 'refused', is_error: true, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+      const notice = await told;
+      assert.deepEqual([notice.payload.code, notice.payload.message], [code, words[code][moving ? 1 : 0]], `${code}, moving=${moving}`);
+    }
+  }
+});
+
+test('a refusal stops only its own turn: a later automatic turn the provider accepts keeps the query and clears the refusal for the next message', { timeout: 15000 * timeoutScale }, async t => {
+  const f = fixture(t, { auto: false }), session = f.create('gui', { terminalId: randomUUID() }); await session.start();
+  const consumed = f.wait(event => event.type === 'routing.updated');
+  await session.send({ clientMessageId: 'refused', text: 'offline input' }); await consumed;
+  f.fake.emit({ type: 'system', subtype: 'task_started', task_id: 'background', run_id: 1, is_backgrounded: true });
+  const refused = f.wait(event => event.type === 'turn.completed');
+  f.fake.emit({ type: 'assistant', error: 'rate_limit', user_message_uuid: 'refused', message: { model: '<synthetic>', content: [{ type: 'text', text: 'Too many requests' }] } });
+  f.fake.emit({ type: 'result', uuid: randomUUID(), user_message_uuid: 'refused', is_error: true, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+  assert.equal((await refused).payload.status, 'failed');
+  // The background task ends and the CLI reports it in an automatic turn, which the provider accepts.
+  const automatic = f.wait(event => event.type === 'turn.completed');
+  f.fake.emit({ type: 'system', subtype: 'task_notification', task_id: 'background', run_id: 1 });
+  f.fake.emit({ type: 'assistant', message: { model: 'fake-model', content: [{ type: 'text', text: 'The background task finished.' }] } });
+  f.fake.emit({ type: 'result', uuid: randomUUID(), subtype: 'success', terminal_reason: 'completed', is_error: false, total_cost_usd: 0.1, usage: { input_tokens: 5, output_tokens: 3 } });
+  assert.equal((await automatic).payload.status, 'completed');
+  assert.equal(f.fake.closes.length, 0, 'the accepted turn is not cancelled for the earlier refusal');
+  const delivered = f.wait(event => event.type === 'input.receipt' && event.payload.clientMessageId === 'next' && event.payload.status === 'delivered');
+  assert.equal((await session.send({ clientMessageId: 'next', text: 'continue' })).status, 'queued'); await delivered;
+  assert.equal(f.fake.calls.length, 1, 'the next message goes to the same query');
 });

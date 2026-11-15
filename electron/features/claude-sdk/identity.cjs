@@ -24,6 +24,11 @@ function routeFailure(code, file) {
 const CREDITS_LOW = '控制台余额不足，请到 Claude Console 的 Billing 充值。';
 const LIMIT_MESSAGES = { credits_exhausted: CREDITS_LOW,
   rate_limited: 'API 请求达到速率限制，请稍后重试。', account_limit: 'Claude 账号或组织的 API 用量已达上限，请检查控制台的用量限制。' };
+// The same refusal when "API, then terminal" moves the session on at the end of the turn. Each is one whole sentence, so the
+// translation table holds it exactly as it is shown.
+const LIMIT_SWITCHING = { credits_exhausted: `${CREDITS_LOW}本轮结束后将转到 Claude Code 终端。`,
+  rate_limited: 'API 请求达到速率限制，本轮结束后将转到 Claude Code 终端。',
+  account_limit: 'Claude 账号或组织的 API 用量已达上限，请检查控制台的用量限制。本轮结束后将转到 Claude Code 终端。' };
 const creditsLow = text => /credit balance is too low/i.test(String(text ?? ''));
 
 const whyText = ({ text, values }) => text.replace(/\{(\w+)\}/g, (match, name) => name in values ? String(values[name]) : match);
@@ -101,4 +106,4 @@ function startupFailure(error, { stderr = '', key = null } = {}) {
   });
 }
 
-module.exports = { billingIdentityError, billingSource, startupFailure, routeFailure, whyText, CREDITS_LOW, creditsLow, LIMIT_MESSAGES };
+module.exports = { billingIdentityError, billingSource, startupFailure, routeFailure, whyText, CREDITS_LOW, creditsLow, LIMIT_MESSAGES, LIMIT_SWITCHING };

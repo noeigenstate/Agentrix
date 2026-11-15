@@ -47,7 +47,7 @@ for (const [error, text] of [['billing_error', 'Credit balance is too low'], ['r
     assert.deepEqual(f.sends, [{ clientMessageId: 'refused', text: 'Keep this exact input', images: [] }]);
     assert.equal(f.events.filter(event => event.type === 'turn.completed' && !event.replay).length, 0);
     assert.match(f.router.switchState('t').reason, /已转到 Claude Code/);
-    f.router.reconcile(); assert.equal(f.sends.length, 1);
+    await f.router.reconcile(); assert.equal(f.sends.length, 1);
   });
 }
 for (const kind of ['composer-draft', 'cli-draft', 'executed']) test(`quota fallback preserves ${kind} and returns refused input without clearing or sending`, async t => {
@@ -106,8 +106,9 @@ test('only a newly opened owner session can spend the bounded API trial; another
   assert.equal(f.router.snapshot('new-trial').events.findLast(event => event.type === 'path.changed').payload.selected, 'api');
   await f.router.start('new-terminal', { agent: 'claude' });
   assert.equal(f.router.snapshot('new-terminal').events.findLast(event => event.type === 'path.changed').payload.selected, 'terminal');
-  f.router.reconcile();
-  assert.equal(f.router.switchState('t').current, 'terminal', 'an existing terminal never initiates a timed retry');
+  await f.router.reconcile();
+  const { current, target, phase } = f.router.switchState('t');
+  assert.deepEqual({ current, target, phase }, { current: 'terminal', target: 'terminal', phase: 'stable' }, 'an existing terminal never initiates a timed retry');
 });
 
 test('an explicit turn in an idle retained query observes settings invalidation and can record a fresh refusal', async t => {
@@ -119,3 +120,50 @@ test('an explicit turn in an idle retained query observes settings invalidation 
   f.fake.emit({ type: 'result', uuid: randomUUID(), user_message_uuid: 'fresh-turn', is_error: true, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } }); await waitFor(() => f.runtime.apiState('p').status === 'credits_exhausted', 'fresh refusal');
   assert.equal(f.runtime.apiState('p').status, 'credits_exhausted');
 });
+
+test('a key revoked mid-session leaves the route unavailable: with API, then terminal the next message is not sent to the API and the session moves to the terminal', async t => {
+  const f = fixture(t), started = await f.router.start('t', { agent: 'claude' });
+  await f.router.send('t', started.runtimeSessionId, { clientMessageId: 'first', text: 'Before the key was revoked' }); await waitFor(() => f.fake.inputs.length === 1, 'first input');
+  f.fake.emit({ type: 'assistant', user_message_uuid: 'first', error: 'authentication_failed', message: { model: '<synthetic>', content: [{ type: 'text', text: 'Invalid API key · Please run /login' }] } });
+  f.fake.emit({ type: 'result', uuid: randomUUID(), user_message_uuid: 'first', subtype: 'success', is_error: true, total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+  await waitFor(() => f.router.snapshot('t')?.state === 'idle' || f.router.switchState('t')?.phase === 'preparing', 'refused turn');
+  assert.equal(f.runtime.apiState('p').status, 'invalid_key');
+  assert.equal(f.events.findLast(event => event.type === 'limits.updated')?.payload.source, 'invalid_key');
+  assert.equal((await f.router.send('t', started.runtimeSessionId, { clientMessageId: 'second', text: 'After the key was revoked' })).status, 'rejected');
+  assert.equal(f.fake.inputs.length, 1, 'nothing more reaches the API');
+  await f.handoff(); assert.equal(f.router.switchState('t').current, 'terminal');
+});
+
+test('the terminal switch names the limit that moved the session: credits, a rate limit and an account limit each in their own words', async t => {
+  const words = {
+    credits: ['控制台余额不足，请到 Claude Console 的 Billing 充值。已转到 Claude Code 终端。', '控制台余额不足，请到 Claude Console 的 Billing 充值。已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
+    rate: ['API 请求达到速率限制，已转到 Claude Code 终端。', 'API 请求达到速率限制，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
+    account: ['Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端。', 'Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
+  };
+  for (const [kind, refusal] of [['credits', {}], ['rate', { error: 'rate_limit', text: 'Too many requests' }], ['account', { error: 'spend_limit', text: 'enforced_spend_limit_reached' }]]) {
+    for (const kept of [false, true]) {
+      const f = fixture(t, { sendStatus: kept ? 'rejected' : 'delivered' }); await f.refuse(refusal); await f.handoff();
+      assert.equal(f.router.switchState('t').reason, words[kind][kept ? 1 : 0], `${kind}, kept=${kept}`);
+    }
+  }
+});
+
+test('a final rate limit stops and moves only the session that received it; another owner session in the project keeps the API', async t => {
+  const f = fixture(t), other = await f.router.start('other', { agent: 'claude' });
+  await f.refuse({ error: 'rate_limit', text: 'Too many requests' }); await f.handoff();
+  assert.equal(f.router.switchState('t').current, 'terminal');
+  assert.equal(f.runtime.apiState('p').status, 'ready', 'a new session in the project takes the API');
+  await f.router.reconcile();
+  assert.notEqual(f.router.switchState('other')?.target, 'terminal');
+  const receipt = await f.router.send('other', other.runtimeSessionId, { clientMessageId: 'other-input', text: 'Still on the API' });
+  assert.equal(receipt.status, 'queued'); await waitFor(() => f.fake.inputs.some(input => input.uuid === 'other-input'), 'other session input');
+});
+
+for (const [kind, refusal] of [['credits', {}], ['account limits', { error: 'spend_limit', text: 'enforced_spend_limit_reached' }]]) {
+  test(`${kind} stay project-wide: another owner session in the project moves to the terminal too`, async t => {
+    const f = fixture(t); await f.router.start('other', { agent: 'claude' });
+    await f.refuse(refusal); await f.router.reconcile();
+    assert.equal(f.router.switchState('other')?.target, 'terminal');
+    assert.equal(f.runtime.apiState('p').status, kind === 'credits' ? 'credits_exhausted' : 'account_limit');
+  });
+}
