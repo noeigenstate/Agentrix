@@ -3223,5 +3223,9 @@
   "Codex 没有报告版本号：运行它时出错": "Codex did not report its version: running it failed",
   "Codex 没有报告版本号：输出里没有版本号": "Codex did not report its version: its output has no version number",
   "{reason}（{detail}）": "{reason} ({detail})",
-  "用下面的命令安装，或把 Codex 所在的文件夹加入 PATH。Agentrix 会在启动时和窗口重新获得焦点时再检查一次。": "Install it with the command below, or add Codex's folder to PATH. Agentrix checks again on start-up and whenever the window regains focus."
+  "用下面的命令安装，或把 Codex 所在的文件夹加入 PATH。Agentrix 会在启动时和窗口重新获得焦点时再检查一次。": "Install it with the command below, or add Codex's folder to PATH. Agentrix checks again on start-up and whenever the window regains focus.",
+  "状态汇报更快": "Faster status reports",
+  "本机终端里，Claude Code 现在通过本地连接把状态（工作中、等待授权、完成）告诉 Agentrix。以前每个事件都要启动一次 PowerShell，约需 0.6 秒。现在等待提示灯和一轮的结束更快跟上命令行，Claude Code 在步骤之间也不再等 Agentrix。": "In a local terminal, Claude Code now reports its status (working, waiting for permission, done) to Agentrix over a local connection. Before, each event started a PowerShell, which took about 0.6 s. The waiting light and the end of a round now follow the CLI sooner, and Claude Code no longer waits on Agentrix between steps.",
+  "有代理时沿用旧法": "Old way with a proxy",
+  "如果代理（HTTP_PROXY 或 HTTPS_PROXY）会接管这条本地连接，终端会沿用原来的方式（在 Windows 上，状态汇报在后台运行），并写明原因。SSH 项目不变。": "If a proxy (HTTP_PROXY or HTTPS_PROXY) would carry that local connection, the terminal keeps the old way (on Windows, the status reports run in the background) and says why. SSH projects are unchanged."
 }
