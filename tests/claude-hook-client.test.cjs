@@ -6,7 +6,7 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const { once } = require('node:events');
 const { EventEmitter } = require('node:events');
-const { KIND_OF_EVENT, HTTP_ONLY_EVENTS, resolveHook, sendHook, hookText, postHook, startHookReceiver } = require('./helpers/claude-hook-client.cjs');
+const { KIND_OF_EVENT, HTTP_ONLY_EVENTS, MAX_BODY_BYTES, resolveHook, sendHook, hookText, postHook, startHookReceiver } = require('./helpers/claude-hook-client.cjs');
 
 const command = { powershellPath: 'powershell.exe', claudeHookPath: 'claude-hook.ps1', pipeName: 'pipe', projectId: 'project', sessionKey: 'session' };
 
@@ -56,17 +56,25 @@ test('a wrong key or an unknown terminal gets 404 and is counted with its reason
   assert.deepEqual(receiver.accepted, []);
 });
 
-test('a body over 256 KB is refused by the client, and by the receiver when it is sent anyway', async t => {
-  const receiver = await startHookReceiver();
+test('a body over 4 MB is refused by the client, and when it is sent anyway the receiver still answers 200 with {} and counts it as oversize', async t => {
+  const receiver = await startHookReceiver({ terminalId: 'terminal-7', key: 'secret' });
   t.after(() => receiver.close());
-  assert.throws(() => postHook(receiver.hooks, 'Stop', { text: 'x'.repeat(256 * 1024) }), /at most 262144 bytes/);
-  const oversized = JSON.stringify({ text: 'x'.repeat(256 * 1024) });
-  const status = await new Promise((resolve, reject) => {
-    const request = http.request(`${receiver.hooks.url}/Stop`, { method: 'POST', agent: false, headers: { 'x-agentrix-key': receiver.hooks.key } }, response => { response.resume(); response.once('end', () => resolve(response.statusCode)); });
+  assert.throws(() => postHook(receiver.hooks, 'Stop', { text: 'x'.repeat(MAX_BODY_BYTES) }), /at most 4194304 bytes/);
+  const oversized = JSON.stringify({ text: 'x'.repeat(MAX_BODY_BYTES) });
+  const reply = await new Promise((resolve, reject) => {
+    const request = http.request(`${receiver.hooks.url}/Stop`, { method: 'POST', agent: false, headers: { 'x-agentrix-key': 'secret' } }, response => {
+      let body = ''; response.setEncoding('utf8'); response.on('data', chunk => { body += chunk; }); response.once('end', () => resolve({ status: response.statusCode, body }));
+    });
     request.once('error', reject); request.end(oversized);
   });
-  assert.equal(status, 413);
-  assert.deepEqual(receiver.rejected.map(item => item.reason), ['too_large']);
+  assert.deepEqual(reply, { status: 200, body: '{}' });
+  assert.deepEqual(receiver.accepted.map(({ terminalId, event, payload, oversize }) => ({ terminalId, event, payload, oversize })), [{ terminalId: 'terminal-7', event: 'Stop', payload: {}, oversize: true }]);
+  assert.deepEqual(receiver.stats, { events: 1, oversize: 1 });
+  assert.deepEqual(receiver.rejected, []);
+  // A wrong key is still 404 and is not counted as an event.
+  const wrong = await postHook({ ...receiver.hooks, key: 'other' }, 'Stop', {});
+  assert.equal(wrong.status, 404);
+  assert.deepEqual(receiver.stats, { events: 1, oversize: 1 });
 });
 
 test('SessionStart, a command terminal and a command-async terminal go to the hook script with the kind and the JSON on its input', async () => {

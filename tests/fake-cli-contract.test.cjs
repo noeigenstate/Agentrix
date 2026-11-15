@@ -4,7 +4,7 @@
 // and approvals of thread/start (Codex). A new stand-in fails here until it is registered; there is no list to forget.
 // Only offline child processes in a temporary folder run here.
 require('./fixtures/team-isolation.cjs');
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), readline = require('node:readline');
 const { spawn, spawnSync } = require('node:child_process');
@@ -20,9 +20,11 @@ const SETTINGS = { hooks: {
 } };
 const { standIns: entries, notStandIns } = registry();
 const csc = path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
-const compiled = new Map();
+// One compiled program per source, shared by the tests that run it and removed when the file is done.
+const compiled = new Map(), builds = [];
+after(() => Promise.all(builds.map(directory => remove(directory))));
 
-const live = Object.entries(entries).filter(([, entry]) => !entry.pending);
+const live = Object.entries(entries);
 const folder = prefix => fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 const remove = directory => fs.promises.rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 // The environment a stand-in gets: nothing of the real machine, every home inside the throwaway folder.
@@ -34,7 +36,7 @@ function command(t, file, entry) {
   if (entry.build === 'node') return { file: process.execPath, prefix: [path.join(root, file)] };
   if (process.platform !== 'win32' || !fs.existsSync(csc)) return null;
   if (!compiled.has(file)) {
-    const output = folder('agx-standin-cs-'); t.after(() => remove(output));
+    const output = folder('agx-standin-cs-'); builds.push(output);
     const exe = path.join(output, path.basename(file, '.cs') + '.exe');
     const built = spawnSync(csc, ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${exe}`, path.join(root, file)], { windowsHide: true, encoding: 'utf8' });
     assert.equal(built.status, 0, `${file} does not compile: ${built.stdout}${built.stderr}`);
@@ -63,7 +65,6 @@ test('every Claude and Codex stand-in found under tests/ and scripts/ is registe
   for (const [file, entry] of Object.entries(entries)) {
     const source = fs.readFileSync(path.join(root, file), 'utf8');
     assert.ok(['node', 'csc'].includes(entry.build), `${file}: build is node or csc`);
-    if (entry.pending) { assert.match(entry.note || '', /\S/, `${file} is pending without saying why`); continue; }
     // The checks below run from the registry, so an entry that names none would pass by doing nothing.
     assert.ok(entry.recorder || entry.launches?.length, `${file} names no launch to check --version and the echo on`);
     // Answering thread/start is a fact about the source, so the registry cannot leave out the sandbox check.
@@ -158,8 +159,6 @@ test('the argument recorder echoes every argument it is started with, and nothin
   assert.deepEqual(fs.readdirSync(home), ['argv.jsonl']);
 });
 
-test('a stand-in that lane L-c is still changing is registered with its reason, and its checks run once L-c merges', t => {
-  const pending = Object.entries(entries).filter(([, entry]) => entry.pending);
-  for (const [file, entry] of pending) t.diagnostic(`${file}: pending ${entry.pending}`);
-  assert.deepEqual(pending.map(([, entry]) => entry.pending), pending.map(() => 'L-c'), 'only lane L-c has stand-ins pending');
+test('no stand-in is pending: every registered one is checked', () => {
+  assert.deepEqual(Object.entries(entries).filter(([, entry]) => entry.pending).map(([file]) => file), []);
 });

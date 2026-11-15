@@ -1,7 +1,7 @@
 // The test-side Claude Code hook client: how a smoke, a probe or a fixture reports "Claude Code fired this hook" to a
 // terminal, the way Claude Code itself does. It speaks contract C-2 of the 1.5.0 plan:
 //   - a terminal whose bootstrap names the HTTP channel gets a POST to <hooks.url>/<EventName> with the header
-//     X-Agentrix-Key, and the reply is always 200 with the body {};
+//     X-Agentrix-Key, a body of at most 4 MB, and the reply is always 200 with the body {};
 //   - every other terminal (and SessionStart, which stays a command hook) gets integration/claude-hook.ps1 started as
 //     Claude Code starts it, with the hook's JSON on its input.
 // One module so that a change of channel is made here and nowhere else. It never waits on a clock: a caller that wants a
@@ -9,7 +9,7 @@
 const http = require('node:http');
 const { spawn: spawnProcess } = require('node:child_process');
 
-const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 // The legacy kind of every hook event that has one (C-2's table). Events without a kind are HTTP only.
 const KIND_OF_EVENT = {
@@ -85,28 +85,28 @@ function hookText(kindOrEvent, payload = {}) {
   return `& { param($json) if (${session}.hooks.channel -eq 'http') { ${post} } else { ${script} } } ${body}`;
 }
 
-// A hook server that answers as contract C-2 says, for tests that have no Agentrix to talk to: 200 with {} for the right
-// terminal and key, 404 (counted with its reason) for anything else, 413 over 256 KB.
+// A hook server that answers as contract C-2 says, for tests that have no Agentrix to talk to: 200 with {} for the right terminal and
+// key, 404 (counted with its reason) for anything else. A body over the 4 MB cap is still answered 200 with {}: the event is counted
+// from the URL's terminal and event name with an empty payload, and in stats.oversize.
 async function startHookReceiver({ terminalId = 'terminal-1', key = 'test-key', onRequest } = {}) {
-  const accepted = [], rejected = [];
+  const accepted = [], rejected = [], stats = { events: 0, oversize: 0 };
   let seq = 0;
   const server = http.createServer((request, response) => {
     const chunks = []; let size = 0, over = false;
-    request.on('data', chunk => { size += chunk.length; if (size > MAX_BODY_BYTES) over = true; else chunks.push(chunk); });
+    const parts = request.url.split('/'), reason = request.method !== 'POST' || parts[1] !== 'h' || parts[2] !== terminalId ? 'unknown_terminal' : request.headers['x-agentrix-key'] !== key ? 'bad_key' : null;
+    request.on('data', chunk => { size += chunk.length; if (size > MAX_BODY_BYTES) { over = true; chunks.length = 0; } else if (!over) chunks.push(chunk); });
     request.once('end', () => {
-      const parts = request.url.split('/'), reason = request.method !== 'POST' || parts[1] !== 'h' || parts[2] !== terminalId ? 'unknown_terminal' : request.headers['x-agentrix-key'] !== key ? 'bad_key' : null;
-      if (over) { rejected.push({ reason: 'too_large', url: request.url }); return response.writeHead(413).end(); }
       if (reason) { rejected.push({ reason, url: request.url }); return response.writeHead(404).end(); }
-      let payload = null; try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* recorded as null */ }
-      const entry = { seq: ++seq, event: parts[3], headers: request.headers, payload };
-      accepted.push(entry); onRequest?.(entry);
+      let payload = {}; if (over) stats.oversize++; else try { payload = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { payload = null; }
+      const entry = { seq: ++seq, terminalId: parts[2], event: parts[3], headers: request.headers, payload, oversize: over };
+      stats.events++; accepted.push(entry); onRequest?.(entry);
       response.writeHead(200, { 'content-type': 'application/json' }).end('{}');
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   return {
     hooks: { url: `http://127.0.0.1:${server.address().port}/h/${terminalId}`, key, channel: 'http', channelReason: null },
-    accepted, rejected, server,
+    accepted, rejected, stats, server,
     close: () => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }),
   };
 }

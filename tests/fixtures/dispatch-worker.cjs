@@ -1,6 +1,8 @@
 // A real child process standing in for either CLI. All input/output stays in the test's temporary directory.
 const fs = require('node:fs');
 const path = require('node:path');
+// Stand-in contract (tests/fake-cli-contract.test.cjs): AGENTRIX_STAND_IN_ECHO names the file that gets the arguments, --settings and hooks it was given.
+if (process.env.AGENTRIX_STAND_IN_ECHO) require('./stand-in-echo.cjs')();
 const { setTimeout: delay } = require('node:timers/promises');
 
 async function main() {

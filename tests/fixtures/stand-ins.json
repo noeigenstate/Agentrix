@@ -60,13 +60,14 @@
     },
     "tests/fixtures/dispatch-worker.cjs": {
       "build": "node",
-      "pending": "L-c",
-      "note": "Lane L-c is making it answer --version; integration drops pending once L-c has merged and the checks pass."
+      "launches": [{ "args": ["--version"], "product": "codex" }],
+      "appServer": ["app-server", "--listen", "stdio://"],
+      "note": "Stands in for either CLI in the dispatch tests; a version probe is answered before any fixture is read."
     },
     "tests/fixtures/restore-codex.cs": {
       "build": "csc",
-      "pending": "L-c",
-      "note": "Lane L-c is making it answer --version; integration drops pending once L-c has merged and the checks pass."
+      "launches": [{ "args": ["--version"], "product": "codex" }, { "args": ["-V"], "product": "codex" }],
+      "note": "Compiled program: it answers --version and -V before anything else and has no echo."
     }
   },
   "notStandIns": {
