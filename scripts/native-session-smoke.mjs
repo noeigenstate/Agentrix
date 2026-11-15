@@ -829,7 +829,7 @@ async function run(output, stages) {
     assert.equal(await settings.locator('input[type="password"]').count(), 1);
     assert.ok((await settings.locator('.select-trigger').count()) >= 2, 'Claude’s path and Codex’s view');
     await waitFor(async () => /已保存|未保存/.test(await settings.locator('.runtime-key-row small[role="status"]').innerText()), 'the key status has been read');
-    await settings.getByText('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的花费估算。', { exact: true }).waitFor();
+    await settings.getByText('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入 API 花费估算。', { exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, 'native-settings.png') });
     checks.push('运行方式 settings page');
     assert.deepEqual(errors, []);

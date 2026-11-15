@@ -97,7 +97,7 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
     <p className="settings-note"><Info size={15} /><span>{t('修改运行方式、保存或清除 API key，都会同时应用到正在运行的会话：空闲的立刻切换，工作中的等本轮结束，有后台任务的先问你。')}</span></p>
     {waiting !== null && waiting > 0 && <p className="settings-note" role="status"><Info size={15} /><span>{t('有 {count} 个会话在等待切换', { count: waiting })}</span></p>}
     <p className="settings-note"><Info size={15} /><span>{t('派发的工作者看不到你的 API 密钥。')}</span></p>
-    <p className="settings-note"><Info size={15} /><span>{t('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入这里的花费估算。')}</span></p>
+    <p className="settings-note"><Info size={15} /><span>{t('你自己的 API 会话里运行的命令能读到密钥；这些命令产生的花费不计入 API 花费估算。')}</span></p>
     <div className="setting-row runtime-key-row"><span><Key size={19} /><span><b>{t('Anthropic API key')}</b><small role="status">{saved === null ? t('正在读取…') : saved ? t('已保存') : t('未保存')}</small></span></span>
       <span className="runtime-key">
         <input ref={keyField} type="password" autoComplete="off" spellCheck={false} aria-label={t('Anthropic API key')} placeholder={saved ? t('输入新的 key 以替换') : 'sk-ant-…'} value={key} disabled={busy || testing}
