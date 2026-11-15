@@ -820,16 +820,77 @@ test('an automatic outbox send shows sending until uncertainty is known', async 
   assert.equal(h.pasted.length, 1);
 });
 
-test('a retry drain timeout retains uncertainty without a later paste', async t => {
+test('a retry drain timeout keeps the sent echo available for a receipt', async t => {
   const h = workingComposerHarness(t, 'claude');
   h.view.accept = false; h.view.working = false;
   h.edit('uncertain retry'); h.press('Enter'); await h.tick(0); await h.tick(400);
   h.view.pending = true; await h.advance(700, false); await h.advance(500, false); h.render();
-  assert.deepEqual(outboxTexts(h), ['uncertain retry']);
-  assert.equal(outboxReason(h), 'Delivery is not confirmed. Check the terminal before sending this message again.');
-  h.view.pending = false; h.view.draft = ''; h.render();
+  assert.deepEqual(outboxTexts(h), []);
+  const cards = () => elements(h.tree()).find(node => node.props.queued).props;
+  assert.ok(cards().prompts.some(prompt => prompt.text === 'uncertain retry'));
+  h.view.pending = false; h.view.draft = '';
+  h.view.records = [...h.view.records, { id: 'late-receipt', role: 'user', text: 'uncertain retry', at: Date.now() }]; h.render();
+  assert.equal(cards().prompts.some(prompt => prompt.text === 'uncertain retry'), false);
+  assert.equal(h.pasted.length, 1);
+});
+
+test('a slow receipt after Enter and a dialog releases the send and later outbox messages', async t => {
+  const h = workingComposerHarness(t, 'claude'), first = 'slow receipt', second = 'later message';
+  h.view.accept = false;
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+  h.edit(first); h.press('Enter'); await h.tick(0);
+  h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0); await h.tick(400);
+  assert.deepEqual(h.written.map(write => write.text), ['\r']);
+  h.view.draft = ''; h.view.pending = true; await h.advance(700, false);
+  h.view.rows = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'];
+  h.view.pending = false; h.parsed(false); await h.advance(0, false); h.render(); h.render();
+  const cards = () => elements(h.tree()).find(node => node.props.queued).props;
+  assert.ok(cards().prompts.some(prompt => prompt.text === first), 'Enter was written, so the pending echo remains reconcilable');
+  h.edit(second); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), [second]);
+  const receipt = { id: 'late-queued', role: 'user', text: first, at: Date.now(), queued: true };
+  h.view.records = [...h.view.records, receipt]; h.render(); h.render();
+  assert.deepEqual(outboxTexts(h), [second]);
+  assert.ok(cards().prompts.some(prompt => prompt.text === first && cards().queued(prompt)));
+  h.view.records = [{ ...receipt, queued: false }]; h.render();
+  assert.equal(cards().prompts.some(prompt => prompt.text === first), false);
+  h.popup()?.props.onClose(); delete h.view.rows; h.view.accept = true; h.render(); h.render();
+  await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.pasted.map(paste => paste.text), [first, second]);
+  assert.deepEqual(outboxTexts(h), []);
+});
+
+test('a fresh queue or user record clears an uncertain head even while delivery is blocked', async t => {
+  for (const queued of [true, false]) await t.test(queued ? 'queue' : 'user', async t => {
+    const h = workingComposerHarness(t, 'claude'), text = 'same words again';
+    h.view.records.push({ id: 'older-receipt', role: 'user', text, at: Date.now() - 10000 });
+    h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit(text); h.press('Enter'); await h.tick(0);
+    h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
+    assert.equal(h.pasted.length, 1);
+    h.remount(); h.props.active = false; h.view.rows = ['Settings', 'Esc to close']; h.render();
+    assert.deepEqual(outboxTexts(h), [text], 'an older identical receipt cannot acknowledge this attempt');
+    h.view.records = [...h.view.records, { id: 'cancelled', role: 'user', text, at: Date.now(), queued: true, cancelled: true }]; h.render();
+    assert.deepEqual(outboxTexts(h), [text]);
+    h.view.records = [...h.view.records, { id: 'fresh', role: 'user', text, at: Date.now(), queued }]; h.render(); h.render();
+    assert.deepEqual(outboxTexts(h), [], 'receipt reconciliation is independent of readiness and active view');
+    await h.tick(10000); assert.equal(h.pasted.length, 1);
+  });
+});
+
+test('a paste without Enter stays uncertain until a fresh receipt arrives', async t => {
+  const h = workingComposerHarness(t, 'claude'), text = 'pasted but not entered';
+  h.view.records.push({ id: 'older-receipt', role: 'user', text, at: Date.now() - 10000 });
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit(text); h.press('Enter'); await h.tick(0);
+  h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
+  h.view.pending = true; await h.tick(400); for (let i = 0; i < 5; i++) await h.tick(500);
+  h.view.pending = false; h.view.draft = ''; h.view.working = false; h.render();
   await h.tick(30000); await h.tick(30000);
-  assert.equal(h.pasted.length, 1, 'the pending-prompt safety net cannot re-paste after a drain timeout');
+  assert.deepEqual(h.written, []); assert.equal(h.pasted.length, 1);
+  assert.deepEqual(outboxTexts(h), [text]);
+  assert.equal(outboxReason(h), 'Delivery is not confirmed. Check the terminal before sending this message again.');
+  h.view.records = [...h.view.records, { id: 'confirmed-later', role: 'user', text, at: Date.now(), queued: true }]; h.render(); h.render();
+  assert.deepEqual(outboxTexts(h), [], 'a later CLI receipt resolves the uncertainty without another paste');
+  assert.equal(h.pasted.length, 1);
 });
 
 test('a reported host wait and an owner terminal popup have their own reasons', async t => {
