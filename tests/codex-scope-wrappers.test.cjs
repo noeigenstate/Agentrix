@@ -55,6 +55,7 @@ async function recorderExecutable(t) {
   const folder = fixture(t);
   await exec(path.join(process.env.SystemRoot, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
     ['/nologo', '/target:exe', `/out:${path.join(folder, 'codex.exe')}`, path.join(__dirname, 'fixtures/argv-recorder.cs')], { windowsHide: true });
+  await (await import('../scripts/gui-codex-env.mjs')).markStandIn(folder);
   return folder;
 }
 

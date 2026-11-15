@@ -355,10 +355,22 @@ test('the agents page says how Codex was found and which file it runs, why its c
     const places = ['~\\AppData\\Roaming\\npm', '~\\AppData\\Local\\Microsoft\\WinGet\\Links', 'D:\\Tools; Old\\bin'];
     const missing = await codex({ installed: false, reason: reason('codex.not_found', { params: { pathFolders: 3, searched: places.join('; ') } }) });
     assert.deepEqual([missing.status, missing.install], ['未安装', true]);
-    assert.deepEqual(missing.hints, ['没有找到 Codex。已查找 PATH 里的 3 个目录，以及以下位置。', '用下面的命令安装，或把 Codex 所在的文件夹加入 PATH。Agentrix 会在启动时和窗口重新获得焦点时再检查一次。'],
-      'a whole sentence with the count, then the next step and that Agentrix checks again on start-up and on focus');
+    assert.deepEqual(missing.hints, ['没有找到 Codex。已查找 PATH 里的 3 个目录，以及以下位置。', '用下面的命令安装，装好后 Agentrix 会自己发现。'],
+      'a whole sentence with the count, then the install as the only step: no folder to add to PATH');
     assert.deepEqual(missing.paths, places, 'each searched place has its own line, even one with "; " inside it');
     assert.equal(missing.command, 'npm install -g @openai/codex', 'the command the step points to is below it');
+    // While the local drives are searched the row says so and nothing else; after it, that every drive was searched too.
+    const searching = await codex({ installed: false, scan: 'running', reason: reason('codex.not_found', { params: { pathFolders: 3, searched: places.join('; ') } }) });
+    assert.deepEqual([searching.status, searching.hints, searching.paths, searching.install, searching.command], ['正在搜索所有本地磁盘…', [], [], true, 'npm install -g @openai/codex']);
+    const everywhere = await codex({ installed: false, scan: 'done', reason: reason('codex.not_found', { params: { pathFolders: 3, searched: places.join('; ') } }) });
+    assert.deepEqual([everywhere.status, everywhere.hints, everywhere.paths], ['未安装', ['没有找到 Codex。已查找 PATH 里的 3 个目录，以及以下位置。', '也搜索了所有本地磁盘。用下面的命令安装，装好后 Agentrix 会自己发现。'], places]);
+    assert.doesNotMatch(JSON.stringify([missing.hints, everywhere.hints]), /PATH。|加入 PATH/, 'no manual PATH step');
+    // A scan a limit or its deadline cut short never claims every drive was searched.
+    const partial = await codex({ installed: false, scan: 'partial', reason: reason('codex.not_found', { params: { pathFolders: 3, searched: places.join('; ') } }) });
+    assert.deepEqual([partial.status, partial.hints, partial.paths], ['未安装', ['没有找到 Codex。已查找 PATH 里的 3 个目录，以及以下位置。', '已搜索部分本地磁盘，下次启动会继续搜索。'], places]);
+    assert.doesNotMatch(JSON.stringify(partial.hints), /所有本地磁盘/);
+    const scanned = await codex({ installed: true, version: '0.166.0', via: 'drive-scan', fileShown: 'E:\\my tools\\codex\\codex.exe' });
+    assert.equal(scanned.status, '已安装 · 版本 0.166.0 · 来自本地磁盘搜索');
     const incomplete = await codex({ installed: false, reason: reason('codex.incomplete', { detail: 'D:\\nodejs' }) });
     assert.deepEqual([incomplete.hints, incomplete.paths], [['Codex 安装不完整'], []], 'no next step for a reason that is not a missing Codex');
     const unbroken = `D:\\${'N'.repeat(110)}`, long = await codex({ installed: false, reason: reason('codex.not_found', { params: { pathFolders: 1, searched: `${unbroken}; ~\\AppData\\Roaming\\npm` } }) });
@@ -384,13 +396,13 @@ test('the Codex row keeps its button inside the row however long a path is', () 
 
 // The Codex phrases the row builds from a table, not from literal t() calls, still need English (the coverage scan cannot see them).
 test('the Codex via phrases have English that reads in the middle of a sentence', () => {
-  const root = path.join(__dirname, '..'), additions = path.join(root, 'locale-additions-w1ui.json');
-  const english = { ...require('../electron/locales/en.json'), ...(fs.existsSync(additions) ? JSON.parse(fs.readFileSync(additions, 'utf8')) : {}) };
+  const root = path.join(__dirname, '..'), additions = fs.readdirSync(root).filter(name => /^locale-additions-[\w-]+\.json$/.test(name));
+  const english = Object.assign({ ...require('../electron/locales/en.json') }, ...additions.map(name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'))));
   const block = /const CODEX_VIA_WORDS: Record<string, string> = \{([\s\S]*?)\n\};/.exec(fs.readFileSync(path.join(root, 'src/features/agents/AgentsSettings.tsx'), 'utf8'))[1];
   const phrases = [...block.matchAll(/:\s*'([^']+)'/g)].map(match => match[1]);
-  assert.equal(phrases.length, 9);
-  for (const phrase of phrases) assert.equal(typeof english[phrase], 'string', `${phrase} has an English entry (en.json or the additions file)`);
-  for (const phrase of phrases) assert.match(english[phrase], /^from (PATH|WinGet|the |an? |npm global install)/, phrase);
+  assert.equal(phrases.length, require('../electron/features/codex-runtime/locator.cjs').VIAS.length, 'one phrase for each via');
+  for (const phrase of phrases) assert.equal(typeof english[phrase], 'string', `${phrase} has an English entry (en.json or an additions file)`);
+  for (const phrase of phrases) assert.match(english[phrase], /^from (PATH|WinGet|Scoop|Chocolatey|Volta|Bun|pnpm|Yarn|nvm-windows|fnm|the |an? |npm global install)/, phrase);
 });
 
 test('the agents page says where Claude Code was found beside 已安装, and only 已安装 when main gave nothing more', async () => {

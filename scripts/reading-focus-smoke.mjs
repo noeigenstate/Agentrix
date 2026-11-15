@@ -1,4 +1,4 @@
-import { guiCodexEnvironment } from './gui-codex-env.mjs';
+import { guiCodexEnvironment, markStandIn } from './gui-codex-env.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -32,6 +32,7 @@ if (process.argv.includes('--startup')) {
   await promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
     ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(root, 'tests/fixtures/restore-codex.cs')], { windowsHide: true });
   await fs.copyFile(path.join(bin, 'codex.exe'), path.join(bin, 'claude.exe'));
+  await markStandIn(bin);
   const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[pathKey] = bin + path.delimiter + env[pathKey];
 }
 const errors = [], results = [];

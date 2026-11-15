@@ -36,6 +36,26 @@ test('every way Codex can be found is in the locator, the shared type and the wo
     }
   }
   assert.deepEqual(offenders, [], 'files that look for Codex outside the locator');
+  // The drive scan is a generic walk: what counts as a hit comes from the locator, and the dispatch helper, which
+  // needs no scan, does not carry it.
+  assert.doesNotMatch(read('electron/features/codex-runtime/drive-scan.cjs'), /codex\.exe|codex\.js|@openai/i, 'the drive scan names no Codex layout');
+  assert.ok(!Object.keys(require('../integration/dispatch.cjs').runtimeFiles()).some(file => file.endsWith('drive-scan.cjs')), 'the helper does not carry the drive scan');
+  // Agentrix's own Codex stand-ins answer --version as Codex does: each one's folder is marked, so a scan never takes
+  // it. Every script or test that compiles or copies a codex.exe marks the folder through markStandIn.
+  assert.match(read('scripts/gui-codex-env.mjs'), /export const markStandIn = bin => writeFile\(path\.join\(bin, STAND_IN_MARKER\), ''\);[\s\S]*await markStandIn\(bin\);[\s\S]*codex\.exe/);
+  const builders = [], unmarked = [];
+  for (const folder of ['scripts', 'tests']) {
+    for (const name of fs.readdirSync(path.join(root, folder), { recursive: true })) {
+      const file = path.posix.join(folder, String(name).replaceAll('\\', '/'));
+      if (!/\.(c|m)?js$/.test(file) || file === 'scripts/gui-codex-env.mjs' || file === 'tests/codex-runtime-guards.test.cjs') continue;
+      const source = read(file);
+      if (!(/csc\.exe/.test(source) && /\/out:[^\n]*codex\.exe/.test(source) || /copyFile\([^\n]*codex\.exe/.test(source))) continue;
+      builders.push(file);
+      if (!/markStandIn\(|windowsCodexStandIn\(/.test(source)) unmarked.push(file);
+    }
+  }
+  assert.ok(builders.length >= 9, `the guard sees the stand-in builders (${builders.join(', ')})`);
+  assert.deepEqual(unmarked, [], 'files that build a stand-in codex.exe without marking its folder');
   const resolution = read('scripts/codex-cli-resolution.cjs');
   assert.match(resolution, /packageBinaries\(/); assert.doesNotMatch(resolution, /codex-win32-|windows-msvc/);
 });

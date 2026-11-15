@@ -1,5 +1,6 @@
 // Isolated desktop checks: default mode feeds renderer events for UI acceptance; --runtime drives the actual main,
 // SDK import and provider adapters against offline native executable fixtures. Neither mode uses real credentials or accounts.
+import { markStandIn } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -80,6 +81,7 @@ export async function prepareProviders(directory) {
     const result = spawnSync(compiler, ['/nologo', '/target:exe', `/out:${path.join(bin, 'claude.exe')}`, source], { windowsHide: true, encoding: 'utf8', timeout: 30000 });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     await fs.copyFile(path.join(bin, 'claude.exe'), path.join(bin, 'codex.exe'));
+    await markStandIn(bin);
   } else for (const name of ['claude', 'codex']) {
     await fs.writeFile(path.join(bin, name), `#!/bin/sh\nexec "$AGENTRIX_FAKE_NODE" "$AGENTRIX_FAKE_CLI" ${name} "$@"\n`, { mode: 0o755 });
     await fs.chmod(path.join(bin, name), 0o755);

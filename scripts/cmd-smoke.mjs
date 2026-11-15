@@ -1,4 +1,4 @@
-import { guiCodexEnvironment } from './gui-codex-env.mjs';
+import { guiCodexEnvironment, markStandIn } from './gui-codex-env.mjs';
 // Command Prompt terminals: the shell chosen in settings starts, reports its prompt and directory,
 // runs codex through the same wrapper as PowerShell, and restores an interrupted session with "继续".
 import { testRun } from './test-output.mjs';
@@ -22,6 +22,7 @@ const project = { id: randomUUID(), name: '命令提示符项目', path: path.jo
 const sessionId = randomUUID();
 for (const folder of [dataDir, path.join(codexHome, 'sessions'), bin, path.join(project.path, 'sub')]) await fs.mkdir(folder, { recursive: true });
 await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(root, 'tests/fixtures/restore-codex.cs')], { windowsHide: true });
+await markStandIn(bin);
 // An interrupted Codex turn from the last run, owned by this project.
 await fs.writeFile(path.join(codexHome, 'sessions', `rollout-${sessionId}.jsonl`), [
   { type: 'session_meta', payload: { id: sessionId, cwd: project.path, source: 'cli' } },

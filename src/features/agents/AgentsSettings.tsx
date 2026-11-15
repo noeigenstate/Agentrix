@@ -17,6 +17,8 @@ const from = (via: ClaudeFound['via'] | undefined) => via && t('来自 {via}', {
 const CODEX_VIA_WORDS: Record<string, string> = {
   path: '来自 PATH', 'npm-shim': '来自 npm 或 pnpm 命令', 'npm-vendor': '来自 npm 全局安装', 'npm-hoisted': '来自 npm 平台包', 'npm-prefix': '来自 npm 全局目录',
   'registry-path': '来自系统 PATH（注册表）', 'official-installer': '来自官方安装器', winget: '来自 WinGet', system: '来自系统目录',
+  scoop: '来自 Scoop', chocolatey: '来自 Chocolatey', volta: '来自 Volta', bun: '来自 Bun', pnpm: '来自 pnpm', yarn: '来自 Yarn', nvm: '来自 nvm-windows', fnm: '来自 fnm',
+  'vscode-extension': '来自 VS Code 扩展', registry: '来自已安装的程序（注册表）', 'drive-scan': '来自本地磁盘搜索',
 };
 // A Codex reason in words: its code's phrase with its params filled in.
 const reasonWords = ({ code, params = {} }: Reason) => (codexWords[code]
@@ -68,13 +70,17 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
   return <>
     <p className="agents-intro">{t('Agentrix 基于 Codex 和 Claude Code 这两个命令行工具：在每个项目的终端里运行它们，这里负责并排显示、提醒完成和恢复会话。至少安装其中一个。')}</p>
     {(['codex', 'claude'] as const).map(agent => {
-      // Codex not found says where it looked and what to do next; one found says which file it runs.
-      const codex = agent === 'codex' ? agents?.codex : null, notFound = codex && !codex.installed && codex.reason ? codex.reason : null;
+      // Codex not found says where it looked and what to do next, once the scan of the local drives is over; one found
+      // says which file it runs.
+      const codex = agent === 'codex' ? agents?.codex : null, scanning = !codex?.installed && codex?.scan === 'running';
+      const notFound = codex && !codex.installed && codex.reason && !scanning ? codex.reason : null, missing = notFound?.code === 'codex.not_found';
       const words = agents?.[agent].installed ? installedWords(agent, agents, keySaved) : null, hint = words ? words.hint : notFound ? reasonWords(notFound) : null;
-      const places = notFound?.code === 'codex.not_found' ? placesOf(notFound) : [], step = notFound?.code === 'codex.not_found' ? t('用下面的命令安装，或把 Codex 所在的文件夹加入 PATH。Agentrix 会在启动时和窗口重新获得焦点时再检查一次。') : null;
+      const places = missing ? placesOf(notFound) : [], step = !missing ? null
+        : codex?.scan === 'done' ? t('也搜索了所有本地磁盘。用下面的命令安装，装好后 Agentrix 会自己发现。')
+          : codex?.scan === 'partial' ? t('已搜索部分本地磁盘，下次启动会继续搜索。') : t('用下面的命令安装，装好后 Agentrix 会自己发现。');
       const file = codex?.installed ? codex.fileShown : null, settled = !!agents && agents.installing !== agent;
       return <div className="agent-setting" key={agent}>
-      <div className="setting-row"><span className="agent-info"><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" className="agent-status" title={agents?.[agent].fileShown}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : t('未安装')}</small>
+      <div className="setting-row"><span className="agent-info"><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" className="agent-status" title={agents?.[agent].fileShown}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : scanning ? t('正在搜索所有本地磁盘…') : t('未安装')}</small>
         {settled && file && <small className="agent-path"><PathText text={file} /></small>}
         {settled && hint && <small className="agent-hint">{hint}</small>}
         {settled && places.map(place => <small className="agent-path" key={place}><PathText text={place} /></small>)}

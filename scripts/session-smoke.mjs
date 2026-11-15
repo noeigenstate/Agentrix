@@ -1,5 +1,5 @@
 import './clipboard-guard.mjs';
-import { guiCodexEnvironment } from './gui-codex-env.mjs';
+import { guiCodexEnvironment, markStandIn } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -27,6 +27,7 @@ await fs.mkdir(bin);
 await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(root, 'tests/fixtures/restore-codex.cs')], { windowsHide: true });
 // The same offline fixture stands in for Claude Code: it records the arguments it was resumed with.
 await fs.copyFile(path.join(bin, 'codex.exe'), path.join(bin, 'claude.exe'));
+await markStandIn(bin);
 const projects = [];
 for (const [index, name] of ['中断的项目', '已结束这一轮', '主动关闭终端', '旧版完成项目'].entries()) {
   const directory = path.join(output, name);

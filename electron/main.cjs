@@ -59,9 +59,16 @@ const { routingNote } = require('./features/dashboard/decisions.cjs');
 const { CodexAccountUsage, readCodexAccount, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
 const { createRpc: createResetRpc } = require('./features/codex-app-server/rpc.cjs');
 const { createCodexLocator } = require('./features/codex-runtime/locator.cjs');
+const { scanDrives, fixedDrives } = require('./features/codex-runtime/drive-scan.cjs');
 // One Codex locator for the terminal, native mode, the account reads and the settings (codex-runtime/BOUNDARY.md). They
-// all run the file it found in main's environment; a terminal is told where that file was found.
-const codexLocator = createCodexLocator();
+// all run the file it found in main's environment; a terminal is told where that file was found. When its fast search
+// finds nothing it scans the local drives in the background (never the temporary folder), keeps a hit, or when it
+// found none, the time, for the next start, and tells the settings. An isolated profile (AGENTRIX_DATA_DIR) never
+// scans: its PATH keeps it from this machine's real Codex, and a scan would not.
+const codexHitFile = () => path.join(app.getPath('userData'), 'codex-location.json');
+const codexLocator = createCodexLocator({ scan: process.env.AGENTRIX_DATA_DIR ? null
+  : async walk => scanDrives({ ...walk, drives: await fixedDrives(process.env), skipPaths: [process.env.TEMP, process.env.TMP, os.tmpdir()] }),
+  store: { read: () => readNativeJson(codexHitFile(), null), write: value => writeNativeJson(codexHitFile(), value) }, changed: () => agents.changed() });
 const codexExecutable = () => codexLocator.locate().then(found => found.file);
 const codexAccounts = new CodexAccountUsage({ read: options => readCodexAccount({ ...options, resolveExecutable: codexExecutable }),
   resetClient: { rpcFactory: createResetRpc, resolveExecutable: codexExecutable }, resetStorage: {
@@ -238,7 +245,7 @@ function send(channel, data) { if (window && !window.isDestroyed()) window.webCo
 // One Claude Code locator for the terminal and the native path (claude-runtime/BOUNDARY.md).
 const claudeLocator = createLocator();
 const agents = new AgentsManager({ onChange: state => send('agents:changed', state), translate: t,
-  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh'), codex: () => codexLocator.peek(), refreshCodex: () => checkCodex('refresh') });
+  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh'), codex: () => codexLocator.peek(), refreshCodex: () => checkCodex('scan') });
 // The CLI the native path runs, from the locator. `mode`: 'locate' only stats what it chose; 'refresh' (start-up, the
 // connection test, an install) reads the stored Windows PATH and searches again; 'focus' does that at most once a
 // minute. The agents' state is told again whenever what it says of Claude Code changed.
@@ -248,11 +255,12 @@ async function inspectClaude(mode) {
   try { return await inspectClaudeExecutable({ locator: claudeLocator, fresh: mode !== 'locate', throttled: mode === 'focus' }); }
   finally { if (seen() !== before) agents.changed(); }
 }
-// Codex is searched again like Claude Code ('refresh' or 'focus'), and the agents' state told when what it says changed.
+// Codex is searched again like Claude Code ('refresh' or 'focus'; 'scan', after the user installed, also scans the
+// drives at once when nothing is found), and the agents' state told when what it says changed.
 async function checkCodex(mode) {
   const seen = () => { const found = codexLocator.peek(); return found && JSON.stringify(codexState(found)); };
   const before = seen();
-  try { return await codexLocator.refresh(undefined, { throttled: mode === 'focus' }); }
+  try { return await codexLocator.refresh(undefined, { throttled: mode === 'focus', scan: mode === 'scan' }); }
   finally { if (seen() !== before) agents.changed(); }
 }
 // The runtime numbers each CLI check: a stale one comes back as the newer result and changes nothing.

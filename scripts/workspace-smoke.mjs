@@ -1,5 +1,5 @@
 import './clipboard-guard.mjs';
-import { guiCodexEnvironment } from './gui-codex-env.mjs';
+import { guiCodexEnvironment, markStandIn } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -32,6 +32,7 @@ const bin = path.join(output, 'bin'), codexHome = path.join(output, 'codex-home'
 for (const directory of [bin, codexHome, claudeHome]) await fs.mkdir(directory);
 await exec(path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'),
   ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', `/out:${path.join(bin, 'codex.exe')}`, path.join(root, 'tests/fixtures/restore-codex.cs')], { windowsHide: true });
+await markStandIn(bin);
 const speech = path.join(output, 'speech.wav');
 try { await exec(powershell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts/voice-fixture.ps1'), '-Destination', speech], { windowsHide: true }); }
 catch (error) {

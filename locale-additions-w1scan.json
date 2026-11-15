@@ -1,0 +1,17 @@
+{
+  "正在搜索所有本地磁盘…": "Searching every local drive…",
+  "也搜索了所有本地磁盘。用下面的命令安装，装好后 Agentrix 会自己发现。": "Every local drive was searched too. Install it with the command below; Agentrix will notice it by itself.",
+  "用下面的命令安装，装好后 Agentrix 会自己发现。": "Install it with the command below; Agentrix will notice it by itself.",
+  "来自 Scoop": "from Scoop",
+  "来自 Chocolatey": "from Chocolatey",
+  "来自 Volta": "from Volta",
+  "来自 Bun": "from Bun",
+  "来自 pnpm": "from pnpm",
+  "来自 Yarn": "from Yarn",
+  "来自 nvm-windows": "from nvm-windows",
+  "来自 fnm": "from fnm",
+  "来自 VS Code 扩展": "from a VS Code extension",
+  "来自已安装的程序（注册表）": "from the installed programs (registry)",
+  "来自本地磁盘搜索": "from a search of the local drives",
+  "已搜索部分本地磁盘，下次启动会继续搜索。": "Part of the local drives was searched; Agentrix keeps looking at the next start."
+}
