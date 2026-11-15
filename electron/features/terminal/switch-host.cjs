@@ -3,7 +3,8 @@ const fs = require('node:fs');
 // The terminal side of a run-mode switch: the local Claude terminals a switch can take over, what each one is doing,
 // the terminal a switch to it stages, and retiring or replacing the terminal when the switch ends. `deps` is the app
 // shell (main.cjs), read on every call so its late values are current; these functions are among its members and
-// reach each other through it too.
+// reach each other through it too. A closure a call leaves behind (a staged switch's cancel, send and commit) keeps
+// the members that call read.
 function createSwitchHost(deps) {
   function localSwitchSessions() {
     const { sessions, store, randomUUID } = deps;

@@ -54,13 +54,14 @@ function createHostInputs(deps) {
   }
 
   async function readNativeUsageInputs(projectId) {
-    const { store, shellPathReady, checkClaude, codexExecutable, quitting, projectAccounts, nativeEnvironment, readNativeSubscriptionLimits } = deps;
+    const { shellPathReady, checkClaude, codexExecutable, projectAccounts, nativeEnvironment, readNativeSubscriptionLimits } = deps;
     if (projectId) await shellPathReady;
     const [claudeCli, codexFile] = await Promise.all([checkClaude(), codexExecutable()]);
     const cli = { claude: claudeCli, codex: { status: codexFile ? 'ok' : 'missing' } };
-    const project = store.projects.find(project => project.id === projectId);
+    // Read after the checks: the app can start quitting, or the project close, while they run.
+    const { store } = deps, project = store.projects.find(project => project.id === projectId);
     if (project && project.kind !== 'ssh') {
-      if (!quitting && store.projects.includes(project)) await projectAccounts.read(project, { cli, env: nativeEnvironment('') });
+      if (!deps.quitting && store.projects.includes(project)) await projectAccounts.read(project, { cli, env: nativeEnvironment('') });
     }
     return { cli, limits: readNativeSubscriptionLimits(projectId) };
   }

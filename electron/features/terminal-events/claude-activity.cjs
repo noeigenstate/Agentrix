@@ -3,7 +3,8 @@ const path = require('node:path');
 // A terminal's Claude Code and Codex activity: hook events, the transcript Claude writes and the turn snapshots
 // readers produce become the CLI state, the lights and the completion alert. `deps` is the app shell (main.cjs),
 // read on every call so its late values are current; these functions are among its members and reach each other
-// through it too, so a later round can replace one of them without editing the rest.
+// through it too, so a later round can replace one of them without editing the rest. A closure a call leaves behind
+// (the transcript tail's and monitor's callbacks) keeps the members that call read.
 function createClaudeActivity(deps) {
   // Claude Code writes each tool call to its transcript; follow it while the session lasts.
   function followClaude(project, s, event) {

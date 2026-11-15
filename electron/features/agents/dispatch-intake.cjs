@@ -44,7 +44,7 @@ function createDispatchIntake(deps) {
   }
   function clearDispatchAccount(projectId) { dispatchAccounts.delete(projectId); }
 
-  return { acceptDispatchEvent, dispatchAccounts, dispatchReading, clearDispatchAccount };
+  return { acceptDispatchEvent, dispatchReading, clearDispatchAccount };
 }
 
 module.exports = { createDispatchIntake };

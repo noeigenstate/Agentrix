@@ -109,7 +109,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
   const check = source.indexOf('function checkClaude(');
   vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
-  defineMain(context, 'acceptDispatchEvent', 'readNativeConnections', 'liveHost', 'dispatchAccounts', 'dispatchReading', 'clearDispatchAccount', 'readNativeSubscriptionLimits',
+  defineMain(context, 'acceptDispatchEvent', 'readNativeConnections', 'liveHost', 'dispatchReading', 'clearDispatchAccount', 'readNativeSubscriptionLimits',
     'readNativeUsageInputs', 'connectionSpec', 'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal',
     'retireTerminal', 'activateNative');
   vm.runInContext(source.slice(source.indexOf('async function initializeNativeSessions('), source.indexOf('function startTerminal('))
@@ -124,7 +124,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   const unavailable = new Map(); context.registerUnavailableNative((name, handle) => unavailable.set(name, handle));
   return { context, removeProject, sent, fallbackUsage: async () => (await unavailable.get('native:usage')('p')).agents.codex,
     fallbackClaude: async () => (await unavailable.get('native:usage')('p')).agents.claude,
-    controlAddress: () => vm.runInContext('controlAddress', context), held: () => vm.runInContext('dispatchAccounts', context),
+    controlAddress: () => vm.runInContext('controlAddress', context), held: () => new Map(['p'].map(id => [id, context.dispatchReading(id, null, Infinity)]).filter(([, payload]) => payload)),
     usage: async () => (await handlers.get('native:usage')('p')).agents.codex };
 }
 

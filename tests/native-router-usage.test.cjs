@@ -13,6 +13,7 @@ const { createRouter } = require('../electron/features/native-session/router.cjs
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
+const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
 
 for (const [agent, config, status, cli, expected] of [
   ['claude', {}, 'no_key', 'ok', ['terminal', 'no_key']],
@@ -129,7 +130,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
   const check = source.indexOf('function checkClaude(');
   vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
   // Execute the actual main composition and callbacks; substitute only dynamic module loading at the process boundary.
-  defineMain(context, 'readNativeConnections', 'liveHost', 'dispatchAccounts', 'dispatchReading', 'readNativeSubscriptionLimits', 'readNativeUsageInputs', 'connectionSpec',
+  defineMain(context, 'readNativeConnections', 'liveHost', 'dispatchReading', 'readNativeSubscriptionLimits', 'readNativeUsageInputs', 'connectionSpec',
     'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'retireTerminal', 'activateNative');
   vm.runInContext(source.slice(source.indexOf('async function initializeNativeSessions('), source.indexOf('function startTerminal('))
     .replaceAll('await import(', 'await importFixture('), context);
@@ -193,4 +194,22 @@ test('API records distinguish an empty ledger from zero spend and survive reload
   usage.record('fixture-session', { uuid: 'result', total_cost_usd: 0 });
   assert.equal(usage.summary().apiRecords, true); assert.equal(usage.summary().todayUsdMicros, 0);
   assert.equal(createUsage({ file }).summary().apiRecords, true);
+});
+
+// The checks before the account read can take long (a cold CLI, a slow PATH); the order is driven by the check's own promise.
+test('a quit that starts while the usage checks run blocks the account read', async () => {
+  let check = Promise.withResolvers();
+  const project = { id: 'p', kind: 'local' }, reads = [];
+  const deps = { quitting: false, shellPathReady: Promise.resolve(), store: { projects: [project] },
+    checkClaude: () => check.promise, codexExecutable: async () => 'fixture-codex',
+    projectAccounts: { read: async (...args) => { reads.push(args); } }, nativeEnvironment: () => ({}), readNativeSubscriptionLimits: () => ({}) };
+  const pending = createHostInputs(deps).readNativeUsageInputs('p');
+  deps.quitting = true;
+  check.resolve({ status: 'ok' });
+  assert.deepEqual((await pending).cli, { claude: { status: 'ok' }, codex: { status: 'ok' } });
+  assert.equal(reads.length, 0, 'a quit that began during the checks stops the account read');
+  deps.quitting = false; check = Promise.withResolvers();
+  const reading = createHostInputs(deps).readNativeUsageInputs('p');
+  check.resolve({ status: 'ok' }); await reading;
+  assert.equal(reads.length, 1, 'without a quit the same checks lead to the read');
 });
