@@ -25,7 +25,9 @@ function global:Find-AgentrixProgram {
         }
     }
 }
-$global:AgentrixCodexCommand = Find-AgentrixProgram codex
+# Codex is the one Agentrix chose for this terminal (AGENTRIX_CODEX_EXECUTABLE, codex-runtime's locator) while that
+# file is there; otherwise the first on PATH as above.
+$global:AgentrixCodexCommand = if ($env:AGENTRIX_CODEX_EXECUTABLE -and [IO.File]::Exists($env:AGENTRIX_CODEX_EXECUTABLE)) { $env:AGENTRIX_CODEX_EXECUTABLE } else { Find-AgentrixProgram codex }
 # Claude Code is the one Agentrix chose for this terminal (AGENTRIX_CLAUDE_EXECUTABLE, claude-runtime's locator) while
 # that file is there; otherwise the first on PATH as above.
 $global:AgentrixClaudeCommand = if ($env:AGENTRIX_CLAUDE_EXECUTABLE -and [IO.File]::Exists($env:AGENTRIX_CLAUDE_EXECUTABLE)) { $env:AGENTRIX_CLAUDE_EXECUTABLE } else { Find-AgentrixProgram claude }

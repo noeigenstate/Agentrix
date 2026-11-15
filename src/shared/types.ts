@@ -148,7 +148,14 @@ export type ClaudeFound = { version: string | null; via: ClaudeVia; fileShown: s
 // the other, newer one the native path runs.
 export type ClaudeAgentState = { installed: boolean } & Partial<ClaudeFound> & {
   reason?: 'too_old' | 'timeout' | 'failed' | 'unreadable'; incomplete?: true; notice?: 'cli_split_versions'; native?: ClaudeFound };
-export type AgentsState = { codex: { installed: boolean }; claude: ClaudeAgentState; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
+// Why something is not as expected (C-1, electron/shared/reason.cjs): a code whose words src/shared/reason-words holds.
+export type Reason = { code: string; params?: Record<string, string | number | boolean | null>; detail?: string; stage?: string; source: string; observedAt: number };
+// Where the Codex a session runs was found (codex-runtime/BOUNDARY.md); `fileShown` writes home as ~.
+export type CodexVia = 'path' | 'npm-shim' | 'npm-vendor' | 'npm-hoisted' | 'npm-prefix' | 'registry-path' | 'official-installer' | 'winget' | 'system';
+// An installed Codex says how it was found; `version` is null and `reason` says why when its check printed none. One
+// not found keeps the reason, which says where the search looked. Before the first search only `installed` is known.
+export type CodexAgentState = { installed: boolean; version?: string | null; via?: CodexVia; fileShown?: string; reason?: Reason };
+export type AgentsState = { codex: CodexAgentState; claude: ClaudeAgentState; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }
   | { kind: 'image' | 'video'; mimeType: string; url: string; previewId: string }

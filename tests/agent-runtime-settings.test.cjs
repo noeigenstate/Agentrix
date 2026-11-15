@@ -315,11 +315,11 @@ function agentsPage(saved, { windows = true, visible = true } = {}) {
   const bridge = { keyStatus: async () => { reads.push(1); return saved === null ? { ok: false, error: 'x' } : { ok: true, value: { saved } }; } };
   const harness = hookHarness('src/features/agents/AgentsSettings.tsx', { './i18n': { t: fill }, './platform': { isWindows: windows },
     './native-words': { viaWords: via => via, installerCommand: win => (win ? 'irm-installer' : 'curl-installer') }, './native-bridge.ts': { nativeBridge: () => bridge } });
-  // The first render starts the key read, the second shows its answer.
-  const render = async claude => {
-    const props = { agents: { codex: { installed: true }, claude, npm: true, installing: null, message: '', error: '' }, onChange() {}, visible };
+  // The first render starts the key read, the second shows its answer. `index` 0 reads the Codex row.
+  const render = async (claude, { codex = { installed: true }, index = 1 } = {}) => {
+    const props = { agents: { codex, claude, npm: true, installing: null, message: '', error: '' }, onChange() {}, visible };
     harness.render('AgentsSettings', props); await settle();
-    const section = elements(harness.render('AgentsSettings', props).result).filter(node => node.props?.className === 'agent-setting')[1];
+    const section = elements(harness.render('AgentsSettings', props).result).filter(node => node.props?.className === 'agent-setting')[index];
     const inside = elements(section.props.children);
     return { status: elementsText(inside.find(node => node.type === 'small' && node.props.role === 'status').props.children), title: inside.find(node => node.type === 'small' && node.props.role === 'status').props.title,
       hint: inside.filter(node => node.type === 'small' && !node.props.role).map(node => elementsText(node.props.children))[0] ?? null,
@@ -328,6 +328,22 @@ function agentsPage(saved, { windows = true, visible = true } = {}) {
   return { render, reads, done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
 const NPM_COMMAND = 'npm install -g @anthropic-ai/claude-code';
+
+test('the agents page says how Codex was found, why its check printed no version, or where the search looked', async () => {
+  const view = agentsPage(true), codex = async value => view.render({ installed: true }, { codex: value, index: 0 });
+  const reason = (code, fields = {}) => ({ code, source: 'codex-runtime locator', observedAt: 1, ...fields });
+  try {
+    assert.deepEqual(await codex({ installed: true }), { status: '已安装', title: undefined, hint: null, command: 'npm install -g @openai/codex', install: false });
+    const found = await codex({ installed: true, version: '0.166.0', via: 'npm-vendor', fileShown: 'D:\\nodejs\\codex.exe' });
+    assert.deepEqual([found.status, found.title, found.hint], ['已安装 · 版本 0.166.0 · 来自 npm 全局安装', 'D:\\nodejs\\codex.exe', null]);
+    const silent = await codex({ installed: true, version: null, via: 'winget', fileShown: 'x', reason: reason('codex.unreadable') });
+    assert.deepEqual([silent.status, silent.hint], ['已安装 · 版本未知 · 来自 WinGet', '无法读取 Codex']);
+    const searched = '~\\AppData\\Roaming\\npm; ~\\AppData\\Local\\Microsoft\\WinGet\\Links';
+    const missing = await codex({ installed: false, reason: reason('codex.not_found', { params: { pathFolders: 3, searched } }) });
+    assert.deepEqual([missing.status, missing.hint, missing.install], ['未安装', `没有找到 Codex。已查找：${searched}；PATH 目录：3`, true]);
+    assert.equal((await codex({ installed: false, reason: reason('codex.incomplete', { detail: 'D:\\nodejs' }) })).hint, 'Codex 安装不完整');
+  } finally { view.done(); }
+});
 
 test('the agents page says where Claude Code was found beside 已安装, and only 已安装 when main gave nothing more', async () => {
   const view = agentsPage(true);

@@ -139,6 +139,25 @@ test('Claude Code reads as installed from the locator\'s last search, never a se
   assert.deepEqual(new AgentsManager({ env: { ...env, AGENTRIX_DATA_DIR: 'x' }, claude: () => assert.fail('not read') }).getState().claude, { installed: true });
 });
 
+test("Codex reads as installed from the locator's last search, with how it was found or where it looked, and an install searches again", async t => {
+  const { env, add } = fixture(t); add('npm'); add('codex');
+  const file = 'D:\\nodejs\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe';
+  const reason = code => ({ code, source: 'codex-runtime locator', observedAt: 1 });
+  const found = { file, path: 'D:\\nodejs\\codex.ps1', fileShown: file, version: '0.166.0', via: 'npm-vendor', reason: null, searched: [], pathFolders: 1 };
+  let located = null, refreshes = 0;
+  const fake = fakeLaunch(), manager = new AgentsManager({ env, launch: fake.launch, codex: () => located, refreshCodex: async () => { refreshes++; located = found; } });
+  // Before the first search the PATH check stands in.
+  assert.deepEqual(manager.getState().codex, { installed: true });
+  located = { file: null, reason: reason('codex.not_found') };
+  assert.deepEqual(manager.getState().codex, { installed: false, reason: reason('codex.not_found') });
+  const pending = manager.install('codex'); fake.children[0].emit('close', 0);
+  assert.deepEqual((await pending).codex, { installed: true, version: '0.166.0', via: 'npm-vendor', fileShown: file }); assert.equal(refreshes, 1);
+  // One whose check printed no version is installed, with why; an isolated desktop check reads no search.
+  located = { ...found, version: null, reason: reason('codex.unreadable') };
+  assert.deepEqual(manager.getState().codex, { installed: true, version: null, via: 'npm-vendor', fileShown: file, reason: reason('codex.unreadable') });
+  assert.deepEqual(new AgentsManager({ env: { ...env, AGENTRIX_DATA_DIR: 'x' }, codex: () => assert.fail('not read') }).getState().codex, { installed: true });
+});
+
 test('an installed Claude Code that cannot run natively still reads as installed, with why, and a version split names the native copy', t => {
   const { env } = fixture(t), file = 'D:\\bin\\claude.exe';
   const old = { file, fileShown: file, version: '2.1.300', via: 'path' }, fresh = { file: 'D:\\new\\claude.exe', fileShown: 'D:\\new\\claude.exe', version: '2.1.322', via: 'npm' };

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { withGuiLock } from './gui-lock.mjs';
 import { waitFor } from './wait.mjs';
+import { windowsCodexStandIn } from './gui-codex-env.mjs';
 import { testRun } from './test-output.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -66,10 +67,11 @@ const changedFiles = repo => execFileSync('git', ['status', '--porcelain', '--un
 const decode = buffer => buffer[0] === 0xff && buffer[1] === 0xfe ? buffer.subarray(2).toString('utf16le') : buffer.toString('utf8');
 const quote = value => `'${String(value).replace(/'/g, "''")}'`;
 
-// A rogue CLI for scenario 3: the test fixture worker, found on PATH as Codex, that edits a file outside --allow.
-const rogue = path.join(lab, 'rogue-cli');
-await fs.mkdir(path.join(rogue, 'node_modules/@openai/codex/bin'), { recursive: true });
-await fs.copyFile(path.join(root, 'tests/fixtures/dispatch-worker.cjs'), path.join(rogue, 'node_modules/@openai/codex/bin/codex.js'));
+// A rogue CLI for scenario 3: the test fixture worker, found on PATH as Codex, that edits a file outside --allow. It sits
+// where npm puts Codex's program (tests/fixtures/real-cli/codex-layouts.json): the offline stand-in that runs the worker.
+const rogue = path.join(lab, 'rogue-cli'), rogueBin = path.join(rogue, 'node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin');
+await fs.mkdir(rogueBin, { recursive: true });
+await windowsCodexStandIn(rogueBin);
 const rogueHome = path.join(lab, 'rogue-codex-home');
 await fs.mkdir(rogueHome, { recursive: true });
 
@@ -95,8 +97,10 @@ await withGuiLock('routing-acceptance', async () => {
     const expand = page.getByRole('button', { name: /进入 Routing lab|Full screen.*Routing lab/i }).first();
     if (await expand.isVisible().catch(() => false)) await expand.click();
     const write = (id, data) => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id, data });
-    // The rogue terminal finds the fixture worker as Codex and keeps its rollout away from the real Codex home.
-    await write(rogueTerminal, `$env:PATH = ${quote(rogue)} + ';' + $env:PATH; $env:CODEX_HOME = ${quote(rogueHome)}\r`);
+    // The rogue terminal finds the fixture worker as Codex (not the Codex main told it) and keeps its rollout away from
+    // the real Codex home.
+    await write(rogueTerminal, `$env:PATH = ${quote(rogue)} + ';' + $env:PATH; $env:CODEX_HOME = ${quote(rogueHome)}; Remove-Item Env:AGENTRIX_CODEX_EXECUTABLE -ErrorAction SilentlyContinue; `
+      + `$env:AGENTRIX_FAKE_NODE = ${quote(process.execPath)}; $env:AGENTRIX_GUI_CODEX_RPC = ${quote(path.join(root, 'tests/fixtures/dispatch-worker.cjs'))}\r`);
     const groupsOf = async (id, title) => ((await call('getState')).projects[0].terminals.find(item => item.id === id)?.agentUsage?.calls || [])
       .filter(group => group.items.some(item => item.title === title));
     let shot = 0;

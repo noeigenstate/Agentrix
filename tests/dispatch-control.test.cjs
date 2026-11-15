@@ -101,10 +101,12 @@ for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${actio
   fs.writeFileSync(brief, 'Synthetic task');
   const bin = path.join(root, 'bin');
   if (action === 'npm') {
-    const entry = path.join(bin, 'node_modules/@openai/codex/bin/codex.js');
-    fs.mkdirSync(path.dirname(entry), { recursive: true });
+    // A global npm prefix as npm 10 and 11 lay it out (tests/fixtures/real-cli/codex-layouts.json): a shim that would
+    // fail if it ran, and the nested platform package's codex.exe, an offline stand-in that serves the fake app-server.
+    const vendor = path.join(bin, 'node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin');
+    fs.mkdirSync(vendor, { recursive: true });
     fs.writeFileSync(path.join(bin, 'codex.cmd'), '@exit /b 99');
-    fs.writeFileSync(entry, `require(${JSON.stringify(path.join(__dirname, 'fixtures/codex-app-server.cjs'))});`);
+    await (await import('../scripts/gui-codex-env.mjs')).windowsCodexStandIn(vendor);
   }
   const control = createDispatchControl({ resolveRun: auth => auth.sessionKey === 'synthetic-key' && team.live().some(x => x.id === auth.runId)
     ? { runId: auth.runId, projectId: 'p', cwd: repo, worktree: repo, allow: [], readOnly: false, roundtable: false } : null });
@@ -116,7 +118,8 @@ for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${actio
     '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**', '--skip-meeting', 'Synthetic native fixture'], {
     env: { PATH: action === 'npm' ? bin : '', CODEX_HOME: path.join(root, 'home'), CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
       AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SDK_PARENT: '1', ANTHROPIC_API_KEY: 'synthetic-injected',
-      SYNTHETIC_CODEX_MODE: action === 'npm' ? 'normal' : 'worker' },
+      SYNTHETIC_CODEX_MODE: action === 'npm' ? 'normal' : 'worker',
+      ...(action === 'npm' ? { AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_GUI_CODEX_RPC: path.join(__dirname, 'fixtures/codex-app-server.cjs') } : {}) },
     stdout: { write: text => { stdout += text; } },
     ...(action === 'npm' ? {} : { resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server.cjs'), ...args] }) }),
     launch: (file, args, options) => lifetime.child(spawn(file, args, options)),

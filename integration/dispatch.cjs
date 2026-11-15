@@ -23,13 +23,15 @@ const { TASK_KINDS, taskKind, routingVerdict: strictRoutingVerdict } = require(p
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
+const { processLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
   'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
-  'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs'];
+  'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
+  'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
 const runtimeFiles = () => {
   // A supplies this pure module in the merged tree. Older or standalone helper trees remain usable without it.
   const routing = 'features/native-session/routing.cjs';
@@ -444,15 +446,22 @@ class CodexRollout {
   }
 }
 
-// Standard Windows npm installs expose a JS entrypoint beside the shim; never invoke a shell.
-function executable(agent, args, env) {
+// The Codex file a worker runs: the one the terminal was told (AGENTRIX_CODEX_EXECUTABLE) while it is there, resolved
+// to its program the way main's locator resolves it, else codex-runtime's own search; null when there is none.
+const locateCodex = (env, locator = processLocator) => locator.locate({ env,
+  prefer: Object.entries(env).find(([key]) => key.toUpperCase() === 'AGENTRIX_CODEX_EXECUTABLE')?.[1] || undefined }).then(found => found.file);
+
+// The command for a worker's CLI, never through a shell: Codex is the file locateCodex found (`codex`, the bare name,
+// when none was); a standard Windows npm install of Claude Code exposes its JS entrypoint beside the shim.
+function executable(agent, args, env, codex) {
+  if (agent === 'codex') return { file: codex || agent, args };
   if (process.platform !== 'win32') return { file: agent, args };
   const searchPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
   for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
     const folder = directory.replace(/^"|"$/g, '');
     const native = path.join(folder, agent + '.exe');
     if (fs.existsSync(native)) return { file: native, args };
-    const entry = path.join(folder, 'node_modules', agent === 'codex' ? '@openai/codex/bin/codex.js' : '@anthropic-ai/claude-code/cli.js');
+    const entry = path.join(folder, 'node_modules', '@anthropic-ai/claude-code/cli.js');
     if (fs.existsSync(entry)) return { file: process.execPath, args: [entry, ...args] };
   }
   return { file: agent, args };
@@ -1037,8 +1046,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (options.agent === 'codex') {
           codexAccountKey = controlClient?.accountKey || null;
+          // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none.
+          const codex = resolveExecutable === executable ? await locateCodex(env) : null;
           activeRuntime = createCodexRuntime({ accountKey: codexAccountKey || undefined, resolveExecutable: async () => 'codex', spawnProcess: (_file, _args, spawnOptions) => {
-            const command = resolveExecutable('codex', commandOf(effective), env); return launch(command.file, command.args, spawnOptions);
+            const command = resolveExecutable('codex', commandOf(effective), env, codex); return launch(command.file, command.args, spawnOptions);
           } }).create(spec, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
@@ -1216,4 +1227,4 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
 }
 
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
-module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, RATE_INTERVAL };
+module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, locateCodex, executable, RATE_INTERVAL };

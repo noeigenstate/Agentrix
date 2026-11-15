@@ -1,12 +1,16 @@
 const fs = require('node:fs');
 const path = require('node:path');
-// Resolve argv without invoking a shell or reading account files. Windows npm shims require their JS entrypoint.
-function resolveCli(provider, env = process.env, platform = process.platform, node) {
+const { packageBinaries } = require('../electron/features/codex-runtime/locator.cjs');
+// Resolve argv without invoking a shell or reading account files. On Windows an npm package's own program (by
+// codex-runtime's layout table) runs directly; a package without one needs its JS entrypoint.
+function resolveCli(provider, env = process.env, platform = process.platform, node, arch = process.arch) {
   if (provider !== 'codex') throw new Error('Native mode is only available for Codex');
   const folders = String(Object.entries(env).find(([k]) => k.toLowerCase() === 'path')?.[1] || '').split(platform === 'win32' ? ';' : ':').map(folder => folder.replace(/"/g, '')).filter(Boolean);
   for (const base of folders) {
     if (platform === 'win32') {
-      for (const file of [path.join(base, 'codex.exe'), path.join(base, 'node_modules', '@openai/codex', 'bin/codex.js')]) {
+      const pkg = path.join(base, 'node_modules', '@openai', 'codex');
+      const binaries = packageBinaries(pkg, arch, path).map(([file]) => file);
+      for (const file of [path.join(base, 'codex.exe'), ...binaries, path.join(pkg, 'bin', 'codex.js')]) {
         if (!fs.existsSync(file)) continue;
         if (!file.endsWith('.js')) return { file, prefix: [] };
         // Electron-as-Node has no usable Windows stdin TTY. npm's wrapper must inherit the real Node console.

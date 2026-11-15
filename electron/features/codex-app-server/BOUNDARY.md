@@ -17,6 +17,7 @@ Owns an independent app-server runtime over local stdio or an injected SSH byte 
 - `electron/generated-image-path.cjs`
 - `src/shared/agent-events.ts`
 - `electron/features/agents/codex-account-usage.cjs`
+- `electron/features/codex-runtime/locator.cjs` (codexExecutable: the default executable resolver, this process's Codex locator)
 - `electron/features/agents/token-rate.cjs` (shared response samples from root-thread token usage, excluding tool waits and child threads)
 - `electron/features/agents/start-failure.cjs` (startupDetail: a failed start's reason as one line, redacted with skill-privacy's scrubText before the owner sees it; shared with the Claude billing check)
 

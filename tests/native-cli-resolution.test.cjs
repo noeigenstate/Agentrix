@@ -23,6 +23,10 @@ test('Windows npm Codex uses its Node console, never the packaged Electron execu
   // npm also supports a Node runtime beside the shim; it takes precedence over other PATH entries.
   const adjacent = path.join(bin, 'node.exe'); fs.writeFileSync(adjacent, '');
   assert.equal(resolveCli('codex', env, 'win32').file, adjacent);
+  // The package's own program, where npm 10 and 11 nest it (tests/fixtures/real-cli/codex-layouts.json), runs directly.
+  const vendor = path.join(bin, 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
+  fs.mkdirSync(path.dirname(vendor), { recursive: true }); fs.writeFileSync(vendor, '');
+  assert.deepEqual(resolveCli('codex', env, 'win32', undefined, 'x64'), { file: vendor, prefix: [] });
   const executable = path.join(bin, 'codex.exe'); fs.writeFileSync(executable, '');
   assert.deepEqual(resolveCli('codex', env, 'win32'), { file: executable, prefix: [] });
   assert.throws(() => resolveCli('claude', env, 'win32'), /only available for Codex/);

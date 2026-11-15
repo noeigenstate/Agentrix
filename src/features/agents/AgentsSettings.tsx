@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { AgentsState, ClaudeFound } from '../../shared/types';
+import type { AgentsState, ClaudeFound, CodexAgentState, Reason } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { isWindows } from '../../shared/platform';
 import { installerCommand, viaWords } from '../native-session/native-words';
 import { nativeBridge } from '../native-session/native-bridge.ts';
+import { codexWords } from '../../shared/reason-words/codex.ts';
 
 const api = window.agentrix;
 // What an installed agent reads as: Claude Code says which install the terminal runs, a split (the native path runs another),
@@ -11,9 +12,25 @@ const api = window.agentrix;
 // connection test is only reachable with an API key saved, so without one the step is the installer's command or saving the key.
 const found = ({ version, via }: Partial<ClaudeFound>) => [version ? t('版本 {version}', { version }) : t('版本未知'), via && t('来自 {via}', { via: viaWords(via) })].filter(Boolean).join(' · ');
 const from = (via: ClaudeFound['via'] | undefined) => via && t('来自 {via}', { via: viaWords(via) });
+// How Codex was found, one phrase per codex-runtime VIAS entry (tests/codex-runtime-guards.test.cjs keeps them equal).
+const CODEX_VIA_WORDS: Record<string, string> = {
+  path: 'PATH', 'npm-shim': 'npm 或 pnpm 命令', 'npm-vendor': 'npm 全局安装', 'npm-hoisted': 'npm 平台包', 'npm-prefix': 'npm 全局目录（.npmrc）',
+  'registry-path': '系统 PATH（注册表）', 'official-installer': '官方安装器', winget: 'WinGet', system: '系统目录',
+};
+// A Codex reason in words: its code's phrase with its params filled in.
+const reasonWords = ({ code, params = {} }: Reason) => (codexWords[code]
+  ? t(codexWords[code], Object.fromEntries(Object.entries(params).map(([name, value]) => [name, String(value)]))) : code);
+// Codex says its version and how it was found; a check that printed no version says why. Before the first search main
+// gives only whether it is installed.
+function codexInstalledWords({ version, via, reason }: CodexAgentState): { text: string; hint: string | null } {
+  if (via === undefined) return { text: t('已安装'), hint: null };
+  const words = CODEX_VIA_WORDS[via];
+  return { text: [t('已安装'), version ? t('版本 {version}', { version }) : t('版本未知'), words && t('来自 {via}', { via: t(words) })].filter(Boolean).join(' · '),
+    hint: reason ? reasonWords(reason) : null };
+}
 function installedWords(agent: 'codex' | 'claude', state: AgentsState, keySaved: boolean | null): { text: string; hint: string | null } {
   const claude = state.claude, noKey = keySaved === false, testHint = t('到「运行方式 › 测试连接」查看原因。');
-  if (agent === 'codex') return { text: t('已安装'), hint: null };
+  if (agent === 'codex') return codexInstalledWords(state.codex);
   if (claude.incomplete) return { text: t('安装不完整'), hint: noKey ? t('npm 装了，但里面没有原生程序。请用官方安装器重新安装：{command}', { command: installerCommand(isWindows) }) : t('npm 装了，但里面没有原生程序。{hint}', { hint: testHint }) };
   if (claude.reason === 'too_old') return { text: [claude.version ? t('版本 {version} 过低', { version: claude.version }) : t('版本过低'), from(claude.via)].filter(Boolean).join(' · '), hint: t('请升级 Claude Code。') };
   if (claude.reason) return { text: t('已安装 · 检查未通过'), hint: noKey ? t('检查没有通过。先在「运行方式」里保存 API 密钥，再点「测试连接」查看原因。') : testHint };
@@ -40,9 +57,13 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
   const openNode = async () => { try { const result = await api.openNode(); if (!result.ok) setError(result.error); } catch (err) { setError(String(err)); } };
   return <>
     <p className="agents-intro">{t('Agentrix 基于 Codex 和 Claude Code 这两个命令行工具：在每个项目的终端里运行它们，这里负责并排显示、提醒完成和恢复会话。至少安装其中一个。')}</p>
-    {(['codex', 'claude'] as const).map(agent => { const words = agents?.[agent].installed ? installedWords(agent, agents, keySaved) : null; return <div className="agent-setting" key={agent}>
-      <div className="setting-row"><span><span><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" title={agent === 'claude' ? agents?.claude.fileShown : undefined}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : t('未安装')}</small>
-        {agents?.installing !== agent && words?.hint && <small>{words.hint}</small>}</span></span>
+    {(['codex', 'claude'] as const).map(agent => {
+      // Codex not found says where it looked.
+      const missing = agent === 'codex' && agents && !agents.codex.installed && agents.codex.reason ? reasonWords(agents.codex.reason) : null;
+      const words = agents?.[agent].installed ? installedWords(agent, agents, keySaved) : null, hint = words ? words.hint : missing;
+      return <div className="agent-setting" key={agent}>
+      <div className="setting-row"><span><span><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" title={agents?.[agent].fileShown}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : t('未安装')}</small>
+        {agents?.installing !== agent && hint && <small>{hint}</small>}</span></span>
         {agents && !agents[agent].installed && <button type="button" className="button secondary small" disabled={pending || !!agents.installing || !agents.npm} onClick={() => void install(agent)}>{t('一键安装')}</button>}</div>
       <code className="agent-command">{agent === 'codex' ? 'npm install -g @openai/codex' : agents?.claude.incomplete ? installerCommand(isWindows) : 'npm install -g @anthropic-ai/claude-code'}</code>
     </div>; })}

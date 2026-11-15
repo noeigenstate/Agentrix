@@ -53,9 +53,15 @@ const { DashboardRecords, quotaScope } = require('./features/dashboard/records.c
 const { createDashboard } = require('./features/dashboard/index.cjs');
 const { createLab } = require('./features/lab/index.cjs');
 const { routingNote } = require('./features/dashboard/decisions.cjs');
-const { CodexAccountUsage, codexExecutable, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
+const { CodexAccountUsage, readCodexAccount, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
 const { createRpc: createResetRpc } = require('./features/codex-app-server/rpc.cjs');
-const codexAccounts = new CodexAccountUsage({ resetClient: { rpcFactory: createResetRpc }, resetStorage: {
+const { createCodexLocator } = require('./features/codex-runtime/locator.cjs');
+// One Codex locator for the terminal, native mode, the account reads and the settings (codex-runtime/BOUNDARY.md). They
+// all run the file it found in main's environment; a terminal is told where that file was found.
+const codexLocator = createCodexLocator();
+const codexExecutable = () => codexLocator.locate().then(found => found.file);
+const codexAccounts = new CodexAccountUsage({ read: options => readCodexAccount({ ...options, resolveExecutable: codexExecutable }),
+  resetClient: { rpcFactory: createResetRpc, resolveExecutable: codexExecutable }, resetStorage: {
   read: () => readNativeJson(path.join(app.getPath('userData'), 'codex-reset-attempts.json'), null),
   write: value => writeNativeJson(path.join(app.getPath('userData'), 'codex-reset-attempts.json'), value),
 }, audit: event => {
@@ -110,7 +116,7 @@ const { ReadingHistory } = require('./reading-history.cjs');
 const { conversationBatchDelay, pollAfterSubmission } = require('./conversation-timing.cjs');
 const { listAgentCommands, isLocalAgentCommand } = require('./agent-commands.cjs');
 const { claudeConfigDir, findClaudeSession } = require('./claude-sessions.cjs');
-const { AgentsManager, claudeState, onPath } = require('./agents.cjs');
+const { AgentsManager, claudeState, codexState, onPath } = require('./agents.cjs');
 const { macShell, linuxShell, shellEnvironment, zshEnvironment, bashArguments, withoutAppImage, terminalLocale } = require('./zsh-terminal.cjs');
 
 const root = path.join(__dirname, '..');
@@ -226,7 +232,7 @@ function send(channel, data) { if (window && !window.isDestroyed()) window.webCo
 // One Claude Code locator for the terminal and the native path (claude-runtime/BOUNDARY.md).
 const claudeLocator = createLocator();
 const agents = new AgentsManager({ onChange: state => send('agents:changed', state), translate: t,
-  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh') });
+  claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh'), codex: () => codexLocator.peek(), refreshCodex: () => checkCodex('refresh') });
 // The CLI the native path runs, from the locator. `mode`: 'locate' only stats what it chose; 'refresh' (start-up, the
 // connection test, an install) reads the stored Windows PATH and searches again; 'focus' does that at most once a
 // minute. The agents' state is told again whenever what it says of Claude Code changed.
@@ -234,6 +240,13 @@ async function inspectClaude(mode) {
   const seen = () => { const found = claudeLocator.peek(); return found && JSON.stringify(claudeState(found)); };
   const before = seen();
   try { return await inspectClaudeExecutable({ locator: claudeLocator, fresh: mode !== 'locate', throttled: mode === 'focus' }); }
+  finally { if (seen() !== before) agents.changed(); }
+}
+// Codex is searched again like Claude Code ('refresh' or 'focus'), and the agents' state told when what it says changed.
+async function checkCodex(mode) {
+  const seen = () => { const found = codexLocator.peek(); return found && JSON.stringify(codexState(found)); };
+  const before = seen();
+  try { return await codexLocator.refresh(undefined, { throttled: mode === 'focus' }); }
   finally { if (seen() !== before) agents.changed(); }
 }
 // The runtime numbers each CLI check: a stale one comes back as the newer result and changes nothing.
@@ -1140,7 +1153,7 @@ async function initializeNativeSessions() {
   });
   // The first look at the CLI (already under way since the app was ready) seeds what later looks compare with.
   checkClaude().catch(() => {});
-  const codexFactory = createCodexRuntime({ renderImage: generatedImages.render, settleImage: generatedImages.settle, translate: t,
+  const codexFactory = createCodexRuntime({ resolveExecutable: codexExecutable, renderImage: generatedImages.render, settleImage: generatedImages.settle, translate: t,
     launchRemote: async (spec, { signal, readOnly = false }) => {
       const project = findProject(spec.terminalId);
       const delivery = readOnly ? null : skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
@@ -1270,6 +1283,10 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
   if (claudeFile) env.AGENTRIX_CLAUDE_EXECUTABLE = claudeFile;
+  // Codex likewise: the wrappers and the dispatch helper run the file found, told where it was found (an npm shim keeps
+  // npm's environment for the CLI's own runs).
+  const codexPath = project.kind !== 'ssh' && codexLocator.peek()?.path;
+  if (codexPath) env.AGENTRIX_CODEX_EXECUTABLE = codexPath;
   if (project.kind !== 'ssh') env.AGENTRIX_ACCOUNT_BASELINE = JSON.stringify(accountEnvironment(env));
   // The agent wrappers tell Claude Code and Codex what the reading view shows (an SSH project's worker is told on start),
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
@@ -1307,7 +1324,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
     usageEnv: project.kind === 'ssh' ? null : { ...env },
     prompts: shellKind === 'cmd' ? new PromptMarkers() : null,
-    tools: shellKind === 'cmd' ? { codex: onPath('codex', env), claude: !!env.AGENTRIX_CLAUDE_EXECUTABLE || onPath('claude', env) } : null,
+    tools: shellKind === 'cmd' ? { codex: !!env.AGENTRIX_CODEX_EXECUTABLE || onPath('codex', env), claude: !!env.AGENTRIX_CLAUDE_EXECUTABLE || onPath('claude', env) } : null,
     titles: new TerminalTitleTracker(), reportedThreadId: null,
     codexActive: false, codexAvailable: null, seq: 0, chunks: [], bytes: 0, pending: '',
     flushTimer: null, error: null, submissions: new SubmissionTracker(), draftSubmissions: null,
@@ -1635,11 +1652,12 @@ if (!app.requestSingleInstanceLock()) {
     const shellIcon = prepareWindowIcon({ app, shell, root, installed, appUserModelId, relaunchDisplayName });
     const shellIntegration = prepareShellIntegration({ app, integrationDir, agents });
     zshStartup = shellIntegration.startup; shellPathReady = shellIntegration.ready;
-    // Claude Code is looked for now, again once a macOS or Linux login shell has given its PATH, and when the window
-    // comes back at most once a minute, so one installed meanwhile is found without a restart.
+    // Claude Code and Codex are looked for now, again once a macOS or Linux login shell has given its PATH, and when the
+    // window comes back at most once a minute, so one installed meanwhile is found without a restart.
     claudeFirst = checkClaude('refresh').catch(() => {});
-    if (process.platform !== 'win32') void shellPathReady.then(() => checkClaude('refresh')).catch(() => {});
-    app.on('browser-window-focus', () => { checkClaude('focus').catch(() => {}); });
+    checkCodex('refresh').catch(() => {});
+    if (process.platform !== 'win32') void shellPathReady.then(() => Promise.all([checkClaude('refresh'), checkCodex('refresh')])).catch(() => {});
+    app.on('browser-window-focus', () => { checkClaude('focus').catch(() => {}); checkCodex('focus').catch(() => {}); });
     store = new WorkspaceStore(path.join(app.getPath('userData'), 'workspace.json'), { systemTheme: systemTheme() });
     if (store.settings.restoreSessions && (!process.env.AGENTRIX_DATA_DIR || process.env.AGENTRIX_TEST_RESTORE === '1')) {
       for (const project of store.projects) for (const record of [project, ...(project.terminals || [])]) {

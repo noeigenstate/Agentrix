@@ -75,12 +75,16 @@ function resetCreditMessage(result, translate = value => value) {
   return null;
 }
 
+// Which Codex a read or a reset runs when no `executable` is given: the host's codex-runtime locator, injected as
+// `resolveExecutable(env)`. Without one there is none to run.
+const noExecutable = async () => null;
+
 // One explicit action, with no login, refresh, thread, turn or transport retry.
 // claim() serializes accounts across project/cwd scopes before any consume RPC.
-async function consumeCodexResetCredit({ env = process.env, cwd, codexHome, executable, launch = spawn,
+async function consumeCodexResetCredit({ env = process.env, cwd, codexHome, executable, resolveExecutable = noExecutable, launch = spawn,
   stop = stopChild, claim, current = () => true, timeout = 8000, scopeCheck = accountConfigScope, rpcFactory, signal } = {}) {
   if (!cwd || !codexHome || !claim || !rpcFactory || !current() || await scopeCheck({ env, cwd, codexHome })) return { status: 'ineligible' };
-  const file = executable || await codexExecutable(env);
+  const file = executable || await resolveExecutable(env);
   if (!file || !current()) return { status: 'unavailable' };
   let child, rpc, attempted = false, outcome = null, idempotencyKey;
   const abort = () => { rpc?.close(); stop(child); };
@@ -123,25 +127,6 @@ async function consumeCodexResetCredit({ env = process.env, cwd, codexHome, exec
   } finally { signal?.removeEventListener('abort', abort); rpc?.close(); stop(child); }
 }
 
-// Use a native executable, avoiding a shell and unowned npm shim descendants.
-// Standard Windows npm installations can expose the vendor binary here too.
-async function codexExecutable(env = process.env, platform = process.platform, cancelled = () => false) {
-  const folders = String(Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '').split(path.delimiter);
-  for (const folder of folders.filter(Boolean)) {
-    const root = folder.replace(/"/g, '');
-    const candidates = platform === 'win32' ? [path.join(root, 'codex.exe'),
-      ...['node_modules/@openai/codex/vendor', 'node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor',
-        'node_modules/@openai/codex/node_modules/@openai/codex-win32-arm64/vendor']
-        .flatMap(base => ['x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc'].map(target => path.join(root, base, target, 'codex/codex.exe')))]
-      : [path.join(root, 'codex')];
-    for (const candidate of candidates) {
-      if (cancelled()) return null;
-      try { if ((await fs.promises.stat(candidate)).isFile()) return candidate; } catch { }
-    }
-  }
-  return null;
-}
-
 function stopChild(child) {
   if (!child || child.exitCode != null) return;
   // Only our own pid/tree. Never enumerate or signal any running Codex sessions.
@@ -158,7 +143,7 @@ function stopChild(child) {
 }
 
 function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout = 8000,
-  executable, launch = spawn, stop = stopChild } = {}) {
+  executable, resolveExecutable = noExecutable, launch = spawn, stop = stopChild } = {}) {
   return new Promise(resolve => {
     let child, timer, limitsReadAt, connection, done = false, pending = '', bytes = 0, stage = 1;
     const finish = value => {
@@ -241,7 +226,7 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
       } catch { fail('query'); }
     };
     if (executable) start(executable);
-    else void codexExecutable(env, process.platform, () => done).then(start, () => fail('query'));
+    else void resolveExecutable(env).then(start, () => fail('query'));
   });
 }
 
@@ -592,4 +577,4 @@ class CodexAccountUsage {
   }
 }
 
-module.exports = { CodexAccountUsage, readCodexAccount, accountScopeId, accountKey, consumeCodexResetCredit, usageAtLimit, resetCreditMessage, accountResult, usageScope, codexExecutable, configScope, accountConfigScope, scopePathKey };
+module.exports = { CodexAccountUsage, readCodexAccount, accountScopeId, accountKey, consumeCodexResetCredit, usageAtLimit, resetCreditMessage, accountResult, usageScope, configScope, accountConfigScope, scopePathKey };

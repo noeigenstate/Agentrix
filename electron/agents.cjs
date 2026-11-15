@@ -26,21 +26,28 @@ function claudeState({ terminal, native, reason, version, failure, incomplete })
   return state;
 }
 
+// The agents' word on Codex from codex-runtime's locate: installed when a file was found, with its version (null when
+// its check printed none, `reason` then says why) and how it was found; nothing found keeps the reason, which says
+// where the search looked.
+function codexState({ file, version, via, fileShown, reason }) {
+  return file ? { installed: true, version, via, fileShown, ...(reason ? { reason } : {}) } : { installed: false, reason };
+}
+
 class AgentsManager {
-  // `claude` gives claude-runtime's last locate (locator.peek()), never running a search: the program the terminal
-  // runs, its version and where it was found. Before the first search the PATH check stands in. `refreshClaude`
-  // searches again after Claude Code is installed.
-  constructor({ env = process.env, platform = process.platform, detect = onPath, claude = () => null, refreshClaude = async () => {}, launch = spawn,
-    onChange = () => {}, translate = text => text, timeout = 10 * 60 * 1000 } = {}) {
-    Object.assign(this, { env, platform, detect, located: claude, refreshClaude, launch, onChange, t: translate, timeout });
+  // `claude` and `codex` give claude-runtime's and codex-runtime's last locate (locator.peek()), never running a
+  // search: the program the terminal runs, its version and where it was found. Before the first search the PATH check
+  // stands in. `refreshClaude` and `refreshCodex` search again after an install.
+  constructor({ env = process.env, platform = process.platform, detect = onPath, claude = () => null, refreshClaude = async () => {},
+    codex = () => null, refreshCodex = async () => {}, launch = spawn, onChange = () => {}, translate = text => text, timeout = 10 * 60 * 1000 } = {}) {
+    Object.assign(this, { env, platform, detect, located: claude, refreshClaude, locatedCodex: codex, refreshCodex, launch, onChange, t: translate, timeout });
     this.installing = null; this.message = ''; this.error = '';
   }
   getState() {
     // Existing isolated desktop checks should not depend on tools installed on the test host.
     const isolated = !!this.env.AGENTRIX_DATA_DIR && this.env.AGENTRIX_TEST_AGENTS !== '1';
-    const located = isolated ? null : this.located();
+    const located = isolated ? null : this.located(), codex = isolated ? null : this.locatedCodex();
     const claude = located ? claudeState(located) : { installed: isolated || this.detect('claude', this.env) };
-    return { codex: { installed: isolated || this.detect('codex', this.env) }, claude, npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
+    return { codex: codex ? codexState(codex) : { installed: isolated || this.detect('codex', this.env) }, claude, npm: this.detect('npm', this.env), installing: this.installing, message: this.message, error: this.error };
   }
   changed() { const state = this.getState(); this.onChange(state); return state; }
   install(agent) {
@@ -56,8 +63,8 @@ class AgentsManager {
         finished = true; clearTimeout(timer); this.installing = null;
         this.error = error ? `${error}${output ? '\n' + output : ''}` : '';
         this.message = error ? '' : this.t('安装完成，请重启项目的终端；新终端会识别新命令。');
-        // A Claude Code just installed is searched for before the state is told, so it reads as installed.
-        Promise.resolve(!error && agent === 'claude' ? this.refreshClaude() : null).catch(() => {}).then(() => resolve(this.changed()));
+        // An agent just installed is searched for before the state is told, so it reads as installed.
+        Promise.resolve(error ? null : agent === 'claude' ? this.refreshClaude() : this.refreshCodex()).catch(() => {}).then(() => resolve(this.changed()));
       };
       try {
         // Only the fixed map reaches cmd.exe; renderer input is never part of a shell command.
@@ -80,4 +87,4 @@ class AgentsManager {
   }
 }
 
-module.exports = { AGENT_PACKAGES, AgentsManager, claudeState, onPath };
+module.exports = { AGENT_PACKAGES, AgentsManager, claudeState, codexState, onPath };

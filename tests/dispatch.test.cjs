@@ -582,14 +582,21 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
   const bin = path.join(f.directory, 'fake bin (with spaces)');
   await fs.mkdir(bin);
   if (process.platform === 'win32') {
-    const entry = path.join(bin, 'node_modules/@openai/codex/bin/codex.js');
-    await fs.mkdir(path.dirname(entry), { recursive: true });
-    await fs.writeFile(entry, `require(${JSON.stringify(worker)});`);
+    // A global npm prefix as npm 10 and 11 lay it out (tests/fixtures/real-cli/codex-layouts.json): a shim that would
+    // fail if it ran, and the nested platform package's codex.exe, an offline stand-in that runs the worker.
+    const vendor = path.join(bin, 'node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/x86_64-pc-windows-msvc/bin');
+    await fs.mkdir(vendor, { recursive: true });
+    await (await import('../scripts/gui-codex-env.mjs')).windowsCodexStandIn(vendor);
     await fs.writeFile(path.join(bin, 'codex.cmd'), '@echo off\r\nexit /b 93\r\n');
   } else {
     await fs.writeFile(path.join(bin, 'codex'), `#!${process.execPath}\nrequire(${JSON.stringify(worker)});\n`, { mode: 0o700 });
   }
-  const env = { ...process.env, CODEX_HOME: path.join(f.directory, 'codex'), DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture };
+  // The helper's Codex search reads the profile's install folders too: they are the fixture's, and no terminal told it a Codex.
+  const profile = path.join(f.directory, 'profile');
+  const env = { ...process.env, CODEX_HOME: path.join(f.directory, 'codex'), DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture,
+    AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_GUI_CODEX_RPC: worker };
+  for (const key of Object.keys(env)) if (/^(?:AGENTRIX_CODEX_EXECUTABLE|NPM_CONFIG_PREFIX|NPM_CONFIG_USERCONFIG|USERPROFILE|HOME|APPDATA|LOCALAPPDATA|PROGRAMFILES)$/i.test(key)) delete env[key];
+  Object.assign(env, { USERPROFILE: profile, HOME: profile, APPDATA: profile, LOCALAPPDATA: profile });
   delete env.AGENTRIX_BOOTSTRAP;
   const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH'; env[pathKey] = bin;
   const installed = path.join(f.directory, 'installed/integration/dispatch.cjs');

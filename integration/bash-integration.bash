@@ -56,13 +56,15 @@ done
 unset __pg_name __pg_alias
 
 # The words that run codex or claude ($1), in __pg_words; fails when neither the alias nor PATH has a program. Without
-# an alias, claude is the file Agentrix chose for this terminal (AGENTRIX_CLAUDE_EXECUTABLE) while it is there.
+# an alias, each is the file Agentrix chose for this terminal (AGENTRIX_CODEX_EXECUTABLE, AGENTRIX_CLAUDE_EXECUTABLE)
+# while it is there.
 __pg_program() {
-  local alias_name=__pg_alias_$1
+  local alias_name=__pg_alias_$1 chosen=AGENTRIX_CODEX_EXECUTABLE
+  [[ $1 == claude ]] && chosen=AGENTRIX_CLAUDE_EXECUTABLE
   __pg_words=()
   [[ -n ${!alias_name} ]] && eval "__pg_words=(${!alias_name})" 2>/dev/null
   if (( ! ${#__pg_words[@]} )); then
-    if [[ $1 == claude && -f ${AGENTRIX_CLAUDE_EXECUTABLE-} && -x ${AGENTRIX_CLAUDE_EXECUTABLE-} ]]; then __pg_words=("$AGENTRIX_CLAUDE_EXECUTABLE"); else __pg_words=("$1"); fi
+    if [[ -f ${!chosen-} && -x ${!chosen-} ]]; then __pg_words=("${!chosen}"); else __pg_words=("$1"); fi
   fi
   [[ ${__pg_words[0]} == '~'* ]] && __pg_words[0]=$HOME${__pg_words[0]:1}
   if [[ ${__pg_words[0]} == */* ]]; then [[ -x ${__pg_words[0]} ]]

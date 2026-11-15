@@ -54,6 +54,8 @@ test('dispatch tests start workers only through an injected fake CLI', () => {
         if (!/dispatch\.cjs/.test(body.slice(0, match.index)) || /runner/.test(match[1])) continue;
         entrypoints++;
         assert.match(body.slice(0, match.index), /env\[pathKey\]\s*=\s*\w+;/, `${name}: the helper entrypoint ${match[1]} runs with the machine's PATH`);
+        // codex-runtime's search also follows AGENTRIX_CODEX_EXECUTABLE and the profile's install folders.
+        assert.match(body.slice(0, match.index), /AGENTRIX_CODEX_EXECUTABLE[\s\S]*LOCALAPPDATA/, `${name}: the helper entrypoint ${match[1]} can find the machine's Codex`);
       }
     }
   }
