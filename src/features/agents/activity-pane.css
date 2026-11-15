@@ -102,6 +102,8 @@
 .activity-metric { display: grid; grid-template-columns: 88px minmax(0, 1fr) 48px; grid-template-rows: 32px; column-gap: 8px; align-items: center; }
 .activity-metric > .activity-metric-label { grid-area: 1 / 1; overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-muted); text-overflow: ellipsis; white-space: nowrap; }
 .activity-metric-label b { font-weight: 600; color: var(--flow-ink); font-variant-numeric: tabular-nums; }
+/* English labels are longer ("This conversation"): the label column is 112px there, the same for the 连接 rows below, so both stay aligned. Chinese keeps 88px. */
+.activity-metric:lang(en) { grid-template-columns: 112px minmax(0, 1fr) 48px; }
 .activity-metric > .activity-meter { grid-area: 1 / 2; }
 .activity-metric > b { grid-area: 1 / 3; font-size: 12px; line-height: 16px; font-weight: 600; color: var(--flow-ink); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .activity-metric > small { grid-area: 2 / 2 / auto / -1; font-size: 12px; line-height: 16px; color: var(--flow-faint); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -119,6 +121,7 @@
 .api-agent-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
 .api-usage { display: grid; gap: 4px; margin: 0; }
 .api-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
+.api-row:lang(en) { grid-template-columns: 112px minmax(0, 1fr); }
 .api-row dt { overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-muted); text-overflow: ellipsis; white-space: nowrap; }
 .api-row dd { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .api-row dd small { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
