@@ -1,5 +1,0 @@
-{
-  "Claude 账号或组织的 API 用量已达上限，请检查控制台的用量限制。": "The Claude account or organization has reached its API spend limit. Check the usage limits in the console.",
-  "API 请求达到速率限制，请稍后重试。": "The API rate limit has been reached. Try again later.",
-  "命令已执行，但输出未发送给模型。请检查 API 后重试。": "The command ran, but its output was not sent to the model. Check the API and try again."
-}

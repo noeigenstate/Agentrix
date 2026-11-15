@@ -63,6 +63,7 @@
     "tests/project-reorder-release.test.cjs",
     "tests/project-svg.test.cjs",
     "tests/question-appearance.test.cjs",
+    "tests/reason-words.test.cjs",
     "tests/release-notes.test.cjs",
     "tests/review-grade.test.cjs",
     "tests/select.test.cjs",
@@ -73,6 +74,7 @@
     "tests/system-proxy.test.cjs",
     "tests/terminal-cleanup.test.cjs",
     "tests/terminal-reveal.test.cjs",
+    "tests/test-hygiene.test.cjs",
     "tests/test-output.test.cjs",
     "tests/undeclared-names.test.cjs",
     "tests/updates-ipc.test.cjs",
@@ -224,7 +226,8 @@
       "file": "scripts/completion-smoke.mjs",
       "shard": "terminals",
       "modules": [
-        "electron/BOUNDARY.md"
+        "electron/BOUNDARY.md",
+        "electron/features/terminal-events/BOUNDARY.md"
       ]
     },
     "gpu-terminal": {
@@ -285,7 +288,8 @@
       "shard": "reading",
       "modules": [
         "src/features/reading/BOUNDARY.md",
-        "electron/features/terminal/BOUNDARY.md"
+        "electron/features/terminal/BOUNDARY.md",
+        "electron/features/terminal-events/BOUNDARY.md"
       ]
     },
     "native-question": {

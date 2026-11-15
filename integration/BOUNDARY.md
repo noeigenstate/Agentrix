@@ -44,7 +44,7 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 ## Not ours
 - Showing dispatched rows, their grouping, wording and how long they stay — Activity pane (agent-calls.cjs, ActivityPane.tsx)
 - The rate calculation and reading settings from records — Activity pane (token-rate.cjs, agent-settings.cjs)
-- The event pipe server and its bootstrap file — electron/events.cjs and main.cjs
+- The event pipe server and its bootstrap file — electron/events.cjs and electron/features/terminal-events/bootstrap-file.cjs
 - Telling a session where the helper is — the startup note (electron/features/agents/handoff.cjs)
 - Copying the runtime into packaged builds and onto SSH hosts — scripts/after-pack.cjs, electron/remote-connection.cjs, integration/remote-worker.py
 - Which model takes a task and what its brief says — the lead (the system model-routing skill)
