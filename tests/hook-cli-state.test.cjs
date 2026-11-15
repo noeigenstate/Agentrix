@@ -5,6 +5,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { claudeEvent } = require('../integration/agent-event.cjs');
 const { createEventServer } = require('../electron/events.cjs');
+const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
 
 const hooks = { PreToolUse: 'progress', PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress', ElicitationResult: 'progress', PermissionRequest: 'permission', Elicitation: 'permission' };
 // Claude 2.1.317 permission/elicitation inputs do not identify a tool-use request.
@@ -18,19 +19,19 @@ for (const [hookEvent, kind] of Object.entries(hooks)) test(hookEvent + ' is sil
 });
 
 test('Bash, zsh and PowerShell register matching observation hooks', () => {
-  for (const file of ['bash-integration.bash', 'zsh-integration.zsh']) {
-    const text = fs.readFileSync(path.join(__dirname, '../integration', file), 'utf8');
-    const line = text.split('\n').find(line => line.startsWith('  local settings=')).trimEnd();
-    const settings = JSON.parse(line.slice(line.indexOf('=') + 2, -1).replace(/\\"/g, '"').replace(/\$(start|stop|notify|session|progress|permission)/g, (_, kind) => JSON.stringify(kind)));
-    for (const [name, kind] of Object.entries(hooks)) {
-      const hook = settings.hooks[name][0].hooks[0];
-      assert.equal(hook.command, kind, file + ': ' + name);
-      assert.equal(hook.async === true, kind === 'progress', file + ': ' + name + ' async');
+  // One generator writes every wrapper's settings; the command fallback keeps these kinds in every shell.
+  const shells = { powershell: { posix: false, powershellPath: 'C:\Windows\powershell.exe', script: 'C:\agentrix\claude-hook.ps1' },
+    posix: { posix: true, node: '/agentrix/node', helper: '/agentrix/agent-event.cjs', noteFile: '/runtime/note' } };
+  for (const [name, shell] of Object.entries(shells)) {
+    const { settings } = terminalHooks({ port: 1, terminalId: 'terminal', sessionKey: 'capability', eventServer: { name: 'pipe', address: '/socket' }, env: {}, cwd: '/project',
+      shell, platform: 'linux', home: '/home', read: () => '{}' });
+    const fallback = JSON.parse(settings.fallback).hooks;
+    for (const [event, kind] of Object.entries(hooks)) {
+      const hook = fallback[event][0].hooks[0];
+      assert.ok(hook.command.endsWith(name === 'posix' ? ` ${kind}` : ` -Kind ${kind}`), name + ': ' + event);
+      assert.equal(hook.async === true, kind === 'progress', name + ': ' + event + ' async');
     }
   }
-  const ps = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
-  for (const name of Object.keys(hooks)) assert.ok(ps.includes("'" + name + "'"), name);
-  assert.match(ps, /async = \(\$kind -eq 'progress'\)/);
 });
 
 test('PowerShell and Node emit equivalent progress and permission fields without output', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {

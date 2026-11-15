@@ -22,9 +22,10 @@ function fixture(agent = 'claude') {
     store: { projects: [project], setRestore() {}, expectCompletion(_id, value = true) { armed = value; }, complete() { if (!armed) return false; armed = false; return true; } },
     notifyCompletion() { notifications++; }, summarizeTask: () => '', isLocalAgentCommand: require('../electron/agent-commands.cjs').isLocalAgentCommand,
     promptText: require('../electron/prompt-queue.cjs').promptText, followClaude() {}, memoryFolder: () => '', memoryDir: () => '', roundsOf: () => [],
-    remember: async () => {}, setTimeout: () => ({ unref() {} }), refreshClaudeAccounts() {}, scrubProjectSkills: async () => {} });
+    remember: async () => {}, setTimeout: () => ({ unref() {} }), refreshClaudeAccounts() {}, scrubProjectSkills: async () => {},
+    downgradeHooks: require('../electron/features/terminal-events/hook-channel.cjs').downgradeHooks });
   vm.runInContext(functions, context);
-  defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'acceptDispatchEvent');
+  defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'claudeHook', 'acceptDispatchEvent');
   let serial = 0;
   const hook = (state, extra = {}) => context.claudeActivity(project, s, { state, sessionId: 'provider', eventId: 'provider:hook-' + ++serial, sentAt: now, ...extra });
   return { s, frames, hook, context, project, advance(ms = 1) { now += ms; }, notifications: () => notifications, beginnings: () => beginnings,
@@ -158,4 +159,49 @@ test('progress releases a correlated host wait only with its exact request ident
   assert.equal(h.s.cliState.revision, revision);
   h.hook('progress', { requestId: 'root-request' });
   assert.equal(h.s.cliState.state, 'working'); assert.equal(h.s.needsInput, null); assert.equal(h.beginnings(), 1);
+});
+
+test('under command-async a late Stop of an older prompt does not end the newer turn', () => {
+  const h = fixture();
+  h.hook('working', { prompt: 'First task', promptId: 'p1' }); h.advance();
+  h.hook('progress', { hookEvent: 'PostToolUse', promptId: 'p1' }); h.advance(10);
+  // The first turn's Stop hook arrives after the next prompt's, its PowerShell having started later.
+  h.hook('working', { prompt: 'Second task', promptId: 'p2' }); h.advance();
+  h.hook('complete', { promptId: 'p1' });
+  assert.equal(h.s.cliState.state, 'working'); assert.equal(h.notifications(), 0);
+  h.advance(); h.hook('complete', { promptId: 'p2' });
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.notifications(), 1);
+  // A dequeued prompt has no UserPromptSubmit: its first hook, even its Stop, makes it the newest.
+  const revision = h.s.cliState.revision;
+  h.advance(); h.hook('complete', { promptId: 'p3' });
+  assert.ok(h.s.cliState.revision > revision);
+});
+
+test('an HTTP hook event becomes the pipe event, and one that lost its payload belongs to the session the terminal follows', () => {
+  const h = fixture();
+  let seq = 0, at = 3000;
+  const hook = (event, payload = {}) => h.context.claudeHook({ seq: ++seq, terminalId: 't', event, at: at++, sessionId: payload.session_id ?? '', transcriptPath: '',
+    promptId: payload.prompt_id ?? null, toolUseId: payload.tool_use_id ?? null, agentId: null, payload });
+  hook('UserPromptSubmit', { session_id: 'provider', prompt: 'Do the task', prompt_id: 'p1' });
+  assert.equal(h.s.cliState.state, 'working'); assert.equal(h.beginnings(), 1);
+  hook('Notification', { session_id: 'provider', notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
+  hook('SubagentStart', { session_id: 'provider', agent_id: 'a' });
+  hook('Stop', { session_id: 'another-session' });
+  assert.equal(h.s.cliState.state, 'working', 'an idle notice, an event the adapter does not map and another session change nothing');
+  hook('PermissionRequest', { session_id: 'provider', tool_name: 'Bash', prompt_id: 'p1' });
+  assert.equal(h.s.cliState.state, 'waiting'); assert.equal(h.s.needsInput.message, 'Bash');
+  hook('Stop', {});
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.notifications(), 1);
+});
+
+test("a wrapper's hook-channel report moves the terminal to command hooks and says why, never back", () => {
+  const h = fixture();
+  h.s.hooks = { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' };
+  h.context.onEvent({ projectId: 't', sessionKey: 'other', type: 'hook-channel', command: 'HTTP_PROXY', sequence: 1 });
+  assert.equal(h.s.hooks.channel, 'http');
+  h.context.onEvent({ projectId: 't', sessionKey: 'cap', type: 'hook-channel', command: 'HTTP_PROXY', sequence: 2 });
+  assert.equal(h.s.hooks.channel, 'command-async'); assert.deepEqual(h.s.hooks.channelReason.params, { variable: 'HTTP_PROXY', source: 'terminal' });
+  const fallen = h.s.hooks;
+  h.context.onEvent({ projectId: 't', sessionKey: 'cap', type: 'hook-channel', command: 'HTTPS_PROXY', sequence: 3 });
+  assert.equal(h.s.hooks, fallen);
 });

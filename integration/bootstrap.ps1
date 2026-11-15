@@ -143,34 +143,37 @@ function global:codex {
     $global:LASTEXITCODE = 0
 }
 
-# Claude Code reports each turn through hooks injected with --settings, which merge with the
-# user's own settings instead of replacing them. Depending on the installation Claude runs hook
-# commands through PowerShell or Git Bash, so the command must mean the same in both: the
-# executable path has no spaces and stays unquoted (a quoted first word is only a string in
-# PowerShell), arguments are quoted, and every path uses forward slashes.
+# The proxy variable that would carry this terminal's HTTP hooks to $Port, by hook-channel.cjs's rule over the live
+# environment, where every spelling is the one variable: HTTPS_PROXY or HTTP_PROXY, unless NO_PROXY exempts 127.0.0.1.
+function global:Get-AgentrixHookProxy {
+    param([int]$Port)
+    $proxy = @('HTTPS_PROXY', 'HTTP_PROXY') | Where-Object { [Environment]::GetEnvironmentVariable($_) } | Select-Object -First 1
+    if (-not $proxy) { return }
+    foreach ($entry in ([string][Environment]::GetEnvironmentVariable('NO_PROXY') -split '[\s,]+')) {
+        if ($entry -eq '*' -or $entry -eq '127.0.0.1' -or $entry -eq "127.0.0.1:$Port" -or ($entry.StartsWith('.') -and '127.0.0.1'.EndsWith($entry))) { return }
+    }
+    $proxy
+}
+
+# Claude Code reports each turn through the hooks main wrote for this terminal (hook-channel.cjs), passed with --settings,
+# which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
+# carry them. A proxy set in this terminal since it started falls back too, and main is told why.
 function global:claude {
     if (-not $global:AgentrixClaudeCommand) {
         Write-Host 'Claude Code was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
         return
+    }
+    $hooks = $global:AgentrixSession.hooks
+    $settings = $hooks.settings.fallback
+    if ($hooks.channel -eq 'http') {
+        $proxy = Get-AgentrixHookProxy $hooks.port
+        if ($proxy) { Send-AgentrixEvent 'hook-channel' -Agent 'claude' -Command $proxy } else { $settings = $hooks.settings.http }
     }
     Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
     $currentNote = Get-AgentrixReadingNote
     $marker = ([string]$currentNote).IndexOf(' Agentrix skill delivery: ')
     if ($marker -ge 0) { $currentNote = $currentNote.Substring(0, $marker) + ' Agentrix delivers skill instructions through its SessionStart hook.' }
     $readingNote = if ($currentNote) { @('--append-system-prompt', $currentNote) } else { @() }
-    $hookCommand = @(
-        ($global:AgentrixSession.powershellPath -replace '\\', '/'),
-        '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-        '-File', ('"' + ($global:AgentrixSession.claudeHookPath -replace '\\', '/') + '"'),
-        '-PipeName', $global:AgentrixSession.pipeName,
-        '-ProjectId', $global:AgentrixSession.projectId,
-        '-SessionKey', $global:AgentrixSession.sessionKey
-    ) -join ' '
-    $hook = { param($kind) @{ hooks = @(@{ type = 'command'; command = ($hookCommand + ' -Kind ' + $kind); timeout = 10; async = ($kind -eq 'progress') }) } }
-    $hooks = @{ UserPromptSubmit = @(& $hook 'start'); Stop = @(& $hook 'stop'); Notification = @(& $hook 'notify'); SessionStart = @(& $hook 'session') }
-    foreach ($name in @('PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult')) { $hooks[$name] = @(& $hook 'progress') }
-    foreach ($name in @('PermissionRequest', 'Elicitation')) { $hooks[$name] = @(& $hook 'permission') }
-    $settings = @{ hooks = $hooks } | ConvertTo-Json -Depth 6 -Compress
     $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
     $sessionName = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' }
     $settingsFile = Join-Path $sessionFolder ($sessionName + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')

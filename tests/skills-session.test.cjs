@@ -10,6 +10,14 @@ const { startupNote } = require('../electron/features/agents/handoff.cjs');
 const { READING_NOTE } = require('../electron/features/agents/reading-note.cjs');
 const { digest, deliveryMarker, readDelivery, sessionContext } = require('../electron/features/skills/session.cjs');
 const receiptFixture = require('./fixtures/skill-receipts/lifecycle.json');
+const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
+
+// A terminal's hooks as main writes them (hook-channel.cjs), for a wrapper run outside Agentrix.
+const hooksFor = shell => terminalHooks({ port: 4242, terminalId: 'project', sessionKey: 'key', eventServer: { name: 'absent', address: '/absent.sock' }, env: {},
+  cwd: os.tmpdir(), shell, platform: process.platform, home: os.tmpdir(), read: () => '{}' });
+// The PowerShell session object a wrapper reads, with its command hooks only: these wrapper tests are about the note and arguments.
+const powershellSession = () => `$global:AgentrixSession = @{ hooks = @{ channel = 'command'; settings = @{ fallback = '${
+  hooksFor({ posix: false, powershellPath: 'powershell.exe', script: 'fixture.ps1' }).settings.fallback.replace(/'/g, "''")}' } } }`;
 
 async function fixture(t, routingNote = () => '') {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-'));
@@ -275,6 +283,8 @@ test('Unix Claude wrapper keeps the startup note on the command line, with skill
   const source = path.join(__dirname, process.platform === 'darwin' ? '../integration/zsh-integration.zsh' : '../integration/bash-integration.bash');
   const env = { HOME: home, ZDOTDIR: home, AGENTRIX_USER_ZDOTDIR: home, PATH: `${bin}:/usr/bin:/bin`, CODEX_HOME: path.join(home, 'codex'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'),
     CAPTURE_ROOT: f.root, AGENTRIX_NODE: process.execPath, AGENTRIX_EVENT_HELPER: path.join(__dirname, '../integration/agent-event.cjs'), AGENTRIX_READING_NOTE_FILE: noteFile };
+  const hooks = hooksFor({ posix: true, node: process.execPath, helper: env.AGENTRIX_EVENT_HELPER, noteFile });
+  Object.assign(env, { AGENTRIX_HOOK_PORT: String(hooks.port), AGENTRIX_HOOK_CHANNEL: hooks.channel, AGENTRIX_HOOK_SETTINGS: hooks.settings.http, AGENTRIX_HOOK_FALLBACK: hooks.settings.fallback });
   await new Promise((resolve, reject) => {
     const child = spawn(shell, ['-c', 'source "$1" zshrc; claude hello; codex hello', '_', source], { env, stdio: ['ignore', 'ignore', 'pipe'] });
     let errors = ''; child.stderr.on('data', bytes => { errors += bytes; }); child.once('error', reject);
@@ -309,7 +319,7 @@ ${helper}
 ${wrapper}
 function global:Send-AgentrixEvent {}
 function global:Get-AgentrixCommand {}
-$global:AgentrixSession = @{ powershellPath = 'powershell.exe'; claudeHookPath = 'fixture.ps1'; pipeName = 'absent'; projectId = 'project'; sessionKey = 'key' }
+${powershellSession()}
 $global:AgentrixClaudeExecutable = $null
 $global:AgentrixClaudeCommand = { @{ args = @($args); settings = (Get-Content -LiteralPath $args[1] -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 10 -Compress }
 claude --resume fixture '继续'`;
@@ -380,7 +390,7 @@ test('PowerShell 5.1 fallback passes a settings file through a real fake claude.
   const wrapper = source.slice(source.indexOf('function global:claude'), source.indexOf('if ($global:AgentrixAgentOnly)'));
   const quote = value => `'${value.replace(/'/g, "''")}'`;
   const script = `$ProgressPreference = 'SilentlyContinue'\n${helper}\n${wrapper}\nfunction global:Send-AgentrixEvent {}\nfunction global:Get-AgentrixCommand {}
-$global:AgentrixSession = @{ powershellPath = 'powershell.exe'; claudeHookPath = 'fixture.ps1'; pipeName = 'absent'; projectId = 'project'; sessionKey = 'key' }
+${powershellSession()}
 $global:AgentrixClaudeExecutable = ${quote(command)}
 $global:AgentrixClaudeCommand = ${quote(command)}
 claude --resume fixture 'next task'`;

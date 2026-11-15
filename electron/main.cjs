@@ -16,6 +16,9 @@ const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
 const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
 const { writeBootstrap } = require('./features/terminal-events/bootstrap-file.cjs');
+const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
+const { createHookIngest } = require('./features/terminal-events/hook-ingest.cjs');
+const { terminalHooks, downgradeHooks } = require('./features/terminal-events/hook-channel.cjs');
 const { createNativeSessions, createNativeUsage } = require('./features/native-session/index.cjs');
 const { createHostInputs } = require('./features/native-session/host-inputs.cjs');
 const { createProjectAccounts } = require('./features/native-session/project-accounts.cjs');
@@ -131,7 +134,7 @@ const { translate } = require('./i18n.cjs');
 // Text shown by the main process follows the language chosen in settings (Chinese source -> locales/en.json).
 const t = (text, values) => translate(store?.settings.language, text, values);
 setConversationTranslator(t);
-let window, tray, store, eventServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, labWindow = null, quitCleaned = false;
+let window, tray, store, eventServer, hookServer, sshAuth, updateManager, quitting = false, updatesIpc, projectImageAuto, windowZoom, dashboardWindow = null, labWindow = null, quitCleaned = false;
 let macTitlebar = null;
 const desktopGlassBackend = desktopGlassKind();
 let desktopGlassWindow = false, desktopGlassActive = false;
@@ -225,7 +228,7 @@ const host = {
   get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
 };
 Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host));
-const { followClaudeSession, publishCliState, applyActivity, claudeActivity, acceptDispatchEvent, clearDispatchAccount } = host;
+const { followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook, acceptDispatchEvent, clearDispatchAccount } = host;
 const { localSwitchSessions, observeSwitchTerminal, retainAgentState, prepareSwitchTerminal, retireTerminal, activateNative } = host;
 const { readNativeConnections, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment } = host;
 const clipboardWrites = new ClipboardWrites();
@@ -782,6 +785,8 @@ function onEvent(event) {
   if (!project) return;
   if (acceptDispatchEvent(s, project, event)) return;
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
+  // The claude wrapper found a proxy set since the terminal started; its command field names the variable.
+  if (event.type === 'hook-channel') { s.hooks = downgradeHooks(s.hooks, event.command); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
   if (event.type === 'codex-started' && event.agent !== 'claude') { void openCodexFromShell(project, s, event); return; }
   if (event.type === 'codex-exited' && event.agent !== 'claude') return;
@@ -1278,10 +1283,15 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${sessionId}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
-  if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
-    powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath: path.join(integrationDir, 'claude-hook.ps1'),
-    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs') });
   let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '');
+  // How this terminal's Claude Code reports to main (hook-channel.cjs): HTTP hooks, or command hooks behind a proxy.
+  const claudeHookPath = path.join(integrationDir, 'claude-hook.ps1');
+  const hooks = bootstrapFile && terminalHooks({ port: hookServer?.port, terminalId: id, sessionKey, eventServer, env, cwd: startPath,
+    shell: { posix: ['zsh', 'bash'].includes(shellKind), powershellPath, script: claudeHookPath, node: process.execPath,
+      helper: path.join(integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
+  if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
+    powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
+    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks });
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
@@ -1304,7 +1314,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   // bash-integration.bash), and report through integration/agent-event.cjs run by this executable as Node.
   const local = project.kind !== 'ssh' && ['zsh', 'bash'].includes(shellKind);
   const integration = local && { folder: zshStartup, socket: eventServer.address, projectId: id, sessionKey, node: process.execPath,
-    helper: path.join(integrationDir, 'agent-event.cjs'), startDir: startPath,
+    helper: path.join(integrationDir, 'agent-event.cjs'), startDir: startPath, hooks,
     loginFiles: process.platform === 'darwin' && shellKind === 'bash',
     // Every glibc since 2.35 has C.UTF-8; a Linux desktop session normally sets LANG itself.
     locale: process.platform === 'darwin' ? terminalLocale(app.getPreferredSystemLanguages()) : 'C.UTF-8' };
@@ -1321,7 +1331,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions);
   const s = {
-    switchPreviousHost: transfer, terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: null, sessionKey, controlCapability, bootstrapFile, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
+    switchPreviousHost: transfer, terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: null, sessionKey, controlCapability, bootstrapFile, hooks, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
     recordRun: (call, event) => dashboard.run(project, call, event),
     recordQuota: (provider, limits) => dashboard.quota(provider, limits, quotaScope(provider, project, s)),
     // Command Prompt reports its prompts through markers in its output instead of the event pipe.
@@ -1690,6 +1700,8 @@ if (!app.requestSingleInstanceLock()) {
     });
     runtimeDir = fs.mkdtempSync(path.join(app.getPath('userData'), 'runtime-'));
     eventServer = await createEventServer(onEvent);
+    // Claude Code's HTTP hooks (C-2). Without the server, terminals keep command hooks and say why.
+    hookServer = await createHookServer(createHookIngest({ keyOf: id => sessions.get(id)?.hooks?.key, deliver: claudeHook })).catch(() => null);
     try { await initializeNativeSessions(); }
     catch {
       try { dispatchControl?.close(); } catch { }
@@ -1787,6 +1799,7 @@ app.on('before-quit', event => {
     for (const id of sessions.keys()) disposeTerminal(id);
     sshAuth?.close();
     eventServer?.close();
+    hookServer?.close();
     dispatchControl?.close();
     tray?.destroy();
     cleanupAskpass();

@@ -13,6 +13,7 @@ const { READING_NOTE: NOTE } = require('../electron/features/agents/reading-note
 const { findShell, linuxShell, shellEnvironment, bashArguments, withoutAppImage } = require('../electron/zsh-terminal.cjs');
 const { linuxFileClipboard, readFileList, parseFileList } = require('../electron/file-clipboard.cjs');
 const { shellEvent } = require('../integration/agent-event.cjs');
+const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
 
 const integrationDir = path.resolve(__dirname, '../integration');
 const helper = path.join(integrationDir, 'agent-event.cjs');
@@ -145,7 +146,11 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   const source = { ...process.env, HOME: home, TMPDIR: sessionFolder, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', PG_TEST_NODE: process.execPath, PG_TEST_RECORDER: recorder, PG_TEST_LOG: log, AGENTRIX_READING_NOTE: readingNote, AGENTRIX_READING_NOTE_FILE: noteFile };
   delete source.LANG; delete source.LC_ALL; delete source.LC_CTYPE; delete source.CODEX_HOME; delete source.PROMPT_COMMAND;
   const locale = process.platform === 'darwin' ? 'en_US.UTF-8' : 'C.UTF-8';
-  const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale, loginFiles });
+  // No hook server here: the wrapper passes the command hooks, which this test runs the way Claude Code would.
+  const channelHooks = terminalHooks({ terminalId: 'project', sessionKey: 'key', eventServer: server, env: {}, cwd: project,
+    shell: { posix: true, node: process.execPath, helper, noteFile }, platform: process.platform, home, read: () => '{}' });
+  const env = shellEnvironment(createTerminalEnvironment(source, ''), { socket: server.address, projectId: 'project', sessionKey: 'key', node: process.execPath, helper, startDir: project, locale, loginFiles,
+    hooks: channelHooks });
   const terminal = pty.spawn(loginFiles ? '/bin/bash' : findShell('bash'), bashArguments(integrationDir), { name: 'xterm-256color', cols: 120, rows: 30, cwd: project, env });
   cleanupTerminal(t, terminal);
   let output = '';
@@ -223,9 +228,8 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   assert.equal(path.dirname(fallbackArgs[3]), sessionFolder);
   assert.match(path.basename(fallbackArgs[3]), /^agentrix-claude-settings-[A-Za-z0-9]{6}$/);
   assert.equal(fs.existsSync(fallbackArgs[3]), false, 'the fallback settings file is removed after a failed CLI');
-  const fallbackHooks = JSON.parse(fs.readFileSync(path.join(log, 'claude-settings.json'), 'utf8')).hooks;
-  assert.deepEqual(Object.keys(fallbackHooks), Object.keys(hooks));
-  assert.match(fallbackHooks.SessionStart[0].hooks[0].command, / session ''$/);
+  // The hooks are main's (hook-channel.cjs), the same whatever the shell's note file.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(log, 'claude-settings.json'), 'utf8')).hooks, JSON.parse(channelHooks.settings.fallback).hooks);
 
   // Every report from this shell is newer than the one before it.
   const sequences = events.filter(event => typeof event.sequence === 'number').map(event => event.sequence);
