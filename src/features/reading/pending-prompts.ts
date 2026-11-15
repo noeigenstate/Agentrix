@@ -22,6 +22,9 @@ const transcriptMatches = (message: string, record: string, original?: string) =
     || (bounded && original === undefined && normalized.startsWith(normalizePrompt(record.slice(0, 20000))));
 };
 
+export const matchesPrompt = (prompt: Pick<PendingPrompt, 'text' | 'at'>, record: UserRecord) =>
+  timely(prompt, record) && transcriptMatches(prompt.text, record.text ?? '', record.original);
+
 // Pair queue records and renderer echoes one-to-one. Raw-terminal sends and reloads have no echo;
 // the transcript still owns a queued card, its timestamp and its position ahead of later sends.
 export function pendingPromptCards(prompts: readonly PendingPrompt[], records: readonly UserRecord[]) {
@@ -29,7 +32,7 @@ export function pendingPromptCards(prompts: readonly PendingPrompt[], records: r
   const cards: PendingPrompt[] = [];
   for (const record of records) {
     if (!record.queued || record.cancelled || record.role !== 'user') continue;
-    const index = remaining.findIndex(prompt => timely(prompt, record) && transcriptMatches(prompt.text, record.text ?? '', record.original));
+    const index = remaining.findIndex(prompt => matchesPrompt(prompt, record));
     const echo = index >= 0 ? remaining.splice(index, 1)[0] : undefined;
     const card: PendingPrompt = { ...echo, id: echo?.id ?? record.id, role: 'user', text: echo?.text ?? record.text ?? '', at: record.at ?? echo?.at ?? 0, sending: false, images: record.images ?? echo?.images };
     cards.push(card); queuedIds.add(card.id);
@@ -68,7 +71,7 @@ export function reconcilePendingPrompts(state: PendingPrompts, sessionId: string
     // The echo with the same text, or one this record ends with: a prompt Claude put back after an interrupt can
     // precede what was sent.
     const text = normalizePrompt(entry.text ?? '');
-    let index = prompts.findIndex(prompt => timely(prompt, entry) && transcriptMatches(prompt.text, entry.text ?? '', entry.original));
+    let index = prompts.findIndex(prompt => matchesPrompt(prompt, entry));
     if (index < 0) index = prompts.findIndex(prompt => timely(prompt, entry) && text.endsWith(normalizePrompt(prompt.text)));
     // A matching text receipt cannot acknowledge pictures. Leave it unseen so a later thumbnail update can confirm it.
     if (index >= 0 && (entry.images?.length ?? 0) < (prompts[index].imageCount ?? 0)) continue;

@@ -2,10 +2,12 @@
 // its words live in src/shared/reason-words/term.ts. The terminal-events rounds extend this table, nobody else.
 module.exports = {
   codes: {
-    waiting_permission: {},
-    waiting_question: {},
+    waiting_permission: { params: ['agent'] },
+    waiting_question: { params: ['agent'] },
     menu_open: {},
-    queued_behind_turn: {},
+    reported_waiting: { params: ['agent'] },
+    popup_open: {},
+    queued_behind_turn: { params: ['agent'] },
     turn_running: {},
     cli_not_ready: {},
     input_has_draft: {},

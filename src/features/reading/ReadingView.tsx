@@ -7,7 +7,7 @@ import { VoiceButton } from '../voice/VoiceButton';
 import { createDictationSend } from './dictation-send';
 import { bindApproval, useScreen } from '../terminal/terminal-screen';
 import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
-import { cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
+import { cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { readingState, nextCliState, type CliState } from './reading-state.ts';
 import { cliReady, endDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
@@ -27,13 +27,14 @@ import { blocks, useVisibleTail } from './useVisibleTail';
 import './reading.css';
 import './reading-flow.css';
 import { t } from '../../shared/i18n';
+import { termWords } from '../../shared/reason-words/term.ts';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { useMentions } from './useMentions';
 import { MentionPalette } from './MentionPalette';
 import { useComposerHistory } from './useComposerHistory';
 import { useCommandPalette } from './useCommandPalette';
 import { commandList, composerAria } from './CommandList';
-import { isTypedCommand, pendingPromptCards, sameMessage, type PendingPrompt } from './pending-prompts';
+import { isTypedCommand, matchesPrompt, pendingPromptCards, sameMessage, type PendingPrompt } from './pending-prompts';
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages } from './PendingPromptEntries';
 import { AgentMark, TimelineStep } from './Timeline';
@@ -59,7 +60,7 @@ export type ReadingHandoff = {
 
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
 const history = new Map<string, string[]>();
-type WaitingMessage = { id: number; text: string; uncertain?: boolean };
+type WaitingMessage = { id: number; text: string; at: number; uncertain?: boolean; seen?: string[] };
 type Leftover = { text: string; again: string | null };
 const waitingMessages = new WeakMap<object, WaitingMessage[]>();
 let nextWaitingMessage = 0;
@@ -131,6 +132,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   useEffect(() => rememberReady(terminal.id, run, inputShown));
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
   const latestSignal = useRef<CliState | null>(null);
+  const latestTerminal = useRef(terminal); latestTerminal.current = terminal;
   const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
   const state = readingState(kind, visibleScreen?.rows ?? [], parsedScreen, terminal, signal, visibleScreen);
   const idleInput = state.idle;
@@ -148,14 +150,24 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     setOutbox(messages);
   };
   useLayoutEffect(() => { setOutbox(waitingMessages.get(ownHistory) ?? []); }, [ownHistory]);
+  // A receipt resolves uncertainty even while a dialog, an inactive view or a pending parse prevents another send.
+  useEffect(() => {
+    const messages = waitingMessages.get(ownHistory) ?? [];
+    const remaining = messages.filter(message => !message.uncertain || !conversationEntries.some(entry => entry.role === 'user'
+      && !entry.cancelled && !message.seen?.includes(entry.id) && matchesPrompt(message, entry)));
+    if (remaining.length !== messages.length) saveOutbox(remaining);
+  }, [conversationEntries, ownHistory]);
   const [sendingSoon, setSendingSoon] = useState(false);
   const [commands, setCommands] = useState<AgentCommand[]>([]), [requested, setRequested] = useState(false);
   const caret = useRef<number | null>(null), sending = useRef(false);
+  const drainOutbox = useRef<(parsed?: boolean) => void>(() => {});
   // The composer's draft a send in flight took, until the composer changes: another Enter on it is that same message.
   const sendingDraft = useRef<string | null>(null);
   const interaction = useRef(0), pictureGeneration = useRef(0);
-  const native = useNativePictures({ owner: conversation, terminalId: terminal.id, agent: kind, sending, interaction,
-    blocked: () => choiceVisible.current, preserveDraft: ownInput, onError });
+  const native = useNativePictures({ owner: conversation, terminalId: terminal.id, sessionId: readingSession, agent: kind, sending, interaction,
+    onParsed: () => drainOutbox.current(true),
+    blocked: frame => choiceVisible.current || !!frame && readingState(kind, frame.rows, parseAgentScreen(kind, frame.rows), latestTerminal.current,
+      nextCliState(latestSignal.current, latestTerminal.current), frame).waiting, preserveDraft: ownInput, onError });
   const images = native.images;
   // Reserve remote slots at paste time, so Send can await uploads in order without a stale render's path list.
   const serverPictures = useRef<ServerPicture[]>([]), [, setPictureTick] = useState(0);
@@ -283,6 +295,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     else if (terminalPopup === null) input.current?.focus();
   }, [terminal.id, autoFocus]);
   const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
+  const reasonWords = (code: string) => t(termWords[code], { agent });
   const grouped = useMemo(() => blocks(entries), [entries]);
   const tail = useVisibleTail(grouped, conversation, scroller, stuck, holdPosition, historyPage);
   useEffect(() => {
@@ -300,7 +313,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (inputBlocked || !text && !images.length && !serverPictures.current.length) return false;
     // The gate is the held one the box shows: a half-drawn redraw does not send a message to the outbox; the send waits
     // for the input itself. A dialog, a menu or the popup holds it at once.
-    if (shownBlocked || outbox.length && !automatic || sending.current) {
+    if (shownBlocked && !automatic || outbox.length && !automatic || sending.current) {
       if (automatic || own && sendingDraft.current === text) return false;
       if (images.length || serverPictures.current.length) return false; // Native chips stay with the draft until their CLI input returns.
       hold(text, own);
@@ -322,7 +335,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // A view that went away meanwhile (the raw terminal, another session) keeps it in that outbox, shown when the
   // conversation is, and the owner is told.
   const hold = (text: string, own: boolean, quote = own && !isTypedCommand(text) ? quoteRef.current : null, place = ++nextWaitingMessage) => {
-    const messages = [...(waitingMessages.get(ownHistory) ?? []), { id: place, text: withQuote(quote?.excerpt, text) }].sort((a, b) => a.id - b.id);
+    const messages = [...(waitingMessages.get(ownHistory) ?? []), { id: place, text: withQuote(quote?.excerpt, text), at: Date.now() }].sort((a, b) => a.id - b.id);
     if (!mounted.current || identity.current.epoch !== epoch) {
       waitingMessages.set(ownHistory, messages); onError(t('视图已切换，这条消息还没写进终端，已留在原会话的待发消息里。'));
       return;
@@ -369,7 +382,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     return false;
   };
   const submitLeftover = async (shown: Leftover) => {
-    if (!await leftoverStill(shown)) return;
+    if (!await leftoverStill(shown) || !sameMessage(shown.text, native.readInput()?.text ?? '')) return;
     setLeftover(null); window.agentrix.writeTerminal(terminal.id, '\r');
   };
   // The outbox waits while the input is cleared: a message pasted meanwhile would be cleared with it.
@@ -402,7 +415,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number, automatic: boolean, place: number) => {
-    if (inputBlocked || shownBlocked) return false;
+    if (inputBlocked || shownBlocked && !automatic) return false;
     if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
     const pictureSend = !!(batch.length || uploads.length);
@@ -447,13 +460,18 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     // terminal would take the keys; only when none comes, or a dialog does, it waits in the outbox instead.
     const textOnly = !pictureSend && !!text, early = textOnly ? echo(text, [], 0) : null;
     if (textOnly) { toBottom(); if (own) edit(''); }
-    if (!native.readInput() && !await native.awaitInput(() => ownsSend(owner) && !choiceVisible.current) || !ownsSend(owner) || choiceVisible.current) {
+    const initialInput = native.readInput(true) ?? await native.awaitInput(() => ownsSend(owner) && !choiceVisible.current, 2000, true);
+    if (!initialInput || !ownsSend(owner) || choiceVisible.current) {
       if (!textOnly) return false;
       if (early) cancelEcho(early);
       if (automatic) return false;
       hold(words, own, carried, place);
       return;
     }
+    const readyInput = () => {
+      const current = ownsSend(owner) && !choiceVisible.current ? native.readInput() : null;
+      return current && current.epoch === initialInput.epoch ? current : null;
+    };
     if (batch.length) {
       await native.prepare(batch);
       for (let attempt = 0; ; attempt++) {
@@ -465,7 +483,14 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     }
     const pendingId = textOnly ? early : text || batch.length ? echo(text, attached, batch.length) : null;
     if (pendingId) toBottom();
-    const currentInput = text && !batch.length ? native.readInput() : null;
+    if (native.parsing()) await native.settle(() => ownsSend(owner), 2000);
+    if (!readyInput()) {
+      if (pendingId) cancelEcho(pendingId);
+      if (automatic) return false;
+      if (!pictureSend) hold(words, own, carried, place);
+      return;
+    }
+    const currentInput = text && !batch.length ? readyInput() : null;
     const left = currentInput?.text ?? '';
     const queuedLeft = !!left && queuedInput(left);
     const ownedLeft = !!left && ownInput(left);
@@ -498,13 +523,17 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (left && (!queuedLeft || returnedQueued) && sameMessage(text, left)) {
+      if (!readyInput()) return false;
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
-      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(text, owner, returnedQueued);
+      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r');
+      await submitted(text, owner, returnedQueued, initialInput.epoch);
       remember(); return true;
     }
     if (left && (returnedQueued || !queuedLeft && pending.some(prompt => sameMessage(prompt.text, left)))) {
-      window.agentrix.writeTerminal(terminal.id, '\r'); await submitted(left, owner, returnedQueued);
+      if (!readyInput()) return false;
+      window.agentrix.writeTerminal(terminal.id, '\r');
+      await submitted(left, owner, returnedQueued, initialInput.epoch);
       if (returnedQueued && ownsSend(owner)) {
         const current = native.readInput();
         if (!current || current.text) {
@@ -514,7 +543,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
           return;
         }
       }
-    } else if (left && !IMAGE_PLACEHOLDER.test(left) && !await native.clearInput(() => ownsSend(owner) && !choiceVisible.current)) {
+    } else if (left && !IMAGE_PLACEHOLDER.test(left) && !await native.clearInput(() => ownsSend(owner) && !choiceVisible.current, initialInput.epoch)) {
       // A dialog took the input (its popup cancels this send) or it would not clear: nothing is pasted, and the message
       // waits in this conversation's outbox. A picture send never cleared the composer; its draft is still there.
       if (pendingId) cancelEcho(pendingId);
@@ -523,7 +552,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       hold(words, own, carried, place);
       return;
     }
-    if (!ownsSend(owner)) return;
+    if (native.parsing()) await native.settle(() => ownsSend(owner), 2000);
+    if (!readyInput()) {
+      if (pendingId) cancelEcho(pendingId);
+      if (automatic) return false;
+      hold(words, own, carried, place); return;
+    }
     if (text) {
       const pasted = await window.agentrix.pasteTerminal(terminal.id, text, terminal.sessionId);
       if (!ownsSend(owner)) return;
@@ -541,7 +575,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     // The words are in the terminal now. Handing them back on a frame that only has not parsed yet would leave them in
     // both places, so this waits longer for one (a send of them again still meets them there as a leftover).
     if (native.parsing()) await native.settle(() => ownsSend(owner), 2000);
-    if (!ownsSend(owner) || choiceVisible.current || !native.readInput()) {
+    if (!readyInput()) {
       if (pendingId) cancelEcho(pendingId);
       restoreQuote();
       if (ownsSend(owner) && own && !input.current?.value) edit(words);
@@ -556,51 +590,48 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     uploads.forEach(picture => { picture.sent = true; });
     if (own) clearPictures();
     window.agentrix.writeTerminal(terminal.id, '\r');
-    if (text) await submitted(text, owner);
+    if (text) await submitted(text, owner, false, initialInput.epoch);
     return true;
   };
   // A message is sent once it has left the CLI's input. An Enter the CLI did not take (it arrived while the CLI was
   // redrawing or taking the paste) leaves it there: retry only at a current idle input. A queue receipt is final unless
-  // the owner's next send explicitly submits an input restored after interruption.
-  const submitted = async (text: string, owner: number, returnedQueued = false) => {
+  // the owner's next send explicitly submits an input restored after interruption. Once Enter was written, a timeout
+  // or a dialog only ends these retries: the echo stays available for a late receipt or the undelivered UI.
+  const submitted = async (text: string, owner: number, returnedQueued = false, epoch?: number) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 700));
       if (!ownsSend(owner) || choiceVisible.current || !returnedQueued && (queuedInput(text) || receivedInput(text))) return;
-      if (native.parsing()) await native.settle(() => ownsSend(owner));
+      if (native.parsing() && !await native.settle(() => ownsSend(owner))) return;
       const current = native.readInput();
-      if (!current || !sameMessage(text, current.text) || !isAtPrompt(kind, current.rows, parseAgentScreen(kind, current.rows))) return;
+      if (!current || current.epoch !== epoch || !sameMessage(text, current.text) || !isAtPrompt(kind, current.rows, parseAgentScreen(kind, current.rows))) return;
       window.agentrix.writeTerminal(terminal.id, '\r');
     }
   };
   const sendRef = useRef(send); sendRef.current = send;
-  const outboxAttempt = useRef(''), outboxSettling = useRef(false);
-  useEffect(() => {
-    if (!active || inputBlocked || deliveryBlocked || !outbox.length || outbox[0].uncertain || sending.current || leftoverClearing.current || images.length || serverPictures.current.length) return;
-    // What the input holds shows on a parsed frame. Wait for one here and look again: a busy agent's output may not
-    // publish one before it goes quiet.
-    if (native.parsing()) {
-      if (!outboxSettling.current) {
-        outboxSettling.current = true;
-        void native.settle(() => mounted.current).then(() => { outboxSettling.current = false; if (mounted.current) setOutbox(messages => [...messages]); });
-      }
-      return;
-    }
-    const held = native.readInput()?.text, head = outbox[0];
+  const outboxAttempt = useRef('');
+  drainOutbox.current = (parsed = false) => {
+    const messages = waitingMessages.get(ownHistory) ?? [], head = messages[0];
+    if (!active || inputBlocked || !head || head.uncertain || sending.current || leftoverClearing.current || images.length || serverPictures.current.length) return;
+    const input = native.readInput(true);
+    if (!input) return;
+    const held = input.text;
     // Never replace a draft the owner is editing in the terminal. Words of ours there (an Enter the CLI did not take)
     // get the notice that sends or clears them; the same words as the waiting message are that message.
-    if (held) { if (!leftoverShown && ownInput(held)) leftBehind(held, head); return; }
-    const attempt = JSON.stringify([conversation, head.id, visibleScreen?.rows, signal?.revision]);
+    if (held) { if (!parsed && !leftoverShown && ownInput(held)) leftBehind(held, head); return; }
+    const attempt = JSON.stringify([conversation, head.id, input.epoch, input.parse, signal?.revision]);
     if (outboxAttempt.current === attempt) return;
     outboxAttempt.current = attempt;
     // A raw/reading switch can interrupt this async send. Persist uncertainty before writing so a remount never replays it.
-    saveOutbox(outbox.map(message => message.id === head.id ? { ...message, uncertain: true } : message));
+    saveOutbox(messages.map(message => message.id === head.id
+      ? { ...message, uncertain: true, at: Date.now(), seen: latestMessages.current.entries.map(entry => entry.id) } : message));
     void sendRef.current(head.text, false, true).then(sent => {
       if (!mounted.current || identity.current.epoch !== epoch) return;
       const messages = waitingMessages.get(ownHistory) ?? [];
       saveOutbox(sent ? messages.filter(message => message.id !== head.id)
         : messages.map(message => message.id === head.id ? { ...message, uncertain: sent !== false } : message));
     });
-  });
+  };
+  useEffect(() => { drainOutbox.current(); });
   const [dictationSend] = useState(() => createDictationSend(() => { void sendRef.current(); }, setSendingSoon));
   // A terminal can stay mounted when another split is selected. Cancel before it loses composer ownership.
   useLayoutEffect(() => () => { dictationSend.cancel(); }, [dictationSend, terminal.id, terminal.sessionId, active, autoFocus]);
@@ -766,7 +797,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   </>;
   const lastBlock = grouped.at(-1);
   const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);
-  const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
+  const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} queuedNote={reasonWords('term.queued_behind_turn')} undelivered={undelivered} onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
     {status && !statusInTurn && <TimelineStep at={pending.at(-1)?.at ?? entries.at(-1)?.at} kind="agent" who={agent} state={shownWorking ? 'running' : null} agent={kind} mark={<AgentMark agent={kind} />}>{status}</TimelineStep>}</>;
   const beforeFeed = terminal.agentCommand ? <AgentCommandRun agent={kind} command={terminal.agentCommand} rows={visibleScreen?.rows ?? []} onShowTerminal={onShowTerminal} />
     : !entries.length && !cards.prompts.length ? <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} /> : <>
@@ -783,6 +814,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent })]
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
+  const outboxReason = sending.current ? null : outbox[0]?.uncertain ? 'term.receipt_missing'
+    : parsedScreen.choice?.kind === 'question' ? 'term.waiting_question'
+    : parsedScreen.choice?.kind === 'permission' ? 'term.waiting_permission'
+    : hasChoice && !cliDialogShown(kind, visibleScreen?.rows ?? [], parsedScreen) ? 'term.reported_waiting'
+    : hasChoice ? 'term.menu_open' : terminalPopup !== null ? 'term.popup_open'
+    : leftoverShown || cliInputDraft(kind, visibleScreen?.rows ?? [], parsedScreen) ? 'term.input_has_draft' : 'term.cli_not_ready';
   return <div className="reading-view" data-agent={kind} ref={readingView}>
     <div className="reading-scroll-area">
       <div className="reading-scroll" ref={scroller} tabIndex={0}>{body}</div>
@@ -802,7 +839,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       <div className="reading-notice-actions">
         {!leftoverDelivered && <button type="button" className="button small" disabled={inputBlocked || deliveryBlocked} onClick={() => void submitLeftover(leftoverShown)}>{t('先发送终端里这段')}</button>}
         <button type="button" className="button small" disabled={inputBlocked || deliveryBlocked} onClick={() => void clearLeftover(leftoverShown)}>{t('清空它，再发送新消息')}</button></div></li></ul></div>}
-    {outbox.length > 0 && <div className="reading-outbox" role="status"><span>{hasChoice ? t('等终端处理完后发送') : leftoverShown ? t('排在终端输入框里那段文字后面') : t('等待终端输入就绪后发送')}</span><ul>{outbox.map(message => <li key={message.id}><span className="reading-notice-text" title={message.text}>{message.text}</span>{message.uncertain && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}
+    {outbox.length > 0 && <div className="reading-outbox" role="status"><span data-reason={outboxReason ?? undefined}>{outboxReason ? reasonWords(outboxReason) : t('发送中')}</span><ul>{outbox.map(message => <li key={message.id}><span className="reading-notice-text" title={message.text}>{message.text}</span>{message.uncertain && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}
       <div className="reading-notice-actions"><button type="button" className="button small" onClick={() => { if (draft || sending.current) return; saveOutbox(outbox.filter(item => item.id !== message.id)); edit(message.text); }} disabled={!!draft || sending.current}>{t('取回')}</button></div></li>)}</ul></div>}
     {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}

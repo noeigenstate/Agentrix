@@ -1,21 +1,23 @@
-import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { t } from '../../shared/i18n';
 import { isWindows } from '../../shared/platform';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { parseAgentScreen } from '../agents/agent-screen';
-import { readScreen } from '../terminal/terminal-screen';
+import { readScreen, subscribeParsed, type Screen } from '../terminal/terminal-screen';
 import { cliDialogShown, cliInputDraft, hasCliInput } from './cli-panel';
 import { imageRemoval, inputImageLabels } from './image-input';
 
 export type NativeImage = { id: number; src: string };
 type Paste = { before?: string[]; label?: string; ready?: Promise<void>; conflicted?: boolean };
-type Options = { owner: string; terminalId: string; agent: 'claude' | 'codex'; sending: RefObject<boolean>; interaction: RefObject<number>;
-  blocked: () => boolean; preserveDraft: (text: string) => boolean; onError: (message: string) => void };
+type Options = { owner: string; terminalId: string; sessionId: string | null; agent: 'claude' | 'codex'; sending: RefObject<boolean>; interaction: RefObject<number>;
+  onParsed: () => void; blocked: (frame?: Screen) => boolean; preserveDraft: (text: string) => boolean; onError: (message: string) => void };
 
-export function useNativePictures({ owner, terminalId, agent, sending, interaction, blocked, preserveDraft, onError }: Options) {
+export function useNativePictures({ owner, terminalId, sessionId, agent, sending, interaction, onParsed, blocked, preserveDraft, onError }: Options) {
   const sequence = useRef(0), lifetime = useRef({ owner, alive: true, pastes: new Map<number, Paste>() });
   if (lifetime.current.owner !== owner) lifetime.current = { owner, alive: true, pastes: new Map() };
   const context = lifetime.current, valid = () => lifetime.current === context && context.alive;
+  const parsed = useRef(onParsed); parsed.current = onParsed;
+  useEffect(() => subscribeParsed(terminalId, () => parsed.current()), [terminalId, context]);
   const [snapshot, setSnapshot] = useState<{ context: typeof context; images: NativeImage[] }>({ context, images: [] });
   const images = snapshot.context === context ? snapshot.images : [];
   useLayoutEffect(() => {
@@ -28,41 +30,44 @@ export function useNativePictures({ owner, terminalId, agent, sending, interacti
     context.pastes.delete(id);
     setSnapshot(previous => previous.context === context ? { context, images: previous.images.filter(image => image.id !== id) } : previous);
   };
-  const readInput = () => {
+  const readInput = (admit = false) => {
     const current = readScreen(terminalId);
-    if (!current || current.pending) return null;
+    if (!valid() || !current || current.sessionId != null && current.sessionId !== sessionId || current.pending && (!admit || !current.parsed) || blocked(current)) return null;
     const screen = parseAgentScreen(agent, current.rows);
     if (!hasCliInput(agent, current.rows, screen) || cliDialogShown(agent, current.rows, screen)) return null;
-    return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen) };
+    return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen), epoch: current.epoch, parse: current.parse };
   };
-  // readInput reads nothing while xterm parses a write. Claude Code's busy output keeps it parsing, so a send waits for
-  // a parsed frame (half a second unless told otherwise) instead of taking the absent input for a missing or empty one.
+  // A cached parse may admit a message; every mutation requires all queued output to have parsed first.
   const parsing = () => !!readScreen(terminalId)?.pending;
-  const settle = async (owns: () => boolean, limit = 500) => {
-    for (let waited = 0; waited < limit && owns() && parsing(); waited += 50) await new Promise(resolve => setTimeout(resolve, 50));
-  };
   // A parsed frame showing a dialog, a menu or a picker.
   const dialogShown = () => {
     const shown = readScreen(terminalId);
-    return !!shown && !shown.pending && cliDialogShown(agent, shown.rows, parseAgentScreen(agent, shown.rows));
+    return !!shown && (!shown.pending || shown.parsed) && cliDialogShown(agent, shown.rows, parseAgentScreen(agent, shown.rows));
   };
   // The input on the first parsed frame that draws it: a busy agent's redraw can leave it out for a moment. Nothing once
   // a dialog takes its place, the caller lets go, or it stays away past the limit.
-  const awaitInput = async (owns: () => boolean, limit = 2000) => {
-    for (let waited = 0; owns(); waited += 50) {
-      const current = readInput();
-      if (current) return current;
-      if (dialogShown() || waited >= limit) return null;
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    return null;
-  };
+  const awaitInput = (owns: () => boolean, limit = 2000, admit = false) => new Promise<ReturnType<typeof readInput>>(resolve => {
+    let off = () => {}, timer: ReturnType<typeof setTimeout> | undefined, done = false;
+    const finish = (input: ReturnType<typeof readInput>) => {
+      if (done) return;
+      done = true; off(); clearTimeout(timer); resolve(input);
+    };
+    const look = () => {
+      if (!valid() || !owns()) { finish(null); return; }
+      const current = readInput(admit);
+      if (current || dialogShown() || blocked()) finish(current);
+    };
+    off = subscribeParsed(terminalId, look);
+    if (done) off();
+    else { timer = setTimeout(() => finish(null), limit); look(); }
+  });
+  const settle = (owns: () => boolean, limit = 500) => awaitInput(owns, limit);
   // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
-  const clearInput = async (owns: () => boolean) => {
+  const clearInput = async (owns: () => boolean, epoch = readScreen(terminalId)?.epoch) => {
     for (let tries = 0; owns(); tries++) {
       if (parsing()) await settle(owns);
       const current = owns() ? readInput() : null;
-      if (!current) return false;
+      if (!current || current.epoch !== epoch) return false;
       if (!current.text) return true;
       if (tries === 30) return false;
       window.agentrix.writeTerminal(terminalId, '\x15'); await new Promise(resolve => setTimeout(resolve, 80));
