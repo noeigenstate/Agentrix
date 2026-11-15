@@ -355,7 +355,7 @@
       "reason": "Loads a downloaded external native speech engine."
     },
     "integration/agent-event.cjs": {
-      "digest": "28fa60455255557d5bb93fc1c4e186b63c199d143ec8bbb639791492a828bb9a",
+      "digest": "de3c1c67e68edc1f70179768d47c5c08257b694949364b0e13c8366ad7e87172",
       "targets": [
         "electron/features/skills/session.cjs"
       ],
