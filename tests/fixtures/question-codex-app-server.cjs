@@ -1,6 +1,8 @@
 // The app-server peer of scripts/native-question-smoke.mjs: once the trigger file exists it starts a turn and asks two questions, and it writes the
 // owner's answer to the answered file. Both paths come from the environment; nothing else is read or written.
 const fs = require('node:fs'), readline = require('node:readline');
+// Stand-in contract (tests/fake-cli-contract.test.cjs): --version answers at once and writes nothing; AGENTRIX_STAND_IN_ECHO names the file that gets the arguments, --settings and hooks it was given.
+if (process.env.AGENTRIX_STAND_IN_ECHO) require('./stand-in-echo.cjs')();
 if (process.argv.includes('--version')) { console.log(process.argv[2] === 'claude' ? '2.1.318 (Claude Code)' : 'codex-cli 0.166.0'); process.exit(0); }
 const trigger = process.env.AGENTRIX_QUESTION_TRIGGER, answered = process.env.AGENTRIX_QUESTION_ANSWERED;
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };

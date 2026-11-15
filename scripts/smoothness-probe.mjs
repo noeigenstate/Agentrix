@@ -48,7 +48,9 @@ for (let i = 0; i < 40; i++) {
 }
 const transcript = path.join(claude, 'projects', 's1.jsonl');
 await fs.writeFile(transcript, records.map(item => JSON.stringify(item)).join('\n') + '\n');
-const hook = (kind, payload) => `'${JSON.stringify(payload)}' | & $global:AgentrixSession.powershellPath -NoProfile -ExecutionPolicy Bypass -File $global:AgentrixSession.claudeHookPath -PipeName $global:AgentrixSession.pipeName -ProjectId $global:AgentrixSession.projectId -SessionKey $global:AgentrixSession.sessionKey -Kind ${kind}\r`;
+// A Claude Code hook typed into the terminal, over the channel its session names (tests/helpers/claude-hook-client.cjs).
+const { hookText } = require('../tests/helpers/claude-hook-client.cjs');
+const hook = (kind, payload) => hookText(kind, payload) + '\r';
 
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, AGENTRIX_TEST_HOME: '1', CLAUDE_CONFIG_DIR: claude, CODEX_HOME: path.join(output, 'codex-home') }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const app = await electron.launch({ executablePath: require('electron'), args: [root], cwd: root, env, timeout: 30000 });

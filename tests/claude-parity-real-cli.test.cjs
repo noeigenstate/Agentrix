@@ -3,9 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path');
 const { harness, opening, textBlock, finish } = require('./fixtures/claude-real.cjs');
 const { bashEnvironment, missingTmpWarning } = require('./fixtures/bash-environment.cjs');
+const { terminal } = require('./fixtures/claude-terminal.cjs');
 const skip = !process.env.AGENTRIX_REAL_CLAUDE;
-const { fork } = require('node:child_process');
-const { once } = require('node:events');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 test('agent catalog parity admits only the exact native lookup and existing terminal guide differences', () => {
   const { compareAgents } = require('./fixtures/claude-parity.cjs');
@@ -42,27 +41,6 @@ function configureBash(f, options) {
   const pathName = Object.keys(env).find(name => name.toUpperCase() === 'PATH');
   if (pathName) f.env.PATH = env[pathName];
   f.env.LC_ALL = 'C';
-}
-
-async function terminal(t, f, args = [], capture = false) {
-  const env = { ...f.env }; delete env.CI;
-  fs.writeFileSync(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true,
-    lastOnboardingVersion: '2.1.318', theme: 'dark', customApiKeyResponses: { approved: [env.ANTHROPIC_API_KEY.slice(-20)], rejected: [] },
-    projects: { [f.cwd.replaceAll('\\', '/')]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } } }));
-  const child = fork(path.join(__dirname, 'fixtures/claude-terminal-peer.cjs'), [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
-  child.stderr.resume(); const ended = once(child, 'exit');
-  f.cleanup(async () => {
-    if (child.exitCode === null && child.signalCode === null && child.connected) child.send({ type: 'stop' });
-    // ConPTY's synchronous kill can stall its owned peer. Bound cleanup rather
-    // than leaving a completed CLI test waiting forever in its after hook.
-    const timer = setTimeout(() => child.kill('SIGKILL'), 4000);
-    try { await ended; } finally { clearTimeout(timer); }
-  });
-  let output = '';
-  child.on('message', message => { if (message.type === 'data') output = (output + message.data).slice(-65536); });
-  child.send({ type: 'start', cli: process.env.AGENTRIX_REAL_CLAUDE, cwd: f.cwd, env, args, capture });
-  await new Promise(resolve => { const ready = message => { if (message.type === 'ready') { child.off('message', ready); resolve(); } }; child.on('message', ready); });
-  return Object.assign((text, paste = false) => child.send({ type: 'input', text, paste }), { output: () => output, key: text => child.send({ type: 'key', text }) });
 }
 
 test('real streaming input shell handling is observed rather than guessed', { skip, timeout: 60000 }, async t => {
@@ -451,4 +429,17 @@ test('N7 real terminal and native background processes survive a later model int
   await until(() => fs.existsSync(path.join(f.cwd, 'tui-background-proof')) && fs.existsSync(path.join(f.cwd, 'native-background-proof')));
   for (const name of ['tui', 'native']) assert.equal(fs.readFileSync(path.join(f.cwd, name + '-background-proof'), 'utf8'), 'alive');
   t.diagnostic('real terminal Escape and native interrupt both retain the already-returned background job');
+});
+
+// Agentrix's status hooks answer {} and print nothing, so whichever channel carries them the model is sent the same request as with no
+// hooks at all (G1). Each channel is a session of its own against its own stub; what differs between runs is normalised away.
+test('Agentrix terminal hooks leave the model context byte-identical', { skip, timeout: 600000 }, async t => {
+  const { hooked, MODES, normalize, plainAnswer, playTurn } = require('./fixtures/claude-hooks-real.cjs');
+  const requests = {};
+  for (const mode of MODES) {
+    const run = await hooked(t, mode, { respond: plainAnswer, drive: session => playTurn(session) });
+    assert.ok(run.body, `${mode}: the prompt reached the model`);
+    requests[mode] = normalize(run.body, run.f);
+  }
+  for (const mode of MODES.filter(mode => mode !== 'none')) assert.equal(requests[mode], requests.none, `${mode} changes the model request`);
 });

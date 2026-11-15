@@ -25,6 +25,13 @@ Standing checks: `AGENTRIX_REAL_CLAUDE=<path to claude> node --test tests/claude
 ## Compare with the real terminal
 The native view changes the display, never what the agent can do. `tests/claude-parity-real-cli.test.cjs` runs the SDK path and the real terminal through one stub and fails on a new difference. Add a behaviour there before calling it equal. A stub that never triggers a behaviour on either path, such as automatic compaction, proves nothing about it: say so.
 
+## Standing hook check
+Agentrix's status hooks (HTTP, or command and command-async as a fallback) must never change what the model is sent, and must reach Agentrix in the order the CLI works. After any change to the hook settings, the hook server, the wrapper's channel choice or a CLI version bump, run both against the installed CLI:
+- `AGENTRIX_REAL_CLAUDE=<path to claude> node --test tests/terminal-events-real-cli.test.cjs`: `UserPromptSubmit` before the screen shows working, `PermissionRequest` before the dialog, `Stop` before idle; command hooks under `HTTP_PROXY` still report while http hooks go through the proxy; a CLI with Agentrix gone keeps working with the same model request. It also writes `terminal-events-latency.json` (`AGENTRIX_LATENCY_FILE`, `AGENTRIX_LATENCY_SAMPLES`), which records times and bounds nothing.
+- `tests/claude-parity-real-cli.test.cjs` › "Agentrix terminal hooks leave the model context byte-identical": one request body per channel, equal to the no-hook one once ids, times and ports are removed.
+
+The hook client the smokes and probes use is `tests/helpers/claude-hook-client.cjs`; send hooks through it, never by piping JSON into `claude-hook.ps1` by hand. Every stand-in for a CLI is listed in `tests/fixtures/stand-ins.json` and must answer what it is asked (`tests/fake-cli-contract.test.cjs`): a new one fails there until registered. A stand-in that does not show the hooks it received proves nothing about them.
+
 ## GUI checks
 Name the suites you want. Never ask anyone to run every GUI smoke: `session`, `workspace`, `editor-terminals`, `clipboard`, `composer` and `gpu-terminal` write the system clipboard and run only on GitHub Actions. Run GUI checks one at a time, with nothing else loading the machine. Unit tests stay green while these break, so run them after any change to launching or restoring a session.
 

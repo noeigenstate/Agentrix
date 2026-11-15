@@ -9,6 +9,8 @@ if (mode === 'tool') {
   process.stdout.write(JSON.stringify({ keyPresent: Object.keys(process.env).some(name => /^(ANTHROPIC_|CLAUDE_CODE_OAUTH)/i.test(name)) }));
   process.exit(0);
 }
+// Stand-in contract (tests/fake-cli-contract.test.cjs): --version answers at once and writes nothing; AGENTRIX_STAND_IN_ECHO names the file that gets the arguments, --settings and hooks it was given.
+if (process.env.AGENTRIX_STAND_IN_ECHO) require('./stand-in-echo.cjs')();
 if (args.includes('--version')) {
   console.log(mode === 'claude' ? '2.1.317 (Claude Code)' : 'codex-cli 0.166.0'); process.exit(0);
 }

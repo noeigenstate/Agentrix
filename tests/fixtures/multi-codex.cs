@@ -8,6 +8,8 @@ using System.Web.Script.Serialization;
 class MultiCodexFixture {
     static void Main(string[] args) {
         Console.InputEncoding = new UTF8Encoding(false); Console.OutputEncoding = new UTF8Encoding(false);
+        // The stand-in contract (tests/fake-cli-contract.test.cjs): --version answers at once and writes nothing.
+        if (args.Length > 0 && (args[0] == "--version" || args[0] == "-V")) { Console.WriteLine("codex-cli 0.166.0"); return; }
         if (args.Length > 0 && args[0] == "app-server") {
             var driver = Environment.GetEnvironmentVariable("AGENTRIX_GUI_CODEX_RPC");
             var node = Environment.GetEnvironmentVariable("AGENTRIX_FAKE_NODE");
