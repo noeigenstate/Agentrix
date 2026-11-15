@@ -26,7 +26,7 @@ function createNativeSessions(options) {
         : result.cli.status === 'missing' ? (result.cli.reason && result.cli.reason !== 'not_found' ? 'native_cli_unverified' : 'native_cli_required')
           : result.billing?.status !== 'ok' ? result.reason || 'billing_unconfirmed' : null;
     const selection = choosePath({ agent: 'claude', ...config,
-      apiState: reason ? { reason } : options.claude.apiState(config.monthlyBudgetUsd, projectId) });
+      apiState: reason ? { reason } : options.claude.apiState(projectId) });
     router.reconcile();
     return { ...result, ...selection, reason: reason || selection.reason };
   }

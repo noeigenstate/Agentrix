@@ -4,12 +4,11 @@ const { createNormalizer } = require('./normalize.cjs');
 const { TokenRates } = require('../agents/token-rate.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
-const { billingIdentityError, startupFailure, CREDITS_LOW } = require('./identity.cjs');
+const { billingIdentityError, startupFailure } = require('./identity.cjs');
 const { stderrCollector } = require('../agents/start-failure.cjs');
 const { inputQueue, queryOptions, openQuery, readBillingIdentity } = require('./query.cjs');
 const { turnResult, tokensOf, hasModelReply } = require('./result.cjs');
-const { REFUSALS } = require('./usage.cjs');
-const { rateLimits } = require('./limits.cjs');
+const { rateLimits, refusalReason } = require('./limits.cjs');
 const { claudeCommands } = require('./commands.cjs');
 const { runShell } = require('./shell.cjs');
 const { sessionHistory } = require('./history.cjs');
@@ -29,7 +28,7 @@ function createClaudeSession(spec, emit, dependencies) {
   let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
   let apiObservedAt = null, limits = null, fallbackInput = null, resultCost = 0, observedModel = null;
-  let changingOptions = null;
+  let changingOptions = null, providerFailure = null;
   let shellAbort = null, defaultModelReset = false;
   const shellControllers = new Set();
   async function stopShells(foregroundOnly = false) {
@@ -64,26 +63,6 @@ function createClaudeSession(spec, emit, dependencies) {
     publish('turn.started', { origin, clientMessageId }); setState('running');
   }
   const canContinue = () => dependencies.canContinue?.() !== false;
-  function reserve(run) {
-    if (run.reservation && usage.currentReservation?.(run.reservation.id) === false) {
-      usage.finish(run.reservation.id, { started: run.initialized }); run.reservation = null;
-    }
-    run.reservation ||= usage.reserve(spec.monthlyBudgetUsd ?? null, { sessionId: providerId, resume: !!providerId,
-      maxBudgetUsd: run.remainingBudgetUsd });
-  }
-  function releaseIdle(run) {
-    if (!run.reservation) return;
-    // A resumed history anchor may still have unknown spend. Keep ownership of its
-    // held allowance so the same capped query can obtain the later accounting evidence.
-    if (usage.release(run.reservation.id) !== false) run.reservation = null;
-  }
-  function finishReservation(run) {
-    if (!run.reservation) return;
-    if (run.busy && run.initialized) usage.unverified(run.reservation.id);
-    if (usage.finish) usage.finish(run.reservation.id, { started: run.initialized });
-    else usage.release(run.reservation.id);
-    run.reservation = null;
-  }
   function cancelQuery(run, reason) {
     if (run.closing) return;
     run.closing = reason;
@@ -94,30 +73,21 @@ function createClaudeSession(spec, emit, dependencies) {
     for (const [id, status] of sent) if (!['consumed', 'rejected'].includes(status)) receipt(id, 'unknown');
   }
   function unavailable(message, run) {
+    if (message.parent_tool_use_id || message.isSidechain) return;
     const observed = rateLimits(message, limits, spec.scopeId || spec.runtimeSessionId, now());
-    const quota = ['credits_required', 'spend_limit'].includes(observed?.notice?.code), balance = observed?.notice?.message === CREDITS_LOW;
-    if (quota && spec.quotaFallback?.()) observed.notice = { code: observed.notice.code, resetsAtMs: observed.notice.resetsAtMs,
-      message: balance ? `${CREDITS_LOW}本轮结束后将转到 Claude Code 终端。` : 'API 额度已用完，本轮结束后将转到 Claude Code 终端。' };
-    if (observed) { limits = observed; publish('limits.updated', limits); }
-    if (quota) run.quotaRejected = true;
-    if (balance) run.balanceLow = true;
-    const reason = observed?.notice ? quota && !(spec.owner === 'dispatch' && observed.notice.code === 'spend_limit') ? 'credits_exhausted' : 'rate_limited'
-      : message.error === 'authentication_failed' ? 'invalid_key' : null;
-    if (!reason) return;
-    // Owner fallback follows quota evidence only. Workers retain their previous routing.
-    if (spec.owner === 'dispatch' ? reason !== 'credits_exhausted' : reason !== 'rate_limited') onFailure(reason, balance ? new Error(CREDITS_LOW) : null, run.generation);
-    if (observed) publish('error', { code: observed.notice.code, message: observed.notice.message, retryable: false, willRetry: false, stage: 'turn' });
-    else publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
-      state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: reason });
-  }
-  function budgetNotice() {
-    const refusal = usage.refusal(spec.monthlyBudgetUsd ?? null, active?.reservation?.id), exhausted = !!refusal;
-    const message = exhausted ? REFUSALS[refusal] : active?.background.size
-      ? 'API 预算上限已用完。后台任务结束后才能继续，或先停止它们。' : 'API 预算上限已用完，请发送新消息继续。';
-    publish('error', { code: 'budget_exhausted', message, retryable: !exhausted, willRetry: false, stage: 'runtime' });
-    if (exhausted) publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
-      state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'budget_exhausted' });
-    return message;
+    if (observed) {
+      limits = observed; publish('limits.updated', limits);
+      if (observed.notice && message.type !== 'rate_limit_event') run.limitCandidate = observed.notice;
+    }
+    // A warning or a retry is only an observation. The CLI owns retries; only its final refusal stops input.
+    if (message.type !== 'result' || message.is_error !== true || run.interrupted) return;
+    const notice = run.limitCandidate;
+    if (!notice) return;
+    run.limitReason = refusalReason(notice.code); run.limitMessage = notice.message; run.quotaRejected = true;
+    providerFailure = Object.assign(new Error(notice.message), { code: run.limitReason, beforeInput: true });
+    if (spec.owner !== 'dispatch' || run.limitReason !== 'credits_exhausted') onFailure(run.limitReason, providerFailure, run.generation);
+    const messageText = notice.message + (spec.quotaFallback?.() ? '本轮结束后将转到 Claude Code 终端。' : '');
+    publish('error', { code: notice.code, message: messageText, retryable: false, willRetry: false, stage: 'turn' });
   }
   function observeBackground(run, message) {
     if (message.type !== 'system') return;
@@ -147,7 +117,7 @@ function createClaudeSession(spec, emit, dependencies) {
           if (message.apiKeySource !== 'ANTHROPIC_API_KEY') throw billingIdentityError(message.apiKeySource);
           run.initialized = true; run.init = initFacts(message); providerId = message.session_id; stream.provider(providerId);
           apiObservedAt = now();
-          usage.bind?.(run.reservation?.id, providerId); onSession(providerId);
+          onSession(providerId);
           run.model = run.resetModel || message.model || null;
           observedModel = run.model;
           publish('routing.updated', {
@@ -176,7 +146,7 @@ function createClaudeSession(spec, emit, dependencies) {
         }
         if (message.user_message_uuid) receipt(message.user_message_uuid, 'consumed');
         for (const id of message.user_message_uuids || []) receipt(id, 'consumed');
-        unavailable(message, run);
+        if (message.type !== 'result') unavailable(message, run);
         if (message.type === 'assistant' && message.message?.model !== '<synthetic>'
           || message.type === 'stream_event' || message.type === 'user' && Array.isArray(message.message?.content) && message.message.content.some(block => block.type === 'tool_result')) run.executed = true;
         if (message.type === 'assistant' && !message.parent_tool_use_id && message.message?.model === '<synthetic>') run.synthetic = true;
@@ -192,7 +162,7 @@ function createClaudeSession(spec, emit, dependencies) {
             try { Promise.resolve(run.query.interrupt()).catch(() => {}); } catch { }
             continue;
           }
-          reserve(run); run.busy = true; begin('automatic', message.user_message_uuid || null);
+          run.busy = true; begin('automatic', message.user_message_uuid || null);
         }
         if (rates.nativeClaude(message, now())) publish('usage.updated', rateUsage);
         const context = normalize(message, { live: true });
@@ -200,6 +170,7 @@ function createClaudeSession(spec, emit, dependencies) {
         const resultId = message.uuid || message.result_index;
         if (resultId !== undefined && results.has(resultId)) continue;
         if (resultId !== undefined) results.add(resultId);
+        unavailable(message, run);
         const refusal = spec.owner === 'dispatch' ? run.billingRejected && message.total_cost_usd === 0
           : run.quotaRejected && run.synthetic && !run.executed && message.total_cost_usd === resultCost;
         const rejected = refusal && message.is_error === true && message.usage
@@ -215,11 +186,10 @@ function createClaudeSession(spec, emit, dependencies) {
             && message.usage?.input_tokens === 0 && message.usage?.output_tokens === 0 && !run.interrupted) } : null;
         }
         if (spec.owner !== 'dispatch' && !message.is_error && !run.quotaRejected && Object.values(tokensOf(message.usage) || {}).some(value => value > 0)) dependencies.onSuccess?.(run.generation);
-        const entry = usage.record(providerId, message, { resume: !!run.resumeId, reservationId: run.reservation?.id, rejected });
+        const entry = usage.record(providerId, message, { resume: !!run.resumeId, rejected });
         resultCost = message.total_cost_usd;
         tally.result(message);
         run.billingRejected = false;
-        if (entry.deltaUsdMicros > 0) run.remainingBudgetUsd = Math.max(0, Math.round(run.remainingBudgetUsd * 1e6 - entry.deltaUsdMicros) / 1e6);
         const lastUsage = run.lastUsage;
         const contextTokens = lastUsage && [lastUsage.input, lastUsage.cachedInput, lastUsage.cacheWrite, lastUsage.output].every(value => value !== null)
           ? lastUsage.input + lastUsage.cachedInput + lastUsage.cacheWrite + lastUsage.output : null;
@@ -227,10 +197,9 @@ function createClaudeSession(spec, emit, dependencies) {
         publish('usage.updated', { ...entry.snapshot, ...(Number.isSafeInteger(modelWindow) && modelWindow > 0 ? { contextWindow: modelWindow } : {}), contextTokens, round: tokensOf(message.usage) });
         if (entry.deltaUsdMicros > 0) onCost({ ...entry, spec: { ...spec, model: run.model || spec.model }, providerSessionId: providerId });
         requests.cancel();
-        const budgetBlocked = message.terminal_reason === 'budget_exhausted' || message.subtype === 'error_max_budget_usd';
         const interrupted = run.interrupted;
         const outcome = turnResult(message, { interrupted, costUsdMicros: entry.deltaUsdMicros, compacted: context?.compacted });
-        if (run.compactionStarted && !context?.compacted && outcome.status === 'failed' && message.local_command !== 'compact') {
+        if (run.compactionStarted && !run.limitMessage && !context?.compacted && outcome.status === 'failed' && message.local_command !== 'compact') {
           outcome.error = outcome.message = run.compactFailure || '上下文压缩失败。' + outcome.message;
           publish('error', { code: 'context_compaction_failed', message: outcome.message, retryable: false, willRetry: false, stage: 'turn' });
         }
@@ -241,26 +210,25 @@ function createClaudeSession(spec, emit, dependencies) {
         const modelChoice = message.local_command === 'model' && message.subtype === 'success' && message.is_error === false && outcome.status === 'completed'
           && /^\/model\s+(\S+)\s*$/.exec(modelInput?.text?.trim() || '');
         if (modelChoice) { defaultModelReset = modelChoice[1] === 'default'; spec.model = defaultModelReset ? null : modelChoice[1]; }
-        if (budgetBlocked) outcome.error = outcome.message = budgetNotice();
-        else if (run.balanceLow && outcome.error) outcome.error = outcome.message = CREDITS_LOW;
+        if (run.limitMessage) outcome.error = outcome.message = run.limitMessage;
         if (!run.interrupted && !run.modelReplied && (message.is_error === true || outcome.status === 'failed')) {
           for (const id of run.shellInputs || []) shells.get(id)?.reject(null, { completedTurn: true,
-            switching: spec.quotaFallback?.() && (run.quotaRejected || budgetBlocked) });
+            switching: spec.quotaFallback?.() && run.quotaRejected });
         }
         for (const id of run.shellInputs || []) delete shells.get(id)?.reject;
         publish('turn.completed', outcome);
         run.turnInputs = []; run.shellInputs = null; run.modelReplied = false; run.executed = false; run.synthetic = false; run.quotaRejected = false;
-        run.interrupted = false; run.balanceLow = false;
+        run.interrupted = false; run.limitCandidate = null; run.limitReason = null; run.limitMessage = null;
         run.compactionStarted = false; run.compactFailure = null;
         rates.nativeEnd(); turnId = null; stream.turn(null);
         if (interrupted) unknownInput();
-        if (budgetBlocked) {
-          run.busy = false; releaseIdle(run); run.onStoppedResult?.(); unknownInput();
+        if (providerFailure) {
+          run.busy = false; run.onStoppedResult?.(); unknownInput();
           if (run.background.size) { setState('idle'); continue; }
-          idle = !stopping; cancelQuery(run, 'budget'); break;
+          idle = !stopping; cancelQuery(run, 'provider_limit'); break;
         }
         if (!canContinue()) {
-          run.busy = false; releaseIdle(run); unknownInput();
+          run.busy = false; unknownInput();
           if (run.background.size) { setState('idle'); continue; }
           idle = true; cancelQuery(run, 'path_changed'); break;
         }
@@ -269,7 +237,7 @@ function createClaudeSession(spec, emit, dependencies) {
         const unread = spec.owner === 'dispatch' && [...sent.values()].some(status => ['queued', 'delivered'].includes(status));
         if (!(message.queued_turn_count > 0) && !unread) {
           run.busy = false;
-          releaseIdle(run);
+
           run.onStoppedResult?.();
           if (spec.owner === 'dispatch' || stopping && !run.background.size) { idle = !stopping; cancelQuery(run, stopping ? 'stop' : 'idle'); break; }
           setState('idle');
@@ -279,12 +247,10 @@ function createClaudeSession(spec, emit, dependencies) {
     } catch (error) {
       // close()/idle retirement may reject iteration with AbortError. Its accounting was already settled above.
       if (!run.closing) {
-        usage.unverified(run.reservation?.id);
         if (!closed) {
-          if (run.interrupted || error.code === 'budget_exhausted') {
+          if (run.interrupted) {
             if (!turnId) begin('automatic', null);
-            const outcome = turnResult({ terminal_reason: 'budget_exhausted' }, { interrupted: !!run.interrupted });
-            if (!run.interrupted) outcome.error = outcome.message = budgetNotice();
+            const outcome = turnResult({}, { interrupted: true });
             publish('turn.completed', outcome);
             turnId = null; stream.turn(null); idle = true;
             requests.cancel(); unknownInput();
@@ -300,8 +266,7 @@ function createClaudeSession(spec, emit, dependencies) {
       for (const id of run.shellInputs || []) delete shells.get(id)?.reject;
       publish('context.compacting', { active: false });
       cancelQuery(run, 'ended');
-      try { finishReservation(run); }
-      finally { secrets.delete(run.key); if (active === run) active = null; }
+      secrets.delete(run.key); if (active === run) active = null;
       if (idle && !closed && !stopping) setState('idle');
     }
   }
@@ -329,20 +294,14 @@ function createClaudeSession(spec, emit, dependencies) {
     if (closed) throw new Error('会话已停止。');
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
-    // A month with nothing left starts no Claude Code: its cause is told before any input, never as a CLI that exited.
-    const budget = spec.monthlyBudgetUsd ?? null, allowanceUsd = budget === null ? undefined : usage.allowanceUsd(budget);
-    const run = { key, reservation: null, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
+    const run = { key, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
-      remainingBudgetUsd: allowanceUsd ?? Infinity, busy: false, background: new Map(), stderr: stderrCollector() };
+      busy: false, background: new Map(), stderr: stderrCollector() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     try {
-      if (!prepareOnly) {
-        run.reservation = usage.reserve(budget, { sessionId: providerId, resume: !!providerId });
-        run.remainingBudgetUsd = run.reservation.maxBudgetUsd ?? Infinity;
-      }
       const options = queryOptions(spec, { key, executable, abort: run.abort,
-        providerSessionId: providerId, maxBudgetUsd: budget === null ? undefined : run.remainingBudgetUsd, policy,
+        providerSessionId: providerId, policy,
         canUseTool: async (name, input, context) => {
           if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
           if (name === 'AskUserQuestion') return requests.open(name, input, context);
@@ -368,12 +327,11 @@ function createClaudeSession(spec, emit, dependencies) {
       dependencies.onIdentity?.(run.generation);
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
       if (!prepareOnly && !canContinue()) {
-        cancelQuery(run, 'path_changed'); if (run.reservation) usage.release(run.reservation.id); secrets.delete(key); return null;
+        cancelQuery(run, 'path_changed'); secrets.delete(key); return null;
       }
     } catch (error) {
-      cancelQuery(run, 'startup'); if (run.reservation) usage.release(run.reservation.id); secrets.delete(key);
+      cancelQuery(run, 'startup'); secrets.delete(key);
       if (stopping || closed) throw new Error('会话已停止。');
-      if (error.code === 'budget_exhausted') throw error;
       const failure = startupFailure(error, { stderr: run.stderr.text(), key });
       if (observing) throw failure;
       onFailure(failure.code, failure, run.generation);
@@ -407,7 +365,7 @@ function createClaudeSession(spec, emit, dependencies) {
       return context;
     } : null;
     // The question itself may be what creates the query, so what the query tells is read after it: a session with no query is lazy, not disconnected.
-    const local = await panelAnswer(command, { read, tally, summary: usage.summary?.() ?? {}, budgetUsd: spec.monthlyBudgetUsd, limits,
+    const local = await panelAnswer(command, { read, tally, summary: usage.summary?.() ?? {}, limits,
       session: () => ({ model: observedModel, effort: spec.effort || null, cwd: spec.cwd || null, sessionId: providerId, init: active?.init,
         connection: active ? connection() : { kind: 'unknown' } }) });
     if (closed || stopping) throw new Error('会话已停止。');
@@ -421,6 +379,10 @@ function createClaudeSession(spec, emit, dependencies) {
     if (typeof text !== 'string' || !text.trim() && !images.length) throw new Error('无效的消息。');
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
+    if (providerFailure) {
+      if (spec.owner !== 'dispatch' && dependencies.providerReady?.()) providerFailure = null;
+      else throw providerFailure;
+    }
     if (!canContinue()) return { status: 'rejected' };
     if (sent.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     if (/^\/(?:clear|reset|new)(?:\s|$)/.test(text)) throw new Error('原生会话不支持此命令。');
@@ -434,25 +396,12 @@ function createClaudeSession(spec, emit, dependencies) {
       if (active.busy) return { status: 'rejected' };
       await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task;
     }
-    if (active && !active.busy && !active.background.size) {
-      const availableUsd = usage.available(spec.monthlyBudgetUsd ?? null, active.reservation?.id) / 1e6;
-      const freshBudgetUsd = spec.monthlyBudgetUsd == null ? Infinity : availableUsd;
-      if (active.remainingBudgetUsd !== freshBudgetUsd) {
-        // SDK caps accumulate across turns. Renew at an explicit message boundary, preserving live background work.
-        cancelQuery(active, 'budget'); await active.task;
-      }
-    }
     if (!active) await prepare(false);
     if (closed || stopping) throw new Error('会话已停止。');
     if (!canContinue()) return { status: 'rejected' };
     // No input has been queued yet; a key replaced during initialization must initialize again before delivery.
     if (active.keyVersion !== dependencies.credentialVersion?.()) { await stopBackground(); cancelQuery(active, 'credentials_changed'); await active.task; return send({ clientMessageId, text, images }, shellContent); }
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
-    try { reserve(active); }
-    catch (error) {
-      if (error.code === 'budget_exhausted' && active.background.size) error.message = budgetNotice();
-      throw error;
-    }
     // Settings invalidate failures while owner queries stay open at idle. An explicit
     // new turn observes the new generation without letting an old in-flight failure rearm it.
     if (!active.busy) active.generation = dependencies.availabilityGeneration?.();
@@ -488,7 +437,6 @@ function createClaudeSession(spec, emit, dependencies) {
       try { await stopBackground(); } catch { }
       closed = true;
       if (run) cancelQuery(run, 'stop');
-      try { if (run) finishReservation(run); } catch { }
       for (const [id, status] of sent) if (status !== 'consumed') receipt(id, status === 'queued' ? 'rejected' : 'unknown');
       setState('stopped');
       if (run) await waitWithin(run.task.catch(() => {}), 1500);
@@ -536,7 +484,7 @@ function createClaudeSession(spec, emit, dependencies) {
     const update = (async () => {
       if (previous) { try { await previous; } catch {} }
       const run = await optionsQuery();
-      // Keep acknowledged changes on spec so budget renewal resumes with the same choices.
+      // Keep acknowledged changes on spec so a resumed query keeps the same choices.
       if (Object.hasOwn(patch, 'model')) { await run.query.setModel(patch.model || undefined); spec.model = patch.model; defaultModelReset = patch.model === null; }
       const flags = {};
       if (Object.hasOwn(patch, 'effort')) flags.effortLevel = patch.effort;
@@ -571,7 +519,7 @@ function createClaudeSession(spec, emit, dependencies) {
       savedOutput = output; savedExitCode = exitCode;
       publish('item.upsert', { kind: 'command', status, content: { command, cwd: spec.cwd, output, exitCode, ...extra } }, { itemId });
     };
-    const notSent = '命令已执行，但输出未发送给模型。请检查 API 和预算后重试。';
+    const notSent = '命令已执行，但输出未发送给模型。请检查 API后重试。';
     const rejected = (error, { completedTurn = false, switching = false } = {}) => {
       if (!notified) {
         notified = true;
@@ -629,7 +577,6 @@ function createClaudeSession(spec, emit, dependencies) {
       return claudeCommands(Array.isArray(current) ? current : null, fallback, run.terminalCommands)
         .map(row => ({ ...row, description: clean(row.description) }));
     },
-    hasAllowance: () => !!active?.reservation && usage.currentReservation?.(active.reservation.id) !== false && active.remainingBudgetUsd > 0,
     checkpoint(restore) {
       let key; try { key = active?.key || credentials.read(); } catch { return null; }
       return key ? (spec, emit) => restore(spec, emit, { status: credentials.status,

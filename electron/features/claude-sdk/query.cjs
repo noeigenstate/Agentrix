@@ -47,7 +47,7 @@ function inputQueue(onTake = () => {}) {
   };
 }
 
-function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudgetUsd, policy, canUseTool }) {
+function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool }) {
   return {
     cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
     settings: privateSettings({ fastMode: false, ...routeSettings(spec) }, abort.signal), env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
@@ -58,7 +58,6 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudg
     ...(spec.owner === 'gui' ? { agents: { [LOOKUP_AGENT_NAME]: LOOKUP_AGENT } } : {}),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT, spec.context].filter(Boolean).join('\n\n') },
     ...(providerSessionId ? { resume: providerSessionId } : {}),
-    ...(maxBudgetUsd === undefined ? {} : { maxBudgetUsd }),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
       const lookup = spec.owner === 'gui' && lookupDecision(input);
       if (lookup) return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: lookup,
@@ -73,14 +72,7 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, maxBudg
   };
 }
 
-// Every SDK query starts here, so whoever built its options, its cap is checked. Claude Code refuses a --max-budget-usd that is not a
-// positive number and exits before initialize (real 2.1.317: exit 1 for 0 and -1, while 0.000001 runs), so a cap is a positive finite
-// amount or absent; anything else is a host error, refused before the CLI starts.
 function openQuery(sdk, prompt, options) {
-  const cap = options.maxBudgetUsd;
-  if (cap !== undefined && !(Number.isFinite(cap) && cap > 0)) {
-    throw Object.assign(new Error('API 预算上限无效，未启动 Claude Code。'), { code: 'invalid_budget', beforeInput: true });
-  }
   return sdk.query({ prompt, options });
 }
 

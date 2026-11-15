@@ -4,13 +4,13 @@ const { createCredentials } = require('./credentials.cjs');
 const { createSdkLoader } = require('./runtime.cjs');
 const { resolveClaudeExecutable, inspectClaudeExecutable } = require('./executable.cjs');
 const { createConnectionTest, probeBillingIdentity, netRequest } = require('./connection.cjs');
-const { createUsage, REFUSALS } = require('./usage.cjs');
+const { createUsage } = require('./usage.cjs');
 const { CREDITS_LOW } = require('./identity.cjs');
 const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
 const { rememberClaudeSource } = require('../../prompt-queue.cjs');
 function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader(), resolveExecutable = resolveClaudeExecutable,
-  now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs, alive,
+  now = Date.now, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs,
   connectionSpec = () => ({ agent: 'claude', owner: 'gui', cwd: process.cwd(), effort: 'high', fast: true }) } = {}) {
   const sessions = new Set(), leases = new Map(), unavailable = new Map(), observations = new Map(), listeners = new Set();
   let generation = 0, observation = 0, cliIdentity = null, refreshing, credentialVersion = 0;
@@ -19,7 +19,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   const availabilityGeneration = () => ({ generation, sequence: ++observation });
   const currentObservation = (scope, value) => value?.generation === generation && value.sequence >= (observations.get(scope) || 0);
   const credentials = createCredentials({ file: path.join(directory, 'credentials.json'), safeStorage, onChange: () => { credentialVersion++; resetAvailability(); } });
-  const usage = createUsage({ file: path.join(directory, 'usage.json'), now, ...(alive ? { alive } : {}) });
+  const usage = createUsage({ file: path.join(directory, 'usage.json'), now });
   const ownerFile = path.join(directory, 'owner-sessions.json');
   const owners = readJson(ownerFile, []);
   const ownerSessions = new Map((Array.isArray(owners) ? owners.slice(-10000) : []).filter(row => row && typeof row.id === 'string' && /^[\w-]{1,100}$/.test(row.id) && typeof row.cwd === 'string').map(row => [row.id, row.cwd]));
@@ -51,7 +51,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       observations.set(scope, observedGeneration.sequence);
       unavailable.set(scope, { reason, detail: error.message, until: null });
     }
-    else if (reason === 'credits_exhausted' && unavailable.get(scope)?.reason !== 'billing_identity_mismatch') {
+    else if (['credits_exhausted', 'account_limit'].includes(reason) && unavailable.get(scope)?.reason !== 'billing_identity_mismatch') {
       unavailable.set(scope, { reason, until: null, retryAt: now() + 600000, trial: null, ...(error?.message ? { detail: error.message } : {}) });
     }
     else if (unavailable.get(scope)?.until !== null && ['rate_limited', 'invalid_key'].includes(reason)) unavailable.set(scope, { reason, until: now() + 60000 });
@@ -61,7 +61,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   function onIdentity(scope, observedGeneration, tested = false) {
     if (!currentObservation(scope, observedGeneration)) return;
     observations.set(scope, observedGeneration.sequence);
-    if ((tested || unavailable.get(scope)?.reason !== 'credits_exhausted') && unavailable.delete(scope)) notify();
+    if ((tested || !['credits_exhausted', 'account_limit'].includes(unavailable.get(scope)?.reason)) && unavailable.delete(scope)) notify();
   }
   let decisions = readJson(path.join(directory, 'policy-audit.json'), [], { validate: value => Array.isArray(value) && value.length <= 1000 });
   const recordDecision = audit || (decision => {
@@ -84,15 +84,12 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
     connection(id) { return [...sessions].find(session => session.snapshot().runtimeSessionId === id)?.connection() || { kind: 'none', source: null, observedAt: null }; },
     claimApiRetry(projectId = '') {
       const failure = unavailable.get(projectId);
-      if (failure?.reason !== 'credits_exhausted' || failure.retryAt > now()) return null;
+      if (!['credits_exhausted', 'account_limit'].includes(failure?.reason) || failure.retryAt > now()) return null;
       failure.retryAt = now() + 600000;
       return failure.trial = randomUUID();
     },
-    apiState(budget, projectId = '', trial = null, owner = 'gui') {
+    apiState(projectId = '', trial = null, owner = 'gui') {
       if (!credentials.status().saved) return { status: 'no_key' };
-      // A cause other than spending names itself; spending is what the code already says.
-      const refusal = usage.refusal(budget);
-      if (refusal) return { status: 'budget_exhausted', ...(refusal === 'spent' ? {} : { reason: REFUSALS[refusal] }) };
       const failure = unavailable.get(projectId);
       if (owner === 'dispatch' && failure?.reason === 'credits_exhausted') return { status: 'ready' };
       if (trial && failure?.trial === trial) return { status: 'ready' };
@@ -119,6 +116,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials: rollbackCredentials || credentials, usage, now, onCost,
         availabilityGeneration, initializationTimeoutMs,
         credentialVersion: () => credentialVersion,
+        providerReady: () => runtimeApi.apiState(spec.projectId, spec.apiTrial).status === 'ready',
         canContinue: () => spec.owner === 'dispatch' || credentials.status().saved && spec.mayContinue?.() !== false,
         onFailure: (reason, error, observedGeneration) => onFailure(spec.projectId || '', reason, error, observedGeneration),
         onIdentity: observedGeneration => onIdentity(spec.projectId || '', observedGeneration),

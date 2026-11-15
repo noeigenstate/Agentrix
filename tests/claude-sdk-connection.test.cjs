@@ -119,7 +119,7 @@ test('connection tests use the saved key and new-session options without changin
   for (let n = 0; n < 100 && !events.some(event => event.type === 'turn.completed'); n++) await new Promise(resolve => setTimeout(resolve, 2));
   const probe = fake.calls[0].options, actual = fake.calls[1].options;
   assert.equal(Object.hasOwn(probe, 'maxBudgetUsd'), false, 'the billing preflight sends no input, so it takes no budget cap');
-  assert.equal(actual.maxBudgetUsd, 10, 'the session itself uses the monthly allowance without a five-dollar ceiling');
+
   for (const field of ['cwd', 'model', 'effort', 'pathToClaudeCodeExecutable', 'env', 'permissionMode', 'includePartialMessages', 'settingSources', 'systemPrompt']) {
     assert.deepEqual(probe[field], actual[field], field);
   }
@@ -533,7 +533,7 @@ test('a console balance that has run out is named on the key line and moves new 
     assert.deepEqual(result.billing, { status: 'ok', source: 'ANTHROPIC_API_KEY' });
     assert.equal(result.path, mode === 'api-only' ? null : 'terminal'); assert.equal(result.reason, CREDITS);
     assert.doesNotMatch(JSON.stringify(result), /credit balance/i);
-    assert.deepEqual(factory.apiState(null), { status: 'credits_exhausted', reason: CREDITS });
+    assert.deepEqual(factory.apiState(), { status: 'credits_exhausted', reason: CREDITS });
   }
   assert.ok(Object.hasOwn(en, CREDITS));
 });
@@ -551,14 +551,14 @@ test('a start whose stderr says the console balance ran out names that cause, be
   t.after(() => factory.close()); factory.credentials.save(key);
   const result = await factory.testConnection();
   assert.deepEqual(result.billing.detail, { text: CREDITS, values: {} }); assert.doesNotMatch(JSON.stringify(result), /credit balance|退出码/i);
-  assert.deepEqual(factory.apiState(null), { status: 'credits_exhausted', reason: CREDITS });
+  assert.deepEqual(factory.apiState(), { status: 'credits_exhausted', reason: CREDITS });
   factory.resetAvailability();
   const events = [], session = factory.create({ ...specOf(root), projectId: 'p', terminalId: 't', runtimeSessionId: 'r' }, event => events.push(event));
   await session.start();
   await assert.rejects(session.send({ clientMessageId: 'm', text: 'never sent' }),
     error => error.code === 'credits_exhausted' && error.message === CREDITS && error.beforeInput === true);
   assert.equal(events.find(event => event.type === 'error')?.payload.message, CREDITS);
-  assert.deepEqual(factory.apiState(null, 'p'), { status: 'credits_exhausted', reason: CREDITS });
+  assert.deepEqual(factory.apiState('p'), { status: 'credits_exhausted', reason: CREDITS });
   await session.close();
 });
 
@@ -577,7 +577,7 @@ for (const fallback of [false, true]) test(`a turn the console balance refused i
   assert.equal(events.find(event => event.type === 'turn.completed').payload.error, CREDITS);
   assert.equal(events.find(event => event.type === 'error' && event.payload.code === 'credits_required').payload.message,
     fallback ? `${CREDITS}本轮结束后将转到 Claude Code 终端。` : CREDITS);
-  assert.deepEqual(factory.apiState(null, 'p'), { status: 'credits_exhausted', reason: CREDITS });
+  assert.deepEqual(factory.apiState('p'), { status: 'credits_exhausted', reason: CREDITS });
   assert.doesNotMatch(JSON.stringify(events), /credit balance/i);
   assert.ok(Object.hasOwn(en, `${CREDITS}本轮结束后将转到 Claude Code 终端。`));
   await session.close();

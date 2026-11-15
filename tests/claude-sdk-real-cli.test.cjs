@@ -32,7 +32,7 @@ test('SDK requests retain the default CLI entrypoint even with an inherited owne
   }
 });
 
-test('a real billing rejection preserves budget and offers only the proved unexecuted input for terminal fallback', { skip, timeout: 60000 }, async t => {
+test('a real billing rejection preserves observed spend and offers only the proved unexecuted input for terminal fallback', { skip, timeout: 60000 }, async t => {
   let requests = 0;
   const f = await harness(t, data => ++requests === 1 ? [opening(data), ...textBlock(0, 'PAID REPLY'), ...finish('end_turn')]
     : { status: 400, body: { type: 'error', error: { type: 'invalid_request_error', message: 'Credit balance is too low' } } });
@@ -50,10 +50,10 @@ test('a real billing rejection preserves budget and offers only the proved unexe
     await new Promise(resolve => setTimeout(resolve, 20));
   } assert.fail('billing result did not settle'); };
   await session.start(); await session.send({ clientMessageId: 'paid', text: 'Hello' }); await wait(1);
-  const before = runtime.usage.available(10), spend = runtime.usage.summary().monthUsdMicros;
+  const spend = runtime.usage.summary().monthUsdMicros;
   await session.send({ clientMessageId: 'rejected', text: 'Another message' }); await wait(2);
-  assert.equal(requests, 2); assert.equal(runtime.usage.available(10), before); assert.equal(runtime.usage.summary().monthUsdMicros, spend);
-  assert.equal(runtime.apiState(10).status, 'credits_exhausted');
+  assert.equal(requests, 2);  assert.equal(runtime.usage.summary().monthUsdMicros, spend);
+  assert.equal(runtime.apiState().status, 'credits_exhausted');
   assert.deepEqual(session.fallbackInput(), { input: { clientMessageId: 'rejected', text: 'Another message', images: [] }, safe: true }, JSON.stringify(observed.filter(message => ['assistant', 'result'].includes(message.type))));
   const notice = events.findLast(event => event.type === 'limits.updated').payload.notice;
   assert.equal(notice.code, 'credits_required'); assert.equal(notice.action, 'check-console'); assert.match(notice.message, /控制台余额不足/);
@@ -178,11 +178,11 @@ for (const [command, expected, marker] of [
     assert.equal(queries, 1, 'normal consumption keeps the same CLI query alive');
     assert.equal(bodies.at(-1).model, 'claude-haiku-4-5', 'raw slash input retains the model the CLI selected');
     assert.equal((await session.runOptions({})).model, 'claude-haiku-4-5', 'host observations follow the CLI model');
-    spec.monthlyBudgetUsd = 11; // Force a real safe-boundary query renewal, rather than assuming one occurred.
-    await session.send({ clientMessageId: 'check-renewed-model', text: 'Check after cap renewal' }); await wait(4);
-    assert.equal(queries, 2); assert.equal(bodies.at(-1).model, 'claude-haiku-4-5', 'budget renewal cannot undo the CLI model choice');
+    runtime.credentials.save(f.env.ANTHROPIC_API_KEY); // A key refresh renews at the next explicit input boundary.
+    await session.send({ clientMessageId: 'check-renewed-model', text: 'Check after credential renewal' }); await wait(4);
+    assert.equal(queries, 2); assert.equal(bodies.at(-1).model, 'claude-haiku-4-5', 'credential renewal cannot undo the CLI model choice');
     await session.runOptions({ model: 'claude-sonnet-4-5' });
-    spec.monthlyBudgetUsd = 12;
+    runtime.credentials.save(f.env.ANTHROPIC_API_KEY);
     await session.send({ clientMessageId: 'check-gui-model', text: 'Check the native model control' }); await wait(5);
     assert.equal(queries, 3); assert.equal(bodies.at(-1).model, 'claude-sonnet-4-5', 'the GUI control can still change and retain the model');
   }
@@ -594,8 +594,8 @@ test('B3 real CLI ignores malformed project settings without leaking a monthly r
   const deadline = Date.now() + 30000;
   while (!events.some(event => event.type === 'turn.completed') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
   assert.ok(events.some(event => event.type === 'turn.completed')); await session.close();
-  assert.ok(runtime.usage.available(10) > 9000000); assert.equal(f.stats.requests, 1);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.cwd, 'state/usage.json'), 'utf8')).reservations, {});
+   assert.equal(f.stats.requests, 1);
+  assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(f.cwd, 'state/usage.json'), 'utf8')), 'reservations'), false);
 });
 
 for (const form of ['padded', 'leading padded', 'UTF-16LE BOM', 'UTF-8 BOM', 'trailing comma', 'UTF-16BE BOM', 'UTF-16LE without BOM']) {

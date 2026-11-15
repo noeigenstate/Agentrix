@@ -1,15 +1,14 @@
 const { readJson, writeJson } = require('./storage.cjs');
-const defaults = { claudePath: 'api-then-terminal', monthlyBudgetUsd: null, codexAutoReset: false };
+const defaults = { claudePath: 'api-then-terminal', codexAutoReset: false };
 function validSettings(value, partial = false) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => !Object.hasOwn(defaults, key))) return false;
   return (partial && value.claudePath === undefined || ['api-then-terminal', 'api-only', 'terminal-only'].includes(value.claudePath)) &&
-    (value.codexAutoReset === undefined || typeof value.codexAutoReset === 'boolean') &&
-    (partial && value.monthlyBudgetUsd === undefined || value.monthlyBudgetUsd === null || Number.isFinite(value.monthlyBudgetUsd) && value.monthlyBudgetUsd >= 0 && value.monthlyBudgetUsd <= 1e6);
+    (value.codexAutoReset === undefined || typeof value.codexAutoReset === 'boolean');
 }
 function createSettings(file) {
   const current = stored => {
     if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return stored;
-    const { codexView, ...value } = stored; return value;
+    return Object.fromEntries(Object.entries(stored).filter(([key]) => Object.hasOwn(defaults, key)));
   };
   let value = { ...defaults, ...current(readJson(file, defaults, { validate: stored => validSettings(current(stored), true) })) };
   return { get: () => ({ ...value }), set(patch) {

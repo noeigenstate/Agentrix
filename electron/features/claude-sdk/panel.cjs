@@ -81,7 +81,7 @@ const buckets = limits => Object.entries(object(limits?.limitsById)).flatMap(([i
 
 // `read` fetches the SDK's context usage (only /context and /status need it); `session()` is what the session itself holds, with its query's first reply
 // (`init`) and its connection, read once the context is.
-async function answer(command, { read, tally, session, summary, budgetUsd, limits }) {
+async function answer(command, { read, tally, session, summary, limits }) {
   let context = null;
   const errors = [];
   if (read) {
@@ -91,7 +91,7 @@ async function answer(command, { read, tally, session, summary, budgetUsd, limit
       errors.push({ source: 'context', reason: '原因未知' });
     }
   }
-  const month = { spentMicros: count(summary.monthUsdMicros), budgetUsd: Number.isFinite(budgetUsd) && budgetUsd > 0 ? budgetUsd : null };
+  const month = { spentMicros: count(summary.monthUsdMicros) };
   const base = { agent: 'claude', command };
   if (command === 'context') return { ...base, context };
   if (command === 'cost') return { ...base, ...tally.facts(), month };

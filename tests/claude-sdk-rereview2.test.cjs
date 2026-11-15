@@ -59,7 +59,7 @@ test('R6 real-shaped API errors are notices/results, never assistant prose; ordi
     const record = { type: 'assistant', uuid: `error-${index}`, isApiErrorMessage: true, error,
       message: { id: `error-${index}`, model: '<synthetic>', content: [{ type: 'text', text }] } };
     f.emit(record); f.emit({ ...record, isReplay: true }); claudeConversation(log, record);
-    assert.equal(rateLimits(record, null, 'scope', 1000).notice.message, 'API 用量已达上限。');
+    assert.equal(rateLimits(record, null, 'scope', 1000).notice.message, require('../electron/features/claude-sdk/identity.cjs').LIMIT_MESSAGES.account_limit);
   }
   assert.deepEqual(f.events, []); assert.deepEqual(log.list.map(entry => entry.text), ['API 用量已达上限。', 'API 用量已达上限。']);
   const normal = { type: 'assistant', uuid: 'answer', message: { id: 'answer', content: [{ type: 'text', text: 'The API Error example uses 429 and enforced_spend_limit_reached.' }] } };

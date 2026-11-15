@@ -33,59 +33,59 @@ test('B4 stop requests a final result before AbortError and a resumed cumulative
   const { session, fake, factory, spec } = runtime(t);
   await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'hold' }); await until(() => fake.inputs.length === 1);
   await session.close();
-  assert.equal(factory.apiState(10).status, 'ready'); assert.equal(factory.usage.available(10), 10000000);
+  assert.equal(factory.apiState().status, 'ready');
   assert.equal(factory.usage.summary().monthUsdMicros, 0);
   const resumed = factory.create({ ...spec, providerSessionId: fake.sessionId }, () => {});
   await resumed.resume(); await resumed.send({ clientMessageId: randomUUID(), text: 'resume' }); await until(() => fake.inputs.length === 2);
   fake.emit({ type: 'result', uuid: 'resume', subtype: 'success', total_cost_usd: 1, modelUsage: {}, queued_turn_count: 0 });
   await until(() => resumed.snapshot().state === 'idle');
-  assert.equal(factory.usage.available(10), 9000000); assert.equal(factory.usage.summary().monthUsdMicros, 1000000);
+   assert.equal(factory.usage.summary().monthUsdMicros, 1000000);
 });
-test('B4 SDK failure keeps its unverified monthly allowance reserved', async t => {
+test('B4 SDK failure does not block a new native query', async t => {
   const { session, fake, factory } = runtime(t);
   await session.start(); await session.send({ clientMessageId: randomUUID(), text: 'hold' }); await until(() => fake.inputs.length === 1);
   fake.fail(new Error('synthetic SDK crash')); await until(() => session.snapshot().state === 'failed');
-  assert.equal(factory.apiState(10).status, 'budget_exhausted'); assert.equal(factory.usage.available(10), 0);
+  assert.equal(factory.apiState().status, 'ready');
 });
-test('B4 missing resume baseline anchors history, holds one lease, and reconciles on later cumulative evidence', async t => {
+test('B4 missing resume baseline anchors history and records later cumulative evidence', async t => {
   const id = randomUUID(), { session, fake, factory } = runtime(t, { providerSessionId: id });
   // The fixture uses the same provider id as the imported transcript.
   await session.resume(); await session.send({ clientMessageId: randomUUID(), text: 'resume old' }); await until(() => fake.inputs.length === 1);
   fake.emit({ type: 'result', uuid: 'baseline', total_cost_usd: 20, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle');
-  assert.equal(factory.apiState(10).status, 'budget_exhausted'); assert.equal(factory.usage.available(10), 0);
-  assert.equal(session.hasAllowance(), true, 'the live query still owns its allowance; another query cannot spend it');
+  assert.equal(factory.apiState().status, 'ready');
+
   await session.send({ clientMessageId: randomUUID(), text: 'next' }); await until(() => fake.inputs.length === 2);
   fake.emit({ type: 'result', uuid: 'next', total_cost_usd: 20.2, modelUsage: {}, queued_turn_count: 0 });
-  await until(() => session.snapshot().state === 'idle'); assert.equal(factory.usage.available(10), 9800000);
+  await until(() => session.snapshot().state === 'idle');
 });
 
-test('an uncertain retained query acquires a current-month reservation after UTC rollover', async t => {
+test('an uncertain retained query records spend in the new UTC month', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.UTC(2026, 10, 30, 23, 59, 59) });
   const { session, fake, factory } = runtime(t, { providerSessionId: randomUUID() });
   await session.resume(); await session.send({ clientMessageId: 'before-month', text: 'anchor history' }); await until(() => fake.inputs.length === 1);
   fake.emit({ type: 'result', uuid: 'old-anchor', total_cost_usd: 20, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle');
-  assert.equal(factory.usage.available(10), 0); assert.equal(session.hasAllowance(), true);
+
   t.mock.timers.tick(2000);
-  assert.equal(session.hasAllowance(), false); assert.equal(factory.usage.available(10), 10000000);
-  await session.send({ clientMessageId: 'after-month', text: 'new monthly allowance' }); await until(() => fake.inputs.length === 2);
-  assert.equal(factory.usage.available(10), 0, 'the new month is reserved before sending, without spending the prior reservation twice');
+
+  await session.send({ clientMessageId: 'after-month', text: 'new month input' }); await until(() => fake.inputs.length === 2);
+
   assert.equal(fake.calls.length, 1);
   fake.emit({ type: 'result', uuid: 'new-month', total_cost_usd: 20.2, modelUsage: {}, queued_turn_count: 0 });
-  await until(() => session.snapshot().state === 'idle'); assert.equal(factory.usage.available(10), 9800000);
+  await until(() => session.snapshot().state === 'idle');
 });
-test('M2 opened idle sessions reserve nothing and finished idle queries release their unused budget', async t => {
+test('M2 opened idle sessions remain lazy and report observed spend', async t => {
   const { session, factory, fake, spec } = runtime(t);
   const second = factory.create({ ...spec, terminalId: 'other', runtimeSessionId: randomUUID() }, () => {});
-  await session.start(); await second.start(); assert.equal(factory.usage.available(10), 10000000); assert.equal(fake.calls.length, 0);
+  await session.start(); await second.start();  assert.equal(fake.calls.length, 0);
   await session.send({ clientMessageId: randomUUID(), text: 'work' }); await until(() => fake.inputs.length === 1);
   fake.emit({ type: 'result', uuid: 'finished', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 0 });
-  await until(() => session.snapshot().state === 'idle'); assert.equal(factory.usage.available(10), 9900000);
-  assert.equal(factory.apiState(10).status, 'ready');
+  await until(() => session.snapshot().state === 'idle');
+  assert.equal(factory.apiState().status, 'ready');
 });
 
-test('M2 a result with queued turns retains its query and reservation until the final queued result', async t => {
+test('M2 a result with queued turns retains its query until the final queued result', async t => {
   const { session, factory, fake } = runtime(t);
   await session.start();
   await session.send({ clientMessageId: randomUUID(), text: 'first' });
@@ -93,18 +93,17 @@ test('M2 a result with queued turns retains its query and reservation until the 
   await until(() => fake.inputs.length === 2);
   fake.emit({ type: 'result', uuid: 'first', total_cost_usd: 0.1, modelUsage: {}, queued_turn_count: 1 });
   await until(() => factory.usage.baseline(fake.sessionId) === 100000);
-  assert.equal(fake.calls.length, 1); assert.equal(factory.usage.available(10), 0);
+  assert.equal(fake.calls.length, 1);
   fake.emit({ type: 'result', uuid: 'queued', total_cost_usd: 0.2, modelUsage: {}, queued_turn_count: 0 });
   await until(() => session.snapshot().state === 'idle');
-  assert.equal(factory.usage.available(10), 9800000); assert.equal(fake.calls.length, 1);
+   assert.equal(fake.calls.length, 1);
 });
 test('M3 a smaller resumed cumulative value begins a new epoch and is charged once', t => {
   const usage = createUsage({ file: path.join(temp(t), 'usage.json') });
   usage.record('s', { uuid: 'old', total_cost_usd: 5 });
-  const lease = usage.reserve(10, { sessionId: 's', resume: true });
   const result = { uuid: 'new', total_cost_usd: 0.2 };
-  assert.equal(usage.record('s', result, { resume: true, reservationId: lease.id }).deltaUsdMicros, 200000);
-  assert.equal(usage.record('s', result, { resume: true, reservationId: lease.id }).deltaUsdMicros, 0);
+  assert.equal(usage.record('s', result, { resume: true }).deltaUsdMicros, 200000);
+  assert.equal(usage.record('s', result, { resume: true }).deltaUsdMicros, 0);
   assert.equal(usage.summary().monthUsdMicros, 5200000);
 });
 test('M1 owner hooks stay silent so normal permission rules decide, and show a card only when canUseTool is called', async t => {
@@ -162,7 +161,7 @@ for (const file of ['settings.json', 'usage.json', 'policy-audit.json']) test(`N
   fs.writeFileSync(path.join(dir, file), '{broken');
   const factory = createClaudeRuntime({ directory: dir, safeStorage, loadSdk: async () => ({}), resolveExecutable: async () => null });
   const settings = createSettings(path.join(dir, 'settings.json'));
-  assert.deepEqual(settings.get(), { ...(file === 'settings.json' ? { claudePath: 'api-then-terminal', monthlyBudgetUsd: null } : { claudePath: original.claudePath, monthlyBudgetUsd: original.monthlyBudgetUsd }), codexAutoReset: false });
+  assert.deepEqual(settings.get(), { ...(file === 'settings.json' ? { claudePath: 'api-then-terminal' } : { claudePath: original.claudePath }), codexAutoReset: false });
   if (file !== 'settings.json') assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'))), original);
   assert.ok(fs.readdirSync(dir).some(name => name.startsWith(file + '.') && name.endsWith('.corrupt')));
   const warnings = recoveryWarnings(dir, true);

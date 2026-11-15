@@ -22,6 +22,8 @@ function routeFailure(code, file) {
 // Claude Code shortens to "Credit balance is too low" (real 2.1.317 on a local service: a billing_error reply). Wherever it shows up
 // (model list, token count, stderr, a turn), the owner is told its cause instead of the raw text.
 const CREDITS_LOW = '控制台余额不足，请到 Claude Console 的 Billing 充值。';
+const LIMIT_MESSAGES = { credits_exhausted: CREDITS_LOW,
+  rate_limited: 'API 请求达到速率限制，请稍后重试。', account_limit: 'Claude 账号或组织的 API 用量已达上限，请检查控制台的用量限制。' };
 const creditsLow = text => /credit balance is too low/i.test(String(text ?? ''));
 
 const whyText = ({ text, values }) => text.replace(/\{(\w+)\}/g, (match, name) => name in values ? String(values[name]) : match);
@@ -88,8 +90,10 @@ function startupFailure(error, { stderr = '', key = null } = {}) {
       : error.code === 'project_api_key_override' ? '项目 Claude 配置不能覆盖应用保存的 API 密钥。' : '无法读取 Claude 路由配置。';
     return Object.assign(new Error(message), { code: error.code, beforeInput: true });
   }
-  if (creditsLow(stderr) || creditsLow(error?.message)) {
-    return Object.assign(new Error(CREDITS_LOW), { code: 'credits_exhausted', beforeInput: true, why: { text: CREDITS_LOW, values: {} } });
+  const limit = Object.hasOwn(LIMIT_MESSAGES, error?.code) ? error.code : creditsLow(stderr) || creditsLow(error?.message) ? 'credits_exhausted' : null;
+  if (limit) {
+    const text = LIMIT_MESSAGES[limit];
+    return Object.assign(new Error(text), { code: limit, beforeInput: true, why: { text, values: {} } });
   }
   const why = startWhy(error, stderr, key);
   return Object.assign(new Error(whyText(why)), {
@@ -97,4 +101,4 @@ function startupFailure(error, { stderr = '', key = null } = {}) {
   });
 }
 
-module.exports = { billingIdentityError, billingSource, startupFailure, routeFailure, whyText, CREDITS_LOW, creditsLow };
+module.exports = { billingIdentityError, billingSource, startupFailure, routeFailure, whyText, CREDITS_LOW, creditsLow, LIMIT_MESSAGES };

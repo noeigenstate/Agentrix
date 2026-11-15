@@ -46,7 +46,7 @@ for (const mode of ['api-only', 'api-then-terminal', 'terminal-only']) for (cons
     }, apiState: () => ({ status: 'ready' }) } });
     const result = await native.testConnection();
     assert.equal(result.path, mode === 'terminal-only' ? 'terminal' : billingStatus === 'ok' ? 'api' : mode === 'api-only' ? null : 'terminal');
-    assert.deepEqual(result.billing, billing); assert.equal(passedConfig.monthlyBudgetUsd, 25);
+    assert.deepEqual(result.billing, billing); assert.equal(Object.hasOwn(passedConfig, 'monthlyBudgetUsd'), false);
     if (billingStatus !== 'ok' || mode !== 'terminal-only') assert.equal(result.reason, reason);
   });
 }

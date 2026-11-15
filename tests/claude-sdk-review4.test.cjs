@@ -55,18 +55,6 @@ test('F5 future proxy and Node TLS changes are pinned while absent CA search var
   for (const name of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'NODE_EXTRA_CA_CERTS', 'NODE_TLS_REJECT_UNAUTHORIZED']) assert.ok(Object.hasOwn(env, name), name);
   for (const name of ['SSL_CERT_FILE', 'SSL_CERT_DIR', 'CURL_CA_BUNDLE', 'REQUESTS_CA_BUNDLE', 'AWS_CA_BUNDLE']) assert.equal(Object.hasOwn(env, name), false, name);
 });
-test('F6 a reservation failure leaves the session usable after its budget is raised', async t => {
-  const f = fixture(t), fake = fakeSdk(), events = [];
-  const runtime = createClaudeRuntime({ directory: path.join(f.directory, 'state'), loadSdk: async () => fake.sdk, resolveExecutable: async () => 'offline-only',
-    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
-  t.after(() => runtime.close()); runtime.credentials.save('sk-ant-offline-budget-race');
-  const spec = { ...f.spec, agent: 'claude', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 0 };
-  const session = runtime.create(spec, event => events.push(event)); await session.start();
-  await assert.rejects(session.send({ clientMessageId: 'first', text: 'first' }), { code: 'budget_exhausted' });
-  assert.equal(session.snapshot().state, 'idle'); assert.equal(events.some(event => event.payload.code === 'sdk_startup_failed'), false);
-  spec.monthlyBudgetUsd = 10; await session.send({ clientMessageId: 'second', text: 'second' }); await tick();
-  assert.equal(fake.inputs.length, 1);
-});
 test('F7 terminal synthetic API errors use the current main-process translator', t => {
   const conversation = require('../electron/conversation.cjs'), { translate } = require('../electron/i18n.cjs');
   let language = 'en'; conversation.setConversationTranslator?.(text => translate(language, text));
@@ -89,22 +77,6 @@ test('F4 switching retains a trusted pre-input filename and remedy on the old pa
   switches.answer('t', 'old', { handoff: { changeId, draft: { version: 1, text: 'kept draft', images: [], undelivered: [] } } }); await tick();
   assert.equal(switches.state('t').current, 'terminal'); assert.equal(switches.state('t').outcome, 'failed');
   assert.match(switches.state('t').reason, /settings\.local\.json/); assert.match(switches.state('t').reason, /删除/);
-});
-
-test('F8 an exhausted cap with background tasks explains why an explicit send cannot renew it', async t => {
-  const f = fixture(t), fake = fakeSdk({ auto: false }), events = [];
-  const runtime = createClaudeRuntime({ directory: path.join(f.directory, 'state'), loadSdk: async () => fake.sdk, resolveExecutable: async () => 'offline-only',
-    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
-  t.after(() => runtime.close()); runtime.credentials.save('sk-ant-offline-background-cap');
-  const spec = { ...f.spec, agent: 'claude', projectId: 'p', terminalId: 't', runtimeSessionId: 'r', monthlyBudgetUsd: 5 };
-  const session = runtime.create(spec, event => events.push(event));
-  await session.start(); await session.send({ clientMessageId: 'first', text: 'first' }); await tick();
-  spec.monthlyBudgetUsd = 20;
-  fake.emit({ type: 'system', subtype: 'task_started', task_id: 'owned', is_backgrounded: true });
-  fake.emit({ type: 'result', uuid: 'result', terminal_reason: 'budget_exhausted', subtype: 'error_max_budget_usd', total_cost_usd: 5, modelUsage: {} }); await tick();
-  assert.match(events.findLast(event => event.type === 'turn.completed').payload.error, /后台任务/);
-  await assert.rejects(session.send({ clientMessageId: 'second', text: 'second' }), error => error.code === 'budget_exhausted' && /后台任务/.test(error.message));
-  assert.equal(session.activity().count, 1); assert.equal(fake.calls.length, 1);
 });
 test('the native API channel clears a user apiKeyHelper (the owner decision), and keeps the other user helpers', t => {
   const f = fixture(t);

@@ -22,9 +22,6 @@ let sessionId = resume || randomUUID();
 const costsFile = path.join(output, 'fake-costs.json');
 const costs = fs.existsSync(costsFile) ? JSON.parse(fs.readFileSync(costsFile, 'utf8')) : {};
 let total = costs[sessionId] || 0, turns = 0, activeTurn;
-const baseline = total, budgetIndex = args.indexOf('--max-budget-usd');
-const budgetValue = args.find(arg => arg.startsWith('--max-budget-usd='))?.split('=')[1] ?? (budgetIndex < 0 ? undefined : args[budgetIndex + 1]);
-const budget = budgetValue === undefined ? Infinity : Number(budgetValue);
 append({ spawn: true, pid: process.pid, parentPid: process.ppid, node: process.execPath, args, scrub: process.env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB === '1',
   configDir: process.env.CLAUDE_CONFIG_DIR || null, hasBootstrap: !!process.env.AGENTRIX_BOOTSTRAP });
 process.once('exit', code => append({ exit: true, pid: process.pid, code }));
@@ -54,6 +51,19 @@ if (mode === 'claude' && !args.some(arg => arg === '--input-format' || arg.start
   return;
 }
 function claudeUser(message) {
+  const text = typeof message.message?.content === 'string' ? message.message.content : 'image';
+  for (const state of ['queued', 'started']) send({ type: 'command_lifecycle', command_uuid: message.uuid, state, uuid: randomUUID(), session_id: sessionId });
+  send({ type: 'system', subtype: 'init', session_id: sessionId, apiKeySource: 'ANTHROPIC_API_KEY', model: 'fake-claude',
+    tools: ['Read'], mcp_servers: [], permissionMode: 'default', slash_commands: [], claude_code_version: '2.1.317', uuid: randomUUID() });
+  if (text === 'CREDITS_TURN') {
+    send({ type: 'assistant', session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(), user_message_uuid: message.uuid,
+      error: 'billing_error', message: { id: randomUUID(), role: 'assistant', model: '<synthetic>',
+        content: [{ type: 'text', text: 'Credit balance is too low' }], usage: { input_tokens: 0, output_tokens: 0 } } });
+    send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: 'error_during_execution', terminal_reason: 'api_error', is_error: true,
+      result: 'Credit balance is too low', user_message_uuid: message.uuid, user_message_uuids: [message.uuid], queued_turn_count: 0,
+      total_cost_usd: total, usage: { input_tokens: 0, output_tokens: 0 }, modelUsage: {} });
+    return;
+  }
   const childResults = ['bash', 'hook', 'mcp'].map(kind => {
     const child = spawnSync(process.execPath, [__filename, 'tool'], { env: toolEnvironment(), windowsHide: true, encoding: 'utf8', timeout: 5000, killSignal: 'SIGKILL' });
     if (child.status !== 0) throw new Error('fake tool failed');
@@ -68,17 +78,12 @@ function claudeUser(message) {
     { type: 'assistant', uuid: answerId, parentUuid: message.uuid, message: { role: 'assistant', content: [{ type: 'text', text: 'PACKAGED_CLAUDE_OK' }] } }]) {
     fs.appendFileSync(history, JSON.stringify({ ...entry, sessionId, cwd: process.cwd(), timestamp: new Date().toISOString(), isSidechain: false, userType: 'external' }) + '\n');
   }
-  for (const state of ['queued', 'started']) send({ type: 'command_lifecycle', command_uuid: message.uuid, state, uuid: randomUUID(), session_id: sessionId });
-  send({ type: 'system', subtype: 'init', session_id: sessionId, apiKeySource: 'ANTHROPIC_API_KEY', model: 'fake-claude',
-    tools: ['Read'], mcp_servers: [], permissionMode: 'default', slash_commands: [], claude_code_version: '2.1.317', uuid: randomUUID() });
-  const text = typeof message.message?.content === 'string' ? message.message.content : 'image';
   if (text === 'HOLD') return;
   send({ type: 'assistant', session_id: sessionId, parent_tool_use_id: null, uuid: randomUUID(), user_message_uuid: message.uuid,
     message: { id: randomUUID(), type: 'message', role: 'assistant', model: 'fake-claude', content: [{ type: 'text', text: 'PACKAGED_CLAUDE_OK' }], usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 2 } } });
-  total += text === 'BUDGET_TURN' ? 2 : 0.01;
-  const limited = total - baseline >= budget;
+  total += 0.01;
   costs[sessionId] = total; fs.writeFileSync(costsFile, JSON.stringify(costs));
-  send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: limited ? 'error_max_budget_usd' : 'success', terminal_reason: limited ? 'budget_exhausted' : 'completed', is_error: limited, result: 'PACKAGED_CLAUDE_OK',
+  send({ type: 'result', session_id: sessionId, uuid: randomUUID(), subtype: 'success', terminal_reason: 'completed', is_error: false, result: 'PACKAGED_CLAUDE_OK',
     user_message_uuid: message.uuid, user_message_uuids: [message.uuid], queued_turn_count: 0, total_cost_usd: total,
     duration_ms: 1, duration_api_ms: 1, num_turns: 1, permission_denials: [], usage: { input_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 2 },
     modelUsage: { 'fake-claude': { inputTokens: 1, outputTokens: 2, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, contextWindow: 100 } } });

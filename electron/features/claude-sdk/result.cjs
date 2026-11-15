@@ -16,7 +16,6 @@ const reasons = {
   tool_deferred: ['interrupted', '这次工具调用被钩子推迟，没有执行。'],
   max_turns: ['interrupted', '已达到本轮最大执行次数。'],
   background_requested: ['interrupted', '本轮已转入后台，尚未完成。'],
-  budget_exhausted: ['interrupted', 'API 预算上限已用完。'],
   structured_output_retry_exhausted: ['failed', '结构化输出重试次数已用完。'],
   tool_deferred_unavailable: ['failed', '工具无法延期执行，本轮已停止。'],
   turn_setup_failed: ['failed', '本轮初始化失败。'],
@@ -40,7 +39,7 @@ function hasModelReply(message) {
 function turnResult(result, { interrupted = false, costUsdMicros = null, compacted = false } = {}) {
   let reason = Object.hasOwn(reasons, result.terminal_reason) ? result.terminal_reason
     : result.terminal_reason ? 'unknown' : result.deferred_tool_use ? 'tool_deferred'
-      : ({ error_max_budget_usd: 'budget_exhausted', error_max_turns: 'max_turns', error_max_structured_output_retries: 'structured_output_retry_exhausted' }[result.subtype]
+      : ({ error_max_turns: 'max_turns', error_max_structured_output_retries: 'structured_output_retry_exhausted' }[result.subtype]
         || (result.subtype === 'success' && result.is_error === false && typeof result.local_command === 'string' && result.local_command ? 'completed' : null));
   if (reason === 'completed' && result.local_command === 'compact' && !compacted) reason = 'compact_failed';
   let [status, message] = reasons[reason] || ['unknown', '本轮已结束，完成状态未知。'];

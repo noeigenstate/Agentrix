@@ -42,7 +42,7 @@ test('SDK checks account identity with no input, preserves inherited config and 
   await assert.rejects(f.session.send({ clientMessageId: 'm', text: 'must remain unsent' }), error =>
     error.beforeInput === true && /apiKeySource=\/login managed key/.test(error.message));
   assert.equal(f.fake.inputs.length, 0); assert.equal(f.fake.closes.length, 1);
-  assert.equal(f.factory.usage.available(10), 10000000);
+
   assert.equal(f.fake.calls[0].options.env.CLAUDE_CONFIG_DIR, f.env.CLAUDE_CONFIG_DIR);
   assert.equal('configDirectory' in f.fake.calls[0].options, false);
   assert.equal(fs.existsSync(path.join(f.root, 'data/sdk-config')), false);
@@ -63,7 +63,7 @@ test('stop cancels a silent identity preflight before input without waiting for 
   await until(() => f.fake.calls.length === 1);
   await f.session.close(); await rejection;
   assert.equal(f.fake.inputs.length, 0); assert.equal(f.fake.closes.length, 1);
-  assert.equal(f.factory.usage.available(10), 10000000);
+
 });
 
 test('identity diagnostics do not reflect unexpected source strings', async t => {
