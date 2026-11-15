@@ -41,5 +41,7 @@ export function parseDelivery(reply: string): Delivery | null { return scan(repl
 // Only a complete summary under its own heading, with nothing after its three parts, is cut; any other reply comes back as it was.
 export function withoutDelivery(reply: string): string {
   const { delivery, from, stray, lines } = scan(reply);
-  return delivery && from >= 0 && !stray ? lines.slice(0, from).join('\n').trimEnd() : reply;
+  const shown = delivery && from >= 0 && !stray ? lines.slice(0, from).join('\n').trimEnd() : reply;
+  // A reply that is nothing but the block keeps it, so its card is never empty.
+  return shown.trim() ? shown : reply;
 }
