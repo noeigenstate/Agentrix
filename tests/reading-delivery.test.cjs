@@ -71,3 +71,27 @@ test('fix and optimize blocks, Markdown labels and English labels are hidden whe
   assert.equal(withoutDelivery(twice), '【交付】\n问题：旧\n原因：旧\n结果：旧\n\n又改了一次。', 'only the last, closing block goes');
   assert.doesNotMatch(draw(`Done.\n\n${OPTIMIZE}`), /批量解码|优化/);
 });
+
+test('file cards still come from the whole reply, including a file named only in the hidden block', () => {
+  const reply = '做完了。\n\n【交付】\n问题：缺少报告\n原因：没有生成\n结果：报告在 `out/report.html`';
+  const files = [];
+  stubs['./FileCards'] = { FileCards: props => { files.push(...props.files); return null; }, previewable: () => false };
+  try { const html = draw(reply); assert.doesNotMatch(html, /report\.html/, 'the words stay hidden'); } finally { stubs['./FileCards'] = { FileCards: () => null, previewable: () => false }; }
+  assert.deepEqual(files, ['out/report.html']);
+});
+
+test('a fenced example of the 交付 template is not cut', () => {
+  const reply = '模板示例如下：\n\n```\n【交付】\n问题：a\n原因：b\n结果：c\n```';
+  assert.equal(withoutDelivery(reply), reply);
+  assert.equal(withoutDelivery('模板示例如下：\n\n~~~md\n【交付】\n问题：a\n原因：b\n结果：c'), '模板示例如下：\n\n~~~md\n【交付】\n问题：a\n原因：b\n结果：c', 'an open fence hides nothing either');
+  assert.equal(withoutDelivery('先看示例：\n```\nx\n```\n\n' + FIX), '先看示例：\n```\nx\n```', 'a real block after a closed fence still goes');
+  assert.equal(parseDelivery(reply).kind, 'fix', 'parseDelivery reads it as before');
+});
+
+test('words after the last part are closing words, so nothing is hidden; an indented or list continuation is still the part', () => {
+  const closing = '做完了。\n\n【交付】\n问题：a\n原因：b\n结果：c\n需要我继续发布吗？';
+  assert.equal(withoutDelivery(closing), closing);
+  assert.equal(parseDelivery(closing).parts[2].text, 'c\n需要我继续发布吗？', 'the homework card keeps its forgiving reading');
+  assert.equal(withoutDelivery('Done.\n\n【交付】\n问题：a\n原因：b\n结果：c\n  第二行\n- 第三行'), 'Done.');
+  assert.equal(withoutDelivery('Done.\n\n【交付】\n问题：a\n原因：b\n结果：c\n\n需要我继续发布吗？'), 'Done.\n\n【交付】\n问题：a\n原因：b\n结果：c\n\n需要我继续发布吗？');
+});

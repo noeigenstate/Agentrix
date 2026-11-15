@@ -102,7 +102,8 @@ function Message({ entry, text = entry.text, who, className, pathOf, onError, ch
 function AssistantReply({ entry, agent, projectId, result = false, pathOf, onError }: { entry: ConversationEntry; agent: 'claude' | 'codex'; projectId: string; result?: boolean; pathOf?: PathOf; onError: (message: string) => void }) {
   // The closing 【交付】 block is read by the homework card, not shown here; what is shown is also what 复制 and 引用 take.
   const shown = useMemo(() => withoutDelivery(entry.text || ''), [entry.text]);
-  const named = useMemo(() => shown ? replyFiles(shown) : [], [shown]);
+  // File cards come from the whole reply: agents name their deliverables in the block's 结果.
+  const named = useMemo(() => entry.text ? replyFiles(entry.text) : [], [entry.text]);
   const words = shown ? <Markdown text={entry.omitted ? t('此条对话过大，未在此显示。') : shown} /> : null;
   // The latest result shows its picture first with the words under it; anywhere else the words come first. A picture
   // waiting to be read back shows its button in place of the words that say so.
