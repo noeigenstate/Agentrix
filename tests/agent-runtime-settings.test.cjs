@@ -316,33 +316,81 @@ function agentsPage(saved, { windows = true, visible = true } = {}) {
   const harness = hookHarness('src/features/agents/AgentsSettings.tsx', { './i18n': { t: fill }, './platform': { isWindows: windows },
     './native-words': { viaWords: via => via, installerCommand: win => (win ? 'irm-installer' : 'curl-installer') }, './native-bridge.ts': { nativeBridge: () => bridge } });
   // The first render starts the key read, the second shows its answer. `index` 0 reads the Codex row.
-  const render = async (claude, { codex = { installed: true }, index = 1 } = {}) => {
+  const render = async (claude, { codex = { installed: true }, index = 1, detail = false } = {}) => {
     const props = { agents: { codex, claude, npm: true, installing: null, message: '', error: '' }, onChange() {}, visible };
     harness.render('AgentsSettings', props); await settle();
     const section = elements(harness.render('AgentsSettings', props).result).filter(node => node.props?.className === 'agent-setting')[index];
     const inside = elements(section.props.children);
-    return { status: elementsText(inside.find(node => node.type === 'small' && node.props.role === 'status').props.children), title: inside.find(node => node.type === 'small' && node.props.role === 'status').props.title,
-      hint: inside.filter(node => node.type === 'small' && !node.props.role).map(node => elementsText(node.props.children))[0] ?? null,
+    // A path is a PathText element (it may wrap after \ or /): `paths` are their texts, `markup` the rendered blocks.
+    const smalls = inside.filter(node => node.type === 'small' && !node.props.role), hints = smalls.filter(node => node.props.className === 'agent-hint').map(node => elementsText(node.props.children));
+    const pathBlocks = smalls.filter(node => node.props.className === 'agent-path'), statusNode = inside.find(node => node.type === 'small' && node.props.role === 'status');
+    const base = { status: elementsText(statusNode.props.children), title: statusNode.props.title, hint: hints[0] ?? null,
       command: elementsText(inside.find(node => node.type === 'code')?.props.children), install: inside.some(node => node.type === 'button') };
+    // `detail` adds what the Codex row shows around the status: every hint line, the paths and their rendered blocks.
+    return detail ? { ...base, statusClass: statusNode.props.className, hints, paths: pathBlocks.map(node => node.props.children.props.text), markup: pathBlocks.map(node => renderToStaticMarkup(node)) } : base;
   };
   return { render, reads, done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
 const NPM_COMMAND = 'npm install -g @anthropic-ai/claude-code';
 
-test('the agents page says how Codex was found, why its check printed no version, or where the search looked', async () => {
-  const view = agentsPage(true), codex = async value => view.render({ installed: true }, { codex: value, index: 0 });
+test('the agents page says how Codex was found and which file it runs, why its check printed no version, or where the search looked and what to do next', async () => {
+  const view = agentsPage(true), codex = async value => view.render({ installed: true }, { codex: value, index: 0, detail: true });
   const reason = (code, fields = {}) => ({ code, source: 'codex-runtime locator', observedAt: 1, ...fields });
   try {
-    assert.deepEqual(await codex({ installed: true }), { status: '已安装', title: undefined, hint: null, command: 'npm install -g @openai/codex', install: false });
-    const found = await codex({ installed: true, version: '0.166.0', via: 'npm-vendor', fileShown: 'D:\\nodejs\\codex.exe' });
-    assert.deepEqual([found.status, found.title, found.hint], ['已安装 · 版本 0.166.0 · 来自 npm 全局安装', 'D:\\nodejs\\codex.exe', null]);
+    const bare = await codex({ installed: true });
+    assert.deepEqual([bare.status, bare.title, bare.hints, bare.paths, bare.install], ['已安装', undefined, [], [], false]);
+    assert.equal(bare.command, 'npm install -g @openai/codex');
+    const file = '~\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\codex.exe';
+    const found = await codex({ installed: true, version: '0.166.0', via: 'npm-vendor', fileShown: file });
+    assert.deepEqual([found.status, found.statusClass, found.title, found.hints], ['已安装 · 版本 0.166.0 · 来自 npm 全局安装', 'agent-status', file, []]);
+    assert.deepEqual(found.paths, [file], 'the found row shows the file, home as ~, on a line of its own');
+    assert.equal(found.markup[0], '<small class="agent-path">~\\<wbr/>AppData\\<wbr/>Roaming\\<wbr/>npm\\<wbr/>node_modules\\<wbr/>@openai\\<wbr/>codex\\<wbr/>codex.exe</small>', 'a path may wrap after every backslash');
+    assert.equal((await codex({ installed: true, version: '0.166.0', via: 'official-installer', fileShown: '~/bin/codex' })).status, '已安装 · 版本 0.166.0 · 来自官方安装器', 'a whole phrase, so English can read "from the official installer"');
     const silent = await codex({ installed: true, version: null, via: 'winget', fileShown: 'x', reason: reason('codex.unreadable') });
-    assert.deepEqual([silent.status, silent.hint], ['已安装 · 版本未知 · 来自 WinGet', '无法读取 Codex']);
-    const searched = '~\\AppData\\Roaming\\npm; ~\\AppData\\Local\\Microsoft\\WinGet\\Links';
-    const missing = await codex({ installed: false, reason: reason('codex.not_found', { params: { pathFolders: 3, searched } }) });
-    assert.deepEqual([missing.status, missing.hint, missing.install], ['未安装', `没有找到 Codex。已查找：${searched}；PATH 目录：3`, true]);
-    assert.equal((await codex({ installed: false, reason: reason('codex.incomplete', { detail: 'D:\\nodejs' }) })).hint, 'Codex 安装不完整');
+    assert.deepEqual([silent.status, silent.paths, silent.hints], ['已安装 · 版本未知 · 来自 WinGet', ['x'], ['Codex 没有报告版本号：输出里没有版本号']], 'the file, then that Codex did not report a version (not that it is broken)');
+    const crashed = await codex({ installed: true, version: null, via: 'path', fileShown: 'x', reason: reason('codex.failed', { detail: 'exit 3' }) });
+    assert.deepEqual(crashed.hints, ['Codex 没有报告版本号：运行它时出错（exit 3）'], 'the detail main saw is shown');
+    assert.deepEqual((await codex({ installed: true, version: null, via: 'path', fileShown: 'x', reason: reason('codex.timeout') })).hints, ['Codex 没有在限定时间内报告版本号']);
+    assert.equal((await codex({ installed: true, version: '0.1.0', via: 'npm-prefix', fileShown: 'x' })).status, '已安装 · 版本 0.1.0 · 来自 npm 全局目录', 'the npm folder is not always from .npmrc');
+    const places = ['~\\AppData\\Roaming\\npm', '~\\AppData\\Local\\Microsoft\\WinGet\\Links', 'D:\\Tools; Old\\bin'];
+    const missing = await codex({ installed: false, reason: reason('codex.not_found', { params: { pathFolders: 3, searched: places.join('; ') } }) });
+    assert.deepEqual([missing.status, missing.install], ['未安装', true]);
+    assert.deepEqual(missing.hints, ['没有找到 Codex。已查找 PATH 里的 3 个目录，以及以下位置。', '用下面的命令安装，或把 Codex 所在的文件夹加入 PATH。Agentrix 会在启动时和窗口重新获得焦点时再检查一次。'],
+      'a whole sentence with the count, then the next step and that Agentrix checks again on start-up and on focus');
+    assert.deepEqual(missing.paths, places, 'each searched place has its own line, even one with "; " inside it');
+    assert.equal(missing.command, 'npm install -g @openai/codex', 'the command the step points to is below it');
+    const incomplete = await codex({ installed: false, reason: reason('codex.incomplete', { detail: 'D:\\nodejs' }) });
+    assert.deepEqual([incomplete.hints, incomplete.paths], [['Codex 安装不完整'], []], 'no next step for a reason that is not a missing Codex');
+    const unbroken = `D:\\${'N'.repeat(110)}`, long = await codex({ installed: false, reason: reason('codex.not_found', { params: { pathFolders: 1, searched: `${unbroken}; ~\\AppData\\Roaming\\npm` } }) });
+    assert.deepEqual(long.paths, [unbroken, '~\\AppData\\Roaming\\npm']);
+    assert.ok(long.markup[0].includes(`D:\\<wbr/>${'N'.repeat(110)}</small>`), 'the unbroken segment is a wrap unit of its own');
   } finally { view.done(); }
+});
+
+// A 110-character path with no break must not push the Install button out of the row. The render tree has no layout, so
+// the stylesheet is checked for the rules that hold the row in: the text column shrinks (min-width: 0) and breaks inside a
+// segment (overflow-wrap: anywhere), the button never shrinks, and the row aligns to the top. The acceptance shots measure the real layout.
+test('the Codex row keeps its button inside the row however long a path is', () => {
+  const root = path.join(__dirname, '..'), css = fs.readFileSync(path.join(root, 'src/features/settings/settings.css'), 'utf8');
+  const rule = selector => css.split('\n').find(line => line.startsWith(`${selector} {`)) ?? '';
+  assert.match(rule('.agent-setting .agent-info'), /min-width: 0/);
+  assert.match(rule('.agent-setting .agent-info'), /flex: 1/);
+  assert.match(rule('.agent-setting .agent-info small'), /overflow-wrap: anywhere/);
+  assert.match(rule('.agent-setting .setting-row > .button'), /flex: none/);
+  assert.match(rule('.agent-setting .setting-row'), /align-items: flex-start/);
+  assert.match(rule('.agent-setting .agent-status'), /color: var\(--text-1\)/);
+  assert.match(fs.readFileSync(path.join(root, 'src/features/agents/AgentsSettings.tsx'), 'utf8'), /<span className="agent-info">/, 'the text column is the element those rules name');
+});
+
+// The Codex phrases the row builds from a table, not from literal t() calls, still need English (the coverage scan cannot see them).
+test('the Codex via phrases have English that reads in the middle of a sentence', () => {
+  const root = path.join(__dirname, '..'), additions = path.join(root, 'locale-additions-w1ui.json');
+  const english = { ...require('../electron/locales/en.json'), ...(fs.existsSync(additions) ? JSON.parse(fs.readFileSync(additions, 'utf8')) : {}) };
+  const block = /const CODEX_VIA_WORDS: Record<string, string> = \{([\s\S]*?)\n\};/.exec(fs.readFileSync(path.join(root, 'src/features/agents/AgentsSettings.tsx'), 'utf8'))[1];
+  const phrases = [...block.matchAll(/:\s*'([^']+)'/g)].map(match => match[1]);
+  assert.equal(phrases.length, 9);
+  for (const phrase of phrases) assert.equal(typeof english[phrase], 'string', `${phrase} has an English entry (en.json or the additions file)`);
+  for (const phrase of phrases) assert.match(english[phrase], /^from (PATH|WinGet|the |an? |npm global install)/, phrase);
 });
 
 test('the agents page says where Claude Code was found beside 已安装, and only 已安装 when main gave nothing more', async () => {

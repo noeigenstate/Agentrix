@@ -30,7 +30,12 @@ dialog { color: var(--text-1); }
 .settings-note p { margin: 0; font-size: 12px; line-height: 20px; }
 .settings-section { scroll-margin-top: var(--settings-nav-offset, 100px); }
 .settings-section h3 { margin: 20px 0 8px; font-size: 14px; font-weight: 600; }
-.agent-setting .setting-row { padding: 12px 0 8px; border-bottom: 0; }
+.agent-setting .setting-row { align-items: flex-start; padding: 12px 0 8px; border-bottom: 0; }
+.agent-setting .agent-info { display: block; flex: 1; min-width: 0; }
+.agent-setting .agent-info small { overflow-wrap: anywhere; }
+.agent-setting .agent-status { color: var(--text-1); }
+.agent-setting .agent-path + .agent-path { margin-top: 0; }
+.agent-setting .setting-row > .button { flex: none; }
 .agent-command { display: block; padding-bottom: 12px; border-bottom: 1px solid var(--divider); font: 11px/1.7 var(--font-mono); overflow-wrap: anywhere; color: var(--text-2); }
 .agents-node { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; font-size: 12px; }
 .agents-error { white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -12,21 +12,31 @@ const api = window.agentrix;
 // connection test is only reachable with an API key saved, so without one the step is the installer's command or saving the key.
 const found = ({ version, via }: Partial<ClaudeFound>) => [version ? t('版本 {version}', { version }) : t('版本未知'), via && t('来自 {via}', { via: viaWords(via) })].filter(Boolean).join(' · ');
 const from = (via: ClaudeFound['via'] | undefined) => via && t('来自 {via}', { via: viaWords(via) });
-// How Codex was found, one phrase per codex-runtime VIAS entry (tests/codex-runtime-guards.test.cjs keeps them equal).
+// How Codex was found, one whole phrase per codex-runtime VIAS entry (tests/codex-runtime-guards.test.cjs keeps them equal).
+// Whole phrases, not a shared "来自 {via}", so English can read "from the official installer" in the middle of a sentence.
 const CODEX_VIA_WORDS: Record<string, string> = {
-  path: 'PATH', 'npm-shim': 'npm 或 pnpm 命令', 'npm-vendor': 'npm 全局安装', 'npm-hoisted': 'npm 平台包', 'npm-prefix': 'npm 全局目录（.npmrc）',
-  'registry-path': '系统 PATH（注册表）', 'official-installer': '官方安装器', winget: 'WinGet', system: '系统目录',
+  path: '来自 PATH', 'npm-shim': '来自 npm 或 pnpm 命令', 'npm-vendor': '来自 npm 全局安装', 'npm-hoisted': '来自 npm 平台包', 'npm-prefix': '来自 npm 全局目录',
+  'registry-path': '来自系统 PATH（注册表）', 'official-installer': '来自官方安装器', winget: '来自 WinGet', system: '来自系统目录',
 };
 // A Codex reason in words: its code's phrase with its params filled in.
 const reasonWords = ({ code, params = {} }: Reason) => (codexWords[code]
   ? t(codexWords[code], Object.fromEntries(Object.entries(params).map(([name, value]) => [name, String(value)]))) : code);
+// A check that printed no version says why, and the detail main saw (an exit code) when it has one.
+const versionHint = (reason: Reason) => (reason.detail ? t('{reason}（{detail}）', { reason: reasonWords(reason), detail: reason.detail }) : reasonWords(reason));
 // Codex says its version and how it was found; a check that printed no version says why. Before the first search main
 // gives only whether it is installed.
 function codexInstalledWords({ version, via, reason }: CodexAgentState): { text: string; hint: string | null } {
   if (via === undefined) return { text: t('已安装'), hint: null };
   const words = CODEX_VIA_WORDS[via];
-  return { text: [t('已安装'), version ? t('版本 {version}', { version }) : t('版本未知'), words && t('来自 {via}', { via: t(words) })].filter(Boolean).join(' · '),
-    hint: reason ? reasonWords(reason) : null };
+  return { text: [t('已安装'), version ? t('版本 {version}', { version }) : t('版本未知'), words && t(words)].filter(Boolean).join(' · '),
+    hint: reason ? versionHint(reason) : null };
+}
+// The places a not-found reason lists, one per entry (main joins them with "; "; a place starts with ~, a drive or a root).
+const placesOf = (reason: Reason) => (typeof reason.params?.searched === 'string' ? reason.params.searched.split(/; (?=~|[A-Za-z]:|[\\/])/).filter(Boolean) : []);
+// A path that may wrap after each \ or /; a segment longer than the line breaks by the style's overflow-wrap.
+function PathText({ text }: { text: string }) {
+  const parts = text.split(/(?<=[\\/])/);
+  return <>{parts.flatMap((part, index) => (index < parts.length - 1 ? [part, <wbr key={index} />] : [part]))}</>;
 }
 function installedWords(agent: 'codex' | 'claude', state: AgentsState, keySaved: boolean | null): { text: string; hint: string | null } {
   const claude = state.claude, noKey = keySaved === false, testHint = t('到「运行方式 › 测试连接」查看原因。');
@@ -58,12 +68,17 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
   return <>
     <p className="agents-intro">{t('Agentrix 基于 Codex 和 Claude Code 这两个命令行工具：在每个项目的终端里运行它们，这里负责并排显示、提醒完成和恢复会话。至少安装其中一个。')}</p>
     {(['codex', 'claude'] as const).map(agent => {
-      // Codex not found says where it looked.
-      const missing = agent === 'codex' && agents && !agents.codex.installed && agents.codex.reason ? reasonWords(agents.codex.reason) : null;
-      const words = agents?.[agent].installed ? installedWords(agent, agents, keySaved) : null, hint = words ? words.hint : missing;
+      // Codex not found says where it looked and what to do next; one found says which file it runs.
+      const codex = agent === 'codex' ? agents?.codex : null, notFound = codex && !codex.installed && codex.reason ? codex.reason : null;
+      const words = agents?.[agent].installed ? installedWords(agent, agents, keySaved) : null, hint = words ? words.hint : notFound ? reasonWords(notFound) : null;
+      const places = notFound?.code === 'codex.not_found' ? placesOf(notFound) : [], step = notFound?.code === 'codex.not_found' ? t('用下面的命令安装，或把 Codex 所在的文件夹加入 PATH。Agentrix 会在启动时和窗口重新获得焦点时再检查一次。') : null;
+      const file = codex?.installed ? codex.fileShown : null, settled = !!agents && agents.installing !== agent;
       return <div className="agent-setting" key={agent}>
-      <div className="setting-row"><span><span><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" title={agents?.[agent].fileShown}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : t('未安装')}</small>
-        {agents?.installing !== agent && hint && <small>{hint}</small>}</span></span>
+      <div className="setting-row"><span className="agent-info"><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" className="agent-status" title={agents?.[agent].fileShown}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : t('未安装')}</small>
+        {settled && file && <small className="agent-path"><PathText text={file} /></small>}
+        {settled && hint && <small className="agent-hint">{hint}</small>}
+        {settled && places.map(place => <small className="agent-path" key={place}><PathText text={place} /></small>)}
+        {settled && step && <small className="agent-hint">{step}</small>}</span>
         {agents && !agents[agent].installed && <button type="button" className="button secondary small" disabled={pending || !!agents.installing || !agents.npm} onClick={() => void install(agent)}>{t('一键安装')}</button>}</div>
       <code className="agent-command">{agent === 'codex' ? 'npm install -g @openai/codex' : agents?.claude.incomplete ? installerCommand(isWindows) : 'npm install -g @anthropic-ai/claude-code'}</code>
     </div>; })}
