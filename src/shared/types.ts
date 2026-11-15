@@ -151,10 +151,12 @@ export type ClaudeAgentState = { installed: boolean } & Partial<ClaudeFound> & {
 // Why something is not as expected (C-1, electron/shared/reason.cjs): a code whose words src/shared/reason-words holds.
 export type Reason = { code: string; params?: Record<string, string | number | boolean | null>; detail?: string; stage?: string; source: string; observedAt: number };
 // Where the Codex a session runs was found (codex-runtime/BOUNDARY.md); `fileShown` writes home as ~.
-export type CodexVia = 'path' | 'npm-shim' | 'npm-vendor' | 'npm-hoisted' | 'npm-prefix' | 'registry-path' | 'official-installer' | 'winget' | 'system';
+export type CodexVia = 'path' | 'npm-shim' | 'npm-vendor' | 'npm-hoisted' | 'npm-prefix' | 'registry-path' | 'official-installer' | 'winget' | 'system'
+  | 'scoop' | 'chocolatey' | 'volta' | 'bun' | 'pnpm' | 'yarn' | 'nvm' | 'fnm' | 'vscode-extension' | 'registry' | 'drive-scan';
 // An installed Codex says how it was found; `version` is null and `reason` says why when its check printed none. One
-// not found keeps the reason, which says where the search looked. Before the first search only `installed` is known.
-export type CodexAgentState = { installed: boolean; version?: string | null; via?: CodexVia; fileShown?: string; reason?: Reason };
+// not found keeps the reason, which says where the search looked, and `scan` whether the local drives are being
+// searched ('running') or were ('done'). Before the first search only `installed` is known.
+export type CodexAgentState = { installed: boolean; version?: string | null; via?: CodexVia; fileShown?: string; reason?: Reason; scan?: 'running' | 'done' };
 export type AgentsState = { codex: CodexAgentState; claude: ClaudeAgentState; npm: boolean; installing: 'codex' | 'claude' | null; message: string; error: string };
 export type FilePreview = { path: string; name: string; size: number; modifiedAt: number; revision: string } & (
   { kind: 'text'; content: string; page: TextPage } | { kind: 'unsupported'; reason: string }

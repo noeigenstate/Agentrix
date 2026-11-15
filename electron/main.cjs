@@ -59,9 +59,14 @@ const { routingNote } = require('./features/dashboard/decisions.cjs');
 const { CodexAccountUsage, readCodexAccount, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
 const { createRpc: createResetRpc } = require('./features/codex-app-server/rpc.cjs');
 const { createCodexLocator } = require('./features/codex-runtime/locator.cjs');
+const { scanDrives, fixedDrives } = require('./features/codex-runtime/drive-scan.cjs');
 // One Codex locator for the terminal, native mode, the account reads and the settings (codex-runtime/BOUNDARY.md). They
-// all run the file it found in main's environment; a terminal is told where that file was found.
-const codexLocator = createCodexLocator();
+// all run the file it found in main's environment; a terminal is told where that file was found. When its fast search
+// finds nothing it scans the local drives in the background, keeps a hit for the next start and tells the settings. An
+// isolated profile (AGENTRIX_DATA_DIR) never scans: its PATH keeps it from this machine's real Codex, and a scan would not.
+const codexHitFile = () => path.join(app.getPath('userData'), 'codex-location.json');
+const codexLocator = createCodexLocator({ scan: process.env.AGENTRIX_DATA_DIR ? null : async walk => scanDrives({ ...walk, drives: await fixedDrives(process.env) }),
+  store: { read: () => readNativeJson(codexHitFile(), null), write: value => writeNativeJson(codexHitFile(), value) }, changed: () => agents.changed() });
 const codexExecutable = () => codexLocator.locate().then(found => found.file);
 const codexAccounts = new CodexAccountUsage({ read: options => readCodexAccount({ ...options, resolveExecutable: codexExecutable }),
   resetClient: { rpcFactory: createResetRpc, resolveExecutable: codexExecutable }, resetStorage: {

@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), vm = require('node:vm');
 const { execFile } = require('node:child_process'), { promisify } = require('node:util');
 const { createCodexLocator } = require('../electron/features/codex-runtime/locator.cjs');
+const { scanDrives } = require('../electron/features/codex-runtime/drive-scan.cjs');
 const { locateCodex, executable } = require('../integration/dispatch.cjs');
 const { fakeFiles, fakeProbe } = require('./helpers/claude-files.cjs');
 const { isolatedEnvironment } = require('../scripts/native-approval-probe.cjs');
@@ -26,19 +27,27 @@ const exeOf = (name, root) => W.join(root, ...layouts.installs[name].exe.split('
 const versionOf = name => /\d+\.\d+\.\d+/.exec(layouts.installs[name].codexExeVersion)[0];
 
 // fakeFiles with a directory listing, which WinGet's packages folder needs.
+// A folder is every path above an entry; an entry marked `junction` is a folder that is a link (a scan never enters it).
+// `reads` counts the folders listed.
 function codexFiles(entries, rules = W) {
   const files = fakeFiles(entries, rules === W ? 'win32' : 'linux');
-  files.readdir = async dir => {
-    const names = new Set(Object.keys(entries).map(file => rules.relative(dir, file)).filter(relative => relative && !relative.startsWith('..') && !rules.isAbsolute(relative))
-      .map(relative => relative.split(rules.sep)[0]));
+  files.reads = 0;
+  files.readdir = async (dir, options) => {
+    const names = new Map();
+    for (const relative of Object.keys(entries).map(file => rules.relative(dir, file)).filter(relative => relative && !relative.startsWith('..') && !rules.isAbsolute(relative))) {
+      const [name, ...rest] = relative.split(rules.sep);
+      names.set(name, names.get(name) || rest.length > 0);
+    }
     if (!names.size) throw Object.assign(new Error(`ENOENT: ${dir}`), { code: 'ENOENT' });
-    return [...names];
+    files.reads++;
+    const link = name => !!Object.entries(entries).find(([file, entry]) => entry.junction && rules.relative(rules.join(dir, name), file) === '');
+    return options?.withFileTypes ? [...names].map(([name, folder]) => ({ name, isDirectory: () => folder, isFile: () => !folder, isSymbolicLink: () => link(name) })) : [...names.keys()];
   };
   return files;
 }
-function windowsLocator(entries, { versions = {}, fallback = 'codex-cli 0.166.0', stored = null, now } = {}) {
+function windowsLocator(entries, { versions = {}, fallback = 'codex-cli 0.166.0', stored = null, registered = null, now, ...rest } = {}) {
   const files = codexFiles(entries), { probe, runs } = fakeProbe(versions, fallback);
-  const locator = createCodexLocator({ files, probe, storedPath: async () => stored, ...(now ? { now } : {}) });
+  const locator = createCodexLocator({ files, probe, storedPath: async () => stored, registry: async () => registered, ...(now ? { now } : {}), ...rest });
   return { locator, runs, files };
 }
 const windowsEnv = env => ({ USERPROFILE: home, LOCALAPPDATA: local, APPDATA: roaming, PATH: '', ...env });
@@ -103,7 +112,7 @@ test('Windows: Codex is found through a codex.cmd shim, a nested or hoisted npm 
   const pnpm = W.join(local, 'pnpm'), linked = W.join(pnpm, 'global', '5', 'node_modules', '@openai', 'codex'), store = W.join(pnpm, 'global', '5', 'node_modules', '.pnpm', '@openai+codex@0.166.0', 'node_modules', '@openai', 'codex');
   const stored = W.join(W.dirname(store), 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
   assert.deepEqual(picked((await find({ [W.join(pnpm, 'codex.cmd')]: { text: '@SETLOCAL\r\n"%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n' },
-    [linked]: { link: store }, [stored]: { size: NATIVE } }, { PATH: pnpm })).found), { file: stored, path: W.join(pnpm, 'codex.CMD'), via: 'npm-shim', version: '0.166.0', reason: null });
+    [linked]: { link: store }, [stored]: { size: NATIVE } }, { PATH: pnpm })).found), { file: stored, path: W.join(pnpm, 'codex.CMD'), via: 'pnpm', version: '0.166.0', reason: null });
   // A shim names a package only inside its own folder (a .bin shim: the node_modules it sits in), never above it.
   const nested = ['node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'];
   const away = W.join('D:\\other', 'node_modules', '@openai', 'codex', ...nested), above = W.join('D:\\work', '@openai', 'codex', ...nested);
@@ -172,7 +181,7 @@ test("a package a link takes elsewhere on this machine is followed; one really o
   const prefix = 'D:\\nodejs', pnpm = W.join(local, 'pnpm'), nested = ['node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'];
   const npmShim = { [W.join(prefix, 'codex.cmd')]: { text: '"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
   const pnpmShim = { [W.join(pnpm, 'codex.cmd')]: { text: '"%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*' } };
-  const cases = [[prefix, npmShim, W.join(prefix, 'node_modules', '@openai', 'codex'), 'npm-vendor'], [pnpm, pnpmShim, W.join(pnpm, 'global', '5', 'node_modules', '@openai', 'codex'), 'npm-shim']];
+  const cases = [[prefix, npmShim, W.join(prefix, 'node_modules', '@openai', 'codex'), 'npm-vendor'], [pnpm, pnpmShim, W.join(pnpm, 'global', '5', 'node_modules', '@openai', 'codex'), 'pnpm']];
   // A local folder's package that a link (a junction, npm link) takes elsewhere on the machine runs; one it takes to a
   // share is passed over, and Codex is then not found rather than incomplete.
   for (const [folder, shims, dir, via] of cases) for (const target of ['D:\\elsewhere\\codex', W.join(W.dirname(folder), 'codex'), '\\\\server\\share\\codex']) {
@@ -231,6 +240,145 @@ test("a package whose program moved to a layout no table knows is found in its v
     const { found, runs } = await find(entries, { PATH: prefix });
     assert.deepEqual([found.file, found.reason.code, runs], [null, 'codex.incomplete', []], label);
   }
+});
+
+test('each other installer is found after WinGet, with its own via, and the search names only the folders that are there', async () => {
+  const nestedExe = ['node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'];
+  const name = 'npm11-global-0.166.0', data = 'C:\\ProgramData', plain = file => ({ [file]: { size: NATIVE } });
+  const npmAt = root => ({ entries: install(name, root), file: exeOf(name, root) });
+  const ext = (editor, version, platform = 'windows-x86_64') => W.join(home, editor, 'extensions', `openai.chatgpt-${version}-win32-x64`, 'bin', platform, 'codex.exe');
+  const nvm = W.join(roaming, 'nvm'), newer = npmAt(W.join(nvm, 'v22.11.0')), older = npmAt(W.join(nvm, 'v20.1.0'));
+  const pnpmHome = 'D:\\pnpm', linked = W.join(pnpmHome, 'global', '5', 'node_modules', '@openai', 'codex'), pnpmExe = W.join(linked, ...nestedExe);
+  const cases = [
+    ['scoop app', plain(W.join(home, 'scoop', 'apps', 'codex', 'current', 'codex.exe')), {}, 'scoop'],
+    ['scoop shim', plain(W.join(home, 'scoop', 'shims', 'codex.exe')), {}, 'scoop'],
+    ['SCOOP', plain('D:\\scoop\\shims\\codex.exe'), { SCOOP: 'D:\\scoop' }, 'scoop'],
+    ['scoop global', plain(W.join(data, 'scoop', 'shims', 'codex.exe')), { ProgramData: data }, 'scoop'],
+    ['SCOOP_GLOBAL', plain('D:\\apps\\scoop\\shims\\codex.exe'), { SCOOP_GLOBAL: 'D:\\apps\\scoop' }, 'scoop'],
+    ['chocolatey', plain(W.join(data, 'chocolatey', 'bin', 'codex.exe')), {}, 'chocolatey'],
+    ['ChocolateyInstall', plain('D:\\choco\\bin\\codex.exe'), { ChocolateyInstall: 'D:\\choco' }, 'chocolatey'],
+    ['volta', plain(W.join(local, 'Volta', 'bin', 'codex.exe')), {}, 'volta'],
+    ['VOLTA_HOME', plain('D:\\volta\\bin\\codex.exe'), { VOLTA_HOME: 'D:\\volta' }, 'volta'],
+    ['bun bin', plain(W.join(home, '.bun', 'bin', 'codex.exe')), {}, 'bun'],
+    ['bun global', { ...npmAt(W.join(home, '.bun', 'install', 'global')).entries }, {}, 'bun', exeOf(name, W.join(home, '.bun', 'install', 'global'))],
+    ['PNPM_HOME', { [W.join(pnpmHome, 'codex.cmd')]: { text: '"%~dp0\\global\\5\\node_modules\\@openai\\codex\\bin\\codex.js" %*' }, [pnpmExe]: { size: NATIVE } }, { PNPM_HOME: pnpmHome }, 'pnpm', pnpmExe],
+    ['yarn global', npmAt(W.join(local, 'Yarn', 'Data', 'global')).entries, {}, 'yarn', exeOf(name, W.join(local, 'Yarn', 'Data', 'global'))],
+    ['nvm versions, newest first', { ...older.entries, ...newer.entries }, { NVM_HOME: nvm }, 'nvm', newer.file],
+    ['NVM_SYMLINK first', { ...older.entries, ...npmAt('C:\\Program Files\\nodejs').entries }, { NVM_HOME: nvm, NVM_SYMLINK: 'C:\\Program Files\\nodejs' }, 'nvm', exeOf(name, 'C:\\Program Files\\nodejs')],
+    ['fnm', npmAt(W.join(roaming, 'fnm', 'node-versions', 'v22.11.0', 'installation')).entries, {}, 'fnm', exeOf(name, W.join(roaming, 'fnm', 'node-versions', 'v22.11.0', 'installation'))],
+    ['FNM_DIR', npmAt('D:\\fnm\\node-versions\\v22.11.0\\installation').entries, { FNM_DIR: 'D:\\fnm' }, 'fnm', exeOf(name, 'D:\\fnm\\node-versions\\v22.11.0\\installation')],
+    ['VS Code extension, newest first', { ...plain(ext('.vscode', '0.4.9')), ...plain(ext('.vscode', '0.4.12')) }, {}, 'vscode-extension', ext('.vscode', '0.4.12')],
+    ['this CPU first', { ...plain(ext('.vscode', '0.4.12', 'windows-aarch64')), ...plain(ext('.vscode', '0.4.12')) }, {}, 'vscode-extension', ext('.vscode', '0.4.12')],
+    ['Cursor', plain(ext('.cursor', '0.4.12')), {}, 'vscode-extension'],
+    ['Windsurf', plain(ext('.windsurf', '0.4.12')), {}, 'vscode-extension'],
+  ];
+  for (const [label, entries, env, via, file = Object.keys(entries)[0]] of cases) {
+    const { found, runs } = await find(entries, env);
+    assert.deepEqual([found.file, found.via, runs], [file, via, [file]], label);
+  }
+  // The registry: App Paths names a file, an Uninstall entry the folder Codex was installed in (or its bin).
+  for (const [registered, file] of [[{ files: ['E:\\Codex\\codex.exe'], folders: [] }, 'E:\\Codex\\codex.exe'], [{ files: [], folders: ['F:\\Apps\\OpenAI Codex'] }, 'F:\\Apps\\OpenAI Codex\\bin\\codex.exe']]) {
+    assert.deepEqual(picked((await find(plain(file), {}, { registered })).found), { file, path: file, via: 'registry', version: '0.166.0', reason: null });
+  }
+  // After WinGet: its package wins over Scoop's; the folders that are there join the searched places.
+  const winget = W.join(local, 'Microsoft', 'WinGet', 'Packages', layouts.synthetic.winget.packageFolderPattern, layouts.synthetic.winget.packageFiles[0]);
+  assert.equal((await find({ ...plain(winget), ...plain(W.join(home, 'scoop', 'shims', 'codex.exe')) })).found.via, 'winget');
+  const { found: none } = await find({ [W.join(home, 'scoop', 'shims', 'other.exe')]: { size: 1 } });
+  assert.deepEqual(none.searched, [...windowsSearched, '~\\scoop\\shims']);
+});
+
+// A fake drive scan over the fake files: its walk is drive-scan.cjs's own, its turns are free, and `scanned` counts runs.
+function scanning(entries, { store = null, now, drives = ['C:\\', 'E:\\'] } = {}) {
+  let told;
+  const changed = () => told?.(), scanned = [];
+  const settled = () => new Promise(resolve => { told = resolve; });
+  const { locator, files, runs } = windowsLocator(entries, { store, now, changed,
+    scan: walk => { scanned.push(walk); return scanDrives({ ...walk, drives, files, pause: async () => {} }); } });
+  return { locator, files, runs, scanned, settled };
+}
+const memory = () => { const store = { hit: null, read: () => store.hit, write: value => { store.hit = value; } }; return store; };
+
+test('a Codex off PATH and every known place is found by a background scan of the local drives, kept, and found first from the store on the next start', async () => {
+  const exe = 'E:\\my tools\\codex\\codex.exe', entries = { [exe]: { size: NATIVE } }, store = memory(), options = { env: windowsEnv(), platform: 'win32', arch: 'x64' };
+  const first = scanning(entries, { store }), done = first.settled();
+  const before = await first.locator.refresh(options);
+  assert.deepEqual([before.file, before.reason.code, before.scan], [null, 'codex.not_found', 'running'], 'the fast answer comes at once, saying a scan runs');
+  await done;
+  const hit = first.locator.peek();
+  assert.deepEqual(picked(hit), { file: exe, path: exe, via: 'drive-scan', version: '0.166.0', reason: null });
+  assert.equal(await first.locator.locate(options), hit, 'the hit stands for a locate');
+  assert.deepEqual(store.hit, { file: exe, path: exe, size: NATIVE, mtimeMs: 1 });
+  // The next start checks the kept hit before any scan.
+  const second = scanning(entries, { store });
+  assert.deepEqual(picked(await second.locator.refresh(options)), picked(hit));
+  assert.deepEqual([second.scanned.length, second.runs], [0, [exe]]);
+  // An npm package off PATH is found by its prefix, and its own program runs.
+  const name = 'npm11-global-0.166.0', prefix = 'E:\\my tools\\npm', npm = scanning(install(name, prefix)), npmDone = npm.settled();
+  await npm.locator.refresh(options); await npmDone;
+  assert.deepEqual(picked(npm.locator.peek()), { file: exeOf(name, prefix), path: W.join(prefix, 'codex.ps1'), via: 'drive-scan', version: '0.166.0', reason: null });
+});
+
+test('a kept hit that is gone or changed is dropped and the drives are searched again, at most hourly on focus and at once on an explicit refresh', async () => {
+  const exe = 'E:\\my tools\\codex\\codex.exe', options = { env: windowsEnv(), platform: 'win32', arch: 'x64' };
+  for (const [label, entries] of [['gone', {}], ['changed', { [exe]: { size: NATIVE + 1 } }]]) {
+    const store = memory();
+    store.hit = { file: exe, path: exe, size: NATIVE, mtimeMs: 1 };
+    const view = scanning(entries, { store }), done = view.settled();
+    assert.equal((await view.locator.refresh(options)).scan, 'running', label);
+    await done;
+    assert.deepEqual([view.scanned.length, view.locator.peek().file], [1, label === 'gone' ? null : exe], label);
+    assert.deepEqual(store.hit, label === 'gone' ? null : { file: exe, path: exe, size: NATIVE + 1, mtimeMs: 1 }, `${label}: dropped, or kept anew by the scan`);
+  }
+  // Still nothing: focus scans again an hour after the last, an explicit refresh at once; the answer says it looked everywhere.
+  let clock = 0;
+  const view = scanning({}, { now: () => clock });
+  let done = view.settled();
+  await view.locator.refresh(options); await done;
+  const after = view.locator.peek();
+  assert.deepEqual([after.file, after.reason.code, after.scan], [null, 'codex.not_found', 'done']);
+  clock = 60000;
+  assert.equal((await view.locator.refresh(options, { throttled: true })).scan, 'done', 'focus within the hour does not scan');
+  clock = 3600000;
+  done = view.settled();
+  assert.equal((await view.locator.refresh(options, { throttled: true })).scan, 'running');
+  await done;
+  done = view.settled();
+  await view.locator.refresh(options); await done;
+  assert.equal(view.scanned.length, 3);
+  assert.equal((await view.locator.locate(options)).scan, 'done');
+});
+
+test('the drive scan keeps to its depth, skips what it must, and stops at its folder and time caps, yielding between folders', async () => {
+  const at = (...parts) => W.join('C:\\', ...parts), exe = (...parts) => ({ [at(...parts, 'codex.exe')]: { size: 1 } });
+  const entries = {
+    ...exe('a', 'b', 'c', 'd'), ...exe('a', 'b', 'c', 'd', 'e'), ...exe('Program Files', 'A', 'B', 'C'),
+    ...exe('Users', 'u', 'AppData', 'Local', 'Programs', 'x', 'y', 'z'), ...exe('Users', 'u', 'AppData', 'Local', 'Programs', 'x', 'y', 'z', 'w'),
+    ...exe('Windows', 'System32'), ...exe('$Recycle.Bin'), ...exe('System Volume Information'), ...exe('ProgramData', 'Microsoft'), ...exe('ProgramData', 'Other'),
+    ...exe('repo', '.git'), ...exe('proj', 'node_modules', 'tool'), [at('npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js')]: { text: '' },
+    ...exe('Agentrix', 'shims'), [at('Agentrix', 'shims', '.agentrix-shims')]: { text: '' }, [at('loop')]: { junction: true }, ...exe('loop', 'inside'),
+  };
+  const files = codexFiles(entries), turns = [], walk = { names: ['codex.exe'], probes: [['node_modules', '@openai', 'codex', 'bin', 'codex.js']], skipFolder: names => names.includes('.agentrix-shims') };
+  const { hits, stopped, visited } = await scanDrives({ ...walk, drives: ['C:\\'], files, pause: async () => { turns.push(1); }, limits: { depth: 4, extraDepth: 3, folders: 20000, ms: 20000, hits: 50 } });
+  assert.deepEqual(hits.sort(), [at('a', 'b', 'c', 'd'), at('npm'), at('Program Files', 'A', 'B', 'C'), at('ProgramData', 'Other'), at('Users', 'u', 'AppData', 'Local', 'Programs', 'x', 'y', 'z')].sort());
+  assert.equal(stopped, 'done');
+  assert.ok(turns.length >= visited && visited > 0, 'it yields before each folder');
+  // The caps: the folders it may list, and the time it may take on the injected clock.
+  const capped = await scanDrives({ ...walk, drives: ['C:\\'], files, pause: async () => {}, limits: { depth: 4, extraDepth: 3, folders: 3, ms: 20000, hits: 50 } });
+  assert.deepEqual([capped.stopped, capped.visited], ['folders', 3]);
+  let clock = 0;
+  const timed = await scanDrives({ ...walk, drives: ['C:\\'], files, now: () => clock, pause: async () => { clock += 1000; }, limits: { depth: 4, extraDepth: 3, folders: 20000, ms: 5000, hits: 50 } });
+  assert.deepEqual([timed.stopped, timed.visited], ['time', 5]);
+});
+
+test('the drive scan walks a real folder tree, never through a link', async t => {
+  if (process.platform !== 'win32') return t.skip('the scan is Windows only');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-scan-')), junction = path.join(root, 'loop');
+  t.after(() => { try { fs.rmdirSync(junction); } catch { } fs.rmSync(root, { recursive: true, force: true }); });
+  for (const folder of ['tools\\codex', 'away\\deep']) fs.mkdirSync(path.join(root, folder), { recursive: true });
+  fs.writeFileSync(path.join(root, 'tools', 'codex', 'codex.exe'), ''); fs.writeFileSync(path.join(root, 'away', 'deep', 'codex.exe'), '');
+  fs.symlinkSync(path.join(root, 'away'), junction, 'junction');
+  const { hits } = await scanDrives({ names: ['codex.exe'], drives: [root], limits: { depth: 2, extraDepth: 2, folders: 100, ms: 20000, hits: 50 } });
+  assert.deepEqual(hits.sort(), [path.join(root, 'away', 'deep'), path.join(root, 'tools', 'codex')].sort(), 'the junction to away is not walked a second time');
 });
 
 test('a Codex that prints no version is still found and used, with why', async () => {

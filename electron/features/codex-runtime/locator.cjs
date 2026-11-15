@@ -6,10 +6,14 @@ const { mergePath, readStoredPath, variable } = require('../claude-runtime/path-
 const { reason } = require('../../shared/reason.cjs');
 const { SHIM_MARKER } = require('../../shared/agentrix-shims.cjs');
 // Every `via` a found Codex can have (codex-runtime/BOUNDARY.md).
-const VIAS = Object.freeze(['path', 'npm-shim', 'npm-vendor', 'npm-hoisted', 'npm-prefix', 'registry-path', 'official-installer', 'winget', 'system']);
+const VIAS = Object.freeze(['path', 'npm-shim', 'npm-vendor', 'npm-hoisted', 'npm-prefix', 'registry-path', 'official-installer', 'winget', 'system',
+  'scoop', 'chocolatey', 'volta', 'bun', 'pnpm', 'yarn', 'nvm', 'fnm', 'vscode-extension', 'registry', 'drive-scan']);
 const VERSION = /\b\d+\.\d+\.\d+(?:-[\w.]+)?/, VERSION_TIMEOUT_MS = 10000, SHIM_BYTES = 65536, SOURCE = 'codex-runtime locator';
-// A throttled refresh (window focus) searches with the stored Windows PATH at most this often.
-const REFRESH_MS = 60000;
+// A throttled refresh (window focus) searches with the stored Windows PATH at most this often; while nothing is found,
+// it scans the local drives again at most this often (an explicit refresh always does).
+const REFRESH_MS = 60000, SCAN_MS = 3600000;
+// What the drive scan counts as a Codex: a codex.exe in a folder, or npm's package below it (the folder is its prefix).
+const SCAN_HITS = { names: ['codex.exe'], probes: [['node_modules', '@openai', 'codex', 'bin', 'codex.js']] };
 // How many folders below vendor/<triple> a package's program is looked for when no known layout holds it.
 const VENDOR_DEPTH = 3;
 // The Windows CPUs npm ships a platform package for, and the target triple of each one's binary.
@@ -57,6 +61,70 @@ function installFolders({ env, platform }, prefixes, path) {
     ...[local && path.join(local, 'Microsoft', 'WinGet', 'Links'), programs && path.join(programs, 'WinGet', 'Links')].filter(Boolean).map(folder => [folder, 'winget'])].filter(Boolean);
 }
 
+// Names in version order, newest first, by the numbers in them (v22.11.0, openai.chatgpt-0.4.12-win32-x64).
+const newestFirst = names => names.map(name => [name, (name.match(/\d+/g) ?? []).map(Number)])
+  .sort(([, a], [, b]) => { for (let i = 0; i < Math.max(a.length, b.length); i++) if (a[i] !== b[i]) return (b[i] ?? -1) - (a[i] ?? -1); return 0; })
+  .map(([name]) => name);
+
+// Where other installers put Codex on Windows, searched after WinGet, as [folder, via, file?], and only those that are
+// there, so the search says where it really looked: Scoop's app and shims (user, then global), Chocolatey's and Volta's
+// shims, Bun's bin and global packages, pnpm's home, Yarn's bin and global packages, nvm-windows' active link and each
+// version (newest first), fnm's versions, the codex.exe the OpenAI extension of VS Code and its forks bundles (newest
+// first, this CPU's first), then what the registry names (`registered`: App Paths' file, an Uninstall entry's folder
+// and its bin).
+async function managerFolders({ env, home, arch }, registered, files, path) {
+  const at = (base, ...parts) => (base ? path.join(base, ...parts) : null);
+  const list = async dir => { try { return (await files.readdir(dir)).map(String); } catch { return null; } };
+  const below = async (dir, pattern, ...rest) => newestFirst(((dir && await list(dir)) ?? []).filter(name => pattern.test(name))).map(name => path.join(dir, name, ...rest));
+  const local = variable(env, 'LOCALAPPDATA'), data = variable(env, 'ProgramData') || 'C:\\ProgramData';
+  const fnm = variable(env, 'FNM_DIR') || at(variable(env, 'APPDATA'), 'fnm'), cpu = arch === 'arm64' ? /aarch64|arm64/i : /x86_64|x64/i;
+  const editors = [];
+  for (const editor of ['.vscode', '.vscode-insiders', '.cursor', '.windsurf']) {
+    for (const extension of await below(at(home, editor, 'extensions'), /^openai\.chatgpt-\d/i, 'bin')) {
+      const platforms = await below(extension, /^windows-/i);
+      editors.push(...[...platforms.filter(dir => cpu.test(path.basename(dir))), ...platforms.filter(dir => !cpu.test(path.basename(dir)))].map(dir => [dir, 'vscode-extension']));
+    }
+  }
+  const candidates = [
+    ...[variable(env, 'SCOOP') || at(home, 'scoop'), variable(env, 'SCOOP_GLOBAL') || at(data, 'scoop')].flatMap(root => [[at(root, 'apps', 'codex', 'current'), 'scoop'], [at(root, 'shims'), 'scoop']]),
+    [at(variable(env, 'ChocolateyInstall') || at(data, 'chocolatey'), 'bin'), 'chocolatey'], [at(variable(env, 'VOLTA_HOME') || at(local, 'Volta'), 'bin'), 'volta'],
+    [at(home, '.bun', 'bin'), 'bun'], [at(home, '.bun', 'install', 'global'), 'bun'], [variable(env, 'PNPM_HOME') || at(local, 'pnpm'), 'pnpm'],
+    [at(local, 'Yarn', 'bin'), 'yarn'], [at(local, 'Yarn', 'Data', 'global'), 'yarn'],
+    [variable(env, 'NVM_SYMLINK'), 'nvm'], ...(await below(variable(env, 'NVM_HOME'), /^v\d/i)).map(dir => [dir, 'nvm']),
+    ...(await below(at(fnm, 'node-versions'), /^v\d/i, 'installation')).map(dir => [dir, 'fnm']), ...editors,
+    ...(registered?.files ?? []).map(file => [path.dirname(file), 'registry', file]),
+    ...(registered?.folders ?? []).flatMap(folder => [[folder, 'registry'], [path.join(folder, 'bin'), 'registry']]),
+  ].filter(([folder]) => folder && path.isAbsolute(folder));
+  const there = await Promise.all(candidates.map(async ([folder]) => await list(folder) !== null));
+  return candidates.filter((_, index) => there[index]);
+}
+
+// What the registry names for Codex: App Paths' codex.exe (user, then machine) and the InstallLocation of each
+// Uninstall entry whose DisplayName mentions Codex, read through the PowerShell of the environment's own SystemRoot
+// (an environment without one reads nothing), as readStoredPath reads the stored PATH. Nothing is written; a read that
+// fails or takes too long gives null.
+function readRegistry(env, { run = execFile, timeoutMs = 5000 } = {}) {
+  const root = variable(env, 'SystemRoot');
+  if (!root) return Promise.resolve(null);
+  const script = "$o=@();foreach($h in 'HKCU','HKLM'){try{$v=(Get-ItemProperty -LiteralPath \"$($h):\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\codex.exe\" -ErrorAction Stop).'(default)';if($v){$o+='file'+[char]9+$v}}catch{}};"
+    + "foreach($k in 'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'){"
+    + "Get-ItemProperty -Path $k -ErrorAction SilentlyContinue|Where-Object{$_.DisplayName -match 'codex' -and $_.InstallLocation}|ForEach-Object{$o+='folder'+[char]9+$_.InstallLocation}};"
+    + "[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($o -join [char]0))))";
+  return new Promise(resolve => {
+    try {
+      run(nodePath.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {
+        if (error) return resolve(null);
+        const found = { files: [], folders: [] };
+        for (const line of Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\0')) {
+          const [kind, raw] = line.split('\t'), value = raw?.trim().replace(/^"(.*)"$/, '$1');
+          if (value && nodePath.win32.isAbsolute(value) && (kind === 'file' || kind === 'folder')) found[`${kind}s`].push(value);
+        }
+        resolve(found);
+      });
+    } catch { resolve(null); }
+  });
+}
+
 // The native program of an npm package of Codex, as [file, layout], this machine's CPU first: where its bin/codex.js
 // looks (the platform package nested in it, then hoisted beside it, then its own vendor folder), then 0.46's single
 // package, vendor/<triple>/codex/codex.exe.
@@ -85,9 +153,12 @@ const onShareOf = (folder, real, path) => !shareOf(real, path) || shareOf(real, 
 // Main's one Codex locator serves the terminal and native mode alike; the dispatch helper builds its own
 // (codex-runtime/BOUNDARY.md). A refresh reads the stored Windows PATH and searches; a throttled refresh does that at
 // most once a minute; a locate keeps the last answer while it stands. `--version` runs once per file, size and mtime.
-function createCodexLocator({ probe = execFile, files = fs, storedPath = readStoredPath, readNpmPrefix, now = Date.now } = {}) {
+// Main alone gives `scan` (drive-scan.cjs's walk of the local drives), `store` (where a hit is kept across starts) and
+// `changed` (told when a background scan changed the answer); without them nothing is scanned.
+function createCodexLocator({ probe = execFile, files = fs, storedPath = readStoredPath, registry = readRegistry, readNpmPrefix, now = Date.now,
+  scan = null, store = null, changed = () => {} } = {}) {
   const versions = new Map();
-  let stored = null, lastFull = null, last = null, latest = null, running = null, trailing = null;
+  let stored = null, registered = null, lastFull = null, last = null, latest = null, running = null, trailing = null, scanning = null, scannedAt = null;
 
   // The version a file printed, run once per file, size and mtime. One that printed none is run again only by a search
   // a refresh started (`retry`): the check never changes which file runs, and a hanging Codex must not gain a process
@@ -122,15 +193,17 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
   }
 
   // `found` is told the file chosen, without its version, while a check runs: what a terminal is told need not wait
-  // for a slow `--version` (Defender scanning a cold codex.exe).
-  async function search({ env, platform, arch, home, prefer }, retry, found) {
+  // for a slow `--version` (Defender scanning a cold codex.exe). `entries`, as [folder, via, file?], replaces the
+  // search order: the folders a drive scan or the store gave.
+  async function search({ env, platform, arch, home, prefer }, retry, found, entries = null) {
     const windows = platform === 'win32', path = windows ? nodePath.win32 : nodePath.posix;
     const shown = file => { const relative = home && path.relative(home, file); return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? path.join('~', relative) : file; };
     const inherited = variable(env, 'PATH') || '';
     const effective = windows && stored ? mergePath(inherited, stored, env) : inherited;
     // The entries merging added after the inherited ones came from the stored PATH alone.
     const fromStored = new Set(windows && stored ? effective.split(';').slice(mergePath(inherited, [], env).split(';').filter(Boolean).length) : []);
-    const places = installFolders({ env, platform }, await (readNpmPrefix ?? (options => npmPrefixes(options, files, path)))({ env, platform, home }), path);
+    const places = [...installFolders({ env, platform }, await (readNpmPrefix ?? (options => npmPrefixes(options, files, path)))({ env, platform, home }), path),
+      ...(windows ? await managerFolders({ env, home, arch }, registered, files, path) : [])];
     const pathHash = createHash('sha256').update(JSON.stringify([platform, home, effective, places, prefer ?? null])).digest('hex').slice(0, 16);
     // An npm prefix the .npmrc names may be %APPDATA%\npm as well: each place is said once.
     const searched = [...new Set(places.map(([place]) => shown(place)))], folders = new Set();
@@ -182,7 +255,7 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
     }
 
     // The preferred file first (the terminal's choice, for the helper), then PATH in its order, then the install folders.
-    const queue = [...(prefer ? [[path.dirname(prefer), null, prefer]] : []), ...effective.split(windows ? ';' : ':').map(entry => [entry, null]), ...places];
+    const queue = entries ?? [...(prefer ? [[path.dirname(prefer), null, prefer]] : []), ...effective.split(windows ? ';' : ':').map(entry => [entry, null]), ...places];
     for (const [entry, place, only] of queue) {
       const folder = String(entry).trim().replace(/^"(.*)"$/, '$1'), key = path.resolve(windows ? folder.toUpperCase() : folder);
       if (!folder || !path.isAbsolute(folder) || !only && folders.has(key)) continue;
@@ -231,21 +304,55 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       return same && stat.size === result.fingerprint.size && stat.mtimeMs === result.fingerprint.mtimeMs;
     } catch { return false; }
   }
+  // Nothing found on Windows: the hit a scan kept, while its file keeps its size and mtime (otherwise it is dropped),
+  // then a scan of the local drives in the background (`due`, which the caller starts once the answer is kept) when
+  // none runs and none ran yet, or for an explicit refresh, or for a full search an hour after the last. The answer
+  // says whether a scan is running or has looked everywhere.
+  async function unfound(options, mode, full, chosen, result) {
+    const hit = await Promise.resolve().then(() => store?.read()).catch(() => null);
+    if (hit?.file && hit.path) {
+      const stat = await files.stat(hit.file).catch(() => null);
+      const kept = stat?.size === hit.size && stat.mtimeMs === hit.mtimeMs && await search(options, full, chosen, [[nodePath.win32.dirname(hit.path), 'drive-scan', hit.path]]);
+      if (kept?.file) return { result: kept, due: false };
+      await Promise.resolve().then(() => store.write(null)).catch(() => {});
+    }
+    const due = !scanning && (scannedAt === null || mode === 'refresh' || full && now() - scannedAt >= SCAN_MS);
+    return { result: { ...result, scan: due || scanning ? 'running' : 'done' }, due };
+  }
+  // A hit runs through the same search as any folder, with via `drive-scan`; it becomes the answer, and is kept in the
+  // store, while nothing else was found meanwhile. `changed` is told either way.
+  function driveScan(options) {
+    scannedAt = now();
+    return Promise.resolve().then(() => scan({ ...SCAN_HITS, skipFolder: names => names.includes(SHIM_MARKER) }))
+      .then(({ hits }) => (hits.length ? search(options, true, () => {}, hits.map(folder => [folder, 'drive-scan'])) : null)).catch(() => null)
+      .then(async found => {
+        scanning = null;
+        if (!last || last.result.file) return;
+        if (found?.file) last = { ...last, result: found, leads: await files.realpath(found.path).catch(() => null) };
+        else last = { ...last, result: { ...last.result, ...(found?.reason?.code === 'codex.incomplete' ? { reason: found.reason } : {}), scan: 'done' } };
+        latest = last.result;
+        if (found?.file) await Promise.resolve().then(() => store?.write({ file: found.file, path: found.path, size: found.fingerprint.size, mtimeMs: found.fingerprint.mtimeMs })).catch(() => {});
+        changed();
+      });
+  }
   async function answer(options, mode) {
-    const full = mode === 'refresh' || mode === 'throttled' && (lastFull === null || now() - lastFull >= REFRESH_MS);
+    const full = mode === 'refresh' || mode === 'throttled' && (lastFull === null || now() - lastFull >= REFRESH_MS), windows = options.platform === 'win32';
     if (full) {
-      if (options.platform === 'win32') stored = await storedPath(options.env) ?? stored;
+      if (windows) [stored, registered] = await Promise.all([storedPath(options.env), registry(options.env)]).then(([path, names]) => [path ?? stored, names ?? registered]);
       lastFull = now();
     }
     const key = JSON.stringify([options.platform, options.home, options.arch, variable(options.env, 'PATH') || '', stored, options.prefer ?? null]);
     if (!full && last?.key === key && await stands()) return last.result;
     // A file chosen while its check runs is what peek() says, unless it already says that file: a terminal restored at
     // start-up is told it, and an answer that stands keeps its version and reason until the check settles.
-    const result = await search(options, full, chosen => { if (latest?.file !== chosen.file || latest?.path !== chosen.path) latest = chosen; });
+    const chosen = found => { if (latest?.file !== found.file || latest?.path !== found.path) latest = found; };
+    let result = await search(options, full, chosen), due = false;
+    if (!result.file && windows && scan) ({ result, due } = await unfound(options, mode, full, chosen, result));
     // Where `path` leads now, through a junction such as nvm-windows' C:\Program Files\nodejs, is what stands means.
     const leads = result.path && await files.realpath(result.path).catch(() => null);
-    last = { key, result, leads, windows: options.platform === 'win32' };
+    last = { key, result, leads, windows };
     latest = result;
+    if (due) scanning = driveScan(options);
     return result;
   }
   const normalized = ({ env = process.env, platform = process.platform, arch = process.arch, home, prefer } = {}) =>

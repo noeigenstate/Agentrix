@@ -36,6 +36,10 @@ test('every way Codex can be found is in the locator, the shared type and the wo
     }
   }
   assert.deepEqual(offenders, [], 'files that look for Codex outside the locator');
+  // The drive scan is a generic walk: what counts as a hit comes from the locator, and the dispatch helper, which
+  // needs no scan, does not carry it.
+  assert.doesNotMatch(read('electron/features/codex-runtime/drive-scan.cjs'), /codex\.exe|codex\.js|@openai/i, 'the drive scan names no Codex layout');
+  assert.ok(!Object.keys(require('../integration/dispatch.cjs').runtimeFiles()).some(file => file.endsWith('drive-scan.cjs')), 'the helper does not carry the drive scan');
   const resolution = read('scripts/codex-cli-resolution.cjs');
   assert.match(resolution, /packageBinaries\(/); assert.doesNotMatch(resolution, /codex-win32-|windows-msvc/);
 });
