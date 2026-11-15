@@ -482,6 +482,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       reconcile(true); return result;
     },
     keySave(key) { const result = claude.credentials.save(key); for (const record of sessions.values()) record.rollbackFactory = null; reconcile(true); return result; },
+    // The same settle point without asking for a pass: whatever was already requested has run and every change has settled.
+    settled: () => Promise.resolve(reconcileQueued).then(() => switches.settled()),
     reconcile, observe: id => switches.observe(id), input: (id, runtimeSessionId) => switches.input(id, runtimeSessionId),
     failed: (id, runtimeSessionId) => switches.failed(id, runtimeSessionId),
     switchState: id => switches.state(id),

@@ -12,8 +12,10 @@ const empty = () => ({ version: 1, text: '', images: [], undelivered: [] });
 function fixture(t, { mode = 'api-then-terminal', sendStatus = 'delivered', owner = 'gui' } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-quota-')), fake = fakeSdk({ auto: false });
   let clock = 1000000, terminals = [];
+  // The runtime's clock and timers are one injected pair: time() moves the clock and runs every timer it reaches.
+  const due = new Set(), timers = { setTimeout: (run, delay) => { const task = { run, at: clock + delay }; due.add(task); return task; }, clearTimeout: task => due.delete(task) };
   const events = [], sends = [], specs = [], config = { claudePath: mode, monthlyBudgetUsd: 10 };
-  const runtime = createClaudeRuntime({ directory, now: () => clock, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'fake-only',
+  const runtime = createClaudeRuntime({ directory, now: () => clock, timers, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'fake-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save('sk-ant-fake-offline-quota');
   const router = createRouter({ claude: runtime, codex: {}, settings: { get: () => config }, resolveSpec: id => ({ terminalId: id, projectId: 'p', owner,
@@ -36,7 +38,7 @@ function fixture(t, { mode = 'api-then-terminal', sendStatus = 'delivered', owne
       total_cost_usd: 0, usage, result: text }); await waitFor(() => router.snapshot('t')?.state === 'idle' || router.switchState('t')?.phase === 'preparing', 'provider refusal');
     return started;
   }
-  return { runtime, router, fake, events, sends, specs, handoff, refuse, config, time: ms => { clock += ms; } };
+  return { runtime, router, fake, events, sends, specs, handoff, refuse, config, time: ms => { clock += ms; for (const task of [...due].filter(task => task.at <= clock)) { due.delete(task); task.run(); } } };
 }
 for (const [error, text] of [['billing_error', 'Credit balance is too low'], ['rate_limit', 'enforced_spend_limit_reached'], ['invalid_request', 'You have reached your specified API usage limits'], ['rate_limit', 'Too many requests']]) {
   test(`quota fallback ${text}: same id, safe input sent once after readiness, no intermediate completion`, async t => {
@@ -167,3 +169,21 @@ for (const [kind, refusal] of [['credits', {}], ['account limits', { error: 'spe
     assert.equal(f.runtime.apiState('p').status, kind === 'credits' ? 'credits_exhausted' : 'account_limit');
   });
 }
+
+test('a rate-limit fallback returns to the API when its one-minute hold ends, driven by the expiry alone, by the switch-back path', async t => {
+  const f = fixture(t);
+  f.fake.sdk.getSessionMessages = async id => [{ type: 'user', uuid: randomUUID(), session_id: id, parent_tool_use_id: null, message: { role: 'user', content: 'Keep this exact input' } }];
+  await f.refuse({ error: 'rate_limit', text: 'Too many requests' }); await f.handoff();
+  const stateOf = () => { const { current, target, phase } = f.router.switchState('t'); return { current, target, phase }; };
+  // Before the hold ends even an explicit pass keeps the card on the terminal.
+  f.time(59999); await f.router.reconcile();
+  assert.deepEqual(stateOf(), { current: 'terminal', target: 'terminal', phase: 'stable' });
+  // The expiry is the only event: its timer asks for the pass, and the settle point asks for nothing.
+  f.time(1); await f.router.settled();
+  assert.deepEqual(stateOf(), { current: 'terminal', target: 'api', phase: 'preparing' });
+  const snapshot = f.router.snapshot('t');
+  f.router.answer('t', snapshot.runtimeSessionId, 'handoff', { handoff: { changeId: snapshot.switchState.changeId, draft: empty() } });
+  await f.router.settled();
+  assert.deepEqual(stateOf(), { current: 'api', target: 'api', phase: 'stable' });
+  assert.deepEqual(f.router.snapshot('t').events.findLast(event => event.type === 'path.changed').payload, { previous: 'terminal', selected: 'api', reason: null });
+});

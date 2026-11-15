@@ -83,6 +83,7 @@ test('a Reason has only the declared fields and the params its code declares', (
     ['codex.not_found', { source: 'main', params: { searched: 'a', bogus: 'y' } }],
     ['codex.failed', { source: 'main', params: { searched: 'a' } }],
     ['codex.not_found', { source: 'main', message: '中文句子' }],
+    ['codex.not_found', { code: 'codex.failed', source: 'x', params: { searched: 'a' } }],
   ]) assert.throws(() => reason(code, fields), /Invalid reason/, `${code} ${JSON.stringify(fields)}`);
   assert.equal(isReason({ ...built, message: '中文句子' }), false);
   assert.equal(isReason({ ...built, params: { bogus: 'y' } }), false);

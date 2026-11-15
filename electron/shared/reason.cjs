@@ -45,6 +45,8 @@ function problemOf(code, value) {
 // fields: { source, params?, detail?, stage?, observedAt? }. A detail, which may come from process output, is redacted
 // and cut to one line first. Throws on an unknown code or a field that breaks the contract.
 function reason(code, fields = {}) {
+  // The code is the first argument only: one in fields would replace it after the checks of the code asked for.
+  if (Object.hasOwn(fields, 'code')) throw new Error(`Invalid reason ${code}: code is not one of the fields`);
   const { detail, observedAt = Date.now(), ...rest } = fields;
   const redacted = detail === undefined ? undefined : stderrTail(String(detail), { limit: DETAIL_LIMIT });
   const built = { code, ...rest, ...(redacted ? { detail: redacted } : {}), observedAt };
