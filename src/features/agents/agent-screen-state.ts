@@ -3,7 +3,7 @@ import type { AgentScreen, ScreenAgent } from './agent-screen-types.ts';
 import { parseAgentScreen } from './agent-screen.ts';
 import { cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from './agent-screen-input.ts';
 
-export type CliFrame = { rows: string[]; sessionId?: string | null; revision?: number; updatedAt?: number; stateUpdatedAt?: Partial<Record<ScreenAgent, number>>; pending?: boolean };
+export type CliFrame = { rows: string[]; sessionId?: string | null; revision?: number; updatedAt?: number; stateUpdatedAt?: Partial<Record<ScreenAgent, number>>; parsed?: boolean; pending?: boolean };
 export function validCliState(terminal: ProjectTerminal): CliState | null {
   const state = terminal.cliState;
   return state && typeof state.sessionId === 'string' && !!state.sessionId && state.sessionId === terminal.sessionId && Number.isSafeInteger(state.revision) && state.revision >= 0
@@ -21,7 +21,7 @@ export function cliStateFor(agent: ScreenAgent, frame: CliFrame | null, terminal
   const rows = current?.rows ?? [], screen = current && parsed || parseAgentScreen(agent, rows);
   const input = hasCliInput(agent, rows, screen), idle = isAtPrompt(agent, rows, screen);
   const dialog = cliDialogShown(agent, rows, screen), busy = isCliWorking(agent, rows, screen);
-  const observed = current?.pending ? null : dialog ? 'waiting' : busy ? 'working' : idle ? 'idle' : null;
+  const observed = current?.pending && !current.parsed ? null : dialog ? 'waiting' : busy ? 'working' : idle ? 'idle' : null;
   const newer = !!observed && current?.sessionId === terminal.sessionId && (current?.revision ?? 0) > 0
     && (current?.stateUpdatedAt?.[agent] ?? current?.updatedAt ?? 0) > (signal?.updatedAt ?? Infinity);
   const authority = signal && !newer ? signal : null;

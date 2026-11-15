@@ -9,6 +9,8 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const { choiceIdentity } = require('../src/features/agents/agent-screen.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 const en = require('../electron/locales/en.json');
+const outboxLocales = path.join(__dirname, '../locale-additions-outbox.json');
+if (fs.existsSync(outboxLocales)) Object.assign(en, JSON.parse(fs.readFileSync(outboxLocales, 'utf8')));
 const historySnapshot = entries => ({ entries, paged: false, hasEarlier: false, loading: false, error: null, loadEarlier: async () => false, compact: async () => false });
 
 // Components use test-only screen values until feat/screen-parser replaces the stub.
@@ -36,7 +38,7 @@ function loadUI(name, overrides = {}) {
     const key = name.startsWith('.') ? './' + path.basename(name) : name;
     if (name === 'react' && overrides.react) return { ...React, ...overrides.react };
     // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
-    if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, ...overrides[key] };
+    if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, subscribeScreen: () => () => {}, ...overrides[key] };
     if (Object.hasOwn(overrides, key) && key === './agent-screen') { const { choiceIdentity, waitingTitle } = require('../src/features/agents/agent-screen.ts'); return { choiceIdentity, waitingTitle, ...overrides[key] }; }
     if (Object.hasOwn(overrides, key)) return overrides[key];
     if (name.endsWith('.css')) return {};
@@ -467,8 +469,11 @@ function workingComposerHarness(t, agent, overrides = {}) {
     ...(view.working ? [agent === 'claude' ? '✶ Swooping… (12s)' : '• Working (12s · esc to interrupt)'] : []),
     ...fixture.flatMap((row, index) => index === inputRow ? view.draft.split(/\r?\n/).map((line, part) => (part ? '  ' : agent === 'claude' ? '❯ ' : '› ') + line) : [row]),
   ];
-  const h = dictationHarness(t, {
-    './terminal-screen': { useScreen: () => ({ rows: rows(), pending: view.pending }), readScreen: () => ({ rows: rows(), pending: view.pending }) },
+  const listeners = new Set(); let revision = 1, h;
+  const frame = () => ({ rows: rows(), pending: view.pending, parsed: view.parsed, revision, epoch: view.epoch ?? 1, sessionId: h?.props.terminal.sessionId ?? 'session' });
+  const parsed = (render = true) => { revision++; for (const listener of listeners) listener(frame()); if (render) h?.render(); };
+  h = dictationHarness(t, {
+    './terminal-screen': { useScreen: frame, readScreen: frame, subscribeScreen: (_id, listener) => { listeners.add(listener); return () => listeners.delete(listener); } },
     './agent-screen': { parseAgentScreen },
     './useReadingConversation': { useReadingHistory: () => historySnapshot(view.records) },
     './usePendingPrompts': { usePendingPrompts: () => {
@@ -492,7 +497,9 @@ function workingComposerHarness(t, agent, overrides = {}) {
     }
   };
   h.render();
-  return { ...h, view, async tick(ms) { clock += ms; await h.tick(ms); } };
+  return { ...h, view, parsed,
+    async tick(ms) { clock += ms; if (!view.pending || view.parsed) parsed(); await h.tick(ms); },
+    async advance(ms, notify = true) { clock += ms; if (notify && (!view.pending || view.parsed)) parsed(false); await h.advance(ms); } };
 }
 
 for (const agent of ['claude', 'codex']) {
@@ -687,6 +694,112 @@ for (const agent of ['claude', 'codex']) {
     assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.equal(h.pasted.length, 1);
   });
 }
+
+test('a staged message queues during a long tool call despite continuous redraws', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+  h.edit('send during SendMessage'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), ['send during SendMessage']);
+  h.popup()?.props.onClose(); delete h.view.rows;
+  h.view.pending = true; h.view.parsed = true; h.render(); h.parsed();
+  await h.tick(0); await h.tick(400); await h.tick(700);
+  for (let i = 0; i < 160; i++) await h.tick(100);
+  assert.equal(h.view.working, true);
+  assert.deepEqual(h.view.records.map(record => [record.text, record.queued]), [['send during SendMessage', true]]);
+  assert.equal(h.pasted.length, 1); assert.deepEqual(outboxTexts(h), []);
+});
+
+test('a dialog arriving before paste or Enter prevents that write', async t => {
+  for (const stage of ['paste', 'Enter']) await t.test('menu before ' + stage, async t => {
+    const h = workingComposerHarness(t, 'claude');
+    const menu = () => { h.view.rows = ['Settings', 'Esc to close']; };
+    if (stage === 'paste') {
+      h.view.draft = 'terminal draft'; h.render(); h.render();
+      const write = window.agentrix.writeTerminal;
+      window.agentrix.writeTerminal = (id, text) => { write(id, text); if (text === '\x15') menu(); };
+    }
+    h.edit('ordinary instruction'); h.press('Enter'); await h.advance(0);
+    if (stage === 'Enter') menu();
+    for (let i = 0; i < 12; i++) await h.advance(80, false);
+    assert.equal(h.written.some(write => write.text === '\r'), false);
+    assert.equal(h.pasted.length, stage === 'paste' ? 0 : 1);
+  });
+  for (const stage of ['paste', 'Enter']) await t.test(stage, async t => {
+    const h = workingComposerHarness(t, 'claude');
+    const wait = () => { h.props.terminal.cliState = { sessionId: 'session', revision: 2, state: 'waiting', updatedAt: Date.now(), message: 'Approve tool' }; };
+    if (stage === 'paste') {
+      h.view.draft = 'terminal draft'; h.render(); h.render();
+      const write = window.agentrix.writeTerminal;
+      window.agentrix.writeTerminal = (id, text) => { write(id, text); if (text === '\x15') wait(); };
+    }
+    h.edit('ordinary instruction'); h.press('Enter'); await h.advance(0);
+    if (stage === 'Enter') { assert.equal(h.pasted.length, 1); wait(); }
+    for (let i = 0; i < 12; i++) await h.advance(80, false);
+    assert.equal(h.written.some(write => write.text === '\r'), false, 'host waiting is rechecked without a React render');
+    assert.equal(h.pasted.length, stage === 'paste' ? 0 : 1);
+  });
+  for (const stage of ['paste', 'Enter']) await t.test('terminal epoch before ' + stage, async t => {
+    const h = workingComposerHarness(t, 'claude');
+    if (stage === 'paste') {
+      h.view.draft = 'terminal draft'; h.render(); h.render();
+      const write = window.agentrix.writeTerminal;
+      window.agentrix.writeTerminal = (id, text) => { write(id, text); if (text === '\x15') h.view.epoch = 2; };
+    }
+    h.edit('original terminal only'); h.press('Enter'); await h.advance(0);
+    if (stage === 'Enter') { assert.equal(h.pasted.length, 1); h.view.epoch = 2; }
+    for (let i = 0; i < 12; i++) await h.advance(80, false);
+    assert.equal(h.written.some(write => write.text === '\r'), false);
+    assert.equal(h.pasted.length, stage === 'paste' ? 0 : 1);
+  });
+});
+
+const outboxReason = h => elements(h.tree()).find(node => node.props.className === 'reading-outbox')?.props.children[0].props.children;
+test('turn end retains uncertain delivery without another paste', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+  h.edit('uncertain message'); h.press('Enter'); await h.tick(0);
+  h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
+  assert.equal(h.pasted.length, 1);
+  h.view.pending = true; await h.tick(400);
+  for (let i = 0; i < 50; i++) await h.tick(50);
+  h.view.pending = false; h.view.working = false; h.render(); h.render();
+  for (let i = 0; i < 8; i++) await h.tick(10000);
+  assert.equal(h.pasted.length, 1); assert.deepEqual(h.written, []);
+  assert.deepEqual(outboxTexts(h), ['uncertain message']);
+  assert.equal(outboxReason(h), 'Delivery is not confirmed. Check the terminal before sending this message again.');
+});
+
+test('the outbox says why it waits', async t => {
+  for (const [reason, rows, sentence] of [
+    ['cli_not_ready', ['ordinary output'], 'Agentrix has not sent this message because it cannot yet confirm a safe terminal input.'],
+    ['waiting_permission', ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'], 'Claude Code is waiting for your permission. Answer in the terminal before this message can be sent.'],
+    ['waiting_question', fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-investigation-single.txt'), 'utf8').split(/\r?\n/), 'Claude Code is waiting for your answer. Answer the question in the terminal first.'],
+    ['menu_open', ['Settings', 'Esc to close'], 'A terminal menu is open. Close it before this message can be sent.'],
+    ['input_has_draft', null, 'The terminal contains an unsent draft. Send or clear that draft first.'],
+  ]) await t.test(reason, async t => {
+    const h = workingComposerHarness(t, 'claude');
+    h.view.rows = rows ?? ['Settings', 'Esc to close']; h.render(); h.render(); await h.tick(600);
+    h.edit('waiting message'); h.press('Enter'); await h.tick(0);
+    if (reason === 'input_has_draft') { h.popup()?.props.onClose(); delete h.view.rows; h.view.draft = 'other words'; h.render(); h.render(); }
+    assert.equal(outboxReason(h), sentence);
+    assert.ok(elements(h.tree()).some(node => node.type === 'button' && node.props.children === en['取回']));
+  });
+  await t.test('queued_behind_turn', async t => {
+    const h = workingComposerHarness(t, 'claude');
+    h.edit('queued message'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+    const pending = elements(h.tree()).find(node => node.props.queued);
+    const { PendingPromptEntries } = loadUI('features/reading/PendingPromptEntries.tsx', { dompurify: { default: () => ({ sanitize: html => html }) } });
+    const html = renderToStaticMarkup(React.createElement(PendingPromptEntries, pending.props));
+    assert.match(html, /Claude Code has queued this message and will read it after the current work\./);
+  });
+  await t.test('receipt_missing', async t => {
+    const h = workingComposerHarness(t, 'claude');
+    h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('unknown delivery'); h.press('Enter');
+    h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
+    h.remount(); await h.tick(1000);
+    assert.equal(outboxReason(h), 'Delivery is not confirmed. Check the terminal before sending this message again.');
+  });
+});
 
 for (const removal of ['stale', 'popAll', 'remove', 'history-only', 'history-remount']) for (const dropped of [0, 1, 4]) test(`claude: Esc restores a queued input before the next send (${removal}, ${dropped} dropped Enters)`, async t => {
   const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
@@ -2929,7 +3042,7 @@ for (const action of ['先发送终端里这段', '清空它，再发送新消�
   assert.equal(h.popup(), undefined); assert.deepEqual(errors, []);
   const notice = leftoverNotice(h);
   assert.equal(notice.title, en['终端输入框里还有一段文字，新消息排在它后面']); assert.equal(notice.text, 'left in the box');
-  assert.equal(elements(h.tree()).find(node => node.props.className === 'reading-outbox').props.children[0].props.children, en['排在终端输入框里那段文字后面']);
+  assert.equal(outboxReason(h), 'The terminal contains an unsent draft. Send or clear that draft first.');
   assert.deepEqual(Object.keys(notice.actions), [en['先发送终端里这段'], en['清空它，再发送新消息']]);
   notice.actions[en[action]].onClick(); await h.tick(80); h.render();
   for (let step = 0; step < 6; step++) await h.tick(700);
@@ -3047,7 +3160,7 @@ test('claude: a waiting message goes once the frame settles, without later outpu
   assert.deepEqual(outboxTexts(h), ['after the dialog']);
   h.popup()?.props.onClose(); delete h.view.rows; h.view.pending = true; h.render();
   const writes = h.stateWrites();
-  h.view.pending = false; await h.advance(50);
+  h.view.pending = false; h.parsed(); await h.advance(50);
   assert.ok(h.stateWrites() > writes, 'the view asks to look again once the frame is parsed');
   h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
   assert.deepEqual(h.pasted.map(item => item.text), ['after the dialog']); assert.deepEqual(outboxTexts(h), []);

@@ -8,9 +8,9 @@ export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 
 // What a terminal shows right now, as text rows: the agent's own screen (its welcome lines, footer, mode and the
 // choices it is asking about) for the reading view to present without switching to the terminal. Each
-// TerminalPane registers its xterm; readers subscribe and are told at most every 100 ms after output.
-export type Screen = { rows: string[]; sessionId: string | null; revision: number; updatedAt: number; stateUpdatedAt?: Record<ScreenAgent, number>; pending?: boolean; approval?: ApprovalStamp | null; instances?: Record<ScreenAgent, number> };
-type Entry = { terminal: Terminal; listeners: Set<(screen: Screen) => void>; timer: number; dispose: () => void;
+// TerminalPane registers its xterm; each completed parse publishes a stable frame, even for an unchanged spinner.
+export type Screen = { rows: string[]; sessionId: string | null; epoch?: number; revision: number; updatedAt: number; stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; approval?: ApprovalStamp | null; instances?: Record<ScreenAgent, number> };
+type Entry = { terminal: Terminal; listeners: Set<(screen: Screen) => void>; dispose: () => void; frame?: Screen; epoch: number;
   sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; updatedAt: number;
   states: Partial<Record<ScreenAgent, string | null>>; stateUpdatedAt: Record<ScreenAgent, number>;
   identities: Partial<Record<ScreenAgent, string | null>>; instances: Record<ScreenAgent, number>; rowsKey: string };
@@ -27,12 +27,13 @@ function read(terminal: Terminal): Pick<Screen, 'rows'> {
   return { rows };
 }
 
-function snapshot(entry: Entry): Screen {
+function capture(entry: Entry): Screen {
   const screen = read(entry.terminal);
-  // Observe every parsed screen, before the 100 ms UI publisher. Otherwise A/B/A inside one UI frame reuses A.
+  entry.revision = ++frameRevision;
+  // State timestamps advance only when the observed state changes, never for spinner or background output.
   const rowsKey = JSON.stringify(screen.rows);
   if (rowsKey !== entry.rowsKey) {
-    entry.revision = ++frameRevision; entry.updatedAt = Date.now();
+    entry.updatedAt = Date.now();
     entry.rowsKey = rowsKey;
     for (const agent of ['claude', 'codex'] as const) {
       const parsed = parseAgentScreen(agent, screen.rows), choice = parsed.choice;
@@ -42,22 +43,31 @@ function snapshot(entry: Entry): Screen {
       if (entry.identities[agent] !== identity) { entry.identities[agent] = identity; entry.instances[agent] = ++incarnation; }
     }
   }
-  return { ...screen, sessionId: entry.sessionId ?? null, revision: entry.revision, updatedAt: entry.updatedAt, pending: entry.pending > 0,
+  return entry.frame = { ...screen, sessionId: entry.sessionId ?? null, epoch: entry.epoch, revision: entry.revision, updatedAt: entry.updatedAt, parsed: true,
     stateUpdatedAt: { ...entry.stateUpdatedAt }, approval: entry.pending ? null : entry.approval, instances: { ...entry.instances } };
+}
+
+function snapshot(entry: Entry): Screen {
+  return { ...entry.frame!, pending: entry.pending > 0, approval: entry.pending ? null : entry.approval };
+}
+
+function publish(entry: Entry) {
+  capture(entry);
+  const frame = snapshot(entry);
+  entry.listeners.forEach(listener => listener(frame));
 }
 
 export function registerScreen(id: string, terminal: Terminal, sessionId?: string) {
   const previous = entries.get(id), listeners = previous?.listeners ?? pending.get(id) ?? new Set(); pending.delete(id);
   previous?.dispose();
-  const entry: Entry = { terminal, listeners, timer: 0, dispose: () => {}, sessionId, approval: null, writes: 0, pending: 0,
+  const entry: Entry = { terminal, listeners, dispose: () => {}, epoch: ++incarnation, sessionId, approval: null, writes: 0, pending: 0,
     revision: ++frameRevision, updatedAt: Date.now(), states: {}, stateUpdatedAt: { claude: 0, codex: 0 }, identities: {}, instances: { claude: ++incarnation, codex: ++incarnation }, rowsKey: '' };
   const notify = () => {
-    snapshot(entry);
-    if (entry.timer || !entry.listeners.size) return;
-    entry.timer = window.setTimeout(() => { entry.timer = 0; if (entries.get(id) !== entry || !entry.listeners.size) return; const screen = snapshot(entry); entry.listeners.forEach(listener => listener(screen)); }, 100);
+    if (entries.get(id) === entry) publish(entry);
   };
   const written = terminal.onWriteParsed(notify), resized = terminal.onResize(notify);
-  entry.dispose = () => { written.dispose(); resized.dispose(); clearTimeout(entry.timer); };
+  entry.dispose = () => { written.dispose(); resized.dispose(); };
+  capture(entry);
   entries.set(id, entry);
   listeners.forEach(listener => listener({ rows: [], sessionId: sessionId ?? null, revision: entry.revision, updatedAt: entry.updatedAt }));
   notify();
@@ -85,7 +95,7 @@ export function writeScreen(id: string, data: string, approval?: ApprovalStamp) 
     if (entries.get(id) !== entry) return;
     entry.pending--;
     if (serial === entry.writes && approval && approval.sessionId === entry.sessionId) entry.approval = { ...approval };
-    snapshot(entry);
+    publish(entry);
   });
 }
 
