@@ -1031,7 +1031,6 @@ function sessionView(events, bridge, base = {}) {
   // The message box's helpers are the reading view's real ones, run on the same hooks as the view (the harness is made just below).
   const readingFile = file => harness.load(`src/features/reading/${file}`);
   Object.defineProperties(parts, {
-    createDictationSend: { value: require('../src/features/reading/dictation-send.ts').createDictationSend },
     splitQuote: { value: load('features/reading/message-quote.ts').splitQuote }, isCommandDraft: { get: () => readingFile('useCommandPalette.ts').isCommandDraft },
     useComposerHistory: { get: () => readingFile('useComposerHistory.ts').useComposerHistory }, useCommandPalette: { get: () => readingFile('useCommandPalette.ts').useCommandPalette },
     useMentions: { get: () => readingFile('useMentions.ts').useMentions }, MentionPalette: { get: () => harness.load('src/features/reading/MentionPalette.tsx').MentionPalette },
@@ -1047,8 +1046,7 @@ function sessionView(events, bridge, base = {}) {
     './native-notices.ts': load('features/native-session/native-notices.ts'),
     // The hook of the Claude commands runs on the same hooks as the view (the harness is made just below).
     './useComposerActions.ts': { get useComposerActions() { return harness.load('src/features/native-session/useComposerActions.ts').useComposerActions; } },
-    './dictation-send': require('../src/features/reading/dictation-send.ts'),
-    './voice-input': { dictateInto: (id, insert, sends, options) => { const binding = { id, insert, sends, options }; voice = binding; return () => { if (voice === binding) voice = null; }; } },
+    './voice-input': { dictateInto: (id, insert, options) => { const binding = { id, insert, options }; voice = binding; return () => { if (voice === binding) voice = null; }; } },
     './VoiceButton': { VoiceButton },
     './SwitchNotice': { asksChoice: state => (state?.phase === 'awaiting-choice' || state?.phase === 'waiting-background') && !!state.requestId, SwitchLine() {}, SwitchQuestion() {} }, './native-words': words(),
   });
@@ -1075,65 +1073,54 @@ function voiceBox(view, value = '', at = value.length, end = at) {
   view.type(value); return node;
 }
 
-for (const provider of ['claude', 'codex']) test(`${provider}: native dictation inserts at the caret, and only an explicit voice submit uses the shared half-second grace`, async t => {
+for (const provider of ['claude', 'codex']) test(`${provider}: native dictation inserts at the caret and never sends, even when ended with Enter; pictures stay attached and go with the owner’s own Enter`, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } }, { provider });
+  const reader = globalThis.FileReader;
+  globalThis.FileReader = class { readAsDataURL(file) { Promise.resolve().then(() => { this.result = `data:${file.type};base64,${file.body}`; this.onload(); }); } };
   try {
     const node = voiceBox(view, 'before after', 7);
     assert.ok(view.voice(), 'native composer registers with the existing dictation controller');
-    assert.deepEqual([view.voice().id, view.voice().sends, view.voiceButton().disabled], ['t1', true, false]);
-    view.voice().insert('spoken ', false); view.tree();
+    assert.deepEqual([view.voice().id, view.voiceButton().disabled], ['t1', false]);
+    assert.equal(view.voice().insert.length, 1, 'the controller hands over the words only: there is no submit flag');
+    view.box().props.onPaste({ clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ type: 'image/png', body: 'AAAA', size: 4 }) }] }, preventDefault() {} });
+    await settle();
+    view.voice().insert('spoken '); view.tree();
     assert.equal(view.box().props.value, 'before spoken after');
-    assert.equal(node.selectionStart, 14); t.mock.timers.tick(500); await settle(); assert.deepEqual(sends, []);
+    assert.equal(node.selectionStart, 14);
     node.value = view.box().props.value; node.selectionStart = node.selectionEnd = node.value.length;
-    view.voice().insert(' next', true); view.tree();
-    t.mock.timers.tick(499); await settle(); assert.deepEqual(sends, []);
-    t.mock.timers.tick(1); await settle();
-    assert.equal(sends.length, 1); assert.equal(sends[0][3], 'before spoken after next');
+    view.voice().insert(' next'); view.tree();
+    t.mock.timers.tick(5000); await settle();
+    assert.deepEqual(sends, [], 'nothing is sent by dictation, however long it waits');
+    assert.equal(view.box().props.value, 'before spoken after next');
+    view.press(); await settle();
+    assert.equal(sends.length, 1); assert.equal(sends[0][3], 'before spoken after next'); assert.deepEqual(sends[0][4], ['data:image/png;base64,AAAA']);
     view.voiceButton().onError('麦克风访问被拒绝，请在 Windows 设置中允许桌面应用使用麦克风。');
     assert.match(view.find(node => node.props.role === 'alert').props.children, /麦克风访问被拒绝/);
-  } finally { document.activeElement = null; view.done(); }
+  } finally { globalThis.FileReader = reader; document.activeElement = null; view.done(); }
 });
 
-test('native dictation follows composer availability and discards stale recordings and delayed sends across switches and session replacement', async t => {
+test('native dictation follows composer availability and discards stale recordings and delayed results across switches and session replacement', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
   try {
     voiceBox(view);
     view.show([view.ev('session.state', { state: 'running' })]);
     assert.equal(view.voiceButton().disabled, false, 'work still takes owner input');
-    const previous = view.voice(); previous.insert('held', true); view.tree();
+    const previous = view.voice(); previous.insert('held'); view.tree();
     view.handoff.locked = true; view.tree();
     assert.equal(view.voiceButton().disabled, true); assert.equal(view.voice().options.available(), false);
     view.handoff.locked = false; view.tree();
-    previous.insert('STALE', true); view.tree(); t.mock.timers.tick(500); await settle();
+    previous.insert('STALE'); view.tree(); t.mock.timers.tick(500); await settle();
     assert.equal(view.box().props.value, 'held'); assert.deepEqual(sends, []);
     const oldSession = view.voice(), other = stream({ runtimeSessionId: 'replacement' });
     view.show([other('session.state', { state: 'idle' })]); view.tree();
-    oldSession.insert('OLD_SESSION', true); view.tree();
+    oldSession.insert('OLD_SESSION'); view.tree();
     assert.doesNotMatch(view.box().props.value, /OLD_SESSION/);
     view.show([other('session.state', { state: 'closed' })]); view.tree();
     assert.equal(view.voiceButton().disabled, true); assert.equal(view.voice().options.available(), false);
     t.mock.timers.tick(500); await settle(); assert.deepEqual(sends, []);
   } finally { document.activeElement = null; view.done(); }
-});
-
-test('native dictation grace cancels on editing, IME, Escape, unmount and direct Enter sends once', async t => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  for (const action of ['edit', 'ime', 'escape', 'unmount', 'enter']) {
-    const sends = [], view = sessionView(idle, { send: async (...args) => { sends.push(args); return { ok: true, value: {} }; } });
-    let disposed = false;
-    try {
-      voiceBox(view); view.voice().insert('spoken', true); view.tree();
-      if (action === 'edit') view.type('edited');
-      if (action === 'ime') view.box().props.onCompositionStart();
-      if (action === 'escape') view.press({ key: 'Escape' });
-      if (action === 'unmount') { view.done(); disposed = true; }
-      if (action === 'enter') view.press();
-      if (!disposed) view.tree(); t.mock.timers.tick(500); await settle();
-      assert.equal(sends.length, action === 'enter' ? 1 : 0, action);
-    } finally { document.activeElement = null; if (!disposed) view.done(); }
-  }
 });
 
 test('Enter sends the trimmed message at once and shows it as sending until the runtime echoes it; Shift+Enter, IME and an empty box send nothing', async () => {

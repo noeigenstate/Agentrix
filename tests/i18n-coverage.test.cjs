@@ -2,7 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { en } = require('../electron/i18n.cjs');
+const { en: shipped } = require('../electron/i18n.cjs');
+// English a round adds in a root locale-additions-*.json counts until the lead folds it into en.json.
+const root = path.join(__dirname, '..');
+const en = Object.assign({}, shipped, ...fs.readdirSync(root).filter(name => /^locale-additions-[\w-]+\.json$/.test(name)).map(name => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'))));
 const { listAgentCommands } = require('../electron/agent-commands.cjs');
 const { THEMES } = require('../src/shared/themes.ts');
 
