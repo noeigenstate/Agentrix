@@ -180,7 +180,8 @@ function global:claude {
     $settingsArgs = @()
     if ($settings) {
         $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
-        $sessionName = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' }
+        # Named after the session (its note is <session>-skills.txt), as main removes it with that session; the bootstrap is named after the terminal.
+        $sessionName = if ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) }
         $settingsFile = Join-Path $sessionFolder ($sessionName + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')
         [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
         $settingsArgs = @('--settings', $settingsFile)
