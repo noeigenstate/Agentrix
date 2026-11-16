@@ -132,10 +132,13 @@ function argumentsOf(argv) {
   options.role = roles.get(options.role);
   if (options.kind && !TASK_KINDS.includes(options.kind)) throw new Error(`Expected --kind ${TASK_KINDS.join(', ')}`);
   if (options.title.length > 1024 || options.model.length > 160 || options.effort.length > 32) throw new Error('Assignment is too long');
+  // Each of these reaches a CLI as an option's value: none may start with a dash and become an option of its own.
+  if (!/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(options.model)) throw new Error('Expected a model name for --model');
+  if (!/^[A-Za-z][\w-]*$/.test(options.effort)) throw new Error('Expected an effort level for --effort');
   if (agent === 'claude' && (options.fast || options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
   if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
-  if (options.resume && !/^[\w-]{1,160}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
+  if (options.resume && !/^[A-Za-z0-9][\w-]{0,159}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
   if (options.meeting && options.readOnly) throw new Error('A roundtable session must later build; --meeting cannot use --read-only');
   if (options.meeting && options.skipMeeting) throw new Error('--meeting and --skip-meeting cannot be combined');
   if (options.meeting && options.role === '执行' && !options.allow.length) throw new Error('An execution roundtable requires --allow for the agreed scope');

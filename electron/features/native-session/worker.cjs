@@ -2,12 +2,16 @@ const { randomUUID } = require('node:crypto');
 const { exact, text, assert } = require('./validate.cjs');
 const { choosePath } = require('./routing.cjs');
 const { createEventStream } = require('./events.cjs');
+// Values a CLI receives as option values: none may start with a dash (it would become an option of its own). A Claude
+// session id is a UUID.
+const CLI_VALUE = /^[A-Za-z0-9][\w.:@+/[\]-]*$/;
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // terminals: main's worker terminals (worker-terminals/BOUNDARY.md); a local terminal lead's worker runs in one of them.
 function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env }) {
   return control.onRequest('claude-sdk.run', async (run, payload, stream) => {
     assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out', 'permission']) && text(payload.prompt) &&
-      (payload.model === undefined || text(payload.model, 160)) && (payload.effort === undefined || ['low', 'medium', 'high', 'max', 'xhigh'].includes(payload.effort))
-      && (payload.permission == null || ['plan', 'acceptEdits'].includes(payload.permission)));
+      (payload.model === undefined || text(payload.model, 160) && CLI_VALUE.test(payload.model)) && (payload.effort === undefined || ['low', 'medium', 'high', 'max', 'xhigh'].includes(payload.effort))
+      && (payload.permission == null || ['plan', 'acceptEdits'].includes(payload.permission)) && (payload.resume == null || SESSION_ID.test(payload.resume)));
     const runtimeSessionId = randomUUID();
     const runtimeEnv = { ...env(run) };
     for (const name of Object.keys(runtimeEnv)) if (/^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|.*SESSION_KEY)|^CLAUDE_CODE_ENTRYPOINT$/i.test(name)) delete runtimeEnv[name];
