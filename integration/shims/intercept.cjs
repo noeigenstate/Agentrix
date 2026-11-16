@@ -49,15 +49,28 @@ function withShims(source, { depth, runId, proof }) {
   if (installed && fs.existsSync(path.join(__dirname, 'hooks/zsh/.zshenv'))) {
     // Login shells (Codex's bash -lc and zsh -lc) and Claude Code's shell snapshot rebuild PATH from the user's start-up
     // files, which may put a real CLI first. Each hook runs the user's own one first, then puts the shims first again.
-    const shell = shellFolder(__dirname);
+    // Inside a planner, this Agentrix's or another's, the incoming hooks are Agentrix's: the user's own stay where the
+    // first one saved them, so no hook is ever saved as the user's and sourced by itself.
+    const nested = source.AGENTRIX_SHIMS !== undefined, shell = shellFolder(__dirname);
+    // CLAUDE_ENV_FILE is the session's private copy (bootstrap-file.cjs), never an installed file: Claude Code lets
+    // SessionStart hooks append to it.
+    const session = nested && source.CLAUDE_ENV_FILE || bootstrapField(source.AGENTRIX_BOOTSTRAP, 'claudeEnvFile');
     env.AGENTRIX_SHIMS = shell;
-    for (const [name, file] of [['BASH_ENV', `${shell}/hooks/bash-env.sh`], ['CLAUDE_ENV_FILE', path.join(__dirname, 'hooks/claude-env.sh')], ['ZDOTDIR', `${shell}/hooks/zsh`]]) {
+    for (const [name, file] of [['BASH_ENV', `${shell}/hooks/bash-env.sh`], ['CLAUDE_ENV_FILE', session], ['ZDOTDIR', `${shell}/hooks/zsh`]]) {
       const saved = `AGENTRIX_SHIM_USER_${name}`;
-      if (env[name] !== file) { if (env[name]) env[saved] = env[name]; else delete env[saved]; }
-      env[name] = file;
+      if (!nested && !shimHook(source[name])) { if (source[name]) env[saved] = source[name]; else delete env[saved]; }
+      if (file) env[name] = file;
     }
   }
   return env;
+}
+
+// Whether a hook value lies in an Agentrix shim folder (<shims>/hooks/<file> or <shims>/hooks/zsh).
+const shimHook = value => !!value && fs.existsSync(path.join(path.dirname(path.dirname(process.platform === 'win32'
+  ? value.replace(/^\/([A-Za-z])(?=\/)/, '$1:') : value)), '.agentrix-shims'));
+
+function bootstrapField(file, name) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))[name]; } catch { return undefined; }
 }
 
 // What withShims changes, as words for env(1): -u NAME or NAME=VALUE. A shell wrapper starts one planner with them.

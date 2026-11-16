@@ -15,7 +15,7 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
 const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
-const { writeBootstrap } = require('./features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, removeBootstrap } = require('./features/terminal-events/bootstrap-file.cjs');
 const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
 const { createHookIngest } = require('./features/terminal-events/hook-ingest.cjs');
 const { terminalHooks, reportHookChannel, startHookLaunch } = require('./features/terminal-events/hook-channel.cjs');
@@ -1081,10 +1081,11 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   // The outbox is beside this file and outlives a host process restart.
   const bootstrapFile = path.join(runtimeDir, `${id}.json`);
   writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability });
-  const env = nativeEnvironment(bootstrapFile, launch?.codexHome);
+  // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
+  const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
     skills.delivery(project, false, sessionId, { agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
-  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, context,
+  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
     sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, providerSessionId };
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
@@ -1269,7 +1270,7 @@ async function initializeNativeSessions() {
     terminal: async (spec, reason) => {
       const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId, { preserveNative: true, preserveCalls: true });
       nativeSpecs.delete(spec.terminalId);
-      if (spec.bootstrapFile) fs.rmSync(spec.bootstrapFile, { force: true });
+      if (spec.bootstrapFile) removeBootstrap(spec.bootstrapFile);
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
       launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history), threadId: history?.id || null });
       store.setRestore(spec.terminalId, { nativeTransport: null });
@@ -1519,10 +1520,10 @@ function cleanupTerminalFiles(s) {
     for (const entry of entries) {
       if (!entry.isDirectory() && entry.name.startsWith(prefix)) fs.rmSync(path.join(folder, entry.name), { force: true });
     }
-    fs.rmSync(s.bootstrapFile, { force: true });
+    removeBootstrap(s.bootstrapFile);
   }
   if (s.skillNoteFile) fs.rmSync(s.skillNoteFile, { force: true });
-  for (const file of s.switchBootstrapFiles || []) fs.rmSync(file, { force: true });
+  for (const file of s.switchBootstrapFiles || []) removeBootstrap(file);
 }
 
 function disposeTerminal(id, { preserveNative = false, preserveSwitch = false, preserveCalls = false } = {}) {

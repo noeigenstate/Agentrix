@@ -13,7 +13,7 @@ function fixture(t) {
   const runtimeDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-terminal-cleanup-')));
   t.after(() => fs.rmSync(runtimeDir, { recursive: true, force: true }));
   const sessionId = randomUUID(), id = 'terminal', otherId = randomUUID();
-  const files = session => [`${session}.json`, `${session}-skills.txt`, `${session}-claude-settings-${'a'.repeat(32)}.json`, `${session}-claude-settings-Abc123`];
+  const files = session => [`${session}.json`, `${session}-claude-env.sh`, `${session}-skills.txt`, `${session}-claude-settings-${'a'.repeat(32)}.json`, `${session}-claude-settings-Abc123`];
   for (const name of [...files(sessionId), ...files(otherId), 'unrelated.json']) fs.writeFileSync(path.join(runtimeDir, name), 'fixture');
   const s = { projectId: 'project', terminalId: id, sessionId, bootstrapFile: path.join(runtimeDir, `${sessionId}.json`), skillNoteFile: path.join(runtimeDir, `${sessionId}-skills.txt`),
     gate: { dispose() {} }, promptQueue: { reset() {} }, completionWork: { reset: () => false }, approval: { context() {} } };
@@ -22,7 +22,7 @@ function fixture(t) {
   const context = vm.createContext({ fs, path, sessions, nativeSessions: null, nativeSpecs: new Map(), readingHistory: { close() {} }, AgentCalls, disposeDispatchInbox: terminal => calls.push(['inbox', terminal]), endSkillSession() {}, stopUsageAccount() {}, syncDashboardLive() {},
     skills: { endSession(project, session) { calls.push([project, session]); } }, clearTimeout, broadcast() {}, store: { setRestore() {} },
     restorePlans: new Map(), quitting: false, project: { id: s.projectId }, id, s, sessionId, bootstrapFile: s.bootstrapFile, skillNoteFile: s.skillNoteFile,
-    report(error) { throw error; }, flush() {}, terminal: { onExit(fn) { context.onExit = fn; } }, t: () => '' });
+    report(error) { throw error; }, flush() {}, removeBootstrap: require('../electron/features/terminal-events/bootstrap-file.cjs').removeBootstrap, terminal: { onExit(fn) { context.onExit = fn; } }, t: () => '' });
   vm.runInContext(main.slice(main.indexOf('function cleanupTerminalFiles('), main.indexOf('function registerIpc(')), context);
   return { runtimeDir, files, sessionId, otherId, id, s, sessions, calls, context };
 }

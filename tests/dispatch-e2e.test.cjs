@@ -41,6 +41,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
     findProject: () => project, runtimeDir: root, integrationDir: path.join(__dirname, '../integration'), eventServer: null, controlAddress: null,
     startupNote: () => '', READING_NOTE: '', handoffFile: () => '', nativeEnvironment: () => ({}),
     writeBootstrap: ({ file, ...value }) => fs.writeFileSync(file, JSON.stringify(value)),
+    removeBootstrap: require('../electron/features/terminal-events/bootstrap-file.cjs').removeBootstrap,
     scheduleState() {}, broadcast() {}, send() {}, report: value => errors.push(String(value?.message || value)),
     console: { warn: (_message, code, id) => warnings.push({ code, id }) },
     dashboard: { run() {} }, createNativeUsage: () => ({ apply() {} }), nativeSessions: { forget: async () => {}, tokenRate: () => null },

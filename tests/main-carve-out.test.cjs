@@ -17,7 +17,9 @@ const modules = {
 test('main.cjs only wires the terminal activity, bootstrap, switch host, host inputs and dispatch intake modules', () => {
   for (const [file, name] of Object.entries(modules)) {
     const specifier = `./${path.posix.relative('electron', file)}`;
-    assert.match(main, new RegExp(`const \\{ ${name} \\} = require\\('${specifier.replaceAll('.', '\\.')}'\\);`), `main requires ${file}`);
+    // The bootstrap module is plain functions: main takes every one it exports (writing and removing the file).
+    const names = name === 'writeBootstrap' ? Object.keys(require(path.join(root, file))).join(', ') : name;
+    assert.match(main, new RegExp(`const \\{ ${names} \\} = require\\('${specifier.replaceAll('.', '\\.')}'\\);`), `main requires ${file}`);
   }
   assert.match(main, /Object\.assign\(host, createClaudeActivity\(host\), createSwitchHost\(host\), createHostInputs\(host\), createDispatchIntake\(host\)\);/,
     'each factory gets the app shell and its functions join it');

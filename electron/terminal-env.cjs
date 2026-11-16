@@ -1,5 +1,8 @@
+const { withoutShims } = require('./shared/agentrix-shims.cjs');
+
 function createTerminalEnvironment(source, bootstrapFile) {
-  const env = { ...source };
+  // Agentrix started inside a planner (a worker's GUI check, beta beside stable): its terminals start as the owner's.
+  const env = withoutShims(source);
   // A terminal window can be launched from a non-interactive host (including
   // Codex tools or CI). Its output policy must not disable colors in our PTYs.
   for (const key of Object.keys(env)) {

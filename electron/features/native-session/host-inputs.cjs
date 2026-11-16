@@ -76,11 +76,12 @@ function createHostInputs(deps) {
   }
 
   // The environment a native session's CLI runs with, and an account read: a terminal's, pointed at the session's
-  // bootstrap file, with the Codex home its launch names.
-  function nativeEnvironment(bootstrapFile, codexHome) {
+  // bootstrap file, with the Codex home its launch names. A planner's env has the shims; the owner's own commands
+  // (`planner: false`) run without them.
+  function nativeEnvironment(bootstrapFile, codexHome, { planner = true } = {}) {
     const { createTerminalEnvironment, withoutAppImage } = deps;
     let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
-    if (bootstrapFile && fs.existsSync(bootstrapFile)) {
+    if (planner && bootstrapFile && fs.existsSync(bootstrapFile)) {
       const { shims } = JSON.parse(fs.readFileSync(bootstrapFile, 'utf8'));
       if (shims) env = require(path.join(shims, 'intercept.cjs')).withShims(env, { depth: 0 });
     }

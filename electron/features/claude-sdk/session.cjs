@@ -581,7 +581,8 @@ function createClaudeSession(spec, emit, dependencies) {
       return new Error(notSent + (detail && detail !== notSent ? '\n' + detail : ''));
     };
     card('running'); setState('running');
-    const task = runShell({ cwd: spec.cwd, env: spec.env || process.env, command, signal: abort.signal,
+    // The owner's own command: the session's env without the planner's shims (shellEnv), so a typed claude is the real CLI.
+    const task = runShell({ cwd: spec.cwd, env: spec.shellEnv || spec.env || process.env, command, signal: abort.signal,
       output: ({ stdout, stderr, combined }) => card('running', combined ?? stdout + stderr) }).then(async result => {
       job.closed = result.closed;
       job.returned = true;

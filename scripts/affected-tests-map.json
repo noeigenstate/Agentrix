@@ -392,7 +392,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "ddde6b6b8e9c930f9a5ee5d2215444273c365e7248bcb98e55b7f4cbbde54c25",
+      "digest": "a2c1755a00676210b58026d9ac9dcb44c056eaa45860945985b155488dfffc43",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
@@ -406,7 +406,7 @@
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "c188de3ae14c103cd0efd77b7f99515d4ba1b7e73f2effb1a0b7035bd208697e",
+      "digest": "61836a81296a4785e189639ac9b377be52166dca903bd6000781027d6693e343",
       "targets": [
         "integration/dispatch.cjs"
       ],
