@@ -23,9 +23,12 @@ const STRICT = new Set(['drive-scan', 'registry']), CODEX_OUTPUT = /^codex(?:-cl
 const VENDOR_DEPTH = 3;
 // The Windows CPUs npm ships a platform package for, and the target triple of each one's binary.
 const TRIPLES = { x64: 'x86_64-pc-windows-msvc', arm64: 'aarch64-pc-windows-msvc' };
-// The package a shim runs, relative to the shim's folder: npm's `%dp0%\node_modules\@openai\codex` (a global prefix) or
-// `$basedir/../@openai/codex` (a project's node_modules\.bin), pnpm's `%~dp0\global\5\node_modules\@openai\codex`.
-const SHIM_PACKAGE = /(?:%~?dp0%?|\$basedir)[\\/]((?:[^"\r\n%$]*?[\\/])?@openai[\\/]codex)[\\/]bin[\\/]codex\.js/gi;
+// The package a shim runs: relative to the shim's folder (group 1) — npm's `%dp0%\node_modules\@openai\codex` (a global
+// prefix) or `$basedir/../@openai/codex` (a project's node_modules\.bin), pnpm's `%~dp0\global\5\node_modules\@openai\codex`
+// — or, where no relative path reaches it, by an absolute path (group 2): a drive or a UNC share, quoted, as pnpm's
+// cmd-shim writes when its global dir is on another drive than PNPM_HOME (`"C:\…\codex\bin\codex.js"` in codex.cmd,
+// `"C:/…/codex/bin/codex.js"` in codex.ps1 and the sh shim). Either way the shim must name @openai/codex's bin/codex.js.
+const SHIM_PACKAGE = /(?:(?:%~?dp0%?|\$basedir)[\\/]((?:[^"\r\n%$]*?[\\/])?@openai[\\/]codex)|(?<=["'])((?:[A-Za-z]:|[\\/]{2}[^"'\\/\r\n]+[\\/][^"'\\/\r\n]+)(?:[\\/][^"'\r\n%$]*?)?[\\/]@openai[\\/]codex))[\\/]bin[\\/]codex\.js/gi;
 
 // What `codex --version` printed, or why it printed none, and whether it read as Codex's own (`codex`). Its input is
 // closed at once, so a stand-in that reads it ends.
@@ -146,9 +149,9 @@ function packageBinaries(dir, arch, path) {
 
 // The share (\\server\share\) a path is on, or null for a local one.
 const shareOf = (file, path) => (/^[\\/]{2}/.test(file) ? path.parse(path.resolve(file)).root.toLowerCase() : null);
-// A package a shim names stays inside the shim's folder (for node_modules\.bin, the node_modules it sits in): never
-// above it, and never a UNC path unless the folder itself is on that share. This is the guard: whoever can plant a
-// link in the folder can as well write its shim.
+// A package a shim names relative to itself stays inside the shim's folder (for node_modules\.bin, the node_modules it
+// sits in): never above it, and never a UNC path unless the folder itself is on that share. The shim's text is the
+// guard: whoever can plant a link in the folder can as well write its shim.
 function inside(folder, target, path) {
   const root = path.basename(folder).toLowerCase() === '.bin' ? path.dirname(folder) : folder, relative = path.relative(root, target);
   return (!shareOf(target, path) || !!shareOf(root, path)) && !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
@@ -237,9 +240,11 @@ function createCodexLocator({ probe = execFile, files = fs, storedPath = readSto
       for (const name of names.filter(name => !native(name))) {
         let text = '';
         try { text = await read(name); } catch { }
-        for (const [, relative] of text.matchAll(SHIM_PACKAGE)) {
-          const dir = path.resolve(folder, relative);
-          if (inside(folder, dir, path) && !packages.has(dir)) packages.set(dir, 'npm-shim');
+        // A package named relative to the shim stays in its folder; one named by an absolute path may be anywhere on
+        // this machine, and on a share only when the shim's folder is on that same share.
+        for (const [, relative, absolute] of text.matchAll(SHIM_PACKAGE)) {
+          const dir = path.resolve(folder, relative ?? absolute);
+          if ((relative ? inside(folder, dir, path) : onShareOf(folder, dir, path)) && !packages.has(dir)) packages.set(dir, 'npm-shim');
         }
       }
       const shim = first && !native(first) ? first : null, npm = [], kept = [];

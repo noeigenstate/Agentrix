@@ -219,6 +219,45 @@ test("a package a link takes elsewhere on this machine is followed; one really o
   }
 });
 
+// pnpm's shims for a package its cmd-shim (@zkochan/cmd-shim) could not name relative to PNPM_HOME, as its templates
+// write them: the package by an absolute path in quotes, backslashes in codex.cmd, forward slashes in codex.ps1 and the
+// sh shim, and NODE_PATH naming the package's bin\node_modules. No pnpm shim is captured under tests/fixtures/real-cli.
+function pnpmShims(target) {
+  const back = target.replaceAll('/', '\\'), forward = target.replaceAll('\\', '/');
+  const nodePath = `${back.replace(/\\codex\.js$/, '')}\\node_modules;${back.replace(/\\@openai\\codex\\bin\\codex\.js$/, '')}\\.pnpm\\node_modules`;
+  return {
+    'codex.cmd': `@SETLOCAL\r\n@IF NOT DEFINED NODE_PATH (\r\n  @SET "NODE_PATH=${nodePath}"\r\n) ELSE (\r\n  @SET "NODE_PATH=${nodePath};%NODE_PATH%"\r\n)\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "${back}" %*\r\n) ELSE (\r\n  @SET PATHEXT=%PATHEXT:;.JS;=;%\r\n  node  "${back}" %*\r\n)\r\n`,
+    'codex.ps1': `#!/usr/bin/env pwsh\n$basedir=Split-Path $MyInvocation.MyCommand.Definition -Parent\n\n$exe=""\n$pathsep=":"\n$env_node_path=$env:NODE_PATH\n$new_node_path="${nodePath}"\nif ($PSVersionTable.PSVersion -lt "6.0" -or $IsWindows) {\n  $exe=".exe"\n  $pathsep=";"\n}\n$ret=0\nif (Test-Path "$basedir/node$exe") {\n  if ($MyInvocation.ExpectingInput) {\n    $input | & "$basedir/node$exe"  "${forward}" $args\n  } else {\n    & "$basedir/node$exe"  "${forward}" $args\n  }\n  $ret=$LASTEXITCODE\n} else {\n  if ($MyInvocation.ExpectingInput) {\n    $input | & "node$exe"  "${forward}" $args\n  } else {\n    & "node$exe"  "${forward}" $args\n  }\n  $ret=$LASTEXITCODE\n}\n$env:NODE_PATH=$env_node_path\nexit $ret\n`,
+    codex: `#!/bin/sh\nbasedir=$(dirname "$(echo "$0" | sed -e 's,\\\\,/,g')")\n\ncase \`uname\` in\n    *CYGWIN*) basedir=\`cygpath -w "$basedir"\`;;\nesac\n\nif [ -z "$NODE_PATH" ]; then\n  export NODE_PATH="${nodePath}"\nelse\n  export NODE_PATH="${nodePath}:$NODE_PATH"\nfi\nif [ -x "$basedir/node" ]; then\n  exec "$basedir/node"  "${forward}" "$@"\nelse\n  exec node  "${forward}" "$@"\nfi\n`,
+  };
+}
+
+test('a pnpm shim naming its package by an absolute path on another drive is found', async () => {
+  // PNPM_HOME on D:, pnpm's global dir on C:; the package links into the store, its platform package beside it there.
+  const pnpmHome = 'D:\\pnpm', global = 'C:\\pnpm-global\\5\\node_modules', linked = W.join(global, '@openai', 'codex');
+  const store = W.join(global, '.pnpm', '@openai+codex@0.166.0', 'node_modules', '@openai', 'codex');
+  const program = W.join(W.dirname(store), 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
+  const shims = pnpmShims(W.join(linked, 'bin', 'codex.js')), installed = { [linked]: { link: store }, [W.join(store, 'bin', 'codex.js')]: { text: '' }, [program]: { size: NATIVE } };
+  // Each of pnpm's shim forms alone, as the wrapper takes it: PowerShell's codex.ps1, cmd's codex.cmd, the bare sh shim.
+  for (const [name, told] of [['codex.ps1', 'codex.ps1'], ['codex.cmd', 'codex.CMD'], ['codex', 'codex']]) {
+    const { found, runs } = await find({ [W.join(pnpmHome, name)]: { text: shims[name] }, ...installed }, { PATH: pnpmHome, PNPM_HOME: pnpmHome });
+    assert.deepEqual([picked(found), runs], [{ file: program, path: W.join(pnpmHome, told), via: 'pnpm', version: '0.166.0', reason: null }, [program]], name);
+  }
+  // Off PATH and without PNPM_HOME: the shim's own folder on PATH still finds it, told by its layout.
+  assert.equal((await find({ [W.join('E:\\bin', 'codex.cmd')]: { text: shims['codex.cmd'] }, ...installed }, { PATH: 'E:\\bin' })).found.file, program);
+  // The shim text is the guard: an absolute path that is not @openai/codex's bin/codex.js names nothing.
+  const elsewhere = W.join('C:\\other', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
+  assert.equal((await find({ [W.join(pnpmHome, 'codex.cmd')]: { text: '@"C:\\other\\bin\\codex.js" %*\r\n' }, [elsewhere]: { size: NATIVE } }, { PATH: pnpmHome })).found.file, null);
+  // A share: only from a shim whose folder is on that same share.
+  const shared = '\\\\server\\share\\pnpm-global\\node_modules\\@openai\\codex', sharedProgram = W.join(shared, ...['node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe']);
+  for (const [folder, runs] of [[pnpmHome, false], ['\\\\server\\share\\pnpm', true], ['\\\\other\\share\\pnpm', false]]) {
+    const { found } = await find({ [W.join(folder, 'codex.cmd')]: { text: pnpmShims(W.join(shared, 'bin', 'codex.js'))['codex.cmd'] }, [sharedProgram]: { size: NATIVE } }, { PATH: folder });
+    assert.equal(found.file, runs ? sharedProgram : null, folder);
+  }
+  // Agentrix's own shim folder stays refused, whatever its shim names.
+  assert.equal((await find({ [W.join(pnpmHome, 'codex.cmd')]: { text: shims['codex.cmd'] }, [W.join(pnpmHome, '.agentrix-shims')]: { text: '' }, ...installed }, { PATH: pnpmHome })).found.file, null);
+});
+
 test("a package whose program moved to a layout no table knows is found in its vendor tree, within bounds and off foreign shares", async () => {
   // Codex once moved vendor/<triple>/codex/codex.exe to vendor/<triple>/bin/codex.exe; a later move is still found.
   const prefix = 'D:\\nodejs', moved = (name, ...parts) => {
