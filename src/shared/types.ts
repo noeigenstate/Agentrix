@@ -46,6 +46,8 @@ export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | nul
 export type AgentIntervention = { id: string; callId: string; text: string; at: number; route: 'dispatch' | 'parent'; status: 'queued' | 'delivered' | 'consumed' | 'rejected' | 'unknown'; reason?: string };
 export type AgentUsage = { provider: string | null; context: { used: number; window: number } | null; round: AgentTokens | null; total: AgentTokens | null; limits: { minutes: number | null; percent: number; resetsAt: number | null }[]; limitsAt?: number | null; limitsFrom?: string | null; resets?: { left: number | null; total: number | null } | null; resetQuery?: { state: 'loading' | 'ready' | 'unavailable' | 'error'; reason?: string; at?: number }; calls?: AgentCall[]; model?: string | null; rate?: TokenRate | null };
 export type CliState = { sessionId: string; revision: number; updatedAt: number; state: 'idle' | 'working' | 'waiting'; message?: string;
+  // Esc without a Stop that the screen confirms idle: state stays 'working' so no action treats it as idle; only the status light shows it idle.
+  screenIdle?: true;
   // Claude terminals, from main: its lifecycle, turn count, queued messages, background work and the dialogs open.
   phase?: 'starting' | 'ready' | 'working' | 'stopping' | 'exited'; turn?: number; queue?: number; background?: boolean; open?: { permission?: true; question?: true; menu?: true } };
 // What the renderer reads off a Claude terminal's screen, as booleans only; main drops a sessionId that is not the live PTY's.

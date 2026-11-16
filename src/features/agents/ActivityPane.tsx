@@ -44,7 +44,7 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
   const cli = cliStateFor(terminal.agent === 'claude' ? 'claude' : 'codex', frame, terminal, signal);
   const hasState = !!signal || !!frame && (cli.input || cli.waiting || cli.working);
-  const now = useNow(Date.now), activity = cli.waiting ? 'waiting' : cli.working ? 'working' : hasState
+  const now = useNow(Date.now), activity = cli.waiting ? 'waiting' : cli.shownWorking ? 'working' : hasState
     ? terminal.mainTurn?.state === 'interrupted' || terminal.mainTurn?.state === 'unknown' ? terminal.mainTurn.state : 'complete' : terminal.mainTurn?.state ?? terminal.codexActivity;
   // A round that ended without saying how (the provider's status was unknown) is neither complete nor interrupted: a quiet line, no check.
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
