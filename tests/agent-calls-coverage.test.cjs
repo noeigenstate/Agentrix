@@ -74,7 +74,7 @@ test('hook and transcript identities deduplicate in either order and late transc
     if (first === 'hook') calls.subagent(signal('start'));
     calls.apply(use());
     if (first === 'transcript') calls.subagent(signal('start'));
-    calls.apply(result());
+    calls.apply(result(-1));
     assert.equal(items(calls).length, 1);
     assert.equal(calls.running().length, 1);
     calls.subagent(signal('stop', 'child', 5));
@@ -258,4 +258,93 @@ test('an intercepted declaration preserves source through starting, running and 
   assert.equal(items(calls)[0].source, 'intercepted');
   calls.dispatch({ type: 'dispatch-end', id, endedAt: at(2), reason: 'error', exitCode: 1, outputTokens: null, activeMs: null });
   assert.equal(items(calls)[0].source, 'intercepted');
+});
+
+test('a tool-first row merge keeps the held run reader, samples and accounting and deduplicates both finished ids', async t => {
+  const records = (await fs.readFile(path.join(__dirname, 'fixtures/claude-subagent-ssh.compact.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  const finished = [], calls = tracker(t, { finished: (_call, event) => finished.push(event) });
+  calls.apply(use()); calls.subagent(signal('start', 'child', 1));
+  calls.remoteRecords({ child: { records: records.slice(0, 3), reset: true, partial: false, behind: true } });
+  const held = [...calls.calls.values()].find(call => call.agentId === 'child'), meter = held.meter;
+  calls.subagent(signal('stop', 'child', 9));
+  assert.equal(finished.length, 0);
+  calls.remoteRecords({ child: { toolUseId: 'toolu_child', records: records.slice(3), reset: false, partial: false, behind: false } });
+  assert.equal(finished.length, 1);
+  assert.equal(finished[0].outputTokens, 75);
+  assert.equal(calls.toolCall('toolu_child'), held, 'keep the object captured by the child reader callbacks');
+  assert.equal(held.meter, meter);
+  assert.equal(items(calls).length, 1);
+  const recorded = [], duplicate = tracker(t, { finished: (_call, event) => recorded.push(event) });
+  duplicate.apply(use()); duplicate.subagent(signal('start', 'child', 1)); duplicate.subagent(signal('stop', 'child', 2));
+  const ids = [...duplicate.calls.values()].map(call => call.id);
+  duplicate.remoteRecords({ child: { toolUseId: 'toolu_child', records: [], reset: false, partial: false, behind: false } });
+  assert.equal(recorded.length, 1);
+  assert.ok(ids.every(id => duplicate.finishedIds.has(id)));
+});
+
+test('SendMessage revives only known children from the parent and a matching failure restores the finished row', t => {
+  const f = hooks(t);
+  f.take('PreToolUse', { tool_name: 'SendMessage', tool_use_id: 'unknown', tool_input: { to: 'team-lead' } });
+  assert.deepEqual(items(f.calls), [], 'a name is not proof of a running child');
+  f.take('SubagentStart', { agent_id: 'child' }); f.take('SubagentStop', { agent_id: 'child' }, 2);
+  f.take('PreToolUse', { agent_id: 'nested-child', tool_name: 'SendMessage', tool_use_id: 'nested', tool_input: { to: 'child' } }, 3);
+  assert.equal(f.calls.running().length, 0);
+  for (const [index, event] of ['PostToolUseFailure', 'PermissionDenied'].entries()) {
+    const toolUseId = `continue-${index}`, seconds = 4 + index * 3;
+    f.take('PreToolUse', { tool_name: 'SendMessage', tool_use_id: toolUseId, tool_input: { to: 'child' } }, seconds);
+    assert.equal(f.calls.running().length, 1);
+    f.take(event, { tool_name: 'SendMessage', tool_use_id: 'unrelated' }, seconds + 1);
+    assert.equal(f.calls.running().length, 1, 'another tool cannot undo this revival');
+    f.take(event, { tool_use_id: toolUseId }, seconds + 1);
+    assert.equal(f.calls.running().length, 0, event);
+    assert.equal(items(f.calls)[0].endedAt, at(2));
+    assert.equal(items(f.calls)[0].resumed, undefined);
+  }
+  f.take('SubagentStart', { agent_id: 'running' }, 12);
+  f.take('PreToolUse', { tool_name: 'SendMessage', tool_use_id: 'message-only', tool_input: { to: 'running' } }, 13);
+  assert.equal(items(f.calls).find(item => item.id === 'agent:running').resumed, undefined);
+});
+
+test('current-generation terminal end proofs release signal-held rows with SSH clock correction and reject old generations', async t => {
+  const toolRecord = (name, seconds, id = 'stop-child') => ({ type: 'assistant', timestamp: new Date(at(seconds)).toISOString(),
+    message: { content: [{ type: 'tool_use', name, id, input: { task_id: 'child' } }] } });
+  const stopped = (seconds, id = 'stop-child') => ({ type: 'user', timestamp: new Date(at(seconds)).toISOString(),
+    message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'Stopped' }] } });
+  for (const proof of ['completed', 'interrupt', 'TaskStop', 'KillShell', 'killed', 'failed']) {
+    const calls = tracker(t);
+    calls.apply(use('toolu_child', { run_in_background: !['completed', 'interrupt'].includes(proof) }));
+    calls.subagent(signal('start', 'child', 1, { toolUseId: 'toolu_child' }));
+    if (['TaskStop', 'KillShell'].includes(proof)) { calls.apply(toolRecord(proof, 2)); calls.apply(stopped(3)); }
+    else if (['killed', 'failed'].includes(proof)) calls.apply({ type: 'user', timestamp: new Date(at(3)).toISOString(), message: { content:
+      `<task-notification><tool-use-id>toolu_child</tool-use-id><task-id>child</task-id><status>${proof}</status></task-notification>` } });
+    else { const record = result(3); if (proof === 'interrupt') record.message.content[0].is_error = true; calls.apply(record); }
+    assert.equal(calls.running().length, 0, proof);
+    calls.subagent(signal('continue', 'child', 4, { toolUseId: `continue-${proof}` }));
+    calls.apply(result(5));
+    assert.equal(calls.running().length, 1, 'the original Agent result cannot end its continuation even when delivered later');
+    calls.apply(toolRecord('TaskStop', 3, 'old-stop')); calls.apply(stopped(5, 'old-stop'));
+    assert.equal(calls.running().length, 1, 'a stop issued before this generation cannot end it');
+    calls.apply({ type: 'user', timestamp: new Date(at(5)).toISOString(), message: { content:
+      '<task-notification><tool-use-id>toolu_child</tool-use-id><task-id>child</task-id><status>killed</status></task-notification>' } });
+    assert.equal(calls.running().length, 1, 'a notification for the original launch cannot end its continuation');
+    calls.apply(toolRecord('TaskStop', 5, 'failed-stop'));
+    const denied = stopped(6, 'failed-stop'); denied.message.content[0].is_error = true; calls.apply(denied);
+    assert.equal(calls.running().length, 1, 'an unsuccessful stop is not end proof');
+    calls.apply(toolRecord('TaskStop', 4, 'new-stop')); calls.apply(stopped(7, 'new-stop'));
+    assert.equal(calls.running().length, 0);
+  }
+  for (const offset of [-60000, 60000]) {
+    const calls = tracker(t), project = { id: 'p', kind: 'ssh', path: '/project' };
+    let records = [use()];
+    const s = { terminalId: 't', agent: 'claude', codexActive: true, activityClockOffset: offset,
+      terminal: { request: async () => ({ records }) } };
+    const deps = { sessions: new Map([['t', s]]), callsOf: () => calls, monitorActivity: read => ({ poll: read, stop() {} }),
+      claudeConversation() {}, describeActions() {}, claudeRecord: () => [], noteSettings: (_session, _agent, record) => calls.apply(record), applyActivity() {} };
+    createClaudeActivity(deps).followClaude(project, s, { sessionId: 'parent', transcriptPath: '/claude/projects/project/parent.jsonl' });
+    await s.activityMonitor.poll();
+    calls.subagent(signal('start', 'child', offset / 1000 + 1, { toolUseId: 'toolu_child' }));
+    records = [result(3)]; await s.activityMonitor.poll();
+    assert.equal(calls.running().length, 0, `offset ${offset}`);
+    assert.equal(items(calls)[0].endedAt, at(3) + offset);
+  }
 });

@@ -31,7 +31,9 @@ function createClaudeActivity(deps) {
     s.approval?.context('claude-session', event.sessionId);
     // The terminal's own calls, not the agent's meter: a hook can bind the transcript before startUsage builds the meter,
     // and the meter it builds keeps these calls and their folder.
-    callsOf(s, project).setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
+    const calls = callsOf(s, project);
+    calls.setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
+    calls.clockOffset = remote && Number.isFinite(s.activityClockOffset) ? s.activityClockOffset : 0;
     if (s.claudeTranscript?.filename !== file) {
       callsOf(s, project).bindBackground(file);
       let tail;
@@ -72,7 +74,8 @@ function createClaudeActivity(deps) {
         if (!value || !readCurrent() || !s.activityMonitor) return null;
         // The host reads the sub-agents after this transcript: their records go first, so a completion below ends a call
         // whose replies are already counted. A reset answer carries none.
-        callsOf(s, project).remoteRecords(value.subagents);
+        calls.clockOffset = Number.isFinite(s.activityClockOffset) ? s.activityClockOffset : 0;
+        calls.remoteRecords(value.subagents);
         if (value.reset) onHistory(false);
         for (const record of Array.isArray(value.records) ? value.records : []) { try { onRecord(record); } catch { } }
         if (value.historyDone) onHistory(true);
@@ -307,12 +310,17 @@ function createClaudeActivity(deps) {
     const state = HOOK_STATES[hookEvent.event], { payload } = hookEvent;
     if (!project) return;
     const sessionId = hookEvent.sessionId || s.claudeSessionId || '';
+    const message = payload.tool_name === 'SendMessage' && !hookEvent.agentId;
+    const receipt = !hookEvent.agentId && hookEvent.toolUseId && ['PostToolUse', 'PostToolUseFailure', 'PermissionDenied'].includes(hookEvent.event);
     const kind = hookEvent.event === 'SubagentStart' ? 'start' : hookEvent.event === 'SubagentStop' ? 'stop'
-      : hookEvent.event === 'PreToolUse' && payload.tool_name === 'SendMessage' ? 'continue' : null;
-    if (kind && s.codexActive && s.agent === 'claude' && /^[\w-]{1,100}$/.test(sessionId)
+      : hookEvent.event === 'PreToolUse' && message ? 'continue' : null;
+    if ((kind || receipt) && s.codexActive && s.agent === 'claude' && /^[\w-]{1,100}$/.test(sessionId)
       && sessionId === (s.cliProviderId || s.claudeSessionId || s.claudeResumeId || sessionId) && hookEvent.at >= (s.activitySince || 0)) {
+      if (receipt) {
+        callsOf(s, project).finishContinuation(hookEvent.toolUseId, hookEvent.at, hookEvent.event !== 'PostToolUse');
+      }
       const agentId = kind === 'continue' ? payload.tool_input?.to || payload.tool_input?.recipient : hookEvent.agentId;
-      if (/^[\w-]{1,100}$/.test(typeof agentId === 'string' ? agentId : '')) {
+      if (kind && /^[\w-]{1,100}$/.test(typeof agentId === 'string' ? agentId : '')) {
         // Bind the parent folder before delivering the signal: changing it resets the old transcript's tracker.
         if (hookEvent.transcriptPath) followClaude(project, s, { sessionId, transcriptPath: hookEvent.transcriptPath });
         callsOf(s, project).subagent({ kind, terminalId: s.terminalId, agentId, agentType: payload.agent_type || '',

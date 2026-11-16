@@ -15,12 +15,13 @@ const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
 const enabled = value => value === true || value === 'true';
 const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/, REMOTE_FOLLOWS = 16;
 const TOOL_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const accountingId = (call, id = call.id) => call.generation ? `${id}:continue:${call.generation}` : id;
 // One record of a sub-agent's own transcript, read here or compacted by the SSH host: its own effort and speed, and its
 // replies' timing once the call started. Both readers take every record through this, and name the model alike.
-function childRecord(call, record) {
+function childRecord(call, record, clockOffset = 0) {
   const settings = agentSettings(null, 'claude', { ...record, isSidechain: false });
   if (settings) { call.effort = settings.effort ?? call.effort; call.fast = settings.fast ?? call.fast; }
-  if (call.startedAt === null || Date.parse(record.timestamp) >= call.startedAt) call.meter.apply(record);
+  if (call.startedAt === null || Date.parse(record.timestamp) + clockOffset >= call.startedAt) call.meter.apply(record);
 }
 const childModel = (call, meta) => call.meter?.model || call.resultModel || text(meta?.model) || call.requested.model;
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
@@ -44,7 +45,7 @@ class AgentCalls {
   constructor({ terminalId = null, changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null; this.terminalId = terminalId;
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
-    this.dispatchAlive = dispatchAlive;
+    this.dispatchAlive = dispatchAlive; this.clockOffset = 0;
     this.dispatchReplay = dispatchReplay;
     this.background = new BackgroundTasks(terminalId, { now });
     this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
@@ -80,7 +81,7 @@ class AgentCalls {
   }
   addSubagent({ key, agentId = null, toolUseId = null, startedAt, agentType, title, task, cwd, planner, background = false,
     requested = { model: 'default', effort: null, fast: null } }) {
-    const call = { id: `agent:${toolUseId || agentId}`, key, agentId, toolUseId, sourceAgent: 'claude', agent: 'Claude Code',
+    const call = { id: `agent:${toolUseId || agentId}`, key, agentId, toolUseId, toolGeneration: 0, sourceAgent: 'claude', agent: 'Claude Code',
       provider: null, ...requested, requested, startedAt, done: false, rate: null, cwd, background,
       title: title || short(agentType) || 'Agent', task, role: agentRoles.get(agentType) || short(agentType) || agentRoles.get('none'),
       preparing: this.local && !!this.folder, planner: planner || { kind: 'planner', agent: null, model: null } };
@@ -88,31 +89,43 @@ class AgentCalls {
     this.calls.set(key, call); this.feeds.track(call);
     return call;
   }
-  // Bind only explicit identities: a hook can beat both the Agent tool record and its result. Keep the first row's id
-  // and feed; a later tool/result or SSH metadata joins observations of that same child, never guesses by title or order.
+  // Keep the first row's display identity, but retain the child object: its reader callbacks and accounting belong to
+  // that object. A metadata join must not discard samples just because the parent tool record arrived first.
   bindSubagent(agentId, toolUseId) {
     const agent = agentId && [...this.calls.values()].find(call => !call.dispatch && call.agentId === agentId);
     const tool = toolUseId && this.toolCall(toolUseId);
     let call = agent || tool;
     if (agent && tool && agent !== tool) {
-      call = [...this.calls.values()].find(value => value === agent || value === tool);
-      const other = call === agent ? tool : agent, held = agent.signalAt != null ? agent : tool;
-      if (held.signalAt != null) Object.assign(call, { signalAt: held.signalAt, signalKind: held.signalKind, signalRunning: held.signalRunning,
-        done: held.done, finishedAt: held.finishedAt, completedAt: held.completedAt, outcome: held.outcome, failure: held.failure,
-        reviewed: held.reviewed, hidden: held.hidden, resumed: held.resumed, generation: held.generation });
+      const first = [...this.calls.values()].find(value => value === agent || value === tool), identity = { id: first.id, key: first.key };
+      call = agent.signalAt != null ? agent : tool.signalAt != null ? tool : agent;
+      const other = call === agent ? tool : agent, ids = [call.id, other.id];
+      const recorded = call.recorded || other.recorded || ids.some(id => this.finishedIds.has(accountingId(call, id)));
+      const entry = this.feeds.owned(call), retired = this.feeds.owned(other);
       if (tool.title) Object.assign(call, { title: tool.title, task: tool.task, role: tool.role, planner: tool.planner, cwd: tool.cwd,
         requested: tool.requested, background: tool.background });
       clearTimeout(other.expiry); clearTimeout(call.expiry);
-      this.calls.delete(other.key); this.pending.delete(other.key);
-      this.aliases.set(other.id, call.id);
-      for (const [id, target] of this.aliases) if (target === other.id) this.aliases.set(id, call.id);
-      const entry = this.feeds.owned(other);
-      if (entry) this.feeds.retire(entry, false);
+      this.calls.delete(other.key); this.calls.delete(call.key);
+      this.pending.delete(other.key); this.pending.delete(call.key);
+      if (retired) this.feeds.retire(retired, false);
+      this.feeds.entries.delete(call.id);
+      Object.assign(call, identity);
+      this.calls.set(call.key, call);
+      if (entry) {
+        entry.revision = Math.max(entry.revision, retired?.revision || 0); entry.dirty = true;
+        this.feeds.entries.set(call.id, entry);
+      }
+      for (const id of ids) if (id !== call.id) this.aliases.set(id, call.id);
+      for (const [id, target] of this.aliases) if (ids.includes(target)) this.aliases.set(id, call.id);
+      if (recorded) {
+        call.recorded = true;
+        for (const id of ids) { this.finishedIds.add(id); this.finishedIds.add(accountingId(call, id)); }
+      }
       if (call.done) this.hideAfterEnd(call);
+      this.feeds.update(call);
     }
     if (call) {
       if (agentId) call.agentId = agentId;
-      if (toolUseId) call.toolUseId = toolUseId;
+      if (toolUseId && call.toolUseId !== toolUseId) { call.toolUseId = toolUseId; call.toolGeneration = call.generation || 0; }
     }
     return call || null;
   }
@@ -126,34 +139,58 @@ class AgentCalls {
     if (call && (signal.at < (call.signalAt ?? -Infinity)
       || signal.at === call.signalAt && (signal.kind === call.signalKind || call.signalKind === 'stop' && signal.kind === 'start'))) return false;
     if (!call) {
+      if (signal.kind === 'continue') return false;
       if (this.calls.size >= 1024) return false;
       const key = toolUseId && !this.calls.has(toolUseId) ? toolUseId : `subagent:${signal.agentId}`;
       call = this.addSubagent({ key, agentId: signal.agentId, toolUseId, startedAt: signal.at, agentType: signal.agentType });
     }
+    if (signal.kind === 'continue' && !call.done) {
+      this.noteContinuation(call, signal.toolUseId);
+      return false;
+    }
     if (signal.kind !== 'stop' && call.done) {
       if (!call.drained) this.finishPartial(call);
+      const entry = this.feeds.owned(call);
+      if (signal.kind === 'continue' && signal.toolUseId) call.revival = { toolUseId: signal.toolUseId, at: signal.at,
+        previous: { ...call }, feed: entry && { completedAt: entry.completedAt, replies: new Map(entry.replies), usageUnknown: entry.usageUnknown } };
       clearTimeout(call.expiry);
       Object.assign(call, { done: false, reviewed: false, hidden: false, recorded: false, recordable: false, drained: false,
         finishedAt: null, completedAt: null, failure: null, pendingReview: false, reviewAt: null, outcome: null,
         partial: false, rate: null, resumed: true, startedAt: signal.at, generation: (call.generation || 0) + 1 });
       call.meter = new TokenRates('claude', { sidechain: true });
-      const entry = this.feeds.owned(call);
       if (entry) { delete entry.completedAt; entry.replies.clear(); entry.usageUnknown = false; this.feeds.prune(); }
     }
     call.signalAt = signal.at; call.signalKind = signal.kind; call.signalRunning = signal.kind !== 'stop';
-    if (signal.kind === 'continue') {
-      call.resumed = true;
-      if (signal.toolUseId) {
-        call.continuations ||= new Set(); call.continuations.add(signal.toolUseId);
-        if (call.continuations.size > 64) call.continuations.delete(call.continuations.values().next().value);
-      }
-    }
+    if (signal.kind === 'continue') this.noteContinuation(call, signal.toolUseId);
+    else delete call.revival;
     if (typeof signal.transcriptPath === 'string' && signal.transcriptPath) call.filename = signal.transcriptPath;
     if (signal.kind === 'stop') this.endSubagent(call, signal.at);
     this.feeds.update(call);
     if (call.done && (!this.local || !this.folder) && call.behind !== true) this.drain(call);
     else this.refresh(call.key);
     this.schedule(); this.changed();
+    return true;
+  }
+  noteContinuation(call, toolUseId) {
+    if (!toolUseId) return;
+    call.continuations ||= new Set(); call.continuations.add(toolUseId);
+    if (call.continuations.size > 64) call.continuations.delete(call.continuations.values().next().value);
+  }
+  finishContinuation(toolUseId, at, failed = false) {
+    const call = [...this.calls.values()].find(call => call.revival?.toolUseId === toolUseId);
+    if (!call || !Number.isFinite(at) || at < call.revival.at) return false;
+    const { previous, feed } = call.revival;
+    delete call.revival;
+    if (!failed) return false;
+    const identity = Object.fromEntries(['id', 'key', 'agentId', 'toolUseId', 'toolGeneration', 'title', 'task', 'role', 'planner', 'cwd', 'requested', 'background', 'continuations']
+      .map(key => [key, call[key]]));
+    clearTimeout(call.expiry);
+    for (const key of Object.keys(call)) delete call[key];
+    Object.assign(call, previous, identity);
+    const entry = this.feeds.owned(call);
+    if (entry && feed) { Object.assign(entry, feed); entry.dirty = true; this.feeds.prune(); }
+    if (!call.hidden && !call.reviewed) this.hideAfterEnd(call);
+    this.feeds.update(call); this.schedule(); this.changed();
     return true;
   }
   finishPartial(call) {
@@ -310,8 +347,17 @@ class AgentCalls {
     call.expiry = setTimeout(check, call.failure ? 30000 : 3000);
     call.expiry.unref?.();
   }
-  endSubagent(call, at, status = 'completed') {
-    if (call.done || call.signalRunning) return false;
+  endSubagent(call, at, status = 'completed', proof) {
+    if (call.done) return false;
+    if (call.signalRunning) {
+      if (!Number.isFinite(at) || at <= call.signalAt) return false;
+      const ownTool = proof?.toolUseId === call.toolUseId && (call.toolGeneration || 0) === (call.generation || 0);
+      if (!(proof?.kind === 'agent' && ownTool || proof?.kind === 'stop' && proof.startedAt >= call.startedAt
+        && (proof.generation == null ? proof.startedAt > call.signalAt : proof.generation === (call.generation || 0))
+        || proof?.kind === 'notification' && ['killed', 'failed'].includes(status) && (!proof.toolUseId || ownTool))) return false;
+      call.signalRunning = false; call.signalAt = at; call.signalKind = 'stop';
+    }
+    delete call.revival;
     call.done = true; call.finishedAt = time(at); call.completedAt = this.now(); call.outcome = status;
     call.failure = status === 'completed' ? null : { reason: status === 'killed' ? 'killed' : 'error', exitCode: null };
     call.recordable = !this.replaying && call.finishedAt !== null && call.finishedAt >= this.since;
@@ -321,7 +367,7 @@ class AgentCalls {
   recordSubagent(call) {
     if (call.recorded) return;
     call.recorded = true;
-    const id = call.generation ? `${call.id}:continue:${call.generation}` : call.id;
+    const id = accountingId(call);
     if (!call.recordable || this.finishedIds.has(id)) return;
     this.finishedIds.add(id);
     const rate = call.rate?.samples > 0 && !call.rate.partial ? call.rate : null;
@@ -343,12 +389,15 @@ class AgentCalls {
   apply(record) {
     if (record.isSidechain) return false;
     const content = record.message?.content;
-    const at = Date.parse(record.timestamp);
+    const at = Date.parse(record.timestamp) + this.clockOffset;
     let changed = false;
     for (const block of Array.isArray(content) ? content : []) {
       if (record.type === 'assistant' && block.type === 'tool_use' && ['BashOutput', 'TaskOutput', 'TaskStop', 'KillShell'].includes(block.name)) {
         const task = block.input?.bash_id || block.input?.task_id || block.input?.shell_id;
-        if (typeof block.id === 'string' && typeof task === 'string' && task) this.polls.set(block.id, { task, stop: ['TaskStop', 'KillShell'].includes(block.name) });
+        if (typeof block.id === 'string' && typeof task === 'string' && task) {
+          const target = [...this.calls.values()].find(call => call.backgroundTaskId === task || call.agentId === task);
+          this.polls.set(block.id, { task, stop: ['TaskStop', 'KillShell'].includes(block.name), at, generation: target ? target.generation || 0 : null });
+        }
         continue;
       }
       if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string') {
@@ -370,8 +419,8 @@ class AgentCalls {
           const task = result.task?.task_id || result.task_id || poll.task;
           const call = [...this.calls.values()].find(call => call.backgroundTaskId === task || (poll.stop && call.agentId === task));
           if (call && !call.reviewed && (!call.done || call.pendingReview) && !block.is_error && (poll.stop || /^(?:completed|failed|killed)$/.test(result.task?.status || result.status))) {
-            this.endSubagent(call, at, poll.stop ? 'killed' : result.task?.status || result.status);
-            call.pendingReview = false; changed = true;
+            if (this.endSubagent(call, at, poll.stop ? 'killed' : result.task?.status || result.status,
+              poll.stop ? { kind: 'stop', startedAt: poll.at, generation: poll.generation } : undefined)) { call.pendingReview = false; changed = true; }
           }
           continue;
         }
@@ -380,7 +429,8 @@ class AgentCalls {
         if (!call || call.reviewed) continue;
         call.background ||= enabled(result.isAsync) || !!result.backgroundTaskId;
         if (typeof result.backgroundTaskId === 'string' && result.backgroundTaskId) call.backgroundTaskId = result.backgroundTaskId;
-        if (block.is_error || !call.background) changed = this.endSubagent(call, at, block.is_error ? 'failed' : 'completed') || changed;
+        if (block.is_error || !call.background) changed = this.endSubagent(call, at, block.is_error ? 'failed' : 'completed',
+          { kind: 'agent', toolUseId: block.tool_use_id }) || changed;
         if (call.agent === 'Claude Code') {
           if (typeof result.resolvedModel === 'string' && result.resolvedModel) {
             call.resultModel = result.resolvedModel;
@@ -399,7 +449,8 @@ class AgentCalls {
       const body = typeof notificationContent === 'string' ? notificationContent : (Array.isArray(notificationContent) ? notificationContent.filter(block => block.type === 'text').map(block => text(block.text)).join('\n') : '');
       for (const [notification] of body.matchAll(/<task-notification>[\s\S]*?<\/task-notification>/g)) {
         hasNotification = true;
-        let id = /<tool-use-id>\s*([^<]+?)\s*<\/tool-use-id>/.exec(notification)?.[1];
+        const toolUseId = /<tool-use-id>\s*([^<]+?)\s*<\/tool-use-id>/.exec(notification)?.[1];
+        let id = toolUseId;
         const taskId = /<task-id>\s*([^<]+?)\s*<\/task-id>/.exec(notification)?.[1];
         if (!/<status>\s*(?:completed|failed|killed)\s*<\/status>/.test(notification)) continue;
         // Dispatch has its own UUID, not a transcript tool-use id. Delivery opens the lead's next review round.
@@ -411,8 +462,8 @@ class AgentCalls {
         if (!call || call.reviewed) continue;
         if (queued && record.operation === 'remove' && !call.done) continue;
         if (!call.done) {
-          this.endSubagent(call, at, /<status>\s*(completed|failed|killed)\s*<\/status>/.exec(notification)[1]);
-          call.pendingReview = queued; changed = true;
+          if (this.endSubagent(call, at, /<status>\s*(completed|failed|killed)\s*<\/status>/.exec(notification)[1],
+            { kind: 'notification', toolUseId })) { call.pendingReview = queued; changed = true; }
         }
         if (call.pendingReview && (!queued || record.operation === 'remove')) { call.pendingReview = false; call.reviewAt = at; }
       }
@@ -458,7 +509,7 @@ class AgentCalls {
           Object.assign(call, call.requested, { unfollowed: false });
           call.meter = new TokenRates('claude', { sidechain: true }); call.meter.reset(entry.partial === true);
         }
-        for (const record of entry.records) if (record && typeof record === 'object') childRecord(call, record);
+        for (const record of entry.records) if (record && typeof record === 'object') childRecord(call, record, this.clockOffset);
         call.behind = entry.behind === true;
         call.pollPartial = entry.partial === true;
       } else Object.assign(call, { behind: null, unfollowed: !!call.meter });
