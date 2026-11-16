@@ -363,7 +363,7 @@ function createClaudeActivity(deps) {
     const message = payload.tool_name === 'SendMessage' && !hookEvent.agentId;
     const receipt = !hookEvent.agentId && hookEvent.toolUseId && ['PostToolUse', 'PostToolUseFailure', 'PermissionDenied'].includes(hookEvent.event);
     const kind = hookEvent.event === 'SubagentStart' ? 'start' : hookEvent.event === 'SubagentStop' ? 'stop'
-      : hookEvent.event === 'PreToolUse' && message ? 'continue' : null;
+      : !(hookEvent.event === 'PreToolUse' && message) ? null : 'continue';
     const current = s.codexActive && s.agent === 'claude' && /^[\w-]{1,100}$/.test(sessionId)
       && sessionId === (s.cliProviderId || s.claudeSessionId || s.claudeResumeId || sessionId) && hookEvent.at >= (s.activitySince || 0);
     if (current && receipt) callsOf(s, project).finishContinuation(hookEvent.toolUseId, hookEvent.at, hookEvent.event !== 'PostToolUse');
