@@ -362,7 +362,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "45fffda5c6080e4f6fd722d975309e9083d4f5dbae92874f3eb54ef3dfe24c45",
+      "digest": "a1da02b1bf4208d1f5516b528700ae423b4b70543b9fa69c2d4108e318241a90",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -377,7 +377,8 @@
         "electron/features/skills/worker-proposals.cjs",
         "electron/features/codex-app-server/index.cjs",
         "electron/features/agents/dispatch-control.cjs",
-        "electron/features/codex-runtime/locator.cjs"
+        "electron/features/codex-runtime/locator.cjs",
+        "electron/features/agents/dispatch-events.cjs"
       ],
       "reason": "All dynamic runtime paths point into the carried electron tree."
     },
@@ -385,6 +386,13 @@
       "digest": "48725f320ea0b968c87bdff1e7e669d40f09a67d457456b02efc85a15f3fd833",
       "targets": [],
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
+    },
+    "integration/dispatch-outbox.cjs": {
+      "digest": "e80bc7ee17ac100123ad7c32b4b2311fa2c1ed758002b7f0f27f28b26486b8d4",
+      "targets": [
+        "electron/features/agents/dispatch-events.cjs"
+      ],
+      "reason": "The packaged runtime root is electron."
     }
   },
   "unresolvedImports": {
