@@ -521,8 +521,8 @@ function workerInput(event, controls, resumeIds, resumeInputId) {
   return { entryId: `u:${event.itemId}`, inputId, origin: direct ? 'owner' : 'planner', ownerMessageIds };
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable, locate = locateCodex, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
-  if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env, stdout, dispatch: (args, deps) => run(args, { ...deps, launch, resolveExecutable, locate, startTimeout, rateInterval, requestTimeout }) });
+async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable, locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
+  if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env, stdout, dispatch: (args, deps) => run(args, { ...deps, launch, resolveExecutable, locate, locateClaude: findClaude, startTimeout, rateInterval, requestTimeout }) });
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
@@ -1167,7 +1167,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         break;
       }
       if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
-      const claudeFile = resolveExecutable === executable ? await locateClaude(env) : null;
+      const claudeFile = resolveExecutable === executable ? await findClaude(env) : null;
       if (resolveExecutable === executable && !claudeFile) throw Object.assign(new Error('Claude Code was not found outside the Agentrix shim folder'), { code: 'ENOENT' });
       const command = resolveExecutable(options.agent, commandOf(effective), env, claudeFile);
 

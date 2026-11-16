@@ -242,7 +242,7 @@ for (const kind of ['bash', 'zsh']) test(`G13: through a real ${kind} login shel
   for (const [agent, call, option] of [['codex', 'codex exec --json "analyse"', '--json'], ['claude', 'claude -p --output-format json "analyse"', '--output-format']]) {
     // Called by name: outside a planner the stand-in, inside it the shim, whatever the profile put first.
     const where = env => run(env, `command -v ${agent}`).stdout.trim();
-    assert.ok(inStandIn(where(owner), folder), where(owner)); assert.equal(path.dirname(where(plannerEnv)).toLowerCase(), posix(shims).toLowerCase());
+    assert.ok(inStandIn(where(owner), folder), where(owner)); assert.ok(inShims(where(plannerEnv)), where(plannerEnv));
     const inside = run(plannerEnv, call);
     assert.equal(inside.status, 2, `${agent}: ${inside.stdout}${inside.stderr}`); assert.equal(inside.stdout, '');
     assert.match(inside.stderr, new RegExp(`not run: ${option} is not supported through the Agentrix dispatcher`));
@@ -382,7 +382,7 @@ test("a planner's CLAUDE_ENV_FILE is the session's private copy: appending to it
   const folder = temporary(t), installed = path.join(shims, 'hooks/claude-env.sh'), original = fs.readFileSync(installed);
   const { file, claudeEnvFile } = sessionBootstrap(folder);
   const env = shim().withShims({ PATH: 'tools', AGENTRIX_BOOTSTRAP: file }, { depth: 0 });
-  assert.equal(env.CLAUDE_ENV_FILE, claudeEnvFile); assert.match(path.relative(shims, claudeEnvFile), /^\.\./);
+  assert.equal(env.CLAUDE_ENV_FILE, claudeEnvFile); assert.ok(outside(shims, claudeEnvFile), `${claudeEnvFile} is outside ${shims}`);
   assert.deepEqual(fs.readFileSync(claudeEnvFile), original);
   if (process.platform !== 'win32') assert.equal(fs.statSync(claudeEnvFile).mode & 0o777, 0o600);
   fs.appendFileSync(env.CLAUDE_ENV_FILE, 'export FROM_A_SESSION_START_HOOK=1\n');
@@ -414,6 +414,14 @@ const shells = () => [
 ];
 // Whether a resolved file is in this test's stand-in folder, however the shell spells the path (Git Bash may say /tmp/…).
 const inStandIn = (file, folder) => file.replaceAll(path.win32.sep, '/').toLowerCase().includes('/' + path.basename(folder).toLowerCase() + '/stand-in/');
+// Whether a shell resolved a name to the repository's shim folder, by its last two folder names: the shell may spell the
+// drive or a short (8.3) name its own way.
+const inShims = file => path.dirname(file.replaceAll(path.win32.sep, '/')).toLowerCase().endsWith('/integration/shims');
+// Whether file lies outside folder, across drives and short (8.3) names: both resolved by the native realpath first.
+function outside(folder, file) {
+  const relative = path.relative(fs.realpathSync.native(folder), fs.realpathSync.native(file));
+  return relative.startsWith('..') || path.isAbsolute(relative);
+}
 // System folders only, so a CLI called by name can only be the stand-in (or, in a planner, the shim).
 function systemPath(standin) {
   if (process.platform !== 'win32') return [standin, '/usr/bin', '/bin'].join(':');

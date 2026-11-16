@@ -60,7 +60,8 @@ test('dispatch tests start workers only through an injected fake CLI', () => {
         .map(match => ({ at: match.index, helper: /dispatch\.cjs|helper/.test(match[1] || '') }));
       for (const match of body.matchAll(/(?<![\w.])run\(/g)) {
         if (!bindings.findLast(binding => binding.at < match.index)?.helper) continue;
-        let depth = 0, end = match.index + 3;
+        // After the opening parenthesis, so the call ends at its own closing one.
+        let depth = 0, end = match.index + 4;
         for (; end < body.length; end++) {
           if (body[end] === '(') depth++;
           else if (body[end] === ')' && depth-- === 0) break;
@@ -68,9 +69,13 @@ test('dispatch tests start workers only through an injected fake CLI', () => {
         const call = body.slice(match.index, end);
         runs++;
         assert.match(call, /\b(?:launch|resolveExecutable)\s*:/, `${name}: ${call.slice(0, 120)}… runs the helper without an injected CLI`);
-        // A launcher alone leaves the Codex search to the machine (a Codex in /usr/local/bin or /opt/homebrew/bin is found whatever PATH says): such a call names its `locate`.
+        // A launcher alone leaves the CLI search to the machine (a Codex in /usr/local/bin or /opt/homebrew/bin, a Claude Code in ~/.local/bin, is found whatever
+        // PATH says, and CI has neither): such a call names its `locate` for Codex and its `locateClaude` for Claude Code.
         // A launcher that only fails the test (help, stop, minutes and the like never start a worker) needs none.
-        if (!/\bresolveExecutable\s*:/.test(call) && !/\blaunch\s*:\s*\(\s*\)\s*=>\s*assert\.fail/.test(call)) assert.match(call, /\blocate\s*:/, `${name}: ${call.slice(0, 120)}… injects a launcher but searches the machine for Codex`);
+        if (!/\bresolveExecutable\s*:/.test(call) && !/\blaunch\s*:\s*\(\s*\)\s*=>\s*assert\.fail/.test(call)) {
+          assert.match(call, /\blocate\s*:/, `${name}: ${call.slice(0, 120)}… injects a launcher but searches the machine for Codex`);
+          assert.match(call, /\blocateClaude\s*:/, `${name}: ${call.slice(0, 120)}… injects a launcher but searches the machine for Claude Code`);
+        }
       }
       // Starting the helper's own entrypoint resolves the CLI from PATH, so that PATH must be the test's fake bin alone.
       for (const match of body.matchAll(/spawn(?:Sync)?\(\s*process\.execPath\s*,\s*\[\s*(\w+)\s*,\s*\.\.\./g)) {
