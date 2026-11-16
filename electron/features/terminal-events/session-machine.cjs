@@ -14,7 +14,7 @@
 //   screen   { at, terminalSession, revision, inputPresent, busy, dialog, menu, queueShown, draft }
 //   attach   { at, terminalSession }                  the renderer attached again: its frame revisions restart
 //   confirm  { at, asking }                           the caller's timer: has the screen's idle stood long enough?
-//   settled  { at, queued, background }               the transcript read after a Stop: CompletionWork's queue and work
+//   settled  { at, queued, background }               a Stop's round, asked (again) with CompletionWork's queue and work
 // Every hook signal may carry claudeSession; one from another Claude session than the epoch's changes nothing.
 // Effects: { type: 'subagent', signal } and { type: 'completion', turn }.
 const KEPT = 32;
@@ -28,7 +28,7 @@ const toolAt = (state, prompt) => state.toolAt.find(([id]) => id === prompt)?.[1
 
 function createSessionMachine({ terminalSession = null, claudeSession = null, launch = 0 } = {}) {
   return { epoch: { terminalSession, claudeSession, launch }, phase: 'starting', turn: 0, prompt: null, promptAt: 0,
-    prompts: [], ended: [], toolAt: [], local: false, queue: 0, background: false, dialog: null, menu: false,
+    prompts: [], ended: [], toolAt: [], local: false, queue: 0, dialog: null, menu: false,
     screen: -1, busy: false, busySeen: false, quietSince: 0, ...quiet, screenIdleAt: 0, endedAt: 0, pending: null, completed: null };
 }
 
@@ -61,7 +61,7 @@ function hook(state, signal) {
     const queued = !signal.local && !!prompt && prompt === state.prompt && state.phase === 'working';
     const next = { ...state, prompts: remember(state.prompts, prompt), local: !!signal.local, turn: signal.local ? state.turn : state.turn + 1 };
     return queued ? { ...next, queue: state.queue + 1 }
-      : { ...turnStart(next), prompt: prompt ?? state.prompt, promptAt: at, queue: 0, background: false, pending: null };
+      : { ...turnStart(next), prompt: prompt ?? state.prompt, promptAt: at, queue: 0, pending: null };
   }
   const seen = sight(state, signal);
   if (!seen) return null;
@@ -120,8 +120,9 @@ function reduce(state, signal) {
   if (signal.type === 'settled') {
     if (state.pending == null || state.pending !== state.turn) return { state, effects: [] };
     // The transcript's queue is the authority here: a queued message Claude absorbed mid-turn or dropped runs no hook.
+    // A held round stays pending, so the Stop's snapshot asked again once the queue or the work clears completes it.
     const blocked = signal.queued || signal.background;
-    return { state: { ...state, pending: null, queue: signal.queued ? state.queue : 0, background: !!signal.background, ...(blocked ? {} : { completed: state.turn }) },
+    return { state: { ...state, queue: signal.queued ? state.queue : 0, ...(blocked ? {} : { pending: null, completed: state.turn }) },
       effects: blocked ? [] : [{ type: 'completion', turn: state.turn }] };
   }
   let next;
@@ -139,12 +140,13 @@ function reduce(state, signal) {
   return { state: next || state, effects: [] };
 }
 
-// The machine's part of the published CliState. `open` names the dialog only while the state says waiting, and
+// The machine's part of the published CliState; `background` is CompletionWork's, as the caller reads it at publish
+// time. `open` names the dialog only while the state says waiting, and
 // `screenIdle` marks a working turn whose light the screen alone turned idle: the state itself stays working, so no
 // reader that acts for the owner (a run-mode switch, a worker's intervention) takes it for idle.
-function cliFields(state, published) {
+function cliFields(state, published, background) {
   const open = { ...(published === 'waiting' && state.dialog ? { [state.dialog]: true } : {}), ...(state.menu ? { menu: true } : {}) };
-  return { phase: state.phase, turn: state.turn, queue: state.queue, background: state.background, open, ...(state.screenIdle ? { screenIdle: true } : {}) };
+  return { phase: state.phase, turn: state.turn, queue: state.queue, background, open, ...(state.screenIdle ? { screenIdle: true } : {}) };
 }
 
 module.exports = { createSessionMachine, reduce, cliFields, SCREEN_IDLE_MS };

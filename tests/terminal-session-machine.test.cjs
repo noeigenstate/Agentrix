@@ -6,7 +6,12 @@ const vm = require('node:vm');
 const { defineMain } = require('./helpers/main-modules.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
 
-function fixture({ channel = 'http', native = false } = {}) {
+const { PromptQueue } = require('../electron/prompt-queue.cjs');
+const { CompletionWork } = require('../electron/completion-work.cjs');
+const { SubmissionTracker } = require('../electron/terminal-input.cjs');
+
+// real: the terminal's own prompt queue, completion work and submission tracker, with main's expiry replay.
+function fixture({ channel = 'http', native = false, real = false } = {}) {
   let now = 2000, armed = false, notifications = 0;
   const project = { id: 'p', kind: 'ssh' }, subagents = [], timers = [];
   const s = { terminalId: 't', projectId: 'p', sessionId: 'pty', agent: 'claude', codexActive: true, activitySince: 1000, activityInputAt: 0,
@@ -15,16 +20,24 @@ function fixture({ channel = 'http', native = false } = {}) {
     ...(native ? { nativeStructured: true } : {}), flush() {}, chunks: [], seq: 0, status: 'codex', submissions: { write: () => false, sent: [] }, gate: { input() {} } };
   // An injected clock and timer queue: the screen's idle confirmation runs when the test moves time past it.
   const context = vm.createContext({ sessions: new Map([['t', s]]), Date: class extends Date { static now() { return now; } }, broadcast() {},
-    scheduleState() {}, store: { projects: [project], setRestore() {}, expectCompletion(_id, value = true) { armed = value; }, complete() { if (!armed) return false; armed = false; return true; } },
+    scheduleState() {}, store: { projects: [project], setRestore() {}, expectCompletion(_id, value = true) { armed = value; }, complete(_id, _key, at) { if (!armed) return false; armed = false; project.lastCompletedAt = at; return true; } },
     notifyCompletion() { notifications++; }, summarizeTask: () => '', isLocalAgentCommand: require('../electron/agent-commands.cjs').isLocalAgentCommand,
     promptText: require('../electron/prompt-queue.cjs').promptText, followClaude() {}, memoryFolder: () => '', memoryDir: () => '', roundsOf: () => [],
     remember: async () => {}, setTimeout: (run, ms) => { timers.push({ run, due: now + ms }); return { unref() {} }; },
     refreshClaudeAccounts() {}, scrubProjectSkills: async () => {}, findProject() {},
     callsOf: () => ({ subagent: signal => subagents.push(signal), finishContinuation() {} }) });
   defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'claudeHook', 'observeSwitchTerminal');
+  if (real) Object.assign(s, { submissions: new SubmissionTracker(), completionWork: new CompletionWork({ now: () => now }),
+    // main.cjs: a submission that expires releases its guard and replays the latest snapshot, which may end the round.
+    promptQueue: new PromptQueue(expired => {
+      if (!expired?.length) return;
+      s.activityInputAt = Math.max(s.activityConfirmedInputAt || 0, ...s.promptQueue.items.map(item => item.at));
+      if (s.activityRawSnapshot) context.applyActivity(project, s, s.activityRawSnapshot);
+    }, { now: () => now }) });
   const listeners = new Map(), handles = new Map();
   registerTerminalIpc({ handle: (channel, callback) => handles.set(channel, callback), listen: (channel, callback) => listeners.set(channel, callback),
-    findProject() {}, getSession: id => context.sessions.get(id), applyActivity: (...args) => context.applyActivity(...args), scheduleState() {}, getProjectById: () => project, now: () => now });
+    findProject() {}, getSession: id => context.sessions.get(id), applyActivity: (...args) => context.applyActivity(...args), scheduleState() {}, getProjectById: () => project,
+    acknowledgeProject() {}, expectCompletion: id => context.store.expectCompletion(id), pollAfterSubmission() {}, now: () => now });
   let seq = 0, revision = 0;
   const hook = (event, payload = {}) => context.claudeHook({ seq: ++seq, terminalId: 't', event, at: now, sessionId: payload.session_id ?? 'provider',
     transcriptPath: '', promptId: payload.prompt_id ?? null, toolUseId: payload.tool_use_id ?? null, agentId: payload.agent_id ?? null, payload });
@@ -38,7 +51,7 @@ function fixture({ channel = 'http', native = false } = {}) {
   };
   return { s, context, project, hook, subagents, notifications: () => notifications, armed: () => armed, advance(ms = 1) { now += ms; }, elapse,
     screen: (flags, payload = facts(flags)) => listeners.get('terminal:screenFacts')?.('t', payload), facts, attach: () => handles.get('terminal:attach')('t'),
-    key: data => listeners.get('terminal:write')('t', data),
+    key: data => listeners.get('terminal:write')('t', data), type: line => listeners.get('terminal:write')('t', line + '\r'),
     switchState: () => context.observeSwitchTerminal({ identity: s }).state, light: () => s.cliState.screenIdle ? 'idle' : s.cliState.state,
     record(state, at = now) { context.applyActivity(project, s, { state, turnId: state === 'complete' ? `record-${at}` : null, threadId: 'provider', updatedAt: at, transcriptRead: true }); } };
 }
@@ -134,6 +147,49 @@ test('with a permission request open and no further screen facts, nothing is con
   // Even an idle frame while the question is asked confirms nothing.
   h.screen({ busy: false }); h.elapse(5000);
   assert.equal(h.s.cliState.state, 'waiting'); assert.equal(h.s.needsInput?.message, 'Bash');
+});
+
+// scripts/reading-smoke.mjs:280-311 on 1.6.0-beta.1: the stand-in's hooks and screens are statements typed into the
+// terminal, so each is also a submission the prompt queue holds; the working line, an idle frame, then Stop.
+for (const confirmed of [true, false]) test(`a Stop after an idle-looking screen ${confirmed ? 'confirmed' : 'not yet confirmed'} completes its round once, held submissions or not`, () => {
+  const h = fixture({ real: true });
+  const hook = (event, payload) => { h.type(`& { hook ${event} }`); h.advance(50); h.hook(event, payload); h.advance(50); };
+  hook('UserPromptSubmit', { prompt: 'test interrupt' });
+  h.type("Clear-Host; Write-Host 'spinner'; Show-ReadingFixtureInput"); h.screen({ busy: true }); h.advance(300);
+  h.type('Clear-Host; Show-ReadingFixtureInput'); h.screen({ busy: false }); h.elapse(confirmed ? 1200 : 300);
+  hook('Stop', {});
+  assert.equal(h.s.cliState.state, 'idle');
+  // The typed statements still wait as submissions; once they expire, the held round completes, as it did before.
+  h.elapse(25000); h.s.promptQueue.list();
+  assert.equal(h.s.codexActivity, 'complete'); assert.ok(Number.isFinite(h.project.lastCompletedAt)); assert.equal(h.notifications(), 1);
+  const completedAt = h.project.lastCompletedAt;
+  // Background progress and a repeated Stop, typed the same way, never complete it again.
+  hook('PostToolUse', {}); hook('Stop', {}); h.elapse(25000); h.s.promptQueue.list();
+  assert.equal(h.project.lastCompletedAt, completedAt); assert.equal(h.notifications(), 1);
+});
+
+// main.cjs's refreshCompletion: CompletionWork reports its background work ended and the latest snapshot is replayed.
+test('a round held by background work completes once when that work ends and the Stop is replayed', () => {
+  const h = fixture({ real: true });
+  h.hook('UserPromptSubmit', { prompt: 'Do the task', prompt_id: 'p1' }); h.advance();
+  h.s.completionWork.start('shell', h.context.Date.now(), 'shell');
+  h.hook('Stop', { prompt_id: 'p1' });
+  assert.equal(h.notifications(), 0); assert.equal(h.s.cliState.background, true);
+  h.s.completionWork.finish('shell'); h.advance();
+  h.context.applyActivity(h.project, h.s, h.s.activityRawSnapshot);
+  assert.equal(h.notifications(), 1); assert.ok(Number.isFinite(h.project.lastCompletedAt));
+  h.context.applyActivity(h.project, h.s, h.s.activityRawSnapshot); h.hook('Stop', { prompt_id: 'p1' });
+  assert.equal(h.notifications(), 1);
+});
+
+test('a Stop with nothing held completes at once, whatever the screen showed before it', () => {
+  for (const confirmed of [true, false]) {
+    const h = fixture();
+    working(h);
+    h.screen({ busy: false }); h.elapse(confirmed ? 1200 : 300);
+    h.hook('Stop', { prompt_id: 'p1' });
+    assert.ok(Number.isFinite(h.project.lastCompletedAt)); assert.equal(h.notifications(), 1);
+  }
 });
 
 test('a pending switch is not released by a screen idle', () => {
@@ -248,7 +304,7 @@ test('a completion effect needs Stop, an empty queue and no background work', as
   assert.equal(completions({ type: 'settled', queued: true }), 0, 'the transcript shows a queued prompt');
   step({ type: 'progress', prompt: 'p2' }); assert.equal(state.phase, 'working'); assert.equal(state.queue, 0);
   step({ type: 'stop', prompt: 'p2' });
-  assert.equal(completions({ type: 'settled', background: true }), 0, 'background work runs'); assert.equal(state.background, true);
+  assert.equal(completions({ type: 'settled', background: true }), 0, 'background work runs');
   step({ type: 'stop', prompt: 'p2' });
   assert.equal(completions({ type: 'settled' }), 1);
   // A repeated Stop, an idle callback, a background callback, a StopFailure or the screen never rearm it.
