@@ -220,17 +220,17 @@ function createClaudeActivity(deps) {
     }
     s.activitySnapshot = snapshot;
     const queued = queuedOf(s);
+    const state = s.completionWork?.state(snapshot, { queued })
+      || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
     // A Claude terminal's Stop completes its round only on the session machine's completion effect: the newest prompt's
-    // Stop, nothing queued and no background work, once. Asked with the queue as it stands after this round's finish,
+    // Stop, once the final gate agrees it is complete. Asked with the queue as it stands after this round's finish,
     // and asked again whenever this snapshot is replayed (a typed submission expiring, background work ending), as
     // a held round always was; the snapshot's turn is the completion key, so without the effect nothing is raised.
     if (snapshot.hookStop && s.agent === 'claude' && !s.nativeStructured) {
       const effects = snapshot.state === 'complete'
-        ? feed(s, { type: 'settled', at: snapshot.updatedAt, queued, background: backgroundOf(s) }) || [] : [];
+        ? feed(s, { type: 'settled', at: snapshot.updatedAt, queued, background: backgroundOf(s), blocked: state !== 'complete' }) || [] : [];
       if (!effects.some(effect => effect.type === 'completion')) snapshot = { ...snapshot, turnId: null };
     }
-    const state = s.completionWork?.state(snapshot, { queued })
-      || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
     if (snapshot.ended && snapshot.state === 'unknown' || snapshot.state === 'interrupted' || state === 'interrupted') store.expectCompletion(project.id, false);
     snapshot = { ...snapshot, state };
     s.rootThreadId = snapshot.threadId;

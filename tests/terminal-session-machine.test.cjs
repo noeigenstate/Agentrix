@@ -182,6 +182,36 @@ test('a round held by background work completes once when that work ends and the
   assert.equal(h.notifications(), 1);
 });
 
+test('a queued owner prompt keeps completion pending through its predecessor replay and completes once on its own hook Stop', () => {
+  const h = fixture({ real: true });
+  h.hook('UserPromptSubmit', { prompt: 'First task', prompt_id: 'p1' }); h.advance();
+  h.s.promptQueue.enqueue('Second task', h.context.Date.now(), 'm2');
+  // A queued UserPromptSubmit still names p1, but advances the owner round's turn number.
+  h.hook('UserPromptSubmit', { prompt: 'Second task', prompt_id: 'p1' }); h.advance();
+  h.hook('Stop', { prompt_id: 'p1' });
+  const stopped = h.s.activityRawSnapshot, turn = h.s.cliStateMeta.machine.turn;
+  assert.equal(h.notifications(), 0); assert.equal(h.s.cliStateMeta.machine.pending, turn);
+  // M2 leaves the queue and its user record holds the final gate. refreshCompletion replays p1's Stop.
+  h.advance();
+  const at = h.context.Date.now();
+  h.s.completionWork.record({ type: 'user', timestamp: new Date(at).toISOString(), message: { content: 'Second task' } }, 'claude');
+  h.s.promptQueue.start('Second task', at, 'm2');
+  assert.equal(h.s.promptQueue.list().some(item => item.state === 'queued'), false);
+  assert.equal(h.s.completionWork.reviewAt, at);
+  h.context.applyActivity(h.project, h.s, stopped);
+  assert.equal(h.s.codexActivity, 'working'); assert.equal(h.notifications(), 0);
+  assert.equal(h.s.cliStateMeta.machine.pending, turn, 'a final gate held by M2 must not spend p1\'s pending completion');
+  // No transcript is followed from here: M2 runs and ends through hooks alone.
+  h.advance(); h.hook('PreToolUse', { prompt_id: 'p2', tool_use_id: 'm2-tool' }); h.advance();
+  h.hook('Stop', { prompt_id: 'p2' });
+  assert.equal(h.notifications(), 1); assert.ok(Number.isFinite(h.project.lastCompletedAt));
+  assert.equal(h.s.cliStateMeta.machine.completed, turn);
+  const completedAt = h.project.lastCompletedAt;
+  h.advance(); h.hook('Stop', { prompt_id: 'p2' });
+  h.context.applyActivity(h.project, h.s, h.s.activityRawSnapshot);
+  assert.equal(h.notifications(), 1); assert.equal(h.project.lastCompletedAt, completedAt);
+});
+
 test('a Stop with nothing held completes at once, whatever the screen showed before it', () => {
   for (const confirmed of [true, false]) {
     const h = fixture();
@@ -306,6 +336,7 @@ test('a completion effect needs Stop, an empty queue and no background work', as
   step({ type: 'stop', prompt: 'p2' });
   assert.equal(completions({ type: 'settled', background: true }), 0, 'background work runs');
   step({ type: 'stop', prompt: 'p2' });
+  assert.equal(completions({ type: 'settled', blocked: true }), 0, 'the final gate still holds the round');
   assert.equal(completions({ type: 'settled' }), 1);
   // A repeated Stop, an idle callback, a background callback, a StopFailure or the screen never rearm it.
   for (const signal of [{ type: 'stop', prompt: 'p2' }, { type: 'settled' }, { type: 'record', state: 'complete' }, { type: 'stop', prompt: 'p2', failed: true },
