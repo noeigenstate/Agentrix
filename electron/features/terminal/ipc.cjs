@@ -34,6 +34,8 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
     findProject(id);
     const s = getSession(id);
     if (!s || s.nativeStructured) return { sessionId: null, seq: 0, data: '' };
+    // A renderer attaching again (a reload) counts its screen-fact revisions from the start, for this PTY session only.
+    s.cliStateMeta?.screenAttached?.();
     s.flush();
     return { sessionId: s.sessionId, seq: s.seq, data: s.chunks.join(''), ...(s.approval ? { approval: approvalStamp(s) } : {}) };
   });
