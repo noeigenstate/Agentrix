@@ -1145,14 +1145,8 @@ async function initializeNativeSessions() {
   const { createCodexRuntime } = await import('./features/codex-app-server/index.cjs');
   const { createDispatchControl } = await import('./features/agents/dispatch-control.cjs');
   const { locateTeam } = require('./features/team/team-locate.cjs');
-  dispatchControl = createDispatchControl({ resolveRun: async registration => {
-    const s = sessions.get(registration.projectId), project = store.findTerminal(registration.projectId)?.project;
-    if (!s || !project || s.sessionKey !== registration.sessionKey || s.controlCapability !== registration.capability) return null;
-    const worker = (await locateTeam(project.path))?.live().find(run => run.id === registration.runId);
-    if (!worker) return null;
-    return { runId: worker.id, projectId: registration.projectId, agent: worker.agent, cwd: worker.cwd, worktree: worker.cwd, allow: worker.allow,
-      readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查', roundtable: worker.role === '圆桌', local: project.kind !== 'ssh' };
-  } });
+  const { resolveRegistration } = require('./features/agents/dispatch-registration.cjs');
+  dispatchControl = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions, store, locateTeam }, registration) });
   ({ address: controlAddress } = await dispatchControl.listen());
   const directory = path.join(app.getPath('userData'), 'native-session');
   claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,

@@ -2,6 +2,7 @@
 // placeholders from the reason; English comes from electron/locales/en.json by the same phrase. Plain strings, so the
 // main process never builds a sentence. Keep this table equal to electron/shared/reasons/dispatch.cjs.
 export const dispatchWords: Record<string, string> = {
+  'dispatch.duplicate_run': '派发任务已注册，已拒绝重复注册',
   'dispatch.bootstrap_missing': '派发助手找不到启动文件',
   'dispatch.bootstrap_invalid': '派发助手的启动文件无法使用',
   'dispatch.pipe_unreachable': '派发助手连不上 Agentrix',

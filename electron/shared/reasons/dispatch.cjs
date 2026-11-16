@@ -21,6 +21,7 @@ module.exports = {
     // The control channel and the liveness check.
     control_timeout: {},
     control_unbound: {},
+    duplicate_run: {},
     control_disconnected: {},
     helper_gone: {},
     // Interception (C-8): option is the refused option, equivalent the dispatcher command that runs the same call.

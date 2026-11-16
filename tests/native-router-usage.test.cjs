@@ -113,6 +113,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
     require: name => {
       if (name === 'electron') return { safeStorage };
       if (name === './features/team/team-locate.cjs') return { locateTeam: forbidden };
+      if (name === './features/agents/dispatch-registration.cjs') return require('../electron/features/agents/dispatch-registration.cjs');
       assert.fail(`unexpected require: ${name}`);
     },
     importFixture: async name => {
