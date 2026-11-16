@@ -1078,8 +1078,19 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     skills.delivery(project, false, sessionId, { agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, context,
     sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, providerSessionId };
+  if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
   nativeSpecs.set(id, spec); return spec;
+}
+
+function nativeSubagent(spec, signal, { runtimeSessionId, providerSessionId, folder }) {
+  const s = sessions.get(spec.terminalId), project = store.findTerminal(spec.terminalId)?.project;
+  if (quitting || !project || nativeSpecs.get(spec.terminalId) !== spec || !s?.nativeStructured || !s.codexActive
+    || s.agent !== 'claude' || s.nativeRuntimeSessionId !== runtimeSessionId || s.claudeSessionId !== providerSessionId
+    || signal.terminalId !== spec.terminalId) return;
+  const calls = callsOf(s, project);
+  if (folder) calls.setFolder(folder);
+  calls.subagent(signal); scheduleState();
 }
 
 function structuredEvent(id, event) {
@@ -1141,6 +1152,7 @@ function structuredEvent(id, event) {
   if (event.type === 'session.state') {
     s.nativeState = event.payload.state;
     if (['stopped', 'failed', 'disconnected'].includes(event.payload.state)) {
+      s.calls?.endSession();
       s.status = 'exited'; s.codexActive = false;
       store.setRestore(id, { terminal: false, codex: false });
     }
