@@ -15,7 +15,7 @@ export type Screen = { rows: string[]; sessionId: string | null; epoch?: number;
 type Entry = { id: string; terminal: Terminal; listeners: Set<(screen: Screen) => void>; parses: Set<(screen: Screen) => void>; timer: number; dispose: () => void; frame?: Screen; epoch: number;
   sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; parse: number; updatedAt: number;
   states: Partial<Record<ScreenAgent, string | null>>; stateUpdatedAt: Record<ScreenAgent, number>;
-  identities: Partial<Record<ScreenAgent, string | null>>; instances: Record<ScreenAgent, number>; rowsKey: string; facts: (frame: Screen) => void };
+  identities: Partial<Record<ScreenAgent, string | null>>; instances: Record<ScreenAgent, number>; rowsKey: string; facts: (frame: Screen) => void; factsTimer: number };
 const entries = new Map<string, Entry>();
 // What the terminal's owner knows about it (the agent running in it, the messages main holds queued), kept by id across a remount.
 const agentKinds = new Map<string, ScreenAgent | null>();
@@ -57,11 +57,20 @@ function snapshot(entry: Entry): Screen {
   return { ...entry.frame!, pending: entry.pending > 0, queued: queueCounts.get(entry.id) ?? 0, approval: entry.pending ? null : entry.approval };
 }
 
+// Screen facts are computed on the parsed subscribers' 100 ms coalescing: a burst of frames costs one computation, from the last frame.
+function scheduleFacts(entry: Entry) {
+  if (agentKinds.get(entry.id) !== 'claude' || entry.factsTimer) return;
+  entry.factsTimer = window.setTimeout(() => {
+    entry.factsTimer = 0;
+    if (entries.get(entry.id) === entry && agentKinds.get(entry.id) === 'claude') entry.facts(snapshot(entry));
+  }, 100);
+}
+
 function publish(entry: Entry) {
   capture(entry);
   const frame = snapshot(entry);
   entry.parses.forEach(listener => listener(frame));
-  if (agentKinds.get(entry.id) === 'claude') entry.facts(frame);
+  scheduleFacts(entry);
   if (entry.timer || !entry.listeners.size) return;
   entry.timer = window.setTimeout(() => {
     entry.timer = 0;
@@ -77,12 +86,12 @@ export function registerScreen(id: string, terminal: Terminal, sessionId?: strin
   previous?.dispose();
   const entry: Entry = { id, terminal, listeners, parses, timer: 0, dispose: () => {}, epoch: ++incarnation, sessionId, approval: null, writes: 0, pending: 0, parse: 0,
     revision: ++frameRevision, updatedAt: Date.now(), states: {}, stateUpdatedAt: { claude: 0, codex: 0 }, identities: {}, instances: { claude: ++incarnation, codex: ++incarnation }, rowsKey: '',
-    facts: createFactsPublisher(facts => window.agentrix.screenFacts(id, facts)) };
+    facts: createFactsPublisher(facts => window.agentrix.screenFacts(id, facts)), factsTimer: 0 };
   const notify = () => {
     if (entries.get(id) === entry) publish(entry);
   };
   const written = terminal.onWriteParsed(notify), resized = terminal.onResize(notify);
-  entry.dispose = () => { written.dispose(); resized.dispose(); clearTimeout(entry.timer); };
+  entry.dispose = () => { written.dispose(); resized.dispose(); clearTimeout(entry.timer); clearTimeout(entry.factsTimer); };
   capture(entry);
   entries.set(id, entry);
   listeners.forEach(listener => listener({ rows: [], sessionId: sessionId ?? null, revision: entry.revision, updatedAt: entry.updatedAt }));
