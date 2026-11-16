@@ -164,7 +164,7 @@ class AgentCalls {
     if (signal.kind === 'continue') this.noteContinuation(call, signal.toolUseId);
     else delete call.revival;
     if (typeof signal.transcriptPath === 'string' && signal.transcriptPath) call.filename = signal.transcriptPath;
-    if (signal.kind === 'stop') this.endSubagent(call, signal.at);
+    if (signal.kind === 'stop') this.endSubagent(call, signal.at, signal.outcome === 'killed' ? 'killed' : 'completed');
     this.feeds.update(call);
     if (call.done && (!this.local || !this.folder) && call.behind !== true) this.drain(call);
     else this.refresh(call.key);
@@ -424,6 +424,8 @@ class AgentCalls {
           }
           continue;
         }
+        if (block.is_error) changed = this.finishContinuation(block.tool_use_id, at, true) || changed;
+        if (!this.toolCall(block.tool_use_id)) continue;
         const agentId = REMOTE_ID.test(text(result.agentId)) ? result.agentId : null;
         const call = this.bindSubagent(agentId, block.tool_use_id);
         if (!call || call.reviewed) continue;

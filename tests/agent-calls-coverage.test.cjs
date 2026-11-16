@@ -348,3 +348,75 @@ test('current-generation terminal end proofs release signal-held rows with SSH c
     assert.equal(items(calls)[0].endedAt, at(3) + offset);
   }
 });
+
+test('SendMessage results cannot replace a known Agent or Task identity or complete its continued child', t => {
+  for (const name of ['Agent', 'Task']) {
+    const calls = tracker(t), launch = use(); launch.message.content[0].name = name;
+    calls.subagent(signal('start', 'child', 1)); calls.apply(launch); calls.apply(result(0));
+    calls.subagent(signal('stop', 'child', 2));
+    const child = calls.toolCall('toolu_child');
+    calls.subagent(signal('continue', 'child', 3, { toolUseId: 'send-message' }));
+    calls.apply({ type: 'assistant', timestamp: new Date(at(3)).toISOString(), message: { content:
+      [{ type: 'tool_use', name: 'SendMessage', id: 'send-message', input: { to: 'child' } }] } });
+    const receipt = result(4); receipt.message.content[0].tool_use_id = 'send-message';
+    calls.apply(receipt);
+    assert.equal(calls.running().length, 1, name);
+    assert.equal(child.toolUseId, 'toolu_child');
+    assert.equal(calls.toolCall('toolu_child'), child);
+    assert.equal(calls.toolCall('send-message'), null);
+    assert.equal(child.toolGeneration, 0);
+  }
+});
+
+test('only an explicit killed stop outcome records a killed child and every other outcome remains completed', t => {
+  for (const outcome of ['killed', undefined, 'failed', 'completed', null, true, { reason: 'killed' }]) {
+    const finished = [], calls = tracker(t, { finished: (_call, event) => finished.push(event) });
+    calls.subagent(signal('start', 'child', 1));
+    calls.subagent(signal('stop', 'child', 2, { outcome }));
+    const killed = outcome === 'killed';
+    assert.equal(items(calls)[0].failure?.reason, killed ? 'killed' : undefined);
+    assert.equal(finished.length, 1);
+    assert.equal(finished[0].reason, killed ? 'killed' : 'exit');
+    assert.equal(finished[0].exitCode, killed ? null : 0);
+    calls.subagent(signal('stop', 'child', 2, { outcome }));
+    assert.equal(finished.length, 1);
+    assert.equal(calls.running().length, 0);
+  }
+});
+
+test('a matching transcript error rolls back continuation when no failure hook arrives', t => {
+  const finished = [], calls = tracker(t, { finished: (_call, event) => finished.push(event) });
+  calls.subagent(signal('start', 'child', 1)); calls.subagent(signal('stop', 'child', 2));
+  const id = items(calls)[0].id;
+  calls.subagent(signal('continue', 'child', 3, { toolUseId: 'denied-message' }));
+  const error = { type: 'user', timestamp: new Date(at(4)).toISOString(), message: { content:
+    [{ type: 'tool_result', tool_use_id: 'unrelated', is_error: true, content: 'Not allowed' }] } };
+  calls.apply(error); assert.equal(calls.running().length, 1);
+  error.message.content[0].tool_use_id = 'denied-message'; calls.apply(error);
+  assert.equal(calls.running().length, 0);
+  assert.equal(items(calls)[0].id, id);
+  assert.equal(items(calls)[0].endedAt, at(2));
+  assert.equal(items(calls)[0].resumed, undefined);
+  assert.equal(finished.length, 1, 'a denied revival creates no additional completed run');
+});
+
+test('an existing transcript monitor sends remote records and clock updates to the current tracker after a host switch', async t => {
+  const first = tracker(t), second = tracker(t), project = { id: 'p', kind: 'ssh', path: '/project' };
+  const records = (await fs.readFile(path.join(__dirname, 'fixtures/claude-subagent-ssh.compact.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  let current = first;
+  const s = { terminalId: 't', agent: 'claude', codexActive: true, activityClockOffset: 60000,
+    terminal: { request: async () => ({ subagents: current === first
+      ? { child: { records: records.slice(0, 3), reset: true, partial: false, behind: true } }
+      : { next: { records, reset: true, partial: false, behind: true } } }) } };
+  const deps = { sessions: new Map([['t', s]]), callsOf: () => current,
+    monitorActivity: read => ({ poll: read, stop() {} }), applyActivity() {} };
+  createClaudeActivity(deps).followClaude(project, s, { sessionId: 'parent', transcriptPath: '/claude/projects/project/parent.jsonl' });
+  first.subagent(signal('start', 'child', 61)); await s.activityMonitor.poll();
+  assert.equal(first.snapshot()[0].rate.outputTokens, 45);
+  current = second; s.activityClockOffset = 90000;
+  second.subagent(signal('start', 'next', 91)); await s.activityMonitor.poll();
+  assert.equal(second.snapshot()[0].rate?.outputTokens, 75);
+  assert.equal(second.clockOffset, 90000);
+  assert.equal(first.clockOffset, 60000);
+  assert.equal(first.snapshot()[0].rate.outputTokens, 45);
+});
