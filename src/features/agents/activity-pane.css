@@ -175,3 +175,29 @@
 .subagent-jump.button { position: absolute; bottom: 12px; left: 50%; z-index: 3; background: var(--bg-menu); transform: translateX(-50%); }
 @container (max-width: 480px) { .subagent-body { padding: 12px 16px; } }
 @container (max-width: 420px) { .subagent-meta { padding-right: 8px; } }
+
+/* The project's Agent tab (CallsCard with every terminal): the terminal each row belongs to, its tags, the 15 s notice, the background group's rows and the folded 最近完成 list. */
+.activity-call-rows li.activity-call-item > .activity-call-body.has-terminal { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.activity-call-terminal { padding-top: 2px; font-size: 12px; line-height: 16px; color: var(--flow-faint); white-space: nowrap; }
+.activity-call-pill { display: inline-flex; align-items: center; height: 16px; margin-left: 8px; padding: 0 8px; vertical-align: top; border-radius: 999px; background: var(--bg-selected); color: var(--flow-muted); font-size: 12px; line-height: 16px; }
+.activity-call-item.is-awaiting .activity-row-icon { color: var(--warning); }
+.activity-call-item.is-awaiting .activity-call-sub { color: var(--flow-ink); }
+.activity-call-notice { display: flex; align-items: center; gap: 8px; padding: 0 0 4px 24px; font-size: 12px; line-height: 16px; color: var(--flow-ink); }
+.activity-call-notice > svg { flex: none; color: var(--warning); }
+.activity-call-notice > span { min-width: 0; }
+.activity-call-notice button { flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--flow-muted); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.activity-call-notice button:hover { background: var(--bg-hover); color: var(--flow-ink); }
+.activity-call-notice button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.activity-finished { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--flow-line); }
+.activity-finished-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0; border: 0; background: none; color: var(--flow-muted); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
+.activity-finished-head:hover { color: var(--flow-ink); }
+.activity-finished-head:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 8px; }
+.activity-finished-head svg { transition: transform .12s ease; }
+.activity-finished-head[aria-expanded="true"] svg { transform: rotate(90deg); }
+@media (prefers-reduced-motion: reduce) { .activity-finished-head svg { transition: none; } }
+/* 「后台 N 个运行中」: a grey pill, no colour of its own (the spinner takes the running blue). */
+.activity-background-badge { display: inline-flex; flex: none; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border-radius: 999px; background: var(--bg-selected); color: var(--text-1); font-size: 12px; font-weight: 400; line-height: 16px; white-space: nowrap; }
+.activity-background-badge > svg { color: var(--running); }
+/* A background task's view: the end of its output, read-only. */
+.subagent-background-tail { flex: 1; min-height: 0; margin: 0; padding: 16px; overflow: auto; color: var(--text-1); font: 12px/18px var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; scrollbar-color: var(--border-hover) transparent; }
+.subagent-background-tail:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

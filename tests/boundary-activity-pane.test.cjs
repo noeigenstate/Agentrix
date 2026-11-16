@@ -38,8 +38,9 @@ test('a sub-agent view opens only on the owner’s click on a row, reads the sub
   const callers = walk('src').filter(file => /\.tsx?$/.test(file) && /\b(openSplit|toggleSplit)\(/.test(read(file)));
   assert.deepEqual(callers, ['src/features/agents/AgentCalls.tsx', 'src/features/agents/subagent-splits.ts'], 'only the list’s row and the store itself');
   const pane = read('src/features/agents/AgentCalls.tsx');
-  assert.equal(pane.match(/\btoggleSplit\(/g).length, 1);
-  assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, item\.id\)\}/, 'and it is the row button’s click');
+  assert.equal(pane.match(/\btoggleSplit\(/g).length, 2, 'a worker row and a background task row');
+  assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, item\.id\)\}/, 'each is its row button click');
+  assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, callId\)\}/);
   assert.doesNotMatch(read('src/features/terminal/ProjectTerminals.tsx'), /\b(openSplit|toggleSplit)\(/, 'the grid shows the views, it never opens one');
   const code = file => read(`src/features/agents/${file}`).replace(/\/\/.*$/gm, ''), view = ['SubagentPane.tsx', 'SubagentInput.tsx', 'subagent-splits.ts'].map(code).join('\n');
   assert.doesNotMatch(view, /writeTerminal|writeApproval|answerTerminal|resizeTerminal|startTerminal|closeTerminal|restartTerminal|sendToAgent|readClipboard|\.copy\(/, 'no write to a terminal, no input, no clipboard');

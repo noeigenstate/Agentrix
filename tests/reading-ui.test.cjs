@@ -132,6 +132,7 @@ function projectHeaderHarness(t) {
     './native-store.ts': { useNativeEntries: () => new Map(), nativeTells: () => false },
     './ActivityPane': { ActivityPane: () => null },
     './SubagentChip': { SubagentChip: () => null },
+    './BackgroundBadge': { BackgroundBadge: () => null },
     './ProjectImageDialog': { ProjectImageDialog: () => null },
     './IconButton': loadUI('shared/IconButton.tsx'),
     './active-terminal': { useActiveTerminal: () => null, setActiveTerminal() {} },
