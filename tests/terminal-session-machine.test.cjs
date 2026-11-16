@@ -12,7 +12,7 @@ function fixture({ channel = 'http', native = false } = {}) {
   const s = { terminalId: 't', projectId: 'p', sessionId: 'pty', agent: 'claude', codexActive: true, activitySince: 1000, activityInputAt: 0,
     claudeSessionId: 'provider', hooks: { channel }, promptQueue: { finish() {}, list: () => [] }, actions: { settle() {} }, conversation: { settle() {}, list: [] },
     completionWork: { tasks: new Map(), notifications: new Set(), begin() {}, end() {}, state: snapshot => snapshot.state },
-    ...(native ? { nativeStructured: true } : {}), flush() {}, chunks: [], seq: 0 };
+    ...(native ? { nativeStructured: true } : {}), flush() {}, chunks: [], seq: 0, status: 'codex', submissions: { write: () => false, sent: [] }, gate: { input() {} } };
   // An injected clock and timer queue: the screen's idle confirmation runs when the test moves time past it.
   const context = vm.createContext({ sessions: new Map([['t', s]]), Date: class extends Date { static now() { return now; } }, broadcast() {},
     scheduleState() {}, store: { projects: [project], setRestore() {}, expectCompletion(_id, value = true) { armed = value; }, complete() { if (!armed) return false; armed = false; return true; } },
@@ -24,7 +24,7 @@ function fixture({ channel = 'http', native = false } = {}) {
   defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'claudeHook', 'observeSwitchTerminal');
   const listeners = new Map(), handles = new Map();
   registerTerminalIpc({ handle: (channel, callback) => handles.set(channel, callback), listen: (channel, callback) => listeners.set(channel, callback),
-    findProject() {}, getSession: id => context.sessions.get(id), applyActivity: (...args) => context.applyActivity(...args), now: () => now });
+    findProject() {}, getSession: id => context.sessions.get(id), applyActivity: (...args) => context.applyActivity(...args), scheduleState() {}, getProjectById: () => project, now: () => now });
   let seq = 0, revision = 0;
   const hook = (event, payload = {}) => context.claudeHook({ seq: ++seq, terminalId: 't', event, at: now, sessionId: payload.session_id ?? 'provider',
     transcriptPath: '', promptId: payload.prompt_id ?? null, toolUseId: payload.tool_use_id ?? null, agentId: payload.agent_id ?? null, payload });
@@ -38,6 +38,7 @@ function fixture({ channel = 'http', native = false } = {}) {
   };
   return { s, context, project, hook, subagents, notifications: () => notifications, armed: () => armed, advance(ms = 1) { now += ms; }, elapse,
     screen: (flags, payload = facts(flags)) => listeners.get('terminal:screenFacts')?.('t', payload), facts, attach: () => handles.get('terminal:attach')('t'),
+    key: data => listeners.get('terminal:write')('t', data),
     switchState: () => context.observeSwitchTerminal({ identity: s }).state, light: () => s.cliState.screenIdle ? 'idle' : s.cliState.state,
     record(state, at = now) { context.applyActivity(project, s, { state, turnId: state === 'complete' ? `record-${at}` : null, threadId: 'provider', updatedAt: at, transcriptRead: true }); } };
 }
@@ -51,8 +52,10 @@ test('Esc without Stop reaches idle', () => {
   h.screen({ busy: false }); h.elapse(2000); assert.equal(h.light(), 'working');
   h.screen({ busy: true }); h.advance();
   h.hook('PermissionRequest', { tool_name: 'Bash', prompt_id: 'p1' }); assert.equal(h.light(), 'waiting');
-  // Esc answers the dialog and interrupts the turn: no Stop, no transcript record, only newer screen facts.
-  h.advance(); h.screen({ busy: false, dialog: true, inputPresent: false }); h.elapse(2000); assert.equal(h.light(), 'waiting');
+  // Esc, typed in the terminal, answers the dialog and interrupts the turn: no Stop, no transcript record, only the key
+  // and newer screen facts.
+  h.advance(); h.key(''); assert.equal(h.s.needsInput, null);
+  h.screen({ busy: false, dialog: true, inputPresent: false }); h.elapse(2000); assert.equal(h.light(), 'waiting');
   h.screen({ busy: false }); h.elapse(999); assert.equal(h.light(), 'waiting', 'an idle frame must stand for a second');
   h.elapse(1);
   assert.equal(h.light(), 'idle'); assert.equal(h.s.needsInput, null);
@@ -96,17 +99,41 @@ test('a confirmed screen idle turns only the light idle, and a later sign of the
   // The round is untouched: the state stays working for every reader that acts, completion stays armed, the turn open.
   assert.equal(h.s.cliState.state, 'working'); assert.equal(h.s.cliState.phase, 'working'); assert.equal(h.s.codexActivity, 'working');
   assert.equal(h.armed(), true);
-  // A tool hook of the same turn shows it still runs.
+  // A tool hook of the same turn shows it still runs; only a newer idle frame starts the quiet again.
   h.hook('PreToolUse', { tool_use_id: 'tool', prompt_id: 'p1' }); assert.equal(h.light(), 'working');
-  h.elapse(1000); assert.equal(h.light(), 'idle', 'the screen still looks idle and the quiet lasted again');
+  h.elapse(1000); assert.equal(h.light(), 'working');
+  h.screen({ busy: false, menu: true }); h.elapse(1000); assert.equal(h.light(), 'idle');
   // So does a transcript record dated after the screen idle; one dated before it does not.
   const idleAt = h.context.Date.now();
   h.record('working', idleAt - 500); assert.equal(h.light(), 'idle');
   h.advance(); h.record('working'); assert.equal(h.light(), 'working');
   // And a frame with the working line again.
-  h.elapse(1000); assert.equal(h.light(), 'idle'); h.screen({ busy: true }); assert.equal(h.light(), 'working');
+  h.screen({ busy: false }); h.elapse(1000); assert.equal(h.light(), 'idle'); h.screen({ busy: true }); assert.equal(h.light(), 'working');
   // The real end still completes the round once.
   h.advance(); h.hook('Stop', { prompt_id: 'p1' }); assert.equal(h.notifications(), 1);
+});
+
+test('a hook after an idle-looking frame cancels the pending confirm until a newer idle frame arrives', () => {
+  const h = fixture();
+  working(h);
+  // A short card: the working line is off-screen, then a long tool call runs with no hook and no new frame.
+  h.screen({ busy: false }); h.elapse(500);
+  h.hook('PreToolUse', { tool_use_id: 'long-tool', prompt_id: 'p1' }); h.elapse(10000);
+  assert.equal(h.light(), 'working');
+  h.screen({ busy: false, menu: true }); h.elapse(1000);
+  assert.equal(h.light(), 'idle');
+});
+
+test('with a permission request open and no further screen facts, nothing is confirmed and the question stands', () => {
+  const h = fixture();
+  working(h);
+  // An idle-looking frame, then the renderer stops sending (a reload or a hang) as Claude asks.
+  h.screen({ busy: false }); h.elapse(500);
+  h.hook('PermissionRequest', { tool_name: 'Bash', prompt_id: 'p1' }); h.elapse(10000);
+  assert.equal(h.s.cliState.state, 'waiting'); assert.equal(h.s.needsInput?.message, 'Bash'); assert.equal(h.light(), 'waiting');
+  // Even an idle frame while the question is asked confirms nothing.
+  h.screen({ busy: false }); h.elapse(5000);
+  assert.equal(h.s.cliState.state, 'waiting'); assert.equal(h.s.needsInput?.message, 'Bash');
 });
 
 test('a pending switch is not released by a screen idle', () => {

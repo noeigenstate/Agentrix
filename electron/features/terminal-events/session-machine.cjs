@@ -13,7 +13,7 @@
 //   record   { at, state }                            a transcript snapshot: working, complete or interrupted
 //   screen   { at, terminalSession, revision, inputPresent, busy, dialog, menu, queueShown, draft }
 //   attach   { at, terminalSession }                  the renderer attached again: its frame revisions restart
-//   confirm  { at }                                   the caller's timer: has the screen's idle stood long enough?
+//   confirm  { at, asking }                           the caller's timer: has the screen's idle stood long enough?
 //   settled  { at, queued, background }               the transcript read after a Stop: CompletionWork's queue and work
 // Every hook signal may carry claudeSession; one from another Claude session than the epoch's changes nothing.
 // Effects: { type: 'subagent', signal } and { type: 'completion', turn }.
@@ -74,9 +74,9 @@ function hook(state, signal) {
   // Async command hooks arrive out of order: a hook of a prompt whose Stop was applied, or a permission notice older
   // than a tool hook of its prompt (the dialog it announced was answered), changes nothing.
   if (signal.async && prompt && (state.ended.includes(prompt) || signal.type === 'attention' && signal.notice && at < toolAt(state, prompt))) return null;
-  // Any hook of the turn shows it still runs: a screen idle so far was false, and the quiet starts again while the
-  // screen still looks idle.
-  const live = { ...seen, idleLooking: seen.idleLooking || seen.screenIdle, screenIdle: false, quietSince: Math.max(seen.quietSince, at) };
+  // Any hook of the turn shows it still runs: a screen idle so far was false, and only an idle frame drawn after this
+  // hook can start the quiet again (a long tool call on a short card shows no working line, and no frame may come).
+  const live = { ...seen, ...quiet, quietSince: Math.max(seen.quietSince, at) };
   if (signal.type === 'attention') return { ...live, dialog: signal.dialog || 'permission' };
   return prompt ? { ...live, toolAt: [...live.toolAt.filter(([id]) => id !== prompt), [prompt, Math.max(at, toolAt(live, prompt))]].slice(-KEPT) } : live;
 }
@@ -94,8 +94,9 @@ function screen(state, signal) {
   return { ...next, idleLooking: !state.screenIdle && state.busySeen && !signal.dialog && !!signal.inputPresent };
 }
 
+// A permission or question the CLI is asking (asking: the terminal's waiting notice stands) is never confirmed away.
 function confirm(state, signal) {
-  if (state.phase !== 'working' || !state.idleLooking || signal.at - state.quietSince < SCREEN_IDLE_MS) return null;
+  if (signal.asking || state.phase !== 'working' || !state.idleLooking || signal.at - state.quietSince < SCREEN_IDLE_MS) return null;
   return { ...state, idleLooking: false, screenIdle: true, screenIdleAt: signal.at };
 }
 
@@ -107,7 +108,7 @@ function record(state, signal) {
   if (signal.state === 'working') {
     if (state.endedAt && signal.at < state.endedAt) return null;
     const revived = state.screenIdle && signal.at > state.screenIdleAt;
-    return { ...(state.phase === 'working' ? state : turnStart(state)), quietSince, screenIdle: state.screenIdle && !revived, idleLooking: state.idleLooking || revived };
+    return { ...(state.phase === 'working' ? state : turnStart(state)), quietSince, ...(revived ? quiet : {}) };
   }
   if (!['complete', 'interrupted'].includes(signal.state) || state.phase !== 'working') return { ...state, quietSince };
   return { ...ended(state), endedAt: Math.max(state.endedAt, signal.at) };
