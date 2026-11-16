@@ -170,6 +170,6 @@ for (const failure of ['identity', 'timeout', 'query_refused']) for (const claud
   assert.equal(stdout.includes(key), false);
   assert.equal(launches, claudePath === 'api-only' ? 0 : 1);
   assert.equal(code, claudePath === 'api-only' ? 1 : 0);
-  if (claudePath === 'api-only') assert.doesNotMatch(stdout, /claude-cli fallback/);
-  else { assert.match(stdout, /claude-cli fallback/); assert.doesNotMatch(stdout, /control unavailable|failed to start/); }
+  if (claudePath === 'api-only') assert.doesNotMatch(stdout, /claude-cli:/);
+  else { assert.match(stdout, /claude-cli:/); assert.doesNotMatch(stdout, /control unavailable|failed to start/); }
 });

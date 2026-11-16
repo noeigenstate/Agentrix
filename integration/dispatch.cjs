@@ -106,7 +106,11 @@ function argumentsOf(argv) {
     const value = flags[++i];
     if (!value || value.startsWith('--') || /[\0\r\n]/.test(value)) throw new Error(`Expected one-line value for ${flag}`);
     if (flag === '--image') options.images.push(value);
-    else if (flag === '--allow') options.allow.push(value.replace(/\\/g, '/').replace(/^\.\//, ''));
+    else if (flag === '--allow') {
+      const glob = value.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+      if (/^(?:[A-Za-z]:|[\/~])|(?:^|\/)\.\.(?:\/|$)/.test(glob)) throw new Error('--allow must be relative to --cwd and cannot contain .. path components');
+      options.allow.push(glob);
+    }
     else {
       if (options[names.get(flag)] !== undefined) throw new Error(`Repeated option ${flag}`);
       options[names.get(flag)] = value;
@@ -541,7 +545,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let treeStop = Promise.resolve(), stoppingChild = null;
   let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
-  let controlFailure = 'bootstrap/missing_environment', transportFallback = false, lastControlFailure, lastControlNotice;
+  let controlFailure = 'bootstrap/missing_environment', controlLeadMode = null, transportFallback = false, lastControlFailure, lastControlNotice;
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
   const controlReceipts = new Map(), requestTimers = new Map();
@@ -928,8 +932,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         readOnly: !!options.readOnly || options.permission === 'plan', roundtable,
         onControl: async messageId => { await readInbox(); return controlReceipts.get(messageId) || inbox?.receipt(messageId) || 'queued'; },
         onEvent: event => acceptNative(event) });
-        if (ending) client.close(); else { controlClient = client; controlFailure = null; }
+        if (ending) client.close(); else { controlClient = client; controlFailure = null; controlLeadMode = null; }
       } catch (error) {
+        controlLeadMode = error.message === 'control_unavailable' && error.stage === 'control_register' ? error.leadMode : null;
         // Never print exception messages: filesystem/socket errors contain the bootstrap path.
         controlFailure = error.message === 'control_unavailable' ? `${error.stage}/${error.category}`
           : `bootstrap/${error instanceof SyntaxError ? 'invalid_json' : ['ENOENT', 'EACCES', 'EPERM'].includes(error.code) ? error.code : 'read_failed'}`;
@@ -948,6 +953,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       }
     }
     await openControl();
+    if (!controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
     // Nobody answers a dispatched worker's request, and the app-server waits for ever: a blocking one is declined so the run goes on.
     function requestOpened({ requestId, kind, blocking, preview, questions }) {
       const text = (preview || questions?.[0]?.question || '').slice(0, 160);

@@ -204,7 +204,7 @@ test('M8: a correction rejected by an already-ended runtime resumes the same ses
   assert.equal(await f.result, 0); assert.equal(fs.readFileSync(f.out, 'utf8'), 'Resumed correction result');
   assert.equal(f.sdk.inputs.length, 2); assert.equal(f.sdk.calls.length, 2);
   assert.match(f.stdout(), /native worker ended before correction/);
-  assert.doesNotMatch(f.stdout(), /claude-cli fallback/);
+  assert.doesNotMatch(f.stdout(), /claude-cli:/);
 });
 
 test('B2: broker loss during finalization cannot turn its failed outcome into success', { timeout: 15000 }, async t => {

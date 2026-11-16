@@ -110,7 +110,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   vm.runInContext(source.slice(source.indexOf('function localClaudeMeters('), source.indexOf('function disposeClaudeAccounts(')), context);
   const check = source.indexOf('function checkClaude(');
   vm.runInContext(source.slice(check, source.indexOf('\n}', check) + 2), context);
-  defineMain(context, 'acceptDispatchEvent', 'readNativeConnections', 'liveHost', 'dispatchReading', 'clearDispatchAccount', 'readNativeSubscriptionLimits',
+  defineMain(context, 'acceptDispatchEvent', 'bindDispatchInbox', 'disposeDispatchInbox', 'readNativeConnections', 'liveHost', 'dispatchReading', 'clearDispatchAccount', 'readNativeSubscriptionLimits',
     'readNativeUsageInputs', 'connectionSpec', 'nativeEnvironment', 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal',
     'retireTerminal', 'activateNative');
   vm.runInContext(source.slice(source.indexOf('async function initializeNativeSessions('), source.indexOf('function startTerminal('))
@@ -118,7 +118,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   // The workspace's project removal, as main registers it.
   const removeProject = vm.runInContext(`(${/removeProject: (id => \{[^\n]*\}),/.exec(source)[1]})`, context);
   await context.initializeNativeSessions();
-  t.after(() => { context.nativeSessions.close(); if (locate) vm.runInContext('dispatchControl', context).close(); });
+  t.after(() => { context.disposeDispatchInbox(); context.nativeSessions.close(); if (locate) vm.runInContext('dispatchControl', context).close(); });
   const handlers = new Map(); context.nativeSessions.register((name, handle) => handlers.set(name, handle));
   // The fallback main registers when native sessions failed to start: its usage still has to carry what dispatched workers report.
   vm.runInContext(source.slice(source.indexOf('function registerUnavailableNative('), source.indexOf('function registerIpc(')), context);
@@ -126,7 +126,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   return { context, removeProject, sent, fallbackUsage: async () => (await unavailable.get('native:usage')('p')).agents.codex,
     fallbackClaude: async () => (await unavailable.get('native:usage')('p')).agents.claude,
     controlAddress: () => vm.runInContext('controlAddress', context), held: () => new Map(['p'].map(id => [id, context.dispatchReading(id, null, Infinity)]).filter(([, payload]) => payload)),
-    usage: async () => (await handlers.get('native:usage')('p')).agents.codex };
+    usage: async () => { await context.bindDispatchInbox(planner, project).work; return (await handlers.get('native:usage')('p')).agents.codex; } };
 }
 
 test('a dispatched Codex worker reports its app-server account and quota between its start and end, and the pane shows them without a native session', async t => {

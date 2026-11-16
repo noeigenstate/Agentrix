@@ -33,12 +33,13 @@ function createClaudeActivity(deps) {
     // and the meter it builds keeps these calls and their folder.
     callsOf(s, project).setFolder(remote ? null : path.join(path.dirname(file), event.sessionId, 'subagents'));
     if (s.claudeTranscript?.filename !== file) {
+      callsOf(s, project).bindBackground(file);
       let tail;
       const readCurrent = () => sessions.get(s.terminalId) === s && (!tail || s.claudeTranscript === tail)
         && (s.codexActive && s.agent === 'claude' || s.claudeResumeId === event.sessionId);
       const onHistory = ready => {
         if (ready) s.conversation.endHistory();
-        else { s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true); }
+        else { callsOf(s, project).bindBackground(file, true); s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true); }
         if (!ready && s.completionWork?.reset()) store.expectCompletion(project.id, false);
         if (s.completionWork) s.completionWork.reading = !ready;
         usageHistory(s, ready);
@@ -50,6 +51,7 @@ function createClaudeActivity(deps) {
       s.activityMonitor?.stop();
       const onRecord = record => {
         if (!readCurrent()) return;
+        callsOf(s, project).backgroundRecord(record);
         s.completionWork?.record(record, 'claude', remote ? s.activityClockOffset || 0 : 0);
         // Finish this user round even if later background records replace the poll's final snapshot.
         const endedAt = s.completionWork?.endedAt;

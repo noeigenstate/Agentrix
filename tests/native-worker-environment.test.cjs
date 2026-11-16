@@ -88,7 +88,7 @@ for (const sdkParent of [false, true]) test(`N5: CLI preserves owner authenticat
       delete expected.CLAUDE_CODE_ENTRYPOINT; delete expected.claude_code_entrypoint;
       assert.deepEqual(options.env, expected); return lifetime.child(spawn(file, args, options));
     } });
-  assert.equal(code, 0); assert.equal(launched, true); assert.match(stdout, /claude-cli fallback/);
+  assert.equal(code, 0); assert.equal(launched, true); assert.match(stdout, /claude-cli:/);
   assert.equal(synthetic.ANTHROPIC_API_KEY, 'synthetic-key', 'parent environment is never mutated');
 });
 

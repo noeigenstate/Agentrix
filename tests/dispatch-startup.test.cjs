@@ -30,7 +30,7 @@ async function visibilityFixture(t, refused) {
     } };
     if (name.replaceAll('\\', '/').endsWith('/features/agents/dispatch-control.cjs')) return { async connectDispatchControl(auth) {
       assert.equal(auth.cwd, root); assert.equal(auth.agent, 'claude'); assert.deepEqual(auth.allow, []);
-      if (refused) throw Object.assign(new Error('control_unavailable'), { stage: 'control_register', category: 'dispatch.unknown_run' });
+      if (refused) throw Object.assign(new Error('control_unavailable'), { stage: 'control_register', category: 'dispatch.unknown_run', leadMode: refused === 'native' ? 'native' : 'terminal' });
       return { connected: true, close() {}, async request(method) {
         assert.equal(method, 'claude-sdk.run');
         auth.onEvent({ type: 'path.changed', payload: { selected: 'terminal', reason: 'terminal lead (subscription)' } });
@@ -63,7 +63,7 @@ async function visibilityFixture(t, refused) {
     },
   });
   t.after(async () => { child?.end(); await finished; calls.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
-  await ready;
+  await Promise.race([ready, finished]);
   async function until(predicate) {
     const end = Date.now() + 1500;
     while (!predicate()) {
@@ -96,6 +96,14 @@ test('a rejected execution-control registration does not discard an authenticate
   assert.equal(f.calls.snapshot()[0].items[0].id, item.id);
   f.child.stdout.write(JSON.stringify({ type: 'result', result: 'Synthetic result', usage: { output_tokens: 1 }, duration_api_ms: 1 }) + '\n');
   f.child.end(); assert.equal(await f.finished, 0);
+});
+
+test('an authenticated native-lead refusal ends startup with its code and never invokes a CLI', async t => {
+  const f = await visibilityFixture(t, 'native');
+  assert.equal(f.child, undefined);
+  assert.equal(await f.finished, 1);
+  assert.match(f.output(), /failed to start .*control_register\/dispatch\.unknown_run/);
+  assert.doesNotMatch(f.output(), /claude-cli:/);
 });
 
 for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_json', 'missing_file', 'missing_capability', 'missing_session_key', 'rejected_registration', 'dead_address']) {

@@ -230,12 +230,13 @@ const host = {
   refreshClaudeAccounts, localClaudeMeters, checkClaude, codexExecutable, memoryFolder, memoryDir, scrubProjectSkills, remember, roundsOf,
   summarizeTask, promptText, isLocalAgentCommand, rememberClaudeSource, claudeConfigDir, findClaudeSession, TranscriptTail, claudeRecord,
   claudeConversation, monitorActivity, createTerminalEnvironment, withoutAppImage, writeBootstrap,
+  dispatchRefused: ({ code }) => report(code),
   get store() { return store; }, get quitting() { return quitting; }, get eventServer() { return eventServer; },
   get controlAddress() { return controlAddress; }, get claudeRuntime() { return claudeRuntime; }, get terminalInput() { return terminalInput; },
   get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
 };
 Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host));
-const { followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook, acceptDispatchEvent, clearDispatchAccount } = host;
+const { followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook, acceptDispatchEvent, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox } = host;
 const { localSwitchSessions, observeSwitchTerminal, retainAgentState, prepareSwitchTerminal, retireTerminal, activateNative } = host;
 const { readNativeConnections, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment } = host;
 const clipboardWrites = new ClipboardWrites();
@@ -283,6 +284,8 @@ function publicState() {
       const terminals = shownTerminalIds(p).map(id => {
         const current = sessions.get(id), s = current?.switchPreviousHost || current;
         const reading = !s?.nativeStructured && !s?.error && !startupErrors.has(id) && (s?.codexActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
+        const usage = s?.nativeStructured ? s.nativeUsage?.snapshot(s.calls?.snapshot()) || dispatchedOnly(s)
+          : s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s);
         return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.nativeStructured ? null : s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
           ...(reading ? { readingHistory: reading } : {}),
           agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
@@ -291,8 +294,7 @@ function publicState() {
           // The model, effort and fast mode its records show, above the reading view's message box.
           agentSettings: s?.codexActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
-          agentUsage: s?.nativeStructured ? s.nativeUsage?.snapshot(s.calls?.snapshot()) || dispatchedOnly(s)
-            : s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s),
+          agentUsage: s?.calls?.usage(usage) || usage,
           // A run of the CLI that is no conversation (update, --version, login), for the reading view to say so.
           agentCommand: s?.codexActive ? s.agentCommand || null : null,
           codexActivity: s?.completionWork?.reading ? 'working' : s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
@@ -550,8 +552,8 @@ function usageHistory(s, ready) {
 function callsOf(s, project) {
   if (s.switchPreviousHost) return callsOf(s.switchPreviousHost, project);
   if (s.calls) return s.calls;
-  const helperPids = new WeakMap();
-  return s.calls ||= new AgentCalls({ changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
+  const helperPids = new WeakMap(), id = s.terminalId, current = () => sessions.get(id);
+  const calls = AgentCalls.forTerminal(sessions, id, () => new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
     dispatchAlive: async call => {
       if (project.kind === 'ssh') return null;
       let pid = call.helperPid || helperPids.get(call);
@@ -568,9 +570,10 @@ function callsOf(s, project) {
       }
       return AgentCalls.alive(pid);
     },
-    codexHome: () => s.codexHome || s.usageEnv?.CODEX_HOME || path.join(os.homedir(), '.codex'),
-    claudeHome: () => s.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
-    feedChanged: event => { if (sessions.get(s.terminalId)?.calls === s.calls) send('terminal:subagent-feed', { terminalId: s.terminalId, ...event }); } });
+    codexHome: () => current()?.codexHome || current()?.usageEnv?.CODEX_HOME || path.join(os.homedir(), '.codex'),
+    claudeHome: () => current()?.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
+    feedChanged: event => { if (current()?.calls === calls) send('terminal:subagent-feed', { terminalId: id, ...event }); } }));
+  return s.calls = calls;
 }
 // An owner intervention's target, from the call the terminal's own tracker holds: never from the renderer. The planner
 // binding is the terminal session together with its CLI conversation, so a replaced conversation is never written to.
@@ -788,9 +791,11 @@ async function openCodexFromShell(project, s, event) {
 
 function onEvent(event) {
   const s = sessions.get(event.projectId);
-  if (!s || event.sessionKey !== s.sessionKey) return;
+  if (!s) return;
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
+  if (event.version === 1 && acceptDispatchEvent(s, project, event)) return;
+  if (event.sessionKey !== s.sessionKey) return;
   if (acceptDispatchEvent(s, project, event)) return;
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   // The claude wrapper found a proxy set since the terminal started; its command field names the variable.
@@ -1051,7 +1056,7 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   if (validateOnly) return;
   if (old?.nativeStructured && old.status !== 'exited') return old.nativeSpec;
   if (old?.codexActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
-  if (old) disposeTerminal(id, { preserveNative: !!old.nativeStructured });
+  if (old) disposeTerminal(id, { preserveNative: !!old.nativeStructured, preserveCalls: true });
   const saved = store.findTerminal(id).record.restore;
   const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
   const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
@@ -1064,7 +1069,8 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
       sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
     nativeSpecs.set(id, spec); return spec;
   }
-  const bootstrapFile = path.join(runtimeDir, `${sessionId}.json`);
+  // The outbox is beside this file and outlives a host process restart.
+  const bootstrapFile = path.join(runtimeDir, `${id}.json`);
   writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability });
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome);
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
@@ -1098,6 +1104,7 @@ function structuredEvent(id, event) {
       actions: new ActionLog(() => {}), conversation: new ConversationLog(() => {}) };
     if (spec.switchHost) { retainAgentState(s, spec.switchHost); delete spec.switchHost; }
     sessions.set(id, s);
+    bindDispatchInbox(s, project);
   }
   s.nativeRuntimeSessionId = event.runtimeSessionId;
   s.nativeUsage ||= createNativeUsage(spec.agent);
@@ -1275,7 +1282,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const project = findProject(id);
   const old = sessions.get(id);
   if (old && old.status !== 'exited') return;
-  if (old) disposeTerminal(id);
+  if (old) disposeTerminal(id, { preserveCalls: true });
   if (!['win32', 'darwin', 'linux'].includes(process.platform)) throw new Error('此版本的终端集成面向 Windows 10/11、macOS 和 Linux。');
   if (project.kind !== 'ssh' && !fs.existsSync(project.path)) throw new Error('项目目录不存在，请重新添加。');
   const sessionId = randomUUID();
@@ -1284,7 +1291,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const startPath = restorePlans.get(id)?.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path;
   // Local terminals use the shell chosen in settings; SSH projects always run Bash on the server.
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
-  const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${sessionId}.json`) : null;
+  const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${id}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
   let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '');
   // How this terminal's Claude Code reports to main (hook-channel.cjs): HTTP hooks, or command hooks behind a proxy.
@@ -1414,6 +1421,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
     }
   });
   sessions.set(id, s);
+  bindDispatchInbox(s, project);
   store.setRestore(id, { terminal: true, ...(restorePlans.has(id) ? {} : { codex: false }) });
   startupErrors.delete(id);
   const flush = () => {
@@ -1474,7 +1482,6 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
     if (terminal.error || exitCode) s.error = terminal.error || t('终端已退出（代码 {code}）。', { code: exitCode });
     if (!quitting && !exitCode) store.setRestore(id, { terminal: false, codex: false });
     if (bootstrapFile || skillNoteFile) cleanupTerminalFiles(s);
-    s.calls?.dispose();
     broadcast();
   });
   captureBranch(project);
@@ -1496,15 +1503,19 @@ function cleanupTerminalFiles(s) {
   for (const file of s.switchBootstrapFiles || []) fs.rmSync(file, { force: true });
 }
 
-function disposeTerminal(id, { preserveNative = false, preserveSwitch = false } = {}) {
+function disposeTerminal(id, { preserveNative = false, preserveSwitch = false, preserveCalls = false } = {}) {
   readingHistory.close(id);
   const s = sessions.get(id);
   sessions.delete(id);
   nativeSpecs.delete(id);
   if (!preserveNative && !preserveSwitch) void nativeSessions?.forget(id).catch(report);
+  if (!preserveSwitch && !preserveCalls) {
+    disposeDispatchInbox(id);
+    (s?.calls || s?.switchPreviousHost?.calls || AgentCalls.forTerminal(sessions, id))?.dispose();
+  }
   if (!s) return;
   if (!preserveSwitch) {
-    s.calls?.dispose(); syncDashboardLive(); endSkillSession(s); skills.endSession(s.projectId, s.sessionId);
+    syncDashboardLive(); endSkillSession(s); skills.endSession(s.projectId, s.sessionId);
   }
   stopUsageAccount(s);
   clearTimeout(s.flushTimer); clearTimeout(s.actionTimer); clearTimeout(s.conversationTimer);
@@ -1785,6 +1796,7 @@ app.on('before-quit', event => {
   if (process.platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
   if (!quitCleaned) {
     quitCleaned = true;
+    disposeDispatchInbox();
     dashboardWindow?.dispose();
     labWindow?.dispose();
     clearTimeout(attentionTimer);

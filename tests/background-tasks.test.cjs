@@ -4,6 +4,58 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const capture = require('./fixtures/claude-user-round-background.json');
 const modulePath = '../electron/features/agents/background-tasks.cjs';
+
+function hostFeed(t) {
+  const path = require('node:path');
+  const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+  const { createClaudeActivity } = require('../electron/features/terminal-events/claude-activity.cjs');
+  const calls = new AgentCalls({ terminalId: 'terminal-1', local: false, now: () => 10000 }); t.after(() => calls.dispose());
+  const root = path.resolve('synthetic-claude-home'), project = { id: 'project', path: root, kind: 'local' };
+  let tail, read, armed = 0;
+  const s = { terminalId: 'terminal-1', agent: 'claude', codexActive: true, promptQueue: { finishedAt: 0 },
+    conversation: { beginHistory() {}, endHistory() {}, reset() {} }, actions: { reset() {} }, usage: { reset() {} },
+    completionWork: { record() {}, reset: () => false } };
+  const deps = { sessions: new Map([['terminal-1', s]]), store: { expectCompletion() { armed++; } },
+    callsOf: () => calls, claudeConfigDir: () => root, prepareReading: async () => {}, usageHistory() {},
+    TranscriptTail: class {
+      constructor(filename, options) { this.filename = filename; this.options = options; tail = this; this.records = []; this.buffer = ''; this.offset = 0; this.fileSize = 0; }
+      async read(deliver) { for (const record of this.records.splice(0)) deliver(record); }
+    },
+    monitorActivity: reader => { read = reader; return { poll: reader, stop() {} }; }, readEvery: () => 250,
+    claudeConversation() {}, describeActions() {}, claudeRecord() {}, noteSettings() {}, applyActivity() {} };
+  const activity = createClaudeActivity(deps);
+  const follow = id => activity.followClaude(project, s, { sessionId: id, transcriptPath: path.join(root, `${id}.jsonl`) });
+  follow('provider');
+  return { calls, s, follow, tail: () => tail, historical: record => tail.options.onWorkRecord(record),
+    live: async record => { tail.records.push(record); await read(); }, armed: () => armed,
+    shown: () => calls.usage?.(null)?.background || [] };
+}
+
+test('the host feeds historical workOnly and live Claude records into background usage without rearming completion', async t => {
+  const host = hostFeed(t);
+  host.historical(tool('Bash', 'launch', { command: 'node background.cjs', run_in_background: true }));
+  assert.equal(host.shown().length, 1); assert.equal(host.shown()[0].terminalId, 'terminal-1');
+  await host.live(result('launch', { backgroundTaskId: 'shell', stdout: 'inline output', stderr: '' }));
+  assert.equal(host.shown()[0].tail, 'inline output');
+  await host.live(notice('shell'));
+  assert.equal(host.shown()[0].state, 'done'); assert.equal(host.shown()[0].endedAt, 2000);
+  assert.equal(host.armed(), 0); assert.equal(host.s.codexActive, true);
+});
+
+test('a new transcript binding resets background usage and ignores the previous reader while preserving live delivery', async t => {
+  const host = hostFeed(t);
+  host.historical(tool('Bash', 'launch', { command: 'node old.cjs', run_in_background: true }));
+  assert.equal(host.shown().length, 1);
+  const previous = host.tail(); host.follow('other-provider');
+  assert.deepEqual(host.shown(), []);
+  previous.options.onWorkRecord(tool('Bash', 'stale', { command: 'node stale.cjs', run_in_background: true }));
+  assert.deepEqual(host.shown(), []);
+  host.historical(tool('Bash', 'launch', { command: 'node new.cjs', run_in_background: true }, 3000));
+  assert.equal(host.shown()[0].command, 'node new.cjs');
+  await host.live(result('launch', { backgroundTaskId: 'new-shell' }, 3100));
+  await host.live(notice('new-shell', 3200));
+  assert.equal(host.shown()[0].endedAt, 3200); assert.equal(host.armed(), 0);
+});
 const stamp = at => new Date(at).toISOString();
 const tool = (name, id, input, at = 1000) => ({ type: 'assistant', timestamp: stamp(at), message: { content: [{ type: 'tool_use', name, id, input }] } });
 const result = (id, toolUseResult, at = 1100, { error = false, content = '' } = {}) => ({ type: 'user', timestamp: stamp(at), toolUseResult,

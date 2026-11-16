@@ -6,6 +6,9 @@ const { agentSettings } = require('./agent-settings.cjs');
 const { taskKind } = require('../dashboard/records-routing.cjs');
 const { containedFile } = require('../../session-files.cjs');
 const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subagent-feed.cjs');
+const { BackgroundTasks, attach } = require('./background-tasks.cjs');
+// Host processes can restart while their terminal's dispatched workers keep running.
+const terminalCalls = new WeakMap();
 
 const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
@@ -28,17 +31,28 @@ function helperAlive(pid) {
 
 class AgentCalls {
   static alive(pid) { return helperAlive(pid); }
-  constructor({ changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null } = {}) {
+  static forTerminal(scope, id, create) {
+    let calls = terminalCalls.get(scope);
+    if (!calls && create) { calls = new Map(); terminalCalls.set(scope, calls); }
+    if (create && !calls.has(id)) {
+      const tracker = create(); calls.set(id, tracker);
+      tracker.release = () => { if (calls.get(id) === tracker) calls.delete(id); };
+    }
+    return calls?.get(id) || null;
+  }
+  constructor({ terminalId = null, changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null;
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
     this.dispatchAlive = dispatchAlive;
     this.dispatchReplay = dispatchReplay;
+    this.background = new BackgroundTasks(terminalId, { now });
     this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
       plannerOf: id => this.calls?.get(id)?.planner || null,
       read: async call => { this.refresh(call.key); await this.work; } });
     this.reset();
   }
   reset(preserveDispatch = false) {
+    if (!preserveDispatch) this.background.reset();
     clearTimeout(this.timer);
     const dispatched = [...(this.calls || [])].filter(([, call]) => preserveDispatch && call.dispatch);
     for (const call of this.calls?.values() || []) if (!preserveDispatch || !call.dispatch) { clearTimeout(call.expiry); clearTimeout(call.startNotice); }
@@ -53,7 +67,15 @@ class AgentCalls {
     if (call?.dispatch) this.feeds.ownerInput(call, messageId, call.key, message);
   }
   byId(id) { return [...this.calls.values()].find(call => call.id === id) || null; }
-  dispose() { this.reset(); this.finishedIds.clear(); }
+  dispose() { this.release?.(); this.reset(); this.finishedIds.clear(); }
+  bindBackground(binding, reset = false) {
+    if (reset || this.backgroundBinding !== binding) { this.backgroundBinding = binding; this.background.reset(); }
+  }
+  backgroundRecord(record) { if (this.background.apply(record)) this.changed(); }
+  usage(value) {
+    const entries = this.background.snapshot();
+    return value || entries.length ? attach(value || { provider: null, context: null, round: null, total: null, limits: [], calls: [] }, entries) : null;
+  }
   running() {
     return [...this.calls.values()].filter(call => !call.done && !call.reviewed).map(call => ({
       id: call.id, agent: call.agent, ...shownModel(call), title: call.title, role: call.role,
