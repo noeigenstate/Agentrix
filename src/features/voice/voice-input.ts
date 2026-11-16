@@ -7,10 +7,9 @@ import { isMac, isLinux } from '../../shared/platform';
 
 // One shared dictation controller: a single microphone, one recording at a time,
 // and every terminal's microphone button reflecting the same device and model state.
-// label names the terminal being dictated to; sending marks a recognition that will press Enter; sends: Enter sends
-// what was said (a box that only takes the words, such as the decision page's, has Enter insert them instead).
-type VoiceSnapshot = { microphone: boolean | null; model: VoiceState | null; recording: string | null; busy: string | null; label: string | null; sending: boolean; sends: boolean };
-let snapshot: VoiceSnapshot = { microphone: null, model: null, recording: null, busy: null, label: null, sending: false, sends: true };
+// label names the terminal being dictated to. Dictation only ever puts the words in: nothing is sent or submitted for the owner.
+type VoiceSnapshot = { microphone: boolean | null; model: VoiceState | null; recording: string | null; busy: string | null; label: string | null };
+let snapshot: VoiceSnapshot = { microphone: null, model: null, recording: null, busy: null, label: null };
 // Audio messages update the meter without notifying React's voice-state subscribers.
 let measuredLevel = 0;
 export function getVoiceLevel() { return measuredLevel; }
@@ -25,13 +24,12 @@ let opening: Promise<unknown> = Promise.resolve();
 // The terminal the user last clicked or typed in, for Ctrl+T when keyboard focus is elsewhere.
 let lastTerminal: string | null = null;
 // A reading view showing a terminal's conversation takes the words dictated to that terminal into its message
-// box instead (submit: send them as the next message). A text box of its own, such as the decision page's
-// (data-voice-target="<id>" on it, for the shortcut), takes dictation under its id with no terminal at all;
-// sends: false when Enter only puts the words in.
-type Composer = { insert: (text: string, submit: boolean) => void; sends: boolean; available: () => boolean; sessionId?: string };
+// box instead. A text box of its own, such as the decision page's
+// (data-voice-target="<id>" on it, for the shortcut), takes dictation under its id with no terminal at all.
+type Composer = { insert: (text: string) => void; available: () => boolean; sessionId?: string };
 const composers = new Map<string, Composer>();
-export function dictateInto(id: string, insert: (text: string, submit: boolean) => void, sends = true, options: { available?: () => boolean; sessionId?: string } = {}) {
-  const composer = { insert, sends, available: options.available ?? (() => true), sessionId: options.sessionId };
+export function dictateInto(id: string, insert: (text: string) => void, options: { available?: () => boolean; sessionId?: string } = {}) {
+  const composer = { insert, available: options.available ?? (() => true), sessionId: options.sessionId };
   composers.set(id, composer);
   return () => {
     if (composers.get(id) === composer) composers.delete(id);
@@ -39,7 +37,7 @@ export function dictateInto(id: string, insert: (text: string, submit: boolean) 
   };
 }
 // Such a text box (the decision page's new work, a review's comments): the words go in at its caret, or at the end
-// when it has no focus, and Enter only puts them in; sending stays the box's own button.
+// when it has no focus; sending stays the box's own button.
 export function useDictatedBox(id: string, box: RefObject<HTMLTextAreaElement | null>, setText: (text: string) => void) {
   useEffect(() => dictateInto(id, words => {
     const node = box.current;
@@ -48,12 +46,8 @@ export function useDictatedBox(id: string, box: RefObject<HTMLTextAreaElement | 
     setText(node.value.slice(0, at) + words + node.value.slice(end));
     node.focus();
     requestAnimationFrame(() => node.setSelectionRange(at + words.length, at + words.length));
-  }, false), [id]);
+  }), [id]);
 }
-// Codex and Claude Code treat an Enter that arrives right after pasted text as part of the paste
-// (a newline), so the submitting Enter waits until the paste has landed.
-const SUBMIT_DELAY = 400;
-
 async function refreshMicrophone() {
   try { set({ microphone: (await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === 'audioinput') }); }
   catch { set({ microphone: false }); }
@@ -70,11 +64,12 @@ function start() {
     const id = (event.target as Element | null)?.closest?.<HTMLElement>('[data-terminal-id]')?.dataset.terminalId;
     if (id) lastTerminal = id;
   });
-  // While recording, Enter and Escape belong to dictation and never reach the terminal.
+  // While recording, Enter and Escape belong to dictation and never reach the terminal. Enter ends the recording
+  // and puts the words in, as a second click does; sending is always the owner's own.
   document.addEventListener('keydown', event => {
     if (!snapshot.recording || event.isComposing || (event.key !== 'Escape' && event.key !== 'Enter')) return;
     event.preventDefault(); event.stopPropagation();
-    void (event.key === 'Escape' ? cancelDictation() : finish(true));
+    void (event.key === 'Escape' ? cancelDictation() : finish());
   }, true);
 }
 
@@ -98,10 +93,10 @@ async function cancelDictation() {
   target = null; measuredLevel = 0; await capture.close(); set({ recording: null, label: null });
 }
 
-// submit: press Enter after inserting, so the text is sent as the next prompt.
-async function finish(submit = false) {
+// The words go into the box (a terminal's own input line where there is no box); nothing presses Enter.
+async function finish() {
   const current = target; if (!current) return;
-  target = null; measuredLevel = 0; set({ recording: null, busy: current.id, sending: submit && snapshot.sends });
+  target = null; measuredLevel = 0; set({ recording: null, busy: current.id });
   const currentComposer = () => !current.composer || composers.get(current.id) === current.composer && current.composer.available();
   try {
     const wav = await capture.stopRecording(); await capture.close();
@@ -111,17 +106,16 @@ async function finish(submit = false) {
     if (!text.value.trim()) throw new Error(t('没有识别出文字，请再说一遍。'));
     const composer = composers.get(current.id);
     if (!currentComposer() || composer && (!composer.available() || composer.sessionId && composer.sessionId !== current.sessionId)) return;
-    if (composer) { composer.insert(text.value.trim(), submit && composer.sends); return; }
+    if (composer) { composer.insert(text.value.trim()); return; }
     const pasted = await window.agentrix.pasteTerminal(current.id, text.value, current.sessionId);
     if (!pasted.ok) throw new Error(pasted.error);
-    if (submit) { await new Promise(resolve => setTimeout(resolve, SUBMIT_DELAY)); window.agentrix.writeTerminal(current.id, '\r'); }
     focusTerminal(current.id);
   } catch (error) { if (currentComposer()) current.onError(microphoneMessage(error)); }
-  finally { await capture.close(); set({ busy: null, sending: false, label: null }); }
+  finally { await capture.close(); set({ busy: null, label: null }); }
 }
 
-// Click once to start talking. Click again to insert the recognised text into this terminal's input
-// for review, or press Enter (or Ctrl+T) to insert it and send it.
+// Click once to start talking. Click again, press Enter or press Ctrl+T to insert the recognised text into this
+// terminal's input for review; the owner sends it.
 export async function toggleDictation(id: string, sessionId: string | null, onError: (message: string) => void, label = '') {
   if (snapshot.busy) return onError(t('正在识别上一段语音，请稍候。'));
   if (snapshot.recording) return snapshot.recording === id ? finish() : onError(t('另一个终端正在录音，请先结束那一段。'));
@@ -136,7 +130,7 @@ export async function toggleDictation(id: string, sessionId: string | null, onEr
   }
   // Recording counts from the keypress or click, so an Escape while the microphone is still opening cancels it.
   const pending = { id, sessionId: composer?.sessionId ?? sessionId ?? '', composer, onError };
-  target = pending; measuredLevel = 0; set({ recording: id, label: label || null, sends: composers.get(id)?.sends ?? true });
+  target = pending; measuredLevel = 0; set({ recording: id, label: label || null });
   // The recognizer is released after a few idle minutes; load it again while the user is speaking.
   void window.agentrix.warmVoice();
   const opened = opening.then(() => target === pending ? capture.open('', level => {
@@ -176,9 +170,9 @@ function terminalTarget() {
   return visible.length === 1 ? visible[0] : null;
 }
 
-// Ctrl+T starts talking to the current terminal; pressing it again works like Enter and sends the text.
+// Ctrl+T starts talking to the current terminal; pressing it again ends the recording and inserts the text.
 export async function quickDictation(onError: (message: string) => void) {
-  if (snapshot.recording) return finish(true);
+  if (snapshot.recording) return finish();
   if (snapshot.busy) return onError(t('正在识别上一段语音，请稍候。'));
   const terminal = terminalTarget(), id = terminal?.dataset.terminalId || terminal?.dataset.voiceTarget;
   if (!terminal || !id) return onError(t('先点一下要输入的终端，再按 {key} 说话。', { key: shortcut('voice') }));

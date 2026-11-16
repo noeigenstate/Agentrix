@@ -48,7 +48,6 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     'react/jsx-runtime': runtime,
     '@phosphor-icons/react': new Proxy({}, { get: () => noop }),
     './action-text': { actionText: () => '' },
-    './dictation-send': require('../src/features/reading/dictation-send.ts'),
     './reading-command': require('../src/features/reading/reading-command.ts'),
     './image-thumbnail': { thumbnail: async () => '', dataUrl: async () => '' },
     './pasted-pictures': { rememberPicture() {} },
