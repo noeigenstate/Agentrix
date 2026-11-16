@@ -118,7 +118,7 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
     </div>}
     <label className="setting-row"><span><Robot size={19} /><span><b>{t('Claude 的运行方式')}</b><small>{t('API：应用里的原生模式，按量计费；订阅：Claude Code 终端')}</small></span></span>
       <Select label={t('Claude 的运行方式')} className="runtime-select" value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
-    <label className="setting-row"><span><ShieldCheck size={19} /><span><b>{t('Codex 权限')}</b><small>{permissionOptions.find(option => option.value === permission)?.hint}</small><small>{t('只影响之后新建的原生 Codex 会话；正在运行的用 /permissions 切换；派发的工作者不受影响。')}</small></span></span>
+    <label className="setting-row"><span><ShieldCheck size={19} /><span><b>{t('Codex 权限')}</b><small>{t('只影响之后新建的原生 Codex 会话；正在运行的用 /permissions 切换；派发的工作者不受影响。')}</small></span></span>
       <Select label={t('Codex 权限')} className="runtime-select" value={permission} disabled={!onCodexPermissions} options={permissionOptions.map(({ value, label, hint }) => ({ value, label, description: hint }))} onChange={value => onCodexPermissions?.(codexPermissionOf(value))} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
       <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>

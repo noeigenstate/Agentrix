@@ -9,5 +9,6 @@ import './activity-pane.css';
 export function BackgroundBadge({ terminals }: { terminals: readonly ProjectTerminal[] }) {
   const count = countBackground(terminals);
   if (count <= 0) return null;
-  return <span className="activity-background-badge" title={t('{count} 个后台任务还在运行，回复写着完成不代表它们结束了。', { count })}><CircleNotch size={12} weight="bold" className="loading-spinner" aria-hidden="true" />{t('后台 {count} 个运行中', { count })}</span>;
+  const full = t('{count} 个后台任务还在运行，回复写着完成不代表它们结束了。', { count });
+  return <span className="activity-background-badge" title={full} aria-label={`${t('后台 {count} 个运行中', { count })}. ${full}`}><CircleNotch size={12} weight="bold" className="loading-spinner" aria-hidden="true" /><span className="activity-background-long" aria-hidden="true">{t('后台 {count} 个运行中', { count })}</span><span className="activity-background-short" aria-hidden="true">{t('后台 {count}', { count })}</span></span>;
 }

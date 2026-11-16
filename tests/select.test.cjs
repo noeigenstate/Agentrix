@@ -59,3 +59,8 @@ test('the selected option carries a check in a fixed column, and the trigger pad
   assert.match(css, /\.select-option-mark \{[^}]*flex: none; width: 16px/, 'the slot is 16px on every row, so labels stay aligned');
   assert.match(css, /\.select-trigger \{[^}]*padding: 0 12px;/);
 });
+
+test('a wide settings trigger never gets a menu wider than itself', () => {
+  assert.deepEqual(selectMenuWidths(300, 1000), { minWidth: 300, maxWidth: 300 });
+  assert.deepEqual(selectMenuWidths(199, 1000), { minWidth: 199, maxWidth: 360 }, 'a narrow trigger may still grow to its options');
+});

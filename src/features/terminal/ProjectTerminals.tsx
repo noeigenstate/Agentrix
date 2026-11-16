@@ -42,6 +42,8 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
   const cells = visible.length + views.length;
   const columns = Math.min(Math.max(1, Math.ceil(Math.sqrt(cells))), width < 600 ? 1 : width < 1150 ? 2 : 3);
   const rows = Math.max(1, Math.ceil(cells / columns));
+  // A last row that is not full gives its unused cells to the last split, so the grid never shows an unfilled area (the grid colour) beside it.
+  const spare = cells % columns ? columns - (cells % columns) : 0;
   const selected = terminalInUse(visible, activeId)?.id ?? null;
   const launcherTerminal = terminals.find(terminal => !terminal.sessionId || terminal.status === 'exited') ?? terminals[0];
   const runningCount = terminals.filter(terminal => terminal.sessionId && terminal.status !== 'exited' && terminal.status !== 'stopped').length;
@@ -88,7 +90,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
         {multiple && stopped && terminal.sessionId && <button className="button secondary small terminal-split-restart" onClick={() => void onAction(window.agentrix.startTerminal(terminal.id))}>{t('重新启动')}</button>}
       </section></div>;
     })}
-    {views.map(view => <div key={`${view.terminalId}/${view.callId}`} className="subagent-slot">
+    {views.map((view, index) => <div key={`${view.terminalId}/${view.callId}`} className="subagent-slot" style={index === views.length - 1 && spare ? { gridColumn: `span ${spare + 1}` } : undefined}>
       {isBackgroundCall(view.callId)
         ? <BackgroundPane terminal={records.get(view.terminalId)} callId={view.callId} onClose={() => closeSplit(view.terminalId, view.callId)} />
         : <SubagentPane terminalId={view.terminalId} callId={view.callId} projectId={project.id} onClose={() => closeSplit(view.terminalId, view.callId)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}

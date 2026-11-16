@@ -668,7 +668,7 @@ test('every group of called models has its own rate and inline effort, its calls
   assert.ok(html.includes('主模型'));
   assert.doesNotMatch(calls, /activity-call-tag|子代理/, 'the section heading identifies the called models');
   assert.equal((calls.match(/class="activity-call-head"/g) || []).length, 3, 'three groups, none merged');
-  assert.deepEqual([...calls.matchAll(/<span class="activity-row-end activity-rate[^"]*" title="[^"]*">([^<]*)<\/span>/g)].map(match => match[1]), ['48 token/s', '— token/s', '— token/s'], 'each group has its own rate');
+  assert.deepEqual([...calls.matchAll(/<span class="activity-row-end activity-rate[^"]*" title="[^"]*">([^<]*)<\/span>/g)].map(match => match[1]), ['48 token/s'], 'each group has its own rate, and a group without one shows nothing');
   assert.ok(calls.includes('<span class="activity-call-settings">high</span>') && calls.includes('<span class="activity-call-settings">max · 快速</span>'), 'effort and speed follow the bold model name');
   assert.doesNotMatch(calls, /activity-call-note/, 'settings are never repeated on a separate row');
   assert.deepEqual([...calls.matchAll(/<p>(claude-[a-z0-9-]+ work)<\/p>/g)].map(match => match[1]), ['claude-opus-5-5 work', 'claude-sonnet-5-5 work', 'claude-sonnet-5-5 work'], 'calls as given');
@@ -684,8 +684,8 @@ test('a dispatched worker that has not reported its model shows the requested on
     sessionId: `thread-${id}`, startedAt: 1000, ...extra });
   calls.dispatch(start('asked', { requestedModel: 'gpt-6.1-sol' })); calls.dispatch(start('unasked'));
   const heads = html => [...html.matchAll(/<li class="activity-call-head" title="([^"]*)">[\s\S]*?<b>([^<]*)<\/b>/g)].map(match => [match[2], match[1]]);
-  assert.deepEqual(heads(callsMarkup(calls.snapshot())), [['GPT-6.1-Sol（未确认）', 'Codex / GPT-6.1-Sol（未确认）'], ['模型未确认', 'Codex / 模型未确认']]);
-  assert.deepEqual(heads(callsMarkup(calls.snapshot(), 'en')).map(([name]) => name), ['GPT-6.1-Sol (unconfirmed)', 'Model unconfirmed']);
+  assert.deepEqual(heads(callsMarkup(calls.snapshot())), [['GPT-6.1-Sol', 'Codex / GPT-6.1-Sol'], ['模型未确认', 'Codex / 模型未确认']]);
+  assert.deepEqual(heads(callsMarkup(calls.snapshot(), 'en')).map(([name]) => name), ['GPT-6.1-Sol', 'Model unconfirmed']);
   for (const language of ['zh', 'en']) assert.doesNotMatch(callsMarkup(calls.snapshot(), language), /unreported/);
   // The worker's report replaces the placeholder in its own group.
   assert.equal(calls.dispatch({ type: 'dispatch-routing', id: 'asked', model: 'gpt-6.1-sol', effort: 'max', fast: true }), true);
