@@ -11,7 +11,7 @@ const catalog = [
   { model: 'model-a', isDefault: true, supportedReasoningEfforts: ['low', 'high', 'ultra'].map(reasoningEffort => ({ reasoningEffort })), defaultReasoningEffort: 'high', additionalSpeedTiers: ['fast'] },
   { model: 'model-b', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }], defaultReasoningEffort: 'medium', additionalSpeedTiers: [] },
 ];
-function fixture(t, { remote = false, scope = 'host-a', home, env = {} } = {}) {
+function fixture(t, { remote = false, scope = 'host-a', home, env = {}, shellOf } = {}) {
   const root = home || fs.mkdtempSync(path.join(os.tmpdir(), 'agx-slash-unit-'));
   if (!home) t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const wire = [], events = [], threads = new Map(), held = []; let serial = 0, turn = 0, drop = false, holding = false;
@@ -66,7 +66,7 @@ function fixture(t, { remote = false, scope = 'host-a', home, env = {} } = {}) {
     });
     return child;
   }
-  const factory = createCodexRuntime({ optionsHome: root, resolveExecutable: async () => 'unused', spawnProcess: peer,
+  const factory = createCodexRuntime({ optionsHome: root, resolveExecutable: async () => 'unused', spawnProcess: peer, ...(shellOf ? { shellOf } : {}),
     launchRemote: async () => ({ child: peer(), cwd: root }) });
   const spec = { owner: 'gui', projectId: 'p', terminalId: 't', cwd: root, env: { CODEX_HOME: root, ...env }, ...(remote ? { kind: 'ssh' } : {}) };
   const session = factory.create(spec, event => events.push(event)); t.after(() => session.close());
@@ -172,15 +172,25 @@ test("an owner's ! command in a planner's session runs behind the line that take
   const { ownerShellCommand } = require('../electron/shared/agentrix-shims.cjs');
   const { itemPayload } = require('../electron/features/codex-app-server/events.cjs');
   const planner = { AGENTRIX_SHIMS: '/agentrix/shims', AGENTRIX_DISPATCH_DEPTH: '0' }, typed = `claude -p --output-format json "it's x"`;
-  for (const [remote, env, expected] of [[false, planner, ownerShellCommand(typed, planner)], [false, {}, typed], [true, planner, typed]]) {
-    const f = fixture(t, { remote, env }); await f.session.start();
+  // The line goes only to a shell it is written for; fish, cmd or an unknown shell gets the text as typed.
+  for (const [remote, env, shell, expected] of [[false, planner, 'posix', ownerShellCommand(typed, planner, 'posix')],
+    [false, planner, 'powershell', ownerShellCommand(typed, planner, 'powershell')], [false, planner, null, typed], [false, {}, 'posix', typed], [true, planner, 'posix', typed]]) {
+    const asked = [];
+    const f = fixture(t, { remote, env, shellOf: options => { asked.push(options); return shell; } }); await f.session.start();
     await f.session.shell('owner', typed);
-    assert.equal(f.wire.findLast(row => row.method === 'thread/shellCommand').params.command, expected);
+    assert.equal(f.wire.findLast(row => row.method === 'thread/shellCommand').params.command, expected, `${shell} ${remote}`);
+    if (!remote) assert.equal(asked.at(-1).env, f.spec.env, "the lookup sees the session's own env");
   }
-  assert.notEqual(ownerShellCommand(typed, planner), typed);
-  const shown = itemPayload({ type: 'commandExecution', id: 'c', command: '/bin/zsh -lc rendered', status: 'completed',
-    commandActions: [{ type: 'unknown', command: ownerShellCommand(typed, planner) }] }, true);
-  assert.equal(shown.content.command, typed);
+  assert.notEqual(ownerShellCommand(typed, planner, 'posix'), typed);
+  for (const shell of ['posix', 'powershell']) {
+    const shown = itemPayload({ type: 'commandExecution', id: 'c', command: '/bin/zsh -lc rendered', status: 'completed',
+      commandActions: [{ type: 'unknown', command: ownerShellCommand(typed, planner, shell) }] }, true);
+    assert.equal(shown.content.command, typed, shell);
+  }
+  // Codex may split the text into several actions: its rendering keeps the POSIX line verbatim, and the line goes from there.
+  const plain = 'git status && npm test', rendered = `/bin/zsh -lc '${ownerShellCommand(plain, planner, 'posix')}'`;
+  assert.equal(itemPayload({ type: 'commandExecution', id: 'c', command: rendered, status: 'completed',
+    commandActions: [{ type: 'unknown', command: 'git status' }, { type: 'unknown', command: 'npm test' }] }, true).content.command, `/bin/zsh -lc '${plain}'`);
   assert.equal(itemPayload({ type: 'commandExecution', id: 'c', command: 'npm test', status: 'completed', commandActions: [{ type: 'unknown', command: 'npm test' }] }, true).content.command, 'npm test');
 });
 
