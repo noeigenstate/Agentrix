@@ -23,7 +23,7 @@ function fixture(agent = 'claude') {
     notifyCompletion() { notifications++; }, summarizeTask: () => '', isLocalAgentCommand: require('../electron/agent-commands.cjs').isLocalAgentCommand,
     promptText: require('../electron/prompt-queue.cjs').promptText, followClaude() {}, memoryFolder: () => '', memoryDir: () => '', roundsOf: () => [],
     remember: async () => {}, setTimeout: () => ({ unref() {} }), refreshClaudeAccounts() {}, scrubProjectSkills: async () => {},
-    downgradeHooks: require('../electron/features/terminal-events/hook-channel.cjs').downgradeHooks });
+    reportHookChannel: require('../electron/features/terminal-events/hook-channel.cjs').reportHookChannel });
   vm.runInContext(functions, context);
   defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'claudeHook', 'acceptDispatchEvent');
   let serial = 0;
@@ -237,4 +237,22 @@ test('under command-async a late hook of a prompt whose Stop was applied changes
   // The next prompt is new and works as ever.
   h.advance(); h.hook('working', { prompt: 'Next', promptId: 'p2' });
   assert.equal(h.s.cliState.state, 'working'); assert.equal(h.beginnings(), 3);
+});
+
+test('a StopFailure ends the round without rearming completion when the turn failed', () => {
+  const h = fixture();
+  let seq = 0, at = 3000;
+  const hook = (event, payload = {}) => h.context.claudeHook({ seq: ++seq, terminalId: 't', event, at: at++, sessionId: 'provider', transcriptPath: '',
+    promptId: payload.prompt_id ?? null, toolUseId: null, agentId: null, payload });
+  hook('UserPromptSubmit', { prompt: 'Do the task', prompt_id: 'p1' });
+  assert.equal(h.s.cliState.state, 'working');
+  hook('StopFailure', { prompt_id: 'p1', error: 'unknown', last_assistant_message: 'API Error: 400' });
+  assert.equal(h.s.cliState.state, 'idle', 'the waiting light leaves working');
+  assert.equal(h.s.codexActivity, 'interrupted'); assert.equal(h.notifications(), 0, 'a failed turn is not a completed round');
+  // Nothing later rearms the alert: a repeated Stop or a StopFailure finds no armed completion.
+  h.advance(); hook('Stop', { prompt_id: 'p1' }); hook('StopFailure', { prompt_id: 'p1' });
+  assert.equal(h.notifications(), 0);
+  // The next round still completes normally.
+  hook('UserPromptSubmit', { prompt: 'Try again', prompt_id: 'p2' }); hook('Stop', { prompt_id: 'p2' });
+  assert.equal(h.notifications(), 1);
 });

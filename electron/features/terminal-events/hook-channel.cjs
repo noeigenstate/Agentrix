@@ -106,4 +106,14 @@ function downgradeHooks(hooks, variable) {
     channelReason: reason('term.hooks_command_proxy', { source: 'wrapper', params: { variable, source: 'terminal' } }) };
 }
 
-module.exports = { HTTP_EVENTS, COMMAND_KINDS, proxyOf, terminalHooks, downgradeHooks };
+// The terminal's channel follows each claude launch: the wrapper's hook-channel report downgrades the launch it precedes, and a
+// launch that follows none (no proxy this time) uses the terminal's own channel again. `s` is the terminal's session record.
+function reportHookChannel(s, variable) {
+  s.hooksBase ||= s.hooks; s.hooks = downgradeHooks(s.hooks, variable); s.hookReported = true;
+}
+function startHookLaunch(s) {
+  if (s.hooksBase && !s.hookReported) s.hooks = s.hooksBase;
+  s.hookReported = false;
+}
+
+module.exports = { HTTP_EVENTS, COMMAND_KINDS, proxyOf, terminalHooks, downgradeHooks, reportHookChannel, startHookLaunch };

@@ -1,7 +1,7 @@
 const path = require('node:path');
 
 // The hook events the pipe's claude-hook.ps1 kinds stood for (C-2), by the state claudeActivity takes.
-const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', Notification: 'attention', PermissionRequest: 'attention',
+const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', StopFailure: 'failed', Notification: 'attention', PermissionRequest: 'attention',
   Elicitation: 'attention', PreToolUse: 'progress', PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress',
   ElicitationResult: 'progress' };
 // The notifications that mean Claude waits for an answer; an idle one must not turn a finished round back into a waiting one.
@@ -211,11 +211,15 @@ function createClaudeActivity(deps) {
   }
 
   // Claude Code hooks (HTTP through claudeHook, commands through claude-hook.ps1 and agent-event.cjs): UserPromptSubmit ->
-  // working, Stop -> complete. SessionStart, always a command -> the conversation Claude writes from now on: after /clear
+  // working, Stop -> complete, StopFailure -> interrupted. SessionStart, always a command -> the conversation Claude writes from now on: after /clear
   // or /resume the reading view follows the new file at once.
   // Notification -> attention while Claude waits for a permission answer in its own screen; that only
   // sets the waiting indicator and never changes the round's lifecycle.
   function claudeActivity(project, s, event) {
+    // StopFailure: the turn ended in an API error. It ends the round like a Stop but is an interrupted round, never a
+    // completed one, so it disarms the completion alert instead of raising it.
+    const failed = event.state === 'failed';
+    if (failed) event = { ...event, state: 'complete' };
     const { store, publishCliState, followClaude, applyActivity, refreshClaudeAccounts, promptText, isLocalAgentCommand } = deps;
     if (!s.codexActive || s.agent !== 'claude' || !['working', 'complete', 'attention', 'session', 'progress'].includes(event.state)) return;
     if (typeof event.sessionId !== 'string' || !/^[\w-]{1,100}$/.test(event.sessionId) || typeof event.eventId !== 'string' || event.eventId.length > 200) return;
@@ -279,10 +283,10 @@ function createClaudeActivity(deps) {
     // Remember the conversation and whether its turn is still open, so a restart can resume it and continue.
     store.setRestore(s.terminalId, { threadId: event.sessionId, interrupted: event.state === 'working' });
     followClaude(project, s, event);
-    const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' ? turnId : null, state: event.state, updatedAt: at, prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
+    const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' && !failed ? turnId : null, state: failed ? 'interrupted' : event.state, updatedAt: at, prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
     // Stop can beat the last tool-result write. Read it before granting a completion,
     // and let a newer turn/input win if it started while the read was in flight.
-    if (event.state === 'complete' && s.activityMonitor) {
+    if (event.state === 'complete' && !failed && s.activityMonitor) {
       const promptEvent = s.claudePromptEventId;
       void Promise.resolve(s.activityMonitor.poll()).then(() => {
         if (s.agent !== 'claude' || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;

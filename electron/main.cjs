@@ -18,7 +18,7 @@ const { createClaudeActivity } = require('./features/terminal-events/claude-acti
 const { writeBootstrap } = require('./features/terminal-events/bootstrap-file.cjs');
 const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
 const { createHookIngest } = require('./features/terminal-events/hook-ingest.cjs');
-const { terminalHooks, downgradeHooks } = require('./features/terminal-events/hook-channel.cjs');
+const { terminalHooks, reportHookChannel, startHookLaunch } = require('./features/terminal-events/hook-channel.cjs');
 const { createNativeSessions, createNativeUsage } = require('./features/native-session/index.cjs');
 const { createHostInputs } = require('./features/native-session/host-inputs.cjs');
 const { createProjectAccounts } = require('./features/native-session/project-accounts.cjs');
@@ -794,7 +794,7 @@ function onEvent(event) {
   if (acceptDispatchEvent(s, project, event)) return;
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   // The claude wrapper found a proxy set since the terminal started; its command field names the variable.
-  if (event.type === 'hook-channel') { s.hooks = downgradeHooks(s.hooks, event.command); return; }
+  if (event.type === 'hook-channel') { reportHookChannel(s, event.command); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
   if (event.type === 'codex-started' && event.agent !== 'claude') { void openCodexFromShell(project, s, event); return; }
   if (event.type === 'codex-exited' && event.agent !== 'claude') return;
@@ -817,6 +817,7 @@ function onEvent(event) {
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (!quitting && typeof event.cwd === 'string') store.setRestore(s.terminalId, { cwd: event.cwd });
   } else if (event.type === 'codex-started') {
+    if (event.agent === 'claude') startHookLaunch(s);
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
     s.needsInput = null;
     s.agentStarting = false;
