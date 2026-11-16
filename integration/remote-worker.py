@@ -883,7 +883,7 @@ def take_subagents(order):
         if reader.file_identity is None: continue
         batch, size = take_batch(reader.outbox, size, SUBAGENTS_BUDGET)
         answer[agent_id] = {"records": batch, "reset": reader.reset,
-                            "partial": reader.partial or reader.unreadable, "behind": reader.unreadable or reader.behind()}
+                            "partial": reader.partial or (reader.unreadable and not reader.reset), "behind": reader.unreadable or reader.behind()}
         if reader.tool_use_id is not None: answer[agent_id]["toolUseId"] = reader.tool_use_id
         reader.reset = False
     return answer

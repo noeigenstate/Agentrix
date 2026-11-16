@@ -303,3 +303,41 @@ test('macOS runs only the SSH descriptor-relative and sub-agent symlink Python t
     'test_sub_agent_reads_never_follow_a_link_out_of_the_session_folder',
   ]);
 });
+
+test('a read fault on the poll that resets a sub-agent file never marks its new meter partial', () => {
+  interpreter ||= findPython();
+  const probe = String.raw`
+import errno, json, os, sys, tempfile, types
+from pathlib import Path
+from unittest import mock
+src = sys.argv[1]
+remote = types.ModuleType("remote_worker"); remote.__file__ = src
+exec(compile(open(src, encoding="utf-8").read(), src, "exec"), remote.__dict__)
+polls = []
+with tempfile.TemporaryDirectory(prefix="agentrix-ssh-rate-") as t:
+    folder = Path(t); child = folder / "agent-a1.jsonl"
+    child.write_text(json.dumps({"type": "assistant", "uuid": "u", "message": {"id": "m", "content": [], "usage": {"output_tokens": 1}}}) + "\n", encoding="utf-8")
+    reader = remote.ClaudeTranscriptReader("x.jsonl", 0)
+    class Faulty:
+        def __init__(self, f): self.f = f
+        def __enter__(self): return self
+        def __exit__(self, *a): self.f.close()
+        def fileno(self): return self.f.fileno()
+        def seek(self, n): return self.f.seek(n)
+        def read(self, n=-1): raise OSError(errno.EIO, "io")
+    fault = [True]
+    def opened(name, _f):
+        f = (folder / name).open("rb")
+        return Faulty(f) if fault[0] and name.endswith(".jsonl") else f
+    with mock.patch.object(remote, "subagent_folder", lambda _p: os.open(str(child), os.O_RDONLY)), \
+         mock.patch.object(remote, "open_regular", side_effect=opened):
+        polls.append(reader.read_subagents(["a1"])["a1"]); fault[0] = False
+        polls.append(reader.read_subagents(["a1"])["a1"])
+print(json.dumps([{k: p[k] for k in ("reset", "partial", "behind")} for p in polls]))
+`;
+  const result = spawnSync(interpreter.command, [...interpreter.args, '-I', '-B', '-c', probe, worker], { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  assert.equal(result.status, 0, result.stderr);
+  const [faulted, next] = JSON.parse(result.stdout.trim().split('\n').at(-1));
+  assert.deepEqual([faulted.reset, faulted.partial, faulted.behind], [true, false, true], 'the reset poll that hit a read fault is behind, not partial');
+  assert.equal(next.partial, false);
+});
