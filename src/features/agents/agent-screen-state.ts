@@ -24,11 +24,10 @@ export function cliStateFor(agent: ScreenAgent, frame: CliFrame | null, terminal
   const observed = current?.pending && !current.parsed ? null : dialog ? 'waiting' : busy ? 'working' : idle ? 'idle' : null;
   const newer = !!observed && current?.sessionId === terminal.sessionId && (current?.revision ?? 0) > 0
     && (current?.stateUpdatedAt?.[agent] ?? current?.updatedAt ?? 0) > (signal?.updatedAt ?? Infinity);
-  const authority = signal && !newer ? signal : null;
+  // A screenIdle signal (Esc without a Stop, confirmed idle by the screen) is no authority: every reader follows its own current frame.
+  const authority = signal && !newer && !signal.screenIdle ? signal : null;
   const waiting = dialog || (authority ? authority.state === 'waiting' : !signal && terminal.needsInput != null && !idle);
   const working = !waiting && (authority ? authority.state === 'working' : busy || !idle && (terminal.mainTurn?.state ?? terminal.codexActivity) === 'working');
-  // The status light alone: main's screen-confirmed idle (state 'working' with screenIdle) shows as idle. Sending, queueing and every other reader keep `working`.
-  const shownWorking = working && !(authority?.state === 'working' && authority.screenIdle);
-  return { input, idle, waiting, working, shownWorking, message: authority?.state === 'waiting' ? authority.message : waiting ? terminal.needsInput : null,
+  return { input, idle, waiting, working, message: authority?.state === 'waiting' ? authority.message : waiting ? terminal.needsInput : null,
     canDeliver: input && !dialog && !waiting && !current?.pending };
 }

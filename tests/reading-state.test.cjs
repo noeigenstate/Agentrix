@@ -91,16 +91,15 @@ test('a busy Claude takes a message while its frame is parsing; a dialog still h
   assert.equal(dialog.accepting, false); assert.equal(dialog.waiting, true);
 });
 
-test('screenIdle dims the status light only: sending, queueing and readiness keep reading working', () => {
-  const rows = ['────', '❯ ', '────', '  ⏸ manual mode on'], screen = parseAgentScreen('claude', rows);
-  const terminal = cli => ({ needsInput: null, codexActivity: 'unknown', sessionId: 's', agentStartedAt: 0, cliState: cli });
-  const read = cli => readingState('claude', rows, screen, terminal(cli), cli, { rows, sessionId: 's', revision: 1, updatedAt: 1 });
-  const flagged = { sessionId: 's', revision: 5, state: 'working', updatedAt: 9000, screenIdle: true };
-  const lit = read(flagged);
-  assert.equal(lit.shownWorking, false, 'the light is idle');
-  assert.equal(lit.working, true, 'the working flag every other reader uses is unchanged');
-  assert.equal(lit.canDeliver, true); assert.equal(lit.accepting, true);
-  const plain = read({ ...flagged, revision: 6, updatedAt: 9001, screenIdle: undefined });
-  assert.equal(plain.shownWorking, true, 'a later state without the flag is working again');
-  assert.deepEqual({ ...lit, shownWorking: 0 }, { ...plain, shownWorking: 0 }, 'nothing but the light differs');
+
+test('a screenIdle host signal has no authority: the frame decides, so Claude shows idle at once and working when its line returns', () => {
+  const idleRows = ['────', '❯ ', '────', '  ⏸ manual mode on'], busyRows = ['✶ Befuddling… (2s)', ...idleRows];
+  const signal = { sessionId: 's', revision: 5, state: 'working', updatedAt: 9000, screenIdle: true };
+  const terminal = { needsInput: null, codexActivity: 'unknown', sessionId: 's', agentStartedAt: 0, cliState: signal };
+  const read = (rows, cli = signal) => readingState('claude', rows, parseAgentScreen('claude', rows), { ...terminal, cliState: cli }, cli, { rows, sessionId: 's', revision: 1, updatedAt: 1, stateUpdatedAt: { claude: 1 } });
+  const idle = read(idleRows);
+  assert.equal(idle.working, false, 'the input box with no working line is idle although the host signal is newer');
+  assert.equal(idle.canDeliver, true, 'a message goes straight in');
+  assert.equal(read(busyRows).working, true, 'the working line returning says working again');
+  assert.equal(read(idleRows, { ...signal, revision: 6, updatedAt: 9001, screenIdle: undefined }).working, true, 'a later signal without the flag has authority again');
 });
