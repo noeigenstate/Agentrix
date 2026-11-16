@@ -1,5 +1,7 @@
 const { acceptDispatch, dispatchDirectory } = require('./dispatch-events.cjs');
 const { DispatchInbox } = require('./dispatch-inbox.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const DISPATCH_EVENTS = ['dispatch-declared', 'dispatch-notice', 'dispatch-start', 'dispatch-routing', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt', 'dispatch-input'];
 
@@ -32,8 +34,18 @@ function createDispatchIntake(deps) {
     return entry.inbox;
   }
   function disposeDispatchInbox(terminalId) {
-    if (terminalId === undefined) { for (const entry of inboxes.values()) entry.inbox.dispose(); inboxes.clear(); }
-    else { inboxes.get(terminalId)?.inbox.dispose(); inboxes.delete(terminalId); }
+    const entries = terminalId === undefined ? [...inboxes.values()] : [inboxes.get(terminalId)].filter(Boolean);
+    for (const { inbox } of entries) {
+      inbox.dispose();
+      if (!inbox.directory) continue;
+      try {
+        const parent = path.dirname(inbox.directory), root = fs.realpathSync(path.dirname(parent));
+        const folder = fs.realpathSync(inbox.directory), expected = path.join(root, 'dispatch-outbox', path.basename(inbox.directory));
+        if (path.basename(parent) === 'dispatch-outbox' && !path.relative(expected, folder)
+          && !fs.lstatSync(parent).isSymbolicLink() && !fs.lstatSync(inbox.directory).isSymbolicLink()) fs.rmSync(folder, { recursive: true, force: true });
+      } catch (error) { if (error.code !== 'ENOENT') inbox.refuse(null, 'dispatch.outbox_unreadable'); }
+    }
+    if (terminalId === undefined) inboxes.clear(); else inboxes.delete(terminalId);
   }
 
   // True when the event is a dispatch event, which ends its handling, whether or not the gate accepted it.
@@ -41,7 +53,7 @@ function createDispatchIntake(deps) {
     if (event.type !== 'dispatch-account' && !DISPATCH_EVENTS.includes(event.type)) return false;
     if (event.version === 1) {
       const inbox = bindDispatchInbox(s, project);
-      void inbox.accept(event).then(() => inbox.sweep()).catch(() => deps.dispatchRefused?.({ code: 'dispatch.outbox_unreadable' }));
+      void inbox.accept(event).then(() => inbox.sweep()).catch(() => inbox.refuse(event, 'dispatch.outbox_unreadable'));
     } else applyDispatchEvent(s, project, event);
     return true;
   }

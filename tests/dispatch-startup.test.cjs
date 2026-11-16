@@ -10,7 +10,7 @@ const { run } = require('../integration/dispatch.cjs');
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { apiEnvironment } = require('../electron/features/claude-sdk/credentials.cjs');
 
-async function visibilityFixture(t, refused) {
+async function visibilityFixture(t, refused, agent = 'claude') {
   const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
   const { acceptDispatch } = require('../electron/features/agents/dispatch-events.cjs');
   const { EventEmitter } = require('node:events'), { PassThrough, Writable } = require('node:stream');
@@ -29,8 +29,9 @@ async function visibilityFixture(t, refused) {
       socket.destroy = () => socket.emit('close'); queueMicrotask(() => socket.emit('connect')); return socket;
     } };
     if (name.replaceAll('\\', '/').endsWith('/features/agents/dispatch-control.cjs')) return { async connectDispatchControl(auth) {
-      assert.equal(auth.cwd, root); assert.equal(auth.agent, 'claude'); assert.deepEqual(auth.allow, []);
-      if (refused) throw Object.assign(new Error('control_unavailable'), { stage: 'control_register', category: 'dispatch.unknown_run', leadMode: refused === 'native' ? 'native' : 'terminal' });
+      assert.equal(auth.cwd, root); assert.equal(auth.agent, agent); assert.deepEqual(auth.allow, []);
+      if (refused) throw Object.assign(new Error('control_unavailable'), { stage: 'control_register',
+        category: agent === 'codex' ? 'dispatch.project_mismatch' : 'dispatch.unknown_run', leadMode: refused === 'native' ? 'native' : 'terminal' });
       return { connected: true, close() {}, async request(method) {
         assert.equal(method, 'claude-sdk.run');
         auth.onEvent({ type: 'path.changed', payload: { selected: 'terminal', reason: 'terminal lead (subscription)' } });
@@ -45,20 +46,28 @@ async function visibilityFixture(t, refused) {
   fs.writeFileSync(brief, 'Synthetic task');
   let launched, output = '', child;
   const ready = new Promise(resolve => { launched = resolve; });
-  const finished = loaded.exports.run(['claude', '--role', 'review', '--title', 'Synthetic visibility', '--model', 'synthetic-model', '--effort', 'high',
-    '--permission', 'plan', '--cwd', root, '--brief', brief, '--out', out], {
+  const finished = loaded.exports.run([agent, '--role', 'review', '--title', 'Synthetic visibility', '--model', 'synthetic-model', '--effort', 'high',
+    ...(agent === 'claude' ? ['--permission', 'plan'] : []), '--cwd', root, '--brief', brief, '--out', out], {
     env: { PATH: '', HOME: root, USERPROFILE: root, CODEX_HOME: path.join(root, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap },
     stdout: { write: text => { output += text; } },
     resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
     launch: () => {
       child = new EventEmitter(); child.pid = process.pid; child.exitCode = null;
       child.stdout = new PassThrough(); child.stderr = new PassThrough();
-      child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+      child.stdin = agent === 'codex' ? new PassThrough() : new Writable({ write(_chunk, _encoding, callback) { callback(); } });
       child.kill = () => child.end();
       child.end = () => {
         if (child.exitCode !== null) return;
         child.exitCode = 0; child.stdout.end(); child.stderr.end(); child.emit('exit', 0); child.emit('close', 0, null);
       };
+      if (agent === 'codex') {
+        // This in-memory peer owns termination; no OS process or process tree belongs to it.
+        child.remote = true;
+        const peer = path.join(__dirname, 'fixtures/codex-app-server.cjs');
+        require('node:vm').runInNewContext(fs.readFileSync(peer, 'utf8'), { require: createRequire(peer), setTimeout, clearTimeout,
+          process: { argv: ['node', peer, 'app-server'], env: {}, cwd: () => root, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr,
+            exit: () => child.end() } });
+      }
       launched(child); return child;
     },
   });
@@ -104,6 +113,15 @@ test('an authenticated native-lead refusal ends startup with its code and never 
   assert.equal(await f.finished, 1);
   assert.match(f.output(), /failed to start .*control_register\/dispatch\.unknown_run/);
   assert.doesNotMatch(f.output(), /claude-cli:/);
+});
+
+test('a Codex worker under a native lead still starts after a project-mismatch control refusal', async t => {
+  const f = await visibilityFixture(t, 'native', 'codex');
+  assert.ok(f.child, f.output());
+  assert.equal(await f.finished, 0, f.output());
+  assert.ok(f.events.some(event => event.type === 'dispatch-start' && !event.unconfirmed));
+  assert.match(f.output(), /control_register\/dispatch\.project_mismatch/);
+  assert.doesNotMatch(f.output(), /failed to start|claude-cli:/);
 });
 
 for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_json', 'missing_file', 'missing_capability', 'missing_session_key', 'rejected_registration', 'dead_address']) {

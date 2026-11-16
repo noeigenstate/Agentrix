@@ -263,17 +263,22 @@ test('quit returns promptly for flushed and empty stores and preserves trailing 
 });
 
 test('main quit cleanup runs once and a late dashboard append cannot prevent the next quit', { timeout: 5000 }, async t => {
-  const vm = require('node:vm'), { records } = await lab(t);
+  const vm = require('node:vm'), syncFs = require('node:fs'), { records, directory } = await lab(t);
+  const runtimeDir = await fs.mkdtemp(path.join(directory, 'runtime-')), neighbour = path.join(directory, 'kept');
+  await fs.mkdir(path.join(runtimeDir, 'dispatch-outbox', 'terminal'), { recursive: true });
+  await fs.writeFile(path.join(runtimeDir, 'dispatch-outbox', 'terminal', 'frame.json'), '{}');
+  await fs.writeFile(neighbour, 'synthetic neighbour');
   const source = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let handler, cleanups = 0, quits = 0, prevented = 0, labDisposals = 0, labWaits = 0, inboxDisposals = 0, releaseLab, notifyQuit;
   const labDrain = new Promise(resolve => { releaseLab = resolve; }), quit = new Promise(resolve => { notifyQuit = resolve; });
   const labWindow = { dispose: () => labDisposals++, waitForQuit: () => labWaits++ === 0 ? labDrain : null };
   vm.runInNewContext('let quitting = false, quitCleaned = false, dashboardWindow = null;\n' + source.slice(source.indexOf("app.on('before-quit',"), source.indexOf("app.on('window-all-closed',")), {
-    app: { on: (_, listener) => { handler = listener; }, quit: () => { quits++; notifyQuit(); } }, process: { platform: 'win32' }, dashboard: records, labWindow,
+    app: { on: (_, listener) => { handler = listener; }, quit: () => { quits++; notifyQuit(); }, getPath: () => directory },
+    fs: syncFs, path, process: { platform: 'win32' }, dashboard: records, labWindow,
     clearTimeout, attentionTimer: null, voiceManager: null, fileOperations: null, skills: { close: () => cleanups++ },
     updateManager: null, projectAccounts: { close() {} }, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
     usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, hookServer: null, dispatchControl: null,
-    nativeSessions: { close: () => { cleanups++; } }, claudeRuntime: null, tray: null, cleanupAskpass() {}, runtimeDir: null,
+    nativeSessions: { close: () => { cleanups++; } }, claudeRuntime: null, tray: null, cleanupAskpass() {}, runtimeDir,
     disposeDispatchInbox: () => inboxDisposals++,
   });
   const first = records.append('runs', { index: 1 });
@@ -281,6 +286,8 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
   const drain = records.quitDrain;
   assert.equal(prevented, 1); assert.equal(cleanups, 2); assert.equal(labDisposals, 1); assert.equal(labWaits, 1);
   assert.equal(inboxDisposals, 1);
+  assert.equal(syncFs.existsSync(runtimeDir), false);
+  assert.equal(await fs.readFile(neighbour, 'utf8'), 'synthetic neighbour');
   await drain; await first;
   assert.equal(quits, 0, 'the lab still has a worker to stop');
   releaseLab(); await quit;

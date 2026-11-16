@@ -68,6 +68,10 @@ class AgentCalls {
   }
   byId(id) { return [...this.calls.values()].find(call => call.id === id) || null; }
   dispose() { this.release?.(); this.reset(); this.finishedIds.clear(); }
+  endSession() {
+    this.reset(true); this.setFolder(null); this.bindBackground(null, true);
+    this.schedule();
+  }
   bindBackground(binding, reset = false) {
     if (reset || this.backgroundBinding !== binding) { this.backgroundBinding = binding; this.background.reset(); }
   }

@@ -953,7 +953,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       }
     }
     await openControl();
-    if (!controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
+    if (options.agent === 'claude' && !controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
     // Nobody answers a dispatched worker's request, and the app-server waits for ever: a blocking one is declined so the run goes on.
     function requestOpened({ requestId, kind, blocking, preview, questions }) {
       const text = (preview || questions?.[0]?.question || '').slice(0, 160);

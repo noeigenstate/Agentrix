@@ -23,11 +23,19 @@ class DispatchInbox {
   constructor({ directory = null, projectId, sessionKey, apply, refused = () => {}, interval = 60000 }) {
     Object.assign(this, { directory, projectId, sessionKey, apply, refused });
     this.runs = new Map(); this.work = Promise.resolve(); this.disposed = false;
+    this.refusals = new Set(); this.refusalCounts = new Map();
     if (directory) { this.timer = setInterval(() => { void this.sweep(); }, interval); this.timer.unref?.(); }
   }
   refuse(frame, code) {
     const result = { accepted: false, id: uuid(frame?.id) ? frame.id : null, seq: Number.isSafeInteger(frame?.seq) ? frame.seq : null, code };
-    this.refused(result); return result;
+    const frameKey = `${result.id}:${result.seq}:${code}`, runKey = `${result.id}:${code}`;
+    if (!this.refusals.has(frameKey)) {
+      this.refusals.add(frameKey);
+      const count = (this.refusalCounts.get(runKey) || 0) + 1;
+      this.refusalCounts.set(runKey, count);
+      if (count === 1) this.refused(result);
+    }
+    return result;
   }
   enqueue(action) {
     const pending = this.work.then(() => this.disposed ? { accepted: false } : action());
@@ -106,7 +114,7 @@ class DispatchInbox {
             const frame = await readFrame(path.join(directory, file));
             if (frame.id !== folder.name || frame.seq !== Number(file.slice(0, -5))) this.refuse(frame, 'dispatch.invalid_event');
             else await this.receive(frame);
-          } catch (error) { if (error.code !== 'ENOENT') this.refuse({ id: folder.name }, 'dispatch.outbox_unreadable'); }
+          } catch (error) { if (error.code !== 'ENOENT') this.refuse({ id: folder.name, seq: Number(file.slice(0, -5)) }, 'dispatch.outbox_unreadable'); }
         }
       } catch (error) { if (error.code !== 'ENOENT') this.refuse({ id: folder.name }, 'dispatch.outbox_unreadable'); }
     }

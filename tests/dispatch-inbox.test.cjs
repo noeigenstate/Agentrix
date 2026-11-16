@@ -6,6 +6,52 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 
+test('an unadmittable frame is counted once across wakes and sweeps and logged once per run and code', async t => {
+  const { DispatchInbox } = require('../electron/features/agents/dispatch-inbox.cjs');
+  const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-inbox-refused-')), logs = [];
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const id = randomUUID(), outbox = new DispatchOutbox({ directory: root, id, projectId: 'terminal', sessionKey: 'old-key' });
+  const frame = outbox.append({ type: 'dispatch-declared', id, helperPid: process.pid, agent: 'claude', role: '执行', title: 'Synthetic old run',
+    cwd: root, worktree: root, requested: { model: 'synthetic-model', effort: 'high', fast: false }, source: 'dispatch', at: 1000 });
+  const inbox = new DispatchInbox({ directory: root, projectId: 'terminal', sessionKey: 'new-key',
+    apply: () => assert.fail('an old unknown run is never admitted'), refused: value => logs.push(value) });
+  t.after(() => inbox.dispose());
+  await inbox.accept(frame); await inbox.sweep(); await inbox.sweep();
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0].code, 'dispatch.session_mismatch');
+  assert.equal(inbox.refusalCounts.get(`${id}:dispatch.session_mismatch`), 1);
+  await inbox.accept({ ...frame, seq: 2 });
+  assert.equal(logs.length, 1, 'another sequence of the same run and code never logs again');
+  assert.equal(inbox.refusalCounts.get(`${id}:dispatch.session_mismatch`), 2);
+});
+
+test('disposing one terminal inbox removes only its own outbox directory', t => {
+  const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
+  const { dispatchDirectory } = require('../electron/features/agents/dispatch-events.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-inbox-dispose-'));
+  const intake = createDispatchIntake({});
+  t.after(() => { intake.disposeDispatchInbox(); fs.rmSync(root, { recursive: true, force: true }); });
+  const first = { terminalId: 'first', sessionKey: 'first-key', bootstrapFile: path.join(root, 'first.json') };
+  const second = { terminalId: 'second', sessionKey: 'second-key', bootstrapFile: path.join(root, 'second.json') };
+  for (const session of [first, second]) {
+    intake.bindDispatchInbox(session, { id: 'project', kind: 'local' });
+    fs.mkdirSync(dispatchDirectory(session.bootstrapFile), { recursive: true });
+    fs.writeFileSync(path.join(dispatchDirectory(session.bootstrapFile), 'marker'), 'synthetic');
+  }
+  intake.disposeDispatchInbox('first');
+  assert.equal(fs.existsSync(dispatchDirectory(first.bootstrapFile)), false);
+  assert.equal(fs.readFileSync(path.join(dispatchDirectory(second.bootstrapFile), 'marker'), 'utf8'), 'synthetic');
+  const linkedRuntime = path.join(root, 'linked-runtime'), external = path.join(root, 'external');
+  fs.mkdirSync(linkedRuntime); fs.mkdirSync(path.join(external, 'linked.json'), { recursive: true });
+  fs.writeFileSync(path.join(external, 'linked.json', 'marker'), 'kept');
+  try { fs.symlinkSync(external, path.join(linkedRuntime, 'dispatch-outbox'), process.platform === 'win32' ? 'junction' : 'dir'); }
+  catch (error) { if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) return; throw error; }
+  intake.bindDispatchInbox({ terminalId: 'linked', sessionKey: 'synthetic-key', bootstrapFile: path.join(linkedRuntime, 'linked.json') }, { kind: 'local' });
+  intake.disposeDispatchInbox('linked');
+  assert.equal(fs.readFileSync(path.join(external, 'linked.json', 'marker'), 'utf8'), 'kept', 'cleanup cannot traverse a linked outbox parent');
+});
+
 test('any order, duplication or loss of wake-ups applies each event once in seq order; a forged MAC or an unknown key is refused with its code', async t => {
   const { DispatchInbox } = require('../electron/features/agents/dispatch-inbox.cjs');
   const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');

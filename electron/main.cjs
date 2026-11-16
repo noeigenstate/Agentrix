@@ -230,7 +230,7 @@ const host = {
   refreshClaudeAccounts, localClaudeMeters, checkClaude, codexExecutable, memoryFolder, memoryDir, scrubProjectSkills, remember, roundsOf,
   summarizeTask, promptText, isLocalAgentCommand, rememberClaudeSource, claudeConfigDir, findClaudeSession, TranscriptTail, claudeRecord,
   claudeConversation, monitorActivity, createTerminalEnvironment, withoutAppImage, writeBootstrap,
-  dispatchRefused: ({ code }) => report(code),
+  dispatchRefused: ({ code, id }) => console.warn('Dispatch event refused:', code, id || ''),
   get store() { return store; }, get quitting() { return quitting; }, get eventServer() { return eventServer; },
   get controlAddress() { return controlAddress; }, get claudeRuntime() { return claudeRuntime; }, get terminalInput() { return terminalInput; },
   get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
@@ -953,6 +953,7 @@ function onEvent(event) {
     store.setRestore(s.terminalId, { terminal: true, codex: true, cwd: event.cwd });
     // Unread completion is independent of session activity. It survives new turns.
   } else if (event.type === 'codex-exited') {
+    s.calls?.endSession();
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
     readingHistory.close(s.terminalId);
     endSkillSession(s);
@@ -1246,7 +1247,7 @@ async function initializeNativeSessions() {
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
     saveInterrupted: (id, interrupted) => { if (!quitting) store.setRestore(id, { interrupted }); },
     terminal: async (spec, reason) => {
-      const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId, { preserveNative: true });
+      const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId, { preserveNative: true, preserveCalls: true });
       nativeSpecs.delete(spec.terminalId);
       if (spec.bootstrapFile) fs.rmSync(spec.bootstrapFile, { force: true });
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
@@ -1482,6 +1483,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
     if (terminal.error || exitCode) s.error = terminal.error || t('终端已退出（代码 {code}）。', { code: exitCode });
     if (!quitting && !exitCode) store.setRestore(id, { terminal: false, codex: false });
     if (bootstrapFile || skillNoteFile) cleanupTerminalFiles(s);
+    s.calls?.endSession();
     broadcast();
   });
   captureBranch(project);
@@ -1508,6 +1510,7 @@ function disposeTerminal(id, { preserveNative = false, preserveSwitch = false, p
   const s = sessions.get(id);
   sessions.delete(id);
   nativeSpecs.delete(id);
+  if (preserveCalls && !preserveSwitch) (s?.calls || s?.switchPreviousHost?.calls || AgentCalls.forTerminal(sessions, id))?.endSession();
   if (!preserveNative && !preserveSwitch) void nativeSessions?.forget(id).catch(report);
   if (!preserveSwitch && !preserveCalls) {
     disposeDispatchInbox(id);
@@ -1819,8 +1822,13 @@ app.on('before-quit', event => {
     tray?.destroy();
     cleanupAskpass();
     if (runtimeDir) {
-      // Only this launch's generated, now-empty runtime directory is removed.
-      try { fs.rmdirSync(runtimeDir); } catch { }
+      // Verify the generated directory is directly inside this launch's userData before recursive cleanup.
+      try {
+        const root = fs.realpathSync(app.getPath('userData')), folder = fs.realpathSync(runtimeDir);
+        if (!path.relative(root, path.dirname(folder)) && /^runtime-[a-zA-Z0-9]+$/.test(path.basename(folder)) && !fs.lstatSync(runtimeDir).isSymbolicLink()) {
+          fs.rmSync(folder, { recursive: true, force: true });
+        }
+      } catch { }
     }
   }
   const drains = [dashboard.waitForQuit(), labWindow?.waitForQuit(), nativeDrain].filter(Boolean);

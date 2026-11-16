@@ -19,14 +19,19 @@ const { RunInbox } = require('../electron/features/team/inbox.cjs');
 const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
 const { dispatchDirectory } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
+const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
 
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const functions = names => ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text)).map(node => node.getText(ast)).join('\n');
+function findNode(predicate, node = ast) {
+  if (predicate(node)) return node;
+  return ts.forEachChild(node, child => findNode(predicate, child));
+}
 
 function mainFixture(t, { native = true, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-e2e-'));
-  const project = { id: 'project', kind: 'local', path: root }, sessions = new Map(), nativeSpecs = new Map(), errors = [];
+  const project = { id: 'project', kind: 'local', path: root }, sessions = new Map(), nativeSpecs = new Map(), errors = [], warnings = [];
   let binds = 0;
   const context = vm.createContext({ path, fs, os, randomUUID, sessions, nativeSpecs, quitting: false, errors,
     Date: class extends Date { static now() { return now(); } },
@@ -36,6 +41,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
     startupNote: () => '', READING_NOTE: '', handoffFile: () => '', nativeEnvironment: () => ({}),
     writeBootstrap: ({ file, ...value }) => fs.writeFileSync(file, JSON.stringify(value)),
     scheduleState() {}, broadcast() {}, send() {}, report: value => errors.push(String(value?.message || value)),
+    console: { warn: (_message, code, id) => warnings.push({ code, id }) },
     dashboard: { run() {} }, createNativeUsage: () => ({ apply() {} }), nativeSessions: { forget: async () => {}, tokenRate: () => null },
     PromptQueue: class { reset() {} }, CompletionWork: class { reset() {} }, ActionLog: class {}, ConversationLog: class {},
     readingHistory: { close() {} }, syncDashboardLive() {}, endSkillSession() {}, skills: { endSession() {}, delivery: () => null }, stopUsageAccount() {},
@@ -60,8 +66,12 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
     return session;
   }
   const session = start();
+  const handlers = new Map();
+  registerTerminalIpc({ handle: (name, fn) => handlers.set(name, fn), listen() {}, confirmTerminalClose: async () => true,
+    forgetRestorePlan() {}, disposeTerminal: context.disposeTerminal, startTerminal: () => start('synthetic-new-key') });
   t.after(async () => { context.disposeDispatchInbox(); await session.calls?.dispatchReplay?.(); for (const value of sessions.values()) value.calls?.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
-  return { root, project, context, session, sessions, start, errors, binds: () => binds };
+  return { root, project, context, session, sessions, start, errors, warnings, binds: () => binds,
+    restart: () => handlers.get('terminal:restart')('terminal') };
 }
 const declaration = (id, cwd) => ({ type: 'dispatch-declared', id, helperPid: process.pid, agent: 'claude', role: '审查', title: 'Synthetic dispatch',
   cwd, worktree: cwd, requested: { model: 'synthetic-model', effort: 'high', fast: false }, source: 'dispatch', resumed: true, at: 1000 });
@@ -96,8 +106,8 @@ test('main preserves the admitted row and inbox across host restart and reports 
   const inbox = f.context.bindDispatchInbox(f.session, f.project), id = randomUUID();
   const outbox = new DispatchOutbox({ directory: dispatchDirectory(f.session.bootstrapFile), id, projectId: 'terminal', sessionKey: f.session.sessionKey });
   f.context.onEvent({ ...outbox.append(declaration(id, f.root)), sessionKey: f.session.sessionKey }); await inbox.work;
-  f.context.disposeTerminal('terminal', { preserveNative: true, preserveCalls: true });
-  const restarted = f.start('synthetic-new-key');
+  assert.equal(await f.restart(), true);
+  const restarted = f.sessions.get('terminal');
   assert.equal(restarted.bootstrapFile, f.session.bootstrapFile, 'the outbox directory follows the terminal across hosts');
   assert.equal(restarted.calls, calls, 'a terminal restart retains its live worker rows');
   assert.equal(f.context.bindDispatchInbox(restarted, f.project), inbox); await inbox.work;
@@ -106,13 +116,64 @@ test('main preserves the admitted row and inbox across host restart and reports 
   f.context.onEvent({ ...frame, sessionKey: 'synthetic-old-key' }); await inbox.work;
   assert.equal(calls.snapshot()[0].items[0].state, 'running');
   f.context.onEvent({ ...frame, seq: 3, mac: '0'.repeat(64), sessionKey: 'synthetic-old-key' }); await inbox.work;
-  assert.deepEqual(f.errors, ['dispatch.invalid_event']);
+  f.context.onEvent({ ...frame, seq: 3, mac: '0'.repeat(64), sessionKey: 'synthetic-old-key' }); await inbox.work;
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.warnings, [{ code: 'dispatch.invalid_event', id }]);
   f.context.disposeTerminal('terminal', { preserveNative: true, preserveCalls: true });
   // Removal must also release a tracker when a replacement host has not been created.
   f.context.disposeTerminal('terminal', { preserveNative: true });
   assert.equal(inbox.disposed, true);
   assert.equal(AgentCalls.forTerminal(f.sessions, 'terminal'), null);
   assert.equal(calls.calls.size, 0);
+});
+
+async function endedSession(t, ending) {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = mainFixture(t, { now: () => 1000 }), calls = f.session.calls, polled = [];
+  calls.readModels = async folder => { polled.push(folder); };
+  calls.setFolder(path.join(f.root, 'old-subagents'));
+  calls.apply({ type: 'assistant', timestamp: new Date(1000).toISOString(), message: { content: [
+    { type: 'tool_use', id: 'old-child', name: 'Agent', input: { prompt: 'Synthetic child', subagent_type: 'Explore' } },
+  ] } });
+  calls.backgroundRecord({ type: 'assistant', timestamp: new Date(1000).toISOString(), message: { content: [
+    { type: 'tool_use', id: 'old-shell', name: 'Bash', input: { command: 'synthetic command', run_in_background: true } },
+  ] } });
+  const id = randomUUID(); calls.dispatch(declaration(id, f.root));
+  assert.equal(calls.calls.size, 2); assert.equal(calls.usage(null).background.length, 1);
+  Object.assign(f.context, { id: 'terminal', s: f.session, project: f.project, sessionId: f.session.sessionId,
+    terminal: f.session.terminal, bootstrapFile: f.session.bootstrapFile, skillNoteFile: null, flush() {}, restorePlans: new Map(), acceptShellEvent: () => true });
+  if (ending === 'handoff') f.context.disposeTerminal('terminal', { preserveCalls: true });
+  else if (ending === 'cli') {
+    f.session.nativeStructured = false;
+    f.context.onEvent({ type: 'codex-exited', agent: 'claude', projectId: 'terminal', sessionKey: f.session.sessionKey, exitCode: 0 });
+  } else {
+    const callback = findNode(node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'onExit');
+    vm.runInContext(`(${callback.arguments[0].getText(ast)})`, f.context)({ exitCode: 0 });
+  }
+  assert.deepEqual([...calls.calls.keys()], [id]);
+  assert.deepEqual(calls.usage(null)?.background || [], []);
+  assert.equal(calls.folder, null);
+  t.mock.timers.tick(1000); await calls.work;
+  assert.ok(polled.every(folder => folder === null), 'no old subagents folder is polled after exit');
+}
+
+test('PTY exit clears background tasks and sub-agents while retaining only dispatch rows', t => endedSession(t, 'pty'));
+test('CLI exit clears background tasks and sub-agents while retaining only dispatch rows', t => endedSession(t, 'cli'));
+test('a preserved-call handoff clears background tasks and sub-agents while retaining only dispatch rows', t => endedSession(t, 'handoff'));
+
+test('the native-to-terminal fallback preserves the admitted worker and its inbox', async t => {
+  const f = mainFixture(t, { now: () => 1000 }), calls = f.session.calls;
+  const inbox = f.context.bindDispatchInbox(f.session, f.project), id = randomUUID();
+  calls.local = false; calls.dispatch(declaration(id, f.root));
+  Object.assign(f.context, { launchPlans: new Map(), launchCommand: () => '', startTerminal: () => f.start('fallback-key') });
+  const options = findNode(node => ts.isCallExpression(node) && node.expression.getText(ast) === 'createNativeSessions').arguments[0];
+  const fallback = options.properties.find(node => node.name?.getText(ast) === 'terminal').initializer;
+  await vm.runInContext(`(${fallback.getText(ast)})`, f.context)(f.session.nativeSpec, 'synthetic fallback');
+  const next = f.sessions.get('terminal');
+  assert.equal(next.calls, calls);
+  assert.equal(next.calls.byId(`dispatch:${id}`).done, false);
+  assert.equal(f.context.bindDispatchInbox(next, f.project), inbox);
+  assert.deepEqual(f.errors, []);
 });
 
 async function registrationOnBoard(deps, registration, refused) {

@@ -21,7 +21,7 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
   handle('terminal:restart', async id => {
     if (!await confirmTerminalClose(id, '重启')) return false;
     forgetRestorePlan(id);
-    disposeTerminal(id); startTerminal(id); return true;
+    disposeTerminal(id, { preserveCalls: true }); startTerminal(id); return true;
   });
   handle('terminal:attach', id => {
     findProject(id);
