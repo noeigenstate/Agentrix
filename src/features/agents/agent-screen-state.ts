@@ -27,6 +27,8 @@ export function cliStateFor(agent: ScreenAgent, frame: CliFrame | null, terminal
   const authority = signal && !newer ? signal : null;
   const waiting = dialog || (authority ? authority.state === 'waiting' : !signal && terminal.needsInput != null && !idle);
   const working = !waiting && (authority ? authority.state === 'working' : busy || !idle && (terminal.mainTurn?.state ?? terminal.codexActivity) === 'working');
-  return { input, idle, waiting, working, message: authority?.state === 'waiting' ? authority.message : waiting ? terminal.needsInput : null,
+  // The status light alone: main's screen-confirmed idle (state 'working' with screenIdle) shows as idle. Sending, queueing and every other reader keep `working`.
+  const shownWorking = working && !(authority?.state === 'working' && authority.screenIdle);
+  return { input, idle, waiting, working, shownWorking, message: authority?.state === 'waiting' ? authority.message : waiting ? terminal.needsInput : null,
     canDeliver: input && !dialog && !waiting && !current?.pending };
 }
