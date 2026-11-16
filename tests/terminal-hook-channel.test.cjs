@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
-const { proxyOf, terminalHooks, downgradeHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
+const { proxyOf, terminalHooks, downgradeHooks, reportHookChannel, startHookLaunch } = require('../electron/features/terminal-events/hook-channel.cjs');
 const { systemProxyEnvironment } = require('../electron/system-proxy.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 
@@ -205,4 +205,21 @@ test("Agentrix adds no NO_PROXY entry anywhere but system-proxy.cjs's adoption, 
   assert.deepEqual([adopted.NO_PROXY, adopted.no_proxy], ['localhost,127.0.0.1,::1', 'localhost,127.0.0.1,::1']);
   assert.equal(proxyOf(adopted, PORT, 'linux'), null, 'which keeps the hooks on HTTP');
   assert.equal(systemProxyEnvironment({ NO_PROXY: 'corp' }, ['PROXY 127.0.0.1:7897']).NO_PROXY, undefined);
+});
+
+test('the channel field follows each launch, so a launch after a downgrade without a proxy reads http', () => {
+  const s = { hooks: { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' } };
+  // Launch 1: the wrapper found a proxy and reported it before codex-started.
+  reportHookChannel(s, 'HTTP_PROXY'); startHookLaunch(s);
+  assert.equal(s.hooks.channel, 'command-async'); assert.equal(s.hooks.channelReason.params.variable, 'HTTP_PROXY');
+  // Launch 2: no proxy, so no report; the server still accepts HTTP and the field says so.
+  startHookLaunch(s);
+  assert.equal(s.hooks.channel, 'http'); assert.equal(s.hooks.channelReason, null); assert.equal(s.hooks.key, 'k');
+  // Launch 3: a proxy again; a repeated report in one launch changes nothing.
+  reportHookChannel(s, 'HTTPS_PROXY'); const fallen = s.hooks; reportHookChannel(s, 'HTTP_PROXY'); startHookLaunch(s);
+  assert.equal(s.hooks, fallen); assert.equal(s.hooks.channel, 'command-async');
+  // A terminal that began on command hooks stays there.
+  const command = { hooks: { channel: 'command', fallback: 'command' } };
+  startHookLaunch(command); reportHookChannel(command, 'HTTP_PROXY'); startHookLaunch(command); startHookLaunch(command);
+  assert.equal(command.hooks.channel, 'command');
 });
