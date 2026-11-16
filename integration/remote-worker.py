@@ -387,13 +387,15 @@ bind -m vi-insertion '"\e[13;2u":"\C-v\C-j"' 2>/dev/null || true
 printf '\033[36m  AGENTRIX / SSH\033[0m\n  Type codex or claude to start, codex resume --last or claude --resume to continue.\n\n'
 '''
 
+class NotRegularFile(ValueError): pass
+
 def open_regular(name, folder=None):
     """A regular file opened for reading without following a final link or waiting on a pipe (name is within folder, a
     descriptor, when given)."""
     descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder)
     if not stat.S_ISREG(os.fstat(descriptor).st_mode):
         os.close(descriptor)
-        raise ValueError("只能读取普通文件。")
+        raise NotRegularFile("只能读取普通文件。")
     return os.fdopen(descriptor, "rb")
 
 
@@ -770,6 +772,7 @@ SUBAGENT_LIMIT = 16
 SUBAGENT_READ_LIMIT = 256 * 1024
 SUBAGENTS_READ_BUDGET = 1024 * 1024
 SUBAGENTS_BUDGET = 64 * 1024
+SUBAGENT_GONE_ERRORS = (errno.ENOENT, errno.ELOOP, errno.ENOTDIR)
 # A user message's words kept per text block: enough for every rule that tells a prompt from Claude's own messages
 # (electron/prompt-queue.cjs; tests/agent-calls-rate.test.cjs checks the margin), and the attachments that make one.
 PROMPT_MARK_LIMIT = 256
@@ -830,6 +833,8 @@ class SubagentReader:
         self.offset, self.buffer, self.skipping, self.history_pending = 0, b"", False, False
         self.file_identity, self.file_size = None, 0
         self.outbox, self.reset, self.partial = [], True, False
+        self.tool_use_id = None
+        self.metadata_pending, self.unreadable = True, False
 
     def record(self, record):
         kept = compact_subagent_record(record)
@@ -838,13 +843,36 @@ class SubagentReader:
     def read(self, source, limit=SUBAGENT_READ_LIMIT):
         """The bytes read: at most limit, and none while records read before wait to be sent."""
         size, replaced = follow_file(self, source)
-        if replaced: self.partial = self.skipping
+        if replaced: self.partial, self.metadata_pending = self.skipping, True
         if self.outbox: return 0
         start = self.offset
-        read_transcript(self, source, size, self.record, min(limit, SUBAGENT_READ_LIMIT))
+        try: read_transcript(self, source, size, self.record, min(limit, SUBAGENT_READ_LIMIT))
+        except Exception as error: self.unavailable(error)
         return self.offset - start
 
     def behind(self): return self.offset < self.file_size or bool(self.outbox)
+
+    def unavailable(self, error):
+        self.unreadable = True
+        if isinstance(error, NotRegularFile) or getattr(error, "errno", None) in SUBAGENT_GONE_ERRORS:
+            self.file_identity = None
+
+    def metadata(self, folder):
+        """Only the spawning tool's id leaves the host; metadata is optional, bounded and opened without following links."""
+        if self.tool_use_id is not None and not self.metadata_pending: return
+        try:
+            with open_regular(self.name[:-len(".jsonl")] + ".meta.json", folder) as source:
+                body = source.read(64 * 1024 + 1)
+            if len(body) > 64 * 1024:
+                self.tool_use_id = None
+                return
+            value = json.loads(body)
+            tool_use_id = value.get("toolUseId") if isinstance(value, dict) else None
+            self.tool_use_id = tool_use_id if isinstance(tool_use_id, str) and SAFE_ID.fullmatch(tool_use_id) else None
+            self.metadata_pending = False
+        except OSError as error:
+            if error.errno in SUBAGENT_GONE_ERRORS: self.tool_use_id = None
+        except (ValueError, TypeError, RecursionError): self.tool_use_id = None
 
 def take_subagents(order):
     """The waiting records of the (id, reader) pairs in that order, up to one shared budget per answer. Each sub-agent
@@ -854,7 +882,9 @@ def take_subagents(order):
     for agent_id, reader in order:
         if reader.file_identity is None: continue
         batch, size = take_batch(reader.outbox, size, SUBAGENTS_BUDGET)
-        answer[agent_id] = {"records": batch, "reset": reader.reset, "partial": reader.partial, "behind": reader.behind()}
+        answer[agent_id] = {"records": batch, "reset": reader.reset,
+                            "partial": reader.partial or (reader.unreadable and not reader.reset), "behind": reader.unreadable or reader.behind()}
+        if reader.tool_use_id is not None: answer[agent_id]["toolUseId"] = reader.tool_use_id
         reader.reset = False
     return answer
 
@@ -894,13 +924,19 @@ class ClaudeTranscriptReader:
         turn = self.subagent_turn % len(order)
         self.subagent_turn += 1
         order = order[turn:] + order[:turn]
-        folder, budget = subagent_folder(self.filename), SUBAGENTS_READ_BUDGET
+        for _agent_id, reader in order: reader.unreadable = False
+        try: folder = subagent_folder(self.filename)
+        except Exception as error:
+            for _agent_id, reader in order: reader.unavailable(error)
+            return take_subagents(order)
+        budget = SUBAGENTS_READ_BUDGET
         try:
             for _agent_id, reader in order:
                 # One file that cannot be read (gone, a link, a stale handle) leaves the others and the transcript be.
                 try:
                     with open_regular(reader.name, folder) as source: budget -= reader.read(source, budget)
-                except Exception: pass
+                except Exception as error: reader.unavailable(error)
+                if reader.file_identity is not None: reader.metadata(folder)
         finally: os.close(folder)
         return take_subagents(order)
 
