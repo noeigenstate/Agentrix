@@ -626,21 +626,19 @@ test('a project’s usage change reaches only that project’s revision; a malfo
 });
 
 // ---- how a session starts -----------------------------------------------------------------------------------------------------------
-test('the launch route follows the settings: native by default, the terminal when chosen, the reason when a missing key is why, and nothing for API-only without a key', () => {
-  const { launchRoute } = load('features/native-session/native-bridge.ts'), set = claudePath => ({ claudePath });
-  const native = { how: 'native' }, terminal = (reason = null) => ({ how: 'terminal', reason });
-  assert.deepEqual([launchRoute('claude', null, null), launchRoute('codex', null, true)], [terminal(), native], 'settings not read: Claude waits on the terminal, Codex has only app-server');
-  assert.deepEqual([launchRoute('claude', set('api-then-terminal'), true), launchRoute('claude', set('api-then-terminal'), null), launchRoute('claude', set('api-only'), true)], [native, native, native]);
-  assert.deepEqual([launchRoute('claude', set('terminal-only'), true), launchRoute('claude', set('terminal-only'), false)], [terminal(), terminal()]);
-  assert.deepEqual([launchRoute('claude', set('api-then-terminal'), false), launchRoute('claude', set('api-only'), false)], [terminal('no_key'), { how: 'blocked', reason: 'no_key' }]);
-  assert.deepEqual([launchRoute('codex', set('terminal-only'), false), launchRoute('codex', set('api-only'), true)], [native, native], 'Codex is always on app-server and needs no key');
-});
-
 // A stand-in for the main process on `window.agentrix`, for the launcher.
 // `kind`: the project's kind; `codexHere`: whether this computer has Codex installed; `startError`: what a start is refused with. `errors`: what the card shows of a refusal.
+// What main's decide() answers for a new Claude session (usage's `next`): the run mode and whether a key is saved, unless the case gives `next` itself.
+function nextOf({ settings, saved, next }) {
+  if (next !== undefined) return next;
+  if (settings.claudePath === 'terminal-only') return { path: 'terminal', reason: 'set_terminal' };
+  if (saved) return { path: 'api', reason: settings.claudePath === 'api-only' ? 'set_api' : null };
+  return { path: settings.claudePath === 'api-only' ? null : 'terminal', reason: 'no_key' };
+}
 function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null }, claude = { installed: true } } = {}) {
   const bridge = {
     getSettings: async () => ({ ok: true, value: runtime.settings }), keyStatus: async () => ({ ok: true, value: { saved: runtime.saved } }),
+    usage: async () => ({ ok: true, value: { agents: { claude: { next: nextOf(runtime) } } } }),
     start: async (...args) => { calls.push(['start', ...args]); return startError ? { ok: false, error: startError } : { ok: true, value: { runtimeSessionId: 'rs1' } }; },
   };
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -664,12 +662,12 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   return { render, button, note, errors, text: () => renderToStaticMarkup(render()), done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
 
-test('the launcher starts a native session or a terminal by the settings, says where the click goes, and a missing key never starts a hidden terminal', async () => {
-  const set = claudePath => ({ claudePath });
+test('the launcher always calls start and shows main decision with today texts: the labels, the missing-key notice, and no note of its own for a terminal main chose', async () => {
+  const set = claudePath => ({ claudePath }), started = [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']];
   const cases = [
-    ['claude', { settings: set('api-then-terminal'), saved: true }, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], '开始新的对话 · API · 原生模式'],
-    ['claude', { settings: set('terminal-only'), saved: true }, [['launch', 't1', 'claude', 'new']], '开始新的对话'],
-    ['claude', { settings: set('api-then-terminal'), saved: false }, [['launch', 't1', 'claude', 'new'], ['note', 't1', 'no_key']], '开始新的对话 · 没有 API key，改用终端'],
+    ['claude', { settings: set('api-then-terminal'), saved: true }, started, '开始新的对话 · API · 原生模式'],
+    ['claude', { settings: set('terminal-only'), saved: true }, started, '开始新的对话'],
+    ['claude', { settings: set('api-then-terminal'), saved: false }, started, '开始新的对话 · 没有 API key，改用终端'],
     ['claude', { settings: set('api-only'), saved: false }, [], '开始新的对话 · 需先保存 API key'],
     ['codex', { settings: set('api-then-terminal'), saved: false }, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], '开始新的对话 · 原生模式'],
   ];
@@ -683,6 +681,28 @@ test('the launcher starts a native session or a terminal by the settings, says w
       if (!expected.length) assert.match(view.text(), /只用 API 运行，但还没有保存 API key/, 'and it says why nothing started');
     } finally { view.done(); }
   }
+});
+
+test('the launcher label follows main decision even when the settings and the key would say otherwise; a reason with no label of its own shows none and the click still goes to main', async () => {
+  // Settings say API with a key saved (the old guess: "API · 原生模式"); main says a terminal for an old CLI, or no path for a billing mismatch.
+  for (const next of [{ path: 'terminal', reason: 'cli_too_old' }, { path: null, reason: 'billing_identity_mismatch' }, { path: 'terminal', reason: 'set_terminal' }]) {
+    const calls = [], view = launcher({ settings: { claudePath: 'api-then-terminal' }, saved: true, next }, calls);
+    try {
+      view.render(); await settle();
+      assert.equal(view.note('claude'), '开始新的对话', JSON.stringify(next));
+      view.button('claude').props.onClick(); await settle();
+      assert.deepEqual(calls, [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']], 'main is asked; the card decides nothing');
+    } finally { view.done(); }
+  }
+  // The other way: settings say terminal-only (old guess: no label), main says the API.
+  const calls = [], view = launcher({ settings: { claudePath: 'terminal-only' }, saved: false, next: { path: 'api', reason: null } }, calls);
+  try { view.render(); await settle(); assert.equal(view.note('claude'), '开始新的对话 · API · 原生模式'); } finally { view.done(); }
+});
+
+test('the words of the route codes main gives for a path: the settings choices and the key and API refusals', () => {
+  const { reasonWords } = load('features/native-session/native-words.ts');
+  assert.deepEqual(['set_terminal', 'set_api', 'key_forbidden', 'api_unreachable', 'key_check_failed', 'cli_too_old', 'api_unavailable', 'no_key'].map(code => reasonWords(code)),
+    ['按设置使用终端', '按设置只用 API', 'API 密钥没有调用权限。', '无法连接 Anthropic API。', '无法完成 API 连接检查。', 'Claude Code 版本过低，请升级到 2.1.317 或更高', 'Claude API 路径当前不可用。', '还没有保存 API key']);
 });
 
 test('an incomplete npm install of Claude Code is not installed again: the card says so and a click opens the run-mode page of the settings; a failed check or an old version still starts', async () => {
