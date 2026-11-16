@@ -33,6 +33,14 @@ function shellFor(kind) {
   const bash = process.env.AGENTRIX_TEST_BASH || 'C:/Program Files/Git/bin/bash.exe';
   return kind === 'bash' && fs.existsSync(bash) ? bash : null;
 }
+const bootstraps = () => require('../electron/features/terminal-events/bootstrap-file.cjs');
+// A session's bootstrap as main writes it, with the session's private copy of the Claude Code start-up hook.
+function sessionBootstrap(folder) {
+  const file = path.join(folder, 'bootstrap.json');
+  bootstraps().writeBootstrap({ file, eventServer: { name: 'agentrix-test-unused', address: path.join(folder, 'unused.sock') }, projectId: 't',
+    projectPath: folder, sessionKey: 'k' });
+  return { file, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
+}
 const posix = file => process.platform === 'win32' ? file.replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase()).replace(/\\/g, '/') : file;
 
 test('interception maps the supported Codex options without flattening prompt or image arguments', () => {
@@ -204,7 +212,7 @@ test("withShims adds start-up hooks that run the user's own first and never chai
   assert.equal(first.AGENTRIX_SHIMS, posix(shims));
   assert.equal(first.BASH_ENV, `${posix(shims)}/hooks/bash-env.sh`); assert.equal(first.AGENTRIX_SHIM_USER_BASH_ENV, 'user-bash-env');
   assert.equal(first.ZDOTDIR, `${posix(shims)}/hooks/zsh`); assert.equal(first.AGENTRIX_SHIM_USER_ZDOTDIR, 'user-zdotdir');
-  assert.equal(first.CLAUDE_ENV_FILE, path.join(shims, 'hooks/claude-env.sh')); assert.equal('AGENTRIX_SHIM_USER_CLAUDE_ENV_FILE' in first, false);
+  assert.equal(first.CLAUDE_ENV_FILE, undefined, 'without a session there is no Claude Code hook, and never the installed one');
   const worker = shim().withShims(first, { depth: 1, runId: 'w', proof: 'p' });
   assert.equal(worker.AGENTRIX_SHIM_USER_BASH_ENV, 'user-bash-env', 'a worker keeps the owner\'s hook, not Agentrix\'s own');
   assert.equal(worker.AGENTRIX_SHIM_USER_ZDOTDIR, 'user-zdotdir');
@@ -226,8 +234,7 @@ for (const kind of ['bash', 'zsh']) test(`G13: through a real ${kind} login shel
   fs.mkdirSync(home); fs.mkdirSync(standin);
   for (const agent of ['codex', 'claude']) fs.writeFileSync(path.join(standin, agent), `#!/bin/sh\necho "STAND-IN ${agent} $*"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(home, kind === 'bash' ? '.bash_profile' : '.zprofile'), `export PATH="${posix(standin)}:$PATH"\n`);
-  const owner = isolatedEnvironment(home), bootstrap = path.join(folder, 'bootstrap.json');
-  fs.writeFileSync(bootstrap, '{}');
+  const owner = isolatedEnvironment(home), bootstrap = sessionBootstrap(folder).file;
   const plannerEnv = shim().withShims({ ...owner, AGENTRIX_BOOTSTRAP: bootstrap }, { depth: 0 });
   const run = (env, script, login = true) => spawnSync(shellFor(kind), [login ? '-lc' : '-c', script], { cwd: folder, env, encoding: 'utf8', timeout: 30000 });
   for (const [agent, call, option] of [['codex', 'codex exec --json "analyse"', '--json'], ['claude', 'claude -p --output-format json "analyse"', '--output-format']]) {
@@ -251,17 +258,20 @@ test('bootstrap names the executable shim folder for terminal and native owner s
 });
 
 test('a native owner receives shim depth zero while account reads remain without interception', t => {
-  const folder = temporary(t), bootstrapFile = path.join(folder, 'bootstrap.json');
-  fs.writeFileSync(bootstrapFile, JSON.stringify({ shims }));
+  const folder = temporary(t), { file: bootstrapFile, claudeEnvFile } = sessionBootstrap(folder);
   const { nativeEnvironment } = require('../electron/features/native-session/host-inputs.cjs').createHostInputs({
-    withoutAppImage: env => env, createTerminalEnvironment: (_env, bootstrap) => ({ PATH: 'tools', AGENTRIX_BOOTSTRAP: bootstrap,
-      AGENTRIX_RUN_ID: 'stale', AGENTRIX_RUN_PROOF: 'stale' }),
+    withoutAppImage: env => env, createTerminalEnvironment: (_env, bootstrap) => require('../electron/terminal-env.cjs').createTerminalEnvironment({
+      PATH: 'tools', AGENTRIX_RUN_ID: 'stale', AGENTRIX_RUN_PROOF: 'stale' }, bootstrap),
   });
   const env = nativeEnvironment(bootstrapFile, 'test-codex-home');
   assert.equal(env.PATH.split(path.delimiter)[0], shims);
   assert.equal(env.AGENTRIX_DISPATCH_DEPTH, '0'); assert.equal(env.AGENTRIX_RUN_ID, undefined); assert.equal(env.CODEX_HOME, 'test-codex-home');
-  assert.equal(env.CLAUDE_ENV_FILE, path.join(shims, 'hooks/claude-env.sh'));
+  assert.equal(env.CLAUDE_ENV_FILE, claudeEnvFile);
   assert.equal(nativeEnvironment('').AGENTRIX_DISPATCH_DEPTH, undefined);
+  // The owner's own ! commands: the same session env without the shims.
+  const owner = nativeEnvironment(bootstrapFile, 'test-codex-home', { planner: false });
+  assert.deepEqual(Object.keys(owner).filter(key => /^(?:AGENTRIX_(?:SHIM|DISPATCH_DEPTH|RUN_)|BASH_ENV$|CLAUDE_ENV_FILE$|ZDOTDIR$)/.test(key)), []);
+  assert.equal(owner.PATH, 'tools'); assert.equal(owner.CODEX_HOME, 'test-codex-home');
 });
 
 test('interactive wrappers read bootstrap shims, keep real CLI lookup outside that folder, and give the shims only to the Claude Code they start', () => {
@@ -283,7 +293,7 @@ for (const kind of ['bash', 'zsh']) test(`the ${kind} terminal's PATH has no shi
   fs.writeFileSync(path.join(folder, 'probe.cjs'), probe);
   fs.writeFileSync(claude, `#!/bin/sh\nexec "${process.execPath}" "${path.join(folder, 'probe.cjs')}"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(folder, 'event.cjs'), '');
-  fs.writeFileSync(path.join(folder, 'bootstrap.json'), JSON.stringify({ shims }));
+  const { claudeEnvFile } = sessionBootstrap(folder);
   const env = { ...isolatedEnvironment(home), AGENTRIX_BOOTSTRAP: path.join(folder, 'bootstrap.json'), AGENTRIX_NODE: process.execPath,
     AGENTRIX_EVENT_HELPER: path.join(folder, 'event.cjs'), AGENTRIX_CLAUDE_EXECUTABLE: claude, AGENTRIX_DISPATCH_DEPTH: '0' };
   const script = `${kind === 'zsh' ? 'source "$1" zshrc' : 'source "$1"'}\nprintf 'SHELL=%s|%s\\n' "\${PATH%%:*}" "\${AGENTRIX_DISPATCH_DEPTH-unset}"\nclaude -p x\n`;
@@ -292,7 +302,7 @@ for (const kind of ['bash', 'zsh']) test(`the ${kind} terminal's PATH has no shi
   assert.equal(result.status, 0, result.stderr);
   const [first, depth] = /SHELL=(.*)\|(.*)/.exec(result.stdout).slice(1);
   assert.notEqual(first, shims); assert.equal(depth, 'unset');
-  assert.deepEqual(JSON.parse(/PLANNER=(.*)/.exec(result.stdout)[1]), { first: shims, depth: '0', hook: path.join(shims, 'hooks/claude-env.sh') });
+  assert.deepEqual(JSON.parse(/PLANNER=(.*)/.exec(result.stdout)[1]), { first: shims, depth: '0', hook: claudeEnvFile });
 });
 
 test("the PowerShell terminal's PATH has no shims and the claude it starts has them first at depth zero, put back once it exits", { skip: process.platform !== 'win32' && 'bootstrap.ps1 runs in Windows terminals only', timeout: 60000 }, t => {
@@ -303,7 +313,7 @@ test("the PowerShell terminal's PATH has no shims and the claude it starts has t
   fs.writeFileSync(path.join(copied, 'refresh-path.ps1'), '');
   fs.writeFileSync(path.join(folder, 'probe.cjs'), probe);
   fs.writeFileSync(claude, `@"${process.execPath}" "${path.join(folder, 'probe.cjs')}"\r\n`);
-  fs.writeFileSync(path.join(folder, 'bootstrap.json'), JSON.stringify({ projectPath: folder, projectId: 't', sessionKey: 'k', pipeName: 'agentrix-test-unused', shims, nodePath: process.execPath }));
+  const { claudeEnvFile } = sessionBootstrap(folder);
   const script = path.join(folder, 'probe.ps1');
   fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. ${quoted(path.join(copied, 'bootstrap.ps1'))}\nfunction Show { Write-Output ("SHELL=" + ($env:Path -split ';')[0] + "|" + $(if ($env:AGENTRIX_DISPATCH_DEPTH) { $env:AGENTRIX_DISPATCH_DEPTH } else { 'unset' })) }\nShow\nclaude -p x\nShow\n`);
   const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: path.join(folder, 'bootstrap.json'), AGENTRIX_CLAUDE_EXECUTABLE: claude,
@@ -315,5 +325,77 @@ test("the PowerShell terminal's PATH has no shims and the claude it starts has t
   assert.equal(shells.length, 2, result.stdout);
   for (const [first, depth] of shells) { assert.notEqual(first.toLowerCase(), shims.toLowerCase()); assert.equal(depth, 'unset'); }
   const planned = JSON.parse(/PLANNER=(.*)/.exec(result.stdout)[1]);
-  assert.equal(planned.first.toLowerCase(), shims.toLowerCase()); assert.equal(planned.depth, '0'); assert.equal(planned.hook, path.join(shims, 'hooks/claude-env.sh'));
+  assert.equal(planned.first.toLowerCase(), shims.toLowerCase()); assert.equal(planned.depth, '0'); assert.equal(planned.hook, claudeEnvFile);
+});
+
+// Two Agentrix installs: copies of the shim folder, as beta beside stable or a GUI check that a worker launches has.
+function shimCopy(folder, name) {
+  const target = path.join(folder, name);
+  for (const file of [...Object.keys(shim().shimFiles()), 'intercept.cjs', ...Object.keys(shim().hookFiles())]) {
+    fs.mkdirSync(path.dirname(path.join(target, file)), { recursive: true }); fs.copyFileSync(path.join(shims, file), path.join(target, file));
+  }
+  return { folder: target, module: require(path.join(target, 'intercept.cjs')) };
+}
+
+test("a planner inside another Agentrix's planner keeps the user's own hooks: bash runs the user's BASH_ENV once and never a hook as the user's", {
+  skip: !shellFor('bash') && 'bash is not installed here', timeout: 60000,
+}, t => {
+  const folder = temporary(t), home = path.join(folder, 'home'), log = path.join(folder, 'ran.log'), user = path.join(folder, 'user-env.sh');
+  fs.mkdirSync(home); fs.writeFileSync(user, `echo user >> "${posix(log)}"\n`);
+  const a = shimCopy(folder, 'a'), b = shimCopy(folder, 'b');
+  const outer = a.module.withShims({ ...isolatedEnvironment(home), BASH_ENV: posix(user), ZDOTDIR: 'user-zdotdir' }, { depth: 0 });
+  const inner = b.module.withShims(outer, { depth: 1, runId: 'w', proof: 'p' });
+  assert.equal(inner.BASH_ENV, `${posix(b.folder)}/hooks/bash-env.sh`);
+  assert.equal(inner.AGENTRIX_SHIM_USER_BASH_ENV, posix(user), "the other folder's hook is not saved as the user's");
+  assert.equal(inner.AGENTRIX_SHIM_USER_ZDOTDIR, 'user-zdotdir');
+  const run = env => spawnSync(shellFor('bash'), ['-c', 'printf "%s" "${PATH%%:*}"'], { cwd: folder, env, encoding: 'utf8', timeout: 30000 });
+  const result = run(inner);
+  assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, posix(b.folder));
+  assert.equal(fs.readFileSync(log, 'utf8'), 'user\n');
+  // A "user" hook that is an Agentrix hook, this folder's own or the other's, is never sourced, so bash cannot recurse.
+  fs.rmSync(log);
+  for (const hook of [inner.BASH_ENV, outer.BASH_ENV]) {
+    const looped = run({ ...inner, AGENTRIX_SHIM_USER_BASH_ENV: hook });
+    assert.equal(looped.status, 0, looped.stderr); assert.equal(looped.stdout, posix(b.folder)); assert.equal(fs.existsSync(log), false);
+  }
+});
+
+test("an owner terminal started inside a planner has no shim variables and the user's own BASH_ENV, ZDOTDIR and CLAUDE_ENV_FILE back", t => {
+  const { createTerminalEnvironment } = require('../electron/terminal-env.cjs'), { zshEnvironment } = require('../electron/zsh-terminal.cjs');
+  const { file } = sessionBootstrap(temporary(t));
+  const user = { PATH: ['tools', 'more-tools'].join(path.delimiter), BASH_ENV: 'user-bash-env', ZDOTDIR: 'user-zdotdir', CLAUDE_ENV_FILE: 'user-claude-env' };
+  const planner = shim().withShims(shim().withShims({ ...user, AGENTRIX_BOOTSTRAP: file }, { depth: 0 }), { depth: 1, runId: 'w', proof: 'p' });
+  const terminal = createTerminalEnvironment(planner, 'next-bootstrap.json');
+  assert.deepEqual(Object.keys(terminal).filter(key => /^AGENTRIX_(?:SHIM|DISPATCH_DEPTH|RUN_)/.test(key)), []);
+  for (const [key, value] of Object.entries(user)) assert.equal(terminal[key], value, key);
+  assert.equal(zshEnvironment(terminal, { folder: 'agentrix-zsh-stubs' }).AGENTRIX_USER_ZDOTDIR, 'user-zdotdir');
+  const none = createTerminalEnvironment(shim().withShims({ PATH: 'tools' }, { depth: 0 }), 'next-bootstrap.json');
+  assert.deepEqual(['BASH_ENV', 'ZDOTDIR', 'CLAUDE_ENV_FILE'].filter(key => key in none), [], 'hooks the user never had are gone');
+});
+
+test("a planner's CLAUDE_ENV_FILE is the session's private copy: appending to it leaves the installed hook as it was, and it goes with the session", t => {
+  const folder = temporary(t), installed = path.join(shims, 'hooks/claude-env.sh'), original = fs.readFileSync(installed);
+  const { file, claudeEnvFile } = sessionBootstrap(folder);
+  const env = shim().withShims({ PATH: 'tools', AGENTRIX_BOOTSTRAP: file }, { depth: 0 });
+  assert.equal(env.CLAUDE_ENV_FILE, claudeEnvFile); assert.match(path.relative(shims, claudeEnvFile), /^\.\./);
+  assert.deepEqual(fs.readFileSync(claudeEnvFile), original);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(claudeEnvFile).mode & 0o777, 0o600);
+  fs.appendFileSync(env.CLAUDE_ENV_FILE, 'export FROM_A_SESSION_START_HOOK=1\n');
+  assert.deepEqual(fs.readFileSync(installed), original);
+  assert.equal(shim().withShims(env, { depth: 1, runId: 'w', proof: 'p' }).CLAUDE_ENV_FILE, claudeEnvFile, "a worker keeps its planner's copy");
+  bootstraps().removeBootstrap(file);
+  assert.deepEqual([file, claudeEnvFile].filter(name => fs.existsSync(name)), []);
+});
+
+test('a terminal switched to native mode gets the planner env of a native session started directly, and the owner env for ! commands', t => {
+  const { defineMain } = require('./helpers/main-modules.cjs');
+  const folder = temporary(t), { file } = sessionBootstrap(folder);
+  const context = defineMain({ process, sessions: new Map([['t', { sessionId: 's' }]]), nativeSpecs: new Map(), disposeTerminal() {},
+    eventServer: { name: 'agentrix-test-unused', address: path.join(folder, 'unused.sock') }, controlAddress: null, withoutAppImage: env => env,
+    createTerminalEnvironment: require('../electron/terminal-env.cjs').createTerminalEnvironment }, 'activateNative', 'observeSwitchTerminal', 'nativeEnvironment', 'writeBootstrap');
+  const spec = { terminalId: 't', sessionId: 's', bootstrapFile: file, cwd: folder, sessionKey: 'k', env: { PATH: 'terminal-usage-env' } };
+  context.activateNative(spec, null, {});
+  const first = env => (env.PATH || env.Path).split(path.delimiter)[0];
+  assert.equal(first(spec.env), shims); assert.equal(spec.env.AGENTRIX_DISPATCH_DEPTH, '0');
+  assert.notEqual(first(spec.shellEnv), shims); assert.equal(spec.shellEnv.AGENTRIX_DISPATCH_DEPTH, undefined);
 });

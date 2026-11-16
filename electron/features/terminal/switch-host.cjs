@@ -117,7 +117,7 @@ function createSwitchHost(deps) {
     store.setRestore(session.spec.terminalId, { codex: false }); broadcast();
   }
   function activateNative(spec, _handoff, transition = {}) {
-    const { sessions, nativeSpecs, observeSwitchTerminal, disposeTerminal, writeBootstrap, eventServer, controlAddress } = deps;
+    const { sessions, nativeSpecs, observeSwitchTerminal, disposeTerminal, writeBootstrap, eventServer, controlAddress, nativeEnvironment } = deps;
     const old = sessions.get(spec.terminalId);
     if (transition.newConversation) {
       if (!old?.nativeStructured) throw new Error('session_changed');
@@ -126,6 +126,8 @@ function createSwitchHost(deps) {
     if (!old || old.sessionId !== spec.sessionId || !transition.recovering && observeSwitchTerminal({ identity: old }).draftBlocked) throw new Error('session_changed');
     if (spec.bootstrapFile && !fs.existsSync(spec.bootstrapFile)) writeBootstrap({ file: spec.bootstrapFile, eventServer, projectId: spec.terminalId,
       projectPath: spec.cwd, sessionKey: spec.sessionKey, controlAddress, controlCapability: spec.controlCapability });
+    // The same env as a native session started directly: a planner's with the shims, and the owner's for ! commands.
+    if (spec.bootstrapFile) Object.assign(spec, { env: nativeEnvironment(spec.bootstrapFile), shellEnv: nativeEnvironment(spec.bootstrapFile, null, { planner: false }) });
     spec.switchHost = old; disposeTerminal(spec.terminalId, { preserveSwitch: true }); nativeSpecs.set(spec.terminalId, spec);
     if (transition.discardBackground) old.completionWork?.discardBackground?.();
   }

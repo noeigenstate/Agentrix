@@ -209,6 +209,31 @@ test('S3 closing after model startup failure waits for shell disposal', async t 
   } finally { await closed; }
 });
 
+test("an owner's ! command runs with the session's owner env, so a typed claude is the real CLI and not the planner's shim", async t => {
+  const root = directory(t), fake = fakeSdk({ preflightSource: 'oauth' }), seen = [];
+  function load(file, overrides) {
+    const module = { exports: {} }, native = require('node:module').createRequire(file);
+    require('node:vm').runInNewContext(fs.readFileSync(file, 'utf8'), { module, __dirname: path.dirname(file),
+      process, Buffer, AbortController, setTimeout, clearTimeout, queueMicrotask,
+      require: name => overrides[name] || native(name) });
+    return module.exports;
+  }
+  const sessionModule = load(path.resolve(__dirname, '../electron/features/claude-sdk/session.cjs'), {
+    './shell.cjs': { runShell: ({ env }) => { seen.push(env); return Promise.resolve({ exitCode: 0, stdout: '', stderr: '', closed: Promise.resolve() }); } },
+  });
+  const { createClaudeRuntime: isolated } = load(path.resolve(__dirname, '../electron/features/claude-sdk/index.cjs'), { './session.cjs': sessionModule });
+  const runtime = isolated({ directory: root, loadSdk: async () => fake.sdk, resolveExecutable: async () => 'fake-only',
+    safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
+  runtime.credentials.save('sk-ant-offline-review-not-a-real-key'); disposers.get(root).push(() => runtime.close());
+  const planner = { HOME: root, USERPROFILE: root, GIT_CEILING_DIRECTORIES: root, PATH: 'shims', AGENTRIX_DISPATCH_DEPTH: '0' };
+  const owner = { HOME: root, USERPROFILE: root, GIT_CEILING_DIRECTORIES: root, PATH: 'tools' };
+  const session = runtime.create({ owner: 'gui', cwd: root, env: planner, shellEnv: owner }, () => {});
+  await session.start();
+  await session.shell('owner-shell', 'claude -p hello').catch(() => {});
+  await session.close();
+  assert.deepEqual(seen, [owner]);
+});
+
 test('S14 shell also removes Claude credential prefixes and custom API key names', async t => {
   const root = directory(t), names = ['ClAuDe_CoDe_SeSsIoN_AcCeSs_ToKeN', 'CLAUDE_AUTH_TOKEN', 'CLAUDE_API_KEY', 'CUSTOM_MODEL_API_KEY'];
   const script = 'process.stdout.write(JSON.stringify(Object.keys(process.env).filter(name=>' + JSON.stringify(names.map(name => name.toUpperCase())) + '.includes(name.toUpperCase()))))';
