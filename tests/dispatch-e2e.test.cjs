@@ -14,6 +14,7 @@ const { createDispatchIntake } = require('../electron/features/agents/dispatch-i
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { resolveRegistration } = require('../electron/features/agents/dispatch-registration.cjs');
 const { locateTeam } = require('../electron/features/team/team-locate.cjs');
+const { sameDirectory } = require('../electron/session-files.cjs');
 const { teamAt } = require('../electron/features/team/team.cjs');
 const { RunInbox } = require('../electron/features/team/inbox.cjs');
 const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
@@ -33,7 +34,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-e2e-'));
   const project = { id: 'project', kind: 'local', path: root }, sessions = new Map(), nativeSpecs = new Map(), errors = [], warnings = [];
   let binds = 0;
-  const context = vm.createContext({ path, fs, os, randomUUID, sessions, nativeSpecs, quitting: false, errors,
+  const context = vm.createContext({ path, fs, os, randomUUID, sameDirectory, sessions, nativeSpecs, quitting: false, errors,
     Date: class extends Date { static now() { return now(); } },
     AgentCalls: class extends AgentCalls { constructor(options) { super({ ...options, now }); } },
     store: { projects: [project], findTerminal: () => ({ project, record: { restore: {} } }), setRestore() {} },

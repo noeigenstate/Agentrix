@@ -34,7 +34,7 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
     fs, process, clearTimeout, readingHistory: { close() {} }, stopUsageAccount() {}, endSkillSession() {}, skills: { endSession() {} }, syncDashboardLive() {}, report(error) { throw error; },
     InputGate, isTerminalResponse, nativeSessions: null, scheduleState() {}, broadcast() {}, setTimeout, applyActivity() {}, findProject: () => project,
     PromptQueue, CompletionWork, ActionLog, ConversationLog, dashboard: { run() {} }, t: value => value,
-    AgentCalls, path, os: { homedir: () => directory }, claudeConfigDir: () => directory, send() {} };
+    AgentCalls, sameDirectory: require('../electron/session-files.cjs').sameDirectory, path, os: { homedir: () => directory }, claudeConfigDir: () => directory, send() {} };
   context.store.setRestore = () => {};
   vm.createContext(context);
   defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'activateNative', 'writeBootstrap',
