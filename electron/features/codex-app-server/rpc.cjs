@@ -97,7 +97,8 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     notify: (method, params = {}) => write({ method, params }),
     respond: (id, result) => write({ id, result }),
     reject: (id, code = -32601) => write({ id, error: { code, message: 'Unsupported request' } }),
-    close() { fail('closed'); read.clear(); try { child.stdin.end(); } catch {} },
+    // Ending the input is the process stop's step: a Windows server that left on it first would leave its children running.
+    close() { fail('closed'); read.clear(); },
     // A live server's protocol rejection needs no exit. A dying server's detail waits for its final stderr and close.
     async diagnostics({ stop, timers = globalThis } = {}) {
       if (ending) await new Promise((resolve, reject) => {

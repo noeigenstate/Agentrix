@@ -99,17 +99,25 @@ function stopProcess(child) {
   // Release our pipe ends on proved local exit; a pipe holder is not a live server.
   const release = () => { if (!child.remote) for (const pipe of [child.stdin, child.stdout, child.stderr]) pipe?.destroy?.(); };
   if (child.exitCode != null || child.signalCode != null) { release(); return Promise.resolve(); }
+  // Windows finds the tree only through a live app-server, and Codex's children outlive it (no job ends them): the tree is
+  // stopped before our input ends (Codex leaves on end of input), and the stop ends when the server has gone and taskkill has finished.
+  const tree = !child.remote && process.platform === 'win32' && child.pid;
   return new Promise((resolve, reject) => {
+    let gone = false, treeStopped = !tree;
     const remove = () => { clearTimeout(timer); child.removeListener('close', closed); child.removeListener('exit', exited); };
-    const closed = () => { remove(); resolve(); };
+    const settle = () => { if (gone && treeStopped) { remove(); resolve(); } };
+    const closed = () => { gone = true; settle(); };
     const exited = () => { release(); closed(); };
     const timer = setTimeout(() => { remove(); reject(new Error('process_stop_timeout')); }, 3000);
     child.once('close', closed);
     if (!child.remote) child.once('exit', exited);
-    if (child.remote) child.kill('SIGKILL');
-    else if (process.platform === 'win32' && child.pid) {
+    if (child.remote) { try { child.stdin.end(); } catch { } child.kill('SIGKILL'); }
+    else if (tree) {
       execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],
-        { windowsHide: true, timeout: 2000 }, error => { if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); });
+        { windowsHide: true, timeout: 2000 }, error => {
+          if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+          treeStopped = true; settle();
+        });
     } else {
       try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
     }

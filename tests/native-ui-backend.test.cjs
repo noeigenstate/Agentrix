@@ -12,7 +12,8 @@ test('an exited local app-server releases inherited pipes without reporting a pr
   const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
   const source = fs.readFileSync(path.join(__dirname, '../electron/features/codex-app-server/index.cjs'), 'utf8');
   const stop = vm.runInNewContext(source.slice(source.indexOf('function stopProcess('), source.indexOf('function createCodexRuntime(')) + '\nstopProcess;', {
-    setTimeout, clearTimeout, path, process: { platform: 'win32', env: { SystemRoot: 'C:/Windows' } }, execFile() {},
+    setTimeout, clearTimeout, path, process: { platform: 'win32', env: { SystemRoot: 'C:/Windows' } },
+    execFile: (...args) => args.at(-1)(null), // taskkill has stopped the tree; only the inherited pipes are left open
   });
   const child = new EventEmitter(); Object.assign(child, { pid: 12345, exitCode: null, signalCode: null,
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });

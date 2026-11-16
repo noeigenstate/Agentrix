@@ -6,7 +6,7 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { once, EventEmitter } = require('node:events');
 const { spawn, spawnSync } = require('node:child_process');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
-const { resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
+const { resources, removeTree, CLEANUP_TIMEOUT } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const { timeoutScale } = require('../scripts/wait.mjs');
 
 test('real app-server: each permissions choice starts as asked, and /permissions changes the running thread from its next turn', {
@@ -14,9 +14,11 @@ test('real app-server: each permissions choice starts as asked, and /permissions
 }, async t => {
   const lifetime = resources(t), childCloses = [];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-perm-real-')), cwd = path.join(root, 'project');
+  // The sessions close first (each stops its app-server's whole tree); a folder still held after that is named with what is left in it.
   lifetime.defer('remove profile after CLI close', async () => {
+    const until = Date.now() + CLEANUP_TIMEOUT - 500;
     await lifetime.wait(Promise.all(childCloses), 'CLI close receipts');
-    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await removeTree(root, until);
   });
   fs.mkdirSync(cwd);
   const env = {};
