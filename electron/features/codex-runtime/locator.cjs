@@ -27,8 +27,9 @@ const TRIPLES = { x64: 'x86_64-pc-windows-msvc', arm64: 'aarch64-pc-windows-msvc
 // prefix) or `$basedir/../@openai/codex` (a project's node_modules\.bin), pnpm's `%~dp0\global\5\node_modules\@openai\codex`
 // — or, where no relative path reaches it, by an absolute path (group 2): a drive or a UNC share, quoted, as pnpm's
 // cmd-shim writes when its global dir is on another drive than PNPM_HOME (`"C:\…\codex\bin\codex.js"` in codex.cmd,
-// `"C:/…/codex/bin/codex.js"` in codex.ps1 and the sh shim). Either way the shim must name @openai/codex's bin/codex.js.
-const SHIM_PACKAGE = /(?:(?:%~?dp0%?|\$basedir)[\\/]((?:[^"\r\n%$]*?[\\/])?@openai[\\/]codex)|(?<=["'])((?:[A-Za-z]:|[\\/]{2}[^"'\\/\r\n]+[\\/][^"'\\/\r\n]+)(?:[\\/][^"'\r\n%$]*?)?[\\/]@openai[\\/]codex))[\\/]bin[\\/]codex\.js/gi;
+// `"C:/…/codex/bin/codex.js"` in codex.ps1 and the sh shim). Either way the shim must name @openai/codex's bin/codex.js,
+// and an absolute path must end there (a quote or a space follows): `codex.js.bak` or `codex.jsx` names nothing.
+const SHIM_PACKAGE = /(?:%~?dp0%?|\$basedir)[\\/]((?:[^"\r\n%$]*?[\\/])?@openai[\\/]codex)[\\/]bin[\\/]codex\.js|(?<=["'])((?:[A-Za-z]:|[\\/]{2}[^"'\\/\r\n]+[\\/][^"'\\/\r\n]+)(?:[\\/][^"'\r\n%$]*?)?[\\/]@openai[\\/]codex)[\\/]bin[\\/]codex\.js(?=["'\s])/gi;
 
 // What `codex --version` printed, or why it printed none, and whether it read as Codex's own (`codex`). Its input is
 // closed at once, so a stand-in that reads it ends.

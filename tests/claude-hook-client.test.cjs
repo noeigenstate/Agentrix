@@ -24,7 +24,7 @@ function fakeSpawn() {
 
 test('every hook event maps to the legacy kind of contract C-2, and the events with no kind are HTTP only', () => {
   assert.deepEqual(KIND_OF_EVENT, {
-    UserPromptSubmit: 'start', Stop: 'stop', Notification: 'notify', SessionStart: 'session',
+    UserPromptSubmit: 'start', Stop: 'stop', StopFailure: 'stop-failed', Notification: 'notify', SessionStart: 'session',
     PreToolUse: 'progress', PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress', ElicitationResult: 'progress',
     PermissionRequest: 'permission', Elicitation: 'permission' });
   assert.deepEqual(resolveHook('start'), { event: 'UserPromptSubmit', kind: 'start' });
@@ -119,5 +119,5 @@ test('typed into a terminal, a hook picks the channel from the terminal\'s own s
   assert.match(session, /-Kind session/);
   assert.ok(session.endsWith(`'{"source":"startup"}'`));
   // An HTTP-only event typed into a terminal reports its own limit instead of a wrong kind.
-  assert.match(hookText('StopFailure', {}), /StopFailure has no command hook/);
+  assert.match(hookText('SubagentStart', {}), /SubagentStart has no command hook/);
 });

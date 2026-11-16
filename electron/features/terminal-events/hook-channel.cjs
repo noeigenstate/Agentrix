@@ -15,7 +15,8 @@ const DIALOGS = ['PermissionRequest', 'Elicitation'];
 // (items 3 and 7). A dialog's hook stays synchronous, so its waiting light comes before the owner can answer.
 const ASYNC_KINDS = ['start', 'stop', 'notify', 'progress'];
 // The command hooks, by the kind claude-hook.ps1 and agent-event.cjs take: the fallback, and SessionStart always.
-const COMMAND_KINDS = { UserPromptSubmit: 'start', Stop: 'stop', Notification: 'notify', SessionStart: 'session', PreToolUse: 'progress',
+// StopFailure (the turn ended in an API error) stays synchronous: K0b never proved it async.
+const COMMAND_KINDS = { UserPromptSubmit: 'start', Stop: 'stop', StopFailure: 'stop-failed', Notification: 'notify', SessionStart: 'session', PreToolUse: 'progress',
   PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress', ElicitationResult: 'progress',
   PermissionRequest: 'permission', Elicitation: 'permission' };
 // The hook client sends through HTTPS_PROXY or HTTP_PROXY, in either letter case, and ignores ALL_PROXY (K0b item 5).
@@ -106,14 +107,18 @@ function downgradeHooks(hooks, variable) {
     channelReason: reason('term.hooks_command_proxy', { source: 'wrapper', params: { variable, source: 'terminal' } }) };
 }
 
-// The terminal's channel follows each claude launch: the wrapper's hook-channel report downgrades the launch it precedes, and a
-// launch that follows none (no proxy this time) uses the terminal's own channel again. `s` is the terminal's session record.
-function reportHookChannel(s, variable) {
-  s.hooksBase ||= s.hooks; s.hooks = downgradeHooks(s.hooks, variable); s.hookReported = true;
+// The terminal's channel follows each claude launch: the wrapper's hook-channel report (shell event N) downgrades the launch
+// it precedes (codex-started N + 1), and a launch that follows none (no proxy this time) uses the terminal's own channel
+// again. The two arrive on separate pipe connections in either order, so they are paired by sequence: a report older than
+// the launch already started is a past launch's and changes nothing. `s` is the terminal's session record.
+function reportHookChannel(s, variable, sequence) {
+  s.hooksBase ||= s.hooks; s.hookReportSequence = sequence;
+  const pastLaunch = sequence < s.hookLaunchSequence - 1;
+  if (!pastLaunch) s.hooks = downgradeHooks(s.hooks, variable);
 }
-function startHookLaunch(s) {
-  if (s.hooksBase && !s.hookReported) s.hooks = s.hooksBase;
-  s.hookReported = false;
+function startHookLaunch(s, sequence) {
+  s.hookLaunchSequence = sequence;
+  if (s.hooksBase && s.hookReportSequence !== sequence - 1) s.hooks = s.hooksBase;
 }
 
 module.exports = { HTTP_EVENTS, COMMAND_KINDS, proxyOf, terminalHooks, downgradeHooks, reportHookChannel, startHookLaunch };

@@ -13,14 +13,14 @@ const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 // The legacy kind of every hook event that has one (C-2's table). Events without a kind are HTTP only.
 const KIND_OF_EVENT = {
-  UserPromptSubmit: 'start', Stop: 'stop', Notification: 'notify', SessionStart: 'session',
+  UserPromptSubmit: 'start', Stop: 'stop', StopFailure: 'stop-failed', Notification: 'notify', SessionStart: 'session',
   PreToolUse: 'progress', PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress', ElicitationResult: 'progress',
   PermissionRequest: 'permission', Elicitation: 'permission',
 };
 // The event a kind stands for when the payload does not name one.
-const DEFAULT_EVENT_OF_KIND = { start: 'UserPromptSubmit', stop: 'Stop', notify: 'Notification', session: 'SessionStart', progress: 'PostToolUse', permission: 'PermissionRequest' };
+const DEFAULT_EVENT_OF_KIND = { start: 'UserPromptSubmit', stop: 'Stop', 'stop-failed': 'StopFailure', notify: 'Notification', session: 'SessionStart', progress: 'PostToolUse', permission: 'PermissionRequest' };
 // Events that are only ever sent over HTTP, so a terminal on the command channel has no kind for them.
-const HTTP_ONLY_EVENTS = ['PostToolBatch', 'StopFailure', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionEnd'];
+const HTTP_ONLY_EVENTS = ['PostToolBatch', 'SubagentStart', 'SubagentStop', 'PreCompact', 'PostCompact', 'SessionEnd'];
 
 // Accepts a hook event name ('Stop') or a legacy kind ('stop'); a progress or permission kind takes the event the payload
 // names when it is one of that kind's events.

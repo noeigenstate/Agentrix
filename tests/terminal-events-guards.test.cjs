@@ -50,7 +50,7 @@ test('the settings generators emit only http hooks but SessionStart, or the decl
       const [hook] = fallback.hooks[event][0].hooks;
       assert.equal(hook.type, 'command');
       assert.ok(hook.command.endsWith(kind === 'posix' ? ` ${commandKind}` : ` -Kind ${commandKind}`) || commandKind === 'session', `${label}: ${event}`);
-      assert.equal(hook.async === true, commandKind === 'progress' || platform === 'win32' && !['session', 'permission'].includes(commandKind), `${label}: ${event} async`);
+      assert.equal(hook.async === true, commandKind === 'progress' || platform === 'win32' && !['session', 'permission', 'stop-failed'].includes(commandKind), `${label}: ${event} async`);
     }
     sessionStart(fallback);
     assert.equal(hooks.settings.http.includes(hooks.key), true);

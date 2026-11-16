@@ -2,7 +2,7 @@
 // run by Agentrix's own executable as Node (ELECTRON_RUN_AS_NODE=1). It sends the same events as notify.ps1
 // and claude-hook.ps1. Bash cannot open a Unix socket, so it sends its own reports through this too.
 // Usage: agent-event.cjs codex-notify <socket> <projectId> <sessionKey> <payload>
-//        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> start|stop|notify|session   (the hook's JSON on stdin)
+//        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> start|stop|stop-failed|notify|session|progress|permission   (the hook's JSON on stdin)
 //        agent-event.cjs shell-event <socket> <projectId> <sessionKey> <type> <sequence> <exitCode> <agent>
 //                        <codexAvailable> <claudeAvailable> <codexHome> <cwd>
 // Only SessionStart prints instruction JSON. The other hooks stay silent, and a closed Agentrix never fails a turn.
@@ -44,9 +44,10 @@ function codexEvent(payload, projectId, sessionKey) {
   return { projectId, sessionKey, type: 'turn-complete', eventId, threadId, turnId };
 }
 
-// Claude Code hook: UserPromptSubmit reports a working turn, Stop reports a finished one, SessionStart the
-// conversation Claude writes now (after /clear, /resume or a new start it is another file).
-const CLAUDE_STATES = { start: 'working', stop: 'complete', notify: 'attention', session: 'session', progress: 'progress', permission: 'attention' };
+// Claude Code hook: UserPromptSubmit reports a working turn, Stop reports a finished one, StopFailure one that ended in an
+// API error (an interrupted round, never a completed one), SessionStart the conversation Claude writes now (after /clear,
+// /resume or a new start it is another file).
+const CLAUDE_STATES = { start: 'working', stop: 'complete', 'stop-failed': 'failed', notify: 'attention', session: 'session', progress: 'progress', permission: 'attention' };
 function claudeEvent(input, projectId, sessionKey, kind) {
   const sentAt = Date.now();
   if (!Object.hasOwn(CLAUDE_STATES, kind)) return null;
@@ -62,6 +63,8 @@ function claudeEvent(input, projectId, sessionKey, kind) {
     sentAt, hookEvent: String(hook.hook_event_name ?? ''), sessionSource: String(hook.source ?? ''),
     ...(typeof hook.turn_id === 'string' ? { turnId: hook.turn_id } : {}),
     ...(typeof hook.tool_use_id === 'string' ? { requestId: hook.tool_use_id } : {}),
+    // The prompt whose turn this is: a late Stop of an older prompt cannot end a newer turn.
+    ...(typeof hook.prompt_id === 'string' ? { promptId: hook.prompt_id } : {}),
     // Where Claude writes this conversation; Agentrix reads the steps of the round from it.
     transcriptPath: String(hook.transcript_path ?? ''),
     eventId: `${sessionId}:${Date.now()}${String(process.hrtime.bigint() % 10000n).padStart(4, '0')}`,

@@ -799,7 +799,7 @@ function onEvent(event) {
   if (acceptDispatchEvent(s, project, event)) return;
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   // The claude wrapper found a proxy set since the terminal started; its command field names the variable.
-  if (event.type === 'hook-channel') { reportHookChannel(s, event.command); return; }
+  if (event.type === 'hook-channel') { reportHookChannel(s, event.command, event.sequence); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
   if (event.type === 'codex-started' && event.agent !== 'claude') { void openCodexFromShell(project, s, event); return; }
   if (event.type === 'codex-exited' && event.agent !== 'claude') return;
@@ -822,7 +822,7 @@ function onEvent(event) {
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (!quitting && typeof event.cwd === 'string') store.setRestore(s.terminalId, { cwd: event.cwd });
   } else if (event.type === 'codex-started') {
-    if (event.agent === 'claude') startHookLaunch(s);
+    if (event.agent === 'claude') startHookLaunch(s, event.sequence);
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
     s.needsInput = null;
     s.agentStarting = false;

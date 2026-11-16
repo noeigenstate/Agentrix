@@ -2,11 +2,12 @@ param(
     [Parameter(Mandatory=$true)][string]$PipeName,
     [Parameter(Mandatory=$true)][string]$ProjectId,
     [Parameter(Mandatory=$true)][string]$SessionKey,
-    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'notify', 'session', 'progress', 'permission')][string]$Kind,
+    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'stop-failed', 'notify', 'session', 'progress', 'permission')][string]$Kind,
     [string]$NoteFile = $env:AGENTRIX_READING_NOTE_FILE
 )
 
-# Claude Code hook: UserPromptSubmit reports a working turn, Stop reports a finished one, SessionStart the
+# Claude Code hook: UserPromptSubmit reports a working turn, Stop reports a finished one, StopFailure one that ended in an
+# API error (an interrupted round, never a completed one), SessionStart the
 # conversation Claude writes now (after /clear, /resume or a new start it is another file).
 # Only SessionStart prints instruction JSON; all other hooks remain silent.
 $ErrorActionPreference = 'Stop'
@@ -78,7 +79,7 @@ try {
         sessionKey = $SessionKey
         type = 'agent-activity'
         agent = 'claude'
-        state = $(if ($Kind -in @('notify', 'permission')) { 'attention' } elseif ($Kind -eq 'stop') { 'complete' } elseif ($Kind -eq 'session') { 'session' } elseif ($Kind -eq 'progress') { 'progress' } else { 'working' })
+        state = $(if ($Kind -in @('notify', 'permission')) { 'attention' } elseif ($Kind -eq 'stop') { 'complete' } elseif ($Kind -eq 'stop-failed') { 'failed' } elseif ($Kind -eq 'session') { 'session' } elseif ($Kind -eq 'progress') { 'progress' } else { 'working' })
         message = $(if ($Kind -in @('notify', 'permission')) { $text = if ($null -ne $hook.message) { [string]$hook.message } else { [string]$hook.tool_name }; $text.Substring(0, [Math]::Min(300, $text.Length)) } else { $null })
         sentAt = $sentAt
         hookEvent = [string]$hook.hook_event_name
