@@ -14,7 +14,7 @@ const { codexExecutable } = require('../codex-runtime/locator.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
 const { startupDetail } = require('../agents/start-failure.cjs');
-const { ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
+const { ownerShell, ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
 // A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
 const RECENT_PICTURES = 6;
 
@@ -117,7 +117,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, optionsHome, accountKey } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, shellOf = ownerShell, optionsHome, accountKey } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -699,7 +699,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             started(response.turn);
           } else {
             // The owner's own command runs the real CLIs, not the planner's shims that the app-server's env carries.
-            await rpc.request('thread/shellCommand', { ...params, command: spec.kind === 'ssh' ? argument : ownerShellCommand(argument, spec.env, platform) });
+            await rpc.request('thread/shellCommand', { ...params, command: spec.kind === 'ssh' ? argument : ownerShellCommand(argument, spec.env, shellOf({ platform, env: spec.env })) });
           }
           inputReceipt(id, 'consumed'); return { clientMessageId: id, status: 'consumed' };
         } catch (error) {

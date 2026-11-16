@@ -3,6 +3,7 @@
 // helper carries this file.
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 const SHIM_MARKER = '.agentrix-shims';
 // The folder of a stand-in CLI that Agentrix's own tests build (scripts/gui-codex-env.mjs) holds this file. The Codex
 // drive scan never takes a file there: the stand-in answers --version as Codex does.
@@ -42,24 +43,47 @@ function withoutShims(source, { exists = fs.existsSync } = {}) {
 }
 
 // An owner's own ! command in a native Codex session: thread/shellCommand runs it in the thread's shell, which the
-// app-server starts with the planner's env, and the protocol takes no env. This line runs first in that shell and applies
-// withoutShims' rules there: PowerShell on Windows (inline, since Codex runs it with -Command under any execution
-// policy), a POSIX shell (bash, zsh, sh) elsewhere. The owner's text follows on its own line, unchanged; Codex reports
-// the text it ran as the command's one action, from which typedCommand reads back what the owner typed.
+// app-server starts with the planner's env, and the protocol takes no env. A line put first applies withoutShims' rules
+// in that shell, then the owner's text follows on its own line, unchanged. The line is added only for a shell whose
+// syntax it is written in (ownerShell); any other shell (fish, cmd) runs the text as typed, with the shims.
+// PowerShell's line is inline, since Codex runs it with -Command under any execution policy, and it is skipped outside
+// FullLanguage mode (AppLocker or WDAC), where its calls would only print errors. Codex reports the text it ran as the
+// command's action, from which typedCommand reads back what the owner typed.
 const OWNER_PREFIX = {
-  win32: '& { $env:Path = ($env:Path -split ";" | Where-Object { $_ -and -not [IO.File]::Exists($_.Trim([char]34).TrimEnd([char]92) + "\\.agentrix-shims") }) -join ";";'
+  powershell: 'if ($ExecutionContext.SessionState.LanguageMode -eq "FullLanguage") { & {'
+    + ' $env:Path = ($env:Path -split ";" | Where-Object { $_ -and -not [IO.File]::Exists($_.Trim([char]34).TrimEnd([char]92) + "\\.agentrix-shims") }) -join ";";'
     + ' if ($env:AGENTRIX_SHIMS) { foreach ($name in "BASH_ENV", "CLAUDE_ENV_FILE", "ZDOTDIR") { [Environment]::SetEnvironmentVariable($name, [Environment]::GetEnvironmentVariable("AGENTRIX_SHIM_USER_" + $name)) } };'
-    + ' Get-ChildItem Env: | Where-Object { $_.Name -match "^AGENTRIX_(?:SHIMS|SHIM_USER_[A-Z_]+|SHIM_NODE|DISPATCH_DEPTH|RUN_ID|RUN_PROOF)$" } | Remove-Item }',
+    + ' Get-ChildItem Env: | Where-Object { $_.Name -match "^AGENTRIX_(?:SHIMS|SHIM_USER_[A-Z_]+|SHIM_NODE|DISPATCH_DEPTH|RUN_ID|RUN_PROOF)$" } | Remove-Item } }',
   posix: '[ ! -r "${AGENTRIX_SHIMS-}/hooks/owner.sh" ] || . "$AGENTRIX_SHIMS/hooks/owner.sh"',
 };
-function ownerShellCommand(command, env, platform = process.platform) {
-  if (!env || env.AGENTRIX_SHIMS === undefined) return command;
-  return `${OWNER_PREFIX[platform === 'win32' ? 'win32' : 'posix']}\n${command}`;
-}
-// What the owner typed, when the text Codex ran is an ownerShellCommand; otherwise null.
-function typedCommand(text) {
-  const prefix = typeof text === 'string' && Object.values(OWNER_PREFIX).find(value => text.startsWith(value + '\n'));
-  return prefix ? text.slice(prefix.length + 1) : null;
+// The POSIX shells the line is written for, named as the passwd entry Codex reads names them.
+const POSIX_SHELLS = ['bash', 'zsh', 'sh', 'dash', 'ksh'];
+
+// Which prefix the shell Codex will run an owner's command in takes, or null when that shell is not known: on Windows
+// PowerShell (pwsh on PATH, or System32's powershell.exe), elsewhere the user's login shell from passwd.
+function ownerShell({ platform = process.platform, env = process.env, userShell = () => os.userInfo().shell, exists = fs.existsSync } = {}) {
+  if (platform === 'win32') {
+    const folders = String(Object.entries(env || {}).find(([name]) => name.toUpperCase() === 'PATH')?.[1] || '').split(';').filter(Boolean);
+    const root = env?.SystemRoot || env?.SYSTEMROOT || 'C:\\Windows';
+    return folders.some(folder => exists(path.win32.join(folder.replace(/^"|"$/g, ''), 'pwsh.exe')))
+      || exists(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')) ? 'powershell' : null;
+  }
+  let shell = null;
+  try { shell = userShell(); } catch { }
+  return typeof shell === 'string' && POSIX_SHELLS.includes(path.posix.basename(shell)) ? 'posix' : null;
 }
 
-module.exports = { SHIM_MARKER, STAND_IN_MARKER, SHIM_HOOKS, shimHook, withoutShims, ownerShellCommand, typedCommand };
+function ownerShellCommand(command, env, shell = ownerShell({ env })) {
+  if (!env || env.AGENTRIX_SHIMS === undefined || !OWNER_PREFIX[shell]) return command;
+  return `${OWNER_PREFIX[shell]}\n${command}`;
+}
+// What the owner typed, when a text Codex ran or rendered holds an ownerShellCommand's line; otherwise null. A rendering
+// (/bin/zsh -lc '…') keeps the POSIX line verbatim, so the line is found inside it as well as at the start.
+function typedCommand(text) {
+  if (typeof text !== 'string') return null;
+  const prefix = Object.values(OWNER_PREFIX).find(value => text.includes(value + '\n'));
+  if (!prefix) return null;
+  return text.startsWith(prefix + '\n') ? text.slice(prefix.length + 1) : text.replace(prefix + '\n', '');
+}
+
+module.exports = { SHIM_MARKER, STAND_IN_MARKER, SHIM_HOOKS, shimHook, withoutShims, ownerShell, ownerShellCommand, typedCommand };
