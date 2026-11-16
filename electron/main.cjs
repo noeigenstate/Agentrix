@@ -52,6 +52,7 @@ const { agentSettings } = require('./features/agents/agent-settings.cjs');
 const { createDispatchIntake } = require('./features/agents/dispatch-intake.cjs');
 const { UsageMeter, claudeProvider, codexProvider, claudeAccount, claudeAccountFiles, readClaudeAccountCache } = require('./features/agents/agent-usage.cjs');
 const { AgentCalls } = require('./features/agents/agent-calls.cjs');
+const { sameDirectory } = require('./session-files.cjs');
 const { DashboardRecords, quotaScope } = require('./features/dashboard/records.cjs');
 const { createDashboard } = require('./features/dashboard/index.cjs');
 const { createLab } = require('./features/lab/index.cjs');
@@ -551,28 +552,35 @@ function usageHistory(s, ready) {
 // restarts, stay visible; the agent's usage meter shares them while it runs.
 function callsOf(s, project) {
   if (s.switchPreviousHost) return callsOf(s.switchPreviousHost, project);
-  if (s.calls) return s.calls;
-  const helperPids = new WeakMap(), id = s.terminalId, current = () => sessions.get(id);
-  const calls = AgentCalls.forTerminal(sessions, id, () => new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
-    dispatchAlive: async call => {
-      if (project.kind === 'ssh') return null;
-      let pid = call.helperPid || helperPids.get(call);
-      if (!pid || call.done) {
-        try {
-          const team = await require('./features/team/team-locate.cjs').locateTeam(project.path);
-          if (!team || !/^[a-f\d-]{36}$/i.test(call.key)) return null;
-          const file = path.join(team.board, call.key + '.json');
-          if (fs.statSync(file).size > 65536) return null;
-          const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
-          if (entry.id !== call.key || path.resolve(entry.cwd) !== path.resolve(call.cwd) || !Number.isSafeInteger(entry.pid) || entry.pid <= 0) return null;
-          pid = entry.pid; helperPids.set(call, pid);
-        } catch (error) { return call.done && error.code === 'ENOENT' ? false : null; }
-      }
-      return AgentCalls.alive(pid);
-    },
-    codexHome: () => current()?.codexHome || current()?.usageEnv?.CODEX_HOME || path.join(os.homedir(), '.codex'),
-    claudeHome: () => current()?.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
-    feedChanged: event => { if (current()?.calls === calls) send('terminal:subagent-feed', { terminalId: id, ...event }); } }));
+  const id = s.terminalId;
+  const calls = s.calls || AgentCalls.forTerminal(sessions, id, () => {
+    const helperPids = new WeakMap(), current = () => sessions.get(id);
+    return new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
+      dispatchAlive: async call => {
+        if (project.kind === 'ssh') return null;
+        let pid = call.helperPid || helperPids.get(call);
+        if (!pid || call.done) {
+          try {
+            const team = await require('./features/team/team-locate.cjs').locateTeam(project.path);
+            if (!team || !/^[a-f\d-]{36}$/i.test(call.key)) return null;
+            const file = path.join(team.board, call.key + '.json');
+            if (fs.statSync(file).size > 65536) return null;
+            const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
+            if (entry.id !== call.key || path.resolve(entry.cwd) !== path.resolve(call.cwd) || !Number.isSafeInteger(entry.pid) || entry.pid <= 0) return null;
+            pid = entry.pid; helperPids.set(call, pid);
+          } catch (error) { return call.done && error.code === 'ENOENT' ? false : null; }
+        }
+        return AgentCalls.alive(pid);
+      },
+      codexHome: () => current()?.codexHome || current()?.usageEnv?.CODEX_HOME || path.join(os.homedir(), '.codex'),
+      claudeHome: () => current()?.usageEnv?.CLAUDE_CONFIG_DIR || claudeConfigDir(),
+      feedChanged: event => { if (current()?.calls === calls) send('terminal:subagent-feed', { terminalId: id, ...event }); } });
+  });
+  if (s.nativeStructured && calls.setFolder === AgentCalls.prototype.setFolder) {
+    const setFolder = calls.setFolder.bind(calls);
+    // Keep this guard when the native tracker returns to a terminal host, including trackers retained from an earlier terminal.
+    calls.setFolder = folder => { if (!sameDirectory(folder, calls.folder)) setFolder(folder); };
+  }
   return s.calls = calls;
 }
 // An owner intervention's target, from the call the terminal's own tracker holds: never from the renderer. The planner

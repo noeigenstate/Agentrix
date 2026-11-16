@@ -67,6 +67,12 @@ function createClaudeSession(spec, emit, dependencies) {
   function cancelQuery(run, reason) {
     if (run.closing) return;
     run.closing = reason;
+    // These starts already reached the host. Their cached bindings can end them even after fresh callbacks lose ownership.
+    const children = [...run.subagents.values()]; run.subagents.clear();
+    for (const { signal, binding } of children) {
+      try { void Promise.resolve(spec.onSubagent({ ...signal, kind: 'stop', transcriptPath: null, at: Math.max(now(), signal.at) }, binding)).catch(() => {}); }
+      catch { }
+    }
     run.queue.close(); run.abort.abort();
     try { run.query.close(); } catch { }
   }
@@ -118,10 +124,13 @@ function createClaudeSession(spec, emit, dependencies) {
         || !/^[A-Za-z0-9_-]{1,100}$/.test(input.agent_id) || typeof input.agent_type !== 'string') return;
       const folder = await claudeSubagentFolder(spec, providerId, input.transcript_path);
       if (!current()) return;
-      await spec.onSubagent({ kind, terminalId: spec.terminalId, agentId: input.agent_id, agentType: input.agent_type,
+      const signal = { kind, terminalId: spec.terminalId, agentId: input.agent_id, agentType: input.agent_type,
         transcriptPath: kind === 'stop' && typeof input.agent_transcript_path === 'string' ? input.agent_transcript_path : null,
-        toolUseId: typeof toolUseId === 'string' && toolUseId.length > 0 && toolUseId.length <= 200 ? toolUseId : null, at },
-      { runtimeSessionId: spec.runtimeSessionId, providerSessionId: providerId, folder });
+        toolUseId: typeof toolUseId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(toolUseId) ? toolUseId : null, at };
+      const binding = { runtimeSessionId: spec.runtimeSessionId, providerSessionId: providerId, folder };
+      if (kind === 'start') run.subagents.set(signal.agentId, { signal, binding });
+      await spec.onSubagent(signal, binding);
+      if (kind === 'stop') run.subagents.delete(signal.agentId);
     }).catch(() => {});
   }
   async function pump(run) {
@@ -321,7 +330,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (!key) throw new Error('请先保存 API 密钥。');
     const run = { key, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
-      busy: false, background: new Map(), stderr: stderrCollector() };
+      busy: false, background: new Map(), subagents: new Map(), stderr: stderrCollector() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     try {
