@@ -16,7 +16,9 @@ const { createFacts, fact } = require('./facts.cjs');
 // The scopes of the key's facts: what sessions saw, and the connection test's refusal, which only new sessions read.
 const KEY = '', TESTED = 'connection-test';
 const LIMIT_REASONS = new Set(['credits_exhausted', 'account_limit']);
-const MINUTE = 60000, TRIAL = 600000;
+// A Claude Code the last check could not run is checked again at a start only once this long has passed: an explicit
+// check can take seconds (the stored PATH, then the version check), and a start must not wait for it every time.
+const MINUTE = 60000, TRIAL = 600000, CLI_RECHECK = 10000;
 const MANAGED = { win32: 'C:\\Program Files\\ClaudeCode', darwin: '/Library/Application Support/ClaudeCode', linux: '/etc/claude-code' };
 
 // The settings files Claude Code reads for a session of this spec: the user's (where the session's own environment
@@ -87,13 +89,15 @@ function createResolver({ keySaved, keyVersion = () => 0, inspectCli, now = Date
   }
   // Claude Code reported the saved key: this project's billing holds again, and a session's key refusal (the same key,
   // whichever project saw it) is over. A tested one (a connection test, or a turn the provider accepted) also ends the
-  // limits. A test with no project ends every project's billing refusal seen before it began, so each checks again (N2);
-  // a refusal a session saw after that stands.
-  function identified({ scope = '', observed, tested = false, everywhere = false }) {
+  // limits, and a turn the provider accepted (`accepted`) also ends the connection test's key refusal: the key works. A
+  // test with no project ends every project's billing refusal seen before it began, so each checks again (N2); a refusal
+  // a session saw after that stands.
+  function identified({ scope = '', observed, tested = false, accepted = false, everywhere = false }) {
     if (!latest(scope, observed)) return;
     observations.set(scope, observed.sequence);
     const older = value => (observations.get(value.scope) || 0) <= observed.sequence;
-    const removed = [facts.remove('billing', everywhere ? older : scope), facts.remove('key', KEY), tested && facts.remove('limit', KEY)];
+    const removed = [facts.remove('billing', everywhere ? older : scope), facts.remove('key', KEY), tested && facts.remove('limit', KEY),
+      accepted && facts.remove('key', TESTED)];
     if (removed.some(Boolean)) notify();
   }
   // The connection test's key answer: a refused key is held for new sessions until the key changes, and an accepted one
@@ -106,15 +110,15 @@ function createResolver({ keySaved, keyVersion = () => 0, inspectCli, now = Date
   }
   // A turn the provider accepted also ends its card's rate limit.
   const KINDS = { failure: failed, identity: identified, key: keyChecked,
-    success: value => { if (value.card) release(value.card); identified({ ...value, tested: true }); } };
+    success: value => { if (value.card) release(value.card); identified({ ...value, tested: true, accepted: true }); } };
   const observe = observation => KINDS[observation.kind](observation);
 
   // CLI checks are numbered as they start. One that comes back after a later one was seen is stale: it changes nothing,
   // and its caller gets the newer result instead. Another Claude Code than before starts everything afresh.
-  let cliIssued = 0, cliSeen = 0, cliLatest, cliIdentity = null;
+  let cliIssued = 0, cliSeen = 0, cliLatest, cliSeenAt = 0, cliIdentity = null;
   function observeCli(value, ticket = ++cliIssued) {
     if (ticket < cliSeen) return false;
-    cliSeen = ticket; cliLatest = value;
+    cliSeen = ticket; cliLatest = value; cliSeenAt = now();
     const identity = JSON.stringify([value.status, value.version || null, value.file || null]);
     if (cliIdentity !== null && cliIdentity !== identity) reset();
     cliIdentity = identity;
@@ -126,8 +130,9 @@ function createResolver({ keySaved, keyVersion = () => 0, inspectCli, now = Date
   }
   const checkCli = () => facts.once('cli', () => trackCli(inspectCli()));
   // Look again before deciding when the answer may be stale: a held billing refusal may be about a Claude Code that has
-  // since changed, and a Claude Code the last check could not run may have been installed or fixed since.
-  const refresh = () => facts.has('billing') || cliLatest && cliLatest.status !== 'ok' ? checkCli().then(() => {}, () => {}) : Promise.resolve();
+  // since changed, and a Claude Code the last check could not run may have been installed or fixed since it was checked.
+  const cliStale = () => cliLatest && cliLatest.status !== 'ok' && now() - cliSeenAt >= CLI_RECHECK;
+  const refresh = () => facts.has('billing') || cliStale() ? checkCli().then(() => {}, () => {}) : Promise.resolve();
 
   function claimTrial() {
     const limit = facts.get('limit', KEY);
