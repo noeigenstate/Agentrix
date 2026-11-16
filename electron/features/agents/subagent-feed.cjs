@@ -154,7 +154,8 @@ class SubagentFeeds {
     call.viewable = this.local && (readable || entry.completedAt != null && entry.everReadable);
     const header = { id: call.id, agent: call.agent, ...shownModel(call), effort: call.effort ?? null, fast: call.fast ?? null,
       title: call.title, role: call.role, state: stateOf(call), failure: call.failure || null,
-      startedAt: time(call.startedAt), endedAt: time(call.finishedAt), rate: call.rate ? { ...call.rate } : null };
+      startedAt: time(call.startedAt), endedAt: time(call.finishedAt), rate: call.rate ? { ...call.rate } : null,
+      ...(call.awaiting && !call.done ? { awaiting: call.awaiting } : {}) };
     const signature = JSON.stringify([header, call.viewable]);
     if (!entry.dirty && entry.signature === signature) return;
     entry.signature = signature; entry.dirty = false; entry.revision++;

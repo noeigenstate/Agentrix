@@ -103,6 +103,8 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
       assert.fail(`unexpected import: ${name}`);
     },
   };
+  // Main's worker terminals: no terminal lead here starts one.
+  context.workerTerminals = null;
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('function launchAfterPrompt(')), context);

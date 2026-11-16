@@ -279,7 +279,7 @@ test('main quit cleanup runs once and a late dashboard append cannot prevent the
     updateManager: null, projectAccounts: { close() {} }, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} }, disposeClaudeAccounts() {},
     usageRolloverTimer: null, stateTimer: null, sessions: new Map(), sshAuth: null, eventServer: null, hookServer: null, dispatchControl: null,
     nativeSessions: { close: () => { cleanups++; } }, claudeRuntime: null, tray: null, cleanupAskpass() {}, runtimeDir,
-    disposeDispatchInbox: () => inboxDisposals++,
+    disposeDispatchInbox: () => inboxDisposals++, workerTerminals: { closeAll() {} },
   });
   const first = records.append('runs', { index: 1 });
   handler({ preventDefault: () => prevented++ });

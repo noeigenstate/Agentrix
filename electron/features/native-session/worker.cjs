@@ -2,32 +2,39 @@ const { randomUUID } = require('node:crypto');
 const { exact, text, assert } = require('./validate.cjs');
 const { choosePath } = require('./routing.cjs');
 const { createEventStream } = require('./events.cjs');
-function registerClaudeWorker({ control, claude, settings, context = () => '', env = () => process.env }) {
+// terminals: main's worker terminals (worker-terminals/BOUNDARY.md); a local terminal lead's worker runs in one of them.
+function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env }) {
   return control.onRequest('claude-sdk.run', async (run, payload, stream) => {
-    assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out']) && text(payload.prompt) &&
-      (payload.model === undefined || text(payload.model, 160)) && (payload.effort === undefined || ['low', 'medium', 'high', 'max', 'xhigh'].includes(payload.effort)));
+    assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out', 'permission']) && text(payload.prompt) &&
+      (payload.model === undefined || text(payload.model, 160)) && (payload.effort === undefined || ['low', 'medium', 'high', 'max', 'xhigh'].includes(payload.effort))
+      && (payload.permission == null || ['plan', 'acceptEdits'].includes(payload.permission)));
     const runtimeSessionId = randomUUID();
     const runtimeEnv = { ...env(run) };
     for (const name of Object.keys(runtimeEnv)) if (/^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|.*SESSION_KEY)|^CLAUDE_CODE_ENTRYPOINT$/i.test(name)) delete runtimeEnv[name];
     const spec = { agent: 'claude', owner: 'dispatch', runtimeSessionId, terminalId: run.runId, projectId: run.projectId, runId: run.runId,
       cwd: run.cwd, worktree: run.worktree || run.cwd, allow: run.allow, readOnly: run.readOnly, roundtable: run.roundtable,
       model: payload.model, effort: payload.effort, fast: payload.fast, context: context(run), env: runtimeEnv,
-      providerSessionId: payload.resume || null };
+      providerSessionId: payload.resume || null, permission: run.readOnly || run.roundtable ? 'plan' : payload.permission || 'acceptEdits' };
     const pathEvent = reason => createEventStream(spec, event => stream.emit(event)).publish('path.changed', { previous: null, selected: 'terminal', reason });
-    if (run.leadMode === 'terminal') { pathEvent('terminal lead (subscription)'); return; }
-    await claude.refreshAvailability?.();
-    const claudePath = run.leadMode === 'native' ? 'api-only' : settings().claudePath;
-    const apiState = claude.apiState(run.projectId, null, 'dispatch');
-    const selection = choosePath({ agent: 'claude', claudePath, apiState });
-    if (selection.path === 'terminal') { pathEvent(selection.reason); return; }
-    if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
-    // Descendant helpers may remove only authentication supplied by this SDK parent.
-    runtimeEnv.AGENTRIX_SDK_PARENT = '1';
+    // Only a local terminal lead's worker is billed like its terminal; an SSH one keeps the CLI path.
+    const terminal = run.leadMode === 'terminal' && run.local === true && terminals;
+    if (run.leadMode === 'terminal' && !terminal) { pathEvent('terminal lead (subscription)'); return; }
+    let claudePath = null;
+    if (!terminal) {
+      await claude.refreshAvailability?.();
+      claudePath = run.leadMode === 'native' ? 'api-only' : settings().claudePath;
+      const apiState = claude.apiState(run.projectId, null, 'dispatch');
+      const selection = choosePath({ agent: 'claude', claudePath, apiState });
+      if (selection.path === 'terminal') { pathEvent(selection.reason); return; }
+      if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
+      // Descendant helpers may remove only authentication supplied by this SDK parent.
+      runtimeEnv.AGENTRIX_SDK_PARENT = '1';
+    }
     let finish, finishRequested = false, done = false, stopping = false, state = 'starting', outcome = 'failed';
     const identityFailure = [];
     const completed = new Promise(resolve => { finish = resolve; });
     void completed.catch(() => {});
-    const runtime = claude.create(spec, event => {
+    const onEvent = event => {
       // Do not end the helper before the safe startup fallback decision reaches it.
       if (event.type === 'error' && event.payload.stage === 'startup'
         || identityFailure.length && event.type === 'session.state' && event.payload.state === 'failed') {
@@ -43,7 +50,8 @@ function registerClaudeWorker({ control, claude, settings, context = () => '', e
         if (state === 'stopped') finish({ status: stopping ? 'interrupted' : done ? outcome : 'failed' });
         if (['failed', 'disconnected'].includes(state)) finish({ status: 'failed' });
       }
-    });
+    };
+    const runtime = terminal ? terminals.create(run, spec, createEventStream(spec, onEvent)) : claude.create(spec, onEvent);
     const unsubscribe = stream.onControl(async controlMessage => {
       if (controlMessage.type === 'disconnect' || controlMessage.type === 'stop') {
         stopping = controlMessage.type === 'stop';

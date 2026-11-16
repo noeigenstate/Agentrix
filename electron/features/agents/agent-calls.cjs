@@ -255,7 +255,7 @@ class AgentCalls {
         startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: retired,
         ...(call.dispatch || call.failure ? { failure: call.failure || null } : {}),
         ...(call.dispatch && call.declared ? { declared: call.declared } : {}),
-        ...(call.resumed ? { resumed: true } : {}), ...(call.notice ? { notice: call.notice } : {}),
+        ...(call.resumed ? { resumed: true } : {}), ...(call.notice ? { notice: call.notice } : {}), ...(call.awaiting && !retired ? { awaiting: call.awaiting } : {}),
         ...(call.source != null ? { source: call.source } : {}),
         ...(call.controlFailure ? { controlFailure: call.controlFailure } : {}) });
       if (!retired && call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
@@ -327,7 +327,7 @@ class AgentCalls {
       return true;
     }
     if (event.type !== 'dispatch-end') return false;
-    clearTimeout(call.startNotice); call.starting = false; delete call.notice;
+    clearTimeout(call.startNotice); call.starting = false; delete call.notice; delete call.awaiting;
     this.finishedIds.add(event.id);
     call.done = true; call.finishedAt = event.endedAt; call.completedAt = this.now();
     try { this.finished(call, event); } catch {}
@@ -341,6 +341,14 @@ class AgentCalls {
     if (!this.local) this.feeds.finish(call);
     this.hideAfterEnd(call);
     return true;
+  }
+  // A worker terminal's dispatched worker waits for the owner's answer ('owner') or went on (null): presentation only,
+  // never completion or a notification (worker-terminals).
+  setAwaiting(id, value) {
+    const call = this.calls.get(id);
+    if (!call?.dispatch || call.done || (call.awaiting ?? null) === value) return false;
+    if (value === 'owner') call.awaiting = value; else delete call.awaiting;
+    this.feeds.update(call); this.changed(); return true;
   }
   hideAfterEnd(call) {
     const hide = alive => {
@@ -574,7 +582,7 @@ class AgentCalls {
       }
     }).catch(() => {}).finally(() => { if (this.calls === calls) { this.work = null; this.schedule(); } });
   }
-  signature(call) { return JSON.stringify(call && [call.model, call.effort, call.fast, call.preparing, call.title, call.role, call.rate, call.viewable, call.done, call.failure]); }
+  signature(call) { return JSON.stringify(call && [call.model, call.effort, call.fast, call.preparing, call.title, call.role, call.rate, call.viewable, call.done, call.failure, call.awaiting]); }
   async readSubagent(call, filename, calls, meta) {
     filename = filename ? await containedFile(this.folder, filename, { exact: true }) : null;
     const home = rootValue(this.claudeHome);

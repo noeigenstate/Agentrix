@@ -512,6 +512,11 @@ function readWorkerOutput(child, agent, log, output) {
   return () => { for (const tail of tails) tail(); };
 }
 
+// A terminal worker's transcript record as main compacts it for the meter (worker-terminals meterRecord): a user or
+// assistant record of bounded size whose message holds only a content list.
+const meterRecord = record => !!record && typeof record === 'object' && !Array.isArray(record) && ['user', 'assistant'].includes(record.type)
+  && !!record.message && typeof record.message === 'object' && Array.isArray(record.message.content) && JSON.stringify(record).length <= 16384;
+
 // Associate a provider echo with the input channel that supplied its identifier. Content never selects an origin.
 function workerInput(event, controls, resumeIds, resumeInputId) {
   if (event.type !== 'item.upsert' || event.payload?.kind !== 'user-message' || event.replay || typeof event.itemId !== 'string') return null;
@@ -997,6 +1002,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         settleNative?.({ code: 1, killedBy: null });
       } else if (event.type === 'path.changed' && event.payload.selected === 'terminal' && !nativeTurn) {
         nativeFallback = event.payload.reason || 'terminal_selected';
+      } else if (event.type === 'path.changed' && event.payload.selected === 'terminal-worker' && !nativeTurn) {
+        // Main runs this worker in a hidden terminal of the lead's own: billed like that terminal.
+        nativeBilling = 'subscription';
+        signal(`transport ${id} claude-terminal: ${String(event.payload.reason || 'terminal lead').replace(/[\r\n]+/g, ' ')}`);
+      } else if (event.type === 'transcript.record' && nativeBilling === 'subscription') {
+        if (meterRecord(event.payload)) output.record(event.payload);
       } else if (event.type === 'request.opened' && options.agent === 'codex') requestOpened(event.payload);
       else if (event.type === 'request.resolved' && requestTimers.has(event.payload.requestId)) {
         clearTimeout(requestTimers.get(event.payload.requestId)); requestTimers.delete(event.payload.requestId);
@@ -1116,7 +1127,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           // Main's broker owns this process. It supplies execution evidence in the streamed events.
           child = { pid: 'broker', exitCode: null };
           const remote = controlClient.request('claude-sdk.run', { prompt: brief.toString('utf8'), model: options.model, effort: options.effort,
-            fast: options.fast, resume: effective.resume || null, out: options.out }).then(value => {
+            fast: options.fast, resume: effective.resume || null, out: options.out, permission: options.permission }).then(value => {
             nativeRunning = false;
             const result = value?.status ? { code: value.status === 'completed' ? 0 : 1, killedBy: value.status === 'interrupted' ? 'SIGTERM' : null } : undefined;
             if (result) settleNative?.(result);
