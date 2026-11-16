@@ -131,7 +131,7 @@ test('closing a local session stops every process its app-server started, and th
   // The stand-in leaves on end of input as Codex does: a tree stop that comes after that finds no tree to stop.
   await session.close();
   await until(() => !alive(helper));
-  fs.rmSync(cwd, { recursive: true });
+  await removeTree(cwd);
 });
 
 test('sparse limits retain missing fields, never infer recovery, and reject unsafe integers', () => {

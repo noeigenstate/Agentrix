@@ -35,7 +35,7 @@ test('a folder a process still holds is removed once it lets go, and a refusal p
   fs.mkdirSync(held); fs.writeFileSync(path.join(held, 'note.txt'), 'x');
   const holder = lifetime.child(spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000)'], { cwd: held, stdio: 'ignore', windowsHide: true }));
   await once(holder, 'spawn');
-  await assert.rejects(removeTree(root, Date.now()), error => /still held after 1 attempts: EBUSY at .*held; \d+ entries left: .*held/.test(error.message));
+  await assert.rejects(removeTree(root, Date.now()), error => /still held after 1 attempts: (EBUSY|EPERM) at .*held; \d+ entries left: .*held/.test(error.message));
   const closed = once(holder, 'close'); holder.kill('SIGKILL'); await closed;
   await removeTree(root); assert.equal(fs.existsSync(root), false);
 });
