@@ -532,6 +532,14 @@
     "id": "src/features/agents/SubagentInput.tsx:9d7f4475067877d886e282dc"
   },
   {
+    "text": "terminal.write(packet.data)",
+    "id": "src/features/agents/WorkerTerminal.tsx:95cd903c8f0b930155272c31"
+  },
+  {
+    "text": "terminal.write(result.data)",
+    "id": "src/features/agents/WorkerTerminal.tsx:790247714290362578675f5b"
+  },
+  {
     "text": "run(item, item.state === 'open' ? 'adopted' : 'open')",
     "id": "src/features/dashboard/Suggestions.tsx:14a3f1ce4f8c3a98d22fb02d"
   },
