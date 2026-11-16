@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { createSessionMachine, reduce, cliFields } = require('./session-machine.cjs');
+const { createSessionMachine, reduce, cliFields, SCREEN_IDLE_MS } = require('./session-machine.cjs');
 
 // The hook events the pipe's claude-hook.ps1 kinds stood for (C-2), by the state claudeActivity takes.
 const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', StopFailure: 'failed', Notification: 'attention', PermissionRequest: 'attention',
@@ -124,16 +124,37 @@ function createClaudeActivity(deps) {
     if (s.cliStateMeta && s.cliStateMeta.sessionId === s.sessionId) return s.cliStateMeta;
     return s.cliStateMeta = { sessionId: s.sessionId, at: 0, events: new Set(), closed: new Set(), turnId: null, requestId: null,
       machine: createSessionMachine({ terminalSession: s.sessionId, claudeSession: s.cliProviderId || s.claudeSessionId || s.claudeResumeId || null, launch: s.activitySince || 0 }),
-      // terminal/ipc.cjs reaches the machine through the session it holds, after validating the renderer's facts.
-      screenFacts: facts => claudeScreen(s, facts) };
+      // terminal/ipc.cjs reaches the machine through the session it holds, after validating the renderer's facts; a
+      // renderer attaching again restarts its frame revisions.
+      screenFacts: facts => claudeScreen(s, facts), screenAttached: () => feed(s, { type: 'attach', at: Date.now(), terminalSession: s.sessionId }) };
   }
 
   // Feeds a signal to the session machine: its effects, or null when the signal changed nothing.
   function feed(s, signal) {
-    const meta = metaOf(s), { state, effects } = reduce(meta.machine, signal);
-    if (state === meta.machine && !effects.length) return null;
+    const meta = metaOf(s), { state, effects } = reduce(meta.machine, signal), changed = state !== meta.machine || effects.length > 0;
     meta.machine = state;
-    return effects;
+    watchIdle(s, meta);
+    return changed ? effects : null;
+  }
+
+  // While the screen looks idle in a working turn, a timer asks the machine to confirm it once the quiet has lasted;
+  // a newer fact or hook restarts the quiet, and the timer then waits for the rest of it.
+  function watchIdle(s, meta) {
+    const { machine } = meta;
+    if (!machine.idleLooking || machine.phase !== 'working' || meta.idleTimer) return;
+    meta.idleTimer = setTimeout(() => {
+      meta.idleTimer = null;
+      if (deps.sessions.get(s.terminalId) !== s || s.cliStateMeta !== meta) return;
+      if (feed(s, { type: 'confirm', at: Date.now() }) && meta.machine.screenIdle) relight(s, `screen-idle:${meta.machine.screenIdleAt}`);
+    }, Math.max(0, machine.quietSince + SCREEN_IDLE_MS - Date.now()));
+    meta.idleTimer.unref?.();
+  }
+
+  // Publishes the turn's light again after the screen changed it, at the newest watermark it already has so no transcript
+  // record of the turn is refused for it. The state stays working; cliState.screenIdle says what the light shows.
+  function relight(s, eventId) {
+    const at = Math.max(metaOf(s).at, s.activitySince || 0, s.activityInputAt || 0);
+    deps.publishCliState(s, 'working', { at, eventId: `${s.sessionId}:${eventId}` });
   }
 
   // CLI interaction is independent of project completion: progress never arms another completion notification.
@@ -184,8 +205,8 @@ function createClaudeActivity(deps) {
     if (snapshot.updatedAt >= (s.activityRawSnapshot?.updatedAt || 0)) s.activityRawSnapshot = snapshot;
     // Neither a polled result from before new input nor a result from before newer attention can end this interaction.
     if (snapshot.updatedAt < Math.max(s.activityInputAt || 0, s.cliStateMeta?.at || 0)) return;
-    // Nor can a Claude transcript record the session machine finds late: one read after its turn ended.
-    if (s.agent === 'claude' && !feed(s, { type: 'record', at: snapshot.updatedAt, state: snapshot.state })) return;
+    // Nor can a terminal's Claude transcript record the session machine finds late: one dated before its turn ended.
+    if (s.agent === 'claude' && !s.nativeStructured && !feed(s, { type: 'record', at: snapshot.updatedAt, state: snapshot.state })) return;
     if (snapshot.ended || ['working', 'complete', 'interrupted'].includes(snapshot.state)) publishCliState(s, snapshot.state === 'working' ? 'working' : 'idle',
       { at: snapshot.updatedAt, threadId: snapshot.threadId, turnId: s.agent === 'codex' ? snapshot.turnId : undefined,
         eventId: `record:${snapshot.threadId}:${snapshot.turnId}:${snapshot.state}:${snapshot.updatedAt}` });
@@ -269,8 +290,10 @@ function createClaudeActivity(deps) {
     // actions conservatively, even if its message is identical. Duplicate events leave the epoch alone.
     s.approval?.context('claude-event', [event.sessionId, event.eventId, event.state]);
     if (event.state === 'attention') { publishCliState(s, 'waiting', { ...evidence, message: event.message }); return; }
-    // A tool hook only releases a matching wait, unless it is a dequeued prompt's first hook: that turn is working.
-    if (event.state === 'progress') { publishCliState(s, 'working', { ...evidence, progress: before.phase === 'working' || after.phase !== 'working' }); return; }
+    // A tool hook only releases a matching wait, unless it is a dequeued prompt's first hook or shows that a turn the
+    // screen took for idle still runs: then that turn is working.
+    const revived = after.phase === 'working' && (before.phase !== 'working' || before.screenIdle);
+    if (event.state === 'progress') { publishCliState(s, 'working', { ...evidence, progress: !revived }); return; }
     if (event.state === 'session') {
       if (publishCliState(s, after.phase === 'working' ? 'working' : 'idle', { ...evidence, bind: true })) {
         s.claudeSessionSource = event.sessionSource; followClaude(project, s, event);
@@ -316,19 +339,15 @@ function createClaudeActivity(deps) {
     }).catch(() => {});
   }
 
-  // Screen facts from the renderer (terminal:screenFacts, validated by terminal/ipc.cjs) act only through the machine,
-  // and only on the one end no hook reports: Esc interrupting a turn. The light goes idle at once, keeping the record
-  // watermark so the transcript's own interrupt record still lands. On HTTP a Stop reaches main before the screen goes
-  // idle, so a turn the screen ended was interrupted; a command hook's Stop can trail the screen, so there the Stop or
-  // the transcript ends the round and completion is never disarmed early.
+  // Screen facts from the renderer (terminal:screenFacts, validated by terminal/ipc.cjs) act only through the machine and
+  // only on the light: Esc interrupting a turn runs no hook, so a screen that has looked idle long enough turns the light
+  // idle (watchIdle). The round, its completion and every owner action still wait for a Stop, the transcript or Esc.
   function claudeScreen(s, facts) {
-    const { sessions, store, publishCliState, applyActivity } = deps;
-    if (sessions.get(s.terminalId) !== s || !s.codexActive || s.agent !== 'claude') return;
-    const at = Date.now(), before = metaOf(s).machine.phase;
-    if (!feed(s, { ...facts, type: 'screen', at, terminalSession: facts.sessionId }) || before === 'ready' || metaOf(s).machine.phase !== 'ready') return;
-    if (!publishCliState(s, 'idle', { at: metaOf(s).at, eventId: `screen:${s.sessionId}:${facts.revision}` })) return;
-    const project = store.projects.find(item => item.id === s.projectId);
-    if (project && s.hooks?.channel === 'http') applyActivity(project, s, { threadId: s.claudeSessionId, turnId: null, state: 'interrupted', updatedAt: at });
+    if (deps.sessions.get(s.terminalId) !== s || !s.codexActive || s.agent !== 'claude') return;
+    const before = metaOf(s).machine;
+    if (feed(s, { ...facts, type: 'screen', at: Date.now(), terminalSession: facts.sessionId }) && before.screenIdle && !metaOf(s).machine.screenIdle) {
+      relight(s, `screen:${facts.revision}`);
+    }
   }
 
   // An HTTP hook event (hook-ingest.cjs) as the event claude-hook.ps1 sends over the pipe, which claudeActivity hands to
