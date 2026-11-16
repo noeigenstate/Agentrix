@@ -1269,10 +1269,10 @@ test('the composer offers its hint longest first and shows the one that fits, so
   Object.assign(h.props.terminal, { codexActive: true, readingHistory: null });
   const shown = h.render().props.placeholder;
   const strictlyShorter = list => list.every((hint, index) => index === 0 || hint.length < list[index - 1].length);
-  assert.equal(offered.length, 3); assert.ok(strictlyShorter(offered), 'longest first');
+  assert.equal(offered.length, 4); assert.ok(strictlyShorter(offered), 'longest first'); assert.equal(offered.at(-1), '输入消息…', 'a 240px box and below still reads something');
   assert.equal(offered[0], en['给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行'].replace('{agent}', /Claude Code|Codex/.exec(offered[0])[0]), 'the full hint is the one that was always shown');
-  assert.ok(offered.every(hint => hint.includes(/Claude Code|Codex/.exec(offered[0])[0])), 'each form still says who it is for');
-  assert.equal(shown, offered[2], 'the shortest hint is the one the narrow box shows');
+  assert.ok(offered.slice(0, 3).every(hint => hint.includes(/Claude Code|Codex/.exec(offered[0])[0])), 'each form but the last still says who it is for');
+  assert.equal(shown, offered[3], 'the shortest hint is the one the narrow box shows');
   const box = h.render(), note = elements(h.tree()).find(element => element.props.id === box.props['aria-describedby']);
   assert.equal(box.props.title, offered[0], 'the full hint, shortcuts included, is the narrow box’s tooltip');
   assert.match(box.props['aria-describedby'], /^reading-hint-/); assert.equal(note.props.children, offered[0], 'and its accessible description, in a hidden element');

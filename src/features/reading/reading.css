@@ -239,6 +239,8 @@
 .reading-outbox li > span:not(.reading-notice-text) { color: var(--text-3); }
 .reading-notice-actions { display: flex; flex-wrap: wrap; gap: 8px; max-width: 100%; }
 .reading-notice-actions .button { max-width: 100%; font-weight: 400; }
+/* The reading view's small buttons (notices, the sign-in card, the ended-session bar) keep the 12px/32px they had before small buttons became 14/28 everywhere else: the reading layout is the owner's and does not change. */
+.reading-view .button.small, .reading-cli-overlay .button.small { height: 32px; font-size: 12px; }
 .reading-notice-actions .button:not(:disabled) { color: var(--text-2); }
 .reading-notice-actions .button:hover:not(:disabled) { color: var(--text-1); }
 .reading-leftover .reading-notice-actions .button:first-child { font-weight: 600; }
