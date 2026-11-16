@@ -1,4 +1,6 @@
 const { subscriptionLimits } = require('./usage.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
 
 // What the native sessions read from the app shell: each agent's connection and subscription limits as the running
 // sessions and the account reads give them, the CLI checks, the spec a connection test runs with, and a native
@@ -77,7 +79,11 @@ function createHostInputs(deps) {
   // bootstrap file, with the Codex home its launch names.
   function nativeEnvironment(bootstrapFile, codexHome) {
     const { createTerminalEnvironment, withoutAppImage } = deps;
-    const env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
+    let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
+    if (bootstrapFile && fs.existsSync(bootstrapFile)) {
+      const { shims } = JSON.parse(fs.readFileSync(bootstrapFile, 'utf8'));
+      if (shims) env = require(path.join(shims, 'intercept.cjs')).withShims(env, { depth: 0 });
+    }
     if (codexHome) {
       for (const key of Object.keys(env)) if (key.toUpperCase() === 'CODEX_HOME') delete env[key];
       env.CODEX_HOME = codexHome;

@@ -44,6 +44,65 @@ test('native helper input origins follow admitted control ids through new turns,
 const records = name => require('node:fs').readFileSync(path.join(__dirname, 'fixtures', name), 'utf8').trim().split('\n').map(JSON.parse);
 const rollout = records('codex-dispatch-rollout.jsonl');
 const claude = records('claude-dispatch-stream.jsonl');
+
+test('a dispatched CLI inherits shim depth and signed identity while its declaration keeps intercepted', async t => {
+  const syncFs = require('node:fs'), { createRequire } = require('node:module'), vm = require('node:vm');
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const folder = syncFs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-shims-'));
+  t.after(() => syncFs.rmSync(folder, { recursive: true, force: true }));
+  const brief = path.join(folder, 'brief.md'), out = path.join(folder, 'answer.md'), bootstrap = path.join(folder, 'bootstrap.json');
+  syncFs.writeFileSync(brief, 'A synthetic worker brief');
+  syncFs.writeFileSync(bootstrap, JSON.stringify({ pipeName: 'not-connected', projectId: 'synthetic-terminal', sessionKey: 'synthetic-admission-key' }));
+  const events = [], local = createRequire(helper), loaded = { exports: {} }; let launchedEnv;
+  const load = name => {
+    name = name.replaceAll('\\', '/');
+    if (name.endsWith('features/claude-runtime/locator.cjs')) return { createLocator: () => ({ locate: async () => ({ terminal: { file: 'synthetic-resolved-claude' } }) }) };
+    if (name.endsWith('features/team/team.cjs')) return { ...local(name), projectTeam: () => null };
+    if (name.endsWith('features/skills/worker-proposals.cjs')) return { WorkerSkillProposals: class {
+      artifacts = new Set(); notes = new Set(); restoredCount = 0; finish() { return 0; }
+    } };
+    if (name.endsWith('dispatch-outbox.cjs')) return { DispatchOutbox: class { append(event) { events.push(event); } } };
+    return local(name);
+  };
+  vm.runInThisContext(`(function(require,module,exports,__filename,__dirname){${syncFs.readFileSync(helper, 'utf8')}\n})`, { filename: helper })(load, loaded, loaded.exports, helper, path.dirname(helper));
+  let reports = '';
+  const code = await loaded.exports.run(['claude', '--role', 'exec', '--title', 'Synthetic intercepted worker', '--model', 'claude-sonnet-5-5',
+    '--effort', 'high', '--permission', 'plan', '--cwd', folder, '--brief', brief, '--out', out], {
+    source: 'intercepted', env: { PATH: '', AGENTRIX_BOOTSTRAP: bootstrap }, stdout: { write: value => { reports += value; } },
+    resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
+    launch: (_file, _argv, options) => {
+      launchedEnv = options.env;
+      const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+      setImmediate(() => {
+        for (const record of claude) child.stdout.write(JSON.stringify(record) + '\n');
+        child.stdout.end(); child.stderr.end(); child.exitCode = 0; child.emit('exit', 0, null); child.emit('close', 0, null);
+      });
+      return child;
+    },
+  });
+  assert.equal(code, 0, reports);
+  const declaration = events.find(event => event.type === 'dispatch-declared');
+  assert.equal(declaration.source, 'intercepted');
+  assert.equal(launchedEnv.AGENTRIX_DISPATCH_DEPTH, '1'); assert.equal(launchedEnv.AGENTRIX_RUN_ID, declaration.id);
+  assert.match(launchedEnv.AGENTRIX_RUN_PROOF, /^[a-f0-9]{64}$/);
+  assert.equal(launchedEnv.AGENTRIX_BOOTSTRAP, undefined, 'the worker receives no reporting credential');
+  assert.equal(launchedEnv.PATH.split(path.delimiter)[0], path.resolve(__dirname, '../integration/shims'));
+  let resolvedFile;
+  assert.equal(await loaded.exports.run(['claude', '--role', 'exec', '--title', 'Resolved CLI', '--model', 'claude-sonnet-5-5', '--effort', 'high',
+    '--permission', 'plan', '--cwd', folder, '--brief', brief, '--out', out], {
+    env: { PATH: path.resolve(__dirname, '../integration/shims') }, stdout: { write: () => {} },
+    launch: (file, _argv, _options) => {
+      resolvedFile = file;
+      const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+      setImmediate(() => {
+        for (const record of claude) child.stdout.write(JSON.stringify(record) + '\n');
+        child.stdout.end(); child.stderr.end(); child.exitCode = 0; child.emit('exit', 0, null); child.emit('close', 0, null);
+      });
+      return child;
+    }, locate: async () => assert.fail('Claude asked for Codex'),
+  }), 0);
+  assert.equal(resolvedFile, 'synthetic-resolved-claude', 'the helper never launches its own shim again');
+});
 const codex = [
   { record: { type: 'thread.started', thread_id: session } },
   ...rollout.map(record => ({ rollout: record })),

@@ -186,6 +186,7 @@ function createLocator({ probe = execFile, files = fs, storedPath = readStoredPa
       const folder = String(entry).trim().replace(/^"(.*)"$/, '$1'), key = path.resolve(windows ? folder.toUpperCase() : folder);
       if (!folder || !path.isAbsolute(folder) || folders.has(key)) continue;
       folders.add(key);
+      try { await files.access(path.join(folder, '.agentrix-shims')); continue; } catch { }
       if (!place) pathFolders++;
       const named = place || places.find(([folderOf]) => path.relative(folderOf, folder) === '')?.[1];
       const facts = await readFolder(folder, { windows, path, env });

@@ -76,5 +76,20 @@ test('the Agentrix shim folder is never a locator candidate, for Claude or Codex
     assert.equal(told.file, real, 'not even when a terminal was told a shim there');
     assert.deepEqual(runs, [real, real], 'nothing there ever ran');
   });
-  await t.test('Claude', { todo: 'F1 (W4) wires SHIM_MARKER into claude-runtime/locator.cjs' }, () => {});
+  await t.test('Claude', async () => {
+    const { createLocator } = require('../electron/features/claude-runtime/locator.cjs');
+    for (const platform of ['win32', 'linux']) {
+      const rules = platform === 'win32' ? path.win32 : path.posix;
+      const shims = platform === 'win32' ? 'D:\\Agentrix\\shims' : '/agentrix/shims';
+      const tools = platform === 'win32' ? 'D:\\Tools' : '/tools';
+      const name = platform === 'win32' ? 'claude.exe' : 'claude', real = rules.join(tools, name);
+      const entries = { [rules.join(shims, SHIM_MARKER)]: { text: '' }, [rules.join(shims, name)]: { size: 10000 }, [real]: { size: 10000 } };
+      const { probe, runs } = fakeProbe();
+      const found = await createLocator({ files: fakeFiles(entries, platform), probe, storedPath: async () => null }).locate({
+        platform, arch: 'x64', home: rules.join(tools, 'empty-home'), env: { PATH: [shims, tools].join(platform === 'win32' ? ';' : ':') },
+      });
+      assert.equal(found.terminal.file, real); assert.equal(found.native.file, real);
+      assert.deepEqual(runs, [real], 'the shim never runs a version probe');
+    }
+  });
 });

@@ -11,6 +11,22 @@ const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const requires = source => [...source.matchAll(/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g)].map(match => match[1]);
 
+test('the carried intercept runtime includes the six launchers in a CJS envelope', async t => {
+  const carried = runtimeFiles();
+  assert.equal(typeof carried['shims/intercept.cjs'], 'string');
+  const bundle = { exports: {} };
+  require('node:vm').runInNewContext(carried['shims/launchers.cjs'], { module: bundle });
+  assert.deepEqual(Object.keys(bundle.exports).sort(), ['.agentrix-shims', 'claude', 'claude.cmd', 'claude.ps1', 'codex', 'codex.cmd', 'codex.ps1']);
+  for (const [name, source] of Object.entries(bundle.exports)) assert.equal(source, read(`integration/shims/${name}`));
+  assert.ok(Object.keys(carried).every(name => /^[\w-]+(?:\/[\w-]+)*\.cjs$/.test(name)), 'the SSH carrier remains CJS-only');
+  const install = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agx-packed-shims-'));
+  t.after(() => fs.rmSync(install, { recursive: true, force: true }));
+  await require('../scripts/after-pack.cjs').copyDispatchRuntime(install);
+  for (const [name, source] of Object.entries(bundle.exports)) assert.equal(fs.readFileSync(path.join(install, 'shims', name), 'utf8'), source);
+  assert.equal(fs.readFileSync(path.join(install, 'shims/intercept.cjs'), 'utf8'), carried['shims/intercept.cjs']);
+  if (process.platform !== 'win32') for (const name of ['codex', 'claude']) assert.equal(fs.statSync(path.join(install, 'shims', name)).mode & 0o777, 0o755);
+});
+
 // Plain Node cannot read app.asar and an SSH host has only what was copied, so the helper carries these files beside it.
 test("the helper's runtime modules require only Node built-ins and each other", () => {
   const carried = runtimeFiles();

@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHmac, randomBytes } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { homedir, constants: { signals } } = require('node:os');
 const { setImmediate } = require('node:timers');
@@ -24,23 +24,26 @@ const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/wor
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
+const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { dispatchDirectory } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox } = require(outboxFile);
+const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
+const { withShims, runtimeFiles: shimRuntimeFiles } = require(path.join(shimDirectory, 'intercept.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
   'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs', 'features/agents/dispatch-events.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
-  'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
+  'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
   'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
 const runtimeFiles = () => {
   // A supplies this pure module in the merged tree. Older or standalone helper trees remain usable without it.
   const routing = 'features/native-session/routing.cjs';
   const files = fs.existsSync(path.join(runtime, routing)) ? [...RUNTIME_FILES, routing] : RUNTIME_FILES;
   return { ...Object.fromEntries(files.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')])),
-    'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8') };
+    'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8'), ...shimRuntimeFiles() };
 };
 
 const START_TIMEOUT = 30000;
@@ -470,26 +473,14 @@ class CodexRollout {
 
 // The helper never uses the version `codex --version` prints, so its locator's probe answers at once with none and runs no Codex.
 const helperLocator = createCodexLocator({ probe: (_file, _args, _options, done) => { done(null, ''); } });
+const helperClaudeLocator = createLocator();
 // The Codex file a worker runs: the one the terminal was told (AGENTRIX_CODEX_EXECUTABLE) while it is there, resolved
 // to its program the way main's locator resolves it, else codex-runtime's own search; null when there is none.
 const locateCodex = (env, locator = helperLocator) => locator.locate({ env,
   prefer: Object.entries(env).find(([key]) => key.toUpperCase() === 'AGENTRIX_CODEX_EXECUTABLE')?.[1] || undefined }).then(found => found.file);
 
-// The command for a worker's CLI, never through a shell: Codex is the file locateCodex found (`codex`, the bare name,
-// when none was); a standard Windows npm install of Claude Code exposes its JS entrypoint beside the shim.
-function executable(agent, args, env, codex) {
-  if (agent === 'codex') return { file: codex || agent, args };
-  if (process.platform !== 'win32') return { file: agent, args };
-  const searchPath = Object.entries(env).find(([key]) => key.toLowerCase() === 'path')?.[1] || '';
-  for (const directory of searchPath.split(path.delimiter).filter(Boolean)) {
-    const folder = directory.replace(/^"|"$/g, '');
-    const native = path.join(folder, agent + '.exe');
-    if (fs.existsSync(native)) return { file: native, args };
-    const entry = path.join(folder, 'node_modules', '@anthropic-ai/claude-code/cli.js');
-    if (fs.existsSync(entry)) return { file: process.execPath, args: [entry, ...args] };
-  }
-  return { file: agent, args };
-}
+// CLI lookup belongs to the shared locators. Never resolve a bare Claude against the worker's shim-prefixed PATH.
+function executable(agent, args, _env, file) { return { file: file || agent, args }; }
 
 function readWorkerOutput(child, agent, log, output) {
   const tails = [];
@@ -528,7 +519,8 @@ function workerInput(event, controls, resumeIds, resumeInputId) {
   return { entryId: `u:${event.itemId}`, inputId, origin: direct ? 'owner' : 'planner', ownerMessageIds };
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, launch = spawn, resolveExecutable = executable, locate = locateCodex, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
+async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable, locate = locateCodex, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
+  if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env, stdout, dispatch: (args, deps) => run(args, { ...deps, launch, resolveExecutable, locate, startTimeout, rateInterval, requestTimeout }) });
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
@@ -536,7 +528,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   plannerOutput = stdout;
   const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
-  const workerEnv = workerEnvironment(env);
+  let workerEnv = workerEnvironment(env);
   let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
@@ -784,6 +776,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
     options = argumentsOf(argv);
+    if (!['dispatch', 'intercepted'].includes(source)) throw new Error('Unknown dispatch source');
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     team = projectTeam(options.cwd, true);
     // Watch before admission: a peer that finishes before us must still disable restoration.
@@ -833,8 +826,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     if (options.meeting && !team) throw new Error('roundtables need a git repository');
     if (team) admission = await team.admit(options, id, __filename);
     send({ type: 'dispatch-declared', id, helperPid: process.pid, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
-      cwd: options.cwd, worktree: options.cwd, requested: declared(), source: 'dispatch', parentId: null, resumed: !!options.resume,
+      cwd: options.cwd, worktree: options.cwd, requested: declared(), source, parentId: null, resumed: !!options.resume,
       kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, at: Date.now() });
+    workerEnv = withShims(workerEnv, { depth: 1 + (Number(env.AGENTRIX_DISPATCH_DEPTH) || 0), runId: id,
+      proof: createHmac('sha256', send.bootstrap?.sessionKey || randomBytes(32)).update(`agentrix-run:${id}`).digest('hex') });
     if (team && !roundtable) {
       inbox = new RunInbox(team, id); await inbox.open();
       inboxTimer = setInterval(() => {
@@ -1168,7 +1163,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         break;
       }
       if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
-      const command = resolveExecutable(options.agent, commandOf(effective), env);
+      const claudeFile = resolveExecutable === executable ? (await helperClaudeLocator.locate({ env })).terminal?.file : null;
+      if (resolveExecutable === executable && !claudeFile) throw Object.assign(new Error('Claude Code was not found outside the Agentrix shim folder'), { code: 'ENOENT' });
+      const command = resolveExecutable(options.agent, commandOf(effective), env, claudeFile);
 
       if (killed) throw new Error('Dispatch interrupted before launch');
       child = launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
