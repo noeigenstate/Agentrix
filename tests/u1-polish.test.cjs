@@ -67,13 +67,31 @@ test('the reading view keeps its own small buttons at 12px/32px', () => {
   assert.match(rules(read('src/features/reading/reading.css'), '.reading-view .button.small').join(' '), /height: 32px; font-size: 12px/);
 });
 
-test('every card hint list ends in 「输入消息…」, so a narrow composer is never blank', () => {
+test('every card hint ladder gets strictly shorter, in Chinese and in English, and the agent ladder ends in the 240px fallback', () => {
   const source = read('src/features/reading/ReadingView.tsx'), statement = /const hints = [\s\S]*?;\n/.exec(source)[0];
-  assert.equal([...statement.matchAll(/t\('输入消息…'\)\]/g)].length, 3, 'the result, Codex and command lists');
-  const { outputText } = ts.transpileModule(read('src/shared/useFittingHint.ts'), { compilerOptions: { module: ts.ModuleKind.CommonJS } });
-  const exported = {}; new Function('exports', 'require', outputText)(exported, () => ({ useLayoutEffect() {}, useState() {} }));
-  const width = text => [...text].reduce((sum, ch) => sum + (ch.charCodeAt(0) > 255 ? 14 : 7), 0), shortest = '输入消息…';
-  for (const list of [['继续修改，或描述下一步…', '继续修改…', shortest], ['给 Codex 发消息，/ 查看命令', '给 Codex 发消息', shortest], ['输入命令，Enter 发送', '输入命令', shortest]]) {
-    assert.notEqual(exported.fittingIndex(list, 70, width), -1, `${list[0]} has a hint that fits 70px`);
+  const en = { ...require('../electron/locales/en.json'), ...JSON.parse(read('locale-additions-u1.json')) };
+  const width = text => [...text].reduce((sum, ch) => sum + (ch.charCodeAt(0) > 255 ? 14 : 7), 0);
+  const arrays = [...statement.matchAll(/\[((?:t\('[^']*'(?:, \{ agent \})?\)(?:, )?)+)\]/g)];
+  const ladders = arrays.map(match => [...match[1].matchAll(/t\('([^']*)'/g)].map(item => item[1])).filter(list => list.length > 1);
+  assert.equal(ladders.length, 3, 'the result, agent and command ladders');
+  for (const list of ladders) for (const [name, words] of [['zh', list.map(key => key.replace('{agent}', 'Codex'))], ['en', list.map(key => (en[key] ?? key).replace('{agent}', 'Codex'))]]) {
+    words.forEach((word, index) => { if (index) assert.ok(width(word) < width(words[index - 1]), `${name}: "${word}" is shorter than "${words[index - 1]}"`); });
   }
+  assert.equal(ladders.filter(list => list.includes('输入消息…')).length, 1, 'only the agent ladder has the fallback');
+  assert.equal(ladders.find(list => list.includes('输入消息…')).at(-1), '输入消息…');
+  assert.equal(en['输入消息…'], 'Message…');
+});
+
+test('a Select option\'s description is its own element, not part of the option\'s name, and the title carries both', () => {
+  const tsx = read('src/shared/Select.tsx');
+  assert.match(tsx, /aria-labelledby=\{option\.description \? optionId\(index, 'label'\)/);
+  assert.match(tsx, /aria-describedby=\{option\.description \? optionId\(index, 'description'\)/);
+  assert.match(tsx, /id=\{optionId\(index, 'description'\)\}/);
+  assert.match(tsx, /title=\{typeof option\.label === 'string' \? \[option\.label, typeof option\.description === 'string' \? option\.description : ''\]/);
+});
+
+test('no selected-row override touches the reading view or the Agent tab rows, and the launcher no longer calls text-3 the darker', () => {
+  const rule = /:root\[data-theme="light"\] :is\(([^\n]*)\) \{ --text-3: var\(--text-1\);/.exec(themes)[1];
+  assert.ok(!rule.includes('.reading-command') && !rule.includes('.activity-call-rows'));
+  assert.doesNotMatch(read('src/features/terminal/agent-launcher.css'), /agent-launcher-agent small \{ color: var\(--text-3\)/);
 });

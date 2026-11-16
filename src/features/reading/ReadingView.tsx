@@ -810,9 +810,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     </ConversationDecorations.Provider>;
   // The hint, longest first: the box shows the first that fits its width, so a narrow composer gets a short hint instead of a cut-off one.
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
-  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续')] : preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : shownBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…'), t('输入消息…')] : terminal.codexActive
+  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续')] : preview ? [t('历史预览，等待会话输入就绪')] : !live ? [t('会话未启动或已退出')] : hasChoice ? [t('等终端处理完后发送')] : shownBlocked ? [t('等待终端输入就绪后发送')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent }), t('输入消息…')]
-    : [t('输入命令，Enter 发送'), t('输入命令'), t('输入消息…')];
+    : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
   const outboxReason = sending.current ? null : outbox[0]?.uncertain ? 'term.receipt_missing'
     : parsedScreen.choice?.kind === 'question' ? 'term.waiting_question'
