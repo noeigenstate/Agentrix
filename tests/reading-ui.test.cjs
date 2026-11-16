@@ -47,7 +47,6 @@ function loadUI(name, overrides = {}) {
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => props => React.createElement('svg', { className: props.className }) });
     if (key === './i18n') return { currentLanguage: () => 'en', t: (text, values = {}) => (en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) };
     if (key === './platform') return { isMac: true, isLinux: false, isWindows: false };
-    if (key === './dictation-send') return require('../src/features/reading/dictation-send.ts');
     if (key === './reading-command') return require('../src/features/reading/reading-command.ts');
     if (key === './reply-files') return require('../src/features/reading/reply-files.ts');
     if (key === './reading-paths') return { pathTooltip: () => 'Ctrl+click to show in File Explorer', markReadingPaths() {} };
@@ -425,9 +424,9 @@ function dictationHarness(t, overrides = {}) {
   return { props, screen, node, composer, popupInput, editables, terminalFocused, written, pasted, echoed, render, unmount, remount, tree: () => root,
     popup: () => elements(root).find(element => element.type?.name === 'ReadingTerminalPopup'),
     command(text) { listeners.get('agentrix:command')({ detail: { terminalId: props.terminal.id, text }, preventDefault() {} }); render(); },
-    dictate: (text, submit = true) => { insert(text, submit); render(); },
+    // The second argument is what Enter used to pass: a view must put the words in whatever the controller says.
+    dictate: text => { insert(text, true); render(); },
     edit: text => { render().props.onChange({ target: { value: text } }); render(); },
-    pending: () => elements(root).some(element => /\bis-sending-soon\b/.test(element.props.className)),
     press(key, modifiers = {}) {
       const event = { key, currentTarget: node, nativeEvent: {}, ...modifiers, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; } };
       render().props.onKeyDown(event); render(); return event;
@@ -582,16 +581,13 @@ for (const agent of ['claude', 'codex']) {
     assert.equal(h.pasted.length, 1);
   });
 
-  test(agent + ': working Stop and Esc interrupt, while dictation and the slash palette keep Escape priority', async t => {
+  test(agent + ': working Stop and Esc interrupt, while the slash palette keeps Escape priority', async t => {
     const h = workingComposerHarness(t, agent);
     const stop = () => elements(h.tree()).find(element => element.props.title === en['中断（Esc）']);
     assert.equal(stop().props.disabled, false); stop().props.onClick();
     h.edit('keep editing'); h.press('Escape');
     assert.deepEqual(h.written.map(item => item.text), ['\x1b', '\x1b']);
     assert.equal(h.node.value, 'keep editing');
-    h.dictate('spoken words'); assert.equal(h.pending(), true);
-    const cancel = h.press('Escape');
-    assert.equal(cancel.prevented, true); assert.equal(cancel.stopped, true); assert.equal(h.pending(), false);
     assert.equal(h.written.length, 2);
     h.edit('/mo'); await h.tick(0);
     const palette = () => elements(h.tree()).find(element => element.props.role === 'listbox');
@@ -1118,7 +1114,7 @@ test('codex: picture paste cannot erase or attach to a previously delivered inpu
   assert.ok(h.popup()); assert.equal(errors.length, 1);
 });
 
-test('submitted dictation appears at the caret for half a second, then uses the composer send with pictures', async t => {
+test('dictation ended with Enter inserts at the caret and sends nothing; the pictures stay and go with the owner’s own Enter', async t => {
   const h = imageComposerHarness(t, 'codex');
   h.edit('before replace after'); h.node.setSelectionRange(7, 14);
   await h.paste(1);
@@ -1126,69 +1122,31 @@ test('submitted dictation appears at the caret for half a second, then uses the 
   assert.equal(h.node.value, 'before spoken after');
   assert.equal(document.activeElement, h.node);
   assert.equal(h.node.selectionStart, 13); assert.equal(h.node.selectionEnd, 13);
-  assert.equal(h.pending(), true);
-  await h.tick(499); assert.deepEqual(h.pasted, []);
-  await h.tick(1);
+  await h.tick(2000);
+  assert.deepEqual(h.pasted, []); assert.deepEqual(h.echoed, []); assert.equal(h.node.value, 'before spoken after');
+  h.press('Enter'); await h.tick(0);
   assert.deepEqual(h.pasted, [{ id: 'dictation', text: 'before spoken after' }]);
   assert.deepEqual(h.echoed, [{ text: 'before spoken after', images: ['data:image/png;base64,1'] }]);
-  assert.equal(h.pending(), false); assert.equal(h.node.value, '');
-  await h.tick(2000); assert.equal(h.pasted.length, 1);
+  assert.equal(h.node.value, '');
 });
 
-test('Enter sends pending dictation at once and disarms its timer', async t => {
-  const h = dictationHarness(t);
-  h.dictate('send now'); h.press('Enter'); await h.tick(0);
-  assert.deepEqual(h.pasted, [{ id: 'dictation', text: 'send now' }]);
-  assert.equal(h.pending(), false);
-  await h.tick(2000); assert.equal(h.pasted.length, 1);
-});
-
-test('Escape only cancels pending dictation, leaving text alone', async t => {
-  const h = dictationHarness(t);
-  h.props.terminal.codexActivity = 'working';
-  h.dictate('keep for editing');
-  const event = h.press('Escape');
-  assert.equal(event.prevented, true); assert.equal(event.stopped, true);
-  assert.deepEqual(h.written, []);
-  assert.equal(h.node.value, 'keep for editing'); assert.equal(h.pending(), false);
-  await h.tick(1000); assert.deepEqual(h.pasted, []);
-});
-
-test('editing, clearing and starting IME input cancel dictation without sending', async t => {
-  for (const action of ['edit', 'clear', 'compose']) await t.test(action, async t => {
-    const h = dictationHarness(t); h.dictate('keep');
-    if (action === 'compose') h.render().props.onCompositionStart();
-    else h.edit(action === 'clear' ? '' : 'keep editing');
-    await h.tick(1000);
-    assert.deepEqual(h.pasted, []); assert.equal(h.pending(), false);
-    assert.equal(h.node.value, action === 'clear' ? '' : action === 'edit' ? 'keep editing' : 'keep');
+test('dictation while the agent works or a confirmation waits inserts the words and queues nothing', async t => {
+  for (const waiting of ['working', 'confirmation']) await t.test(waiting, async t => {
+    const h = dictationHarness(t);
+    if (waiting === 'working') h.props.terminal.codexActivity = 'working'; else h.screen.choice = fakeChoice();
+    h.render(); h.dictate('wait');
+    await h.tick(2000);
+    assert.deepEqual(h.pasted, [], waiting); assert.deepEqual(h.written, [], waiting);
+    assert.equal(h.node.value, 'wait', waiting);
+    assert.equal(elements(h.tree()).some(node => node.props.className === 'reading-outbox'), false, waiting);
   });
 });
 
-test('terminal changes, split selection and unmount cancel pending dictation', async t => {
-  for (const action of ['terminal', 'session', 'selection', 'unmount']) await t.test(action, async t => {
-    const h = dictationHarness(t); h.props.autoFocus = true; h.render(); h.dictate('cancel on leaving');
-    if (action === 'terminal') h.props.terminal = { ...h.props.terminal, id: 'other' };
-    if (action === 'session') h.props.terminal = { ...h.props.terminal, sessionId: 'other' };
-    if (action === 'selection') h.props.autoFocus = false;
-    if (action === 'unmount') h.unmount(); else h.render();
-    await h.tick(1000); assert.deepEqual(h.pasted, []);
-  });
-});
-
-test('the delayed send queues text when a confirmation arrives before dictation submits', async t => {
-  const h = dictationHarness(t); h.dictate('wait');
-  h.screen.choice = fakeChoice(); h.render();
-  await h.tick(1000);
-  assert.deepEqual(h.pasted, []); assert.equal(h.node.value, ''); assert.equal(h.pending(), false);
-  assert.ok(elements(h.tree()).some(node => node.props.className === 'reading-outbox'));
-});
-
-test('dictation without submit inserts and focuses without scheduling a send', async t => {
+test('dictation inserts at the end and focuses the box when it had no focus', async t => {
   const h = dictationHarness(t); document.activeElement = null;
-  h.dictate('insert only', false);
+  h.dictate('insert only');
   assert.equal(h.node.value, 'insert only'); assert.equal(document.activeElement, h.node);
-  assert.equal(h.node.selectionStart, 11); assert.equal(h.pending(), false);
+  assert.equal(h.node.selectionStart, 11);
   await h.tick(2000); assert.deepEqual(h.pasted, []);
 });
 
@@ -1350,7 +1308,7 @@ test('a restored preview cannot send until its own CLI input is ready, and a dif
   assert.equal(h.render().props.placeholder, en['历史预览，等待会话输入就绪']);
   h.edit('do not send before ready'); h.press('Enter'); await h.tick(1000);
   h.command('/status'); await h.tick(1000);
-  h.dictate('/status', true); await h.tick(1000);
+  h.dictate('/status'); await h.tick(1000);
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
   Object.assign(h.props.terminal, { sessionId: 'resumed-runtime', codexActive: true });
   assert.equal(h.render().props.disabled, true);

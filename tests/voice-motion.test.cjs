@@ -63,11 +63,11 @@ function voiceController({ devices = [{ kind: 'audioinput' }], openError = null 
   const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   const events = new Map(), exports = {};
   let emit, notifications = 0, subscribed = false, recognize, opens = 0;
-  const pasted = [], written = [];
+  const pasted = [], written = [], timers = [];
   const ready = { ready: true, phase: 'ready' };
   vm.runInNewContext(compiled, {
-    exports, setTimeout, CSS: { escape: value => value },
-    document: { addEventListener: (name, fn) => events.set(name, fn) },
+    exports, setTimeout: (run, delay) => timers.push({ run, delay }), CSS: { escape: value => value },
+    document: { querySelector: () => null, addEventListener: (name, fn) => events.set(name, fn) },
     navigator: { mediaDevices: { addEventListener() {}, enumerateDevices: async () => devices } },
     window: { agentrix: { onVoiceState() {}, getVoiceState: async () => ({ ok: true, value: ready }), warmVoice() {},
       transcribe: () => new Promise(resolve => { recognize = resolve; }), pasteTerminal: async (...args) => { pasted.push(args); return { ok: true }; }, writeTerminal: (...args) => written.push(args) } },
@@ -86,7 +86,8 @@ function voiceController({ devices = [{ kind: 'audioinput' }], openError = null 
   });
   exports.useVoice();
   return { controller: exports, emit: value => emit(value), get notifications() { return notifications; },
-    pasted, written, get opens() { return opens; },
+    pasted, written, timers, get opens() { return opens; },
+    enter() { let taken = false; events.get('keydown')({ key: 'Enter', isComposing: false, preventDefault() { taken = true; }, stopPropagation() {} }); return taken; },
     recognize: result => recognize(result), cancel() { events.get('keydown')({ key: 'Escape', preventDefault() {}, stopPropagation() {} }); } };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -107,7 +108,7 @@ test('audio messages update only the meter, keeping every useVoice snapshot stab
 test('recognition resets the level and ignores the final audio messages while busy', async () => {
   const f = voiceController(); await flush();
   const words = [];
-  f.controller.dictateInto('terminal', (text, submit) => words.push([text, submit]));
+  f.controller.dictateInto('terminal', text => words.push([text]));
   await f.controller.toggleDictation('terminal', 'session', assert.fail);
   f.emit(.1); assert.equal(f.controller.getVoiceLevel(), .5);
   const finishing = f.controller.toggleDictation('terminal', 'session', assert.fail);
@@ -115,48 +116,60 @@ test('recognition resets the level and ignores the final audio messages while bu
   assert.equal(f.controller.useVoice().busy, 'terminal'); assert.equal(f.controller.getVoiceLevel(), 0);
   f.emit(.2); assert.equal(f.controller.getVoiceLevel(), 0);
   f.recognize({ ok: true, value: 'hello' }); await finishing;
-  assert.deepEqual(words, [['hello', false]]); assert.equal(f.controller.useVoice().busy, null);
+  assert.deepEqual(words, [['hello']]); assert.equal(f.controller.useVoice().busy, null);
 });
 
 test('a native composer refuses recording while disabled and a removed/replaced binding never falls back to terminal paste', async () => {
   const f = voiceController(); await flush();
   const words = [];
-  const unavailable = f.controller.dictateInto('native', assert.fail, true, { available: () => false, sessionId: 'runtime' });
+  const unavailable = f.controller.dictateInto('native', assert.fail, { available: () => false, sessionId: 'runtime' });
   await f.controller.toggleDictation('native', null, assert.fail); assert.equal(f.opens, 0); unavailable();
-  const unregister = f.controller.dictateInto('native', (text, submit) => words.push([text, submit]), true, { sessionId: 'runtime' });
+  const unregister = f.controller.dictateInto('native', text => words.push([text]), { sessionId: 'runtime' });
   await f.controller.toggleDictation('native', null, assert.fail);
   const finishing = f.controller.toggleDictation('native', null, assert.fail); await flush();
   unregister();
-  const replacement = f.controller.dictateInto('native', () => assert.fail('old recognition entered the replacement session'), true, { sessionId: 'replacement' });
+  const replacement = f.controller.dictateInto('native', () => assert.fail('old recognition entered the replacement session'), { sessionId: 'replacement' });
   f.recognize({ ok: true, value: 'late result' }); await finishing; replacement();
   assert.deepEqual(words, []); assert.deepEqual(f.pasted, []); assert.deepEqual(f.written, []);
 });
 
 test('unmount cancels native recording and late recognition errors stay with their original composer only', async () => {
   const f = voiceController(); await flush();
-  const errors = [], unregister = f.controller.dictateInto('native', assert.fail, true, { sessionId: 'runtime' });
+  const errors = [], unregister = f.controller.dictateInto('native', assert.fail, { sessionId: 'runtime' });
   await f.controller.toggleDictation('native', null, message => errors.push(message));
   unregister(); await flush(); assert.equal(f.controller.useVoice().recording, null);
-  const dispose = f.controller.dictateInto('native', assert.fail, true, { sessionId: 'next' });
+  const dispose = f.controller.dictateInto('native', assert.fail, { sessionId: 'next' });
   await f.controller.toggleDictation('native', null, message => errors.push(message));
   const finishing = f.controller.toggleDictation('native', null, message => errors.push(message)); await flush();
   dispose(); f.recognize({ ok: false, error: 'late failure' }); await finishing;
   assert.deepEqual(errors, []); assert.deepEqual(f.pasted, []);
 });
 
-test('the existing voice shortcut submits native recognition through its composer and never a terminal', async () => {
+test('the existing voice shortcut puts native recognition into its composer and never a terminal', async () => {
   const f = voiceController(); await flush();
-  const words = [], unregister = f.controller.dictateInto('native', (text, submit) => words.push([text, submit]), true, { sessionId: 'runtime' });
+  const words = [], unregister = f.controller.dictateInto('native', text => words.push([text]), { sessionId: 'runtime' });
   await f.controller.toggleDictation('native', null, assert.fail);
   const finishing = f.controller.quickDictation(assert.fail); await flush();
   f.recognize({ ok: true, value: 'shortcut words' }); await finishing;
-  assert.deepEqual(words, [['shortcut words', true]]); assert.deepEqual(f.pasted, []); assert.deepEqual(f.written, []); unregister();
+  assert.deepEqual(words, [['shortcut words']]); assert.deepEqual(f.pasted, []); assert.deepEqual(f.written, []); unregister();
+});
+
+test('Enter while recording puts the words at a terminal with no box and never presses Enter, even after the old delay', async () => {
+  const f = voiceController(); await flush();
+  await f.controller.toggleDictation('terminal', 'session', assert.fail);
+  assert.equal(f.enter(), true, 'Enter belongs to dictation while it records');
+  await flush(); f.recognize({ ok: true, value: 'spoken words' }); await flush();
+  for (const { run } of f.timers.splice(0)) run();
+  await flush();
+  assert.deepEqual(f.pasted, [['terminal', 'spoken words', 'session']]);
+  assert.deepEqual(f.written, [], 'nothing else is written to the terminal'); assert.deepEqual(f.timers, [], 'no delayed key is scheduled');
+  assert.equal(f.controller.useVoice().busy, null);
 });
 
 test('native dictation uses the existing missing-device, permission, occupied-device and recognition error messages', async () => {
   for (const [options, expected] of [[{ devices: [] }, /未检测到麦克风/], [{ openError: { name: 'NotAllowedError' } }, /麦克风访问被拒绝/], [{ openError: { name: 'NotReadableError' } }, /麦克风无法使用/], [{}, /识别失败/]]) {
     const f = voiceController(options); await flush();
-    const errors = [], unregister = f.controller.dictateInto('native', assert.fail, true, { sessionId: 'runtime' });
+    const errors = [], unregister = f.controller.dictateInto('native', assert.fail, { sessionId: 'runtime' });
     await f.controller.toggleDictation('native', null, message => errors.push(message));
     if (!options.devices && !options.openError) {
       const finishing = f.controller.toggleDictation('native', null, message => errors.push(message)); await flush();
@@ -184,8 +197,8 @@ test('the shared microphone button retains icons and status, stops click propaga
   let stopped = 0; button(true).props.onClick({ stopPropagation() { stopped++; } });
   assert.equal(toggles.length, 0); assert.match(renderToStaticMarkup(button(true)), /disabled=""/);
   button(false).props.onClick({ stopPropagation() { stopped++; } }); assert.equal(toggles.length, 1); assert.equal(stopped, 2);
-  snapshot = { ...snapshot, recording: 'native', sends: true };
-  assert.match(renderToStaticMarkup(button(false)), /is-recording/); assert.match(button(false).props.title, /Enter 识别并发送/);
+  snapshot = { ...snapshot, recording: 'native' };
+  assert.match(renderToStaticMarkup(button(false)), /is-recording/); assert.match(button(false).props.title, /Enter 或再次点击插入文字/);
   snapshot = { ...snapshot, recording: null, busy: 'native' };
   assert.match(renderToStaticMarkup(button(false)), /data-icon="spinner"/); assert.equal(button(false).props.title, '正在识别…');
   snapshot = { ...snapshot, busy: null, microphone: false }; assert.equal(button(false).props.title, '未检测到麦克风');

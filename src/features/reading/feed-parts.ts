@@ -15,4 +15,3 @@ export { isCommandDraft, useCommandPalette } from './useCommandPalette';
 export { commandList, composerAria } from './CommandList';
 export { useMentions } from './useMentions';
 export { MentionPalette } from './MentionPalette';
-export { createDictationSend } from './dictation-send';
