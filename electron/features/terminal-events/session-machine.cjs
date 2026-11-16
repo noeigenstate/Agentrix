@@ -14,7 +14,7 @@
 //   screen   { at, terminalSession, revision, inputPresent, busy, dialog, menu, queueShown, draft }
 //   attach   { at, terminalSession }                  the renderer attached again: its frame revisions restart
 //   confirm  { at, asking }                           the caller's timer: has the screen's idle stood long enough?
-//   settled  { at, queued, background }               a Stop's round, asked (again) with CompletionWork's queue and work
+//   settled  { at, queued, background, blocked }      a Stop's round, asked (again) with CompletionWork's final gate
 // Every hook signal may carry claudeSession; one from another Claude session than the epoch's changes nothing.
 // Effects: { type: 'subagent', signal } and { type: 'completion', turn }.
 const KEPT = 32;
@@ -120,8 +120,8 @@ function reduce(state, signal) {
   if (signal.type === 'settled') {
     if (state.pending == null || state.pending !== state.turn) return { state, effects: [] };
     // The transcript's queue is the authority here: a queued message Claude absorbed mid-turn or dropped runs no hook.
-    // A held round stays pending, so the Stop's snapshot asked again once the queue or the work clears completes it.
-    const blocked = signal.queued || signal.background;
+    // A held round stays pending until CompletionWork's final gate agrees, even after its queue and work clear.
+    const blocked = signal.blocked || signal.queued || signal.background;
     return { state: { ...state, queue: signal.queued ? state.queue : 0, ...(blocked ? {} : { pending: null, completed: state.turn }) },
       effects: blocked ? [] : [{ type: 'completion', turn: state.turn }] };
   }
