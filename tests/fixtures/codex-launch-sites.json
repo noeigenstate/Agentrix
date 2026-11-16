@@ -536,8 +536,8 @@
     "id": "src/features/agents/WorkerTerminal.tsx:95cd903c8f0b930155272c31"
   },
   {
-    "text": "terminal.write(result.data)",
-    "id": "src/features/agents/WorkerTerminal.tsx:790247714290362578675f5b"
+    "text": "terminal.write(snapshot.data)",
+    "id": "src/features/agents/WorkerTerminal.tsx:35709bb77a051233d0b750f2"
   },
   {
     "text": "run(item, item.state === 'open' ? 'adopted' : 'open')",
@@ -674,9 +674,5 @@
   {
     "text": "run()",
     "id": "src/features/titlebar/AppMenu.tsx:5c24355bd061257885bd20db"
-  },
-  {
-    "text": "window.agentrix.writeTerminal(current.id, '\\r')",
-    "id": "src/features/voice/voice-input.ts:bab99e42e605b391e4ea93fb"
   }
 ]

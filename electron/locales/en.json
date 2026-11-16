@@ -115,7 +115,6 @@
   "启动时恢复工作": "Restore work at startup",
   "恢复 Codex 与 Claude Code 的最近会话，被中断的任务自动发送“继续”": "Reopen recent Codex and Claude Code sessions; interrupted tasks are told to continue",
   "本地语音输入": "Local voice input",
-  "按 {key} 或点击终端上的麦克风说话，按回车识别并发送，Esc 取消": "Press {key} or click a terminal’s microphone to talk; Enter recognizes and sends, Esc cancels",
   "应用更新": "App updates",
   "当前版本 v{version}": "Version {version}",
   "当前为便携版或开发版。安装 Windows 版后，即可自动检查和下载更新。": "This is a portable or development build. Install the Windows edition to check for and download updates automatically.",
@@ -301,7 +300,6 @@
   "下载中 {percent}%": "Downloading {percent}%",
   "重试下载": "Retry download",
   "下载模型": "Download model",
-  "正在录音 · Enter 识别并发送，再次点击只插入不发送（Esc 取消）": "Recording · Enter recognizes and sends; click again to insert without sending (Esc cancels)",
   "正在识别…": "Recognizing…",
   "未检测到麦克风": "No microphone detected",
   "麦克风已连接 · 语音模型下载中 {percent}%": "Microphone connected · downloading voice model {percent}%",
@@ -312,7 +310,6 @@
   "结束录音并插入": "Stop and insert",
   "进入会话": "Open session",
   "正在聆听…": "Listening…",
-  "正在识别并发送…": "Recognizing and sending…",
   "发送": "Send",
   " · 已暂存": " · staged",
   "{count} 个文件有更改": "{count} files changed",
@@ -3286,5 +3283,6 @@
   "它在等你确认。点进下面的终端回答。": "It is waiting for your confirmation. Click into the terminal below to answer.",
   "在上面的终端里输入你的回答；Esc 取消。": "Type your answer in the terminal above; Esc cancels.",
   "这个 worker 的终端现在不能显示。": "This worker's terminal cannot be shown right now.",
-  "{name} 的终端": "Terminal of {name}"
+  "{name} 的终端": "Terminal of {name}",
+  "按 {key} 或点击终端上的麦克风说话，按回车识别并插入输入框，Esc 取消": "Press {key} or click a terminal’s microphone to talk; Enter recognizes and puts the words in the input box, Esc cancels"
 }
