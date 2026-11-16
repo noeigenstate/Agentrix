@@ -671,3 +671,24 @@ test('login PATH readiness settles on failure and Windows without an account rea
   const windows = shellIntegration('win32'); await windows.ready;
   assert.equal(windows.loginCalls(), 0); assert.equal(windows.startup, undefined);
 });
+
+test('a finished account read stops every process its app-server started before it settles, and the folder they ran in can be removed', async t => {
+  const { resources, removeTree } = require('./fixtures/codex-app-server-lifecycle.cjs');
+  const { waitFor } = await import('../scripts/wait.mjs');
+  const lifetime = resources(t), root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-account-tree-'));
+  const cwd = path.join(root, 'project'), pidFile = path.join(root, 'helper.pid'); fs.mkdirSync(cwd);
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  let helper = null;
+  lifetime.defer('stop a surviving helper and remove the folder', async () => {
+    if (helper && alive(helper)) process.kill(helper, 'SIGKILL');
+    await removeTree(root);
+  });
+  // The stand-in leaves on end of input as Codex does and starts a helper of its own; an API-key account ends the read at account/read.
+  const result = await readCodexAccount({ cwd, codexHome: path.join(root, 'home'), env: { PATH: '' }, executable: 'synthetic-only',
+    launch: (_file, args, opts) => lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs'), ...args],
+      { ...opts, env: { ...opts.env, SYNTHETIC_CODEX_MODE: 'grandchild', SYNTHETIC_GRANDCHILD_PID: pidFile, SYNTHETIC_CODEX_ACCOUNT: '{"type":"apiKey"}' } })) });
+  assert.equal(result.resetQuery.reason, 'unsupported');
+  helper = Number(fs.readFileSync(pidFile, 'utf8'));
+  await waitFor(() => !alive(helper), 'the helper the app-server started is gone', 2000);
+  await removeTree(cwd);
+});

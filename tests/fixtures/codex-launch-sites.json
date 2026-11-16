@@ -32,8 +32,8 @@
     "id": "electron/features/agents/codex-account-usage.cjs:7c067127cabbb32d99602cbb"
   },
   {
-    "text": "execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {\n      try { if (child.exitCode == null) child.kill('SIGKILL'); } catch { }\n    })",
-    "id": "electron/features/agents/codex-account-usage.cjs:0605990eb5d7ef5f9e45b74a"
+    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {\n        try { if (child.exitCode == null && child.signalCode == null) child.kill('SIGKILL'); } catch { }\n        treeStopped = true; settle();\n      })",
+    "id": "electron/features/agents/codex-account-usage.cjs:a240b1bd71a4a411c3769385"
   },
   {
     "text": "launch(file, ['app-server', '--listen', 'stdio://'], {\n          cwd, env: { ...env, CODEX_HOME: codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex') },\n          windowsHide: true, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],\n        })",
@@ -64,8 +64,8 @@
     "id": "electron/features/claude-sdk/shell.cjs:2d7dadcf31593105fd0dee50"
   },
   {
-    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],\n        { windowsHide: true, timeout: 2000 }, error => { if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); })",
-    "id": "electron/features/codex-app-server/index.cjs:99516e16cf4a76574364f0ca"
+    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],\n        { windowsHide: true, timeout: 2000 }, error => {\n          if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');\n          treeStopped = true; settle();\n        })",
+    "id": "electron/features/codex-app-server/index.cjs:75ca58dee1a9ce35f94d37c3"
   },
   {
     "text": "resolveExecutable(env)",
