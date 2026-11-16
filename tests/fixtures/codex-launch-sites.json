@@ -232,6 +232,30 @@
     "id": "electron/features/terminal/ipc.cjs:6f6cb011c8493d7a7e324bee"
   },
   {
+    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(pty.pid), '/t', '/f'], { windowsHide: true, timeout: 5000 }, end)",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:cb6de93d747f81f3952e267c"
+  },
+  {
+    "text": "spawn(command.file, command.args, { name: 'xterm-256color', cols: w.cols, rows: w.rows, cwd: w.spec.cwd, env: w.env,\n      ...(platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}) })",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:2b006e374b8ca40ac6b3fa4d"
+  },
+  {
+    "text": "w.pty.write(`\\x1b[200~${input.text}\\x1b[201~`)",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:d72bfdf6fc5c8f62ddfa27f5"
+  },
+  {
+    "text": "w.pty.write('\\r')",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:d1e27d1ceeae5521e0fa308b"
+  },
+  {
+    "text": "launch(w, text, clientMessageId)",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:ca07277d7a5409c096f89e59"
+  },
+  {
+    "text": "w.pty.write(data)",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:564ca29ae75f8f9f308c9de2"
+  },
+  {
     "text": "execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MAC_SCRIPT, action, ...(action === 'copy' ? paths : [])], { timeout: 10000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (error, output) => {\n      if (error) { reject(new Error(error.killed ? '剪贴板暂时不可用，请重试。' : '无法访问文件剪贴板。')); return; }\n      try { resolve(JSON.parse(output)); } catch { reject(new Error('文件剪贴板返回了无效数据。')); }\n    })",
     "id": "electron/file-clipboard.cjs:5b1e3fabde82e80c1ddea827"
   },
@@ -254,6 +278,10 @@
   {
     "text": "this.run(project, '正在粘贴文件…', async (update, check) => {\n      const pasted = [];\n      for (const source of sources) {\n        check(); if (typeof source !== 'string' || !path.isAbsolute(source)) throw new Error('无效的剪贴板文件。');\n        const name = cleanName(path.basename(source)); update(`正在粘贴：${name}`);\n        if (project.kind === 'ssh') {\n          pasted.push(await this.upload(this.remote(project.id), source, directory, name, update, check));\n          continue;\n        }\n        const parent = await directoryPath(project, directory);\n        const info = await fs.lstat(source);\n        if (info.isDirectory() && inside(await fs.realpath(source), parent)) throw new Error('不能把文件夹复制到它自身内部。');\n        const targetName = await unusedName(parent, name);\n        const staging = path.join(parent, `.agentrix-copy-${randomUUID()}`);\n        try {\n          await fs.cp(source, staging, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, filter: () => { check(); return true; } });\n          check();\n          const target = path.join(parent, targetName);\n          try { await fs.lstat(target); throw new Error('目标文件已存在，请重试。'); } catch (error) { if (error.code !== 'ENOENT') throw error; }\n          await this.move(staging, target);\n          pasted.push(path.posix.join(directory, targetName));\n        } finally { if (path.dirname(path.resolve(staging)) === parent) await fs.rm(staging, { recursive: true, force: true }); }\n      }\n      return { pasted };\n    })",
     "id": "electron/file-operations.cjs:58cb494be6109fd8cc26b44e"
+  },
+  {
+    "text": "pty.spawn(file, args, options)",
+    "id": "electron/main.cjs:46faab512efeac4c01131a13"
   },
   {
     "text": "session.gate.afterPrompt(plan.command)",
