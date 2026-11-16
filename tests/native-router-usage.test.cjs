@@ -42,6 +42,12 @@ test('next path: a Claude Code found but not verified reads as unverified, the w
   assert.deepEqual(nextPath('claude', {}, [], { status: 'missing', reason: 'not_found' }), { path: 'terminal', reason: 'cli_missing' });
 });
 
+test('next path: with no CLI check given (an SSH project) the Claude Code this computer last checked is not read', () => {
+  const local = [{ name: 'cli', reason: { code: 'claude.native_cli_required' } }];
+  assert.deepEqual(nextPath('claude', {}, local, undefined), { path: 'api', reason: null });
+  assert.deepEqual(nextPath('claude', {}, local, { status: 'ok' }), { path: 'api', reason: null }, 'the check given replaces it');
+});
+
 test('subscription limits preserve milliseconds, missing windows, credits, source and freshness', () => {
   const account = { at: 1000, source: 'fixture', limits: [{ minutes: 10080, percent: 42, resetsAt: 1234567890000 }] };
   const value = subscriptionLimits(account, 'scope', 120000, 1001);
