@@ -372,8 +372,8 @@
     "id": "integration/dispatch.cjs:7eeedc98678a9064e3c1cd6f"
   },
   {
-    "text": "run(args, { ...deps, launch, resolveExecutable, locate, startTimeout, rateInterval, requestTimeout })",
-    "id": "integration/dispatch.cjs:8c60c1e5b3e79d45887b0537"
+    "text": "run(args, { ...deps, launch, resolveExecutable, locate, locateClaude: findClaude, startTimeout, rateInterval, requestTimeout })",
+    "id": "integration/dispatch.cjs:3a415e86a410071d1b452c5f"
   },
   {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",
