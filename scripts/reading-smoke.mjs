@@ -9,7 +9,7 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor, terminalsSettled, timeoutScale } from './wait.mjs';
 import { setMode } from './mode-switch.mjs';
 import { guiCodexEnvironment, windowsCodexStandIn } from './gui-codex-env.mjs';
-import { claudeHook, sendClaudeHook } from '../tests/helpers/desktop-task-fixture.mjs';
+import { claudeHook, sendClaudeHook, terminalBootstrap } from '../tests/helpers/desktop-task-fixture.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
@@ -61,9 +61,7 @@ const resetWrites = () => app.evaluate(() => { globalThis.voicePastes = []; });
 const hook = (kind, payload) => claudeHook(kind, payload) + '\r';
 // A hook from outside the terminal, over the channel the terminal's own bootstrap names (tests/helpers/claude-hook-client.cjs).
 async function backgroundHook(kind, payload) {
-  const runtime = (await fs.readdir(profile)).find(name => name.startsWith('runtime-'));
-  const bootstrap = JSON.parse(await fs.readFile(path.join(profile, runtime, `${(await state()).sessionId}.json`), 'utf8'));
-  await sendClaudeHook(bootstrap, kind, payload);
+  await sendClaudeHook(await terminalBootstrap(profile, terminalId), kind, payload);
 }
 try {
   app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env });

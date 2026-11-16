@@ -78,7 +78,7 @@ async function launch() {
   await page.evaluate(() => { window.spokenNotices = []; window.speechSynthesis.speak = utterance => { window.spokenNotices.push({ text: utterance.text, lang: utterance.lang, voice: utterance.voice?.name || null }); setTimeout(() => utterance.onend?.(), 0); }; });
   await page.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).shellReady, 'shell ready');
-  bootstrap = await terminalBootstrap(dataDir, (await state()).sessionId);
+  bootstrap = await terminalBootstrap(dataDir, (await state()).terminals[0].id);
   // The agent is started by typing it at the prompt, as a user does: the wrapper runs the stand-in with Claude Code's hooks.
   await input('claude\r');
   await waitFor(async () => (await state()).codexActive && (await state()).agent === 'claude', 'offline Claude Code fixture');
