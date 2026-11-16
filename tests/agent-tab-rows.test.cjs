@@ -151,7 +151,7 @@ test('background tasks are listed with their terminal and age, and 后台 N 个�
   for (const file of walk('src/features/reading').filter(name => /\.(tsx?|css)$/.test(name))) assert.doesNotMatch(read(file), /BackgroundBadge|background-badge|后台 \{count\} 个运行中/, `${file}: nothing of it inside the reading view`);
 
   // Every new sentence has its English.
-  const english = { ...JSON.parse(read('electron/locales/en.json')), ...JSON.parse(read('locale-additions-d3ui.json')) };
+  const english = JSON.parse(read('electron/locales/en.json'));
   const used = ['已等 15 秒仍未确认，可能没有启动。', '启动中 · 未确认', '最近完成 {count} 个', '后台任务', '{count} 个运行中', '后台 {count} 个运行中', '最后输出 {count} 秒前', '终端 {number}', '继续', '自启动'];
   assert.deepEqual(used.filter(text => !english[text]), []);
 });
