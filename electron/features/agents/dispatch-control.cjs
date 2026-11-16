@@ -16,6 +16,7 @@ const validId = value => typeof value === 'string' && /^[\w-]{1,160}$/.test(valu
 const status = value => ['queued', 'delivered', 'consumed', 'rejected', 'unknown'].includes(value);
 const registrationCodes = new Set(['dispatch.session_mismatch', 'dispatch.control_unbound', 'dispatch.unknown_run',
   'dispatch.project_mismatch', 'dispatch.duplicate_run']);
+const leadModes = new Set(['native', 'terminal', 'codex']);
 
 function frames(socket, receive, disconnected) {
   let queue = [], bytes = 0, blocked = false, ended = false;
@@ -48,7 +49,7 @@ function frames(socket, receive, disconnected) {
   return send;
 }
 
-// resolveRun: main's { run } or { refused: code }; injected bindings may return the run directly. It names the run's agent:
+// resolveRun: main's { run } or { refused: code, leadMode? }; injected bindings may return the run directly. It names the run's agent:
 // channel does not look it up, and only a run bound to 'claude' may request a Claude SDK run.
 // accountKey: this process's key for naming Codex accounts (accountScopeId). Only a run main's resolver marks local
 // receives it, so a local helper names a worker's account as main does; an SSH host's account keeps its own channel.
@@ -58,8 +59,9 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
   function accept(socket, registration) {
     sockets.add(socket);
     let client, registering = false, send;
-    const refuse = (runId, code) => {
-      send({ type: 'refused', runId, code: registrationCodes.has(code) ? code : 'dispatch.control_unbound' }); socket.end();
+    const refuse = (runId, code, leadMode) => {
+      send({ type: 'refused', runId, code: registrationCodes.has(code) ? code : 'dispatch.control_unbound',
+        ...(leadModes.has(leadMode) ? { leadMode } : {}) }); socket.end();
     };
     const handle = async value => {
       if (!client) {
@@ -69,12 +71,12 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
         const result = await resolveRun({ runId: value.runId, projectId: value.projectId, sessionKey: value.sessionKey, capability: value.capability,
           cwd: value.cwd, agent: value.agent, allow: value.allow, readOnly: value.readOnly, roundtable: value.roundtable });
         if (socket.destroyed) return;
-        if (result?.refused) return refuse(value.runId, result.refused);
+        if (result?.refused) return refuse(value.runId, result.refused, result.leadMode);
         const verified = result?.run || result;
-        if (!verified || verified.runId !== value.runId || verified.projectId !== value.projectId || !path.isAbsolute(verified.cwd || '') || !Array.isArray(verified.allow)) return refuse(value.runId, 'dispatch.control_unbound');
+        if (!verified || verified.runId !== value.runId || verified.projectId !== value.projectId || !path.isAbsolute(verified.cwd || '') || !Array.isArray(verified.allow)) return refuse(value.runId, 'dispatch.control_unbound', verified?.leadMode);
         // A worker may tighten its admitted mode (for example --permission plan), never loosen main's binding.
         const run = { ...verified, readOnly: !!verified.readOnly || value.readOnly === true, roundtable: !!verified.roundtable || value.roundtable === true };
-        if (clients.has(run.runId)) return refuse(run.runId, 'dispatch.duplicate_run');
+        if (clients.has(run.runId)) return refuse(run.runId, 'dispatch.duplicate_run', run.leadMode);
         client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
         send({ type: 'registered', runId: run.runId, ...(accountKey && verified.local === true ? { accountKey } : {}) }); return;
@@ -171,6 +173,7 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
       }
       else if (!registered && value.type === 'refused' && value.runId === runId) {
         failure = unavailable(registrationCodes.has(value.code) ? value.code : 'dispatch.control_unbound');
+        if (registrationCodes.has(value.code) && leadModes.has(value.leadMode)) failure.leadMode = value.leadMode;
         clearTimeout(timer); reject(failure); socket.destroy();
       } else if (registered && value.type === 'control.push') {
         serial = serial.catch(() => {}).then(async () => {

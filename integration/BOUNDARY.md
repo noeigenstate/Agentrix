@@ -11,7 +11,7 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 - `electron/features/agents/dispatch-registration.cjs`
 
 ## Interface
-- `createDispatchControl` (`electron/features/agents/dispatch-control.cjs`) — the authenticated execution-control channel and its helper client, connectDispatchControl; registration refusals carry a closed code.
+- `createDispatchControl` (`electron/features/agents/dispatch-control.cjs`) — the authenticated execution-control channel and its helper client, connectDispatchControl; registration refusals carry a closed code, and authenticated refusals also carry leadMode on the frame and client error.
 - `resolveRegistration` (`electron/features/agents/dispatch-registration.cjs`) — main's current-session, worker-cwd board and lead-mode binding, or a coded refusal; test: `tests/dispatch-registration.test.cjs` › "a worker in a worktree registers against the board its helper admitted it on; a board from another Git common directory is refused with project_mismatch; a worker outside Git is bound from its authenticated declaration and no wider".
 - `USAGE` (`integration/dispatch.cjs`) — the helper's command line (`node dispatch.cjs <codex|claude> …`, and `stop <run id> [--reason] [--no-resume]` for the planner to stop a worker whose owner intervention conflicts with its task); a normal owner intervention never stops a worker: it is resumed in the same session after its current run; sessions learn its path from the startup note (skills/agent-dispatch)
 - `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines, and a Codex worker's request lines (opened, unanswered, resolution); events carry kind, meeting, the requested model and verified routing, and a model reported after the start follows as dispatch-routing; outputTokens/activeMs are the meter's timed pair and totalOutputTokens is the invocation's cost count; resumed Codex never falls back to stdout totals
@@ -24,14 +24,14 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 - `skillProposals` (`integration/dispatch.cjs`) — dispatch-end and the end line report the number awaiting the lead; versions live in `<out>.skill-proposals-<run id>/`
 
 ## May import
-- `electron/features/agents/*.cjs` (the Activity pane's public record readers and account key)
+- `electron/features/agents/token-rate.cjs`
+- `electron/features/agents/agent-settings.cjs`
+- `electron/features/agents/codex-account-usage.cjs`
 - `electron/oversized-record.cjs`
 - `electron/session-files.cjs`
 - `electron/transcript-tail.cjs`
 - `electron/boundaries.cjs`
-- `electron/features/team/team.cjs`
-- `electron/features/team/minutes-page.cjs`
-- `electron/features/team/inbox.cjs`
+- `electron/features/team/*.cjs` (Team's public admission, minutes and inbox interfaces)
 - `electron/features/dashboard/records-routing.cjs`
 - `electron/features/skills/session.cjs`
 - `electron/features/skills/worker-proposals.cjs`

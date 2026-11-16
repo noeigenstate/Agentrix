@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { realpath } = require('node:fs/promises');
 
 const samePath = (left, right) => typeof left === 'string' && typeof right === 'string' && path.isAbsolute(left) && path.isAbsolute(right)
   && (process.platform === 'win32' ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase() : path.resolve(left) === path.resolve(right));
@@ -16,29 +17,40 @@ async function resolveRegistration({ sessions, store, locateTeam }, registration
   };
   let refused = refusal();
   if (refused) return { refused };
+  const leadMode = () => session.agent === 'claude' ? session.nativeStructured ? 'native' : 'terminal' : 'codex';
+  const refuse = code => {
+    const auth = refusal();
+    return auth ? { refused: auth } : { refused: code, leadMode: leadMode() };
+  };
   if (typeof registration.cwd !== 'string' || !path.isAbsolute(registration.cwd) || !['claude', 'codex'].includes(registration.agent)
-    || !validScope(registration.allow) || typeof registration.readOnly !== 'boolean' || typeof registration.roundtable !== 'boolean') return { refused: 'dispatch.control_unbound' };
+    || !validScope(registration.allow) || typeof registration.readOnly !== 'boolean' || typeof registration.roundtable !== 'boolean') return refuse('dispatch.control_unbound');
   const [location, parent] = await Promise.all([locateTeam(registration.cwd, { details: true }), locateTeam(project.path, { details: true })]);
   refused = refusal();
   if (refused) return { refused };
-  const leadMode = session.agent === 'codex' ? 'codex' : session.agent === 'claude' ? session.nativeStructured ? 'native' : 'terminal' : null;
-  if (!leadMode) return { refused: 'dispatch.control_unbound' };
   let worker;
   if (location?.status === 'outside_git') {
-    if (registration.roundtable === true) return { refused: 'dispatch.control_unbound' };
+    if (registration.roundtable === true) return refuse('dispatch.control_unbound');
+    let cwd, projectRoot;
+    try { [cwd, projectRoot] = await Promise.all([realpath(registration.cwd), realpath(project.path)]); }
+    catch { return refuse('dispatch.project_mismatch'); }
+    const relative = path.relative(cwd, projectRoot);
+    // A boardless ancestor would let a relative glob reach into the project without its admission lock.
+    if (!relative || !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) return refuse('dispatch.project_mismatch');
     worker = { id: registration.runId, agent: registration.agent, cwd: registration.cwd, allow: registration.allow,
       readOnly: registration.readOnly === true || registration.allow.length === 0 };
   } else {
     if (!['found', 'no_team'].includes(location?.status) || !['found', 'no_team'].includes(parent?.status)
-      || !samePath(location.common, parent.common)) return { refused: 'dispatch.project_mismatch' };
+      || !samePath(location.common, parent.common)) return refuse('dispatch.project_mismatch');
     try { worker = location.team?.live().find(run => run.id === registration.runId); }
-    catch { return { refused: 'dispatch.unknown_run' }; }
-    if (!worker) return { refused: 'dispatch.unknown_run' };
-    if (worker.agent !== registration.agent || !samePath(worker.cwd, registration.cwd) || !validScope(worker.allow)) return { refused: 'dispatch.control_unbound' };
+    catch { return refuse('dispatch.unknown_run'); }
+    if (!worker) return refuse('dispatch.unknown_run');
+    if (worker.agent !== registration.agent || !samePath(worker.cwd, registration.cwd) || !validScope(worker.allow)) return refuse('dispatch.control_unbound');
   }
+  refused = refusal();
+  if (refused) return { refused };
   return { run: { runId: worker.id, projectId: registration.projectId, agent: worker.agent, cwd: worker.cwd, worktree: worker.cwd,
     allow: [...worker.allow], readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查' || registration.readOnly === true,
-    roundtable: worker.role === '圆桌' || registration.roundtable === true, local: project.kind !== 'ssh', leadMode } };
+    roundtable: worker.role === '圆桌' || registration.roundtable === true, local: project.kind !== 'ssh', leadMode: leadMode() } };
 }
 
 module.exports = { resolveRegistration };

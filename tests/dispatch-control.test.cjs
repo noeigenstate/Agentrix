@@ -69,7 +69,8 @@ test('registration rejection reports the failed binding without exposing credent
       socket.on('data', data => { received += data; }); socket.once('error', reject); socket.once('close', () => resolve(received));
       socket.once('connect', () => socket.write(JSON.stringify({ v: 1, type: 'register', ...registration, ...patch }) + '\n'));
     });
-    assert.deepEqual(JSON.parse(wire), { v: 1, type: 'refused', runId: patch.runId || registration.runId, code });
+    assert.deepEqual(JSON.parse(wire), { v: 1, type: 'refused', runId: patch.runId || registration.runId, code,
+      ...(!Object.hasOwn(patch, 'sessionKey') && !Object.hasOwn(patch, 'capability') ? { leadMode: 'terminal' } : {}) });
     assert.doesNotMatch(wire, /synthetic-.*secret/);
     assert.equal(client.connected, true, 'a refused duplicate never replaces the admitted client');
   }
@@ -78,20 +79,62 @@ test('registration rejection reports the failed binding without exposing credent
 test('the register frame carries the worker declaration and never accepts its claimed lead mode', async t => {
   const { createDispatchControl, connectDispatchControl } = registrationChannel();
   const { resolveRegistration } = require('../electron/features/agents/dispatch-registration.cjs');
-  const project = { id: 'project', kind: 'local', path: os.tmpdir() }, session = { agent: 'claude', nativeStructured: true,
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-control-outside-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cwd = path.join(root, 'worker'), project = { id: 'project', kind: 'local', path: path.join(root, 'project') };
+  fs.mkdirSync(cwd); fs.mkdirSync(project.path);
+  const session = { agent: 'claude', nativeStructured: true,
     sessionKey: 'synthetic-session', controlCapability: 'synthetic-control' };
   const channel = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions: new Map([['terminal', session]]),
     store: { findTerminal: () => ({ project }) }, locateTeam: async () => ({ status: 'outside_git', common: null, team: null }) }, registration) });
   const { address } = await channel.listen(); t.after(() => channel.close());
   const client = await connectDispatchControl({ address, runId: 'boardless-worker', projectId: 'terminal', sessionKey: session.sessionKey,
-    capability: session.controlCapability, cwd: os.tmpdir(), agent: 'claude', allow: ['docs/**'], readOnly: true, leadMode: 'terminal' });
+    capability: session.controlCapability, cwd, agent: 'claude', allow: ['docs/**'], readOnly: true, leadMode: 'terminal' });
   t.after(() => client.close());
   let binding;
   channel.onRequest('inspect', run => { binding = run; });
   await client.request('inspect', {});
-  assert.equal(binding.leadMode, 'native'); assert.equal(binding.agent, 'claude'); assert.equal(binding.cwd, os.tmpdir());
+  assert.equal(binding.leadMode, 'native'); assert.equal(binding.agent, 'claude'); assert.equal(binding.cwd, cwd);
   assert.deepEqual(binding.allow, ['docs/**']); assert.equal(binding.readOnly, true);
   assert.equal(binding.sessionKey, undefined); assert.equal(binding.capability, undefined);
+});
+
+test('authenticated refusals carry the lead mode on the wire and client error; failed authentication carries none', async t => {
+  const { createDispatchControl, connectDispatchControl, net } = registrationChannel();
+  const { resolveRegistration } = require('../electron/features/agents/dispatch-registration.cjs');
+  for (const leadMode of ['native', 'terminal', 'codex']) {
+    const session = { agent: leadMode === 'codex' ? 'codex' : 'claude', nativeStructured: leadMode === 'native',
+      sessionKey: 'synthetic-session-secret', controlCapability: 'synthetic-control-secret' };
+    const project = { id: 'project', kind: 'local', path: os.tmpdir() }, worker = { id: 'worker', agent: 'claude', cwd: os.tmpdir(), allow: ['src/**'] };
+    const channel = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions: new Map([['terminal', session]]),
+      store: { findTerminal: () => ({ project }) }, locateTeam: async cwd => ({ status: cwd.endsWith('git-error') ? 'git_error' : 'found', common: cwd,
+        team: { live: () => [worker] } }) }, registration) });
+    const { address } = await channel.listen(); t.after(() => channel.close());
+    const registration = { runId: worker.id, projectId: 'terminal', sessionKey: session.sessionKey, capability: session.controlCapability,
+      cwd: worker.cwd, agent: worker.agent, allow: worker.allow, readOnly: false, roundtable: false, leadMode: 'forged' };
+    const client = await connectDispatchControl({ address, ...registration }); t.after(() => client.close());
+    for (const [patch, code, authenticated] of [
+      [{ sessionKey: 'stale' }, 'dispatch.session_mismatch', false],
+      [{ capability: 'wrong' }, 'dispatch.control_unbound', false],
+      [{ runId: 'missing-worker' }, 'dispatch.unknown_run', true],
+      [{ cwd: path.join(project.path, 'other-repository') }, 'dispatch.project_mismatch', true],
+      [{ cwd: path.join(project.path, 'git-error') }, 'dispatch.project_mismatch', true],
+      [{ allow: ['../outside/**'] }, 'dispatch.control_unbound', true],
+      [{}, 'dispatch.duplicate_run', true],
+    ]) {
+      await assert.rejects(connectDispatchControl({ address, ...registration, ...patch }), error => {
+        assert.equal(error.category, code); assert.equal(error.leadMode, authenticated ? leadMode : undefined);
+        assert.doesNotMatch(JSON.stringify(error), /synthetic-.*secret|forged/); return true;
+      });
+      const wire = await new Promise((resolve, reject) => {
+        const socket = net.connect(address); let received = '';
+        socket.on('data', data => { received += data; }); socket.once('error', reject); socket.once('close', () => resolve(received));
+        socket.once('connect', () => socket.write(JSON.stringify({ v: 1, type: 'register', ...registration, ...patch }) + '\n'));
+      });
+      assert.deepEqual(JSON.parse(wire), { v: 1, type: 'refused', runId: patch.runId || worker.id, code, ...(authenticated ? { leadMode } : {}) });
+      assert.doesNotMatch(wire, /synthetic-.*secret|forged/);
+    }
+  }
 });
 
 test('persistent channel authenticates a binding, streams events and deduplicates control receipts', async t => {

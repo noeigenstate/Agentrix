@@ -24,7 +24,7 @@ function createTeamLocator({ execFile = nodeExecFile, now = Date.now } = {}) {
       fs.realpath(path.resolve(cwd, directory)).then(common => resolve({ status: 'found', common }),
         () => resolve({ status: 'git_error', common: null }));
     }));
-  async function lookup(cwd) {
+  async function lookup(cwd, details) {
     let real;
     try { real = await fs.realpath(cwd); } catch { return { status: 'git_error', common: null, team: null }; }
     let cached = commons.get(real);
@@ -36,12 +36,12 @@ function createTeamLocator({ execFile = nodeExecFile, now = Date.now } = {}) {
     }
     try {
       const team = teamAt(common, cwd);
-      if (team && !(await fs.stat(team.board)).isDirectory()) return { status: 'no_team', common, team: null };
+      if (details && team && !(await fs.stat(team.board)).isDirectory()) return { status: 'no_team', common, team: null };
       return { status: team ? 'found' : 'no_team', common, team };
     } catch (error) { return { status: ['ENOENT', 'ENOTDIR'].includes(error.code) ? 'no_team' : 'git_error', common, team: null }; }
   }
   return async function locateTeam(cwd, { details = false } = {}) {
-    const result = await lookup(cwd);
+    const result = await lookup(cwd, details);
     return details ? result : result.team;
   };
 }
