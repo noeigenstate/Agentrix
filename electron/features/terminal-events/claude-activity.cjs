@@ -11,6 +11,8 @@ const ATTENTION_NOTICES = ['permission_prompt', 'elicitation_dialog', 'elicitati
 const SIGNALS = { working: 'start', complete: 'stop', attention: 'attention', progress: 'progress', session: 'session' };
 // Prompts the CLI holds back while it works, as the prompt queue and the transcript's queue records show them.
 const queuedOf = s => s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
+// Background work the round waits for, as CompletionWork reports it.
+const backgroundOf = s => !!(s.completionWork?.tasks?.size || s.completionWork?.notifications?.size);
 
 // A terminal's Claude Code and Codex activity: hook events, the transcript Claude writes and the turn snapshots
 // readers produce become the CLI state, the lights and the completion alert. `deps` is the app shell (main.cjs),
@@ -185,7 +187,7 @@ function createClaudeActivity(deps) {
     s.needsInput = state === 'waiting' ? { message, since: Date.now() } : null;
     s.cliStateRevision = (s.cliStateRevision || 0) + 1;
     s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
-      updatedAt: Date.now(), state, ...(message ? { message } : {}), ...(s.agent === 'claude' ? cliFields(meta.machine, state) : {}) };
+      updatedAt: Date.now(), state, ...(message ? { message } : {}), ...(s.agent === 'claude' ? cliFields(meta.machine, state, backgroundOf(s)) : {}) };
     s.observeNativeSwitch?.();
     broadcast();
     return true;
@@ -218,6 +220,15 @@ function createClaudeActivity(deps) {
     }
     s.activitySnapshot = snapshot;
     const queued = queuedOf(s);
+    // A Claude terminal's Stop completes its round only on the session machine's completion effect: the newest prompt's
+    // Stop, nothing queued and no background work, once. Asked with the queue as it stands after this round's finish,
+    // and asked again whenever this snapshot is replayed (a typed submission expiring, background work ending), as
+    // a held round always was; the snapshot's turn is the completion key, so without the effect nothing is raised.
+    if (snapshot.hookStop && s.agent === 'claude' && !s.nativeStructured) {
+      const effects = snapshot.state === 'complete'
+        ? feed(s, { type: 'settled', at: snapshot.updatedAt, queued, background: backgroundOf(s) }) || [] : [];
+      if (!effects.some(effect => effect.type === 'completion')) snapshot = { ...snapshot, turnId: null };
+    }
     const state = s.completionWork?.state(snapshot, { queued })
       || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
     if (snapshot.ended && snapshot.state === 'unknown' || snapshot.state === 'interrupted' || state === 'interrupted') store.expectCompletion(project.id, false);
@@ -322,21 +333,17 @@ function createClaudeActivity(deps) {
     // Remember the conversation and whether its turn is still open, so a restart can resume it and continue.
     store.setRestore(s.terminalId, { threadId: event.sessionId, interrupted: event.state === 'working' });
     followClaude(project, s, event);
-    const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' && !failed ? turnId : null, state: failed ? 'interrupted' : event.state, updatedAt: at, prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
-    if (event.state !== 'complete' || failed) { applyActivity(project, s, snapshot); return; }
-    // A round completes only on the machine's completion effect: the newest prompt's Stop, with nothing queued and no
-    // background work as CompletionWork reports it. The snapshot's turn is the completion key, so without the effect
-    // the round ends but raises nothing.
-    const work = s.completionWork;
-    const settled = () => (feed(s, { type: 'settled', at, queued: queuedOf(s), background: !!(work?.tasks?.size || work?.notifications?.size) }) || [])
-      .some(effect => effect.type === 'completion') ? snapshot.turnId : null;
-    if (!s.activityMonitor) { applyActivity(project, s, { ...snapshot, turnId: settled() }); return; }
+    // A Stop's snapshot is marked so applyActivity asks the session machine whether the round completes (hookStop).
+    const stopped = event.state === 'complete' && !failed;
+    const snapshot = { threadId: event.sessionId, turnId: stopped ? turnId : null, state: failed ? 'interrupted' : event.state, updatedAt: at,
+      prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined, ...(stopped ? { hookStop: true } : {}) };
+    if (!stopped || !s.activityMonitor) { applyActivity(project, s, snapshot); return; }
     // Stop can beat the last tool-result write. Read it before granting a completion,
     // and let a newer turn/input win if it started while the read was in flight.
     const promptEvent = s.claudePromptEventId;
     void Promise.resolve(s.activityMonitor.poll()).then(() => {
       if (s.agent !== 'claude' || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
-      applyActivity(project, s, { ...snapshot, turnId: settled(), state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
+      applyActivity(project, s, { ...snapshot, state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
     }).catch(() => {});
   }
 
