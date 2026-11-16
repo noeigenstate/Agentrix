@@ -14,7 +14,8 @@ const { sameDirectory } = require('../electron/session-files.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 
 const at = seconds => Date.UTC(2026, 0, 1) + seconds * 1000;
-const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
+// A retired or closed run judges a late callback with no I/O, so its report chain settles within microtasks; there is no event to await.
+async function reportChainSettled() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
 async function until(check) {
   for (let i = 0; i < 1000; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
   assert.fail('native sub-agent reports did not settle');
@@ -65,7 +66,9 @@ async function sessionFixture(t, f, onSubagent, options = {}) {
     canContinue: () => spec.mayContinue?.() !== false,
   });
   t.after(() => session.close());
-  await session.start(); await session.send({ clientMessageId: 'parent-input', text: 'Parent task' }); await tick();
+  await session.start(); await session.send({ clientMessageId: 'parent-input', text: 'Parent task' });
+  // Hooks report once the session has seen the query's init message; it announces that with routing.updated.
+  await until(() => events.some(event => event.type === 'routing.updated'));
   const hook = (name, input, toolUseId) => {
     const callback = fake.calls[0].options.hooks[name]?.[0]?.hooks[0];
     assert.equal(typeof callback, 'function', `${name} is registered on the real query options`);
@@ -141,11 +144,14 @@ test('native sub-agent signals stay ordered and ignore invalid or retired query 
   assert.deepEqual(reports[0].binding, { runtimeSessionId: 'native-run', providerSessionId: f.parentId, folder: f.folder });
   await runtime.hook('SubagentStart', { session_id: 'other-session' });
   await runtime.hook('SubagentStart', { agent_id: '../escape' });
-  await tick();
-  assert.equal(reports.length, 2);
+  // Reports run in hook order, so the sentinel arriving means the ignored callbacks before it were already judged.
+  await runtime.hook('SubagentStop', { agent_id: 'sentinel' });
+  await until(() => reports.length === 3);
+  assert.equal(reports[2].signal.agentId, 'sentinel');
   await runtime.session.close();
   assert.deepEqual(await runtime.hook('SubagentStart'), {});
-  assert.equal(reports.length, 2);
+  await reportChainSettled();
+  assert.equal(reports.length, 3);
 });
 
 for (const [title, retirement] of [
@@ -179,7 +185,7 @@ for (const [title, retirement] of [
     assert.equal(entry.signal.outcome, 'killed');
     assert.deepEqual(entry.binding, { runtimeSessionId: 'native-run', providerSessionId: f.parentId, folder: f.folder });
   }
-  await runtime.hook('SubagentStart', { agent_id: 'late-child' }); await tick();
+  await runtime.hook('SubagentStart', { agent_id: 'late-child' }); await reportChainSettled();
   assert.equal(reports.length, 6, 'retirement stops once and a late callback cannot revive the run');
   assert.notEqual(runtime.session.snapshot().state, 'failed');
 });
@@ -320,10 +326,10 @@ test('SDK sub-agent callbacks answer before transcript discovery settles', async
     assert.deepEqual(answer, {}); answered++;
   }));
   try {
-    await tick();
+    await Promise.all(pending);
     assert.equal(answered, 2, 'neither CLI hook waits for transcript discovery');
     assert.equal(discovered, false);
-  } finally { release(); await Promise.all(pending); }
+  } finally { release(); await discovery; }
 });
 
 test('the host tracker keeps native rows through terminal folder aliases and drive-letter case changes', t => {
