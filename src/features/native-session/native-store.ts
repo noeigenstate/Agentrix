@@ -130,8 +130,10 @@ export const nativeItem = (terminalId: string, itemId: string) => entries.get(te
 // Whether the terminal's native view already tells this sentence (the reason its session ended with, or its error), so a bar elsewhere need not say it again.
 export const nativeTells = (entry: NativeEntry | undefined, text: string) => nativeShown(entry) && [entry.model.session?.reason, entry.model.error?.message].some(told => told === text);
 
-// The reason a session was moved to the terminal, while the owner has not dismissed the notice.
-export const terminalSwitch = (entry: NativeEntry | undefined) => (entry && !entry.noteDismissed && entry.model.path?.selected === 'terminal' ? entry.model.path : null);
+// The terminal the owner chose in the settings: main names it as the reason of a start that goes there, and it is nothing to tell.
+const OWN_CHOICE = new Set(['terminal_selected', 'set_terminal']);
+// The reason a session was moved to the terminal, while the owner has not dismissed the notice; the owner's own choice of the terminal is not a move.
+export const terminalSwitch = (entry: NativeEntry | undefined) => (entry && !entry.noteDismissed && entry.model.path?.selected === 'terminal' && !OWN_CHOICE.has(entry.model.path.reason ?? '') ? entry.model.path : null);
 
 // ── The run-mode switch ──
 // Phases in the order a change goes through them: when two copies of one change differ, the later phase is the newer copy.
