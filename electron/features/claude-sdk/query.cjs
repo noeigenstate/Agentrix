@@ -47,7 +47,12 @@ function inputQueue(onTake = () => {}) {
   };
 }
 
-function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool }) {
+function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {} }) {
+  const reportSubagent = kind => async (input, toolUseId) => {
+    // Visibility must never block the CLI or add context to either conversation.
+    try { await onSubagent(kind, input, toolUseId); } catch { }
+    return {};
+  };
   return {
     cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
     settings: privateSettings({ fastMode: false, ...routeSettings(spec) }, abort.signal), env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
@@ -67,7 +72,9 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
       // so the owner's rules get their say by the hook answering nothing.
       if (decision.behavior === 'defer') return {};
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
-    }] }] },
+    }] }],
+    SubagentStart: [{ hooks: [reportSubagent('start')] }],
+    SubagentStop: [{ hooks: [reportSubagent('stop')] }] },
     canUseTool,
   };
 }

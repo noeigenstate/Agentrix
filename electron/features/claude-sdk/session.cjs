@@ -13,6 +13,7 @@ const { claudeCommands } = require('./commands.cjs');
 const { runShell } = require('./shell.cjs');
 const { sessionHistory } = require('./history.cjs');
 const { panelCommand, answer: panelAnswer, createTally, initFacts } = require('./panel.cjs');
+const { claudeSubagentFolder } = require('./transcript-folder.cjs');
 
 async function waitWithin(task, milliseconds) {
   let timer;
@@ -107,6 +108,21 @@ function createClaudeSession(spec, emit, dependencies) {
       else if (message.subtype === 'task_started' && message.is_backgrounded !== false || message.patch?.is_backgrounded === true) run.background.set(message.task_id, message.run_id);
     } else return;
     setState(state);
+  }
+  function reportSubagent(run, kind, input, toolUseId) {
+    const at = now();
+    // Folder discovery is asynchronous. Keep start/stop order and recheck ownership after that read.
+    return run.subagentReports = (run.subagentReports || Promise.resolve()).then(async () => {
+      const current = () => !closed && !stopping && !run.closing && active === run && run.initialized && input?.session_id === providerId;
+      if (typeof spec.onSubagent !== 'function' || !current() || typeof input.agent_id !== 'string'
+        || !/^[A-Za-z0-9_-]{1,100}$/.test(input.agent_id) || typeof input.agent_type !== 'string') return;
+      const folder = await claudeSubagentFolder(spec, providerId, input.transcript_path);
+      if (!current()) return;
+      await spec.onSubagent({ kind, terminalId: spec.terminalId, agentId: input.agent_id, agentType: input.agent_type,
+        transcriptPath: kind === 'stop' && typeof input.agent_transcript_path === 'string' ? input.agent_transcript_path : null,
+        toolUseId: typeof toolUseId === 'string' && toolUseId.length > 0 && toolUseId.length <= 200 ? toolUseId : null, at },
+      { runtimeSessionId: spec.runtimeSessionId, providerSessionId: providerId, folder });
+    }).catch(() => {});
   }
   async function pump(run) {
     let idle = false;
@@ -311,6 +327,7 @@ function createClaudeSession(spec, emit, dependencies) {
     try {
       const options = queryOptions(spec, { key, executable, abort: run.abort,
         providerSessionId: providerId, policy,
+        onSubagent: (kind, input, toolUseId) => reportSubagent(run, kind, input, toolUseId),
         canUseTool: async (name, input, context) => {
           if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
           if (name === 'AskUserQuestion') return requests.open(name, input, context);

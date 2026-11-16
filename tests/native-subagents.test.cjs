@@ -1,0 +1,196 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const vm = require('node:vm');
+const { randomUUID } = require('node:crypto');
+const { createClaudeSession } = require('../electron/features/claude-sdk/session.cjs');
+const { queryOptions } = require('../electron/features/claude-sdk/query.cjs');
+const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
+const { encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
+const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
+
+const at = seconds => Date.UTC(2026, 0, 1) + seconds * 1000;
+const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
+
+function workspace(t) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-native-subagents-'));
+  t.after(() => {
+    assert.equal(path.dirname(directory), path.resolve(os.tmpdir()));
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const cwd = path.join(directory, 'project'), home = path.join(directory, 'config');
+  const parentId = 'parent-session', projectFolder = path.join(home, 'projects', encodeClaudeCwd(cwd));
+  fs.mkdirSync(cwd); fs.mkdirSync(projectFolder, { recursive: true });
+  const transcript = path.join(projectFolder, `${parentId}.jsonl`);
+  fs.writeFileSync(transcript, JSON.stringify({ type: 'user', cwd, sessionId: parentId, message: { content: 'Parent prompt' } }) + '\n');
+  return { directory, cwd, home, parentId, transcript, folder: path.join(projectFolder, parentId, 'subagents') };
+}
+
+function nativeHost(f, calls) {
+  const project = { id: 'project', kind: 'local', path: f.cwd }, sessions = new Map(), nativeSpecs = new Map();
+  const s = { terminalId: 'terminal', agent: 'claude', nativeStructured: true, codexActive: true,
+    status: 'codex', nativeRuntimeSessionId: 'native-run', claudeSessionId: f.parentId };
+  let scheduled = 0;
+  const context = vm.createContext({ path, randomUUID, sessions, nativeSpecs, quitting: false,
+    store: { findTerminal: () => ({ project, record: { restore: {} } }), settings: {}, expectCompletion() { assert.fail('a child hook must not rearm completion'); } },
+    findProject: () => project, disposeTerminal() {}, runtimeDir: f.directory, eventServer: {}, controlAddress: 'offline',
+    writeBootstrap() {}, nativeEnvironment: () => ({ CLAUDE_CONFIG_DIR: f.home, PATH: '' }),
+    startupNote: () => '', handoffFile: () => '', READING_NOTE: '', integrationDir: f.directory,
+    skills: { delivery: () => ({}) }, callsOf: current => { assert.equal(current, s); return calls; },
+    scheduleState: () => { scheduled++; } });
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('function structuredEvent(')), context);
+  const spec = context.nativeSpec('terminal', 'claude', false);
+  s.nativeSpec = spec; sessions.set('terminal', s);
+  return { spec, s, context, sessions, nativeSpecs, scheduled: () => scheduled };
+}
+
+async function sessionFixture(t, f, onSubagent) {
+  const fake = fakeSdk({ auto: false, sessionId: f.parentId }), events = [];
+  let now = at(0);
+  const spec = { owner: 'gui', agent: 'claude', terminalId: 'terminal', projectId: 'project', runtimeSessionId: 'native-run',
+    cwd: f.cwd, env: { CLAUDE_CONFIG_DIR: f.home, PATH: '' }, model: 'claude-opus-5-5', effort: 'high', onSubagent };
+  const session = createClaudeSession(spec, event => events.push(event), {
+    loadSdk: async () => fake.sdk, resolveExecutable: async () => 'offline-only',
+    credentials: { status: () => ({ saved: true }), read: () => 'sk-ant-offline-native-subagents' },
+    usage: createUsage({ file: path.join(f.directory, 'usage.json'), now: () => now }), now: () => now,
+  });
+  t.after(() => session.close());
+  await session.start(); await session.send({ clientMessageId: 'parent-input', text: 'Parent task' }); await tick();
+  const hook = (name, input, toolUseId) => {
+    const callback = fake.calls[0].options.hooks[name]?.[0]?.hooks[0];
+    assert.equal(typeof callback, 'function', `${name} is registered on the real query options`);
+    return callback({ session_id: f.parentId, transcript_path: f.transcript, cwd: f.cwd,
+      hook_event_name: name, agent_id: 'child', agent_type: 'Explore', ...input }, toolUseId, { signal: new AbortController().signal });
+  };
+  return { spec, fake, events, session, hook, clock: value => { now = at(value); } };
+}
+
+test("a native Claude session's Agent-tool sub-agent has its row from SubagentStart, its rate from its transcript, and ends on SubagentStop", async t => {
+  const f = workspace(t), calls = new AgentCalls({ terminalId: 'terminal', claudeHome: () => f.home, now: () => at(0) });
+  t.after(() => calls.dispose());
+  const host = nativeHost(f, calls), runtime = await sessionFixture(t, f, host.spec.onSubagent);
+  assert.equal(fs.existsSync(f.folder), false);
+  assert.deepEqual(await runtime.hook('SubagentStart'), {});
+  const rows = () => calls.snapshot().flatMap(group => group.items);
+  assert.equal(rows().length, 1, 'the hook creates a row before the child transcript exists');
+  assert.equal(calls.folder, f.folder);
+  assert.equal(calls.snapshot()[0].rate, null);
+  await calls.work;
+  fs.mkdirSync(f.folder, { recursive: true });
+  const childFile = path.join(f.folder, 'agent-child.jsonl');
+  fs.copyFileSync(path.join(__dirname, 'fixtures/claude-subagent-token-rate.jsonl'), childFile);
+  const child = [...calls.calls.values()].find(call => call.agentId === 'child');
+  assert.ok(child);
+  calls.refresh(child.key); await calls.work;
+  assert.equal(calls.snapshot()[0].model, 'claude-opus-5-5');
+  assert.equal(calls.snapshot()[0].rate.outputTokens, 120);
+  assert.equal(calls.snapshot()[0].rate.activeMs, 5000);
+  assert.equal(calls.snapshot()[0].rate.samples, 2);
+  runtime.clock(8);
+  assert.deepEqual(await runtime.hook('SubagentStop', { agent_transcript_path: childFile }), {});
+  await calls.work;
+  assert.equal(rows().length, 1);
+  assert.equal(child.done, true); assert.equal(rows()[0].endedAt, at(8));
+  assert.equal(runtime.events.filter(event => event.type === 'turn.completed').length, 0);
+  assert.equal(runtime.events.filter(event => event.type === 'usage.updated').length, 0, 'child rates never enter parent usage');
+  assert.doesNotMatch(JSON.stringify(runtime.events), /Placeholder finding|Placeholder result/);
+});
+
+test('the sub-agent callbacks answer {} and change no query option', async t => {
+  const f = workspace(t), abort = new AbortController(), reports = [];
+  t.after(() => abort.abort());
+  const spec = { owner: 'gui', cwd: f.cwd, env: { PATH: '' }, model: 'claude-opus-5-5', effort: 'high', context: 'Existing context' };
+  const options = queryOptions(spec, { abort, key: 'offline-only', executable: 'offline-only', providerSessionId: f.parentId,
+    policy: () => ({ behavior: 'deny', reason: 'Existing policy' }), canUseTool: async () => ({ behavior: 'deny' }),
+    onSubagent: (...args) => { reports.push(args); if (args[0] === 'stop') throw new Error('offline reporting failure'); } });
+  const before = { ...options, hooks: null }, settings = fs.readFileSync(options.settings, 'utf8');
+  const input = { session_id: f.parentId, agent_id: 'child', agent_type: 'Explore', transcript_path: f.transcript };
+  for (const [event, kind] of [['SubagentStart', 'start'], ['SubagentStop', 'stop']]) {
+    const callback = options.hooks[event]?.[0]?.hooks[0]; assert.equal(typeof callback, 'function');
+    assert.deepEqual(await callback(input, 'toolu_child', { signal: abort.signal }), {});
+    assert.deepEqual(reports.at(-1), [kind, input, 'toolu_child']);
+  }
+  assert.deepEqual({ ...options, hooks: null }, before);
+  assert.equal(fs.readFileSync(options.settings, 'utf8'), settings);
+  const policy = await options.hooks.PreToolUse[0].hooks[0]({ tool_name: 'Read', tool_input: { file_path: 'file' } });
+  assert.equal(policy.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(options.systemPrompt.append.includes('Existing context'), true);
+});
+
+test('native sub-agent signals stay ordered and ignore invalid or retired query callbacks', async t => {
+  const f = workspace(t), reports = [];
+  const runtime = await sessionFixture(t, f, (signal, binding) => reports.push({ signal, binding }));
+  await Promise.all([runtime.hook('SubagentStart', {}, 'toolu_child'), runtime.hook('SubagentStop', { agent_transcript_path: path.join(f.folder, 'agent-child.jsonl') })]);
+  assert.equal(reports.length, 2);
+  assert.deepEqual(reports[0].signal, { kind: 'start', terminalId: 'terminal', agentId: 'child', agentType: 'Explore',
+    transcriptPath: null, toolUseId: 'toolu_child', at: at(0) });
+  assert.equal(reports[1].signal.kind, 'stop'); assert.equal(reports[1].signal.toolUseId, null);
+  assert.deepEqual(reports[0].binding, { runtimeSessionId: 'native-run', providerSessionId: f.parentId, folder: f.folder });
+  await runtime.hook('SubagentStart', { session_id: 'other-session' });
+  await runtime.hook('SubagentStart', { agent_id: '../escape' });
+  assert.equal(reports.length, 2);
+  await runtime.session.close();
+  assert.deepEqual(await runtime.hook('SubagentStart'), {});
+  assert.equal(reports.length, 2);
+});
+
+test('main binds the native rate folder before reporting a row and ignores stale runtimes', t => {
+  const f = workspace(t), received = [], calls = {
+    setFolder: folder => received.push(['folder', folder]),
+    subagent: signal => { received.push(['signal', signal]); return true; },
+  };
+  const host = nativeHost(f, calls);
+  assert.equal(typeof host.spec.onSubagent, 'function');
+  const signal = { kind: 'start', terminalId: 'terminal', agentId: 'child', agentType: 'Explore', transcriptPath: null, toolUseId: null, at: at(0) };
+  const binding = { runtimeSessionId: 'native-run', providerSessionId: f.parentId, folder: f.folder };
+  host.spec.onSubagent(signal, binding);
+  assert.deepEqual(received, [['folder', f.folder], ['signal', signal]]);
+  assert.equal(host.scheduled(), 1);
+  host.spec.onSubagent(signal, { ...binding, runtimeSessionId: 'old-run' });
+  host.spec.onSubagent(signal, { ...binding, providerSessionId: 'old-session' });
+  host.spec.onSubagent({ ...signal, terminalId: 'other-terminal' }, binding);
+  host.s.codexActive = false; host.spec.onSubagent(signal, binding); host.s.codexActive = true;
+  host.context.quitting = true; host.spec.onSubagent(signal, binding); host.context.quitting = false;
+  host.nativeSpecs.set('terminal', { ...host.spec }); host.spec.onSubagent(signal, binding);
+  assert.equal(received.length, 2); assert.equal(host.scheduled(), 1);
+});
+
+test('native retirement clears its child rows and keeps dispatched workers', t => {
+  const f = workspace(t), calls = new AgentCalls({ terminalId: 'terminal', now: () => at(0) });
+  t.after(() => calls.dispose());
+  const host = nativeHost(f, calls); host.s.calls = calls; calls.setFolder(f.folder);
+  calls.dispatch({ type: 'dispatch-declared', id: 'dispatched-worker', agent: 'codex', role: 'execution', title: 'Independent worker',
+    cwd: f.cwd, at: at(0), requested: { model: 'gpt-6.1-sol', effort: 'high', fast: true } });
+  calls.apply({ type: 'assistant', timestamp: new Date(at(0)).toISOString(), message: { content: [
+    { type: 'tool_use', id: 'native-child', name: 'Agent', input: { subagent_type: 'Explore' } },
+  ] } });
+  assert.equal(calls.calls.size, 2);
+  host.context.createNativeUsage = () => ({ apply() {} });
+  host.context.store.setRestore = () => {};
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), host.context);
+  host.context.structuredEvent('terminal', { type: 'session.state', runtimeSessionId: 'native-run', providerSessionId: f.parentId, payload: { state: 'stopped' } });
+  assert.deepEqual([...calls.calls.keys()], ['dispatched-worker']);
+  assert.equal(calls.folder, null); assert.equal(host.s.codexActive, false);
+});
+
+test('native transcript folder discovery keeps SDK aliases before the parent file exists and rejects escapes', async t => {
+  const { claudeSubagentFolder } = require('../electron/features/claude-sdk/transcript-folder.cjs');
+  const f = workspace(t), spec = { cwd: f.cwd, env: { CLAUDE_CONFIG_DIR: f.home } };
+  const alias = path.join(f.home, 'projects', 'alias-spelling'), parent = path.join(alias, `${f.parentId}.jsonl`);
+  fs.mkdirSync(alias);
+  assert.equal(await claudeSubagentFolder(spec, f.parentId, parent), path.join(alias, f.parentId, 'subagents'));
+  const pending = path.join(f.home, 'projects', 'not-created-yet');
+  assert.equal(await claudeSubagentFolder(spec, f.parentId, path.join(pending, `${f.parentId}.jsonl`)), path.join(pending, f.parentId, 'subagents'));
+  assert.equal(await claudeSubagentFolder(spec, f.parentId), f.folder, 'without a hook path the shared verified session lookup supplies it');
+  assert.equal(await claudeSubagentFolder(spec, '../escape', parent), null);
+  assert.equal(await claudeSubagentFolder(spec, f.parentId, path.join(f.cwd, `${f.parentId}.jsonl`)), null);
+  assert.equal(await claudeSubagentFolder(spec, f.parentId, path.join(alias, 'other-session.jsonl')), null);
+  const link = path.join(f.home, 'projects', 'linked');
+  fs.symlinkSync(f.cwd, link, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(await claudeSubagentFolder(spec, f.parentId, path.join(link, `${f.parentId}.jsonl`)), null);
+});
