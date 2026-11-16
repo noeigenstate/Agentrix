@@ -14,6 +14,18 @@ export const HIDDEN_NOTE: CSSProperties = { position: 'absolute', width: 1, heig
 export const fullHintProps = (hints: string[], shown: string, noteId: string) =>
   shown === hints[0] ? {} : { title: hints[0], 'aria-describedby': noteId };
 
+// The room the box has on its line, worked out from its row rather than from its own width: a textarea that sizes to its content (field-sizing) is as wide as the hint it shows, so
+// when no hint fits and the placeholder is empty its own width is 0 and would never grow back. The row's inner width less the other items in flow (buttons) and the gaps is the box's share.
+export const rowRoom = (inner: number, gap: number, siblings: number[]) => Math.max(0, inner - siblings.reduce((sum, width) => sum + width, 0) - gap * siblings.length);
+
+function roomOf(node: HTMLTextAreaElement, own: number) {
+  const row = node.parentElement; if (!row) return own;
+  const rowStyle = getComputedStyle(row), gap = parseFloat(rowStyle.columnGap) || 0;
+  const inner = row.clientWidth - parseFloat(rowStyle.paddingLeft) - parseFloat(rowStyle.paddingRight);
+  const siblings = [...row.children].filter(child => child !== node && getComputedStyle(child).position !== 'absolute' && getComputedStyle(child).display !== 'none').map(child => (child as HTMLElement).offsetWidth);
+  return Math.max(own, rowRoom(inner, gap, siblings));
+}
+
 export function useFittingHint(box: RefObject<HTMLTextAreaElement | null>, hints: string[]) {
   const [index, setIndex] = useState(0), key = hints.join('\n');
   useLayoutEffect(() => {
@@ -22,11 +34,12 @@ export function useFittingHint(box: RefObject<HTMLTextAreaElement | null>, hints
     const fit = () => {
       const style = getComputedStyle(node);
       canvas.font = style.font;
-      setIndex(fittingIndex(hints, node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight), text => canvas.measureText(text).width));
+      setIndex(fittingIndex(hints, roomOf(node, node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)), text => canvas.measureText(text).width));
     };
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(node);
+    if (node.parentElement) observer.observe(node.parentElement);
     return () => observer.disconnect();
   }, [box, key]);
   return hints[index] ?? '';

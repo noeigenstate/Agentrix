@@ -13,6 +13,12 @@ export function selectMenuWidths(triggerWidth: number, windowWidth: number) {
   return { minWidth: Math.min(triggerWidth, maxWidth), maxWidth };
 }
 
+// Opens downward when every option shows there; else upward when every option shows above; else toward the larger side, scrolling (the menu never scrolls while one side can show it all).
+export function selectMenuSide(wanted: number, below: number, above: number) {
+  const up = wanted > below && (above >= wanted || above > below);
+  return { up, maxHeight: Math.min(MAX_HEIGHT, Math.max(96, up ? above : below)) };
+}
+
 export function selectMenuLeft(triggerLeft: number, menuWidth: number, windowWidth: number) {
   return Math.max(EDGE, Math.min(triggerLeft, windowWidth - menuWidth - EDGE));
 }
@@ -47,11 +53,11 @@ export function Select({ value, options, onChange, label, className = '', disabl
     // Inside a dialog the room below ends at the dialog's bottom edge, so a menu there opens upward instead of running past it.
     const floor = host instanceof HTMLDialogElement ? Math.min(innerHeight, host.getBoundingClientRect().bottom) : innerHeight;
     const room = { below: floor - box.bottom - EDGE - MENU_GAP, above: box.top - EDGE - MENU_GAP };
+    // Width first, then height: the wrapped descriptions are as tall as they are at the final width, so the menu is measured there, with no height limit.
+    Object.assign(list.style, { minWidth: `${widths.minWidth}px`, maxWidth: `${widths.maxWidth}px`, maxHeight: 'none' });
     const wanted = Math.min(MAX_HEIGHT, list.scrollHeight + 2);
-    const up = room.below < wanted && room.above > room.below;
-    const maxHeight = Math.min(MAX_HEIGHT, Math.max(96, up ? room.above : room.below));
-    // Apply the constraints before measuring, including any space used by the vertical scrollbar.
-    Object.assign(list.style, { minWidth: `${widths.minWidth}px`, maxWidth: `${widths.maxWidth}px`, maxHeight: `${maxHeight}px` });
+    const { up, maxHeight } = selectMenuSide(wanted, room.below, room.above);
+    list.style.maxHeight = `${maxHeight}px`;
     setPlace({ ...widths, left: selectMenuLeft(box.left, list.getBoundingClientRect().width, innerWidth), maxHeight,
       ...(up ? { bottom: innerHeight - box.top + MENU_GAP } : { top: box.bottom + MENU_GAP }) });
   }, [open, options.length]);

@@ -64,3 +64,12 @@ test('a wide settings trigger never gets a menu wider than itself', () => {
   assert.deepEqual(selectMenuWidths(300, 1000), { minWidth: 300, maxWidth: 300 });
   assert.deepEqual(selectMenuWidths(199, 1000), { minWidth: 199, maxWidth: 360 }, 'a narrow trigger may still grow to its options');
 });
+
+test('a menu opens up when the space below cannot show every option and the space above can; it scrolls only when neither side fits', () => {
+  const { selectMenuSide } = mod.exports;
+  assert.deepEqual(selectMenuSide(230, 400, 200), { up: false, maxHeight: 280 }, 'room below: down');
+  assert.deepEqual(selectMenuSide(230, 150, 300), { up: true, maxHeight: 280 }, 'below clips the last option, above shows all: up');
+  assert.equal(selectMenuSide(230, 220, 260).up, true, 'below is 10px short even though it is the bigger-looking gap');
+  assert.deepEqual(selectMenuSide(230, 120, 100), { up: false, maxHeight: 120 }, 'neither fits: the larger side, scrolling');
+  assert.deepEqual(selectMenuSide(230, 100, 150), { up: true, maxHeight: 150 });
+});
