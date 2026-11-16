@@ -493,7 +493,8 @@ test('no session, timeout and spawn failure print failed-start once and end unco
   const { run } = require('../integration/dispatch.cjs');
   const f = await fixture(t); await f.finished;
   let stdout = '';
-  const code = await run(f.args, { env: {}, stdout: { write: value => { stdout += value; } }, locate: async () => path.join(f.directory, 'missing-executable'), launch: (_, args, options) => spawn(path.join(f.directory, 'missing-executable'), args, options) });
+  const code = await run(f.args, { env: {}, stdout: { write: value => { stdout += value; } }, locate: async () => path.join(f.directory, 'missing-executable'),
+    locateClaude: async () => assert.fail('a Codex run asked for Claude Code'), launch: (_, args, options) => spawn(path.join(f.directory, 'missing-executable'), args, options) });
   assert.notEqual(code, 0); assert.match(stdout, /failed to start .*ENOENT/);
   // No Codex outside the shim folder: nothing is launched, where a bare `codex` would find the shim again.
   stdout = '';
@@ -568,7 +569,8 @@ test('exit or timeout emits the unconfirmed pair before still-open stdout closes
     child.stdin.resume();
     let completed = false;
     const running = run(f.args, { env: { CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: path.join(f.directory, 'bootstrap.json') },
-      stdout: { write() {} }, startTimeout: cause === 'timeout' ? 20 : 30000, locate: async () => null,
+      // A stand-in Claude Code: the injected launch below is what runs, whatever this machine has installed.
+      stdout: { write() {} }, startTimeout: cause === 'timeout' ? 20 : 30000, locate: async () => null, locateClaude: async () => 'stand-in-claude',
       launch: () => {
         if (cause === 'exit') queueMicrotask(() => { child.exitCode = 0; child.emit('exit', 0); });
         return child;
