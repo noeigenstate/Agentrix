@@ -61,7 +61,7 @@ function facade(t, remote = false) {
   let connections = { claude: connection(), codex: connection() }, limits = { claude: subscriptionLimits(account(), 'claude', 120000, 1001), codex: subscriptionLimits(account(), 'codex', 120000, 1001) };
   const native = createNativeSessions({ directory,
     validateProject: () => ({ kind: remote ? 'ssh' : 'local' }),
-    claude: { apiState: () => ({ status: 'no_key' }), usage: { summary: () => ({}) }, credentials: { status: () => ({ saved: false }), get: forbidden }, create: forbidden },
+    claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }], usage: { summary: () => ({}) }, credentials: { status: () => ({ saved: false }), get: forbidden }, create: forbidden },
     codex: { create: forbidden }, resolveSpec: forbidden, emit: forbidden,
     connections: async () => { if (connections instanceof Error) throw connections; return typeof connections === 'function' ? connections() : connections; },
     usageInputs: async () => { assert.equal(remote, false, 'SSH must not read local accounts'); return { cli, limits }; } });
@@ -142,7 +142,7 @@ test('router retains live limits across empty events and lets a newer account re
   const { createRouter } = require('../electron/features/native-session/router.cjs');
   const { createEventStream } = require('../electron/features/native-session/events.cjs');
   let stream;
-  const runtime = { apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) }, create(spec, emit) {
+  const runtime = { facts: () => [], usage: { summary: () => ({}) }, create(spec, emit) {
     stream = createEventStream(spec, emit); return { start: async () => {}, close: async () => {}, snapshot: () => ({ state: 'idle' }) };
   } };
   const router = createRouter({ claude: runtime, codex: runtime, settings: { get: () => ({ claudePath: 'api-only' }) }, resolveSpec: () => ({ projectId: 'p', terminalId: 't' }), emit() {} });
@@ -355,7 +355,7 @@ async function liveCodex(t) {
   const { createEventStream } = require('../electron/features/native-session/events.cjs');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-usage-placeholder-'));
   const live = { limits: {}, codex: connection(999, 'account-a') };
-  const runtime = { apiState: () => ({ status: 'no_key' }), usage: { summary: () => ({}) }, create(spec, emit) {
+  const runtime = { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }], usage: { summary: () => ({}) }, create(spec, emit) {
     const stream = createEventStream(spec, emit); live.publish = payload => stream.publish('limits.updated', payload);
     return { start: async () => {}, close: async () => {}, snapshot: () => ({ state: 'idle' }) };
   } };

@@ -48,7 +48,7 @@ test('real Codex 0.166 native slash controls affect requests, survive resume, an
   };
   const saved = {};
   const make = () => {
-    const router = createRouter({ codex, claude: { apiState: () => ({ status: 'ready' }) }, settings: { get: () => ({}) },
+    const router = createRouter({ codex, claude: { facts: () => [] }, settings: { get: () => ({}) },
       resolveSpec: () => ({ owner: 'gui', cwd, env, projectId: 'p', terminalId: 't', readOnly: true, policy: { approvalPolicy: 'never' }, providerSessionId: saved.providerSessionId }),
       saveSession: (_id, value) => Object.assign(saved, value), emit: event => events.push(event), terminal() { assert.fail('no terminal fallback'); } });
     routers.push(router); return router;

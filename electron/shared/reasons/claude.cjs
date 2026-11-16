@@ -10,11 +10,23 @@ module.exports = {
     timeout: {},
     failed: {},
     unreadable: {},
-    // The route decision (R2).
-    billing_mismatch: {},
+    // The route decision (R2): each fact decide() reads, and the settings' own choice. The names are the ones the windows
+    // already receive as a path's reason.
+    no_key: {},
     invalid_key: {},
-    route_config: {},
+    key_forbidden: {},
+    api_unreachable: {},
+    key_check_failed: {},
+    native_cli_required: {},
     native_cli_unverified: {},
+    cli_too_old: {},
+    billing_identity_mismatch: {},
+    billing_unconfirmed: {},
+    route_config: {},
+    api_unavailable: {},
+    terminal_selected: {},
+    set_terminal: {},
+    set_api: {},
     // Limits the provider reports; Agentrix sets none of its own.
     credits_exhausted: {},
     rate_limited: {},

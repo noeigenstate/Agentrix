@@ -23,7 +23,9 @@ async function waitWithin(task, milliseconds) {
 function createClaudeSession(spec, emit, dependencies) {
   spec.fast = false;
   const { loadSdk, resolveExecutable, credentials, usage, now = Date.now, audit,
-    onCost = () => {}, onFailure = () => {}, onSession = () => {} } = dependencies;
+    onCost = () => {}, observe = () => {}, onSession = () => {} } = dependencies;
+  // What this session saw of its route, told to the resolver with the generation its query began in.
+  const failed = (code, error, observed) => observe({ kind: 'failure', code, message: error?.message, observed });
   const stream = createEventStream(spec, emit, now), secrets = new Set();
   const sent = new Map(), results = new Set();
   let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
@@ -92,7 +94,7 @@ function createClaudeSession(spec, emit, dependencies) {
     }
     // A key revoked mid-session leaves the route unavailable, so the next message takes the run mode's fallback.
     if (message.error === 'authentication_failed') {
-      onFailure('invalid_key', null, run.generation);
+      failed('invalid_key', null, run.generation);
       publish('limits.updated', { scopeId: spec.scopeId || spec.runtimeSessionId, billingRoute: 'api', observedAtMs: now(),
         state: 'unavailable', limitsById: {}, resetCredits: null, ordinaryUsageAllowed: null, source: 'invalid_key' });
     }
@@ -102,7 +104,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (!notice) return;
     run.limitReason = refusalReason(notice.code); run.limitMessage = notice.message; run.quotaRejected = true;
     providerFailure = Object.assign(new Error(notice.message), { code: run.limitReason, beforeInput: true });
-    if (spec.owner !== 'dispatch' || run.limitReason !== 'credits_exhausted') onFailure(run.limitReason, providerFailure, run.generation);
+    if (spec.owner !== 'dispatch' || run.limitReason !== 'credits_exhausted') failed(run.limitReason, providerFailure, run.generation);
     const messageText = (spec.quotaFallback?.() ? LIMIT_SWITCHING : LIMIT_MESSAGES)[run.limitReason];
     publish('error', { code: notice.code, message: messageText, retryable: false, willRetry: false, stage: 'turn' });
   }
@@ -223,7 +225,7 @@ function createClaudeSession(spec, emit, dependencies) {
         // A refusal stops only the turn it ended. A later turn the provider accepted, automatic or a worker's, clears it.
         const limited = run.quotaRejected, accepted = !message.is_error && !limited && Object.values(tokensOf(message.usage) || {}).some(value => value > 0);
         if (accepted) providerFailure = null;
-        if (accepted && spec.owner !== 'dispatch') dependencies.onSuccess?.(run.generation);
+        if (accepted && spec.owner !== 'dispatch') observe({ kind: 'success', observed: run.generation });
         const entry = usage.record(providerId, message, { resume: !!run.resumeId, rejected });
         resultCost = message.total_cost_usd;
         tally.result(message);
@@ -299,7 +301,7 @@ function createClaudeSession(spec, emit, dependencies) {
             requests.cancel(); unknownInput();
           } else {
             const failure = startupFailure(error), code = failure.code === 'billing_identity_mismatch' ? failure.code : 'sdk_failed';
-            onFailure(code, failure, run.generation);
+            failed(code, failure, run.generation);
             publish('error', { code, message: code === 'billing_identity_mismatch' ? failure.message : 'Claude API 会话无法继续。', retryable: false, willRetry: false, stage: 'runtime' });
             requests.cancel(); unknownInput(); setState('failed', code);
           }
@@ -338,7 +340,7 @@ function createClaudeSession(spec, emit, dependencies) {
     const key = credentials.read();
     if (!key) throw new Error('请先保存 API 密钥。');
     const run = { key, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
-      generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
+      generation: dependencies.generation?.(), keyVersion: dependencies.credentialVersion?.(),
       busy: false, background: new Map(), subagents: new Map(), stderr: stderrCollector() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
@@ -368,7 +370,7 @@ function createClaudeSession(spec, emit, dependencies) {
         const context = await run.query.getContextUsage();
         run.resetModel = typeof context.model === 'string' ? context.model : null;
       }
-      dependencies.onIdentity?.(run.generation);
+      observe({ kind: 'identity', observed: run.generation });
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
       if (!prepareOnly && !canContinue()) {
         cancelQuery(run, 'path_changed'); secrets.delete(key); return null;
@@ -378,7 +380,7 @@ function createClaudeSession(spec, emit, dependencies) {
       if (stopping || closed) throw new Error('会话已停止。');
       const failure = startupFailure(error, { stderr: run.stderr.text(), key });
       if (observing) throw failure;
-      onFailure(failure.code, failure, run.generation);
+      failed(failure.code, failure, run.generation);
       publish('error', { code: failure.code, message: failure.message, retryable: false, willRetry: false, stage: 'startup' });
       setState('failed', failure.code);
       throw failure;
@@ -448,7 +450,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
     // Settings invalidate failures while owner queries stay open at idle. An explicit
     // new turn observes the new generation without letting an old in-flight failure rearm it.
-    if (!active.busy) active.generation = dependencies.availabilityGeneration?.();
+    if (!active.busy) active.generation = dependencies.generation?.();
     active.busy = true;
     (active.turnInputs ||= []).push({ clientMessageId, text, images });
     fallbackInput = null;

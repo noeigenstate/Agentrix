@@ -51,7 +51,7 @@ test('a resumed thread’s unfinished history is not running work: a new convers
   const provider = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: () => { peers.push(server(root)); return peers.at(-1).child; } });
   const create = provider.create.bind(provider);
   provider.create = (...args) => { sessions.push(create(...args)); return sessions.at(-1); };
-  const router = createRouter({ codex: provider, claude: { apiState: () => ({ status: 'no_key' }) }, emit() {}, settings: { get: () => ({}) },
+  const router = createRouter({ codex: provider, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, emit() {}, settings: { get: () => ({}) },
     resolveSpec: () => ({ terminalId: 't', projectId: 'p', owner: 'gui', cwd: root, providerSessionId: 'old-thread', env: { CODEX_HOME: root, PATH: '' } }) });
   t.after(async () => { await router.close(); fs.rmSync(root, { force: true, recursive: true }); });
   const { runtimeSessionId } = await router.start('t', { agent: 'codex', resume: true });

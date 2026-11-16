@@ -105,7 +105,7 @@ test('S3 shell background descendants cannot hold timeout and cancellation hosta
 });
 test('S9 subscription limits are isolated by project including SSH', async t => {
   const root = directory(t), streams = new Map();
-  const provider = { apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) }, create(spec, emit) {
+  const provider = { facts: () => [], usage: { summary: () => ({}) }, create(spec, emit) {
     const stream = require('../electron/features/native-session/events.cjs').createEventStream(spec, emit); streams.set(spec.projectId, stream);
     return { start: async () => {}, close() {}, snapshot: () => ({ state: 'idle' }) };
   } };

@@ -29,7 +29,7 @@ test('an explicit shell resume with no matching history refuses instead of start
 });
 function fixture(config = {}) {
   const events = [], terminals = [], created = [], settings = { get: () => ({ claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: null, ...config }) };
-  const claude = { apiState: () => ({ status: 'ready' }), usage: { summary: () => ({ month: '2026-11', todayUsdMicros: 0, monthUsdMicros: 0, estimated: true }) },
+  const claude = { facts: () => [], usage: { summary: () => ({ month: '2026-11', todayUsdMicros: 0, monthUsdMicros: 0, estimated: true }) },
     credentials: { clear: () => ({ saved: false }) }, create(spec, emit) {
       let state = 'stopped';
       const stream = createEventStream(spec, event => { events.push(event); emit(event); }, () => 100);
@@ -44,7 +44,7 @@ function fixture(config = {}) {
 }
 test('an owner Claude quota refusal under API-only cannot move a running Codex off app-server', async t => {
   const { router, claude } = fixture({ claudePath: 'api-only' }); t.after(() => router.close());
-  claude.apiState = () => ({ status: 'credits_exhausted' });
+  claude.facts = () => [{ name: 'limit', reason: { code: 'claude.credits_exhausted' } }];
   await router.start('t', { agent: 'codex' }); router.reconcile();
   await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve));
   assert.equal(router.switchState('t'), null);
@@ -66,7 +66,7 @@ test('missing native Claude falls back only under api-then-terminal', async () =
 });
 test('fallback at a message boundary never replays the submitted text', async () => {
   const { router, claude, terminals, created } = fixture(); const first = await router.start('t', { agent: 'claude' });
-  claude.apiState = () => ({ status: 'account_limit' });
+  claude.facts = () => [{ name: 'limit', reason: { code: 'claude.account_limit' } }];
   const receipt = await router.send('t', first.runtimeSessionId, { clientMessageId: 'message', text: 'must not replay' });
   assert.equal(receipt.status, 'rejected'); assert.equal(terminals.length, 0); assert.ok(!JSON.stringify(terminals).includes('must not replay'));
   assert.equal(created[0].runtime.snapshot().state, 'idle', 'the old path remains alive until handoff and readiness');

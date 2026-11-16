@@ -11,7 +11,7 @@ function fixture(t, mode) {
   const codex = createCodexRuntime({ resolveExecutable: async () => mode === 'absent' ? null : 'synthetic-only', spawnProcess: (_file, _args, options) => {
     return lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options));
   } });
-  const claude = { apiState: () => ({ status: 'no_key' }), usage: { summary: () => ({}) } };
+  const claude = { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }], usage: { summary: () => ({}) } };
   const router = createRouter({ codex, claude, settings: { get: () => ({ codexView: 'native', claudePath: 'api-only', monthlyBudgetUsd: null }) },
     resolveSpec: id => ({ projectId: 'p', terminalId: id, cwd: os.tmpdir(), env: { PATH: '', SYNTHETIC_CODEX_MODE: mode } }),
     terminal: async (spec, reason) => { terminals.push({ spec, reason }); await router.forget(spec.terminalId); }, emit: event => events.push(event) });

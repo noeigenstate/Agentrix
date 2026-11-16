@@ -13,7 +13,7 @@ function fixture(t, mode, existingTerminal) {
   let live = existingTerminal ? [source] : [];
   const codex = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: (_file, _args, options) =>
     lifetime.child(spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options)) });
-  const router = createRouter({ codex, claude: { apiState: () => ({ status: 'no_key' }) }, settings: { get: () => ({ codexView: 'native' }) },
+  const router = createRouter({ codex, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, settings: { get: () => ({ codexView: 'native' }) },
     resolveSpec: () => ({ ...spec }), terminalSessions: () => live,
     observeTerminal: () => ({ state: 'idle', background: { known: true, count: 0 } }),
     activateNative(value) { activated.push(value); live = []; }, terminal(value, reason) { fallback.push({ spec: value, reason }); }, emit: event => events.push(event) });

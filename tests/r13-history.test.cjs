@@ -50,7 +50,7 @@ for (const kind of ['local', 'ssh']) test(`N10 ${kind} history lookup resumes th
   const history = await factory.history(spec); assert.equal(history.id, threadId);
   if (kind === 'ssh') assert.equal(readOnly, true, 'lookup does not consume a first-open delivery');
   assert.ok(methods.some(row => row.method === 'thread/list')); assert.ok(!methods.some(row => /account|turn\/start/.test(row.method)));
-  const facade = createNativeSessions({ directory: path.join(root, 'state'), codex: factory, claude: { apiState: () => ({ status: 'no_key' }) },
+  const facade = createNativeSessions({ directory: path.join(root, 'state'), codex: factory, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] },
     resolveSpec: () => spec, readHistory: async () => ({ codex: history }), emit() {}, terminal: forbidden }); runtimes.push(facade);
   await facade.start('t', { agent: 'codex', resume: true });
   assert.equal(facade.snapshot('t').events.find(event => event.providerSessionId)?.providerSessionId, threadId);
@@ -66,7 +66,7 @@ for (const last of ['task_started', 'task_complete']) test(`N3 continuation veri
     const child = spawn(process.execPath, [path.join(__dirname, 'fixtures/gui-codex-app-server.cjs')], { ...options, env: { ...options.env, CODEX_HOME: home, GIT_CEILING_DIRECTORIES: root } });
     const write = child.stdin.write.bind(child.stdin); child.stdin.write = (line, ...args) => { methods.push(JSON.parse(line)); return write(line, ...args); }; return child;
   } });
-  facade = createNativeSessions({ directory: root, codex: factory, claude: { apiState: () => ({ status: 'no_key' }) }, resolveSpec: () => ({ cwd: root, providerSessionId: threadId }), emit() {}, terminal() { assert.fail(); } });
+  facade = createNativeSessions({ directory: root, codex: factory, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, resolveSpec: () => ({ cwd: root, providerSessionId: threadId }), emit() {}, terminal() { assert.fail(); } });
   const opened = await facade.start('t', { agent: 'codex', resume: true }); let cleared = 0;
   await facade.continueInterrupted('t', opened.runtimeSessionId, () => cleared++);
   await facade.continueInterrupted('t', opened.runtimeSessionId, () => cleared++);

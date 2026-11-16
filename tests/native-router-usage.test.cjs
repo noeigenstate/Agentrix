@@ -9,6 +9,7 @@ const { createNativeSessions } = require('../electron/features/native-session/in
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
 const { nextPath, subscriptionLimits } = require('../electron/features/native-session/usage.cjs');
+const { fromApiState } = require('../electron/features/native-session/routing.cjs');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { createEventStream } = require('../electron/features/native-session/events.cjs');
 const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
@@ -32,13 +33,13 @@ for (const [agent, config, status, cli, expected] of [
   ['codex', {}, null, 'missing', [null, 'cli_missing']],
   ['codex', { codexView: 'terminal' }, null, 'missing', [null, 'cli_missing']],
 ]) test(`next path: ${agent} ${JSON.stringify(config)} ${status} CLI ${cli}`, () => {
-  assert.deepEqual(nextPath(agent, config, { status }, { status: cli }), { path: expected[0], reason: expected[1] });
+  assert.deepEqual(nextPath(agent, config, fromApiState({ status }), { status: cli }), { path: expected[0], reason: expected[1] });
 });
 test('next path: a Claude Code found but not verified reads as unverified, the way the connection test words it', () => {
   for (const reason of ['timeout', 'failed', 'unreadable']) {
-    assert.deepEqual(nextPath('claude', {}, { status: 'ready' }, { status: 'missing', reason }), { path: 'terminal', reason: 'native_cli_unverified' });
+    assert.deepEqual(nextPath('claude', {}, [], { status: 'missing', reason }), { path: 'terminal', reason: 'native_cli_unverified' });
   }
-  assert.deepEqual(nextPath('claude', {}, { status: 'ready' }, { status: 'missing', reason: 'not_found' }), { path: 'terminal', reason: 'cli_missing' });
+  assert.deepEqual(nextPath('claude', {}, [], { status: 'missing', reason: 'not_found' }), { path: 'terminal', reason: 'cli_missing' });
 });
 
 test('subscription limits preserve milliseconds, missing windows, credits, source and freshness', () => {
@@ -58,7 +59,7 @@ test('subscription limits preserve milliseconds, missing windows, credits, sourc
 
 test('native limit events win over subscription fallback and reads leave running paths unchanged', async () => {
   let stream;
-  const runtime = { apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) }, create(spec, emit) {
+  const runtime = { facts: () => [], usage: { summary: () => ({}) }, create(spec, emit) {
     stream = createEventStream(spec, emit);
     return { async start() {}, async close() {}, snapshot: () => ({ state: 'idle' }) };
   } };

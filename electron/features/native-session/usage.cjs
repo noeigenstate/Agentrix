@@ -1,19 +1,15 @@
-const { choosePath } = require('./routing.cjs');
+const { decide, nameOf } = require('../claude-runtime/decide.cjs');
+const { cliFact } = require('../claude-runtime/resolver.cjs');
 
-// A CLI found but not verified (its check timed out, failed or printed no version) is not called missing.
-const cliReason = cli => cli.status === 'too_old' ? 'cli_too_old' : cli.reason && cli.reason !== 'not_found' ? 'native_cli_unverified' : 'cli_missing';
-function nextPath(agent, config, apiState, cli) {
-  if (agent === 'codex') {
-    return ['missing', 'too_old'].includes(cli?.status) ? { path: null, reason: cliReason(cli) } : choosePath({ agent });
-  }
-  if (config.claudePath === 'terminal-only') return { path: 'terminal', reason: 'set_terminal' };
-  const selection = choosePath({ agent, ...config, apiState });
-  if (selection.path === 'api' && ['missing', 'too_old'].includes(cli?.status)) {
-    return choosePath({ agent, ...config, apiState: { reason: cliReason(cli) } });
-  }
-  if (selection.reason === 'native_cli_required') selection.reason = 'cli_missing';
-  if (selection.path === 'api' && config.claudePath === 'api-only') selection.reason = 'set_api';
-  return selection;
+// What a new session takes, in the usage panel's words: the CLI check given here replaces the one the facts hold, and a
+// path the settings chose says so (set_terminal, set_api).
+const SAID = { terminal_selected: 'set_terminal', native_cli_required: 'cli_missing', cli_too_old: 'cli_too_old' };
+function nextPath(agent, config, facts = [], cli) {
+  const held = agent === 'codex' ? [] : facts;
+  const given = cli ? [...held.filter(value => value.name !== 'cli'), cliFact(cli)].filter(Boolean) : held;
+  const { path, reason, wire } = decide(given, config, { agent });
+  if (path === 'api') return { path, reason: config.claudePath === 'api-only' ? 'set_api' : null };
+  return { path, reason: SAID[nameOf(reason)] ?? wire };
 }
 
 // Account readers already normalize reset times to milliseconds. Never query or scale them again here.
