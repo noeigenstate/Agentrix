@@ -36,7 +36,7 @@ test('the host feeds historical workOnly and live Claude records into background
   host.historical(tool('Bash', 'launch', { command: 'node background.cjs', run_in_background: true }));
   assert.equal(host.shown().length, 1); assert.equal(host.shown()[0].terminalId, 'terminal-1');
   await host.live(result('launch', { backgroundTaskId: 'shell', stdout: 'inline output', stderr: '' }));
-  assert.equal(host.shown()[0].tail, 'inline output');
+  assert.deepEqual(host.shown()[0].tail, ['inline output'], 'main publishes the contract\'s tail?: string[]');
   await host.live(notice('shell'));
   assert.equal(host.shown()[0].state, 'done'); assert.equal(host.shown()[0].endedAt, 2000);
   assert.equal(host.armed(), 0); assert.equal(host.s.codexActive, true);
@@ -109,7 +109,7 @@ test('a foreground Bash becomes a background row only when its own receipt recor
   assert.deepEqual(tasks.snapshot(), []);
   tasks.apply(result('timeout', { backgroundTaskId: 'shell', stdout: 'first output', stderr: '' }, 1300));
   assert.deepEqual(tasks.snapshot(), [{ id: 'timeout', command: 'node slow.cjs', terminalId: 'terminal-1', startedAt: 1200,
-    state: 'running', exitCode: null, tail: 'first output', lastOutputAt: 1300 }]);
+    state: 'running', exitCode: null, tail: ['first output'], lastOutputAt: 1300 }]);
 });
 
 test('BashOutput and TaskOutput update only the matching shell and require a successful terminal receipt to finish it', () => {
@@ -232,25 +232,28 @@ test('terminal trackers isolate identical tool and task IDs and snapshots cannot
   assert.equal(right.snapshot()[0].state, 'running');
 });
 
-test('inline output retains its last 200 lines and only a changed output observation advances lastOutputAt', () => {
+test('inline output is published as an array of its last 200 lines and only a changed output observation advances lastOutputAt', () => {
   const { tasks } = fixture();
   const output = Array.from({ length: 250 }, (_, index) => `line ${index + 1}`).join('\r\n');
   tasks.apply(tool('Bash', 'launch', { command: 'node replay.cjs', run_in_background: true }));
   tasks.apply(result('launch', { backgroundTaskId: 'shell', stdout: output, stderr: '' }, 1100));
   const entry = tasks.snapshot()[0];
-  assert.equal(entry.tail.split('\n').length, 200);
-  assert.equal(entry.tail.split('\n')[0], 'line 51');
-  assert.equal(entry.tail.split('\n').at(-1), 'line 250');
+  assert.ok(Array.isArray(entry.tail), 'tail?: string[], one line each');
+  assert.equal(entry.tail.length, 200);
+  assert.equal(entry.tail[0], 'line 51');
+  assert.equal(entry.tail.at(-1), 'line 250');
+  entry.tail.pop();
+  assert.equal(tasks.snapshot()[0].tail.length, 200, 'a snapshot is a copy');
   assert.equal(entry.lastOutputAt, 1100);
   for (const [id, at, stdout, stderr] of [['same', 1200, output, ''], ['empty', 1300, '', ''], ['new', 1400, 'new output', 'a warning']]) {
     tasks.apply(tool('BashOutput', id, { bash_id: 'shell' }, at - 1));
     tasks.apply(result(id, { status: 'running', stdout, stderr }, at));
     assert.equal(tasks.snapshot()[0].lastOutputAt, id === 'new' ? 1400 : 1100);
   }
-  assert.equal(tasks.snapshot()[0].tail, 'new output\na warning');
+  assert.deepEqual(tasks.snapshot()[0].tail, ['new output', 'a warning']);
   tasks.apply(tool('BashOutput', 'older', { bash_id: 'shell' }, 1049));
   tasks.apply(result('older', { status: 'running', stdout: 'stale output' }, 1050));
-  assert.equal(tasks.snapshot()[0].tail, 'new output\na warning');
+  assert.deepEqual(tasks.snapshot()[0].tail, ['new output', 'a warning']);
 });
 
 test('idle, Stop, elapsed time and assistant claims cannot finish a shell or fabricate a last output time', () => {

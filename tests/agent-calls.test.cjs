@@ -13,7 +13,10 @@ const notice = (id, status = 'completed', array = false) => {
   return { type: 'user', message: { content: array ? [{ type: 'text', text: body }] : body } };
 };
 const stop = (timestamp = '2026-10-23T02:32:55.157Z') => ({ type: 'system', subtype: 'stop_hook_summary', hookCount: 1, hookInfos: [{ command: 'claude-hook.ps1 -Kind stop', durationMs: 399 }], hookErrors: [], preventedContinuation: false, timestamp });
-const states = calls => calls.snapshot().map(({ preparing, running, reviewing }) => [preparing, running, reviewing]);
+// The groups with a live row; a finished call main has retired stays in the snapshot as a hidden `done` row for 最近完成.
+const live = calls => calls.snapshot().filter(group => group.items.some(item => !item.hidden));
+const retiredRows = calls => calls.snapshot().flatMap(group => group.items).filter(item => item.hidden).map(({ id, state }) => [id, state]);
+const states = calls => live(calls).map(({ preparing, running, reviewing }) => [preparing, running, reviewing]);
 
 async function fixture(t) {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-calls-'));
@@ -305,7 +308,8 @@ test('subagent items keep every role and full description newest first, includin
   assert.equal(calls.snapshot()[0].tasks.length, 1, 'hover tasks still deduplicate while rows keep each call');
   assert.equal(calls.snapshot()[0].tasks[0].length, 240, 'existing hover task length stays bounded');
   calls.apply(stop());
-  assert.equal(calls.snapshot()[0].items.length, roles.length - 1);
+  assert.equal(calls.snapshot()[0].items.filter(item => !item.hidden).length, roles.length - 1);
+  assert.deepEqual(retiredRows(calls), [['agent:role-0', 'done']], 'the reviewed call is kept for 最近完成');
 });
 
 test('background and foreground subagents start at their first assistant record and leave after review', async t => {
@@ -327,7 +331,8 @@ test('background and foreground subagents start at their first assistant record 
     calls.apply(background ? notice(id, status, true) : result(id, { agentId: id, resolvedModel: 'claude-sonnet-5-5' }));
     await calls.work;
     assert.deepEqual(states(calls), [[0, 0, 1]]); assert.equal(calls.timer, null);
-    calls.apply(stop()); assert.deepEqual(calls.snapshot(), []);
+    calls.apply(stop()); assert.deepEqual(live(calls), []);
+    assert.deepEqual(retiredRows(calls).find(([row]) => row === `agent:${id}`), [`agent:${id}`, 'done'], 'kept for 最近完成');
   }
 });
 
@@ -340,8 +345,8 @@ test('failed launches stop preparing immediately and a new user prompt removes o
   assert.deepEqual(states(calls), [[0, 0, 1]]); assert.equal(calls.timer, null);
   calls.apply(use('working', 'Agent', { model: 'haiku', description: 'Keep working' })); await calls.work;
   calls.apply({ type: 'user', message: { content: 'Check another file.' } });
-  assert.equal(calls.snapshot().length, 1);
-  assert.deepEqual(calls.snapshot()[0].tasks, ['Keep working']); assert.deepEqual(states(calls), [[1, 0, 0]]);
+  assert.equal(live(calls).length, 1);
+  assert.deepEqual(live(calls)[0].tasks, ['Keep working']); assert.deepEqual(states(calls), [[1, 0, 0]]);
 });
 
 test('failed and killed background workers enter review and leave on Stop, including absorbed reports', () => {
@@ -353,6 +358,6 @@ test('failed and killed background workers enter review and leave on Stop, inclu
     calls.apply({ type: 'queue-operation', operation: 'enqueue', content: completion.message.content });
     assert.deepEqual(states(calls), [[0, 0, 1]]);
     calls.apply({ type: 'queue-operation', operation: 'remove', content: completion.message.content });
-    calls.apply(stop()); assert.deepEqual(calls.snapshot(), []);
+    calls.apply(stop()); assert.deepEqual(live(calls), []); assert.deepEqual(retiredRows(calls), [[`agent:${status}`, 'done']]);
   }
 });

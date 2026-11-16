@@ -114,8 +114,9 @@ class BackgroundTasks {
     // Keep the latest inline stdout/stderr observation. Polling identical cached output does not make it newer.
     const output = [text(result.stdout), text(result.stderr)].filter(Boolean).join('\n');
     if (!output) return false;
-    const tail = output.replace(/\r\n?/g, '\n').split('\n').slice(-TAIL_LINES).join('\n');
-    if (tail === entry.tail) return false;
+    // The renderer contract is `tail?: string[]`: the last lines, one string each.
+    const tail = output.replace(/\r\n?/g, '\n').split('\n').slice(-TAIL_LINES);
+    if (entry.tail && tail.join('\n') === entry.tail.join('\n')) return false;
     entry.tail = tail; entry.lastOutputAt = at;
     return true;
   }
@@ -135,7 +136,7 @@ class BackgroundTasks {
   }
   snapshot() {
     this.prune();
-    return [...this.entries.values()].map(entry => ({ ...entry }));
+    return [...this.entries.values()].map(entry => ({ ...entry, ...(entry.tail ? { tail: [...entry.tail] } : {}) }));
   }
 }
 

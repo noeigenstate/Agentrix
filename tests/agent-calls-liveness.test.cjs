@@ -66,5 +66,6 @@ test('an ended helper with a reused live PID retires when its run board is gone'
   const calls = context.callsOf(s, project); calls.feeds.readDispatch = async () => {}; t.after(() => calls.dispose());
   const launch = start(123); calls.dispatch(launch);
   calls.dispatch({ type: 'dispatch-end', id: launch.id, reason: 'exit', exitCode: 0, model: 'gpt-test', outputTokens: null, activeMs: null });
-  t.mock.timers.tick(3000); await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(calls.snapshot(), []);
+  t.mock.timers.tick(3000); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.snapshot()[0].items.map(({ state, hidden }) => [state, hidden]), [['done', true]], 'retired from the live list, kept for 最近完成');
 });

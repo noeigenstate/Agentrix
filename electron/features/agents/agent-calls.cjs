@@ -14,6 +14,7 @@ const text = value => typeof value === 'string' ? value : '';
 const short = value => text(value).replace(/\s+/g, ' ').trim().slice(0, 240);
 const enabled = value => value === true || value === 'true';
 const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/, REMOTE_FOLLOWS = 16;
+const RECENT_KEEP = 10, RECENT_AGE_MS = 30 * 60 * 1000;
 // One record of a sub-agent's own transcript, read here or compacted by the SSH host: its own effort and speed, and its
 // replies' timing once the call started. Both readers take every record through this, and name the model alike.
 function childRecord(call, record) {
@@ -86,34 +87,45 @@ class AgentCalls {
       startedAt: time(call.startedAt), rate: call.rate ? { ...call.rate } : null,
     }));
   }
+  // The owner's 「最近完成」 bounds: this terminal's last ten finished calls, none older than thirty minutes, read at
+  // each snapshot (nothing is polled; an older call drops out at the next publish, as the renderer also filters by age).
+  recent() {
+    const end = call => call.finishedAt ?? call.completedAt ?? -Infinity, now = this.now();
+    return new Set([...this.calls.values()].filter(call => call.done && now - end(call) <= RECENT_AGE_MS)
+      .sort((a, b) => end(b) - end(a)).slice(0, RECENT_KEEP));
+  }
   snapshot(provider) {
     // A group sums the members whose records can be read; one that cannot marks the sum partial, and with none readable
     // the group has no rate.
-    const groups = new Map(), rated = new Set(), unrated = new Set();
+    const groups = new Map(), rated = new Set(), unrated = new Set(), recent = this.recent();
     for (const call of this.calls.values()) {
-      if (call.reviewed || call.hidden && call.dispatch && !call.failure) continue;
+      // A call retired from the live list (hidden after its end, or reviewed by the lead) is still sent as a hidden
+      // `done` row while it is one of the last finished, for 「最近完成」; it adds nothing to the counts or the rate.
+      const retired = !!(call.reviewed || call.hidden);
+      if (retired && !recent.has(call) && (call.reviewed || call.dispatch && !call.failure)) continue;
       const route = { agent: call.agent, provider: call.dispatch ? null : provider ?? null,
         ...(call.unconfirmed && call.declared ? call.declared : { ...shownModel(call), effort: call.effort, fast: call.fast }) };
       const key = JSON.stringify(route);
       if (!groups.has(key)) groups.set(key, { ...route, preparing: 0, running: 0, reviewing: 0, tasks: [], items: [], rate: emptyRate(false) });
       const group = groups.get(key);
-      if (!call.hidden && !call.rate) unrated.add(group);
-      else if (!call.hidden) {
+      if (!retired && !call.rate) unrated.add(group);
+      else if (!retired) {
         rated.add(group);
         group.rate.outputTokens += call.rate.outputTokens; group.rate.activeMs += call.rate.activeMs; group.rate.samples += call.rate.samples;
         group.rate.updatedAt = Math.max(group.rate.updatedAt, call.rate.updatedAt); group.rate.partial ||= call.rate.partial;
       }
-      const state = call.starting && !call.done ? 'starting' : stateOf(call);
-      if (!call.hidden && state !== 'done') group[state] = (group[state] || 0) + 1;
+      const state = retired ? 'done' : call.starting && !call.done ? 'starting' : stateOf(call);
+      if (!retired && state !== 'done') group[state] = (group[state] || 0) + 1;
       group.items.push({ id: call.id, state, role: call.role, title: call.title,
-        startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: !!call.hidden,
+        startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: retired,
         ...(call.dispatch || call.failure ? { failure: call.failure || null } : {}),
         ...(call.dispatch && call.declared ? { declared: call.declared } : {}),
         ...(call.resumed ? { resumed: true } : {}), ...(call.notice ? { notice: call.notice } : {}),
         ...(call.controlFailure ? { controlFailure: call.controlFailure } : {}) });
-      if (!call.hidden && call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
+      if (!retired && call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
     }
-    for (const group of unrated) if (rated.has(group)) group.rate.partial = true; else group.rate = null;
+    // A group of retired calls only has no rate (rather than a zero one the renderer would take for the model's).
+    for (const group of groups.values()) if (!rated.has(group)) group.rate = null; else if (unrated.has(group)) group.rate.partial = true;
     for (const group of groups.values()) group.items.reverse();
     return [...groups.values()];
   }

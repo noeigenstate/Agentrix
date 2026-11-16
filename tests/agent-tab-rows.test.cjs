@@ -156,6 +156,36 @@ test('background tasks are listed with their terminal and age, and 后台 N 个�
   assert.deepEqual(used.filter(text => !english[text]), []);
 });
 
+test('a background task with output, as main publishes it, renders in its split', () => {
+  setup();
+  const splits = files('features/agents/subagent-splits.ts'), { BackgroundPane } = files('features/agents/BackgroundPane.tsx');
+  const { BackgroundTasks, attach } = require('../electron/features/agents/background-tasks.cjs');
+  const now = Date.now(), stamp = at => new Date(at).toISOString(), tasks = new BackgroundTasks('t1', { now: () => now });
+  tasks.apply({ type: 'assistant', timestamp: stamp(now - 2000), message: { content: [{ type: 'tool_use', name: 'Bash', id: 'launch', input: { command: 'node replay.cjs', run_in_background: true } }] } });
+  tasks.apply({ type: 'user', timestamp: stamp(now - 1000), toolUseResult: { backgroundTaskId: 'shell', stdout: 'replay 1/2 ok\r\nreplay 2/2 ok', stderr: '' },
+    message: { content: [{ type: 'tool_result', tool_use_id: 'launch', is_error: false, content: '' }] } });
+  const record = { id: 't1', agentUsage: attach({ provider: null, context: null, round: null, total: null, limits: [], calls: [] }, tasks.snapshot()) };
+  const html = renderToStaticMarkup(React.createElement(BackgroundPane, { terminal: record, callId: splits.backgroundCallId('launch'), onClose() {} }));
+  assert.equal(/<pre[^>]*>([^<]*)<\/pre>/.exec(html)?.[1], 'replay 1/2 ok\nreplay 2/2 ok');
+});
+
+test('a background split shows its output whether main sends lines or one string, and a bad tail never throws', () => {
+  setup();
+  const now = Date.now(), splits = files('features/agents/subagent-splits.ts'), { BackgroundPane } = files('features/agents/BackgroundPane.tsx');
+  const task = (id, tail) => ({ id, command: `node ${id}.cjs`, terminalId: 't1', startedAt: now - 60000, lastOutputAt: now - 1000, state: 'running', tail });
+  const tasks = [task('lines', ['step 1 ok', 'step 2 ok']), task('text', 'step 1 ok\nstep 2 ok'), task('number', 42), task('mixed', ['step 1 ok', null, 'step 2 ok'])];
+  const terminals = [terminal('t1', [], tasks)];
+  const pane = id => renderToStaticMarkup(React.createElement(BackgroundPane, { terminal: terminals[0], callId: splits.backgroundCallId(id), onClose() {} }));
+  const log = html => /<pre[^>]*>([^<]*)<\/pre>/.exec(html)?.[1];
+  assert.equal(log(pane('lines')), 'step 1 ok\nstep 2 ok', 'a task that has output shows it, one line each');
+  assert.equal(log(pane('text')), 'step 1 ok\nstep 2 ok', 'a string tail renders the same lines');
+  assert.equal(log(pane('number')), '还没有输出。', 'a tail that is neither reads as no output');
+  assert.equal(log(pane('mixed')), 'step 1 ok\nstep 2 ok', 'a line that is not a string is left out');
+  // The narrow window's chip lists the same rows (CallsCard) and opens this same split, so both paths read the tail through backgroundTail.
+  assert.ok(card(terminals).includes('node text.cjs'), 'the list the chip and the Agent tab share renders these tasks');
+  assert.deepEqual(splits.backgroundTail(task('empty', '')), []);
+});
+
 test('a finished call that main has already hidden is still counted in 最近完成 N 个', () => {
   const now = Date.now(), done = (id, patch = {}) => item(id, { state: 'done', hidden: true, endedAt: now - 1000, ...patch });
   const html = card([terminal('t1', [call('claude-sonnet-5-5', [done('a'), done('b', { endedAt: now - 31 * 60000 }), item('live', { hidden: true })])])]);
