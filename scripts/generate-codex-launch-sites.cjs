@@ -10,7 +10,8 @@ function files(folder) {
 }
 const sites = ['electron', 'integration', 'src'].flatMap(folder => files(path.join(root, folder))).flatMap(file =>
   calls(fs.readFileSync(file, 'utf8'), path.relative(root, file).split(path.sep).join('/')));
-const unique = [...new Map(sites.map(site => [site.id, site])).values()];
+// The id already ignores line endings; the reviewed text does too, so a Windows checkout writes the same list.
+const unique = [...new Map(sites.map(site => [site.id, { ...site, text: site.text.replace(/\r\n/g, '\n') }])).values()];
 const target = path.join(root, 'tests/fixtures/codex-launch-sites.json');
 if (!process.argv.includes('--write')) throw new Error('Use --write, then review the launch-site JSON diff before accepting it.');
 fs.writeFileSync(target, JSON.stringify(unique, null, 2) + '\n');
