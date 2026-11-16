@@ -32,8 +32,8 @@
     "id": "electron/features/agents/codex-account-usage.cjs:7c067127cabbb32d99602cbb"
   },
   {
-    "text": "execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {\n      try { if (child.exitCode == null) child.kill('SIGKILL'); } catch { }\n    })",
-    "id": "electron/features/agents/codex-account-usage.cjs:0605990eb5d7ef5f9e45b74a"
+    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {\n        try { if (child.exitCode == null && child.signalCode == null) child.kill('SIGKILL'); } catch { }\n        treeStopped = true; settle();\n      })",
+    "id": "electron/features/agents/codex-account-usage.cjs:a240b1bd71a4a411c3769385"
   },
   {
     "text": "launch(file, ['app-server', '--listen', 'stdio://'], {\n          cwd, env: { ...env, CODEX_HOME: codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex') },\n          windowsHide: true, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],\n        })",

@@ -124,22 +124,31 @@ async function consumeCodexResetCredit({ env = process.env, cwd, codexHome, exec
       limits: after.accountId === before.accountId ? after : null };
   } catch {
     return { status: ['reset', 'alreadyRedeemed'].includes(outcome) ? 'redeemed' : attempted ? 'uncertain' : 'unavailable', outcome, idempotencyKey };
-  } finally { signal?.removeEventListener('abort', abort); rpc?.close(); stop(child); }
+  } finally { signal?.removeEventListener('abort', abort); rpc?.close(); await stop(child); }
 }
 
+// Only our own pid/tree. Never enumerate or signal any running Codex sessions. Windows finds the tree only through the
+// live server, which leaves on end of input, so its input is never ended first. Settles once the server has exited and
+// taskkill has finished, or after 3 s: the next read of this home starts after the last one's processes have gone.
 function stopChild(child) {
-  if (!child || child.exitCode != null) return;
-  // Only our own pid/tree. Never enumerate or signal any running Codex sessions.
-  if (process.platform === 'win32' && child.pid) {
-    const killer = execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {
-      try { if (child.exitCode == null) child.kill('SIGKILL'); } catch { }
-    });
-    killer.unref?.();
-    return;
-  } else if (child.pid) {
-    try { process.kill(-child.pid, 'SIGKILL'); return; } catch { }
-  }
-  try { child.kill('SIGKILL'); } catch { }
+  if (!child || child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  return new Promise(resolve => {
+    let gone = false, treeStopped = !(process.platform === 'win32' && child.pid);
+    const finish = () => { clearTimeout(timer); child.removeListener('exit', exited); resolve(); };
+    const settle = () => { if (gone && treeStopped) finish(); };
+    const exited = () => { gone = true; settle(); };
+    const timer = setTimeout(finish, 3000); timer.unref?.();
+    child.once('exit', exited);
+    if (!treeStopped) {
+      execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {
+        try { if (child.exitCode == null && child.signalCode == null) child.kill('SIGKILL'); } catch { }
+        treeStopped = true; settle();
+      });
+      return;
+    }
+    if (child.pid) try { process.kill(-child.pid, 'SIGKILL'); return; } catch { }
+    try { child.kill('SIGKILL'); } catch { }
+  });
 }
 
 function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout = 8000,
@@ -150,9 +159,7 @@ function readCodexAccount({ env = process.env, cwd, codexHome, signal, timeout =
       if (done) return;
       done = true; clearTimeout(timer); signal?.removeEventListener('abort', abort);
       child?.stdout?.removeListener('data', read);
-      try { child?.stdin?.end(); } catch { }
-      stop(child);
-      resolve(value);
+      void Promise.resolve(stop(child)).catch(() => {}).then(() => resolve(value));
     };
     const fail = reason => finish({ resets: null, resetQuery: { state: 'error', reason },
       connection: connection || { kind: 'unknown', active: false, source: 'codex-account-usage account/read', observedAt: null } });
