@@ -6,7 +6,13 @@ const FIELDS = 32, TEXT = 2000;
 const text = value => typeof value === 'string' ? value : '';
 function subset(payload) {
   const plain = Object.entries(payload).filter(([, value]) => value === null || ['string', 'number', 'boolean'].includes(typeof value));
-  return Object.fromEntries(plain.slice(0, FIELDS).map(([name, value]) => [name, typeof value === 'string' ? value.slice(0, TEXT) : value]));
+  const kept = Object.fromEntries(plain.slice(0, FIELDS).map(([name, value]) => [name, typeof value === 'string' ? value.slice(0, TEXT) : value]));
+  // A continuation needs only its target. Message text and the rest of tool input stay in the transcript.
+  if (payload.tool_name === 'SendMessage' && payload.tool_input && typeof payload.tool_input === 'object') {
+    kept.tool_input = Object.fromEntries(['to', 'recipient', 'recipient_kind'].filter(name => typeof payload.tool_input[name] === 'string')
+      .map(name => [name, payload.tool_input[name].slice(0, TEXT)]));
+  }
+  return kept;
 }
 function sameKey(expected, given) {
   const a = Buffer.from(expected), b = Buffer.from(typeof given === 'string' ? given : '');
