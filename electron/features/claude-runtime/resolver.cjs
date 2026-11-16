@@ -1,6 +1,6 @@
 // The facts a Claude path is decided from (C-11), each with its own scope, fingerprint and expiry:
-// - key: no key saved, or the saved one refused (the key's: every project; a refusal the connection test saw lasts until
-//   the key changes, one a session saw for a minute);
+// - key: no key saved, or the saved one refused (the key's: every project; a refusal the connection test saw keeps new
+//   sessions off the API until the key changes, one a session saw keeps every session off it for a minute);
 // - limit: credits or an account limit the provider reported (the key's: every project), with one ten-minute trial;
 // - billing: Claude Code billing another credential than the key, for one project, while its settings chain (the user's,
 //   the managed and the project's settings files) and the key are what they were when it was seen (N1);
@@ -13,7 +13,8 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { createFacts, fact } = require('./facts.cjs');
 
-const KEY = '';  // the scope of the key's facts
+// The scopes of the key's facts: what sessions saw, and the connection test's refusal, which only new sessions read.
+const KEY = '', TESTED = 'connection-test';
 const LIMIT_REASONS = new Set(['credits_exhausted', 'account_limit']);
 const MINUTE = 60000, TRIAL = 600000;
 const MANAGED = { win32: 'C:\\Program Files\\ClaudeCode', darwin: '/Library/Application Support/ClaudeCode', linux: '/etc/claude-code' };
@@ -79,26 +80,28 @@ function createResolver({ keySaved, keyVersion = () => 0, inspectCli, now = Date
       facts.set('billing', scope, code, { source: 'session', message, files: settingsChain(spec, platform) });
     } else if (LIMIT_REASONS.has(code)) {
       facts.set('limit', KEY, code, { source: 'session', message, retryAt: now() + TRIAL, trial: null });
-    } else if (code === 'invalid_key' && facts.get('key', KEY)?.expiresAt !== null) {
+    } else if (code === 'invalid_key') {
       facts.set('key', KEY, code, { source: 'session', expiresAt: now() + MINUTE });
     } else return;
     notify();
   }
-  // Claude Code reported the saved key: this project's billing holds again, and a session's key refusal is over. A tested
-  // one (a connection test, or a turn the provider accepted) also ends the limits; a test with no project ends every
-  // project's billing refusal, so each checks again (N2).
+  // Claude Code reported the saved key: this project's billing holds again, and a session's key refusal (the same key,
+  // whichever project saw it) is over. A tested one (a connection test, or a turn the provider accepted) also ends the
+  // limits. A test with no project ends every project's billing refusal seen before it began, so each checks again (N2);
+  // a refusal a session saw after that stands.
   function identified({ scope = '', observed, tested = false, everywhere = false }) {
     if (!latest(scope, observed)) return;
     observations.set(scope, observed.sequence);
-    const removed = [facts.remove('billing', everywhere ? undefined : scope),
-      facts.get('key', KEY)?.expiresAt !== null && facts.remove('key', KEY), tested && facts.remove('limit', KEY)];
+    const older = value => (observations.get(value.scope) || 0) <= observed.sequence;
+    const removed = [facts.remove('billing', everywhere ? older : scope), facts.remove('key', KEY), tested && facts.remove('limit', KEY)];
     if (removed.some(Boolean)) notify();
   }
-  // The connection test's key answer: a refused key is held until the key changes, an accepted one ends a refusal.
+  // The connection test's key answer: a refused key is held for new sessions until the key changes, and an accepted one
+  // ends every key refusal.
   function keyChecked({ status, observed }) {
     if (!current(observed)) return;
-    if (status === 'invalid') facts.set('key', KEY, 'invalid_key', { source: 'connection-test' });
-    else if (status !== 'ok' || !facts.remove('key', KEY)) return;
+    if (status === 'invalid') facts.set('key', TESTED, 'invalid_key', { source: 'connection-test' });
+    else if (status !== 'ok' || ![facts.remove('key', KEY), facts.remove('key', TESTED)].some(Boolean)) return;
     notify();
   }
   // A turn the provider accepted also ends its card's rate limit.
@@ -122,8 +125,9 @@ function createResolver({ keySaved, keyVersion = () => 0, inspectCli, now = Date
     return observeCli(value, ticket) ? value : cliLatest;
   }
   const checkCli = () => facts.once('cli', () => trackCli(inspectCli()));
-  // A held billing refusal may be about a Claude Code that has since changed: look again before deciding by it.
-  const refresh = () => facts.has('billing') ? checkCli().then(() => {}, () => {}) : Promise.resolve();
+  // Look again before deciding when the answer may be stale: a held billing refusal may be about a Claude Code that has
+  // since changed, and a Claude Code the last check could not run may have been installed or fixed since.
+  const refresh = () => facts.has('billing') || cliLatest && cliLatest.status !== 'ok' ? checkCli().then(() => {}, () => {}) : Promise.resolve();
 
   function claimTrial() {
     const limit = facts.get('limit', KEY);
@@ -132,9 +136,17 @@ function createResolver({ keySaved, keyVersion = () => 0, inspectCli, now = Date
     return limit.trial = randomUUID();
   }
 
+  // `running`: the facts for a session already on its way. The connection test's key refusal is for new sessions only
+  // (it never stopped a running one), and a billing refusal holds it while Claude Code itself rewrites settings files
+  // (/model, "always allow"): N1 is about the next new session.
+  function held(scope = '', card = null, { running = false } = {}) {
+    const key = keySaved() ? facts.get('key', KEY) || !running && facts.get('key', TESTED) : fact('key', 'no_key', { source: 'credentials', observedAt: now() });
+    return [key, cliFact(cliLatest, now()), facts.get('billing', scope, { anyFingerprint: running }), facts.get('limit', KEY),
+      card && facts.get('rate', card)].filter(Boolean);
+  }
+
   return {
-    facts: (scope = '', card = null) => [keySaved() ? facts.get('key', KEY) : fact('key', 'no_key', { source: 'credentials', observedAt: now() }),
-      cliFact(cliLatest, now()), facts.get('billing', scope), facts.get('limit', KEY), card && facts.get('rate', card)].filter(Boolean),
+    facts: held,
     generation: () => ({ generation, sequence: ++sequence }),
     observe, observeCli, trackCli, checkCli, refresh, claimTrial, reset,
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },

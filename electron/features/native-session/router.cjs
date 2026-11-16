@@ -33,11 +33,11 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     }).finally(() => { if (historyReads.get(id) === entry) historyReads.delete(id); });
     historyReads.set(id, entry); return entry.task;
   }
-  // The facts a Claude session's path is decided from: its project's and its card's.
-  const factsOf = (spec, card = spec.terminalId) => spec.agent === 'codex' ? [] : claude.facts(spec.projectId, card);
+  // The facts a Claude session's path is decided from: its project's and its card's, as a new or a running session reads them.
+  const factsOf = (spec, card, running = false) => spec.agent === 'codex' ? [] : claude.facts(spec.projectId, card, { running });
   // A running session's path; a failed switch that kept the API holds it there as if API-only.
   function selection(spec, retained = false) {
-    const { path, wire } = decide(factsOf(spec), settings.get(), { agent: spec.agent, owner: spec.owner, trial: spec.apiTrial,
+    const { path, wire } = decide(factsOf(spec, spec.terminalId, true), settings.get(), { agent: spec.agent, owner: spec.owner, trial: spec.apiTrial,
       retained: retained && switches.retained(spec.terminalId), running: true });
     return { path, reason: wire };
   }
@@ -248,7 +248,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           carryHistory(previousStream, stream);
           let reason = old?.fallbackReason || null;
           // This card's state: a rate limit is this session's own, credits and account limits the project's.
-          const limit = nameOf(decide(factsOf(spec, id), {}, { agent: spec.agent, owner: spec.owner, running: true }).reason);
+          const limit = nameOf(decide(factsOf(spec, id, true), {}, { agent: spec.agent, owner: spec.owner, running: true }).reason);
           if (settings.get().claudePath === 'api-then-terminal' && providerLimit(limit)) {
             reason = LIMIT_SWITCHED[limit][0];
             const refused = old?.runtime.fallbackInput?.();

@@ -1,12 +1,11 @@
 const { decide, nameOf } = require('../claude-runtime/decide.cjs');
 const { cliFact } = require('../claude-runtime/resolver.cjs');
 
-// What a new session takes, in the usage panel's words: the CLI check given here replaces the one the facts hold, and a
-// path the settings chose says so (set_terminal, set_api).
+// What a new session takes, in the usage panel's words: only the CLI check given here counts (an SSH project gives none,
+// and this computer's CLI is not its), and a path the settings chose says so (set_terminal, set_api).
 const SAID = { terminal_selected: 'set_terminal', native_cli_required: 'cli_missing', cli_too_old: 'cli_too_old' };
 function nextPath(agent, config, facts = [], cli) {
-  const held = agent === 'codex' ? [] : facts;
-  const given = cli ? [...held.filter(value => value.name !== 'cli'), cliFact(cli)].filter(Boolean) : held;
+  const given = [...(agent === 'codex' ? [] : facts.filter(value => value.name !== 'cli')), cliFact(cli)].filter(Boolean);
   const { path, reason, wire } = decide(given, config, { agent });
   if (path === 'api') return { path, reason: config.claudePath === 'api-only' ? 'set_api' : null };
   return { path, reason: SAID[nameOf(reason)] ?? wire };

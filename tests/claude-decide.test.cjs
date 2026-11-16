@@ -69,15 +69,18 @@ test('every refused or terminal path carries a code from the claude table, and t
 });
 
 // Until R4 moves them onto decide(): the dispatcher's worker (frozen this wave), and the two wrappers that keep its shape.
+// They may call the legacy choosePath( and apiState( only; what excuses a fact (excused() inside decide.cjs) is never
+// asked anywhere else.
 const UNTIL_R4 = ['electron/features/native-session/worker.cjs', 'electron/features/native-session/routing.cjs', 'electron/features/claude-sdk/index.cjs'];
-test('choosePath( and apiState( decide nowhere but decide.cjs', () => {
+test('choosePath(, apiState( and excused( decide nowhere but decide.cjs', () => {
   const found = [];
   for (const folder of ['electron', 'src', 'integration']) {
     for (const name of fs.readdirSync(path.join(root, folder), { recursive: true })) {
       const file = path.join(folder, name).split(path.sep).join('/');
-      if (!/\.(?:cjs|mjs|js|ts|tsx)$/.test(file) || UNTIL_R4.includes(file) || file === 'electron/features/claude-runtime/decide.cjs') continue;
+      if (!/\.(?:cjs|mjs|js|ts|tsx)$/.test(file) || file === 'electron/features/claude-runtime/decide.cjs') continue;
       const source = fs.readFileSync(path.join(root, file), 'utf8');
-      if (/\b(?:choosePath|apiState)\(/.test(source)) found.push(file);
+      const legacy = !UNTIL_R4.includes(file) && /\b(?:choosePath|apiState)\(/.test(source);
+      if (legacy || /\bexcused\(/.test(source)) found.push(file);
     }
   }
   assert.deepEqual(found, []);

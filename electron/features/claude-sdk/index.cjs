@@ -9,7 +9,7 @@ const { createClaudeSession } = require('./session.cjs');
 const { readJson, writeJson } = require('../native-session/storage.cjs');
 const { rememberClaudeSource } = require('../../prompt-queue.cjs');
 const { createResolver } = require('../claude-runtime/resolver.cjs');
-const { decide, excused, nameOf } = require('../claude-runtime/decide.cjs');
+const { decide, nameOf } = require('../claude-runtime/decide.cjs');
 function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader(), resolveExecutable = resolveClaudeExecutable,
   now = Date.now, timers = globalThis, onCost, onSession, audit, request, inspectCli = inspectClaudeExecutable, initializationTimeoutMs,
   connectionSpec = () => ({ agent: 'claude', owner: 'gui', cwd: process.cwd(), effort: 'high', fast: true }) } = {}) {
@@ -24,7 +24,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   const ownerSessions = new Map((Array.isArray(owners) ? owners.slice(-10000) : []).filter(row => row && typeof row.id === 'string' && /^[\w-]{1,100}$/.test(row.id) && typeof row.cwd === 'string').map(row => [row.id, row.cwd]));
   for (const [id, cwd] of ownerSessions) rememberClaudeSource(id, 'gui', cwd);
   // The API route's facts. A session already runs its Claude Code, so the CLI's fact is not one of them.
-  const apiFacts = (projectId = '', card = null) => resolver.facts(projectId, card).filter(value => value.name !== 'cli');
+  const apiFacts = (projectId = '', card = null, options) => resolver.facts(projectId, card, options).filter(value => value.name !== 'cli');
   let decisions = readJson(path.join(directory, 'policy-audit.json'), [], { validate: value => Array.isArray(value) && value.length <= 1000 });
   const recordDecision = audit || (decision => {
     const next = [...decisions, { ...decision, at: now() }].slice(-1000);
@@ -40,7 +40,8 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       probeBilling: async (key, config = {}, observed) => {
         const scope = config.projectId || '', spec = connectionSpec(config.projectId);
         const result = await probeBillingIdentity({ key, spec, loadSdk, resolveExecutable, timeoutMs: initializationTimeoutMs });
-        if (result.status === 'mismatch') resolver.observe({ kind: 'failure', scope, code: 'billing_identity_mismatch', message: result.reason, observed, spec });
+        // A test with no project open has no project to hold its refusal for: the test's own answer tells it.
+        if (result.status === 'mismatch' && scope) resolver.observe({ kind: 'failure', scope, code: 'billing_identity_mismatch', message: result.reason, observed, spec });
         // A test with no project open stands for every project: each checks its billing again on its next new session.
         else if (result.status === 'ok') resolver.observe({ kind: 'identity', scope, observed, tested: true, everywhere: !scope });
         return result;
@@ -72,7 +73,7 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
       const session = createClaudeSession(spec, emit, { loadSdk, resolveExecutable, credentials: rollbackCredentials || credentials, usage, now, onCost,
         generation: resolver.generation, initializationTimeoutMs,
         credentialVersion: () => credentialVersion,
-        providerReady: () => decide(apiFacts(scope, card), {}, { trial: spec.apiTrial }).path === 'api',
+        providerReady: () => decide(apiFacts(scope, card, { running: true }), {}, { trial: spec.apiTrial }).path === 'api',
         canContinue: () => spec.owner === 'dispatch' || credentials.status().saved && spec.mayContinue?.() !== false,
         observe: observation => resolver.observe({ ...observation, scope, card, spec }),
         onSession: id => { acquire(id); remember(id); onSession?.(spec, id); }, audit: decision => recordDecision({ runId: spec.runId || null, ...decision }) });
@@ -82,10 +83,11 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
         try {
           await resolver.refresh();
           // A billing refusal or a provider limit held for this project closes the session before it asks the SDK anything.
-          const blocked = !rollbackCredentials && apiFacts(scope).find(value => ['billing', 'limit'].includes(value.name)
-            && !excused(value, { owner: spec.owner, trial: spec.apiTrial }));
-          if (blocked) {
-            const failure = Object.assign(new Error(blocked.message), { code: nameOf(blocked.reason), beforeInput: true });
+          // The rest (no key, a key a session saw refused, its card's rate limit) is for its own start and first message to find.
+          const held = apiFacts(scope).filter(value => ['billing', 'limit'].includes(value.name));
+          const blocked = !rollbackCredentials && decide(held, {}, { owner: spec.owner, trial: spec.apiTrial });
+          if (blocked && blocked.path !== 'api') {
+            const failure = Object.assign(new Error(blocked.message || ''), { code: nameOf(blocked.reason), beforeInput: true });
             await session.close(); throw failure;
           }
           return await session.start();
