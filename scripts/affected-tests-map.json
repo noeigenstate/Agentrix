@@ -363,7 +363,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "0263ed399c48ecc1c0c5beba51d1bd841a80ca0526e1c1cf7705338021e9e8b5",
+      "digest": "b9047f5423d7ff9ba0edfed54abc1bad758222b066db7c562297354f10dec061",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -382,7 +382,8 @@
         "electron/features/claude-runtime/locator.cjs",
         "electron/features/agents/dispatch-events.cjs",
         "integration/dispatch-outbox.cjs",
-        "integration/shims/intercept.cjs"
+        "integration/shims/intercept.cjs",
+        "electron/features/claude-runtime/decide.cjs"
       ],
       "reason": "Loads the same carried electron modules, outbox and intercept implementation beside the source or packaged helper."
     },

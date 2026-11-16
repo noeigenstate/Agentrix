@@ -3283,5 +3283,6 @@
   "切换中": "Switching…",
   "历史预览": "History preview",
   "会话未运行": "Session not running",
-  "未运行": "Not running"
+  "未运行": "Not running",
+  "按设置只用 API": "Using the API only, as set"
 }
