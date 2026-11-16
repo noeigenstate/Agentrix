@@ -9,7 +9,7 @@ import { styleTerminal } from './terminal-styling';
 import { terminalOptions, terminalTheme } from './terminal-theme';
 import { gpuRenderer, setTerminalWeight, terminalRenderer, useTerminalRenderer } from './terminal-renderer';
 import { terminalFontFamily } from './terminal-font';
-import { registerScreen, writeScreen } from './terminal-screen';
+import { registerScreen, setQueueCount, setScreenAgent, writeScreen } from './terminal-screen';
 import '@xterm/xterm/css/xterm.css';
 import { t } from '../../shared/i18n';
 import { isMac, isWindows } from '../../shared/platform';
@@ -17,8 +17,8 @@ import { isMac, isWindows } from '../../shared/platform';
 // The terminal text weight chosen in Settings, which App writes on the document; 400 when none is chosen.
 const chosenWeight = () => Number(document.documentElement.dataset.terminalWeight) || Number(terminalOptions.fontWeight);
 
-export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpenLink, remote = false }: {
-  id: string; sessionId: string | null; fontSize: number; focused: boolean; onError: (message: string) => void;
+export function TerminalPane({ id, sessionId, agent = null, queue = 0, fontSize, onError, focused, onOpenLink, remote = false }: {
+  id: string; sessionId: string | null; agent?: 'claude' | 'codex' | null; queue?: number; fontSize: number; focused: boolean; onError: (message: string) => void;
   onOpenLink: (id: string, target: string) => void;
   remote?: boolean;
 }) {
@@ -32,6 +32,10 @@ export function TerminalPane({ id, sessionId, fontSize, onError, focused, onOpen
   report.current = onError;
   const openLink = useRef(onOpenLink);
   openLink.current = onOpenLink;
+  // Read-only: the screen registry learns which agent runs here and how many messages main holds queued for it.
+  useEffect(() => { setScreenAgent(id, agent); }, [id, agent]);
+  useEffect(() => { setQueueCount(id, queue); }, [id, queue]);
+  useEffect(() => () => { setQueueCount(id, 0); setScreenAgent(id, null); }, [id]);
   const copy = async (text: string) => { const result = await window.agentrix.copy(text); if (!result.ok) report.current(result.error); };
   const paste = async () => {
     const terminal = term.current;

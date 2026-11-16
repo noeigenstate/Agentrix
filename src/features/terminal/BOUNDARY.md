@@ -16,6 +16,7 @@ split is in use.
 - `terminalFontFamily` (`src/features/terminal/terminal-font.ts`) — the CSS font list for the chosen terminal fonts
 - `setTerminalRenderer` (`src/features/terminal/terminal-renderer.ts`) — switches every terminal between the GPU and DOM renderers
 - `terminalTheme` (`src/features/terminal/terminal-theme.ts`) — the xterm colours of the current theme
+- `setQueueCount` (`src/features/terminal/terminal-screen.ts`) — tells a terminal's screen how many messages main holds queued; with `setScreenAgent`, Claude's screen facts go to main from there
 - `mountReadingTerminal` (`src/features/terminal/terminal-popup.ts`) — shows a split's live xterm inside the reading view's terminal popup; `pruneReadingCli` drops closed ones
 
 ## May import
@@ -30,7 +31,7 @@ split is in use.
 - `src/features/workspace/useProjectReorder.ts`
 
 ## Invariants
-- Typing, selecting and copying inside a small card's terminal only select its split and never expand the project — AGENTS.md: expansion belongs to the project header, the waiting-status action and explicit expand buttons — test: `tests/boundary-terminal.test.cjs` › "typing, selecting or copying in a small card's terminal never expands the project"
+- Typing, selecting and copying inside a small card's terminal only select its split and never expand the project — AGENTS.md: expansion belongs to the project header, the waiting-status action and explicit expand buttons — test: `tests/boundary-terminal.test.cjs` › "typing, selecting or copying in a small card's terminal never expands the project"; the screen facts a Claude terminal sends main are booleans, on change only, read from the screen alone — test: `tests/screen-facts.test.cjs` › "facts are sent on change only, for the current session"
 - The pane takes only copy (with a selection), paste and select-all; Ctrl+= / Ctrl+- / Ctrl+0 and Ctrl+C without a selection reach the program — a zoom change once swallowed the keys the terminal must receive — test: `tests/boundary-terminal.test.cjs` › "the terminal key handler passes zoom keys and Ctrl+C without a selection to the program"
 - No window-level handler takes the zoom keys from the terminals — the same keys, guarded where the window handles zoom — test: `tests/window-zoom.test.cjs` › "wheel and pinch zoom are reset to the effective setting, and zoom keys still reach the terminals"
 - Output is subscribed before the attach snapshot and applied in sequence order, for the pane's own session only — a remount during a stream must neither lose nor repeat output — test: `tests/boundary-terminal.test.cjs` › "terminal output applies in sequence order: the attach snapshot, then newer packets of the same session only"

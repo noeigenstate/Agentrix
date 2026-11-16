@@ -46,7 +46,7 @@ function terminalHarness(t, initial = {}) {
     './terminal-links': { createTerminalLinkProvider: noop }, './terminal-styling': { styleTerminal: () => disposable },
     './terminal-theme': { terminalOptions: { fontWeight: 400 }, terminalTheme: noop },
     './terminal-renderer': { gpuRenderer: () => ({ set: noop, dispose: noop }), setTerminalWeight: noop, terminalRenderer: () => 'dom', useTerminalRenderer: () => 'dom' },
-    './terminal-font': { terminalFontFamily: () => 'monospace' }, './terminal-screen': { registerScreen: () => noop, writeScreen: noop },
+    './terminal-font': { terminalFontFamily: () => 'monospace' }, './terminal-screen': { registerScreen: () => noop, setQueueCount: noop, setScreenAgent: noop, writeScreen: noop },
     './i18n': { t: text => text }, './platform': { isMac: false, isWindows: false },
   });
   t.after(() => {
