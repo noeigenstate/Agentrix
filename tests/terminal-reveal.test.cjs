@@ -60,7 +60,7 @@ test('revealing a hidden cmd terminal keeps the wrapped prompt in the DOM viewpo
         const stubs = {
           '@xterm/xterm': { Terminal: window.Terminal },
           'terminal-popup': { registerReadingTerminal: () => noop },
-          'terminal-screen': { registerScreen: (_id, terminal) => { fixture.terminal = terminal; return noop; }, writeScreen: (_id, data) => fixture.terminal.write(data) },
+          'terminal-screen': { setQueueCount: noop, setScreenAgent: noop, registerScreen: (_id, terminal) => { fixture.terminal = terminal; return noop; }, writeScreen: (_id, data) => fixture.terminal.write(data) },
           'terminal-links': { createTerminalLinkProvider: noop }, 'terminal-styling': { styleTerminal: () => disposable },
           'terminal-theme': { terminalOptions: { fontWeight: 400 }, terminalTheme: () => ({}) },
           'terminal-renderer': { gpuRenderer: () => ({ set: noop, dispose: noop }), setTerminalWeight: noop, terminalRenderer: () => 'dom', useTerminalRenderer: () => 'dom' },

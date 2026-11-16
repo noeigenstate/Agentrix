@@ -33,7 +33,7 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
   const readInput = (admit = false) => {
     const current = readScreen(terminalId);
     if (!valid() || !current || current.sessionId != null && current.sessionId !== sessionId || current.pending && (!admit || !current.parsed) || blocked(current)) return null;
-    const screen = parseAgentScreen(agent, current.rows);
+    const screen = { ...parseAgentScreen(agent, current.rows), queued: current.queued };
     if (!hasCliInput(agent, current.rows, screen) || cliDialogShown(agent, current.rows, screen)) return null;
     return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen), epoch: current.epoch, parse: current.parse };
   };

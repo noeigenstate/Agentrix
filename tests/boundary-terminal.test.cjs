@@ -58,7 +58,7 @@ function paneHarness(t, agentrix = {}) {
     './terminal-theme': { terminalOptions: { fontWeight: 400 }, terminalTheme: noop },
     './terminal-renderer': { gpuRenderer: () => ({ set: noop, dispose: noop }), setTerminalWeight: noop, terminalRenderer: () => 'dom', useTerminalRenderer: () => 'dom' },
     './terminal-font': { terminalFontFamily: () => 'monospace' },
-    './terminal-screen': { registerScreen: () => noop, writeScreen: (id, data) => screen.push(data) },
+    './terminal-screen': { registerScreen: () => noop, setQueueCount: noop, setScreenAgent: noop, writeScreen: (id, data) => screen.push(data) },
     './i18n': { t: text => text }, './platform': { isMac: false, isWindows: false },
   });
   t.after(() => { harness.dispose(); restore(); });

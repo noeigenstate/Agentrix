@@ -9,8 +9,8 @@ const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 // What the agent's screen holds now: null while its terminal has none (not drawn yet).
 function look(terminalId: string, agent: Agent) {
-  const rows = readScreen(terminalId)?.rows;
-  return rows ? { rows, screen: parseAgentScreen(agent, rows) } : null;
+  const current = readScreen(terminalId), rows = current?.rows;
+  return rows ? { rows, screen: { ...parseAgentScreen(agent, rows), queued: current.queued } } : null;
 }
 
 // Both CLIs queue messages while working if their input is drawn. Dialogs own the keys. Owner sends replace an old
