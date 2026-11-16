@@ -179,12 +179,32 @@ test('a key refusal the connection test saw keeps new sessions off the API until
 });
 
 test('a start looks again at a Claude Code the last check could not run before deciding by it', async () => {
-  let checks = 0, found = { status: 'missing', reason: 'not_found' };
-  const resolver = resolverOf({ inspectCli: async () => { checks++; return found; } });
+  const time = clock(); let checks = 0, found = { status: 'missing', reason: 'not_found' };
+  const resolver = resolverOf({ now: time.now, inspectCli: async () => { checks++; return found; } });
   await resolver.trackCli(Promise.resolve(found));
   assert.deepEqual(codes(resolver.facts('p')), ['claude.native_cli_required']);
   found = { status: 'ok', version: '2.1.318', file: 'claude.exe' };  // installed since
-  await resolver.refresh();
+  time.advance(10000); await resolver.refresh();
   assert.equal(checks, 1); assert.deepEqual(resolver.facts('p'), [], 'the new session decides by what is there now');
+  time.advance(10000);
   await resolver.refresh(); assert.equal(checks, 1, 'a Claude Code that runs is not checked again at every start');
+});
+
+test('starts within ten seconds of a failed CLI check share it; a start after that checks again', async () => {
+  const time = clock(); let checks = 0;
+  const resolver = resolverOf({ now: time.now, inspectCli: async () => { checks++; return { status: 'missing', reason: 'timeout', found: 'claude.exe' }; } });
+  await resolver.trackCli(Promise.resolve({ status: 'missing', reason: 'timeout', found: 'claude.exe' }));
+  time.advance(10000); await resolver.refresh(); assert.equal(checks, 1, 'a start once the last check is ten seconds old checks again');
+  time.advance(9999); await resolver.refresh(); await resolver.refresh();
+  assert.equal(checks, 1, 'two starts within ten seconds of that check wait for none');
+  time.advance(1); await resolver.refresh(); assert.equal(checks, 2, 'a start after the window checks again');
+});
+
+test('a turn the provider accepts ends the key refusal the connection test saw', () => {
+  const resolver = resolverOf();
+  resolver.observe({ kind: 'key', status: 'invalid', observed: resolver.generation() });
+  resolver.observe({ kind: 'identity', scope: 'p', observed: resolver.generation() });
+  assert.deepEqual(codes(resolver.facts('q')), ['claude.invalid_key'], 'Claude Code reporting the key is not proof it works');
+  resolver.observe({ kind: 'success', scope: 'p', card: 'A', observed: resolver.generation() });
+  assert.deepEqual(resolver.facts('q'), [], 'a running session just used the key: new sessions may again');
 });
