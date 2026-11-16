@@ -24,7 +24,9 @@ test('G2 real main structured events populate the same terminal agentUsage field
     contextWindow: 234567, contextTokens: 88, costUsdMicros: 3000, costEstimated: true,
     round: { input: 50, cachedInput: 2, cacheWrite: 3, output: 4, reasoning: null } }));
   const s = main.sessions.get('t');
-  const expression = source.slice(source.indexOf('agentUsage: s?.nativeStructured') + 'agentUsage: '.length, source.indexOf('\n          // A run of the CLI')).trim().replace(/,$/, '');
+  // The usage main builds for the row, then the agentUsage field it publishes from it.
+  const start = source.indexOf('const usage = s?.nativeStructured'), published = source.indexOf('agentUsage: ', start) + 'agentUsage: '.length;
+  const expression = `${source.slice(start, source.indexOf(';', start) + 1)} ${source.slice(published, source.indexOf('\n', published)).trim().replace(/,$/, '')}`;
   const usage = vm.runInNewContext(expression, { s, dispatchedOnly() { throw new Error('not a terminal fallback'); } });
   assert.deepEqual(usage.context, { used: 88, window: 234567 }); assert.deepEqual(usage.round, { input: 55, cached: 2, output: 4 });
   assert.deepEqual(usage.total, { input: 130, cached: 20, output: 5 });
@@ -131,7 +133,7 @@ test('the raw view a native session replaced reaches no PTY: its replies are dro
   const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs'), { createIpcAdapter } = require('../electron/shared/ipc.cjs');
   const sessions = new Map(), nativeSpecs = new Map([['t', { agent: 'codex', sessionId: 'native', sessionKey: 'key', env: {} }]]);
   let wiring;
-  const context = { sessions, nativeSpecs, quitting: false, scheduleState() {}, t: text => text, nativeSessions: {},
+  const context = { sessions, nativeSpecs, quitting: false, scheduleState() {}, bindDispatchInbox() {}, t: text => text, nativeSessions: {},
     store: { findTerminal: () => ({ project: { id: 'p' } }) }, registerTerminalIpc: value => { wiring = value; },
     createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage,
     PromptQueue: require('../electron/prompt-queue.cjs').PromptQueue, CompletionWork: require('../electron/completion-work.cjs').CompletionWork,

@@ -92,7 +92,8 @@ test('N10 forgetting a terminal aborts its read-only history lookup', async () =
 
 test('N10 main disposal cancels history even before a terminal process exists', () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'); let canceled = 0;
-  const context = { readingHistory: { close() {} }, sessions: new Map(), nativeSpecs: new Map(),
+  const context = { readingHistory: { close() {} }, sessions: new Map(), nativeSpecs: new Map(), disposeDispatchInbox() {},
+    AgentCalls: require('../electron/features/agents/agent-calls.cjs').AgentCalls,
     nativeSessions: { forget: async () => { canceled++; } }, report() {} };
   require('node:vm').runInNewContext(source.slice(source.indexOf('function disposeTerminal('), source.indexOf('function registerUnavailableNative(')), context);
   context.disposeTerminal('loading-history'); assert.equal(canceled, 1);

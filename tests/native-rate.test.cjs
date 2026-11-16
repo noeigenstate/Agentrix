@@ -120,7 +120,7 @@ test('the actual main structured-event bridge supplies the provider rate to agen
   let reads = 0;
   class Queue { enqueue() {} start() {} }
   const context = { quitting: false, sessions: new Map(), nativeSpecs: new Map([['t', { agent: 'claude' }]]),
-    store: { findTerminal: () => ({ project: { id: 'p' } }) }, scheduleState() {}, createNativeUsage,
+    store: { findTerminal: () => ({ project: { id: 'p' } }) }, scheduleState() {}, bindDispatchInbox() {}, createNativeUsage,
     PromptQueue: Queue, CompletionWork: Queue, ActionLog: Queue, ConversationLog: Queue,
     nativeSessions: { tokenRate(id, runtime) { reads++; assert.equal(id, 't'); assert.equal(runtime, 'r'); return sample; } } };
   vm.createContext(context);

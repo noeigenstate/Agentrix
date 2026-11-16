@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { randomUUID } = require('node:crypto');
+const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 
@@ -18,7 +19,7 @@ function fixture(t) {
     gate: { dispose() {} }, promptQueue: { reset() {} }, completionWork: { reset: () => false }, approval: { context() {} } };
   const sessions = new Map([[id, s]]), calls = [];
   s.terminal = { kill() { calls.push('kill'); assert.ok(fs.existsSync(s.bootstrapFile)); } };
-  const context = vm.createContext({ fs, path, sessions, nativeSessions: null, nativeSpecs: new Map(), readingHistory: { close() {} }, endSkillSession() {}, stopUsageAccount() {}, syncDashboardLive() {},
+  const context = vm.createContext({ fs, path, sessions, nativeSessions: null, nativeSpecs: new Map(), readingHistory: { close() {} }, AgentCalls, disposeDispatchInbox: terminal => calls.push(['inbox', terminal]), endSkillSession() {}, stopUsageAccount() {}, syncDashboardLive() {},
     skills: { endSession(project, session) { calls.push([project, session]); } }, clearTimeout, broadcast() {}, store: { setRestore() {} },
     restorePlans: new Map(), quitting: false, project: { id: s.projectId }, id, s, sessionId, bootstrapFile: s.bootstrapFile, skillNoteFile: s.skillNoteFile,
     report(error) { throw error; }, flush() {}, terminal: { onExit(fn) { context.onExit = fn; } }, t: () => '' });
@@ -31,6 +32,7 @@ test('disposing a terminal removes its abandoned Claude settings after killing t
   f.context.disposeTerminal(f.id);
   assert.equal(f.sessions.has(f.id), false);
   assert.ok(f.calls.includes('kill'));
+  assert.ok(f.calls.some(call => call[0] === 'inbox' && call[1] === f.id), 'the closed terminal\'s dispatch inbox goes with it');
   for (const name of f.files(f.sessionId)) assert.equal(fs.existsSync(path.join(f.runtimeDir, name)), false, name);
   for (const name of [...f.files(f.otherId), 'unrelated.json']) assert.equal(fs.existsSync(path.join(f.runtimeDir, name)), true, name);
   f.context.disposeTerminal(f.id);
