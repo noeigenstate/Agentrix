@@ -555,6 +555,9 @@ jobs:
       - name: Remove bundled Claude platform binaries
         run: node scripts/claude-sdk-pack.cjs --clean
 
+      - name: Test SSH descriptor-relative reads and symlink recovery
+        run: python3 -m unittest discover -s tests -p 'remote_worker_test.py' -v
+
       - name: Run unit and integration tests, including Bash and a real zsh terminal
         shell: bash
         run: |

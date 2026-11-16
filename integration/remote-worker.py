@@ -830,6 +830,7 @@ class SubagentReader:
         self.offset, self.buffer, self.skipping, self.history_pending = 0, b"", False, False
         self.file_identity, self.file_size = None, 0
         self.outbox, self.reset, self.partial = [], True, False
+        self.tool_use_id = None
 
     def record(self, record):
         kept = compact_subagent_record(record)
@@ -846,6 +847,18 @@ class SubagentReader:
 
     def behind(self): return self.offset < self.file_size or bool(self.outbox)
 
+    def metadata(self, folder):
+        """Only the spawning tool's id leaves the host; metadata is optional, bounded and opened without following links."""
+        self.tool_use_id = None
+        try:
+            with open_regular(self.name[:-len(".jsonl")] + ".meta.json", folder) as source:
+                body = source.read(64 * 1024 + 1)
+            if len(body) > 64 * 1024: return
+            value = json.loads(body)
+            tool_use_id = value.get("toolUseId") if isinstance(value, dict) else None
+            if isinstance(tool_use_id, str) and SAFE_ID.fullmatch(tool_use_id): self.tool_use_id = tool_use_id
+        except (OSError, ValueError, TypeError, RecursionError): pass
+
 def take_subagents(order):
     """The waiting records of the (id, reader) pairs in that order, up to one shared budget per answer. Each sub-agent
     whose file was found says whether it started over, whether its file's start was left out and whether records are
@@ -855,6 +868,7 @@ def take_subagents(order):
         if reader.file_identity is None: continue
         batch, size = take_batch(reader.outbox, size, SUBAGENTS_BUDGET)
         answer[agent_id] = {"records": batch, "reset": reader.reset, "partial": reader.partial, "behind": reader.behind()}
+        if reader.tool_use_id is not None: answer[agent_id]["toolUseId"] = reader.tool_use_id
         reader.reset = False
     return answer
 
@@ -894,13 +908,21 @@ class ClaudeTranscriptReader:
         turn = self.subagent_turn % len(order)
         self.subagent_turn += 1
         order = order[turn:] + order[:turn]
-        folder, budget = subagent_folder(self.filename), SUBAGENTS_READ_BUDGET
+        try: folder = subagent_folder(self.filename)
+        except Exception:
+            for _agent_id, reader in order: reader.file_identity = None
+            return {}
+        budget = SUBAGENTS_READ_BUDGET
         try:
             for _agent_id, reader in order:
                 # One file that cannot be read (gone, a link, a stale handle) leaves the others and the transcript be.
                 try:
                     with open_regular(reader.name, folder) as source: budget -= reader.read(source, budget)
-                except Exception: pass
+                except Exception:
+                    # The next successful open must reset the remote meter, even when it is the same inode again.
+                    reader.file_identity = None
+                    budget -= min(budget, SUBAGENT_READ_LIMIT)
+                if reader.file_identity is not None: reader.metadata(folder)
         finally: os.close(folder)
         return take_subagents(order)
 
