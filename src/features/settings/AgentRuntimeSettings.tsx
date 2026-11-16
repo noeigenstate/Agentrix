@@ -18,7 +18,7 @@ const CLAUDE_PATHS = (): { value: ClaudePath; label: string }[] => [
 // What a new native Codex session may do. 'full' is the default, and what anything else (a missing key, an old file) means.
 export type CodexPermissions = Settings['codexPermissions'];
 const CODEX_PERMISSIONS = (): { value: CodexPermissions; label: string; hint: string }[] => [
-  { value: 'full', label: t('全部放开（默认）'), hint: t('不询问，不使用沙箱：Codex 可以直接运行任何命令、修改任何文件。和 Claude 的 bypass 一样，请用在你信任的项目上。') },
+  { value: 'full', label: t('全部放开（默认）'), hint: t('不询问，不使用沙箱：Codex 可以直接运行任何命令、修改任何文件。请用在你信任的项目上。') },
   { value: 'config', label: t('按 Codex 配置'), hint: t('沿用 Codex 自己 config.toml 里的设置。') },
   { value: 'ask', label: t('先询问'), hint: t('只能在工作目录里写文件；执行需要权限的操作前先问你。') },
 ];
@@ -119,7 +119,7 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
     <label className="setting-row"><span><Robot size={19} /><span><b>{t('Claude 的运行方式')}</b><small>{t('API：应用里的原生模式，按量计费；订阅：Claude Code 终端')}</small></span></span>
       <Select label={t('Claude 的运行方式')} className="runtime-select" value={settings?.claudePath ?? 'api-then-terminal'} disabled={!settings || busy} options={CLAUDE_PATHS()} onChange={value => void change({ claudePath: value as ClaudePath })} /></label>
     <label className="setting-row"><span><ShieldCheck size={19} /><span><b>{t('Codex 权限')}</b><small>{permissionOptions.find(option => option.value === permission)?.hint}</small><small>{t('只影响之后新建的原生 Codex 会话；正在运行的用 /permissions 切换；派发的工作者不受影响。')}</small></span></span>
-      <Select label={t('Codex 权限')} className="runtime-select" value={permission} disabled={!onCodexPermissions} options={permissionOptions} onChange={value => onCodexPermissions?.(codexPermissionOf(value))} /></label>
+      <Select label={t('Codex 权限')} className="runtime-select" value={permission} disabled={!onCodexPermissions} options={permissionOptions.map(({ value, label, hint }) => ({ value, label, description: hint }))} onChange={value => onCodexPermissions?.(codexPermissionOf(value))} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
       <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
     {error && <p className="form-error runtime-error" role="alert">{error}</p>}

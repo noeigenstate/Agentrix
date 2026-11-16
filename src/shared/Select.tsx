@@ -3,7 +3,7 @@ import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } f
 import { createPortal } from 'react-dom';
 import { CaretDown, Check } from '@phosphor-icons/react';
 
-export interface SelectOption { value: string; label: ReactNode; disabled?: boolean }
+export interface SelectOption { value: string; label: ReactNode; disabled?: boolean; description?: ReactNode }
 
 const MENU_GAP = 4, EDGE = 8, MAX_HEIGHT = 280, MAX_WIDTH = 360;
 
@@ -26,6 +26,7 @@ export function Select({ value, options, onChange, label, className = '', disabl
   const [place, setPlace] = useState<{ left: number; minWidth: number; maxWidth: number; top?: number; bottom?: number; maxHeight: number } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null), menu = useRef<HTMLUListElement>(null), typed = useRef({ text: '', at: 0 });
   const id = useId();
+  const optionId = (index: number, part: 'label' | 'description') => `${id}-${index}-${part}`;
   const selected = options.findIndex(option => option.value === value);
   // A dialog is in the top layer: the menu must live inside it to be seen.
   const host = trigger.current?.closest('dialog') ?? document.body;
@@ -90,8 +91,10 @@ export function Select({ value, options, onChange, label, className = '', disabl
     </button>
     {open && createPortal(<ul ref={menu} id={id} role="listbox" aria-label={label} className="select-menu"
       style={{ left: place?.left, width: 'max-content', minWidth: place?.minWidth, maxWidth: place?.maxWidth, top: place?.top, bottom: place?.bottom, maxHeight: place?.maxHeight, visibility: place ? undefined : 'hidden' }}>
-      {options.map((option, index) => <li key={option.value} role="option" aria-selected={index === selected} aria-disabled={option.disabled || undefined} data-value={option.value} data-active={index === active} title={typeof option.label === 'string' ? option.label : undefined}
-        onPointerEnter={() => !option.disabled && setActive(index)} onPointerDown={event => event.preventDefault()} onClick={() => choose(index)}><span className="select-option-label">{option.label}</span><span className="select-option-mark" aria-hidden="true">{index === selected && <Check size={14} weight="bold" />}</span></li>)}
+      {options.map((option, index) => <li key={option.value} role="option" aria-selected={index === selected} aria-disabled={option.disabled || undefined} data-described={option.description ? true : undefined} aria-labelledby={option.description ? optionId(index, 'label') : undefined} aria-describedby={option.description ? optionId(index, 'description') : undefined} data-value={option.value} data-active={index === active} title={typeof option.label === 'string' ? [option.label, typeof option.description === 'string' ? option.description : ''].filter(Boolean).join(String.fromCharCode(10)) : undefined}
+        onPointerEnter={() => !option.disabled && setActive(index)} onPointerDown={event => event.preventDefault()} onClick={() => choose(index)}>{option.description
+          ? <span className="select-option-text"><span className="select-option-label" id={optionId(index, 'label')}>{option.label}</span><span className="select-option-description" id={optionId(index, 'description')}>{option.description}</span></span>
+          : <span className="select-option-label">{option.label}</span>}<span className="select-option-mark" aria-hidden="true">{index === selected && <Check size={14} weight="bold" />}</span></li>)}
     </ul>, host)}
   </>;
 }
