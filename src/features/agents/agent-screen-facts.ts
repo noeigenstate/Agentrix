@@ -15,9 +15,13 @@ export function screenFacts(rows: string[], queued = 0): Omit<ScreenFacts, 'sess
 // Sends the facts once per session at its first completed parse, then only when one changes. A change that comes with
 // no new frame (the queue count) still needs a revision above the last one sent, which main requires.
 export function createFactsPublisher(send: (facts: ScreenFacts) => void) {
-  let key = '', session: string | null = null, last = 0;
+  let key = '', session: string | null = null, last = 0, seen = '';
   return (frame: Frame) => {
     if (!frame.sessionId || frame.pending) return;
+    // The same frame and queue count as the last computation costs nothing.
+    const stamp = frame.sessionId + '|' + frame.revision + '|' + (frame.queued ?? 0);
+    if (stamp === seen) return;
+    seen = stamp;
     const facts = screenFacts(frame.rows, frame.queued ?? 0), next = frame.sessionId + JSON.stringify(facts);
     if (next === key) return;
     if (session !== frame.sessionId) { session = frame.sessionId; last = 0; }

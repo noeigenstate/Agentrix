@@ -10,7 +10,7 @@ const typed = ['────', '❯ my own words', '────', ...footer];
 function terminal(initial) {
   let rows = initial, parsed;
   return { get rows() { return rows.length; }, buffer: { active: { baseY: 0, getLine: index => ({ translateToString: () => rows[index] }) } },
-    onWriteParsed(callback) { parsed = callback; return { dispose() {} }; }, onResize() { return { dispose() {} }; }, draw(next) { rows = next; parsed(); } };
+    onWriteParsed(callback) { parsed = callback; return { dispose() {} }; }, onResize() { return { dispose() {} }; }, draw(next) { rows = next; parsed(); }, rawDraw(next) { rows = next; parsed(); } };
 }
 function setup(t, rows, agent) {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
@@ -20,7 +20,10 @@ function setup(t, rows, agent) {
   const term = terminal(rows);
   screen.setScreenAgent('facts', agent);
   const dispose = screen.registerScreen('facts', term, 'one');
+  t.mock.timers.tick(100);
   t.after(() => { dispose(); screen.setScreenAgent('facts', null); screen.setQueueCount('facts', 0); });
+  const draw = term.draw;
+  term.draw = next => { draw(next); t.mock.timers.tick(100); };
   return { term, sent };
 }
 
@@ -48,7 +51,7 @@ test('a queue count change on an unchanged frame reaches the parsed subscribers 
   t.after(screen.subscribeParsed('facts', frame => frames.push(frame)));
   assert.equal(sent.at(-1).draft, true);
   const before = frames.length, revision = sent.at(-1).revision;
-  screen.setQueueCount('facts', 1);
+  screen.setQueueCount('facts', 1); t.mock.timers.tick(100);
   assert.equal(frames.length, before + 1); assert.equal(frames.at(-1).queued, 1);
   assert.equal(sent.at(-1).draft, false); assert.ok(sent.at(-1).revision > revision);
 });
@@ -56,7 +59,7 @@ test('a queue count change on an unchanged frame reaches the parsed subscribers 
 test('a terminal that is not Claude sends nothing', t => {
   const codex = setup(t, typed, 'codex');
   codex.term.draw(['────', '❯', '────', ...footer]);
-  screen.setQueueCount('facts', 3);
+  screen.setQueueCount('facts', 3); t.mock.timers.tick(100);
   assert.equal(codex.sent.length, 0);
 });
 
@@ -65,4 +68,18 @@ test('busy is the working line only, never a running ! command', t => {
   assert.equal(sent.at(-1).busy, false);
   term.draw(['✶ Befuddling… (2s)', '────', '❯', '────', ...footer]);
   assert.equal(sent.at(-1).busy, true);
+});
+
+test('a burst of changed frames is computed once, from the last frame, when the window closes', t => {
+  const { sent, term } = setup(t, typed, 'claude');
+  t.mock.timers.tick(100);
+  const before = sent.length, flip = on => ['────', on ? '❯ words' : '❯', '────', ...footer];
+  for (const on of [false, true, false, true, false]) term.rawDraw(flip(on));
+  assert.equal(sent.length, before, 'nothing is computed or sent inside the window');
+  t.mock.timers.tick(100);
+  assert.equal(sent.length, before + 1, 'one send for the whole burst, not one per frame');
+  assert.equal(sent.at(-1).draft, false, 'the trailing frame is the one sent');
+  term.rawDraw(flip(true)); term.rawDraw(flip(false));
+  t.mock.timers.tick(100);
+  assert.equal(sent.length, before + 1, 'a burst that ends where it began sends nothing');
 });
