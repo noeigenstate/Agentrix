@@ -131,6 +131,8 @@ test('real main assembly reports terminal-only Claude subscription usage without
       assert.fail(`unexpected import: ${name}`);
     },
   };
+  // Main's worker terminals: no terminal lead here starts one.
+  context.workerTerminals = null;
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), context);

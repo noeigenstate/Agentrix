@@ -28,6 +28,7 @@ const { recoveryWarnings, readJson: readNativeJson, writeJson: writeNativeJson }
 const { createClaudeRuntime, netRequest } = require('./features/claude-sdk/index.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
 const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
+const { createWorkerTerminals } = require('./features/worker-terminals/worker-terminals.cjs');
 const { registerWorkspaceIpc } = require('./features/workspace/ipc.cjs');
 const { listProjectImageCandidates, LIMITS: PROJECT_IMAGE_LIMITS } = require('./features/workspace/project-images.cjs');
 const { createProjectImageAuto } = require('./features/workspace/project-image-auto.cjs');
@@ -246,6 +247,14 @@ const cmdPath = process.env.ComSpec || path.join(process.env.SystemRoot || 'C:\\
 function send(channel, data) { if (window && !window.isDestroyed()) window.webContents.send(channel, data); }
 // One Claude Code locator for the terminal and the native path (claude-runtime/BOUNDARY.md).
 const claudeLocator = createLocator();
+// A local terminal lead's Claude workers, each in a hidden terminal of its own, never in `sessions` (worker-terminals/BOUNDARY.md).
+const workerTerminals = createWorkerTerminals({ spawn: (file, args, options) => pty.spawn(file, args, options), send, cmdPath, powershellPath,
+  claudeFile: () => claudeLocator.peek()?.terminal?.path || null, runtimeDir: () => runtimeDir, claudeHome: () => claudeConfigDir(),
+  parent: run => { const s = sessions.get(run.projectId); return s?.usageEnv ? { env: s.usageEnv, sessionKey: s.sessionKey, bootstrapFile: s.bootstrapFile } : null; },
+  calls: run => { const s = sessions.get(run.projectId), project = s && store.findTerminal(run.projectId)?.project; return project ? callsOf(s, project) : null; },
+  hooks: ({ terminalId, sessionKey, env, cwd }) => terminalHooks({ port: hookServer?.port, terminalId, sessionKey, eventServer, env, cwd,
+    shell: { posix: process.platform !== 'win32', powershellPath, script: path.join(integrationDir, 'claude-hook.ps1'), node: process.execPath,
+      helper: path.join(integrationDir, 'agent-event.cjs') } }) });
 const agents = new AgentsManager({ onChange: state => send('agents:changed', state), translate: t,
   claude: () => claudeLocator.peek(), refreshClaude: () => checkClaude('refresh'), codex: () => codexLocator.peek(), refreshCodex: () => checkCodex('scan') });
 // The CLI the native path runs, from the locator. `mode`: 'locate' only stats what it chose; 'refresh' (start-up, the
@@ -1277,7 +1286,7 @@ async function initializeNativeSessions() {
       startTerminal(spec.terminalId, null, true);
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
     } });
-  registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings });
+  registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings, terminals: workerTerminals });
 }
 
 function restoreTerminal(id, ...args) {
@@ -1593,6 +1602,7 @@ function registerIpc() {
   else registerUnavailableNative(handle);
   if (process.platform === 'darwin') listen('titlebar:state', state => macTitlebar?.update(state));
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
+  workerTerminals.register({ handle, listen });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
@@ -1737,9 +1747,11 @@ if (!app.requestSingleInstanceLock()) {
       progress: value => filesIpc.setProgress(value),
     });
     runtimeDir = fs.mkdtempSync(path.join(app.getPath('userData'), 'runtime-'));
-    eventServer = await createEventServer(onEvent);
+    // A worker terminal's command hooks are its own, taken before any project terminal's (worker-terminals/BOUNDARY.md).
+    eventServer = await createEventServer(event => workerTerminals.event(event) || onEvent(event));
     // Claude Code's HTTP hooks (C-2). Without the server, terminals keep command hooks and say why.
-    hookServer = await createHookServer(createHookIngest({ keyOf: id => sessions.get(id)?.hooks?.key, deliver: claudeHook })).catch(() => null);
+    hookServer = await createHookServer(createHookIngest({ keyOf: id => workerTerminals.keyOf(id) ?? sessions.get(id)?.hooks?.key,
+      deliver: event => workerTerminals.hook(event) || claudeHook(event) })).catch(() => null);
     try { await initializeNativeSessions(); }
     catch {
       try { dispatchControl?.close(); } catch { }
@@ -1836,6 +1848,7 @@ app.on('before-quit', event => {
     clearTimeout(usageRolloverTimer);
     clearTimeout(stateTimer);
     for (const id of sessions.keys()) disposeTerminal(id);
+    workerTerminals.closeAll();
     sshAuth?.close();
     eventServer?.close();
     hookServer?.close();

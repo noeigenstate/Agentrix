@@ -144,6 +144,12 @@ contextBridge.exposeInMainWorld('agentrix', {
   onSubagentFeed: callback => listen('terminal:subagent-feed', callback),
   interveneAgent: (terminalId, callId, text) => ipcRenderer.invoke('agents:intervene', terminalId, callId, text),
   stopAgent: (terminalId, callId) => ipcRenderer.invoke('agents:stop', terminalId, callId),
+  // A dispatched worker's hidden terminal (worker-terminals): its keys reach it only while it waits for the owner.
+  attachWorkerTerminal: (terminalId, callId) => ipcRenderer.invoke('worker-terminal:attach', terminalId, callId),
+  onWorkerTerminalData: callback => listen('worker-terminal:data', callback),
+  workerTerminalKeys: (terminalId, callId, epoch, data) => ipcRenderer.send('worker-terminal:keys', terminalId, callId, epoch, data),
+  resizeWorkerTerminal: (terminalId, callId, epoch, cols, rows) => ipcRenderer.send('worker-terminal:resize', terminalId, callId, epoch, cols, rows),
+  detachWorkerTerminal: (terminalId, callId) => ipcRenderer.send('worker-terminal:detach', terminalId, callId),
   terminalCommands: id => ipcRenderer.invoke('terminal:commands', id),
   agentHistory: id => ipcRenderer.invoke('agent:history', id),
   agentImage: (file, projectId) => ipcRenderer.invoke('agent:image', file, projectId),
