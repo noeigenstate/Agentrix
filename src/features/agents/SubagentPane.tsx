@@ -104,12 +104,12 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       {meta && <div className="subagent-meta" title={feed?.model ? `${meta} · ${feed.model}` : meta}>{meta}</div>}
     </header>
     {terminal ? <div className="subagent-main subagent-worker">
-      <div className="subagent-worker-banner"><DotsThreeCircle size={14} aria-hidden="true" /><div>{t('它在等你确认一条命令。点进下面的终端，按 1 / 2 或 Esc 回答。')}</div></div>
+      <div className="subagent-worker-banner"><DotsThreeCircle size={14} aria-hidden="true" /><div>{t('它在等你确认。点进下面的终端回答。')}</div></div>
       <WorkerTerminal terminalId={terminalId} callId={callId} name={who} onError={onError} onUnavailable={() => setNoTerminal(true)} />
     </div> : <div className="subagent-main">
       <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name: who })}
         onScroll={event => { const end = atEnd(event.currentTarget); setPaused(current => end ? null : current ?? { after: lastId }); }}>
-        {asking && noTerminal && <p className="subagent-empty">{t('这个工作者的终端现在不能显示。')}</p>}
+        {asking && noTerminal && <p className="subagent-empty">{t('这个 worker 的终端现在不能显示。')}</p>}
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {/* Once the conversation shows a word, it is not shown again; a refused one stays, with why. Having been read needs no saying. */}

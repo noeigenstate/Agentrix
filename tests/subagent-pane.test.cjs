@@ -755,7 +755,7 @@ const workerPane = (state, patch, react) => React.createElement(workerPaneType(s
 test('a worker waiting for the owner shows its terminal in the split; keys reach only that terminal; Esc reaches the CLI and keeps the split open', () => zh(() => {
   const html = renderToStaticMarkup(workerPane(waiting()));
   assert.match(html, /worker-terminal-stub" data-terminal="t1" data-call="dispatch:a"/, 'the terminal of this very worker');
-  assert.match(html, /它在等你确认一条命令。点进下面的终端，按 1 \/ 2 或 Esc 回答。/);
+  assert.match(html, /它在等你确认。点进下面的终端回答。/);
   assert.match(html, /在上面的终端里输入你的回答；Esc 取消。/, 'the hint takes the composer’s place');
   assert.doesNotMatch(html, /conversation-feed|<textarea/, 'no conversation and no message box while the terminal shows');
   // Otherwise today's view: not waiting, finished, or a sub-agent of the session (no channel of its own).
