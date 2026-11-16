@@ -12,3 +12,4 @@
 assets/brands/*.svg -text
 integration/shims/codex text eol=lf
 integration/shims/claude text eol=lf
+integration/shims/hooks/zsh/.z* text eol=lf

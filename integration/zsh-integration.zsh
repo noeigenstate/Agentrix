@@ -34,12 +34,11 @@ typeset -gi __pg_sequence=0
 unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_USER_ZDOTDIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
 unset AGENTRIX_HOOK_PORT AGENTRIX_HOOK_CHANNEL AGENTRIX_HOOK_SETTINGS AGENTRIX_HOOK_FALLBACK
 
-# Non-interactive tool shells inherit the shims; this shell's owner functions resolve the real CLI below.
+# The shim folder goes only to the Claude Code the claude wrapper starts (intercept.cjs --shim-env): this shell, its scripts and
+# whatever else it runs find the real CLIs, and the wrappers' own lookups skip the folder too.
 typeset -g __pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" -e 'try { process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).shims || ""); } catch {}' "$AGENTRIX_BOOTSTRAP" 2>/dev/null)
-if [[ -n $__pg_shims && -d $__pg_shims ]]; then
-  export PATH="$__pg_shims:$PATH" AGENTRIX_DISPATCH_DEPTH=0 AGENTRIX_SHIM_NODE="$__pg_node"
-  unset AGENTRIX_RUN_ID AGENTRIX_RUN_PROOF
-fi
+[[ -n $__pg_shims && -d $__pg_shims ]] || __pg_shims=
+unset AGENTRIX_DISPATCH_DEPTH AGENTRIX_RUN_ID AGENTRIX_RUN_PROOF AGENTRIX_SHIM_NODE
 
 __pg_reading_note() {
   if [[ -n $__pg_note_file && -r $__pg_note_file ]]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi
@@ -212,7 +211,10 @@ claude() {
     printf '%s' "$settings" > "$settings_file"
     settings_args=(--settings "$settings_file")
   fi
-  AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" "${settings_args[@]}" "${note[@]}" "$@"
+  # This Claude Code is a planner: the shims come first on its PATH, at depth zero (shims/BOUNDARY.md).
+  local -a planner=()
+  [[ -n $__pg_shims ]] && planner=(${(0)"$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env 2>/dev/null)"})
+  command env "${planner[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" "${settings_args[@]}" "${note[@]}" "$@"
   local code=$?
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
   __pg_send codex-exited $code claude

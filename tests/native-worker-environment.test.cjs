@@ -6,6 +6,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { run } = require('../integration/dispatch.cjs');
+const { withShims } = require('../integration/shims/intercept.cjs');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
@@ -86,7 +87,9 @@ for (const sdkParent of [false, true]) test(`N5: CLI preserves owner authenticat
       const expected = sdkParent ? { PATH: '', CLAUDE_CONFIG_DIR: 'synthetic-config' } : { ...synthetic };
       delete expected.AGENTRIX_CONTROL_CAPABILITY; delete expected.AGENTRIX_BOOTSTRAP;
       delete expected.CLAUDE_CODE_ENTRYPOINT; delete expected.claude_code_entrypoint;
-      assert.deepEqual(options.env, expected); return lifetime.child(spawn(file, args, options));
+      // Plus the shim environment every worker gets (integration/shims/BOUNDARY.md).
+      const { AGENTRIX_RUN_ID: runId, AGENTRIX_RUN_PROOF: proof } = options.env;
+      assert.deepEqual(options.env, withShims(expected, { depth: 1, runId, proof })); return lifetime.child(spawn(file, args, options));
     } });
   assert.equal(code, 0); assert.equal(launched, true); assert.match(stdout, /claude-cli:/);
   assert.equal(synthetic.ANTHROPIC_API_KEY, 'synthetic-key', 'parent environment is never mutated');

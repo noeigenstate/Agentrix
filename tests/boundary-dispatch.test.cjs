@@ -24,6 +24,10 @@ test('the carried intercept runtime includes the six launchers in a CJS envelope
   await require('../scripts/after-pack.cjs').copyDispatchRuntime(install);
   for (const [name, source] of Object.entries(bundle.exports)) assert.equal(fs.readFileSync(path.join(install, 'shims', name), 'utf8'), source);
   assert.equal(fs.readFileSync(path.join(install, 'shims/intercept.cjs'), 'utf8'), carried['shims/intercept.cjs']);
+  // The start-up hooks are installed beside them, dotfiles included; they are not carried to SSH hosts.
+  const hooks = require('../integration/shims/intercept.cjs').hookFiles();
+  assert.ok(Object.keys(hooks).includes('hooks/zsh/.zshenv'));
+  for (const [name, source] of Object.entries(hooks)) assert.equal(fs.readFileSync(path.join(install, 'shims', name), 'utf8'), source);
   if (process.platform !== 'win32') for (const name of ['codex', 'claude']) assert.equal(fs.statSync(path.join(install, 'shims', name)).mode & 0o777, 0o755);
 });
 

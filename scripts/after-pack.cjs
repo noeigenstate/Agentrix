@@ -22,9 +22,11 @@ async function copyDispatchRuntime(integration) {
   }
   const shims = path.join(integration, 'shims');
   await fs.mkdir(shims, { recursive: true });
-  const launchers = require('../integration/shims/intercept.cjs').shimFiles();
-  for (const [name, source] of Object.entries(launchers)) {
+  // Written here, so the packaged folder never depends on how extraResources copies dotfiles (the marker, the zsh stubs).
+  const { shimFiles, hookFiles } = require('../integration/shims/intercept.cjs');
+  for (const [name, source] of Object.entries({ ...shimFiles(), ...hookFiles() })) {
     const target = path.join(shims, name);
+    await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, source);
     if (name === 'codex' || name === 'claude') await fs.chmod(target, 0o755);
   }

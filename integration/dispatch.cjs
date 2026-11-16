@@ -478,6 +478,8 @@ const helperClaudeLocator = createLocator();
 // to its program the way main's locator resolves it, else codex-runtime's own search; null when there is none.
 const locateCodex = (env, locator = helperLocator) => locator.locate({ env,
   prefer: Object.entries(env).find(([key]) => key.toUpperCase() === 'AGENTRIX_CODEX_EXECUTABLE')?.[1] || undefined }).then(found => found.file);
+// The Claude Code file a terminal would run, outside the shim folder; null when there is none.
+const locateClaude = async env => (await helperClaudeLocator.locate({ env })).terminal?.file || null;
 
 // CLI lookup belongs to the shared locators. Never resolve a bare Claude against the worker's shim-prefixed PATH.
 function executable(agent, args, _env, file) { return { file: file || agent, args }; }
@@ -1079,7 +1081,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           codexAccountKey = controlClient?.accountKey || null;
           // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none (a test injecting only `launch` names its `locate`).
           const codex = resolveExecutable === executable ? await locate(env) : null;
-          activeRuntime = createCodexRuntime({ accountKey: codexAccountKey || undefined, resolveExecutable: async () => 'codex', spawnProcess: (_file, _args, spawnOptions) => {
+          // A bare `codex` would find the shim folder again: no Codex outside it is a start failure.
+          const found = async () => { if (resolveExecutable === executable && !codex) throw Object.assign(new Error('Codex was not found outside the Agentrix shim folder'), { code: 'ENOENT' }); return 'codex'; };
+          activeRuntime = createCodexRuntime({ accountKey: codexAccountKey || undefined, resolveExecutable: found, spawnProcess: (_file, _args, spawnOptions) => {
             const command = resolveExecutable('codex', commandOf(effective), env, codex); return launch(command.file, command.args, spawnOptions);
           } }).create(spec, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
@@ -1163,7 +1167,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         break;
       }
       if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
-      const claudeFile = resolveExecutable === executable ? (await helperClaudeLocator.locate({ env })).terminal?.file : null;
+      const claudeFile = resolveExecutable === executable ? await locateClaude(env) : null;
       if (resolveExecutable === executable && !claudeFile) throw Object.assign(new Error('Claude Code was not found outside the Agentrix shim folder'), { code: 'ENOENT' });
       const command = resolveExecutable(options.agent, commandOf(effective), env, claudeFile);
 
@@ -1260,4 +1264,4 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 }
 
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
-module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, locateCodex, executable, RATE_INTERVAL };
+module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, locateCodex, locateClaude, executable, RATE_INTERVAL };
