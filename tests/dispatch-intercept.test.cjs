@@ -235,9 +235,14 @@ for (const kind of ['bash', 'zsh']) test(`G13: through a real ${kind} login shel
   for (const agent of ['codex', 'claude']) fs.writeFileSync(path.join(standin, agent), `#!/bin/sh\necho "STAND-IN ${agent} $*"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(home, kind === 'bash' ? '.bash_profile' : '.zprofile'), `export PATH="${posix(standin)}:$PATH"\n`);
   const owner = isolatedEnvironment(home), bootstrap = sessionBootstrap(folder).file;
+  for (const name of Object.keys(owner)) if (name.toUpperCase() === 'PATH') delete owner[name];
+  owner.PATH = systemPath(standin);
   const plannerEnv = shim().withShims({ ...owner, AGENTRIX_BOOTSTRAP: bootstrap }, { depth: 0 });
   const run = (env, script, login = true) => spawnSync(shellFor(kind), [login ? '-lc' : '-c', script], { cwd: folder, env, encoding: 'utf8', timeout: 30000 });
   for (const [agent, call, option] of [['codex', 'codex exec --json "analyse"', '--json'], ['claude', 'claude -p --output-format json "analyse"', '--output-format']]) {
+    // Called by name: outside a planner the stand-in, inside it the shim, whatever the profile put first.
+    const where = env => run(env, `command -v ${agent}`).stdout.trim();
+    assert.ok(inStandIn(where(owner), folder), where(owner)); assert.equal(path.dirname(where(plannerEnv)).toLowerCase(), posix(shims).toLowerCase());
     const inside = run(plannerEnv, call);
     assert.equal(inside.status, 2, `${agent}: ${inside.stdout}${inside.stderr}`); assert.equal(inside.stdout, '');
     assert.match(inside.stderr, new RegExp(`not run: ${option} is not supported through the Agentrix dispatcher`));
@@ -407,31 +412,63 @@ const shells = () => [
   ...(process.platform === 'win32' ? [{ kind: 'powershell', run: (text, env, cwd) => spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', text], { cwd, env, encoding: 'utf8', timeout: 30000, windowsHide: true }) }] : []),
 ];
+// Whether a resolved file is in this test's stand-in folder, however the shell spells the path (Git Bash may say /tmp/…).
+const inStandIn = (file, folder) => file.replaceAll(path.win32.sep, '/').toLowerCase().includes('/' + path.basename(folder).toLowerCase() + '/stand-in/');
+// System folders only, so a CLI called by name can only be the stand-in (or, in a planner, the shim).
+function systemPath(standin) {
+  if (process.platform !== 'win32') return [standin, '/usr/bin', '/bin'].join(':');
+  const root = process.env.SystemRoot;
+  return [standin, path.join(root, 'System32'), root, path.join(root, 'System32/WindowsPowerShell/v1.0')].join(';');
+}
 test("an owner's ! command in a native Codex session runs the real CLI: the line ownerShellCommand puts first takes the planner's shims out in the thread's shell", { timeout: 120000 }, t => {
   const { ownerShellCommand } = require('../electron/shared/agentrix-shims.cjs');
   const folder = temporary(t), home = path.join(folder, 'home'), standin = path.join(folder, 'stand-in'), user = path.join(folder, 'user-env.sh');
   fs.mkdirSync(home); fs.mkdirSync(standin); fs.writeFileSync(user, ':\n');
   fs.writeFileSync(path.join(standin, 'claude'), '#!/bin/sh\necho "STAND-IN claude $*"\n', { mode: 0o755 });
   fs.writeFileSync(path.join(standin, 'claude.cmd'), '@echo STAND-IN claude %*\r\n');
-  const owner = isolatedEnvironment(home), key = Object.keys(owner).find(name => name.toUpperCase() === 'PATH');
-  // The stand-in comes first on the owner's PATH, so no installed CLI can answer; the planner's shims go before it.
-  owner[key] = [standin, owner[key]].join(path.delimiter); owner.BASH_ENV = posix(user);
+  const owner = isolatedEnvironment(home);
+  for (const name of Object.keys(owner)) if (name.toUpperCase() === 'PATH') delete owner[name];
+  owner.PATH = systemPath(standin); owner.BASH_ENV = posix(user);
   const planner = shim().withShims({ ...owner, AGENTRIX_BOOTSTRAP: sessionBootstrap(folder).file }, { depth: 0 });
   assert.ok(shells().length, 'a shell to run the owner command in');
   for (const shell of shells()) {
-    const powershell = shell.kind === 'powershell';
+    const powershell = shell.kind === 'powershell', kind = powershell ? 'powershell' : 'posix';
+    // Before anything runs by name: behind the line, claude resolves to the stand-in.
+    const resolved = shell.run(ownerShellCommand(powershell ? '(Get-Command claude).Source' : 'command -v claude', planner, kind), planner, folder);
+    const where = resolved.stdout.trim().toLowerCase();
+    assert.ok(inStandIn(where, folder), `${shell.kind} resolves claude to the stand-in: ${resolved.stdout}${resolved.stderr}`);
     const typed = powershell ? `claude -p --output-format json 'it''s x'; Write-Output "D=$env:AGENTRIX_DISPATCH_DEPTH B=$env:BASH_ENV"`
       : `claude -p --output-format json "it's x"; echo "D=\${AGENTRIX_DISPATCH_DEPTH-} B=\${BASH_ENV-}"`;
-    const result = shell.run(ownerShellCommand(typed, planner, powershell ? 'win32' : 'posix'), planner, folder);
+    const result = shell.run(ownerShellCommand(typed, planner, kind), planner, folder);
     assert.equal(result.status, 0, `${shell.kind}: ${result.stdout}${result.stderr}`);
     assert.match(result.stdout, /^STAND-IN claude -p --output-format json .*it's x/m, shell.kind);
     assert.ok(result.stdout.split(/\r?\n/).includes(`D= B=${posix(user)}`), `${shell.kind} drops the depth and gives the user's BASH_ENV back: ${result.stdout}`);
-    if (powershell) continue;
+    if (powershell) {
+      // Constrained Language Mode: the line is skipped without error text, and the command still runs.
+      const constrained = shell.run('$ExecutionContext.SessionState.LanguageMode = "ConstrainedLanguage"; ' + ownerShellCommand('Write-Output "ran"', planner, kind), planner, folder);
+      assert.equal(constrained.status, 0); assert.equal(constrained.stderr, ''); assert.match(constrained.stdout, /^ran/m);
+      continue;
+    }
     const planned = shell.run(typed, planner, folder);
     // Without the line the same text is a planner's call: the shim refuses it and no stand-in runs.
     assert.doesNotMatch(planned.stdout, /STAND-IN/, shell.kind); assert.match(planned.stderr, /not run: --output-format is not supported/, shell.kind);
   }
-  assert.equal(ownerShellCommand('claude -p x', { PATH: 'tools' }), 'claude -p x', 'a session without shims runs the text as typed');
+  assert.equal(ownerShellCommand('claude -p x', { PATH: 'tools' }, 'posix'), 'claude -p x', 'a session without shims runs the text as typed');
+});
+
+test('the owner-command line goes only to a shell it is written for: fish, cmd and an unknown login shell run the text as typed', () => {
+  const { ownerShell, ownerShellCommand } = require('../electron/shared/agentrix-shims.cjs');
+  const posixOf = shell => ownerShell({ platform: 'linux', userShell: () => shell });
+  for (const shell of ['/bin/bash', '/bin/zsh', '/bin/sh', '/usr/bin/dash', '/bin/ksh', '/opt/homebrew/bin/zsh']) assert.equal(posixOf(shell), 'posix', shell);
+  for (const shell of ['/usr/bin/fish', '/opt/homebrew/bin/nu', '', null, undefined]) assert.equal(posixOf(shell), null, String(shell));
+  assert.equal(ownerShell({ platform: 'darwin', userShell: () => { throw new Error('no passwd entry'); } }), null);
+  const windows = (files, PATH = 'C:\\Tools') => ownerShell({ platform: 'win32', env: { SystemRoot: 'C:\\Windows', Path: PATH }, exists: file => files.includes(file) });
+  assert.equal(windows([]), null, 'cmd only');
+  assert.equal(windows(['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe']), 'powershell');
+  assert.equal(windows(['C:\\PowerShell\\7\\pwsh.exe'], 'C:\\Tools;"C:\\PowerShell\\7"'), 'powershell');
+  const planner = { AGENTRIX_SHIMS: '/agentrix/shims' };
+  for (const shell of [null, 'fish', 'cmd']) assert.equal(ownerShellCommand('claude -p x', planner, shell), 'claude -p x', String(shell));
+  assert.notEqual(ownerShellCommand('claude -p x', planner, 'posix'), 'claude -p x');
 });
 
 test("a hook skips a user's file only when it is an Agentrix hook by where it is, not for its first line alone", { skip: !shellFor('bash') && 'bash is not installed here', timeout: 60000 }, t => {

@@ -10,7 +10,7 @@ const KINDS = { userMessage: 'user-message', agentMessage: 'agent-message', reas
 const bounded = value => typeof value === 'string' ? value.slice(0, 256 * 1024) : null;
 const UNFINISHED = ['running', 'in-progress', 'pending'];
 // An owner's ! command shows as typed, without the line that takes the planner's shims out (ownerShellCommand).
-const shownCommand = item => (item.commandActions?.length === 1 && typedCommand(item.commandActions[0]?.command)) || item.command;
+const shownCommand = item => (item.commandActions?.length === 1 && typedCommand(item.commandActions[0]?.command)) || typedCommand(item.command) || item.command;
 // History replays into an idle thread: an item it left unfinished ran in an earlier process and is no work of this one.
 // Only a turn recorded as interrupted proves the outcome; any other result is unknown, never running and never done.
 const settleReplayed = (payload, turnStatus) => UNFINISHED.includes(payload.status)
