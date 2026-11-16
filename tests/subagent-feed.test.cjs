@@ -409,11 +409,16 @@ test('successful dispatch rows hide after three seconds while their final snapsh
   await rollout(f, sessionId, {}, [{ type: 'event_msg', timestamp: iso(1), payload: { type: 'agent_message', message: 'Final synthetic answer.' } }]);
   await f.calls.feed('dispatch:finished'); endDispatch(f, 'finished'); await f.calls.work;
   const final = await f.calls.feed('dispatch:finished'); assert.equal(final.state, 'done');
-  t.mock.timers.tick(3000); assert.deepEqual(f.calls.snapshot(), []);
+  // The live row hides; the call stays in the snapshot as a hidden done row for 最近完成 (30 min, as its feed).
+  const rows = () => f.calls.snapshot().flatMap(group => group.items).map(({ id, state, hidden }) => [id, state, hidden]);
+  t.mock.timers.tick(3000); assert.deepEqual(rows(), [['dispatch:finished', 'done', true]]);
   assert.equal(f.calls.byId('dispatch:finished').hidden, true);
   assert.deepEqual(await f.calls.feed('dispatch:finished'), final);
   t.mock.timers.tick(FINAL_TTL - 3001); assert.deepEqual(await f.calls.feed('dispatch:finished'), final);
   t.mock.timers.tick(1); await assert.rejects(f.calls.feed('dispatch:finished'), /^Error: gone$/);
+  // The row counts from the recorded end (BASE + 10 s), so it leaves just after thirty minutes from there.
+  t.mock.timers.tick(10000); assert.equal(rows().length, 1);
+  t.mock.timers.tick(1); assert.deepEqual(f.calls.snapshot(), []);
   assert.equal(f.calls.dispatch({ type: 'dispatch-start', id: 'finished' }), false, 'expired feed cannot resurrect its receipt');
 });
 

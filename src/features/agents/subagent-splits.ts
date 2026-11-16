@@ -27,7 +27,13 @@ export const listedCalls = (calls: readonly AgentCall[], open: readonly Subagent
 // the background lane: agentUsage.background). A record without them reads as before.
 export type RowState = AgentCall['items'][number]['state'] | 'starting';
 export type RowItem = Omit<AgentCall['items'][number], 'state'> & { state: RowState; notice?: 'unconfirmed'; source?: string; resumed?: boolean; awaiting?: 'owner' };
-export type BackgroundTask = { id: string; command: string; terminalId: string; startedAt: number; lastOutputAt?: number; endedAt?: number; state: 'running' | 'done'; exitCode?: number | null; tail?: string[] };
+export type BackgroundTask = { id: string; command: string; terminalId: string; startedAt: number; lastOutputAt?: number; endedAt?: number; state: 'running' | 'done'; exitCode?: number | null; tail?: string[] | string };
+// The last lines of a task's output. The contract is string[]; one string (what 1.5.1's main sent) is split, and anything else reads as no output, so a bad payload never throws in a render.
+export function backgroundTail(task: BackgroundTask | undefined): string[] {
+  const tail: unknown = task?.tail;
+  if (typeof tail === 'string') return tail ? tail.split('\n') : [];
+  return Array.isArray(tail) ? tail.filter((line): line is string => typeof line === 'string') : [];
+}
 export const backgroundOf = (terminal: ProjectTerminal): readonly BackgroundTask[] => (terminal.agentUsage as { background?: BackgroundTask[] } | null | undefined)?.background ?? [];
 
 // A background task opens in the same split slot as a call, under a call id of its own.

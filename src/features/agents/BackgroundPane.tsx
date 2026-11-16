@@ -4,12 +4,12 @@ import { Terminal, X } from '@phosphor-icons/react';
 import type { ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
-import { backgroundEnd, backgroundTaskOf, useClock } from './subagent-splits.ts';
+import { backgroundEnd, backgroundTail, backgroundTaskOf, useClock } from './subagent-splits.ts';
 import './activity-pane.css';
 
 export function BackgroundPane({ terminal, callId, onClose }: { terminal: ProjectTerminal | undefined; callId: string; onClose(): void }) {
   const task = backgroundTaskOf(terminal, callId), now = useClock(task?.state === 'running'), body = useRef<HTMLPreElement>(null);
-  const tail = task?.tail ?? [];
+  const tail = backgroundTail(task);
   // The newest output stays in view.
   useEffect(() => { const node = body.current; if (node) node.scrollTop = node.scrollHeight; }, [tail.length, tail.at(-1)]);
   if (!task) return <section className="subagent-split" aria-label={t('后台任务的输出，只读')} onKeyDown={event => { if (event.key === 'Escape') onClose(); }}>
