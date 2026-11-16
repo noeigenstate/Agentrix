@@ -10,3 +10,5 @@
 *.bash text eol=lf
 # Official brand sources are checksum verified; preserve their exact bytes on Windows too.
 assets/brands/*.svg -text
+integration/shims/codex text eol=lf
+integration/shims/claude text eol=lf
