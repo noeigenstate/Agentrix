@@ -5,6 +5,8 @@ const SEEN_LIMIT = 1000;
 type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; receivedAt?: number; queued?: boolean; cancelled?: boolean; images?: string[] };
 export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[]; imageCount?: number };
 export type PendingPrompts = { sessionId: string | null; prompts: readonly PendingPrompt[]; seen: readonly string[] };
+export type WaitingMessage = { id: number; text: string; at: number; uncertain?: boolean; seen?: readonly string[]; earlier?: readonly PendingPrompt[] };
+type ReceiptPrompt = Pick<PendingPrompt, 'text' | 'at'> & { seen?: readonly string[] };
 
 export const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');
 
@@ -25,6 +27,38 @@ const transcriptMatches = (message: string, record: string, original?: string) =
 export const matchesPrompt = (prompt: Pick<PendingPrompt, 'text' | 'at'>, record: UserRecord) =>
   timely(prompt, record) && transcriptMatches(prompt.text, record.text ?? '', record.original);
 
+function takeReceipt<T extends ReceiptPrompt>(prompts: T[], record: UserRecord): T | undefined {
+  const index = prompts.findIndex(prompt => !prompt.seen?.includes(record.id) && matchesPrompt(prompt, record));
+  return index >= 0 ? prompts.splice(index, 1)[0] : undefined;
+}
+
+// The echo for an earlier identical send owns its receipt, even if that echo has since retired. Keep the contenders
+// captured at admission across remounts, and consume each receipt once. Untimestamped history cannot confirm delivery.
+export function reconcileOutbox(messages: WaitingMessage[], records: readonly UserRecord[]): WaitingMessage[] {
+  const candidates = new Map<string, ReceiptPrompt & { id: string }>();
+  for (const message of messages) {
+    if (!message.uncertain) continue;
+    for (const prompt of message.earlier ?? []) {
+      if (!candidates.has(prompt.id)) candidates.set(prompt.id, { ...prompt, seen: message.seen });
+    }
+    const id = `outbox:${message.id}`;
+    candidates.set(id, { ...message, id });
+  }
+  if (!candidates.size) return messages;
+  const pending = [...candidates.values()], matched = new Set<string>(), seen = new Set<string>();
+  for (const record of records) {
+    if (record.role !== 'user' || record.cancelled || seen.has(record.id) || !Number.isFinite(record.receivedAt ?? record.at)) continue;
+    const prompt = takeReceipt(pending, record);
+    if (prompt) { matched.add(prompt.id); seen.add(record.id); }
+  }
+  if (!matched.size) return messages;
+  return messages.flatMap(message => {
+    if (!message.uncertain) return [message];
+    if (matched.has(`outbox:${message.id}`)) return [];
+    return [{ ...message, earlier: message.earlier?.filter(prompt => !matched.has(prompt.id)), seen: [...new Set([...(message.seen ?? []), ...seen])] }];
+  });
+}
+
 // Pair queue records and renderer echoes one-to-one. Raw-terminal sends and reloads have no echo;
 // the transcript still owns a queued card, its timestamp and its position ahead of later sends.
 export function pendingPromptCards(prompts: readonly PendingPrompt[], records: readonly UserRecord[]) {
@@ -32,8 +66,7 @@ export function pendingPromptCards(prompts: readonly PendingPrompt[], records: r
   const cards: PendingPrompt[] = [];
   for (const record of records) {
     if (!record.queued || record.cancelled || record.role !== 'user') continue;
-    const index = remaining.findIndex(prompt => matchesPrompt(prompt, record));
-    const echo = index >= 0 ? remaining.splice(index, 1)[0] : undefined;
+    const echo = takeReceipt(remaining, record);
     const card: PendingPrompt = { ...echo, id: echo?.id ?? record.id, role: 'user', text: echo?.text ?? record.text ?? '', at: record.at ?? echo?.at ?? 0, sending: false, images: record.images ?? echo?.images };
     cards.push(card); queuedIds.add(card.id);
   }

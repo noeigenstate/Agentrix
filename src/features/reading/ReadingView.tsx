@@ -34,7 +34,7 @@ import { MentionPalette } from './MentionPalette';
 import { useComposerHistory } from './useComposerHistory';
 import { useCommandPalette } from './useCommandPalette';
 import { commandList, composerAria } from './CommandList';
-import { isTypedCommand, matchesPrompt, pendingPromptCards, sameMessage, type PendingPrompt } from './pending-prompts';
+import { isTypedCommand, pendingPromptCards, reconcileOutbox, sameMessage, type PendingPrompt, type WaitingMessage } from './pending-prompts';
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages } from './PendingPromptEntries';
 import { AgentMark, TimelineStep } from './Timeline';
@@ -60,7 +60,6 @@ export type ReadingHandoff = {
 
 // Switching to the CLI unmounts the composer; sent messages still belong to that terminal.
 const history = new Map<string, string[]>();
-type WaitingMessage = { id: number; text: string; at: number; uncertain?: boolean; seen?: string[] };
 type Leftover = { text: string; again: string | null };
 const waitingMessages = new WeakMap<object, WaitingMessage[]>();
 let nextWaitingMessage = 0;
@@ -109,7 +108,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const cards = useMemo(() => pendingPromptCards(pending, conversationEntries.filter(entry => !hidden?.has(entry.id))), [pending, conversationEntries, hidden]);
   const queued = (prompt: PendingPrompt) => cards.queuedIds.has(prompt.id);
   // A send's delayed Enter must see queue receipts that arrived after the send started.
-  const latestMessages = useRef({ cards, entries: conversationEntries }); latestMessages.current = { cards, entries: conversationEntries };
+  const latestMessages = useRef({ cards, pending, entries: conversationEntries }); latestMessages.current = { cards, pending, entries: conversationEntries };
   const queuedInput = (text: string) => {
     const current = latestMessages.current.cards;
     return current.prompts.some(prompt => current.queuedIds.has(prompt.id) && sameMessage(prompt.text, text));
@@ -153,9 +152,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // A receipt resolves uncertainty even while a dialog, an inactive view or a pending parse prevents another send.
   useEffect(() => {
     const messages = waitingMessages.get(ownHistory) ?? [];
-    const remaining = messages.filter(message => !message.uncertain || !conversationEntries.some(entry => entry.role === 'user'
-      && !entry.cancelled && !message.seen?.includes(entry.id) && matchesPrompt(message, entry)));
-    if (remaining.length !== messages.length) saveOutbox(remaining);
+    const remaining = reconcileOutbox(messages, conversationEntries);
+    if (remaining !== messages) saveOutbox(remaining);
   }, [conversationEntries, ownHistory]);
   const [sendingSoon, setSendingSoon] = useState(false);
   const [commands, setCommands] = useState<AgentCommand[]>([]), [requested, setRequested] = useState(false);
@@ -455,15 +453,16 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (sent && clears(terminal.agent, text)) { const ids = new Set(conversationEntries.map(entry => entry.id)); cleared.set(conversation, ids); setHidden(ids); }
       return sent ? true : undefined; // A cancelled typed command may already have written keys; never replay it automatically.
     }
-    // The screen may have changed since this render, and a busy agent's redraw can leave the input out for a moment. A
-    // text message shows as sent in the conversation while the send waits for the frame that draws the input, as the
-    // terminal would take the keys; only when none comes, or a dialog does, it waits in the outbox instead.
-    const textOnly = !pictureSend && !!text, early = textOnly ? echo(text, [], 0) : null;
+    // The screen may have changed since this render, and a busy agent's redraw can leave the input out for a moment.
+    // The owner's text echoes while waiting for input; an automatic attempt echoes only after the paste so retries under
+    // heavy output do not add and cancel a card without typing anything.
+    const textOnly = !pictureSend && !!text;
+    let pendingId = textOnly && !automatic ? echo(text, [], 0) : null;
     if (textOnly) { toBottom(); if (own) edit(''); }
     const initialInput = native.readInput(true) ?? await native.awaitInput(() => ownsSend(owner) && !choiceVisible.current, 2000, true);
     if (!initialInput || !ownsSend(owner) || choiceVisible.current) {
       if (!textOnly) return false;
-      if (early) cancelEcho(early);
+      if (pendingId) cancelEcho(pendingId);
       if (automatic) return false;
       hold(words, own, carried, place);
       return;
@@ -481,7 +480,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         await new Promise(resolve => setTimeout(resolve, 80));
       }
     }
-    const pendingId = textOnly ? early : text || batch.length ? echo(text, attached, batch.length) : null;
+    if (!textOnly && (text || batch.length)) pendingId = echo(text, attached, batch.length);
     if (pendingId) toBottom();
     if (native.parsing()) await native.settle(() => ownsSend(owner), 2000);
     if (!readyInput()) {
@@ -524,6 +523,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (left && (!queuedLeft || returnedQueued) && sameMessage(text, left)) {
       if (!readyInput()) return false;
+      if (automatic) echo(text, [], 0); // These words were already pasted by the earlier send.
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
       toBottom(); window.agentrix.writeTerminal(terminal.id, '\r');
@@ -567,6 +567,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         if (own && !pictureSend && !input.current?.value) edit(words);
         onError(pasted.error); return;
       }
+      if (automatic) pendingId = echo(text, [], 0);
       remember();
     }
     if (pictureSend) clearDraft();
@@ -623,7 +624,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     outboxAttempt.current = attempt;
     // A raw/reading switch can interrupt this async send. Persist uncertainty before writing so a remount never replays it.
     saveOutbox(messages.map(message => message.id === head.id
-      ? { ...message, uncertain: true, at: Date.now(), seen: latestMessages.current.entries.map(entry => entry.id) } : message));
+      ? { ...message, uncertain: true, at: Date.now(), seen: latestMessages.current.entries.map(entry => entry.id),
+        earlier: latestMessages.current.pending.filter(prompt => !latestMessages.current.cards.queuedIds.has(prompt.id)) } : message));
     void sendRef.current(head.text, false, true).then(sent => {
       if (!mounted.current || identity.current.epoch !== epoch) return;
       const messages = waitingMessages.get(ownHistory) ?? [];
