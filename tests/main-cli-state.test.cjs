@@ -272,6 +272,23 @@ test('a StopFailure on the command channel ends the round as interrupted without
   assert.equal(h.notifications(), 0, 'nothing later rearms the alert');
 });
 
+test('a posix hook names its prompt, so a late Stop of an older prompt does not end the newer turn', () => {
+  const h = fixture();
+  const { claudeEvent } = require('../integration/agent-event.cjs');
+  let serial = 0;
+  const send = (kind, payload) => {
+    const event = claudeEvent(JSON.stringify({ session_id: 'provider', ...payload }), 't', 'cap', kind);
+    assert.equal(event.promptId, payload.prompt_id, 'agent-event.cjs forwards prompt_id as claude-hook.ps1 does');
+    h.context.onEvent({ ...event, eventId: 'provider:posix-' + ++serial });
+  };
+  send('start', { hook_event_name: 'UserPromptSubmit', prompt: 'First task', prompt_id: 'p1' });
+  send('start', { hook_event_name: 'UserPromptSubmit', prompt: 'Second task', prompt_id: 'p2' });
+  send('stop', { hook_event_name: 'Stop', prompt_id: 'p1' });
+  assert.equal(h.s.cliState.state, 'working'); assert.equal(h.notifications(), 0);
+  send('stop', { hook_event_name: 'Stop', prompt_id: 'p2' });
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.notifications(), 1);
+});
+
 test("a hook-channel report and its claude launch pair by sequence, whichever pipe connection lands first", () => {
   const h = fixture(), { startHookLaunch } = require('../electron/features/terminal-events/hook-channel.cjs');
   // A version run keeps the launch branch short; the hook channel follows every claude launch alike.

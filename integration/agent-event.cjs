@@ -63,6 +63,8 @@ function claudeEvent(input, projectId, sessionKey, kind) {
     sentAt, hookEvent: String(hook.hook_event_name ?? ''), sessionSource: String(hook.source ?? ''),
     ...(typeof hook.turn_id === 'string' ? { turnId: hook.turn_id } : {}),
     ...(typeof hook.tool_use_id === 'string' ? { requestId: hook.tool_use_id } : {}),
+    // The prompt whose turn this is: a late Stop of an older prompt cannot end a newer turn.
+    ...(typeof hook.prompt_id === 'string' ? { promptId: hook.prompt_id } : {}),
     // Where Claude writes this conversation; Agentrix reads the steps of the round from it.
     transcriptPath: String(hook.transcript_path ?? ''),
     eventId: `${sessionId}:${Date.now()}${String(process.hrtime.bigint() % 10000n).padStart(4, '0')}`,
