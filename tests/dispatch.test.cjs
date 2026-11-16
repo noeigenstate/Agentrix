@@ -60,7 +60,10 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
     execFileSync('git', ['worktree', 'add', '-qb', 'worker', directory], { cwd: main, stdio: 'ignore', windowsHide: true });
   } else if (setup) await setup(directory);
   // A Codex worker's account reports have their own tests (dispatch-codex-usage); these follow a call's start, routing and end.
-  const events = [], server = await createEventServer(event => { if (event.type !== 'dispatch-account') events.push({ ...event, receivedAt: Date.now() }); });
+  const events = [], visibility = [], server = await createEventServer(event => {
+    if (['dispatch-declared', 'dispatch-notice'].includes(event.type)) visibility.push({ ...event, receivedAt: Date.now() });
+    else if (event.type !== 'dispatch-account') events.push({ ...event, receivedAt: Date.now() });
+  });
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
   const input = path.join(directory, 'fixture.json'), capture = path.join(directory, 'capture.json'), config = path.join(directory, 'bootstrap.json');
   await fs.writeFile(brief, '# A worker brief\nKeep Unicode: 执行.\n');
@@ -94,7 +97,7 @@ run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTim
     if (child.exitCode === null) { child.send('SIGTERM'); await finished; }
     server.close(); await fs.rm(root, { recursive: true, force: true }); if (release) await fs.rm(release, { force: true });
   });
-  return { child, finished, events, directory, out, capture, args, stdout: () => stdout, releaseOn };
+  return { child, finished, events, visibility, directory, out, capture, args, stdout: () => stdout, releaseOn };
 }
 
 async function until(predicate, timeout = 5000) {
@@ -161,6 +164,10 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.match(signals[0], /\[dispatch\] started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok · pid \d+ session /);
   assert.match(signals[1], /38 token\/s \(150 output tokens in 4 s\) · exit 0 reason exit · out /);
   assert.deepEqual(f.events.map(event => event.type), ['dispatch-start', 'dispatch-end']);
+  const declared = f.visibility.find(event => event.type === 'dispatch-declared');
+  assert.equal(declared.seq, 1); assert.equal(declared.id, f.events[0].id);
+  assert.equal(declared.helperPid, f.child.pid); assert.equal(declared.requested.model, 'gpt-6.1-sol');
+  assert.ok(declared.receivedAt <= f.events[0].receivedAt); assert.equal(declared.resumed, false);
   assert.ok(f.events.every(event => event.sessionKey === 'secret-for-test' && event.projectId === 'project'));
   const [start, end] = f.events;
   assert.equal(start.helperPid, f.child.pid, 'liveness follows the helper rather than its provider child');

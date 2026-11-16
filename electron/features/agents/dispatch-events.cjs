@@ -1,4 +1,6 @@
 const { TASK_KINDS } = require('../dashboard/records-routing.cjs');
+const { createHash, createHmac, timingSafeEqual } = require('node:crypto');
+const path = require('node:path');
 const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
 const line = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);
 const number = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
@@ -10,6 +12,26 @@ const percent = value => value === null || Number.isFinite(value) && value >= 0 
 // An observation time: never later than a minute past this clock.
 const observed = value => number(value) && value <= Date.now() + 60000;
 const NOTICES = ['credits_required', 'spend_limit', 'rate_limited'];
+const dispatchDirectory = bootstrapFile => path.join(path.dirname(bootstrapFile), 'dispatch-outbox', path.basename(bootstrapFile));
+const dispatchKeyId = key => createHash('sha256').update(key).digest('hex');
+// Sort object keys so JSON encoding and field order never change a signed fact. Credentials travel only on the pipe.
+function signedBytes(frame) {
+  const { mac, sessionKey, sequence, ...body } = frame;
+  return JSON.stringify(body, (_key, value) => object(value)
+    ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)) : value);
+}
+function dispatchFrame(event, { projectId, sessionKey, seq }) {
+  const { mac, sessionKey: ignored, ...body } = event;
+  const frame = { ...body, projectId, version: 1, seq, keyId: dispatchKeyId(sessionKey) };
+  frame.mac = createHmac('sha256', sessionKey).update(signedBytes(frame)).digest('hex');
+  return frame;
+}
+function verifyDispatchFrame(frame, key) {
+  if (!key || frame?.version !== 1 || !uuid(frame.id) || !line(frame.projectId, 200) || !Number.isSafeInteger(frame.seq) || frame.seq < 1
+    || frame.keyId !== dispatchKeyId(key) || typeof frame.mac !== 'string' || !/^[a-f\d]{64}$/.test(frame.mac)
+    || Buffer.byteLength(JSON.stringify(frame)) > 16384) return false;
+  return timingSafeEqual(Buffer.from(frame.mac, 'hex'), createHmac('sha256', key).update(signedBytes(frame)).digest());
+}
 
 // A quota window as the worker's app-server merged it (mergeLimits); undefined when it is not one.
 function quotaWindow(value) {
@@ -66,6 +88,15 @@ const envelope = event => !!event && uuid(event.id) && Buffer.byteLength(JSON.st
 
 function validDispatch(event) {
   if (!envelope(event)) return false;
+  if (event.type === 'dispatch-declared') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role)
+    && line(event.title, 1024) && line(event.cwd, 4096) && line(event.worktree, 4096) && routing(event.requested)
+    && Number.isSafeInteger(event.helperPid) && event.helperPid > 0 && ['dispatch', 'intercept'].includes(event.source)
+    && (event.parentId == null) && (event.leadMode == null || ['native', 'terminal', 'codex'].includes(event.leadMode))
+    && (event.resumed == null || typeof event.resumed === 'boolean') && number(event.at)
+    && (event.kind == null || TASK_KINDS.includes(event.kind))
+    && (event.meeting == null || typeof event.meeting === 'string' && /^[\w.-]{1,64}$/.test(event.meeting));
+  if (event.type === 'dispatch-notice') return number(event.at) && (event.controlFailure === null
+    || line(event.controlFailure, 160) && /^[\w.-]+\/[\w.-]+$/.test(event.controlFailure));
   if (event.type === 'dispatch-rate') return totals(event) && event.activeMs > 0;
   if (event.type === 'dispatch-input') return line(event.sessionId, 160) && line(event.entryId, 200)
     && event.entryId.startsWith('u:') && (event.inputId == null || line(event.inputId, 160)) && ['owner', 'planner'].includes(event.origin)
@@ -94,8 +125,8 @@ function validDispatch(event) {
 
 // calls: the session's called models (AgentCalls), present whether or not an agent runs in that terminal.
 // observeAccount: takes a running Codex call's account report as a limits payload (dispatchAccount); it may decline it.
-function acceptDispatch(session, event, calls, observeAccount) {
-  if (!session || event.sessionKey !== session.sessionKey || event.projectId !== session.terminalId) return false;
+function acceptDispatch(session, event, calls, observeAccount, admissionKey = session?.sessionKey) {
+  if (!session || event.sessionKey !== admissionKey || event.projectId !== session.terminalId) return false;
   if (event.type === 'dispatch-account') {
     const call = envelope(event) && calls?.byId(`dispatch:${event.id}`), payload = call?.sourceAgent === 'codex' && !call.done && dispatchAccount(event);
     return !!payload && (observeAccount?.(payload) || false);
@@ -104,7 +135,7 @@ function acceptDispatch(session, event, calls, observeAccount) {
   const agent = ['claude', 'codex'].includes(session.agent) ? session.agent : null;
   const model = session.nativeStructured ? session.nativeObservedModel : session.usage?.rates?.model;
   const planner = { kind: 'planner', agent, model: line(model, 160) && model !== '<synthetic>' ? model : null };
-  return calls?.dispatch(event.type === 'dispatch-start' ? { ...event, planner } : event) || false;
+  return calls?.dispatch(['dispatch-declared', 'dispatch-start'].includes(event.type) ? { ...event, planner } : event) || false;
 }
 
-module.exports = { acceptDispatch, validDispatch, dispatchAccount };
+module.exports = { acceptDispatch, validDispatch, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame };

@@ -9,6 +9,43 @@ const { defineMain } = require('./helpers/main-modules.cjs');
 
 const routing = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
 
+test('a dropped Claude declaration is replayed after reconnect and creates exactly one row', async t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-declaration-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const calls = new AgentCalls({ local: false }); t.after(() => calls.dispose());
+  const s = { terminalId: 'terminal', sessionKey: 'synthetic-key' }, id = randomUUID();
+  const event = { type: 'dispatch-declared', id, helperPid: process.pid, agent: 'claude', role: '执行', title: 'Synthetic replay', cwd: root, worktree: root,
+    requested: { model: 'synthetic-model', effort: 'high', fast: false }, source: 'dispatch', resumed: true, at: Date.now() };
+  assert.equal(validDispatch(event), true);
+  const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
+  const { DispatchInbox } = require('../electron/features/agents/dispatch-inbox.cjs');
+  const outbox = new DispatchOutbox({ directory: root, id, projectId: s.terminalId, sessionKey: s.sessionKey, wake: () => {} });
+  const frame = outbox.append(event);
+  assert.deepEqual(calls.snapshot(), [], 'the disconnected pipe has delivered nothing');
+  const inbox = new DispatchInbox({ directory: root, projectId: s.terminalId, sessionKey: s.sessionKey,
+    apply: (frame, key) => acceptDispatch(s, { ...frame, sessionKey: key }, calls) });
+  t.after(() => inbox.dispose());
+  await inbox.sweep(); await inbox.sweep(); await inbox.accept(frame);
+  const item = calls.snapshot()[0].items[0];
+  assert.equal(calls.snapshot()[0].items.length, 1); assert.equal(item.state, 'starting'); assert.equal(item.resumed, true);
+  assert.equal(outbox.acknowledged(), 1);
+});
+
+test('a declaration is unconfirmed after fifteen seconds and record-confirmed start promotes the same row', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const calls = new AgentCalls({ local: false, now: () => 1000 }); t.after(() => calls.dispose());
+  const id = randomUUID(), event = { type: 'dispatch-declared', id, helperPid: process.pid, agent: 'claude', role: '执行', title: 'Synthetic delayed start',
+    cwd: '/project', worktree: '/project', requested: { model: 'synthetic-model', effort: 'high', fast: false }, source: 'dispatch', at: 1000 };
+  const parent = { terminalId: 'terminal', sessionKey: 'test-key' };
+  assert.equal(acceptDispatch(parent, { ...event, projectId: 'terminal', sessionKey: 'test-key' }, calls), true);
+  t.mock.timers.tick(14999); assert.equal(calls.snapshot()[0].items[0].notice, undefined);
+  t.mock.timers.tick(1); assert.equal(calls.snapshot()[0].items[0].notice, 'unconfirmed');
+  assert.equal(acceptDispatch(parent, start(id, { agent: 'claude', model: 'synthetic-model' }), calls), true);
+  assert.equal(calls.snapshot()[0].items.length, 1); assert.equal(calls.snapshot()[0].items[0].state, 'running');
+  assert.equal(calls.snapshot()[0].items[0].notice, undefined);
+});
+
 test('dispatch sender identity comes from the authenticated parent, not helper declarations', t => {
   const calls = new AgentCalls(); t.after(() => calls.dispose());
   const parent = { terminalId: 'terminal', sessionKey: 'test-key', agent: 'claude', usage: { rates: { model: 'claude-opus-5-5' } } };

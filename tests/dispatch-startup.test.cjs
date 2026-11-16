@@ -10,6 +10,94 @@ const { run } = require('../integration/dispatch.cjs');
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { apiEnvironment } = require('../electron/features/claude-sdk/credentials.cjs');
 
+async function visibilityFixture(t, refused) {
+  const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+  const { acceptDispatch } = require('../electron/features/agents/dispatch-events.cjs');
+  const { EventEmitter } = require('node:events'), { PassThrough, Writable } = require('node:stream');
+  const { Module, createRequire } = require('node:module');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-starting-row-'));
+  const calls = new AgentCalls({ local: false });
+  const parent = { terminalId: 'terminal', sessionKey: 'synthetic-admission-key' };
+  const events = [], helper = path.join(__dirname, '../integration/dispatch.cjs'), realRequire = createRequire(helper);
+  const loaded = new Module(helper, module); loaded.filename = helper; loaded.paths = module.paths;
+  loaded.require = name => {
+    if (name === 'node:net') return { connect() {
+      const socket = new EventEmitter(); socket.setTimeout = () => socket;
+      socket.end = (bytes, callback) => queueMicrotask(() => {
+        const event = JSON.parse(bytes); events.push(event); acceptDispatch(parent, event, calls); callback?.(); socket.emit('close');
+      });
+      socket.destroy = () => socket.emit('close'); queueMicrotask(() => socket.emit('connect')); return socket;
+    } };
+    if (name.replaceAll('\\', '/').endsWith('/features/agents/dispatch-control.cjs')) return { async connectDispatchControl(auth) {
+      assert.equal(auth.cwd, root); assert.equal(auth.agent, 'claude'); assert.deepEqual(auth.allow, []);
+      if (refused) throw Object.assign(new Error('control_unavailable'), { stage: 'control_register', category: 'dispatch.unknown_run' });
+      return { connected: true, close() {}, async request(method) {
+        assert.equal(method, 'claude-sdk.run');
+        auth.onEvent({ type: 'path.changed', payload: { selected: 'terminal', reason: 'terminal lead (subscription)' } });
+      } };
+    } };
+    return realRequire(name);
+  };
+  loaded._compile(fs.readFileSync(helper, 'utf8'), helper);
+  const bootstrap = path.join(root, 'bootstrap.json'), brief = path.join(root, 'brief.md'), out = path.join(root, 'out.md');
+  fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: 'synthetic-events', controlAddress: 'synthetic-control', projectId: parent.terminalId,
+    sessionKey: parent.sessionKey, controlCapability: 'synthetic-capability' }));
+  fs.writeFileSync(brief, 'Synthetic task');
+  let launched, output = '', child;
+  const ready = new Promise(resolve => { launched = resolve; });
+  const finished = loaded.exports.run(['claude', '--role', 'review', '--title', 'Synthetic visibility', '--model', 'synthetic-model', '--effort', 'high',
+    '--permission', 'plan', '--cwd', root, '--brief', brief, '--out', out], {
+    env: { PATH: '', HOME: root, USERPROFILE: root, CODEX_HOME: path.join(root, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap },
+    stdout: { write: text => { output += text; } },
+    resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
+    launch: () => {
+      child = new EventEmitter(); child.pid = process.pid; child.exitCode = null;
+      child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
+      child.kill = () => child.end();
+      child.end = () => {
+        if (child.exitCode !== null) return;
+        child.exitCode = 0; child.stdout.end(); child.stderr.end(); child.emit('exit', 0); child.emit('close', 0, null);
+      };
+      launched(child); return child;
+    },
+  });
+  t.after(async () => { child?.end(); await finished; calls.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  await ready;
+  async function until(predicate) {
+    const end = Date.now() + 1500;
+    while (!predicate()) {
+      if (Date.now() > end) throw new Error('Synthetic visibility event was not received');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+  }
+  return { calls, events, child, until, finished, output: () => output };
+}
+
+test('a terminal-only Claude helper creates one running sidebar row before its first result', async t => {
+  const f = await visibilityFixture(t, false);
+  await f.until(() => f.calls.snapshot()[0]?.items[0]?.state === 'starting');
+  assert.equal(f.events.filter(event => event.type === 'dispatch-declared').length, 1);
+  f.child.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'synthetic-session', model: 'synthetic-model' }) + '\n');
+  await f.until(() => f.calls.snapshot()[0]?.items[0]?.state === 'running');
+  assert.equal(f.calls.snapshot()[0].items.length, 1);
+  assert.match(f.output(), /claude-cli: terminal lead \(subscription\)/);
+  f.child.stdout.write(JSON.stringify({ type: 'result', result: 'Synthetic result', usage: { output_tokens: 1 }, duration_api_ms: 1 }) + '\n');
+  f.child.end(); assert.equal(await f.finished, 0);
+});
+
+test('a rejected execution-control registration does not discard an authenticated Claude visibility declaration', async t => {
+  const f = await visibilityFixture(t, true);
+  await f.until(() => !!f.calls.snapshot()[0]?.items[0]?.controlFailure);
+  const item = f.calls.snapshot()[0].items[0];
+  assert.equal(item.state, 'starting'); assert.match(item.controlFailure, /^control_register\//);
+  f.child.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'synthetic-session', model: 'synthetic-model' }) + '\n');
+  await f.until(() => f.calls.snapshot()[0]?.items[0]?.state === 'running');
+  assert.equal(f.calls.snapshot()[0].items[0].id, item.id);
+  f.child.stdout.write(JSON.stringify({ type: 'result', result: 'Synthetic result', usage: { output_tokens: 1 }, duration_api_ms: 1 }) + '\n');
+  f.child.end(); assert.equal(await f.finished, 0);
+});
+
 for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_json', 'missing_file', 'missing_capability', 'missing_session_key', 'rejected_registration', 'dead_address']) {
   test(`helper startup diagnoses ${scenario} without exposing bootstrap paths or credentials`, async t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-startup-')), lifetime = resources(t);
@@ -58,7 +146,7 @@ for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_
       const reasons = { no_environment: /bootstrap\/missing_environment/, missing_address: /bootstrap\/missing_address/,
         invalid_json: /bootstrap\/invalid_json/, missing_file: /bootstrap\/ENOENT/,
         missing_capability: /bootstrap\/missing_capability/, missing_session_key: /bootstrap\/missing_session_key/,
-        rejected_registration: /control_register\/(?:registration_closed|timeout)/, dead_address: /control_connect\/(?:ENOENT|ECONNREFUSED)/ };
+        rejected_registration: /control_register\/(?:dispatch\.control_unbound|registration_closed|timeout)/, dead_address: /control_connect\/(?:ENOENT|ECONNREFUSED)/ };
       assert.match(diagnostics[0], reasons[scenario]);
       assert.ok(!diagnostics[0].includes(root)); assert.ok(!diagnostics[0].includes('synthetic-private-key'));
     }
@@ -94,5 +182,5 @@ test('a GUI Claude SDK planner passes its bootstrap to the helper and its CLI fa
     },
   });
   assert.equal(code, 0); assert.equal(brokerCalls, 1); assert.equal(launched, true);
-  assert.match(stdout, /claude-cli fallback: synthetic_fallback/); assert.doesNotMatch(stdout, /bootstrap\/missing_environment/);
+  assert.match(stdout, /claude-cli: synthetic_fallback/); assert.doesNotMatch(stdout, /bootstrap\/missing_environment/);
 });

@@ -22,7 +22,7 @@ node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues 
 node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <file.md>
 ```
 
-A Codex worker runs only on `codex app-server`, which the helper starts itself with the declared model, effort, speed, folder and sandbox. If app-server cannot start, the helper fails with the reason on its end line and does not fall back to another way of running Codex. A Claude worker runs through the app's Claude runtime where it is available, else as `claude -p --model … --effort … --permission-mode … --output-format stream-json --verbose`, whose stream the helper reads itself and sends only the token rate while the worker runs. The helper gives the
+A Codex worker runs only on `codex app-server`, which the helper starts itself with the declared model, effort, speed, folder and sandbox. If app-server cannot start, the helper fails with the reason on its end line and does not fall back to another way of running Codex. A Claude worker runs through the app's Claude runtime where it is available, else as `claude -p --model … --effort … --permission-mode … --output-format stream-json --verbose`, whose stream the helper reads itself. The helper gives the
 brief to the worker itself, so what is declared is what runs. It exits with the worker's exit code and writes a log next to `--out`
 (`<out>.log`). `--role`: 执行 / exec, 调查 / investigate or 审查 / review (English aliases become the corresponding Chinese
 role in events). `--help` lists all six values. `--title`: one line, what the worker does.
@@ -216,26 +216,40 @@ already inside output tokens are not added again. No usable record: `token/s unr
 
 ## Events to Agentrix
 
-Events over the session's authenticated event pipe (`pipeName`, `sessionKey` from `AGENTRIX_BOOTSTRAP`), one JSON line
-each: `dispatch-start` and `dispatch-end` at the same moments as the two lines above, and in between only the token
-rate, live:
+After admission and before launch, the helper writes a declaration. Each event is written atomically to the run's
+outbox before it wakes main over the authenticated event pipe (`pipeName` from `AGENTRIX_BOOTSTRAP`). The session key
+is captured at admission, never written into the outbox, and never passed to the worker. Records carry `version: 1`,
+`seq`, `keyId` and an HMAC-SHA256 `mac`; the pipe also carries the session key. Its optional SSH `sequence` is transport
+metadata, separate from the authenticated `seq`.
+
+For local terminals the folder is `dispatch-outbox/<bootstrap filename>/<run id>/` beside the bootstrap file, with one
+`<seq>.json` per event. Main applies events once, in sequence order, and atomically writes a signed `ack.json` for the
+highest applied sequence before reclaiming those files. A pipe write alone never acknowledges an event. A later wake
+drains the missing records, and main sweeps registered folders every 60 seconds even when the helper has exited.
+Replay never restarts a model request. An earlier key authorizes only its admitted run; a terminal restart cannot
+authorize another run with that key. App restart recovery and the remote SSH disk-replay bridge are separate work.
 
 | type | fields |
 | --- | --- |
+| `dispatch-declared` | `id`, `helperPid`, `agent`, `role`, `title`, `cwd`, `worktree`, `requested: {model, effort, fast}`, optional authenticated `leadMode`, `source: 'dispatch'|'intercept'`, `parentId: null`, `resumed`, `at`; a declaration admits visibility, never proves execution |
+| `dispatch-notice` | `id`, `controlFailure` (a safe `stage/category`, or null after recovery), `at`; retained on the same row without ending or discarding it |
 | `dispatch-start` | `id` (uuid), `agent` (codex/claude), `role`, `title`, `model`, `effort`, `fast` (as the worker reports them; `declared` holds the declared three when a reported value differs), `cwd`, `brief`, `out`, `sessionId`, `startedAt`; an unconfirmed start uses the declared routing and `unconfirmed: true`, with `sessionId: null` if unknown |
 | `dispatch-rate` | `id`, `outputTokens`, `activeMs` — cumulative completed-response totals, checked every 5 s while running; unchanged or unreported totals are skipped |
 | `dispatch-end` | `id`, `model`, `effort`, `fast`, `exitCode`, `reason` (`exit`, `killed`, `capacity`, `error`, `unconfirmed`, `scope`), `outputTokens`, `activeMs` (null when unreported), `endedAt`; `outOfScope` (files) with `--allow` |
 
-`dispatch-start` shows the row as 运行中 with the model, effort and mode the worker reports (a mismatch is noted in the
-row's tooltip). `dispatch-end` with `reason` exit and
-code 0 shows 已完成 and the row is removed 3 seconds later; any other end (未能启动 for unconfirmed, 模型满载, 已停止,
-出错退出（代码 N）, 越界) stays visible until the lead's next round so it is not missed. The helper finds the reason from the
+`dispatch-declared` creates a `starting` row (启动中 · 未确认), showing the requested model as unconfirmed and leaving
+unreported effort, speed and rate unknown. A `--resume` invocation sets the item's `resumed: true`. After 15 seconds
+without `dispatch-start`, the same item gets `notice: 'unconfirmed'`; that notice does not fail or restart the worker.
+Only record-confirmed `dispatch-start` promotes that row to 运行中 and clears its notice, with the model, effort and
+mode the worker reports (a mismatch is noted in the row's tooltip). `dispatch-end` with `reason` exit and
+code 0 shows 已完成; finished calls hide after 3 seconds on success and 30 seconds on failure while a live helper keeps
+its row. Hiding never acknowledges a failure, removes an open feed or repeats accounting. The helper finds the reason from the
 worker's exit code and the end of its own output (e.g. "at capacity"). `dispatch-rate` makes the running row's model
 group show its token/s while the worker runs (the same TokenRates as other calls); `dispatch-end`'s totals are the
 last word. When confirmation times out, or the process exits without confirming records, the helper sends the declared
 `dispatch-start` with `unconfirmed: true`, followed by `dispatch-end` reason `unconfirmed` (exit code null if still
-unknown). This pair creates the 未能启动 row even without a worker session. The rate is the only thing sent while a
-confirmed worker runs.
+unknown). This pair retains the 未能启动 row even without a worker session. The 30-second startup confirmation deadline
+and its failed-start/end pair remain separate from the 15-second visibility notice.
 
 ## Rules
 

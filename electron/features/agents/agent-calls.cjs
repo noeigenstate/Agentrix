@@ -28,10 +28,11 @@ function helperAlive(pid) {
 
 class AgentCalls {
   static alive(pid) { return helperAlive(pid); }
-  constructor({ changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid) } = {}) {
+  constructor({ changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null;
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
     this.dispatchAlive = dispatchAlive;
+    this.dispatchReplay = dispatchReplay;
     this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
       plannerOf: id => this.calls?.get(id)?.planner || null,
       read: async call => { this.refresh(call.key); await this.work; } });
@@ -40,7 +41,7 @@ class AgentCalls {
   reset(preserveDispatch = false) {
     clearTimeout(this.timer);
     const dispatched = [...(this.calls || [])].filter(([, call]) => preserveDispatch && call.dispatch);
-    for (const call of this.calls?.values() || []) if (!preserveDispatch || !call.dispatch) clearTimeout(call.expiry);
+    for (const call of this.calls?.values() || []) if (!preserveDispatch || !call.dispatch) { clearTimeout(call.expiry); clearTimeout(call.startNotice); }
     this.feeds.reset(preserveDispatch ? new Set(dispatched.map(([, call]) => call)) : null);
     this.timer = null; this.calls = new Map(dispatched); this.polls = new Map(); this.meta = new Map(); this.pending = new Set(); this.work = null;
   }
@@ -76,12 +77,14 @@ class AgentCalls {
         group.rate.outputTokens += call.rate.outputTokens; group.rate.activeMs += call.rate.activeMs; group.rate.samples += call.rate.samples;
         group.rate.updatedAt = Math.max(group.rate.updatedAt, call.rate.updatedAt); group.rate.partial ||= call.rate.partial;
       }
-      const state = stateOf(call);
-      if (!call.hidden && state !== 'done') group[state]++;
+      const state = call.starting && !call.done ? 'starting' : stateOf(call);
+      if (!call.hidden && state !== 'done') group[state] = (group[state] || 0) + 1;
       group.items.push({ id: call.id, state, role: call.role, title: call.title,
         startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: !!call.hidden,
         ...(call.dispatch || call.failure ? { failure: call.failure || null } : {}),
-        ...(call.dispatch && call.declared ? { declared: call.declared } : {}) });
+        ...(call.dispatch && call.declared ? { declared: call.declared } : {}),
+        ...(call.resumed ? { resumed: true } : {}), ...(call.notice ? { notice: call.notice } : {}),
+        ...(call.controlFailure ? { controlFailure: call.controlFailure } : {}) });
       if (!call.hidden && call.task) { group.tasks = group.tasks.filter(task => task !== call.task); group.tasks.push(call.task); group.tasks = group.tasks.slice(-5); }
     }
     for (const group of unrated) if (rated.has(group)) group.rate.partial = true; else group.rate = null;
@@ -90,8 +93,24 @@ class AgentCalls {
   }
   dispatch(event) {
     const call = this.calls.get(event.id);
+    if (event.type === 'dispatch-declared') {
+      if (call || this.finishedIds.has(event.id)) return false;
+      const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
+        model: 'unreported', effort: null, fast: null, requestedModel: event.requested.model, requested: event.requested,
+        planner: event.planner || { kind: 'planner', agent: null, model: null }, kind: taskKind(event), meeting: event.meeting ?? null,
+        role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,
+        helperPid: event.helperPid, starting: true, unconfirmed: true, resumed: event.resumed === true,
+        startedAt: time(event.at), done: false, rate: null, meter: new TokenRates(event.agent) };
+      this.calls.set(event.id, next); this.feeds.track(next);
+      next.startNotice = setTimeout(() => {
+        if (this.calls.get(event.id) !== next || !next.starting || next.done) return;
+        next.notice = 'unconfirmed'; this.changed();
+      }, Math.max(0, 15000 - (this.now() - event.at)));
+      next.startNotice.unref?.(); this.schedule(); return true;
+    }
     if (event.type === 'dispatch-start') {
-      if (call || this.calls.size >= 1024) return false;
+      if (call && (!call.starting || call.done) || !call && this.calls.size >= 1024) return false;
+      if (call && (call.sourceAgent !== event.agent || call.cwd !== event.cwd)) return false;
       const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
         planner: event.planner || { kind: 'planner', agent: null, model: null },
@@ -100,7 +119,12 @@ class AgentCalls {
         role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd,
         startedAt: time(event.startedAt), helperPid: Number.isSafeInteger(event.helperPid) && event.helperPid > 0 ? event.helperPid : null,
         done: false, rate: null, meter: new TokenRates(event.agent) };
-      this.calls.set(event.id, next); this.feeds.track(next); this.schedule();
+      if (call) {
+        clearTimeout(call.startNotice);
+        Object.assign(call, next, { starting: false }); delete call.notice;
+        this.feeds.update(call);
+      } else { this.calls.set(event.id, next); this.feeds.track(next); }
+      this.schedule();
       return true;
     }
     if (!call?.dispatch) return false;
@@ -110,6 +134,7 @@ class AgentCalls {
       return this.feeds.noteInput(call, event);
     }
     if (call.done || call.reviewed) return false;
+    if (event.type === 'dispatch-notice') { call.controlFailure = event.controlFailure; return true; }
     if (event.type === 'dispatch-receipt') {
       const entry = this.feeds.owned(call);
       if (entry) { entry.dirty = true; this.feeds.update(call); }
@@ -128,6 +153,8 @@ class AgentCalls {
       return true;
     }
     if (event.type !== 'dispatch-end') return false;
+    clearTimeout(call.startNotice); call.starting = false; delete call.notice;
+    this.finishedIds.add(event.id);
     call.done = true; call.finishedAt = event.endedAt; call.completedAt = this.now();
     try { this.finished(call, event); } catch {}
     call.model = event.model; call.effort = event.effort; call.fast = event.fast;
@@ -392,6 +419,8 @@ class AgentCalls {
       if (call?.dispatch) {
         let alive;
         if (!call.done) { try { alive = await this.dispatchAlive(call); } catch {} }
+        // The final wake may have been lost after the helper flushed its end. Drain that proof before inferring death.
+        if (alive === false && this.dispatchReplay) { try { await this.dispatchReplay(); } catch { alive = null; } }
         if (this.calls !== calls || calls.get(id) !== call) return;
         if (alive !== false) call.missingSince = null;
         else call.missingSince ??= this.now();

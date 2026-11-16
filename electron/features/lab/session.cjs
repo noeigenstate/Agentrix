@@ -37,6 +37,9 @@ async function copyHelper(helper, directory) {
     for (const [, file] of runtime[1].matchAll(/'([^']+)'/g)) {
       modules['electron/' + file] = await fs.readFile(path.join(root, file), 'utf8');
     }
+    const outbox = path.join(path.dirname(helper), 'dispatch-outbox.cjs');
+    modules['electron/dispatch-outbox.cjs'] = await fs.readFile(await fs.stat(outbox).catch(() => null)
+      ? outbox : path.join(root, 'dispatch-outbox.cjs'), 'utf8');
   }
   modules['dispatch.cjs'] = instrumented;
   await fs.writeFile(destination, JSON.stringify(modules), { mode: 0o600 });
