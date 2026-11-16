@@ -60,17 +60,19 @@ const OWNER_PREFIX = {
 const POSIX_SHELLS = ['bash', 'zsh', 'sh', 'dash', 'ksh'];
 
 // Which prefix the shell Codex will run an owner's command in takes, or null when that shell is not known: on Windows
-// PowerShell (pwsh on PATH, or System32's powershell.exe), elsewhere the user's login shell from passwd.
+// PowerShell (pwsh or powershell.exe on the session's PATH), elsewhere the user's login shell from passwd, and SHELL too.
 function ownerShell({ platform = process.platform, env = process.env, userShell = () => os.userInfo().shell, exists = fs.existsSync } = {}) {
   if (platform === 'win32') {
+    // Found as Codex finds it, on the session's PATH; without one there Codex falls back to cmd.
     const folders = String(Object.entries(env || {}).find(([name]) => name.toUpperCase() === 'PATH')?.[1] || '').split(';').filter(Boolean);
-    const root = env?.SystemRoot || env?.SYSTEMROOT || 'C:\\Windows';
-    return folders.some(folder => exists(path.win32.join(folder.replace(/^"|"$/g, ''), 'pwsh.exe')))
-      || exists(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')) ? 'powershell' : null;
+    return folders.some(folder => ['pwsh.exe', 'powershell.exe'].some(name => exists(path.win32.join(folder.replace(/^"|"$/g, ''), name)))) ? 'powershell' : null;
   }
+  // The passwd shell decides, and a SHELL that is set must agree, in case Codex reads that instead.
+  const known = shell => typeof shell === 'string' && POSIX_SHELLS.includes(path.posix.basename(shell));
+  if (env?.SHELL && !known(env.SHELL)) return null;
   let shell = null;
   try { shell = userShell(); } catch { }
-  return typeof shell === 'string' && POSIX_SHELLS.includes(path.posix.basename(shell)) ? 'posix' : null;
+  return known(shell) ? 'posix' : null;
 }
 
 function ownerShellCommand(command, env, shell = ownerShell({ env })) {

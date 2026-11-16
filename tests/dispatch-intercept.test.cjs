@@ -458,13 +458,20 @@ test("an owner's ! command in a native Codex session runs the real CLI: the line
 
 test('the owner-command line goes only to a shell it is written for: fish, cmd and an unknown login shell run the text as typed', () => {
   const { ownerShell, ownerShellCommand } = require('../electron/shared/agentrix-shims.cjs');
-  const posixOf = shell => ownerShell({ platform: 'linux', userShell: () => shell });
+  const posixOf = (shell, env = {}) => ownerShell({ platform: 'linux', env, userShell: () => shell });
   for (const shell of ['/bin/bash', '/bin/zsh', '/bin/sh', '/usr/bin/dash', '/bin/ksh', '/opt/homebrew/bin/zsh']) assert.equal(posixOf(shell), 'posix', shell);
   for (const shell of ['/usr/bin/fish', '/opt/homebrew/bin/nu', '', null, undefined]) assert.equal(posixOf(shell), null, String(shell));
-  assert.equal(ownerShell({ platform: 'darwin', userShell: () => { throw new Error('no passwd entry'); } }), null);
+  assert.equal(ownerShell({ platform: 'darwin', env: {}, userShell: () => { throw new Error('no passwd entry'); } }), null);
+  // A set SHELL must agree with passwd, in case Codex reads that one instead.
+  assert.equal(posixOf('/bin/zsh', { SHELL: '/opt/homebrew/bin/fish' }), null, 'passwd zsh, SHELL fish');
+  assert.equal(posixOf('/bin/zsh', { SHELL: '/bin/bash' }), 'posix');
+  assert.equal(posixOf('/usr/bin/fish', { SHELL: '/bin/zsh' }), null, 'passwd fish, SHELL zsh');
+  // PowerShell counts only where Codex looks for it: on the session's PATH.
+  const system32 = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0';
   const windows = (files, PATH = 'C:\\Tools') => ownerShell({ platform: 'win32', env: { SystemRoot: 'C:\\Windows', Path: PATH }, exists: file => files.includes(file) });
   assert.equal(windows([]), null, 'cmd only');
-  assert.equal(windows(['C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe']), 'powershell');
+  assert.equal(windows([`${system32}\\powershell.exe`]), null, "System32's powershell.exe off the PATH is not enough");
+  assert.equal(windows([`${system32}\\powershell.exe`], `C:\\Tools;${system32}`), 'powershell');
   assert.equal(windows(['C:\\PowerShell\\7\\pwsh.exe'], 'C:\\Tools;"C:\\PowerShell\\7"'), 'powershell');
   const planner = { AGENTRIX_SHIMS: '/agentrix/shims' };
   for (const shell of [null, 'fish', 'cmd']) assert.equal(ownerShellCommand('claude -p x', planner, shell), 'claude -p x', String(shell));
