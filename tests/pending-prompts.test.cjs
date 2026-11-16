@@ -9,7 +9,7 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const en = require('../electron/locales/en.json');
 const {
   normalizePrompt, isTypedCommand, createPendingPrompts, addPendingPrompt,
-  reconcilePendingPrompts, removePendingPrompt, pendingPromptCards, PENDING_PROMPT_TIMEOUT, sameMessage,
+  reconcilePendingPrompts, removePendingPrompt, pendingPromptCards, reconcileOutbox, PENDING_PROMPT_TIMEOUT, sameMessage,
 } = require('../src/features/reading/pending-prompts.ts');
 
 const user = (id, text) => ({ id, role: 'user', text });
@@ -184,6 +184,21 @@ test('queue cards survive without echoes and pair repeated identical sends one-t
   assert.deepEqual([...cards.queuedIds], ['q1']);
   const long = add(createPendingPrompts('session'), 'long', 'x'.repeat(300)).prompts;
   assert.equal(pendingPromptCards(long, [{ ...queue, text: '[Pasted Content 300 chars]' }]).prompts.length, 2);
+});
+
+test('outbox receipt pairing consumes earlier echoes and each identical waiting send only once', () => {
+  const earlier = add(createPendingPrompts('session'), 'direct', 'same', 1000).prompts;
+  const messages = [1, 2].map(id => ({ id, text: 'same', at: 2000, uncertain: true, earlier }));
+  const first = { ...user('first', 'same'), at: 2100, queued: true };
+  let waiting = reconcileOutbox(messages, [first]);
+  assert.deepEqual(waiting.map(message => message.id), [1, 2]);
+  assert.deepEqual(reconcileOutbox(waiting, [{ ...first, queued: false }]), waiting);
+  const second = { ...user('second', 'same'), at: 2200 };
+  waiting = reconcileOutbox(waiting, [first, second]);
+  assert.deepEqual(waiting.map(message => message.id), [2]);
+  assert.deepEqual(reconcileOutbox(waiting, [first, second]), waiting, 'a receipt consumed by one head cannot retire another on a later snapshot');
+  assert.deepEqual(reconcileOutbox(waiting, [first, second, { ...user('third', 'same'), at: 2300 }]), []);
+  assert.equal(messages[0].earlier.length, 1, 'reconciliation does not mutate the stored snapshot');
 });
 
 test('producer-bounded long queued and accepted transcripts keep one echo and its full text', () => {

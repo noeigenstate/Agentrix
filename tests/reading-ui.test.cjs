@@ -893,6 +893,65 @@ test('a paste without Enter stays uncertain until a fresh receipt arrives', asyn
   assert.equal(h.pasted.length, 1);
 });
 
+test('an earlier history record without a timestamp cannot clear an uncertain outbox message', async t => {
+  const h = workingComposerHarness(t, 'claude'), text = '继续';
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit(text); h.press('Enter'); await h.tick(0);
+  h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
+  h.remount(); h.props.active = false; h.render();
+  assert.deepEqual(outboxTexts(h), [text]);
+  h.view.records = [{ id: 'earlier-page', role: 'user', text }]; h.render(); h.render();
+  assert.deepEqual(outboxTexts(h), [text], 'loading old untimestamped history is not a delivery receipt');
+  h.view.records = [...h.view.records, { id: 'live-receipt', role: 'user', text, receivedAt: Date.now(), queued: true }]; h.render(); h.render();
+  assert.deepEqual(outboxTexts(h), []);
+  assert.equal(h.pasted.length, 1);
+});
+
+test('a late receipt for a direct send cannot clear an identical outbox send', async t => {
+  for (const queued of [true, false]) await t.test(queued ? 'queue' : 'user', async t => {
+    const h = workingComposerHarness(t, 'claude'), text = 'same instruction';
+    h.view.accept = false;
+    h.edit(text); h.press('Enter'); await h.tick(0); await h.tick(400);
+    h.view.draft = ''; await h.tick(700);
+    assert.deepEqual(h.written.map(write => write.text), ['\r']);
+    h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit(text); h.press('Enter'); await h.tick(0);
+    h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
+    assert.equal(h.pasted.length, 2);
+    h.remount(); h.props.active = false; h.render();
+    const receipt = { id: 'first-send', role: 'user', text, at: Date.now(), queued };
+    h.view.records = [receipt]; h.render(); h.render();
+    assert.deepEqual(outboxTexts(h), [text], 'one receipt belongs to the earlier pending echo');
+    h.view.records = [{ ...receipt, queued: false }]; h.render(); h.render();
+    h.remount(); h.props.active = false; h.render();
+    assert.deepEqual(outboxTexts(h), [text], 'the first receipt stays consumed across snapshots and remounts');
+    h.view.records = [...h.view.records, { id: 'second-send', role: 'user', text, at: Date.now(), queued: true }]; h.render(); h.render();
+    assert.deepEqual(outboxTexts(h), []);
+    assert.equal(h.pasted.length, 2);
+    assert.deepEqual(h.written.map(write => write.text), ['\r']);
+  });
+});
+
+test('automatic outbox attempts show no echo until the paste happens', async t => {
+  const h = workingComposerHarness(t, 'claude'), text = 'wait through heavy output';
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit(text); h.press('Enter'); await h.tick(0);
+  h.popup()?.props.onClose(); delete h.view.rows; h.view.pending = true; h.view.parsed = true; h.parsed(); h.render(); await h.tick(0);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assert.deepEqual(h.echoed, [], 'an admitted send waiting for pending output has not pasted anything');
+    assert.deepEqual(h.pasted, []);
+    for (let step = 0; step < 5; step++) await h.tick(500);
+    await h.tick(0);
+  }
+  const paste = window.agentrix.pasteTerminal; let finishPaste;
+  window.agentrix.pasteTerminal = (...args) => new Promise(resolve => { finishPaste = () => { void paste(...args).then(resolve); }; });
+  h.view.pending = false; h.parsed(); await h.tick(0);
+  assert.equal(typeof finishPaste, 'function');
+  assert.deepEqual(h.echoed, [], 'the paste IPC round trip has not completed');
+  finishPaste(); await h.tick(0);
+  assert.deepEqual(h.pasted.map(paste => paste.text), [text]);
+  assert.deepEqual(h.echoed.map(prompt => prompt.text), [text]);
+  await h.tick(400); await h.tick(700);
+  assert.deepEqual(outboxTexts(h), []);
+});
+
 test('a reported host wait and an owner terminal popup have their own reasons', async t => {
   await t.test('reported wait', async t => {
     const h = workingComposerHarness(t, 'claude');
