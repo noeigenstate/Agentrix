@@ -46,11 +46,9 @@ async function copyHelper(helper, directory) {
       break;
     }
     const outbox = path.join(path.dirname(helper), 'dispatch-outbox.cjs');
-    const outboxSource = await fs.readFile(await fs.stat(outbox).catch(() => null) ? outbox : path.join(root, 'dispatch-outbox.cjs'), 'utf8');
-    // In this copy the outbox sits in the bundled electron folder; its search of the disk would find nothing there.
-    const search = /const runtime = \[__dirname, [^\]]*\]\s*\.find\([^;]*\);/;
-    if (!search.test(outboxSource)) throw new Error('The dispatch outbox cannot load from the bundled runtime.');
-    modules['electron/dispatch-outbox.cjs'] = outboxSource.replace(search, 'const runtime = __dirname;');
+    // The outbox finds its runtime beside itself when nothing is on disk (dispatch-outbox.cjs), so the copy is carried unchanged.
+    modules['electron/dispatch-outbox.cjs'] = await fs.readFile(await fs.stat(outbox).catch(() => null)
+      ? outbox : path.join(root, 'dispatch-outbox.cjs'), 'utf8');
   }
   modules['dispatch.cjs'] = instrumented;
   await fs.writeFile(destination, JSON.stringify(modules), { mode: 0o600 });
