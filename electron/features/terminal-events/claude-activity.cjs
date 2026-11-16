@@ -93,6 +93,8 @@ function createClaudeActivity(deps) {
         }
         return s.activityRawSnapshot && { ...s.activityRawSnapshot, workVersion: s.completionWork?.version, reading: !!s.completionWork?.reading, transcriptRead: true };
       }, snapshot => applyActivity(project, s, snapshot), { interval: () => readEvery(s), watch: () => remote ? null : tail.filename });
+      const stop = s.activityMonitor.stop;
+      s.activityMonitor.stop = () => { callsOf(s, project).stopSubagents(); stop.call(s.activityMonitor); };
     } else void s.activityMonitor?.poll();
   }
 
@@ -300,11 +302,25 @@ function createClaudeActivity(deps) {
   // An HTTP hook event (hook-ingest.cjs) as the event claude-hook.ps1 sends over the pipe, until the session machine (T2)
   // reads hook events itself. An event that lost its payload to the size limit belongs to the session the terminal follows.
   function claudeHook(hookEvent) {
-    const { sessions, store, claudeActivity } = deps;
+    const { sessions, store, claudeActivity, callsOf, followClaude } = deps;
     const s = sessions.get(hookEvent.terminalId), project = s && store.projects.find(item => item.id === s.projectId);
     const state = HOOK_STATES[hookEvent.event], { payload } = hookEvent;
-    if (!project || !state || hookEvent.event === 'Notification' && !ATTENTION_NOTICES.includes(payload.notification_type)) return;
+    if (!project) return;
     const sessionId = hookEvent.sessionId || s.claudeSessionId || '';
+    const kind = hookEvent.event === 'SubagentStart' ? 'start' : hookEvent.event === 'SubagentStop' ? 'stop'
+      : hookEvent.event === 'PreToolUse' && payload.tool_name === 'SendMessage' ? 'continue' : null;
+    if (kind && s.codexActive && s.agent === 'claude' && /^[\w-]{1,100}$/.test(sessionId)
+      && sessionId === (s.cliProviderId || s.claudeSessionId || s.claudeResumeId || sessionId) && hookEvent.at >= (s.activitySince || 0)) {
+      const agentId = kind === 'continue' ? payload.tool_input?.to || payload.tool_input?.recipient : hookEvent.agentId;
+      if (/^[\w-]{1,100}$/.test(typeof agentId === 'string' ? agentId : '')) {
+        // Bind the parent folder before delivering the signal: changing it resets the old transcript's tracker.
+        if (hookEvent.transcriptPath) followClaude(project, s, { sessionId, transcriptPath: hookEvent.transcriptPath });
+        callsOf(s, project).subagent({ kind, terminalId: s.terminalId, agentId, agentType: payload.agent_type || '',
+          transcriptPath: typeof payload.agent_transcript_path === 'string' ? payload.agent_transcript_path : null,
+          toolUseId: hookEvent.toolUseId || null, at: hookEvent.at });
+      }
+    }
+    if (!state || hookEvent.event === 'Notification' && !ATTENTION_NOTICES.includes(payload.notification_type)) return;
     claudeActivity(project, s, { state, sessionId, eventId: `${sessionId}:${hookEvent.at}-${hookEvent.seq}`, sentAt: hookEvent.at,
       hookEvent: hookEvent.event, transcriptPath: hookEvent.transcriptPath, promptId: hookEvent.promptId,
       message: state === 'attention' ? String(payload.message ?? payload.tool_name ?? '').slice(0, 300) : null,
