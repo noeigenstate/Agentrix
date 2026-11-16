@@ -143,7 +143,7 @@ test('resuming SSH Claude rebinds its quota poller while preserving the existing
   let rebound = 0;
   const context = vm.createContext({ sessions: new Map([[project.id, session], ['t', session]]), project, session,
     store: { projects: [project], findTerminal: () => ({ record: { restore: { codex: true, agent: 'claude', cwd: project.path } } }), setRestore() {} },
-    acceptShellEvent: () => true, agentCommand: () => null, sshHandoff: async () => {}, prepareReading: async () => {}, startSkillSession() {}, broadcast() {},
+    acceptShellEvent: () => true, startHookLaunch() {}, agentCommand: () => null, sshHandoff: async () => {}, prepareReading: async () => {}, startSkillSession() {}, broadcast() {},
     startUsage() { assert.fail('resume must retain its conversation totals'); }, followClaudeSession: async () => {},
     bindRemoteClaudeAccount(value) { assert.equal(value, session); rebound++; } });
   // Extract the real event handler, ending before unrelated launcher declarations.
