@@ -96,7 +96,7 @@ try {
   await waitFor(async () => { const project = (await state()).projects[0]; return project.codexActive && project.agent === 'claude' && project.terminals[0].agentStartedAt > earlier; }, 'offline task active');
   // The agent a terminal runs is Claude Code. Its rounds are reported by its hooks, sent here by the real hook script
   // while the stand-in occupies the shell: a submitted prompt starts a round and Stop ends it.
-  const bootstrap = await terminalBootstrap(profile, (await state()).projects[0].sessionId), session = randomUUID();
+  const bootstrap = await terminalBootstrap(profile, (await state()).projects[0].terminals[0].id), session = randomUUID();
   const hook = (kind, payload) => sendClaudeHook(bootstrap, kind, { session_id: session, ...payload });
   // The running agent's conversation shows as a document by default; these checks are about the terminal surface.
   await setMode(page, names[0], 'terminal');

@@ -12,10 +12,15 @@ const quote = value => "'" + value.replaceAll("'", "''") + "'";
 // the terminal's own session decides whether it goes over HTTP or through the hook script.
 export const claudeHook = (kind, payload) => hookText(kind, payload);
 
-// A terminal's own session file (its pipe, its key and the hook script), from the profile's runtime folder.
-export async function terminalBootstrap(dataDir, sessionId) {
-  const runtime = (await fs.readdir(dataDir)).find(name => name.startsWith('runtime-'));
-  return JSON.parse(await fs.readFile(path.join(dataDir, runtime, `${sessionId}.json`), 'utf8'));
+// A terminal's own session file (its pipe, its key and the hook script), from the profile's runtime folder: the one
+// bootstrap whose projectId names the terminal, so the smokes do not depend on what main calls the file.
+export async function terminalBootstrap(dataDir, terminalId) {
+  const runtime = path.join(dataDir, (await fs.readdir(dataDir)).find(name => name.startsWith('runtime-')));
+  const read = async entry => { try { return JSON.parse(await fs.readFile(path.join(runtime, entry.name), 'utf8')); } catch { return null; } };
+  const entries = (await fs.readdir(runtime, { withFileTypes: true })).filter(entry => entry.isFile() && entry.name.endsWith('.json'));
+  const found = (await Promise.all(entries.map(read))).filter(value => value?.projectId === terminalId && value.pipeName);
+  assert.equal(found.length, 1, `one bootstrap names terminal ${terminalId}`);
+  return found[0];
 }
 
 // The same hook from outside the terminal, for an agent that occupies its shell: sent over the channel the terminal's

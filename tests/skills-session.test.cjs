@@ -320,6 +320,8 @@ ${wrapper}
 function global:Send-AgentrixEvent {}
 function global:Get-AgentrixCommand {}
 ${powershellSession()}
+# Main names a terminal's bootstrap after the terminal; the settings file still carries the session, as main removes it by.
+$env:AGENTRIX_BOOTSTRAP = '${path.join(f.root, 'terminal.json').replace(/'/g, "''")}'
 $global:AgentrixClaudeExecutable = $null
 $global:AgentrixClaudeCommand = { @{ args = @($args); settings = (Get-Content -LiteralPath $args[1] -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 10 -Compress }
 claude --resume fixture '继续'`;
