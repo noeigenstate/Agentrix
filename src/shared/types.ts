@@ -111,9 +111,9 @@ export type SubagentFeed = { id: string; agent: AgentCall['agent']; model: strin
   // 'owner' while the worker's own terminal waits for the owner's answer; absent when it does not.
   awaiting?: 'owner' };
 // A dispatched worker's terminal: the snapshot attach returns (null when there is none, it is remote, or it is retired) and what is pushed after it.
-// epoch is new for each PTY spawn; seq orders data within one epoch.
-export type WorkerTerminalSnapshot = { epoch: number; seq: number; data: string; cols: number; rows: number; awaiting: 'owner' | null; exited: boolean };
-export type WorkerTerminalPacket = { terminalId: string; callId: string; epoch: number; seq: number; data: string; exited?: undefined } | { terminalId: string; callId: string; epoch: number; exited: true; exitCode: number | null; seq?: undefined; data?: undefined };
+// epoch (a string) is new for each PTY spawn; attach answers in the IPC envelope, like every Result method; seq orders data within one epoch.
+export type WorkerTerminalSnapshot = { epoch: string; seq: number; data: string; cols: number; rows: number; awaiting: 'owner' | null; exited: boolean };
+export type WorkerTerminalPacket = { terminalId: string; callId: string; epoch: string; seq: number; data: string; exited?: undefined } | { terminalId: string; callId: string; epoch: string; exited: true; exitCode: number | null; seq?: undefined; data?: undefined };
 export type SubagentFeedEvent = { terminalId: string; callId: string; revision: number };
 type GitDiffLine = { type: ' ' | '+' | '-' | '\\'; text: string };
 export type GitHunk = { header: string; oldStart: number; oldLines: number; newStart: number; newLines: number; lines: GitDiffLine[]; patch: string };
@@ -358,10 +358,10 @@ type Bridge = {
   onSubagentFeed(listener: (event: SubagentFeedEvent) => void): () => void;
   interveneAgent(terminalId: string, callId: string, text: string): Promise<Result<AgentIntervention>>;
   stopAgent(terminalId: string, callId: string): Promise<Result<AgentIntervention>>;
-  attachWorkerTerminal(terminalId: string, callId: string): Promise<WorkerTerminalSnapshot | null>;
+  attachWorkerTerminal(terminalId: string, callId: string): Promise<Result<WorkerTerminalSnapshot | null>>;
   onWorkerTerminalData(callback: (packet: WorkerTerminalPacket) => void): () => void;
-  workerTerminalKeys(terminalId: string, callId: string, epoch: number, data: string): void;
-  resizeWorkerTerminal(terminalId: string, callId: string, epoch: number, cols: number, rows: number): void;
+  workerTerminalKeys(terminalId: string, callId: string, epoch: string, data: string): void;
+  resizeWorkerTerminal(terminalId: string, callId: string, epoch: string, cols: number, rows: number): void;
   detachWorkerTerminal(terminalId: string, callId: string): void;
   writeTerminal(id: string, data: string): void;
   writeApproval(id: string, key: string, stamp: ApprovalStamp, actionId: string): Promise<Result<ApprovalResult>>;

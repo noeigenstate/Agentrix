@@ -775,8 +775,8 @@ test('a worker waiting for the owner shows its terminal in the split; keys reach
 }));
 
 // The terminal itself, with xterm and the bridge stood in and effects run at once.
-function workerTerminal({ attach, epoch = 3, selection = '' } = {}) {
-  const written = [], handlers = {}, cleanups = [], generation = [], log = [];
+function workerTerminal({ attach, epoch = 'e-3', selection = '' } = {}) {
+  const written = [], handlers = {}, cleanups = [], log = [];
   class FakeTerminal {
     constructor(options) { this.options = options; this.cols = 80; this.rows = 24; }
     open() {} write(data) { written.push(data); } hasSelection() { return Boolean(selection); } getSelection() { return selection; }
@@ -784,18 +784,19 @@ function workerTerminal({ attach, epoch = 3, selection = '' } = {}) {
     onResize(callback) { handlers.resize = callback; return { dispose() {} }; }
     attachCustomKeyEventHandler(callback) { handlers.key = callback; }
     resize(cols, rows) { this.cols = cols; this.rows = rows; handlers.resize?.({ cols, rows }); }
+    reset() { log.push('reset'); }
     dispose() { log.push('dispose'); }
   }
   const calls = [], copies = [], unavailable = [], errors = [];
   let push;
   const bridge = {
-    attachWorkerTerminal: (...args) => { calls.push(['attach', ...args]); return attach ?? Promise.resolve({ epoch, seq: 5, data: 'old', cols: 100, rows: 30, awaiting: 'owner', exited: false }); },
+    attachWorkerTerminal: (...args) => { calls.push(['attach', ...args]); return attach ?? Promise.resolve({ ok: true, value: { epoch, seq: 5, data: 'old', cols: 100, rows: 30, awaiting: 'owner', exited: false } }); },
     onWorkerTerminalData: callback => { push = callback; return () => calls.push(['off']); },
     workerTerminalKeys: (...args) => calls.push(['keys', ...args]), resizeWorkerTerminal: (...args) => calls.push(['resize', ...args]),
     detachWorkerTerminal: (...args) => calls.push(['detach', ...args]), copy: text => { copies.push(text); return Promise.resolve({ ok: true }); },
   };
   const host = { clientWidth: 400, clientHeight: 300 };
-  const react = { ...React, useRef: current => ({ current: current === null ? host : current }), useState: start => [start, value => generation.push(typeof value === 'function' ? value(0) : value)], useEffect: effect => { cleanups.push(effect()); } };
+  const react = { ...React, useRef: current => ({ current: current === null ? host : current }), useEffect: effect => { cleanups.push(effect()); } };
   const savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window'), savedObserver = globalThis.ResizeObserver;
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: bridge } });
   globalThis.ResizeObserver = class { observe() {} disconnect() {} };
@@ -804,13 +805,13 @@ function workerTerminal({ attach, epoch = 3, selection = '' } = {}) {
   loader('shared/i18n.ts').applyLanguage('zh');
   const tree = loader('features/agents/WorkerTerminal.tsx').WorkerTerminal({ terminalId: 't1', callId: 'dispatch:a', name: 'Opus', onError: message => errors.push(message), onUnavailable: () => unavailable.push(true) });
   const restore = () => { if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow); else delete globalThis.window; globalThis.ResizeObserver = savedObserver; };
-  return { calls, written, handlers, host, log, copies, unavailable, errors, generation, tree, push: packet => push(packet), cleanup: () => cleanups.forEach(clean => clean?.()), restore };
+  return { bridge, calls, written, handlers, host, log, copies, unavailable, errors, tree, push: packet => push(packet), cleanup: () => cleanups.forEach(clean => clean?.()), restore };
 }
 
 test('the worker terminal reads the scrollback then the stream in order, sends keys and sizes only for its own live epoch, and cleans up', async () => zh(async () => {
   const view = workerTerminal();
   try {
-    const packet = (seq, data, over = {}) => ({ terminalId: 't1', callId: 'dispatch:a', epoch: 3, seq, data, ...over });
+    const packet = (seq, data, over = {}) => ({ terminalId: 't1', callId: 'dispatch:a', epoch: 'e-3', seq, data, ...over });
     view.push(packet(4, 'stale')); view.push(packet(6, 'new')); view.push({ ...packet(1, 'other worker'), callId: 'dispatch:b' });
     await settle();
     assert.deepEqual(view.calls[0], ['attach', 't1', 'dispatch:a']);
@@ -821,14 +822,15 @@ test('the worker terminal reads the scrollback then the stream in order, sends k
     view.handlers.data('1');
     view.handlers.resize({ cols: 90, rows: 20 });
     view.host.clientWidth = 0; view.handlers.resize({ cols: 91, rows: 20 }); view.host.clientWidth = 400;
-    assert.deepEqual(view.calls.filter(call => call[0] === 'keys' || call[0] === 'resize'), [['keys', 't1', 'dispatch:a', 3, '1'], ['resize', 't1', 'dispatch:a', 3, 90, 20]], 'keys and the size carry the epoch; a hidden view sends no size');
-    view.push({ terminalId: 't1', callId: 'dispatch:a', epoch: 4, seq: 1, data: 'x' });
-    assert.deepEqual(view.generation, [1], 'another epoch is a new mount');
-    view.push({ terminalId: 't1', callId: 'dispatch:a', epoch: 3, exited: true, exitCode: 0 });
+    assert.deepEqual(view.calls.filter(call => call[0] === 'keys' || call[0] === 'resize'), [['keys', 't1', 'dispatch:a', 'e-3', '1'], ['resize', 't1', 'dispatch:a', 'e-3', 90, 20]], 'keys and the size carry the epoch; a hidden view sends no size');
+    for (let seq = 8; seq < 40; seq++) view.push(packet(seq, '.'));
+    assert.deepEqual([view.log, view.calls.filter(call => call[0] === 'attach').length], [[], 1], 'a stream for the attached epoch never remounts or reads the snapshot again');
+    view.push({ terminalId: 't1', callId: 'dispatch:a', epoch: 'e-3', exited: true, exitCode: 0 });
     view.handlers.data('2'); view.handlers.resize({ cols: 80, rows: 24 });
     assert.equal(view.calls.filter(call => call[0] === 'keys' || call[0] === 'resize').length, 2, 'an exited worker takes no more keys or sizes');
     view.cleanup();
     assert.deepEqual([view.log.at(-1), view.calls.at(-1)], ['dispose', ['detach', 't1', 'dispatch:a']], 'the screen is disposed and the worker detached');
+    assert.deepEqual(view.log, ['dispose']);
     for (const name of ['onKeyDown', 'onPointerDown', 'onClick']) { const heard = []; view.tree.props[name]({ stopPropagation: () => heard.push(name) }); assert.deepEqual(heard, [name], `${name} goes no further`); }
   } finally { view.restore(); }
 }));
@@ -848,8 +850,21 @@ test('the worker terminal copies only a selection, never reads the clipboard, an
     assert.equal(key(selected, { ctrlKey: true, code: 'KeyC' }), false); assert.equal(key(selected, { ctrlKey: true, shiftKey: true, code: 'KeyC' }), false);
     assert.deepEqual(selected.copies, ['answer', 'answer'], 'an explicit copy of the selection, through the bridge');
   } finally { selected.restore(); }
-  const none = workerTerminal({ attach: Promise.resolve(null) });
+  const none = workerTerminal({ attach: Promise.resolve({ ok: true, value: null }) });
   try { await settle(); assert.deepEqual([none.unavailable, none.written], [[true], []], 'no terminal for this worker: the view says so'); } finally { none.restore(); }
+  const failed = workerTerminal({ attach: Promise.resolve({ ok: false, error: 'no worker' }) });
+  try { await settle(); assert.deepEqual([failed.errors, failed.unavailable, failed.written], [['no worker'], [true], []], 'a refusal is reported'); } finally { failed.restore(); }
+  // The same worker's PTY started over: a new epoch reads the snapshot once, resets the screen and keys carry the new epoch; a repeat of an epoch already tried, or the same epoch again, changes nothing.
+  const moved = workerTerminal();
+  try {
+    await settle();
+    const next = { ok: true, value: { epoch: 'e-4', seq: 1, data: 'fresh', cols: 80, rows: 24, awaiting: 'owner', exited: false } };
+    moved.bridge.attachWorkerTerminal = () => Promise.resolve(next);
+    for (let seq = 1; seq < 5; seq++) moved.push({ terminalId: 't1', callId: 'dispatch:a', epoch: 'e-4', seq, data: 's' + seq });
+    await settle();
+    moved.handlers.data('y');
+    assert.deepEqual([moved.log, moved.written.slice(-4), moved.calls.at(-1)], [['reset'], ['fresh', 's2', 's3', 's4'], ['keys', 't1', 'dispatch:a', 'e-4', 'y']], 'one re-read, the screen reset once, the stream continues after the snapshot');
+  } finally { moved.restore(); }
   const savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: {} } });
   try {
