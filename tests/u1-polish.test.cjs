@@ -104,3 +104,22 @@ test('no selected-row override touches the reading view or the Agent tab rows, a
   assert.ok(!rule.includes('.reading-command') && !rule.includes('.activity-call-rows'));
   assert.doesNotMatch(read('src/features/terminal/agent-launcher.css'), /agent-launcher-agent small \{ color: var\(--text-3\)/);
 });
+
+test('the busy card composer: the hint fits from the row, not from the textarea own (content-sized) width, and a short rung shows at card widths', () => {
+  const hook = read('src/shared/useFittingHint.ts');
+  assert.match(hook, /roomOf\(node, /, 'the hook measures the row');
+  assert.match(hook, /observer\.observe\(node\.parentElement\)/, 'and watches the row, since the box itself may not resize');
+  const ts = require('typescript'), mod = { exports: {} };
+  new Function('exports', 'require', ts.transpileModule(hook, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText)(mod.exports, id => id === 'react' ? { useLayoutEffect() {}, useState() {} } : require(id));
+  const { rowRoom, fittingIndex } = mod.exports;
+  // A 317px card: the box is 317 - 2*30 margin - 26 padding/border, less three 32px buttons and their gaps; at 237px there is next to nothing.
+  const room317 = rowRoom(317 - 60 - 26, 8, [32, 32, 32]), room237 = rowRoom(237 - 60 - 26, 8, [32, 32, 32]);
+  assert.ok(room317 > 60 && room237 >= 0 && room237 < room317);
+  const width = text => [...text].reduce((sum, ch) => sum + (ch.charCodeAt(0) > 255 ? 14 : 7), 0);
+  const source = read('src/features/reading/ReadingView.tsx'), blocked = /shownBlocked \? \[((?:t\('[^']*'\)(?:, )?)+)\]/.exec(source);
+  const ladder = [...blocked[1].matchAll(/t\('([^']*)'/g)].map(match => match[1]);
+  assert.equal(ladder[0], '等待终端输入就绪后发送');
+  assert.ok(fittingIndex(ladder, room317, width) > 0, 'at 317px a shorter rung of the blocked ladder shows');
+  assert.equal(fittingIndex(ladder, 0, width), -1, 'the old zero-width measure showed nothing');
+  assert.equal(rowRoom(100, 8, [32, 32, 32]), 0);
+});
