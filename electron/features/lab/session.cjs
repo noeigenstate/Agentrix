@@ -37,9 +37,20 @@ async function copyHelper(helper, directory) {
     for (const [, file] of runtime[1].matchAll(/'([^']+)'/g)) {
       modules['electron/' + file] = await fs.readFile(path.join(root, file), 'utf8');
     }
+    // The helper loads its intercept module when it starts. In this copy the module sits in no shim folder (no marker),
+    // so it never puts shims or start-up hooks on a worker's PATH and a model has no pass-through to a real CLI.
+    const shims = [path.join(path.dirname(helper), 'shims'), path.join(root, 'shims')];
+    for (const folder of shims) {
+      if (!await fs.stat(path.join(folder, 'intercept.cjs')).catch(() => null)) continue;
+      for (const [name, text] of Object.entries(require(path.join(folder, 'intercept.cjs')).runtimeFiles())) modules['electron/' + name] = text;
+      break;
+    }
     const outbox = path.join(path.dirname(helper), 'dispatch-outbox.cjs');
-    modules['electron/dispatch-outbox.cjs'] = await fs.readFile(await fs.stat(outbox).catch(() => null)
-      ? outbox : path.join(root, 'dispatch-outbox.cjs'), 'utf8');
+    const outboxSource = await fs.readFile(await fs.stat(outbox).catch(() => null) ? outbox : path.join(root, 'dispatch-outbox.cjs'), 'utf8');
+    // In this copy the outbox sits in the bundled electron folder; its search of the disk would find nothing there.
+    const search = /const runtime = \[__dirname, [^\]]*\]\s*\.find\([^;]*\);/;
+    if (!search.test(outboxSource)) throw new Error('The dispatch outbox cannot load from the bundled runtime.');
+    modules['electron/dispatch-outbox.cjs'] = outboxSource.replace(search, 'const runtime = __dirname;');
   }
   modules['dispatch.cjs'] = instrumented;
   await fs.writeFile(destination, JSON.stringify(modules), { mode: 0o600 });

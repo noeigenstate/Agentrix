@@ -399,3 +399,59 @@ test('a terminal switched to native mode gets the planner env of a native sessio
   assert.equal(first(spec.env), shims); assert.equal(spec.env.AGENTRIX_DISPATCH_DEPTH, '0');
   assert.notEqual(first(spec.shellEnv), shims); assert.equal(spec.shellEnv.AGENTRIX_DISPATCH_DEPTH, undefined);
 });
+
+// An owner's ! command in a native Codex session: thread/shellCommand runs the text in the thread's shell, started by an
+// app-server with the planner's env, the way Codex does (POSIX shells with -lc, PowerShell with -Command).
+const shells = () => [
+  ...['bash', 'zsh'].filter(kind => shellFor(kind)).map(kind => ({ kind, run: (text, env, cwd) => spawnSync(shellFor(kind), ['-lc', text], { cwd, env, encoding: 'utf8', timeout: 30000 }) })),
+  ...(process.platform === 'win32' ? [{ kind: 'powershell', run: (text, env, cwd) => spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', text], { cwd, env, encoding: 'utf8', timeout: 30000, windowsHide: true }) }] : []),
+];
+test("an owner's ! command in a native Codex session runs the real CLI: the line ownerShellCommand puts first takes the planner's shims out in the thread's shell", { timeout: 120000 }, t => {
+  const { ownerShellCommand } = require('../electron/shared/agentrix-shims.cjs');
+  const folder = temporary(t), home = path.join(folder, 'home'), standin = path.join(folder, 'stand-in'), user = path.join(folder, 'user-env.sh');
+  fs.mkdirSync(home); fs.mkdirSync(standin); fs.writeFileSync(user, ':\n');
+  fs.writeFileSync(path.join(standin, 'claude'), '#!/bin/sh\necho "STAND-IN claude $*"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(standin, 'claude.cmd'), '@echo STAND-IN claude %*\r\n');
+  const owner = isolatedEnvironment(home), key = Object.keys(owner).find(name => name.toUpperCase() === 'PATH');
+  // The stand-in comes first on the owner's PATH, so no installed CLI can answer; the planner's shims go before it.
+  owner[key] = [standin, owner[key]].join(path.delimiter); owner.BASH_ENV = posix(user);
+  const planner = shim().withShims({ ...owner, AGENTRIX_BOOTSTRAP: sessionBootstrap(folder).file }, { depth: 0 });
+  assert.ok(shells().length, 'a shell to run the owner command in');
+  for (const shell of shells()) {
+    const powershell = shell.kind === 'powershell';
+    const typed = powershell ? `claude -p --output-format json 'it''s x'; Write-Output "D=$env:AGENTRIX_DISPATCH_DEPTH B=$env:BASH_ENV"`
+      : `claude -p --output-format json "it's x"; echo "D=\${AGENTRIX_DISPATCH_DEPTH-} B=\${BASH_ENV-}"`;
+    const result = shell.run(ownerShellCommand(typed, planner, powershell ? 'win32' : 'posix'), planner, folder);
+    assert.equal(result.status, 0, `${shell.kind}: ${result.stdout}${result.stderr}`);
+    assert.match(result.stdout, /^STAND-IN claude -p --output-format json .*it's x/m, shell.kind);
+    assert.ok(result.stdout.split(/\r?\n/).includes(`D= B=${posix(user)}`), `${shell.kind} drops the depth and gives the user's BASH_ENV back: ${result.stdout}`);
+    if (powershell) continue;
+    const planned = shell.run(typed, planner, folder);
+    // Without the line the same text is a planner's call: the shim refuses it and no stand-in runs.
+    assert.doesNotMatch(planned.stdout, /STAND-IN/, shell.kind); assert.match(planned.stderr, /not run: --output-format is not supported/, shell.kind);
+  }
+  assert.equal(ownerShellCommand('claude -p x', { PATH: 'tools' }), 'claude -p x', 'a session without shims runs the text as typed');
+});
+
+test("a hook skips a user's file only when it is an Agentrix hook by where it is, not for its first line alone", { skip: !shellFor('bash') && 'bash is not installed here', timeout: 60000 }, t => {
+  const folder = temporary(t), log = path.join(folder, 'ran.log'), copy = path.join(folder, 'session-claude-env.sh'), own = path.join(folder, 'own.sh');
+  const marked = path.join(folder, 'marked'), inShims = path.join(marked, 'hooks', 'mine.sh');
+  fs.mkdirSync(path.dirname(inShims), { recursive: true }); fs.writeFileSync(path.join(marked, '.agentrix-shims'), '');
+  for (const file of [own, copy, inShims]) fs.writeFileSync(file, `# Agentrix hook lookalike\necho ${path.basename(file)} >> "${posix(log)}"\n`);
+  const source = file => spawnSync(shellFor('bash'), ['--noprofile', '--norc', '-c', `__agx_user="${posix(file)}"; . "${posix(path.join(shims, 'hooks/path.sh'))}"`],
+    { cwd: folder, env: { ...isolatedEnvironment(folder), AGENTRIX_SHIMS: '' }, encoding: 'utf8', timeout: 30000 });
+  for (const file of [own, copy, inShims]) assert.equal(source(file).status, 0);
+  assert.equal(fs.readFileSync(log, 'utf8'), 'own.sh\n', "the user's own file runs whatever its first line; a session copy and a file in a shim folder never do");
+});
+
+test('withoutShims also puts back a hook variable that still names an Agentrix hook after AGENTRIX_SHIMS was lost', t => {
+  const { withoutShims } = require('../electron/shared/agentrix-shims.cjs');
+  const { claudeEnvFile } = sessionBootstrap(temporary(t));
+  const lost = { PATH: 'tools', BASH_ENV: `${posix(shims)}/hooks/bash-env.sh`, AGENTRIX_SHIM_USER_BASH_ENV: 'user-bash-env', ZDOTDIR: `${posix(shims)}/hooks/zsh`,
+    CLAUDE_ENV_FILE: claudeEnvFile };
+  const clean = withoutShims(lost);
+  assert.equal(clean.BASH_ENV, 'user-bash-env'); assert.equal('ZDOTDIR' in clean, false); assert.equal('CLAUDE_ENV_FILE' in clean, false);
+  assert.equal('AGENTRIX_SHIM_USER_BASH_ENV' in clean, false);
+  assert.deepEqual(withoutShims({ BASH_ENV: 'user-bash-env', ZDOTDIR: 'user-zdotdir' }), { BASH_ENV: 'user-bash-env', ZDOTDIR: 'user-zdotdir' }, "the user's own values stay");
+});

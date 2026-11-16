@@ -13,6 +13,7 @@ Owns an independent app-server runtime over local stdio or an injected SSH byte 
 ## May import
 - `electron/session-files.cjs` (shared local path identity and selective Windows 8.3 expansion)
 - `electron/oversized-record.cjs`
+- `electron/shared/agentrix-shims.cjs` (ownerShellCommand: an owner's ! command runs without the planner's shims)
 - `electron/command-phrase.cjs`
 - `electron/generated-image-path.cjs`
 - `src/shared/agent-events.ts`

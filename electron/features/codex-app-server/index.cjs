@@ -14,6 +14,7 @@ const { codexExecutable } = require('../codex-runtime/locator.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
 const { startupDetail } = require('../agents/start-failure.cjs');
+const { ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
 // A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
 const RECENT_PICTURES = 6;
 
@@ -696,7 +697,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             response = await rpc.request('review/start', { ...params, target: argument ? { type: 'custom', instructions: argument } : { type: 'uncommittedChanges' }, delivery: 'inline' });
             if (response.reviewThreadId !== events.binding.providerSessionId) throw Object.assign(new Error('invalid_review_thread'), { uncertain: true });
             started(response.turn);
-          } else await rpc.request('thread/shellCommand', { ...params, command: argument });
+          } else {
+            // The owner's own command runs the real CLIs, not the planner's shims that the app-server's env carries.
+            await rpc.request('thread/shellCommand', { ...params, command: spec.kind === 'ssh' ? argument : ownerShellCommand(argument, spec.env, platform) });
+          }
           inputReceipt(id, 'consumed'); return { clientMessageId: id, status: 'consumed' };
         } catch (error) {
           manualCommand = null; events.publish('context.compacting', { active: false });

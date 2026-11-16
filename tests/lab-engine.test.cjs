@@ -984,6 +984,28 @@ test('the lab copy of the real dispatch helper starts Codex on the file credenti
   assert.match(source, /const runtime = path\.join\(__dirname, 'electron'\);/);
   assert.deepEqual(Object.keys(modules).filter(name => name !== 'dispatch.cjs').sort(),
     Object.keys(require(helper).runtimeFiles()).filter(name => name !== 'features/native-session/routing.cjs').map(name => 'electron/' + name).sort());
+  // The carried intercept module sits in no shim folder there: a worker's env gets no shims, no hooks, no pass-through.
+  const Module = require('node:module'), carried = new Module(path.join(directory, 'electron/shims/intercept.cjs'));
+  carried.paths = []; carried._compile(modules['electron/shims/intercept.cjs'], carried.id);
+  const worker = carried.exports.withShims({ PATH: 'lab-tools' }, { depth: 1, runId: 'lab-run', proof: 'lab-proof' });
+  assert.equal(worker.PATH, 'lab-tools');
+  assert.deepEqual(['BASH_ENV', 'ZDOTDIR', 'CLAUDE_ENV_FILE', 'AGENTRIX_SHIMS'].filter(name => name in worker), []);
+});
+
+// Runs everywhere, without the macOS sandbox: the lab's trusted executor loads the private copy from memory, and with no
+// Agentrix session env `dispatch.cjs codex --help` is the helper's own usage, never an intercepted call.
+test("the lab's executor loads the private helper copy, intercept module included, and answers codex --help", async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'lab-helper-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const modules = JSON.parse(await fs.readFile(await copyHelper(path.join(__dirname, '../integration/dispatch.cjs'), directory), 'utf8'));
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(?:AGENTRIX_|NODE_OPTIONS$)/i.test(name)));
+  const child = require('node:child_process').spawn(process.execPath, [path.join(__dirname, '../electron/features/lab/executor.cjs')],
+    { cwd: directory, env, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+  child.stdio[3].end(JSON.stringify({ config: { args: ['codex', '--help'] }, bootstrap: null, modules }));
+  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  assert.equal(code, 0, stderr); assert.match(stdout, /Usage: node dispatch/); assert.doesNotMatch(stderr, /intercept|not run/);
 });
 
 // Runs everywhere: every platform's executor loads the private bundle from memory, where no runtime file exists on disk.
