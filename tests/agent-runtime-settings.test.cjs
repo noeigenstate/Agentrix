@@ -470,7 +470,7 @@ test('Codex permissions: three choices, full when unset or unreadable, and a cho
     assert.deepEqual(control.props.options.map(option => option.value), ['full', 'config', 'ask']);
     assert.deepEqual(control.props.options.map(option => option.label), ['全部放开（默认）', '按 Codex 配置', '先询问']);
     assert.equal(control.props.value, 'full', 'no key: full');
-    assert.match(view.html(), /不询问，不使用沙箱/); assert.match(view.html(), /\/permissions/); assert.match(view.html(), /派发的工作者不受影响/);
+    assert.doesNotMatch(view.html(), /不询问，不使用沙箱/, 'the option description is in the menu only'); assert.match(view.html(), /\/permissions/); assert.match(view.html(), /派发的工作者不受影响/);
     for (const value of ['config', 'ask', 'full']) control.props.onChange(value);
     assert.deepEqual(chosen, ['config', 'ask', 'full']);
     control.props.onChange('bypass');
@@ -481,9 +481,15 @@ test('Codex permissions: three choices, full when unset or unreadable, and a cho
     try {
       page2.render(); await settle();
       assert.equal(page2.select('Codex 权限').props.value, shown, `stored ${String(stored)}`);
-      assert.match(page2.html(), hint);
+      assert.match(String(page2.select('Codex 权限').props.options.find(option => option.value === shown).description), hint);
     } finally { page2.done(); }
   }
   const readonly = page(fake(), wordsStub, {});
   try { readonly.render(); await settle(); assert.equal(readonly.select('Codex 权限').props.disabled, true, 'without a writer the choice is shown but cannot change'); } finally { readonly.done(); }
+});
+
+test('the Codex permission row keeps its own note and does not repeat the selected option description above the menu', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src/features/settings/AgentRuntimeSettings.tsx'), 'utf8');
+  assert.doesNotMatch(source, /permissionOptions\.find\(option => option\.value === permission\)\?\.hint/);
+  assert.match(source, /只影响之后新建的原生 Codex 会话/);
 });

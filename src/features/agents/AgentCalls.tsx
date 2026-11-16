@@ -14,7 +14,7 @@ import './activity-pane.css';
 // Output tokens per second of the time the replies took; null until a reply has finished.
 export const rateValue = (rate: TokenRate | null | undefined) => rate && rate.samples > 0 && rate.activeMs > 0 ? Math.round(1000 * rate.outputTokens / rate.activeMs) : null;
 
-function Rate({ rate }: { rate: TokenRate | null | undefined }) {
+function Rate({ rate, quiet }: { rate: TokenRate | null | undefined; quiet?: boolean }) {
   const partial = rate?.partial ? '\n' + t('（部分记录）') : '';
   const value = rateValue(rate);
   if (rate && value !== null) {
@@ -22,18 +22,19 @@ function Rate({ rate }: { rate: TokenRate | null | undefined }) {
     return <span className="activity-row-end activity-rate is-live" title={title}>{value} token/s</span>;
   }
   if (rate) return <span className="activity-row-end activity-rate" title={t('还没有完成一条回复，暂时没有速率。') + partial}>{t('等待中')}</span>;
-  return <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
+  // The Agent tab shows nothing where there is no rate; the main model's block keeps its dash and the tooltip that says why.
+  return quiet ? null : <span className="activity-row-end activity-rate" title={t('这个模型的记录在这里读不到，所以没有速率。')}>— token/s</span>;
 }
 
 // A head row: the name, recorded effort and speed, any non-default service (which gives way first), and a fixed rate column.
-export function ModelHead({ agent, name, effort, fast, provider, title, rate }: { agent: AgentCall['agent']; name: string; effort?: string | null; fast?: boolean | null; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined }) {
+export function ModelHead({ agent, name, effort, fast, provider, title, rate, quiet }: { agent: AgentCall['agent']; name: string; effort?: string | null; fast?: boolean | null; provider: string | null | undefined; title: string; rate: TokenRate | null | undefined; quiet?: boolean }) {
   const Mark = agent === 'Codex' ? CodexLogo : ClaudeLogo;
   const visibleProvider = provider === (agent === 'Codex' ? 'OpenAI' : 'Anthropic') ? null : provider;
   const how = [effort === 'default' ? t('默认') : effort, fast != null && (fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ');
   return <li className="activity-call-head" title={[title, how].filter(Boolean).join('\n')}>
     <span className="activity-row-icon"><Mark size={16} /></span>
     <p><b>{name}</b>{how && <span className="activity-call-settings">{how}</span>}{visibleProvider && <span className="activity-call-provider">{visibleProvider}</span>}</p>
-    <Rate rate={rate} />
+    <Rate rate={rate} quiet={quiet} />
   </li>;
 }
 
@@ -89,8 +90,10 @@ function callItem({ row, open, now, label }: { row: CallRow; open: ReturnType<ty
       : <div className={`activity-call-body${label ? ' has-terminal' : ''}`}>{cells}</div>}
     {late && <div className="activity-call-notice" role="status">
       <WarningCircle size={14} aria-hidden="true" /><span>{t('已等 15 秒仍未确认，可能没有启动。')}</span>
-      <button type="button" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, item.id)}>{t('停止')}</button>
-      <button type="button" disabled={stop?.pending} onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
+      <span className="activity-call-notice-actions">
+        <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, item.id)}>{t('停止')}</button>
+        <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
+      </span>
       {stop?.refusal && <span role="alert">{t('没能停止它：{message}', { message: stop.refusal })}</span>}
     </div>}
   </li>;
@@ -130,10 +133,10 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
     {nothing && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
     {!empty && <ul className="activity-call-groups">
       {groups.map(({ call, rate, rows }) => {
-        const name = callModelName(call);
+        const name = callModelName({ model: call.model }); // the head does not repeat 「未确认」: the starting row says it
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.modelUnconfirmed, call.effort, call.fast])}>
           <ul className="activity-call-rows">
-            <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={rate} />
+            <ModelHead agent={call.agent} name={name} effort={call.effort} fast={call.fast} provider={call.provider} title={[call.agent, call.provider, name].filter(Boolean).join(' / ')} rate={rate} quiet />
             {rows.slice(0, MAX_CALL_ITEMS).map(row => callItem({ row, open, now, label }))}
             {rows.length > MAX_CALL_ITEMS && <li className="activity-call-more"><span /><p>{t('+{count} 个', { count: rows.length - MAX_CALL_ITEMS })}</p></li>}
           </ul>

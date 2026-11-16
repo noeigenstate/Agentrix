@@ -5,10 +5,11 @@ import { CaretDown, Check } from '@phosphor-icons/react';
 
 export interface SelectOption { value: string; label: ReactNode; disabled?: boolean; description?: ReactNode }
 
-const MENU_GAP = 4, EDGE = 8, MAX_HEIGHT = 280, MAX_WIDTH = 360;
+const MENU_GAP = 4, EDGE = 8, MAX_HEIGHT = 280, MAX_WIDTH = 360, WIDE_TRIGGER = 200;
 
 export function selectMenuWidths(triggerWidth: number, windowWidth: number) {
-  const maxWidth = Math.min(Math.max(triggerWidth, MAX_WIDTH), Math.max(0, windowWidth - EDGE * 2));
+  // A wide trigger (a Settings row's) gives a menu of its own width, so the menu never overhangs it; a narrow one may grow to fit its options.
+  const maxWidth = Math.min(triggerWidth >= WIDE_TRIGGER ? triggerWidth : Math.max(triggerWidth, MAX_WIDTH), Math.max(0, windowWidth - EDGE * 2));
   return { minWidth: Math.min(triggerWidth, maxWidth), maxWidth };
 }
 
@@ -43,7 +44,9 @@ export function Select({ value, options, onChange, label, className = '', disabl
     if (!open || !trigger.current || !menu.current) return;
     const box = trigger.current.getBoundingClientRect(), list = menu.current;
     const widths = selectMenuWidths(box.width, innerWidth);
-    const room = { below: innerHeight - box.bottom - EDGE - MENU_GAP, above: box.top - EDGE - MENU_GAP };
+    // Inside a dialog the room below ends at the dialog's bottom edge, so a menu there opens upward instead of running past it.
+    const floor = host instanceof HTMLDialogElement ? Math.min(innerHeight, host.getBoundingClientRect().bottom) : innerHeight;
+    const room = { below: floor - box.bottom - EDGE - MENU_GAP, above: box.top - EDGE - MENU_GAP };
     const wanted = Math.min(MAX_HEIGHT, list.scrollHeight + 2);
     const up = room.below < wanted && room.above > room.below;
     const maxHeight = Math.min(MAX_HEIGHT, Math.max(96, up ? room.above : room.below));

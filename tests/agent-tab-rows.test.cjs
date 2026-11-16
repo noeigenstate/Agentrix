@@ -75,7 +75,7 @@ test('Claude workers from every project terminal remain visible across terminal 
   assert.deepEqual(splits.getSplits().map(({ terminalId, callId }) => [terminalId, callId]), [['t2', 'dispatch:b']], 'the split is (terminal, call) of the row, not of the terminal in use');
   splits.closeSplit('t2', 'dispatch:b');
   // A missing rate or an unreadable feed leaves a plain row.
-  assert.ok(card(terminals).includes('— token/s'), 'no rate: a dash, the row stays');
+  assert.ok(!card(terminals).includes('token/s'), 'no rate: nothing is drawn in the Agent tab, the row stays');
   const lone = [terminal('t9', [call('claude-sonnet-5-5', [item('x', { viewable: false })])])];
   assert.doesNotMatch(card(lone), /终端 \d/, 'one terminal needs no terminal label');
   assert.ok(card(lone).includes('Task x'), 'a row whose record cannot be read is plain, not a button');
@@ -194,4 +194,29 @@ test('a background task that has an end time counts from it', () => {
   const splits = files('features/agents/subagent-splits.ts');
   assert.equal(splits.backgroundEnd({ id: 'x', command: 'c', terminalId: 't', startedAt: 1, lastOutputAt: 5, endedAt: 9, state: 'done' }), 9);
   assert.equal(splits.backgroundEnd({ id: 'x', command: 'c', terminalId: 't', startedAt: 1, lastOutputAt: 5, state: 'done' }), 5);
+});
+
+test('the 15 s notice is a wrapping line of its own and the narrow header shortens the background badge', () => {
+  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-call-notice \{[^}]*flex-wrap: wrap/);
+  assert.match(css, /\.activity-call-notice > span \{[^}]*flex: 1 1 calc\(100% - 22px\)/);
+  assert.match(css, /@container \(max-width: 380px\) \{[^\n]*\.activity-background-long \{ display: none; \} \.activity-background-short \{ display: inline; \}/);
+  const badge = fs.readFileSync(path.join(src, 'features/agents/BackgroundBadge.tsx'), 'utf8');
+  assert.match(badge, /aria-label=/); assert.match(badge, /'后台 \{count\}'/);
+  assert.equal(require('../electron/locales/en.json')['后台 {count}'], 'Background {count}');
+});
+
+test('the notice actions are small buttons on their own line, a starting group head does not say 未确认 twice, and a split fills the last grid row', () => {
+  const starting = item('dispatch:s', { state: 'starting', notice: 'unconfirmed', title: '写属性测试', startedAt: Date.now() - 16000 });
+  const html = card([terminal('t1', [{ ...call('claude-sonnet-5-5', [starting]), modelUnconfirmed: true }])]);
+  assert.equal((html.match(/<button type="button" class="button secondary small"/g) || []).length, 2, '停止 and 再等等 are .button.small');
+  assert.ok(html.indexOf('activity-call-notice-actions') > html.indexOf('已等 15 秒'), 'the actions follow the text');
+  assert.doesNotMatch(html, /Sonnet 5\.5（未确认）/, 'the head drops the mark; the row says 启动中 · 未确认');
+  assert.ok(html.includes('启动中 · 未确认'));
+  const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
+  assert.match(css, /\.activity-call-notice > \.activity-call-notice-actions \{[^}]*flex: 1 1 100%/);
+  assert.doesNotMatch(css, /\.activity-call-notice button/, 'no hand-made link buttons');
+  const grid = fs.readFileSync(path.join(src, 'features/terminal/ProjectTerminals.tsx'), 'utf8');
+  assert.match(grid, /gridColumn: `span \$\{spare \+ 1\}`/, 'the last split takes the cells a short last row leaves');
+  assert.match(fs.readFileSync(path.join(src, 'features/files/files.css'), 'utf8'), /\.explorer-tabs \{[^}]*flex-wrap: wrap/, 'the tab row wraps instead of scrolling');
 });

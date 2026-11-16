@@ -73,13 +73,22 @@ test('every card hint ladder gets strictly shorter, in Chinese and in English, a
   const width = text => [...text].reduce((sum, ch) => sum + (ch.charCodeAt(0) > 255 ? 14 : 7), 0);
   const arrays = [...statement.matchAll(/\[((?:t\('[^']*'(?:, \{ agent \})?\)(?:, )?)+)\]/g)];
   const ladders = arrays.map(match => [...match[1].matchAll(/t\('([^']*)'/g)].map(item => item[1])).filter(list => list.length > 1);
-  assert.equal(ladders.length, 3, 'the result, agent and command ladders');
+  assert.equal(ladders.length, 5, 'the result, agent and command ladders, and the two busy ones (a dialog open, input not ready)');
   for (const list of ladders) for (const [name, words] of [['zh', list.map(key => key.replace('{agent}', 'Codex'))], ['en', list.map(key => (en[key] ?? key).replace('{agent}', 'Codex'))]]) {
     words.forEach((word, index) => { if (index) assert.ok(width(word) < width(words[index - 1]), `${name}: "${word}" is shorter than "${words[index - 1]}"`); });
   }
   assert.equal(ladders.filter(list => list.includes('输入消息…')).length, 1, 'only the agent ladder has the fallback');
   assert.equal(ladders.find(list => list.includes('输入消息…')).at(-1), '输入消息…');
   assert.equal(en['输入消息…'], 'Message…');
+  for (const list of ladders.filter(list => list[0] === '等终端处理完后发送' || list[0] === '等待终端输入就绪后发送')) {
+    assert.ok(width(list.at(-1)) <= 200 && width(en[list.at(-1)]) <= 200, 'a busy ladder ends in a phrase that fits a 240px box');
+  }
+});
+
+test('Settings small buttons are 28px and the standard ones stay 36px', () => {
+  const css = read('src/features/settings/settings.css');
+  assert.match(rules(css, '.settings-paned .button').join(' '), /height: 36px/);
+  assert.match(rules(css, '.settings-paned .button.small').join(' '), /height: 28px/);
 });
 
 test('a Select option\'s description is its own element, not part of the option\'s name, and the title carries both', () => {

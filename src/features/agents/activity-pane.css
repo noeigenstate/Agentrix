@@ -183,12 +183,12 @@
 .activity-call-item.is-awaiting .activity-row-icon { color: var(--warning); }
 .activity-call-open[aria-pressed="true"] .activity-call-terminal { color: var(--flow-ink); }
 .activity-call-item.is-awaiting .activity-call-sub { color: var(--flow-ink); }
-.activity-call-notice { display: flex; align-items: center; gap: 8px; padding: 0 0 4px 24px; font-size: 12px; line-height: 16px; color: var(--flow-ink); }
+.activity-call-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 4px 24px; font-size: 12px; line-height: 16px; color: var(--flow-ink); }
 .activity-call-notice > svg { flex: none; color: var(--warning); }
-.activity-call-notice > span { min-width: 0; }
-.activity-call-notice button { flex: none; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--flow-muted); font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
-.activity-call-notice button:hover { background: var(--bg-hover); color: var(--flow-ink); }
-.activity-call-notice button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.activity-call-notice > span { flex: 1 1 calc(100% - 22px); min-width: 0; }
+/* The two choices follow the text on a line of their own, under its left edge, as small buttons (14px/28px). */
+.activity-call-notice > .activity-call-notice-actions { display: flex; flex: 1 1 100%; gap: 8px; padding: 4px 0 0 22px; }
+.activity-call-notice > span[role="alert"] { flex-basis: 100%; }
 .activity-finished { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--flow-line); }
 .activity-finished-head { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0; border: 0; background: none; color: var(--flow-muted); font: inherit; font-size: 12px; font-weight: 600; text-align: left; cursor: pointer; }
 .activity-finished-head:hover { color: var(--flow-ink); }
@@ -199,6 +199,9 @@
 /* 「后台 N 个运行中」: a grey pill, no colour of its own (the spinner takes the running blue). */
 .activity-background-badge { display: inline-flex; flex: none; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border-radius: 999px; background: var(--bg-selected); color: var(--text-1); font-size: 12px; font-weight: 400; line-height: 16px; white-space: nowrap; }
 .activity-background-badge > svg { color: var(--running); }
+.activity-background-short { display: none; }
+/* A narrow header (the small card, about 320px): the badge is the icon and the count, so the sub-agent chip beside it is not clipped. */
+@container (max-width: 380px) { .activity-background-badge { padding: 0 6px; } .activity-background-long { display: none; } .activity-background-short { display: inline; } }
 /* A background task's view: the end of its output, read-only. */
 .subagent-background-tail { flex: 1; min-height: 0; margin: 0; padding: 16px; overflow: auto; color: var(--text-1); font: 12px/18px var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; scrollbar-color: var(--border-hover) transparent; }
 .subagent-background-tail:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }

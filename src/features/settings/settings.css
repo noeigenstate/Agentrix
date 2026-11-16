@@ -105,6 +105,7 @@ dialog { color: var(--text-1); }
 .settings-dialog.is-enlarged .skills-detail > * { max-width: 800px; }
 /* Buttons in Settings are 36px (the app's own are 32); the categories' rows already are. */
 .settings-paned .button { height: 36px; }
+.settings-paned .button.small { height: 28px; }
 .settings-pane > .settings-section:first-child > .setting-row:first-child { margin-top: 8px; }
 @media (max-width: 900px) { .settings-shell { grid-template-columns: 216px minmax(0, 1fr); } .settings-main-head, .settings-pane { padding-inline: 24px; } .settings-main-head { padding-right: 64px; } .settings-main-head.has-tools { padding-right: 104px; } }
 @media (max-width: 640px) {
