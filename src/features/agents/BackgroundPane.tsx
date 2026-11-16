@@ -8,7 +8,7 @@ import { backgroundEnd, backgroundTaskOf, useClock } from './subagent-splits.ts'
 import './activity-pane.css';
 
 export function BackgroundPane({ terminal, callId, onClose }: { terminal: ProjectTerminal | undefined; callId: string; onClose(): void }) {
-  const task = backgroundTaskOf(terminal, callId), now = useClock(), body = useRef<HTMLPreElement>(null);
+  const task = backgroundTaskOf(terminal, callId), now = useClock(task?.state === 'running'), body = useRef<HTMLPreElement>(null);
   const tail = task?.tail ?? [];
   // The newest output stays in view.
   useEffect(() => { const node = body.current; if (node) node.scrollTop = node.scrollHeight; }, [tail.length, tail.at(-1)]);

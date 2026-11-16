@@ -113,7 +113,8 @@ test('a starting row shows 启动中 · 未确认, and a finished one is counted
   assert.equal(kept.length, 10, 'at most 10');
   assert.equal(kept[0].call.item.id, 'm0', 'newest first');
   const onlyDone = card([terminal('t1', [call('claude-sonnet-5-5', [done('z', 1)])])]);
-  assert.ok(onlyDone.includes('最近完成 1 个') && onlyDone.includes('还没有调用其他模型'), 'only finished work: the quiet line and the folded list');
+  assert.ok(onlyDone.includes('最近完成 1 个') && !onlyDone.includes('还没有调用其他模型'), 'only finished work: the folded list, and no "nothing yet" sentence above it');
+  assert.ok(card([terminal('t1', [])]).includes('还没有调用其他模型'), 'nothing at all: the quiet sentence');
 });
 
 test('background tasks are listed with their terminal and age, and 后台 N 个运行中 shows outside the reading view', () => {
@@ -153,4 +154,44 @@ test('background tasks are listed with their terminal and age, and 后台 N 个�
   const english = { ...JSON.parse(read('electron/locales/en.json')), ...JSON.parse(read('locale-additions-d3ui.json')) };
   const used = ['已等 15 秒仍未确认，可能没有启动。', '启动中 · 未确认', '最近完成 {count} 个', '后台任务', '{count} 个运行中', '后台 {count} 个运行中', '最后输出 {count} 秒前', '终端 {number}', '继续', '自启动'];
   assert.deepEqual(used.filter(text => !english[text]), []);
+});
+
+test('a finished call that main has already hidden is still counted in 最近完成 N 个', () => {
+  const now = Date.now(), done = (id, patch = {}) => item(id, { state: 'done', hidden: true, endedAt: now - 1000, ...patch });
+  const html = card([terminal('t1', [call('claude-sonnet-5-5', [done('a'), done('b', { endedAt: now - 31 * 60000 }), item('live', { hidden: true })])])]);
+  assert.ok(html.includes('最近完成 1 个'), 'hidden and finished: listed; too old: not; a hidden live call stays out');
+  assert.ok(!html.includes('Task live'));
+});
+
+test('停止 belongs to the starting state, waits while sent and says why a refusal came', async () => {
+  const splits = files('features/agents/subagent-splits.ts'), now = Date.now();
+  const confirmed = item('dispatch:c', { state: 'running', notice: 'unconfirmed' });
+  assert.equal(splits.noticeShown('t1', confirmed, now + 99999), false, 'a confirmed worker never shows the notice');
+  assert.doesNotMatch(card([terminal('t1', [call('claude-sonnet-5-5', [confirmed])])]), /已等 15 秒|>停止</);
+  const starting = item('dispatch:r', { state: 'starting', notice: 'unconfirmed' }), terminals = [terminal('t1', [call('claude-sonnet-5-5', [starting])])];
+  const previous = window.agentrix.stopAgent;
+  let release;
+  window.agentrix.stopAgent = () => new Promise(resolve => { release = resolve; });
+  const stop = () => cardTree(terminals).find(node => node.type === 'button' && node.props.children === '停止');
+  stop().props.onClick();
+  assert.equal(stop().props.disabled, true, 'disabled while the request is out');
+  release({ ok: false, error: '工作者已经结束' });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(stop().props.disabled, false);
+  assert.ok(card(terminals).includes('没能停止它：工作者已经结束'), 'the refusal in words');
+  window.agentrix.stopAgent = previous;
+  splits.pruneSplits(new Set());
+});
+
+test('a row names its terminal by the terminal title, not its place in the list', () => {
+  const reordered = [{ ...terminal('t2', [call('claude-sonnet-5-5', [item('a', { title: '甲' })])]), title: '终端 2' }, { ...terminal('t1', [call('claude-sonnet-5-5', [item('b', { title: '乙' })])]), title: '终端 1' }];
+  const html = card(reordered);
+  assert.match(html, /甲[^]*?终端 2/);
+  assert.match(html, /乙[^]*?终端 1/);
+});
+
+test('a background task that has an end time counts from it', () => {
+  const splits = files('features/agents/subagent-splits.ts');
+  assert.equal(splits.backgroundEnd({ id: 'x', command: 'c', terminalId: 't', startedAt: 1, lastOutputAt: 5, endedAt: 9, state: 'done' }), 9);
+  assert.equal(splits.backgroundEnd({ id: 'x', command: 'c', terminalId: 't', startedAt: 1, lastOutputAt: 5, state: 'done' }), 5);
 });

@@ -181,6 +181,7 @@
 .activity-call-terminal { padding-top: 2px; font-size: 12px; line-height: 16px; color: var(--flow-faint); white-space: nowrap; }
 .activity-call-pill { display: inline-flex; align-items: center; height: 16px; margin-left: 8px; padding: 0 8px; vertical-align: top; border-radius: 999px; background: var(--bg-selected); color: var(--flow-muted); font-size: 12px; line-height: 16px; }
 .activity-call-item.is-awaiting .activity-row-icon { color: var(--warning); }
+.activity-call-open[aria-pressed="true"] .activity-call-terminal { color: var(--flow-ink); }
 .activity-call-item.is-awaiting .activity-call-sub { color: var(--flow-ink); }
 .activity-call-notice { display: flex; align-items: center; gap: 8px; padding: 0 0 4px 24px; font-size: 12px; line-height: 16px; color: var(--flow-ink); }
 .activity-call-notice > svg { flex: none; color: var(--warning); }

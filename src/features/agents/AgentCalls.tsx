@@ -6,7 +6,7 @@ import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
-import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, projectCalls, toggleFinished, toggleSplit, useClock, useFinishedOpen, useSplits, waitMore } from './subagent-splits.ts';
+import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
 import './activity-pane.css';
 
 // How fast a model writes, at the right end of its head: the average over its recent replies (output tokens per second of the time it spent writing). The column is a fixed width, so
@@ -58,6 +58,13 @@ export function failureWord(failure: NonNullable<AgentCall['items'][number]['fai
   return failure.exitCode == null ? t('出错退出') : t('出错退出（代码 {code}）', { code: failure.exitCode });
 }
 
+// 停止 on a starting worker: the button waits while the request is out, and a refusal is said in words beside it.
+async function stopWorker(terminalId: string, callId: string) {
+  setStopState(terminalId, callId, { pending: true });
+  const result = await window.agentrix.stopAgent(terminalId, callId).catch((error: unknown) => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
+  setStopState(terminalId, callId, result.ok ? null : { pending: false, refusal: result.error });
+}
+
 // A model's row for one call (a plain function, so the card's element tree stays one level): its state in words (a starting or waiting one says so), the tags 继续 and 自启动, and, in the project's list, the terminal it belongs to.
 // A call whose record can be read is one button on the row: it opens (or closes) a read-only view of that sub-agent beside the conversation.
 function callItem({ row, open, now, label }: { row: CallRow; open: ReturnType<typeof useSplits>; now: number; label: boolean }) {
@@ -72,18 +79,19 @@ function callItem({ row, open, now, label }: { row: CallRow; open: ReturnType<ty
     <span className="activity-call-text"><p>{item.title}</p><small className="activity-call-sub">{t(item.role)} · {word}
       {item.resumed && <span className="activity-call-pill" title={t('这一行由规划员续派唤醒。')}>{t('继续')}</span>}
       {item.source === 'intercepted' && <span className="activity-call-pill" title={t('由脚本自行启动，不是分派器启动。')}>{t('自启动')}</span>}</small></span>
-    {label && <span className="activity-call-terminal">{t('终端 {number}', { number })}</span>}
+    {label && <span className="activity-call-terminal">{row.title ?? t('终端 {number}', { number })}</span>}
   </>;
   const hint = item.viewable ? t(opened ? '点击关闭旁边的分屏' : '点击在旁边查看它在做什么') : null;
-  const late = noticeShown(terminalId, item, now);
+  const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
   return <li key={label ? `${terminalId}/${item.id}` : item.id} className={`activity-call-item is-${state}${failure ? ' is-failed' : ''}${awaiting ? ' is-awaiting' : ''}`} title={[item.title, failure, outside, declared, hint].filter(Boolean).join('\n')}>
     {item.viewable
       ? <button type="button" className={`activity-call-open activity-call-body${label ? ' has-terminal' : ''}`} aria-pressed={opened} aria-label={t('{role} {title}，{state}', { role: t(item.role), title: item.title, state: word })} onClick={() => toggleSplit(terminalId, item.id)}>{cells}</button>
       : <div className={`activity-call-body${label ? ' has-terminal' : ''}`}>{cells}</div>}
     {late && <div className="activity-call-notice" role="status">
       <WarningCircle size={14} aria-hidden="true" /><span>{t('已等 15 秒仍未确认，可能没有启动。')}</span>
-      <button type="button" onClick={() => void window.agentrix.stopAgent(terminalId, item.id)}>{t('停止')}</button>
-      <button type="button" onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
+      <button type="button" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, item.id)}>{t('停止')}</button>
+      <button type="button" disabled={stop?.pending} onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
+      {stop?.refusal && <span role="alert">{t('没能停止它：{message}', { message: stop.refusal })}</span>}
     </div>}
   </li>;
 }
@@ -101,7 +109,7 @@ function backgroundItem({ row, open, now, label }: { row: BackgroundRow; open: R
     <button type="button" className={`activity-call-open activity-call-body${label ? ' has-terminal' : ''}`} aria-pressed={opened} aria-label={t('后台任务 {command}，{state}', { command: task.command, state: word })} onClick={() => toggleSplit(terminalId, callId)}>
       <span className="activity-row-icon">{task.exitCode ? <WarningCircle size={14} weight="fill" aria-hidden="true" /> : CALL_STATES[running ? 'running' : 'done'].icon}</span>
       <span className="activity-call-text"><p>{task.command}</p><small className="activity-call-sub">{word}</small></span>
-      {label && <span className="activity-call-terminal">{t('终端 {number}', { number })}</span>}
+      {label && <span className="activity-call-terminal">{row.title ?? t('终端 {number}', { number })}</span>}
     </button>
   </li>;
 }
@@ -111,12 +119,15 @@ function backgroundItem({ row, open, now, label }: { row: BackgroundRow; open: R
 // has several), then a 「后台任务」 group of commands left running, and a collapsed 「最近完成 N 个」 (the last 10, none older than 30 minutes). Without `terminals` it is the one terminal's calls.
 // A model's calls past the fourth fold into "+N". With nothing to list there is one quiet line saying what will appear. Hidden calls are left out and not counted in "+N".
 export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]; terminalId: string; terminals?: readonly ProjectTerminal[] }) {
-  const open = useSplits(), now = useClock(), finishedOpen = useFinishedOpen();
-  const project = !!terminals, sources: CallSource[] = terminals ? callSources(terminals) : [{ id: terminalId, number: 1, calls, background: [] }];
+  const open = useSplits(), project = !!terminals, sources: CallSource[] = terminals ? callSources(terminals) : [{ id: terminalId, number: 1, calls, background: [] }];
+  useUiVersion();
+  const projectKey = sources[0]?.id ?? terminalId, finishedOpen = isFinishedOpen(projectKey);
+  // The clock runs only while a running background command or a 再等等 timer is on the card.
+  const moving = sources.some(source => source.background.some(task => task.state === 'running')), now = useClock(moving || hasWaitTimer(Date.now()));
   const { groups, background, recent } = projectCalls(sources, open, now, project), label = sources.length > 1;
-  const empty = !groups.length && !background.length;
+  const empty = !groups.length && !background.length, nothing = empty && !recent.length;
   return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
-    {empty && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
+    {nothing && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
     {!empty && <ul className="activity-call-groups">
       {groups.map(({ call, rate, rows }) => {
         const name = callModelName(call);
@@ -134,7 +145,7 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
       </ul></li>}
     </ul>}
     {recent.length > 0 && <div className="activity-finished">
-      <button type="button" className="activity-finished-head" aria-expanded={finishedOpen} onClick={toggleFinished}><CaretRight size={14} aria-hidden="true" />{t('最近完成 {count} 个', { count: recent.length })}</button>
+      <button type="button" className="activity-finished-head" aria-expanded={finishedOpen} onClick={() => toggleFinished(projectKey)}><CaretRight size={14} aria-hidden="true" />{t('最近完成 {count} 个', { count: recent.length })}</button>
       {finishedOpen && <ul className="activity-call-rows">
         {recent.map(entry => entry.call ? callItem({ row: entry.call, open, now, label }) : backgroundItem({ row: entry.background!, open, now, label }))}
       </ul>}

@@ -28,7 +28,7 @@ export function SubagentChip({ terminal, terminals }: { terminal: ProjectTermina
   }, [open]);
   useEffect(() => { if (!viewable) setOpen(false); }, [viewable]);
   if (!viewable) return null;
-  const running = items.filter(item => item.state === 'running').length;
+  const running = items.filter(item => item.state === 'running' || (item.state as string) === 'starting').length;
   return <div className="subagent-chip-anchor" ref={anchor}
     // Tabbing out of the popover closes it; choosing a row closes it too, so the view that opens is not left under it.
     onBlur={event => { if (open && !anchor.current?.contains(event.relatedTarget as Node | null)) setOpen(false); }}>

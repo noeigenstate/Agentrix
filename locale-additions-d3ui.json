@@ -27,5 +27,6 @@
   "后台任务的输出只读，这里不能向它发消息或停止它。": "Its output is read-only here: you cannot send it a message or stop it from this view.",
   "后台任务 {count}": "Background tasks {count}",
   "{count} 个后台任务在运行": "{count} background tasks running",
-  "后台 {count}": "Background {count}"
+  "后台 {count}": "Background {count}",
+  "没能停止它：{message}": "Could not stop it: {message}"
 }

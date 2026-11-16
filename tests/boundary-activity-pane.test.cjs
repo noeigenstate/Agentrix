@@ -42,10 +42,11 @@ test('a sub-agent view opens only on the owner’s click on a row, reads the sub
   assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, item\.id\)\}/, 'each is its row button click');
   assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, callId\)\}/);
   assert.doesNotMatch(read('src/features/terminal/ProjectTerminals.tsx'), /\b(openSplit|toggleSplit)\(/, 'the grid shows the views, it never opens one');
-  const code = file => read(`src/features/agents/${file}`).replace(/\/\/.*$/gm, ''), view = ['SubagentPane.tsx', 'SubagentInput.tsx', 'subagent-splits.ts'].map(code).join('\n');
+  const code = file => read(`src/features/agents/${file}`).replace(/\/\/.*$/gm, ''), view = ['SubagentPane.tsx', 'SubagentInput.tsx', 'subagent-splits.ts', 'BackgroundPane.tsx'].map(code).join('\n');
   assert.doesNotMatch(view, /writeTerminal|writeApproval|answerTerminal|resizeTerminal|startTerminal|closeTerminal|restartTerminal|sendToAgent|readClipboard|\.copy\(/, 'no write to a terminal, no input, no clipboard');
   assert.deepEqual([...view.matchAll(/window\.agentrix\.?(\w*)/g)].map(match => match[1]).sort(), ['', 'interveneAgent', 'stopAgent'], 'the bridge is handed to followFeed whole; the input only intervenes or stops');
   assert.deepEqual([...new Set([...view.matchAll(/bridge\.(\w+)/g)].map(match => match[1]))].sort(), ['onSubagentFeed', 'subagentFeed'], 'whose only calls are the two feed ones');
+  assert.doesNotMatch(code('BackgroundPane.tsx'), /window\.agentrix|<textarea|<input/, 'a background view calls no bridge and takes no typing');
   assert.doesNotMatch(code('SubagentPane.tsx'), /<textarea|<input|contentEditable|interveneAgent|stopAgent/, 'the view itself takes no typing; its input is SubagentInput');
   assert.equal(code('SubagentInput.tsx').match(/<textarea/g).length, 1, 'one text box, for the owner’s word to the agent');
 });
