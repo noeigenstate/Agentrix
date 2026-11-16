@@ -211,10 +211,12 @@ the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscr
 ### Launching workers
 
 Codex workers, and Claude workers started from the command line, go through the dispatch helper. Agentrix reroutes
-these calls automatically: a `codex exec`, or Claude's non-interactive call, made from a terminal's Bash tool is turned
-into a helper dispatch, shows in the Agent tab with a self-started tag, and takes the lead's run mode. Prefer calling the
-helper yourself, because then you set the role, brief, output file and `--allow` scope. A rerouted call made from inside a
-dispatched worker is refused with `dispatch.intercept_nested`: a worker does not start workers of its own. The helper runs Codex on the app-server (native mode) and runs Claude as described in
+a call made from inside a running Claude Code or Codex session: a `codex exec`, or Claude's non-interactive call, run from
+its shell tool is turned into a helper dispatch, shows in the Agent tab with a self-started tag, and takes the lead's run
+mode. It is read-only unless it asks for write access. Commands the owner types in a terminal or with `!`, and scripts, run the real CLI as before.
+Prefer calling the helper yourself, because then you set the role, brief, output file and `--allow` scope. A rerouted call made from inside a
+dispatched worker is refused with `dispatch.intercept_nested`: a worker cannot start another worker except through the dispatcher.
+A Codex planner whose `shell_environment_policy` is `inherit = "core"` drops AGENTRIX_* but keeps PATH, so its codex exec or Claude non-interactive call is refused as nested by design; give such a planner the dispatch helper command directly. The helper runs Codex on the app-server (native mode) and runs Claude as described in
 Run mode and billing. The helper's path is in the session's startup note (`Dispatch helper: node
 "<path>/dispatch.cjs"`); it declares the worker to Agentrix, so the activity pane's called models shows it, and reports how
 it ended. The helper also works outside Agentrix, where there is no startup note: run `integration/dispatch.cjs` from an
