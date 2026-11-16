@@ -45,7 +45,7 @@ class AgentCalls {
   }
   constructor({ terminalId = null, changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null; this.terminalId = terminalId;
-    this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set();
+    this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set(); this.awaitingEarly = new Map();
     this.dispatchAlive = dispatchAlive; this.clockOffset = 0;
     this.dispatchReplay = dispatchReplay;
     this.background = new BackgroundTasks(terminalId, { now });
@@ -275,7 +275,7 @@ class AgentCalls {
         role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,
         helperPid: event.helperPid, starting: true, unconfirmed: true, resumed: event.resumed === true, source: event.source,
         startedAt: time(event.at), done: false, rate: null, meter: new TokenRates(event.agent) };
-      this.calls.set(event.id, next); this.feeds.track(next);
+      this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next);
       next.startNotice = setTimeout(() => {
         if (this.calls.get(event.id) !== next || !next.starting || next.done) return;
         next.notice = 'unconfirmed'; this.changed();
@@ -297,7 +297,7 @@ class AgentCalls {
         clearTimeout(call.startNotice);
         Object.assign(call, next, { starting: false }); delete call.notice;
         this.feeds.update(call);
-      } else { this.calls.set(event.id, next); this.feeds.track(next); }
+      } else { this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next); }
       this.schedule();
       return true;
     }
@@ -344,11 +344,22 @@ class AgentCalls {
   }
   // A worker terminal's dispatched worker waits for the owner's answer ('owner') or went on (null): presentation only,
   // never completion or a notification (worker-terminals).
+  // A wait reported before the row exists is kept for it (at most 64, the newest).
   setAwaiting(id, value) {
     const call = this.calls.get(id);
+    if (!call && !this.finishedIds.has(id)) {
+      this.awaitingEarly.delete(id);
+      if (value === 'owner') this.awaitingEarly.set(id, value);
+      if (this.awaitingEarly.size > 64) this.awaitingEarly.delete(this.awaitingEarly.keys().next().value);
+      return false;
+    }
     if (!call?.dispatch || call.done || (call.awaiting ?? null) === value) return false;
     if (value === 'owner') call.awaiting = value; else delete call.awaiting;
     this.feeds.update(call); this.changed(); return true;
+  }
+  takeAwaiting(call, id) {
+    if (this.awaitingEarly.get(id)) call.awaiting = this.awaitingEarly.get(id);
+    this.awaitingEarly.delete(id);
   }
   hideAfterEnd(call) {
     const hide = alive => {
