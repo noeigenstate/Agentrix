@@ -33,7 +33,8 @@ function registrationChannel() {
   };
   const file = require.resolve('../electron/features/agents/dispatch-control.cjs'), load = require('node:module').createRequire(file), module = { exports: {} };
   require('node:vm').compileFunction(fs.readFileSync(file, 'utf8'), ['require', 'module', 'exports', '__filename', '__dirname'])(
-    name => name === 'node:net' ? net : load(name), module, module.exports, file, path.dirname(file));
+    // No socket file exists behind the stand-in, so the POSIX permission step on it is stood in as well.
+    name => name === 'node:net' ? net : name === 'node:fs' ? { ...fs, chmodSync() {} } : load(name), module, module.exports, file, path.dirname(file));
   return { ...module.exports, net };
 }
 
