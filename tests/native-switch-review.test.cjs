@@ -21,7 +21,11 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-switch-review-'));
   const project = { id: 'p', path: directory, kind: ssh ? 'ssh' : 'local' }, events = [], created = [], phaseListeners = new Set();
   let saved = true, facade;
-  t.after(async () => { await facade?.close(); fs.rmSync(directory, { recursive: true, force: true }); });
+  t.after(async () => {
+    host.gate?.dispose(); await facade?.close(); context.disposeDispatchInbox?.();
+    for (const s of context.sessions.values()) s.calls?.dispose();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
   const host = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true, sessionId: 'pty', status: 'codex',
     nativeRuntimeSessionId: 'r', nativeStructured: native, nativeSpec: {}, cliState: { sessionId: 'pty', state: 'idle' },
     submissions: new SubmissionTracker(), promptQueue: new PromptQueue(), completionWork: new CompletionWork(), approval: { invalidate() {} } };
@@ -29,10 +33,13 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
     nativeSpecs: new Map(), randomUUID: require('node:crypto').randomUUID, wholeThread: value => !!value, launchPlans: new Map(), quitting: false,
     fs, process, clearTimeout, readingHistory: { close() {} }, stopUsageAccount() {}, endSkillSession() {}, skills: { endSession() {} }, syncDashboardLive() {}, report(error) { throw error; },
     InputGate, isTerminalResponse, nativeSessions: null, scheduleState() {}, broadcast() {}, setTimeout, applyActivity() {}, findProject: () => project,
-    PromptQueue, CompletionWork, ActionLog, ConversationLog, dashboard: { run() {} }, t: value => value };
+    PromptQueue, CompletionWork, ActionLog, ConversationLog, dashboard: { run() {} }, t: value => value,
+    AgentCalls, path, os: { homedir: () => directory }, claudeConfigDir: () => directory, send() {} };
   context.store.setRestore = () => {};
   vm.createContext(context);
-  defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'activateNative', 'writeBootstrap');
+  defineMain(context, 'localSwitchSessions', 'observeSwitchTerminal', 'retainAgentState', 'prepareSwitchTerminal', 'activateNative', 'writeBootstrap',
+    'bindDispatchInbox', 'disposeDispatchInbox');
+  vm.runInContext(main.slice(main.indexOf('function callsOf('), main.indexOf('function resolveIntervention(')), context);
   const gateStart = main.indexOf('  s.gate = new InputGate('), gateEnd = main.indexOf('  const refreshCompletion', gateStart);
   context.s = host; context.id = 't'; context.terminal = { write() {} };
   vm.runInContext(main.slice(gateStart, gateEnd), context);
@@ -66,7 +73,6 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   const handlers = new Map(); facade.register((name, fn) => handlers.set(name, fn));
   await handlers.get('native:settings-set')({ claudePath: native ? (apiOnly ? 'api-only' : 'api-then-terminal') : 'terminal-only' });
   if (native) await facade.start('t', { agent: 'claude' });
-  t.after(async () => { host.gate.dispose(); await facade.close(); fs.rmSync(directory, { recursive: true, force: true }); });
   const settings = patch => handlers.get('native:settings-set')(patch);
   const answer = action => { const state = facade.switchState('t'); return facade.answer('t', facade.snapshot('t')?.runtimeSessionId || 't', state.requestId,
     { switch: { changeId: state.changeId, requestId: state.requestId, action } }); };
@@ -119,9 +125,8 @@ test('F12 an adapter rejection during an asynchronous send still produces an uns
 });
 
 test('F15 staged main dispatch updates use the source tracker and survive activation state retention', async t => {
-  const f = await fixture(t); Object.assign(f.context, { AgentCalls, path, os, claudeConfigDir: () => f.directory, send() {} });
+  const f = await fixture(t);
   f.host.usageEnv = { CODEX_HOME: f.directory, CLAUDE_CONFIG_DIR: f.directory };
-  vm.runInContext(main.slice(main.indexOf('function callsOf('), main.indexOf('function resolveIntervention(')), f.context);
   const calls = f.context.callsOf(f.host, { kind: 'local' }); t.after(() => calls.dispose());
   const id = '11111111-1111-4111-8111-111111111111';
   calls.dispatch({ type: 'dispatch-start', id, agent: 'claude', model: 'fake', cwd: os.tmpdir(), title: 'Synthetic', startedAt: Date.now(), helperPid: process.pid });
@@ -138,7 +143,7 @@ test('F13/F14 a no-history terminal starts fresh through actual main activation 
   await f.settings({ claudePath: 'api-only' }); await tick(); f.answer('now'); await tick();
   const state = f.facade.switchState('t');
   f.facade.answer('t', 't', `handoff-${state.changeId}`, { handoff: { changeId: state.changeId, draft } }); await tick();
-  assert.equal(f.facade.switchState('t').current, 'api');
+  assert.equal(f.facade.switchState('t').current, 'api', f.facade.switchState('t').reason);
   const host = f.context.sessions.get('t'); assert.equal(host.nativeStructured, true);
   assert.equal(host.completionWork.tasks.size, 0); assert.equal(host.completionWork.notifications.size, 0); assert.equal(host.completionWork.reviewAt, 42);
 });

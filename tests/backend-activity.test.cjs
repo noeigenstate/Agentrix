@@ -144,6 +144,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   const launches = [], errors = [], nativeSpecs = new Map();
   if (kind === 'ssh') project.path = '/remote/project';
   Object.assign(context, { path, nativeSpecs, launchPlans: new Map(), startupErrors: new Map(), quitting: false,
+    AgentCalls, os: { homedir: context.memoryDir }, claudeConfigDir: context.memoryDir, send() {},
     acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent, stopUsageAccount() {}, launchAfterPrompt() {},
     require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return require('../electron/features/agents/agent-command.cjs'); },
     ActionLog: require('../electron/agent-actions.cjs').ActionLog,
@@ -152,6 +153,12 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     runtimeDir: project.path, fs: syncFs, process: { platform: process.platform, env: {} },
     createTerminalEnvironment: () => ({}), withoutAppImage: value => value, eventServer: { name: 'fixture-pipe' }, controlAddress: 'fixture-control',
     startupNote: () => '', READING_NOTE: '', handoffFile: () => '', integrationDir: 'integration' });
+  vm.runInContext(main.slice(main.indexOf('function callsOf('), main.indexOf('function resolveIntervention(')), context);
+  defineMain(context, 'bindDispatchInbox', 'disposeDispatchInbox');
+  const calls = context.callsOf(s, project), runId = context.randomUUID();
+  t.after(() => { context.disposeDispatchInbox(); calls.dispose(); });
+  calls.dispatch({ type: 'dispatch-start', id: runId, agent: 'codex', model: 'synthetic-model', cwd: project.path,
+    title: 'Synthetic retained worker', startedAt: Date.now(), helperPid: process.pid });
   s.sessionKey = 'old-cap'; s.gate.dispose = () => {};
   s.terminal = { kill() {} };
   const dispose = main.indexOf('function disposeTerminal(');
@@ -183,6 +190,8 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   assert.equal(context.startupErrors.size, 0); assert.equal(launches[0].providerSessionId, null, 'a fresh launch never inherits the old restore binding');
   const next = h.sessions.get(s.terminalId);
   t.after(() => { next?.promptQueue.reset(); next?.completionWork.reset(); });
+  assert.equal(next.calls, calls, 'the new host retains the terminal\'s worker tracker');
+  assert.equal(next.calls.byId(`dispatch:${runId}`).done, false);
   assert.notEqual(next, s); assert.equal(next.nativeStructured, true); assert.notEqual(next.sessionId, 'pty');
   assert.equal(next.cliProviderId, undefined); assert.notEqual(next.reportedThreadId, previous);
   publish('item.upsert', { kind: 'user-message', content: { clientMessageId: 'second-input', text: 'Second task' } }, 2400, { itemId: 'second-input' });

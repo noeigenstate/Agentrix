@@ -14,6 +14,8 @@ const { createDispatchIntake } = require('../electron/features/agents/dispatch-i
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { resolveRegistration } = require('../electron/features/agents/dispatch-registration.cjs');
 const { locateTeam } = require('../electron/features/team/team-locate.cjs');
+const { teamAt } = require('../electron/features/team/team.cjs');
+const { RunInbox } = require('../electron/features/team/inbox.cjs');
 const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
 const { dispatchDirectory } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
@@ -22,13 +24,13 @@ const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'ut
 const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
 const functions = names => ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.includes(node.name?.text)).map(node => node.getText(ast)).join('\n');
 
-function mainFixture(t, { native = true } = {}) {
+function mainFixture(t, { native = true, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-e2e-'));
   const project = { id: 'project', kind: 'local', path: root }, sessions = new Map(), nativeSpecs = new Map(), errors = [];
   let binds = 0;
   const context = vm.createContext({ path, fs, os, randomUUID, sessions, nativeSpecs, quitting: false, errors,
-    Date: class extends Date { static now() { return 1000; } },
-    AgentCalls: class extends AgentCalls { constructor(options) { super({ ...options, now: () => 1000 }); } },
+    Date: class extends Date { static now() { return now(); } },
+    AgentCalls: class extends AgentCalls { constructor(options) { super({ ...options, now }); } },
     store: { projects: [project], findTerminal: () => ({ project, record: { restore: {} } }), setRestore() {} },
     findProject: () => project, runtimeDir: root, integrationDir: path.join(__dirname, '../integration'), eventServer: null, controlAddress: null,
     startupNote: () => '', READING_NOTE: '', handoffFile: () => '', nativeEnvironment: () => ({}),
@@ -75,7 +77,7 @@ test('unsafe allow globs fail at argument parsing before admission or launch', (
 
 test('main binds delivery before launch and publishes the fifteen-second starting notice without a worker start', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
-  const f = mainFixture(t);
+  const f = mainFixture(t, { now: () => 1000 });
   assert.equal(f.binds(), 1, 'starting the host must bind its inbox before a helper can launch');
   f.session.calls.local = false;
   const inbox = f.context.bindDispatchInbox(f.session, f.project), id = randomUUID();
@@ -89,7 +91,7 @@ test('main binds delivery before launch and publishes the fifteen-second startin
 });
 
 test('main preserves the admitted row and inbox across host restart and reports a forged late event by code', async t => {
-  const f = mainFixture(t), calls = f.context.callsOf(f.session, f.project);
+  const f = mainFixture(t, { now: () => 1000 }), calls = f.context.callsOf(f.session, f.project);
   calls.local = false;
   const inbox = f.context.bindDispatchInbox(f.session, f.project), id = randomUUID();
   const outbox = new DispatchOutbox({ directory: dispatchDirectory(f.session.bootstrapFile), id, projectId: 'terminal', sessionKey: f.session.sessionKey });
@@ -113,19 +115,38 @@ test('main preserves the admitted row and inbox across host restart and reports 
   assert.equal(calls.calls.size, 0);
 });
 
+async function registrationOnBoard(deps, registration, refused) {
+  if (!refused) return resolveRegistration(deps, registration);
+  const team = await deps.locateTeam(registration.cwd), file = path.join(team.board, `${registration.runId}.json`);
+  const entry = fs.readFileSync(file);
+  fs.rmSync(file);
+  // Only registration sees the missing board entry; the helper still owns its final inbox check.
+  try { return await resolveRegistration(deps, registration); }
+  finally { fs.writeFileSync(file, entry, { flag: 'wx' }); }
+}
+
+test('a transient registration refusal preserves the admitted helper\'s final control-inbox check', async t => {
+  const f = mainFixture(t, { native: false }), team = teamAt(f.root, f.root, true), id = randomUUID();
+  await team.admit({ agent: 'claude', role: '审查', title: 'Synthetic refusal', model: 'synthetic-model', cwd: f.root, allow: [] }, id);
+  const inbox = new RunInbox(team, id); await inbox.open();
+  const deps = { sessions: f.sessions, store: f.context.store,
+    locateTeam: async (_cwd, options) => options?.details ? { status: 'found', common: f.root, team } : team };
+  const result = await registrationOnBoard(deps, { runId: id, projectId: 'terminal', sessionKey: f.session.sessionKey,
+    capability: f.session.controlCapability, cwd: f.root, agent: 'claude', allow: [], readOnly: true, roundtable: false }, true);
+  assert.deepEqual(result, { refused: 'dispatch.unknown_run', leadMode: 'terminal' });
+  assert.deepEqual(await inbox.take(true), []);
+  await inbox.close();
+  assert.equal(team.live().find(run => run.id === id).closing, true);
+});
+
 async function boardRun(t, { refused = false, native = false } = {}) {
   const lifetime = resources(t), f = mainFixture(t, { native });
   assert.equal(f.binds(), 1, 'main must bind the real helper delivery before registration');
   execFileSync('git', ['init', '-q'], { cwd: f.root, windowsHide: true });
   const events = [], server = await createEventServer(event => { events.push(event); f.context.onEvent(event); });
   lifetime.defer('close event server', () => server.close());
-  const control = createDispatchControl({ resolveRun: async registration => {
-    if (refused) {
-      const team = await locateTeam(f.root);
-      fs.rmSync(path.join(team.board, `${registration.runId}.json`), { force: true });
-    }
-    return resolveRegistration({ sessions: f.sessions, store: f.context.store, locateTeam }, registration);
-  } });
+  const control = createDispatchControl({ resolveRun: registration => registrationOnBoard(
+    { sessions: f.sessions, store: f.context.store, locateTeam }, registration, refused) });
   const { address } = await control.listen(); lifetime.defer('close control', () => control.close());
   control.onRequest('claude-sdk.run', async (_run, _payload, stream) => {
     stream.emit({ type: 'path.changed', payload: { selected: 'terminal', reason: 'terminal lead (subscription)' } });
@@ -154,7 +175,7 @@ async function boardRun(t, { refused = false, native = false } = {}) {
 
 test('the real helper registers against main on its admitted Git board and delivers one completed row', async t => {
   const f = await boardRun(t);
-  assert.equal(f.code, 0); assert.equal(f.launches, 1);
+  assert.equal(f.code, 0, f.stdout); assert.equal(f.launches, 1);
   assert.match(f.stdout, /claude-cli: terminal lead \(subscription\)/);
   assert.equal(f.session.calls.snapshot()[0].items.length, 1);
   assert.equal(f.session.calls.snapshot()[0].items[0].state, 'done');
@@ -162,7 +183,7 @@ test('the real helper registers against main on its admitted Git board and deliv
 
 test('the real helper reports a coded board refusal while retaining its authenticated visibility row', async t => {
   const f = await boardRun(t, { refused: true });
-  assert.equal(f.code, 0); assert.equal(f.launches, 1);
+  assert.equal(f.code, 0, f.stdout); assert.equal(f.launches, 1);
   assert.match(f.stdout, /control_register\/dispatch\.unknown_run/);
   assert.equal(f.session.calls.snapshot()[0].items.length, 1);
   assert.match(f.session.calls.snapshot()[0].items[0].controlFailure, /dispatch\.unknown_run/);
