@@ -58,7 +58,7 @@ for (const scenario of ['native', 'no_environment', 'missing_address', 'invalid_
       const reasons = { no_environment: /bootstrap\/missing_environment/, missing_address: /bootstrap\/missing_address/,
         invalid_json: /bootstrap\/invalid_json/, missing_file: /bootstrap\/ENOENT/,
         missing_capability: /bootstrap\/missing_capability/, missing_session_key: /bootstrap\/missing_session_key/,
-        rejected_registration: /control_register\/(?:registration_closed|timeout)/, dead_address: /control_connect\/(?:ENOENT|ECONNREFUSED)/ };
+        rejected_registration: /control_register\/(?:dispatch\.[a-z_]+|timeout)/, dead_address: /control_connect\/(?:ENOENT|ECONNREFUSED)/ };
       assert.match(diagnostics[0], reasons[scenario]);
       assert.ok(!diagnostics[0].includes(root)); assert.ok(!diagnostics[0].includes('synthetic-private-key'));
     }
