@@ -64,9 +64,9 @@ function createClaudeSession(spec, emit, dependencies) {
     publish('turn.started', { origin, clientMessageId }); setState('running');
   }
   const canContinue = () => dependencies.canContinue?.() !== false;
-  function stopSubagents(run, { keep = null, at = now() } = {}) {
+  function stopSubagents(run, { keep = null, keepTools = null, at = now() } = {}) {
     // These starts already reached the host. Their cached bindings can end them even after fresh callbacks lose ownership.
-    const children = [...run.subagents].filter(([id]) => !keep?.has(id));
+    const children = [...run.subagents].filter(([id, { signal }]) => !keep?.has(id) && !(signal.toolUseId && keepTools?.has(signal.toolUseId)));
     for (const [id] of children) run.subagents.delete(id);
     for (const [, { signal, binding }] of children) {
       try { void Promise.resolve(spec.onSubagent({ ...signal, kind: 'stop', outcome: 'killed', transcriptPath: null, at: Math.max(at, signal.at) }, binding)).catch(() => {}); }
@@ -110,12 +110,16 @@ function createClaudeSession(spec, emit, dependencies) {
     if (message.type !== 'system') return;
     if (message.subtype === 'background_tasks_changed') {
       run.background = new Map(message.tasks.map(task => [task.task_id, task.run_id]));
+      run.backgroundTools = new Map(message.tasks.filter(task => typeof task.tool_use_id === 'string').map(task => [task.task_id, task.tool_use_id]));
     } else if (['task_started', 'task_updated', 'task_notification'].includes(message.subtype)) {
       const previous = run.background.get(message.task_id);
       if (previous && (!message.run_id || message.run_id < previous)) return;
       if (message.subtype === 'task_notification' || message.patch?.is_backgrounded === false
-        || ['completed', 'failed', 'stopped'].includes(message.patch?.status)) run.background.delete(message.task_id);
-      else if (message.subtype === 'task_started' && message.is_backgrounded !== false || message.patch?.is_backgrounded === true) run.background.set(message.task_id, message.run_id);
+        || ['completed', 'failed', 'stopped'].includes(message.patch?.status)) { run.background.delete(message.task_id); run.backgroundTools.delete(message.task_id); }
+      else if (message.subtype === 'task_started' && message.is_backgrounded !== false || message.patch?.is_backgrounded === true) {
+        run.background.set(message.task_id, message.run_id);
+        if (typeof message.tool_use_id === 'string') run.backgroundTools.set(message.task_id, message.tool_use_id);
+      }
     } else return;
     setState(state);
   }
@@ -255,7 +259,7 @@ function createClaudeSession(spec, emit, dependencies) {
         }
         for (const id of run.shellInputs || []) delete shells.get(id)?.reject;
         if (outcome.status === 'interrupted') {
-          const boundary = { keep: new Set(run.background.keys()), at: now() };
+          const boundary = { keep: new Set(run.background.keys()), keepTools: new Set(run.backgroundTools.values()), at: now() };
           // Finish starts/stops already acknowledged while discovery waits, before a later turn's reports can enter the chain.
           run.subagentReports = (run.subagentReports || Promise.resolve()).then(() => stopSubagents(run, boundary)).catch(() => {});
         }
@@ -339,7 +343,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (!key) throw new Error('请先保存 API 密钥。');
     const run = { key, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.availabilityGeneration?.(), keyVersion: dependencies.credentialVersion?.(),
-      busy: false, background: new Map(), subagents: new Map(), stderr: stderrCollector() };
+      busy: false, background: new Map(), backgroundTools: new Map(), subagents: new Map(), stderr: stderrCollector() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     try {

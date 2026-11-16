@@ -229,6 +229,23 @@ for (const backgroundSource of ['snapshot', 'start', 'transition']) test(`native
   assert.equal(reports.length, 4); assert.equal(runtime.fake.closes.length, 0);
 });
 
+test('an interrupt keeps a background child whose task id differs from its agent id by the shared tool-use ID', async t => {
+  const f = workspace(t), reports = [];
+  const runtime = await sessionFixture(t, f, signal => reports.push(signal));
+  await runtime.hook('SubagentStart', { agent_id: 'foreground' }, 'toolu_foreground');
+  await runtime.hook('SubagentStart', { agent_id: 'agent-side' }, 'toolu_background');
+  await until(() => reports.length === 2);
+  runtime.fake.emit({ type: 'system', subtype: 'task_started', task_id: 'task-side', tool_use_id: 'toolu_background', run_id: 'run-1',
+    task_type: 'local_agent', is_backgrounded: true });
+  await until(() => runtime.session.activity().count === 1);
+  runtime.clock(3); await runtime.session.interrupt();
+  await until(() => runtime.session.snapshot().state === 'idle');
+  const stops = reports.filter(signal => signal.kind === 'stop');
+  assert.deepEqual(stops.map(signal => signal.agentId), ['foreground']);
+  assert.equal(stops[0].outcome, 'killed');
+  assert.equal(runtime.fake.closes.length, 0);
+});
+
 test('query retirement kills background children while real SDK SubagentStop stays plain', async t => {
   const f = workspace(t), reports = [];
   const runtime = await sessionFixture(t, f, signal => reports.push(signal));
