@@ -138,14 +138,15 @@ function createClaudeActivity(deps) {
   }
 
   // While the screen looks idle in a working turn, a timer asks the machine to confirm it once the quiet has lasted;
-  // a newer fact or hook restarts the quiet, and the timer then waits for the rest of it.
+  // a newer fact restarts the quiet, and the timer then waits for the rest of it. While the CLI asks something there is
+  // nothing to confirm: the next screen fact, once it is answered, starts the watch again.
   function watchIdle(s, meta) {
     const { machine } = meta;
-    if (!machine.idleLooking || machine.phase !== 'working' || meta.idleTimer) return;
+    if (!machine.idleLooking || machine.phase !== 'working' || meta.idleTimer || s.needsInput) return;
     meta.idleTimer = setTimeout(() => {
       meta.idleTimer = null;
       if (deps.sessions.get(s.terminalId) !== s || s.cliStateMeta !== meta) return;
-      if (feed(s, { type: 'confirm', at: Date.now() }) && meta.machine.screenIdle) relight(s, `screen-idle:${meta.machine.screenIdleAt}`);
+      if (feed(s, { type: 'confirm', at: Date.now(), asking: !!s.needsInput }) && meta.machine.screenIdle) relight(s, `screen-idle:${meta.machine.screenIdleAt}`);
     }, Math.max(0, machine.quietSince + SCREEN_IDLE_MS - Date.now()));
     meta.idleTimer.unref?.();
   }
