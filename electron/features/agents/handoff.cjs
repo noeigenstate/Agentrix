@@ -46,7 +46,7 @@ function startupNote(readingNote, file, skills, delivery = null, dispatchHelper 
   let note = `${readingNote} When you finish a task, end your reply with a delivery summary for the user to grade: a line 【交付】, then for a fix three lines 问题：(the problem solved) 原因：(its specific cause) 结果：(the outcome and how it was verified), `
     + 'or for an optimization three lines 优化：(what was optimized) 解决：(the problem it solves) 对比：(before and after, with numbers when measured). One or two plain sentences each, with these labels exactly.';
   if (dispatchHelper === '{AGENTRIX_DISPATCH}') note += ' {AGENTRIX_DISPATCH_NOTE}';
-  else if (dispatchHelper) note += ` Dispatch helper: node ${dispatchHelper.replace(/\\/g, '/')} — start every command-line Codex or Claude worker through it (see the agent-dispatch rules).`;
+  else if (dispatchHelper) note += ` Dispatch helper: node ${dispatchHelper.replace(/\\/g, '/')} — start every command-line Codex or Claude worker through it; a call made from a terminal is rerouted through it automatically, and a Claude worker follows your run mode (see the agent-dispatch rules).`;
   if (file) note += ` Before your first reply in this session, read the file ${file.replace(/\\/g, '/')} if it exists: `
     + 'it is the recent development work done in this same folder with Claude Code or Codex (what was asked, answered, changed and run), '
     + 'which the user expects you to know and continue from without being told. Do not mention reading it unless asked.';
