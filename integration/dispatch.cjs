@@ -24,10 +24,13 @@ const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/wor
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
+const { dispatchDirectory } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
+const { DispatchOutbox } = require(outboxFile);
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
-  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs',
+  'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs', 'features/agents/dispatch-events.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
   'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs',
@@ -36,7 +39,8 @@ const runtimeFiles = () => {
   // A supplies this pure module in the merged tree. Older or standalone helper trees remain usable without it.
   const routing = 'features/native-session/routing.cjs';
   const files = fs.existsSync(path.join(runtime, routing)) ? [...RUNTIME_FILES, routing] : RUNTIME_FILES;
-  return Object.fromEntries(files.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')]));
+  return { ...Object.fromEntries(files.map(file => [file, fs.readFileSync(path.join(runtime, file), 'utf8')])),
+    'dispatch-outbox.cjs': fs.readFileSync(outboxFile, 'utf8') };
 };
 
 const START_TIMEOUT = 30000;
@@ -211,41 +215,55 @@ async function teamCommand(argv, stdout) {
 let undeliveredNoted = false, plannerOutput = process.stdout;
 // Serialize sends to preserve start/rate/end order. No pipe callback delays the worker or its output.
 function eventSink(filename) {
-  let bootstrap;
-  try {
-    if (!filename || fs.statSync(filename).size > 16384) return () => {};
-    bootstrap = JSON.parse(fs.readFileSync(filename, 'utf8').replace(/^\uFEFF/, ''));
-    if (![bootstrap.pipeName, bootstrap.projectId, bootstrap.sessionKey].every(word)) return () => {};
-  } catch { return () => {}; }
-  const address = process.platform === 'win32' && !bootstrap.pipeName.startsWith('\\\\') ? `\\\\.\\pipe\\${bootstrap.pipeName}` : bootstrap.pipeName;
-  let sending = false;
+  let bootstrap, outbox, sending = false;
   const queue = [];
+  function undelivered(code) {
+    if (undeliveredNoted) return;
+    undeliveredNoted = true;
+    plannerOutput.write(`[dispatch] events not delivered to Agentrix (${code})\n`);
+  }
   function drain() {
     if (sending || !queue.length) return;
     sending = true;
+    const address = process.platform === 'win32' && !bootstrap.pipeName.startsWith('\\\\') ? `\\\\.\\pipe\\${bootstrap.pipeName}` : bootstrap.pipeName;
     const event = queue.shift(), socket = net.connect(address);
-    // The errno code of the first failure (ENOENT, EPIPE, …) or timeout; an event counts as delivered once it is written.
+    // A socket write is only a wake. Main's signed disk acknowledgment is the delivery proof.
     let failure = null, written = false;
     socket.setTimeout(250, () => { failure ??= 'timeout'; socket.destroy(); });
     socket.on('error', error => { failure ??= error.code || 'socket_error'; socket.destroy(); });
     socket.once('close', () => {
-      if (!written && !undeliveredNoted) {
-        undeliveredNoted = true;
-        plannerOutput.write(`[dispatch] events not delivered to Agentrix (${failure || 'closed'})\n`);
-      }
+      if (!written) undelivered(failure || 'closed');
       sending = false; drain();
     });
     socket.once('connect', () => socket.end(JSON.stringify({ ...event, projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey }) + '\n',
       error => { if (!error) written = true; }));
   }
-  return event => {
-    // A slow/disappeared app cannot retain unlimited rate or routing reports; the newest of each supersedes the older.
-    if (['dispatch-rate', 'dispatch-routing', 'dispatch-account'].includes(event.type)) {
-      const index = queue.findIndex(value => value.type === event.type);
-      if (index >= 0) queue.splice(index, 1);
+  const send = event => {
+    try {
+      if (!outbox) {
+        if (!filename || fs.statSync(filename).size > 16384) return;
+        const value = JSON.parse(fs.readFileSync(filename, 'utf8').replace(/^\uFEFF/, ''));
+        if (![value.pipeName, value.projectId, value.sessionKey].every(word)) return;
+        // First event is the admitted declaration; later bootstrap replacements cannot change its signing identity.
+        bootstrap = value; send.bootstrap = value;
+        outbox = new DispatchOutbox({ directory: dispatchDirectory(filename), id: event.id, projectId: value.projectId, sessionKey: value.sessionKey,
+          wake: frame => {
+            // These wakes can coalesce; their records on disk remain complete and ordered.
+            if (['dispatch-rate', 'dispatch-routing', 'dispatch-account'].includes(frame.type)) {
+              const index = queue.findIndex(value => value.type === frame.type);
+              if (index >= 0) queue.splice(index, 1);
+            }
+            queue.push(frame); drain();
+          } });
+        send.directory = outbox.directory;
+      }
+      outbox.append(event);
+    } catch (error) {
+      // Paths and credentials are never printed, including when durable storage is unavailable.
+      undelivered(error.message === 'dispatch.oversize_event' ? 'dispatch.oversize_event' : 'dispatch.outbox_unreadable');
     }
-    queue.push(event); drain();
   };
+  return send;
 }
 
 // Settings are read only from worker records/headers. A missing value remains unreported.
@@ -523,7 +541,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
   let treeStop = Promise.resolve(), stoppingChild = null;
   let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
-  let controlFailure = 'bootstrap/missing_environment', transportFallback = false, lastControlFailure;
+  let controlFailure = 'bootstrap/missing_environment', transportFallback = false, lastControlFailure, lastControlNotice;
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
   const controlReceipts = new Map(), requestTimers = new Map();
@@ -810,6 +828,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
     roundtable = Boolean(team && options.meeting);
     if (options.meeting && !team) throw new Error('roundtables need a git repository');
     if (team) admission = await team.admit(options, id, __filename);
+    send({ type: 'dispatch-declared', id, helperPid: process.pid, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
+      cwd: options.cwd, worktree: options.cwd, requested: declared(), source: 'dispatch', parentId: null, resumed: !!options.resume,
+      kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, at: Date.now() });
     if (team && !roundtable) {
       inbox = new RunInbox(team, id); await inbox.open();
       inboxTimer = setInterval(() => {
@@ -884,7 +905,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       const after = checking ? snapshot(options.cwd, before) : null;
       const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory, ...skillGuard.artifacts].filter(Boolean)
         .map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
-      const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file))) ?? null;
+      const outbox = after && send.directory && path.relative(after.root, send.directory).split(path.sep).join('/');
+      const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file) && !(outbox && file.startsWith(outbox + '/')))) ?? null;
       return { after, changed, outOfScope: changed && (roundtable ? changed : changed.filter(file => !matches(options.allow, file))) };
     };
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
@@ -896,12 +918,13 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       try {
         if (!env.AGENTRIX_BOOTSTRAP) { controlFailure = 'bootstrap/missing_environment'; return; }
         if (fs.statSync(env.AGENTRIX_BOOTSTRAP).size > 16384) { controlFailure = 'bootstrap/size_limit'; return; }
-        bootstrap = JSON.parse(fs.readFileSync(env.AGENTRIX_BOOTSTRAP, 'utf8').replace(/^\uFEFF/, ''));
+        bootstrap = send.bootstrap || JSON.parse(fs.readFileSync(env.AGENTRIX_BOOTSTRAP, 'utf8').replace(/^\uFEFF/, ''));
         if (!bootstrap?.controlAddress) { controlFailure = 'bootstrap/missing_address'; return; }
         if (!bootstrap.controlCapability) { controlFailure = 'bootstrap/missing_capability'; return; }
         if (!bootstrap.sessionKey) { controlFailure = 'bootstrap/missing_session_key'; return; }
         const client = await connectDispatchControl({ address: bootstrap.controlAddress, runId: id,
         projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey, capability: bootstrap.controlCapability,
+        cwd: options.cwd, agent: options.agent, allow: options.allow,
         readOnly: !!options.readOnly || options.permission === 'plan', roundtable,
         onControl: async messageId => { await readInbox(); return controlReceipts.get(messageId) || inbox?.receipt(messageId) || 'queued'; },
         onEvent: event => acceptNative(event) });
@@ -913,6 +936,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
       }
       finally {
         controlOpening = false;
+        const notice = controlClient ? null : controlFailure;
+        if (lastControlNotice !== notice) {
+          lastControlNotice = notice;
+          send({ type: 'dispatch-notice', id, controlFailure: notice, at: Date.now() });
+        }
         if (options.agent === 'codex' && !controlClient && lastControlFailure !== controlFailure) {
           lastControlFailure = controlFailure;
           signal(`transport ${id} app-server: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
@@ -1097,7 +1125,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
           if (nativeFallback) {
             activeRuntime = null; nativeBilling = null; controlClient?.close(); controlClient = null;
             transportFallback = true;
-            signal(`transport ${id} claude-cli fallback: ${String(nativeFallback).replace(/[\r\n]+/g, ' ')}`); continue;
+            signal(`transport ${id} claude-cli: ${String(nativeFallback).replace(/[\r\n]+/g, ' ')}`); continue;
           }
           if (!result) result = await completion;
           activeRuntime.finished = remote;
@@ -1133,7 +1161,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, launch = 
         }
         break;
       }
-      if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli fallback: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
+      if (!resumeSession && !transportFallback) signal(`transport ${id} claude-cli: Agentrix control unavailable (${controlFailure || 'control/disconnected'})`);
       const command = resolveExecutable(options.agent, commandOf(effective), env);
 
       if (killed) throw new Error('Dispatch interrupted before launch');

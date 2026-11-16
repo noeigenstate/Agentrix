@@ -1,6 +1,7 @@
-const { acceptDispatch } = require('./dispatch-events.cjs');
+const { acceptDispatch, dispatchDirectory } = require('./dispatch-events.cjs');
+const { DispatchInbox } = require('./dispatch-inbox.cjs');
 
-const DISPATCH_EVENTS = ['dispatch-start', 'dispatch-routing', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt'];
+const DISPATCH_EVENTS = ['dispatch-declared', 'dispatch-notice', 'dispatch-start', 'dispatch-routing', 'dispatch-rate', 'dispatch-end', 'dispatch-receipt', 'dispatch-input'];
 
 // Main's intake for the dispatch-* events a session's event pipe carries, and the Codex account reports dispatched
 // workers send. `deps` is the app shell (main.cjs), read on every call so its late values are current; these
@@ -9,24 +10,58 @@ function createDispatchIntake(deps) {
   // Per local project, the newest account and quota a dispatched Codex worker's own app-server reported, as a limits
   // payload; it outlives the worker. SSH workers' accounts belong to their host's channel. Only this module writes it.
   const dispatchAccounts = new Map();
+  const inboxes = new Map();
+
+  // Main binds this before launch, rebinds it on a terminal restart, and disposes it only when that terminal is removed.
+  // A signed wake can also establish it. The periodic sweep does not depend on a surviving helper or wake.
+  function bindDispatchInbox(s, project) {
+    let entry = inboxes.get(s.terminalId);
+    if (!entry) {
+      entry = { session: s, project, key: s.sessionKey };
+      entry.inbox = new DispatchInbox({ directory: project.kind !== 'ssh' && s.bootstrapFile ? dispatchDirectory(s.bootstrapFile) : null,
+        projectId: s.terminalId, sessionKey: s.sessionKey,
+        apply: (event, key) => applyDispatchEvent(entry.session, entry.project, { ...event, sessionKey: key }, key),
+        refused: value => deps.dispatchRefused?.(value) });
+      inboxes.set(s.terminalId, entry);
+    } else if (entry.key !== s.sessionKey) {
+      entry.key = s.sessionKey; void entry.inbox.rotate(s.sessionKey);
+    }
+    entry.session = s; entry.project = project;
+    const calls = deps.callsOf?.(s, project);
+    if (calls) calls.dispatchReplay = () => entry.inbox.sweep();
+    return entry.inbox;
+  }
+  function disposeDispatchInbox(terminalId) {
+    if (terminalId === undefined) { for (const entry of inboxes.values()) entry.inbox.dispose(); inboxes.clear(); }
+    else { inboxes.get(terminalId)?.inbox.dispose(); inboxes.delete(terminalId); }
+  }
 
   // True when the event is a dispatch event, which ends its handling, whether or not the gate accepted it.
   function acceptDispatchEvent(s, project, event) {
+    if (event.type !== 'dispatch-account' && !DISPATCH_EVENTS.includes(event.type)) return false;
+    if (event.version === 1) {
+      const inbox = bindDispatchInbox(s, project);
+      void inbox.accept(event).then(() => inbox.sweep()).catch(() => deps.dispatchRefused?.({ code: 'dispatch.outbox_unreadable' }));
+    } else applyDispatchEvent(s, project, event);
+    return true;
+  }
+  function applyDispatchEvent(s, project, event, admissionKey) {
     const { callsOf, send, broadcast, rememberClaudeSource } = deps;
     if (event.type === 'dispatch-account') {
       // An account report changes nothing the window state shows; the pane is told to read usage again. Only a call the
       // session knows can report.
-      if (acceptDispatch(s, event, callsOf(s, project), payload => observeDispatchAccount(project, payload))) {
+      const accepted = acceptDispatch(s, event, callsOf(s, project), payload => observeDispatchAccount(project, payload), admissionKey);
+      if (accepted) {
         send('agents:usage-changed', { projectId: project.id });
       }
-      return true;
+      return accepted;
     }
-    if (!DISPATCH_EVENTS.includes(event.type)) return false;
-    if (acceptDispatch(s, event, callsOf(s, project))) {
+    const accepted = acceptDispatch(s, event, callsOf(s, project), undefined, admissionKey);
+    if (accepted) {
       if (event.type === 'dispatch-start' && event.agent === 'claude' && event.unconfirmed !== true) rememberClaudeSource(event.sessionId, 'dispatch');
       broadcast();
     }
-    return true;
+    return accepted;
   }
   function observeDispatchAccount(project, payload) {
     if (project.kind === 'ssh' || payload.observedAtMs < (dispatchAccounts.get(project.id)?.observedAtMs ?? -Infinity)) return false;
@@ -44,7 +79,7 @@ function createDispatchIntake(deps) {
   }
   function clearDispatchAccount(projectId) { dispatchAccounts.delete(projectId); }
 
-  return { acceptDispatchEvent, dispatchReading, clearDispatchAccount };
+  return { acceptDispatchEvent, dispatchReading, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox };
 }
 
 module.exports = { createDispatchIntake };
