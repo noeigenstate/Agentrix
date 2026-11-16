@@ -64,15 +64,19 @@ function createClaudeSession(spec, emit, dependencies) {
     publish('turn.started', { origin, clientMessageId }); setState('running');
   }
   const canContinue = () => dependencies.canContinue?.() !== false;
+  function stopSubagents(run, { keep = null, at = now() } = {}) {
+    // These starts already reached the host. Their cached bindings can end them even after fresh callbacks lose ownership.
+    const children = [...run.subagents].filter(([id]) => !keep?.has(id));
+    for (const [id] of children) run.subagents.delete(id);
+    for (const [, { signal, binding }] of children) {
+      try { void Promise.resolve(spec.onSubagent({ ...signal, kind: 'stop', outcome: 'killed', transcriptPath: null, at: Math.max(at, signal.at) }, binding)).catch(() => {}); }
+      catch { }
+    }
+  }
   function cancelQuery(run, reason) {
     if (run.closing) return;
     run.closing = reason;
-    // These starts already reached the host. Their cached bindings can end them even after fresh callbacks lose ownership.
-    const children = [...run.subagents.values()]; run.subagents.clear();
-    for (const { signal, binding } of children) {
-      try { void Promise.resolve(spec.onSubagent({ ...signal, kind: 'stop', transcriptPath: null, at: Math.max(now(), signal.at) }, binding)).catch(() => {}); }
-      catch { }
-    }
+    stopSubagents(run);
     run.queue.close(); run.abort.abort();
     try { run.query.close(); } catch { }
   }
@@ -250,6 +254,11 @@ function createClaudeSession(spec, emit, dependencies) {
             switching: spec.quotaFallback?.() && run.quotaRejected });
         }
         for (const id of run.shellInputs || []) delete shells.get(id)?.reject;
+        if (outcome.status === 'interrupted') {
+          const boundary = { keep: new Set(run.background.keys()), at: now() };
+          // Finish starts/stops already acknowledged while discovery waits, before a later turn's reports can enter the chain.
+          run.subagentReports = (run.subagentReports || Promise.resolve()).then(() => stopSubagents(run, boundary)).catch(() => {});
+        }
         publish('turn.completed', outcome);
         run.turnInputs = []; run.shellInputs = null; run.modelReplied = false; run.executed = false; run.synthetic = false; run.quotaRejected = false;
         run.interrupted = false; run.limitCandidate = null; run.limitReason = null; run.limitMessage = null;

@@ -160,6 +160,7 @@ for (const [title, retirement] of [
   await until(() => reports.length === 3);
   await runtime.hook('SubagentStop', { agent_id: 'finished' });
   await until(() => reports.length === 4);
+  assert.equal(Object.hasOwn(reports[3].signal, 'outcome'), false, 'an SDK SubagentStop stays plain');
   runtime.clock(3);
   const result = { type: 'result', uuid: 'parent-result', terminal_reason: 'completed', subtype: 'success', total_cost_usd: 0, modelUsage: {} };
   if (retirement === 'interrupt') {
@@ -175,11 +176,107 @@ for (const [title, retirement] of [
   assert.deepEqual(reports.filter(entry => entry.signal.kind === 'stop').map(entry => entry.signal.agentId).sort(), ['finished', 'first', 'second']);
   for (const entry of reports.slice(4)) {
     assert.equal(entry.signal.kind, 'stop'); assert.equal(entry.signal.at, at(3));
+    assert.equal(entry.signal.outcome, 'killed');
     assert.deepEqual(entry.binding, { runtimeSessionId: 'native-run', providerSessionId: f.parentId, folder: f.folder });
   }
   await runtime.hook('SubagentStart', { agent_id: 'late-child' }); await tick();
   assert.equal(reports.length, 6, 'retirement stops once and a late callback cannot revive the run');
   assert.notEqual(runtime.session.snapshot().state, 'failed');
+});
+
+for (const backgroundSource of ['snapshot', 'start', 'transition']) test(`native interrupt keeps its query and ${backgroundSource} background children while killing foreground children`, async t => {
+  const f = workspace(t), reports = [];
+  const calls = new AgentCalls({ terminalId: 'terminal', claudeHome: () => f.home, now: () => at(0) });
+  const host = nativeHost(f, calls);
+  const runtime = await sessionFixture(t, f, (signal, binding) => { reports.push(signal); host.spec.onSubagent(signal, binding); });
+  t.after(() => calls.dispose());
+  for (const agent_id of ['foreground', 'background']) await runtime.hook('SubagentStart', { agent_id });
+  await until(() => reports.length === 2);
+  if (backgroundSource === 'snapshot') {
+    runtime.fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [
+      { task_id: 'background', run_id: 'run-1', task_type: 'local_agent', description: 'Background child' },
+      { task_id: 'shell-job', run_id: 'run-1', task_type: 'local_bash', description: 'Background shell' },
+    ] });
+  } else {
+    runtime.fake.emit({ type: 'system', subtype: 'task_started', task_id: 'background', run_id: 'run-1',
+      task_type: 'local_agent', is_backgrounded: backgroundSource === 'start' });
+    if (backgroundSource === 'transition') runtime.fake.emit({ type: 'system', subtype: 'task_updated', task_id: 'background', run_id: 'run-1', patch: { is_backgrounded: true } });
+    runtime.fake.emit({ type: 'system', subtype: 'task_started', task_id: 'shell-job', run_id: 'run-1', task_type: 'local_bash', is_backgrounded: true });
+  }
+  await until(() => runtime.session.activity().count === 2);
+  runtime.clock(3); await runtime.session.interrupt();
+  await until(() => runtime.session.snapshot().state === 'idle');
+  const stops = reports.filter(signal => signal.kind === 'stop');
+  assert.deepEqual(stops.map(signal => signal.agentId), ['foreground']);
+  assert.equal(stops[0].outcome, 'killed'); assert.equal(stops[0].at, at(3));
+  const foreground = [...calls.calls.values()].find(call => call.agentId === 'foreground');
+  const background = [...calls.calls.values()].find(call => call.agentId === 'background');
+  assert.equal(foreground.done, true); assert.equal(foreground.outcome, 'killed');
+  assert.equal(foreground.failure.reason, 'killed'); assert.equal(background.done, false);
+  assert.equal(runtime.fake.interrupts.length, 1); assert.equal(runtime.fake.closes.length, 0);
+  assert.equal(runtime.session.activity().count, 2, 'background tasks remain live');
+  await runtime.session.send({ clientMessageId: 'after-interrupt', text: 'Continue the conversation' });
+  await until(() => runtime.fake.inputs.length === 2);
+  assert.equal(runtime.fake.calls.length, 1, 'the same CLI query accepts the next input');
+  await runtime.hook('SubagentStop', { agent_id: 'background', agent_transcript_path: path.join(f.folder, 'agent-background.jsonl') });
+  await until(() => reports.length === 4);
+  assert.equal(reports[3].agentId, 'background'); assert.equal(reports[3].kind, 'stop');
+  assert.equal(Object.hasOwn(reports[3], 'outcome'), false, 'the actual SDK stop is completed by default');
+  assert.equal(background.done, true); assert.equal(background.outcome, 'completed');
+  for (const task_id of ['background', 'shell-job']) runtime.fake.emit({ type: 'system', subtype: 'task_notification', task_id, run_id: 'run-1', status: 'completed' });
+  runtime.fake.emit({ type: 'result', uuid: 'next-result', terminal_reason: 'completed', subtype: 'success', total_cost_usd: 0, modelUsage: {} });
+  await until(() => runtime.session.activity().count === 0 && runtime.session.snapshot().state === 'idle');
+  assert.equal(reports.length, 4); assert.equal(runtime.fake.closes.length, 0);
+});
+
+test('query retirement kills background children while real SDK SubagentStop stays plain', async t => {
+  const f = workspace(t), reports = [];
+  const runtime = await sessionFixture(t, f, signal => reports.push(signal));
+  for (const agent_id of ['completed', 'background']) await runtime.hook('SubagentStart', { agent_id });
+  await until(() => reports.length === 2);
+  await runtime.hook('SubagentStop', { agent_id: 'completed' });
+  await until(() => reports.length === 3);
+  assert.equal(Object.hasOwn(reports[2], 'outcome'), false);
+  runtime.fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [
+    { task_id: 'background', run_id: 'run-1', task_type: 'local_agent', description: 'Background child' },
+  ] });
+  await until(() => runtime.session.activity().count === 1);
+  runtime.clock(4); runtime.fake.end();
+  await until(() => runtime.fake.closes.length === 1);
+  assert.equal(reports.length, 4);
+  assert.equal(reports[3].kind, 'stop'); assert.equal(reports[3].agentId, 'background');
+  assert.equal(reports[3].outcome, 'killed'); assert.equal(reports[3].at, at(4));
+  assert.equal(reports.filter(signal => signal.kind === 'stop' && signal.agentId === 'completed').length, 1);
+});
+
+test('interrupt cleanup covers queued starts before the next turn without killing its children', async t => {
+  const f = workspace(t), reports = [];
+  let release;
+  const gate = new Promise(resolve => { release = resolve; }); t.after(() => release());
+  const runtime = await sessionFixture(t, f, signal => {
+    reports.push(signal);
+    if (signal.kind === 'start' && signal.agentId === 'blocking') return gate;
+  });
+  await runtime.hook('SubagentStart', { agent_id: 'blocking' });
+  await until(() => reports.length === 1);
+  for (const agent_id of ['queued-foreground', 'queued-background']) await runtime.hook('SubagentStart', { agent_id });
+  await runtime.hook('SubagentStop', { agent_id: 'blocking' });
+  runtime.fake.emit({ type: 'system', subtype: 'background_tasks_changed', tasks: [
+    { task_id: 'queued-background', run_id: 'run-1', task_type: 'local_agent', description: 'Background child' },
+  ] });
+  await until(() => runtime.session.activity().count === 1);
+  runtime.clock(3); await runtime.session.interrupt();
+  await until(() => runtime.session.snapshot().state === 'idle');
+  runtime.clock(4); await runtime.session.send({ clientMessageId: 'next-turn', text: 'Next turn' });
+  await runtime.hook('SubagentStart', { agent_id: 'next-turn' });
+  release();
+  await until(() => reports.filter(signal => signal.kind === 'start').length === 4);
+  const stops = reports.filter(signal => signal.kind === 'stop');
+  assert.deepEqual(stops.map(signal => signal.agentId).sort(), ['blocking', 'queued-foreground']);
+  assert.equal(Object.hasOwn(stops.find(signal => signal.agentId === 'blocking'), 'outcome'), false, 'the queued SDK stop completes before synthetic cleanup');
+  const killed = stops.find(signal => signal.agentId === 'queued-foreground');
+  assert.equal(killed.outcome, 'killed'); assert.equal(killed.at, at(3), 'late cleanup keeps the interrupted turn timestamp');
+  assert.equal(runtime.fake.calls.length, 1); assert.equal(runtime.fake.closes.length, 0);
 });
 
 test('invalid tool-use IDs keep native sub-agent signals by falling back to agent identity', async t => {
