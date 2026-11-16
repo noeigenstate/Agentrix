@@ -73,7 +73,7 @@ test('a dispatched CLI inherits shim depth and signed identity while its declara
     launch: (_file, _argv, options) => {
       launchedEnv = options.env;
       const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
-      setImmediate(() => {
+      queueMicrotask(() => {
         for (const record of claude) child.stdout.write(JSON.stringify(record) + '\n');
         child.stdout.end(); child.stderr.end(); child.exitCode = 0; child.emit('exit', 0, null); child.emit('close', 0, null);
       });
@@ -94,7 +94,7 @@ test('a dispatched CLI inherits shim depth and signed identity while its declara
     launch: (file, _argv, _options) => {
       resolvedFile = file;
       const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
-      setImmediate(() => {
+      queueMicrotask(() => {
         for (const record of claude) child.stdout.write(JSON.stringify(record) + '\n');
         child.stdout.end(); child.stderr.end(); child.exitCode = 0; child.emit('exit', 0, null); child.emit('close', 0, null);
       });
@@ -493,8 +493,12 @@ test('no session, timeout and spawn failure print failed-start once and end unco
   const { run } = require('../integration/dispatch.cjs');
   const f = await fixture(t); await f.finished;
   let stdout = '';
-  const code = await run(f.args, { env: {}, stdout: { write: value => { stdout += value; } }, locate: async () => null, launch: (_, args, options) => spawn(path.join(f.directory, 'missing-executable'), args, options) });
+  const code = await run(f.args, { env: {}, stdout: { write: value => { stdout += value; } }, locate: async () => path.join(f.directory, 'missing-executable'), launch: (_, args, options) => spawn(path.join(f.directory, 'missing-executable'), args, options) });
   assert.notEqual(code, 0); assert.match(stdout, /failed to start .*ENOENT/);
+  // No Codex outside the shim folder: nothing is launched, where a bare `codex` would find the shim again.
+  stdout = '';
+  assert.notEqual(await run(f.args, { env: {}, stdout: { write: value => { stdout += value; } }, locate: async () => null, launch: () => assert.fail('a bare codex was launched') }), 0);
+  assert.match(stdout, /failed to start .*ENOENT/);
 });
 
 test('a thread id alone cannot confirm a start and an exiting worker still leaves a declared failure row', async t => {

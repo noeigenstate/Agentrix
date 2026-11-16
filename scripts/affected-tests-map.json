@@ -363,7 +363,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "05745925fc2ce3f6899b4cdd41edaca83f24e80ab6d45186cabbffac61cbc459",
+      "digest": "0263ed399c48ecc1c0c5beba51d1bd841a80ca0526e1c1cf7705338021e9e8b5",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -406,7 +406,7 @@
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "93a1f88b1bbc4db3649d3b492d192b8200a80bbc3c702f1c7b589476035c35dc",
+      "digest": "c188de3ae14c103cd0efd77b7f99515d4ba1b7e73f2effb1a0b7035bd208697e",
       "targets": [
         "integration/dispatch.cjs"
       ],

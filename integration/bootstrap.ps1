@@ -4,12 +4,9 @@
 $OutputEncoding = [Console]::OutputEncoding
 . (Join-Path $PSScriptRoot 'refresh-path.ps1')
 $global:AgentrixSession = Get-Content -LiteralPath $env:AGENTRIX_BOOTSTRAP -Raw -Encoding UTF8 | ConvertFrom-Json
-if ($global:AgentrixSession.shims) {
-    $env:Path = $global:AgentrixSession.shims + ';' + (($env:Path -split ';' | Where-Object { $_.Trim('"').TrimEnd('\') -ine $global:AgentrixSession.shims.TrimEnd('\') }) -join ';')
-    $env:AGENTRIX_DISPATCH_DEPTH = '0'
-    $env:AGENTRIX_SHIM_NODE = $global:AgentrixSession.nodePath
-    Remove-Item Env:AGENTRIX_RUN_ID, Env:AGENTRIX_RUN_PROOF -ErrorAction SilentlyContinue
-}
+# The shim folder goes only to the Claude Code the claude wrapper starts (Set-AgentrixPlanner): this terminal, its scripts and
+# whatever else it runs find the real CLIs, and Find-AgentrixProgram skips the folder too.
+Remove-Item Env:AGENTRIX_DISPATCH_DEPTH, Env:AGENTRIX_RUN_ID, Env:AGENTRIX_RUN_PROOF, Env:AGENTRIX_SHIM_NODE -ErrorAction SilentlyContinue
 $global:AgentrixEventSequence = 0
 Remove-Item Env:AGENTRIX_ACCOUNT_BASELINE -ErrorAction SilentlyContinue
 # agent.ps1 (Command Prompt terminals) loads only the codex and claude wrappers below and keeps its own directory.
@@ -49,6 +46,29 @@ function global:Get-AgentrixReadingNote {
         try { return [IO.File]::ReadAllText($env:AGENTRIX_READING_NOTE_FILE, [Text.Encoding]::UTF8) } catch { }
     }
     return $env:AGENTRIX_READING_NOTE
+}
+
+# Makes the Claude Code started next a planner: intercept.cjs (withShims) names what to set, with the shims first on PATH
+# at depth zero. Returns what Restore-AgentrixEnvironment puts back once it exits.
+function global:Set-AgentrixPlanner {
+    $previous = @{}
+    if (-not $global:AgentrixSession.shims) { return $previous }
+    $electron = $env:ELECTRON_RUN_AS_NODE
+    try {
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        $words = & $global:AgentrixSession.nodePath (Join-Path $global:AgentrixSession.shims 'intercept.cjs') --shim-env json | ConvertFrom-Json
+    } catch { $words = @() } finally { $env:ELECTRON_RUN_AS_NODE = $electron }
+    $words = @($words)
+    for ($index = 0; $index -lt $words.Count; $index++) {
+        if ($words[$index] -ceq '-u') { $name = $words[++$index]; $value = $null } else { $name, $value = $words[$index] -split '=', 2 }
+        $previous[$name] = [Environment]::GetEnvironmentVariable($name)
+        [Environment]::SetEnvironmentVariable($name, $value)
+    }
+    return $previous
+}
+
+function global:Restore-AgentrixEnvironment([hashtable]$Previous) {
+    foreach ($name in $Previous.Keys) { [Environment]::SetEnvironmentVariable($name, $Previous[$name]) }
 }
 
 # Windows PowerShell 5 strips embedded quotes when forwarding native arguments.
@@ -193,9 +213,11 @@ function global:claude {
         [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
         $settingsArgs = @('--settings', $settingsFile)
     }
+    $planner = Set-AgentrixPlanner
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
         try { & $global:AgentrixClaudeCommand @settingsArgs @readingNote @args }
         finally {
+            Restore-AgentrixEnvironment $planner
             if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
             Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude'
         }
@@ -209,6 +231,7 @@ function global:claude {
         Write-Error $_
         $claudeExit = 1
     } finally {
+        Restore-AgentrixEnvironment $planner
         if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
         Send-AgentrixEvent 'codex-exited' $claudeExit -Agent 'claude'
         $global:LASTEXITCODE = $claudeExit

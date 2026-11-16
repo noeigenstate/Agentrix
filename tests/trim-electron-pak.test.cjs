@@ -93,23 +93,30 @@ for (const [platform, arch, key, relative] of [
   ['linux', 3, 'linux-arm64', 'resources.pak'],
 ]) {
   test(`afterPack trims and copies the dispatch runtime for ${key} before platform cleanup`, async () => {
-    const calls = [], removed = [], created = [], written = [];
-    const runtime = { 'transcript-tail.cjs': 'tail source\n', 'features/agents/token-rate.cjs': 'rate source\n', 'features/native-session/routing.cjs': 'routing source\n' };
+    const calls = [], removed = [], created = [], written = [], modes = [];
+    const runtime = { 'transcript-tail.cjs': 'tail source\n', 'features/agents/token-rate.cjs': 'rate source\n', 'features/native-session/routing.cjs': 'routing source\n',
+      'shims/intercept.cjs': 'intercept source\n' };
+    const shimFiles = { codex: 'codex launcher\n', 'codex.cmd': 'cmd launcher\n' }, hookFiles = { 'hooks/zsh/.zshenv': 'zsh stub\n' };
     const verified = [];
     const hook = await loadScript('after-pack.cjs', {
       './claude-sdk-pack.cjs': { verifyPackage: async resources => verified.push(resources) },
       'node:fs/promises': { readFile: async () => runtime['features/native-session/routing.cjs'], rm: async file => removed.push(file), readdir: async () => ['keep.sh', 'drop.ps1', 'drop.cmd', 'drop.exe', 'drop.cs'],
-        mkdir: async folder => created.push(folder), writeFile: async (...args) => written.push(args) },
+        mkdir: async folder => created.push(folder), writeFile: async (...args) => written.push(args), chmod: async (...args) => modes.push(args) },
       './trim-electron-pak.cjs': { trimElectronPak: async (...args) => { calls.push(args); return { removedBytes: 1 }; } },
       '../integration/dispatch.cjs': { runtimeFiles: () => runtime },
+      '../integration/shims/intercept.cjs': { shimFiles: () => shimFiles, hookFiles: () => hookFiles },
     });
     const appOutDir = path.resolve('fixture-output');
     await hook.default({ electronPlatformName: platform, arch, appOutDir, packager: { appInfo: { productFilename: 'Named App' } } });
     assert.deepEqual(calls, [[path.join(appOutDir, relative), key]]);
     const resources = path.join(appOutDir, platform === 'darwin' ? 'Named App.app/Contents/Resources' : 'resources');
-    assert.deepEqual(written, Object.entries(runtime).map(([name, source]) => [path.join(resources, 'integration/electron', name), source]));
+    const shims = path.join(resources, 'integration/shims');
+    const carried = Object.entries(runtime).map(([name, source]) => [path.join(resources, 'integration/electron', name), source]);
+    const installed = Object.entries({ ...shimFiles, ...hookFiles }).map(([name, source]) => [path.join(shims, name), source]);
+    assert.deepEqual(written, [...carried, ...installed, [path.join(shims, 'intercept.cjs'), runtime['shims/intercept.cjs']]]);
     assert.deepEqual(verified, [resources]);
-    assert.deepEqual(created, written.map(([file]) => path.dirname(file)));
+    assert.deepEqual(created, [...carried.map(([file]) => path.dirname(file)), shims, ...installed.map(([file]) => path.dirname(file))]);
+    assert.deepEqual(modes, [[path.join(shims, 'codex'), 0o755]]);
     assert.equal(removed.some(file => file.endsWith('keep.sh')), false);
     assert.equal(removed.some(file => file.endsWith('dxcompiler.dll')), platform === 'win32');
     assert.equal(removed.some(file => file.endsWith('drop.ps1')), platform !== 'win32');

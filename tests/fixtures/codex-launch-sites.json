@@ -372,6 +372,10 @@
     "id": "integration/dispatch.cjs:7eeedc98678a9064e3c1cd6f"
   },
   {
+    "text": "run(args, { ...deps, launch, resolveExecutable, locate, startTimeout, rateInterval, requestTimeout })",
+    "id": "integration/dispatch.cjs:8c60c1e5b3e79d45887b0537"
+  },
+  {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",
     "id": "integration/dispatch.cjs:53d0f87c7ad1d1759cf0cb2c"
   },
@@ -392,8 +396,8 @@
     "id": "integration/dispatch.cjs:27e157b394c93d77890e1b77"
   },
   {
-    "text": "resolveExecutable(options.agent, commandOf(effective), env)",
-    "id": "integration/dispatch.cjs:6f624c43b334bb3894e0654b"
+    "text": "resolveExecutable(options.agent, commandOf(effective), env, claudeFile)",
+    "id": "integration/dispatch.cjs:36dea3d6c467d1fe60d025ae"
   },
   {
     "text": "launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,\n        detached: process.platform !== 'win32' })",
@@ -466,6 +470,22 @@
   {
     "text": "run([\"show\", \"-s\", \"--format=%P\", value + \"^{commit}\", \"--\"])",
     "id": "integration/remote-worker.py:aa2c218bedf4974df02806d5"
+  },
+  {
+    "text": "['exec', 'e']",
+    "id": "integration/shims/intercept.cjs:7c8ee6260251bd5d8fc1689a"
+  },
+  {
+    "text": "launch(file, args, { cwd, env: childEnv, stdio: 'inherit' })",
+    "id": "integration/shims/intercept.cjs:ed652fa68a572023f96c2fe3"
+  },
+  {
+    "text": "stderr.write(`[dispatch] not run: dispatch.intercept_nested\\n[dispatch] request: node ${JSON.stringify(helperPath())} delegate ${agent === 'claude' ? 'claude' : 'codex'} --title <one-line> --model <model> --brief <file> --out <file>\\n`)",
+    "id": "integration/shims/intercept.cjs:09bd1b90ba05c509362d2654"
+  },
+  {
+    "text": "run(helperArguments(options, brief, out), { env, stdout: stderr, source: 'intercepted' })",
+    "id": "integration/shims/intercept.cjs:b91b23fdbaf04e42a3317869"
   },
   {
     "text": "run()",

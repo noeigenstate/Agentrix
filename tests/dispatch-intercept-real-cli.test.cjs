@@ -38,6 +38,20 @@ const chunks=[];process.stdin.on('data',part=>chunks.push(part));process.stdin.o
     const received = JSON.parse(stdout);
     assert.deepEqual({ ...received, cwd: fs.realpathSync.native(received.cwd) }, { args: [agent, '--', ...words], input: input.toString('base64'), cwd: expectedCwd }, `${agent}${suffix} preserves stdin bytes and cwd`);
   }
+  if (process.platform !== 'win32') return;
+  // Inside PowerShell: a number argument arrives as a string, and a piped first string loses one leading byte-order mark.
+  fs.writeFileSync(path.join(folder, 'pipe.ps1'), 'param([string]$Launcher)\nSet-Location -LiteralPath $PSScriptRoot\n([string][char]0xFEFF + [char]0xFEFF + \'piped words\'), \'second\' | & $Launcher exec 5\nexit $LASTEXITCODE\n');
+  for (const agent of ['codex', 'claude']) {
+    const child = scope.spawn(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(folder, 'pipe.ps1'), path.join(folder, `${agent}.ps1`)],
+      { cwd: folder, env: { ...process.env, AGENTRIX_SHIM_NODE: process.execPath }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    assert.equal(await scope.wait(new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }), `${agent}.ps1 pipeline`), 0, stderr);
+    const received = JSON.parse(stdout);
+    assert.deepEqual(received.args, [agent, '--', 'exec', '5']);
+    assert.equal(Buffer.from(received.input, 'base64').toString('utf8'), '﻿piped words\r\nsecond\r\n');
+  }
 });
 
 // CI supplies an isolated authenticated profile and explicitly opts into a real provider request. Never run by default.
