@@ -59,3 +59,10 @@ test('a terminal that is not Claude sends nothing', t => {
   screen.setQueueCount('facts', 3);
   assert.equal(codex.sent.length, 0);
 });
+
+test('busy is the working line only, never a running ! command', t => {
+  const { term, sent } = setup(t, ['! sleep 10', '  ⎿ Running…', '────', '❯', '────', ...footer], 'claude');
+  assert.equal(sent.at(-1).busy, false);
+  term.draw(['✶ Befuddling… (2s)', '────', '❯', '────', ...footer]);
+  assert.equal(sent.at(-1).busy, true);
+});

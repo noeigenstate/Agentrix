@@ -44,7 +44,7 @@ function cliInputArea(agent: ScreenAgent, rows: string[]) {
 // Claude's live status line while it works: a cycling glyph and a verb ending in "…" ("✶ Osmosing… (running
 // UserPromptSubmit hooks…)"). Claude 2.1 empties its input on Enter and shows this while hooks run, before a command
 // draws anything, so an empty input beside it is not idle. A finished turn's "✻ Worked for 25s" has no ellipsis.
-const claudeWorking = (rows: string[]) => rows.some(row => /^\s*[·✢✳✶✻✽*]\s+\S[^…]*…/.test(row));
+export const claudeWorking = (rows: string[]) => rows.some(row => /^\s*[·✢✳✶✻✽*]\s+\S[^…]*…/.test(row));
 export function isCliWorking(agent: ScreenAgent, rows: string[], _screen: AgentScreen): boolean {
   if (agent === 'codex') return rows.some(row => /^\s*[•◦].*\besc to interrupt\b/i.test(row));
   const input = cliInputArea(agent, rows);
