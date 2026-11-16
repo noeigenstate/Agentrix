@@ -3618,3 +3618,18 @@ for (const next of ['other words', 'the same words']) test(`claude: a message th
   assert.deepEqual(h.view.records.map(record => record.text), next === 'other words' ? ['first words', 'second words'] : ['first words']);
   assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined);
 });
+
+test('a half frame without the queue row leaves the reading composer empty while main holds queued messages', t => {
+  const { bindApproval } = require('../src/features/terminal/terminal-screen.ts');
+  const rows = ['────', '❯ Press up to edit queued messages', '────', '  ⏸ manual mode on'];
+  let queued = 0;
+  const h = dictationHarness(t, {
+    './terminal-screen': { bindApproval, useScreen: () => ({ rows, queued }), readScreen: () => ({ rows, queued }) },
+    './agent-screen': require('../src/features/agents/agent-screen.ts'),
+  });
+  Object.assign(h.props.terminal, { agent: 'claude', codexActive: false });
+  h.render();
+  assert.equal(h.render().props.value, 'Press up to edit queued messages', 'with nothing queued the words are typed ones');
+  h.remount(); queued = 2; h.render();
+  assert.equal(h.render().props.value, '', 'main holds two queued: the placeholder is no draft');
+});

@@ -121,7 +121,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const visibleScreen = useScreen(terminal.id, terminal.sessionId);
   const parsedScreen = useMemo(() => {
     const parsed = parseAgentScreen(kind, visibleScreen?.rows ?? []);
-    return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen) };
+    return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen), queued: visibleScreen?.queued };
   }, [kind, visibleScreen]);
   // Readiness outlives this component: a dialog with no input box must still show after a trip to the raw terminal.
   // Rendering only reads it; the effect remembers it.
