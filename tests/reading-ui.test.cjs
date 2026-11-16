@@ -3633,3 +3633,15 @@ test('a half frame without the queue row leaves the reading composer empty while
   h.remount(); queued = 2; h.render();
   assert.equal(h.render().props.value, '', 'main holds two queued: the placeholder is no draft');
 });
+
+test('claude: a screenIdle host signal over an idle frame leaves the composer idle, so Esc writes nothing', t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.working = false; h.parsed();
+  h.props.terminal.cliState = { sessionId: 'session', revision: 9, state: 'working', updatedAt: Date.now() + 1000, screenIdle: true };
+  h.render();
+  h.press('Escape');
+  assert.deepEqual(h.written, [], 'Esc is not written into an idle Claude');
+  h.view.working = true; h.parsed();
+  h.press('Escape');
+  assert.deepEqual(h.written.map(item => item.text), [''], 'with the working line back, Esc interrupts');
+});
