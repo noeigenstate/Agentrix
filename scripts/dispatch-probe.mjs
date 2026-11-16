@@ -1,6 +1,6 @@
 // Lead only, after merging both worktrees and `npm run build`:
 // node scripts/dispatch-probe.mjs [--packaged] [--failure]
-// Latest contract: no row before confirmation -> running -> done -> removed after 3 s.
+// Latest contract: no row before confirmation -> running -> done -> kept as a hidden done row under 最近完成 (last 10, up to 30 min).
 // Failures use reviewing + failure until the next lead round. There is no dispatch preparing event.
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -155,7 +155,7 @@ async function run() {
   assert.equal(ended.items[0].title, title);
   assert.ok(ended.rate?.samples && ended.rate.activeMs > 0, 'pane shows the final measured rate');
   if (failure) assert.equal(ended.items[0].failure?.reason, 'capacity');
-  else await waitFor(async () => !(await groups()).length, 'successful row removed after three seconds', 7000);
+  else await waitFor(async () => { const group = (await groups())[0], item = group?.items.find(item => item.title === title); return item?.state === 'done' && item.hidden === true && !group.running && !group.reviewing; }, 'successful row retired into 最近完成 after three seconds', 7000);
   await fs.writeFile(path.join(output, 'worker.log'), await fs.readFile(out + '.log'));
   evidence.liveRate = liveRate; evidence.running = running; evidence.ended = ended;
   assert.equal(running.model, declared.model, 'CLI must report its actual model; unreported is a protocol limitation, not routing proof');
