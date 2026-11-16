@@ -592,6 +592,12 @@ test('a finished session’s view can be closed until another starts, and a sess
     store.noteTerminalSwitch('t3', 'no_key');
     const own = entriesOf(store).get('t3');
     assert.deepEqual([store.nativeShown(own), store.terminalSwitch(own).reason], [false, 'no_key']);
+    // The terminal the settings chose (main's reason for a terminal-only start) takes the cell and tells nothing; a limit's move still does.
+    for (const reason of ['terminal_selected', 'set_terminal']) {
+      store.noteTerminalSwitch('t4', reason);
+      const chosen = entriesOf(store).get('t4');
+      assert.deepEqual([store.nativeShown(chosen), store.terminalSwitch(chosen)], [false, null], reason);
+    }
   });
 });
 
