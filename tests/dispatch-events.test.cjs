@@ -9,6 +9,14 @@ const { defineMain } = require('./helpers/main-modules.cjs');
 
 const routing = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
 
+test('declarations admit dispatch and intercepted as the one source contract and reject intercept', () => {
+  const event = { type: 'dispatch-declared', id: randomUUID(), helperPid: process.pid, agent: 'codex', role: '执行', title: 'Synthetic intercepted worker',
+    cwd: '/project', worktree: '/project', requested: routing, source: 'intercepted', parentId: null, at: Date.now() };
+  assert.equal(validDispatch(event), true);
+  assert.equal(validDispatch({ ...event, source: 'dispatch' }), true);
+  for (const source of ['intercept', 'forged', '', null]) assert.equal(validDispatch({ ...event, source }), false);
+});
+
 test('a dropped Claude declaration is replayed after reconnect and creates exactly one row', async t => {
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-declaration-'));

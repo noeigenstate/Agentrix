@@ -34,6 +34,13 @@ typeset -gi __pg_sequence=0
 unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_USER_ZDOTDIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
 unset AGENTRIX_HOOK_PORT AGENTRIX_HOOK_CHANNEL AGENTRIX_HOOK_SETTINGS AGENTRIX_HOOK_FALLBACK
 
+# Non-interactive tool shells inherit the shims; this shell's owner functions resolve the real CLI below.
+typeset -g __pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" -e 'try { process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).shims || ""); } catch {}' "$AGENTRIX_BOOTSTRAP" 2>/dev/null)
+if [[ -n $__pg_shims && -d $__pg_shims ]]; then
+  export PATH="$__pg_shims:$PATH" AGENTRIX_DISPATCH_DEPTH=0 AGENTRIX_SHIM_NODE="$__pg_node"
+  unset AGENTRIX_RUN_ID AGENTRIX_RUN_PROOF
+fi
+
 __pg_reading_note() {
   if [[ -n $__pg_note_file && -r $__pg_note_file ]]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi
 }
@@ -69,6 +76,12 @@ unset __pg_name
 # it is there.
 __pg_program() {
   emulate -L zsh
+  local PATH=$PATH path_entry
+  local -a safe_path
+  for path_entry in "${path[@]}"; do
+    [[ -n $__pg_shims && $path_entry == "$__pg_shims" ]] || safe_path+=("$path_entry")
+  done
+  PATH=${(j.:.)safe_path}
   local chosen=AGENTRIX_${(U)1}_EXECUTABLE
   reply=()
   (( ${+__pg_aliases[$1]} )) && reply=(${(Q)${(z)__pg_aliases[$1]}})

@@ -1,0 +1,4 @@
+#!/bin/sh
+shim_dir=${0%/*}
+[ "$shim_dir" != "$0" ] || shim_dir=.
+ELECTRON_RUN_AS_NODE=1 exec "${AGENTRIX_SHIM_NODE:-node}" "$shim_dir/intercept.cjs" claude -- "$@"

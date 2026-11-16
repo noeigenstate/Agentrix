@@ -27,6 +27,13 @@ else
 fi
 unset __pg_login_files
 
+# Non-interactive tool shells inherit the shims; this shell's owner functions resolve the real CLI below.
+__pg_shims=$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" -e 'try { process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).shims || ""); } catch {}' "$AGENTRIX_BOOTSTRAP" 2>/dev/null)
+if [[ -n $__pg_shims && -d $__pg_shims ]]; then
+  export PATH="$__pg_shims:$PATH" AGENTRIX_DISPATCH_DEPTH=0 AGENTRIX_SHIM_NODE="$__pg_node"
+  unset AGENTRIX_RUN_ID AGENTRIX_RUN_PROOF
+fi
+
 # A JSON string (also a TOML basic string) for $1, in REPLY.
 __pg_json() {
   local value=$1 out= character index
@@ -58,6 +65,12 @@ unset __pg_name __pg_alias
 # an alias, each is the file Agentrix chose for this terminal (AGENTRIX_CODEX_EXECUTABLE, AGENTRIX_CLAUDE_EXECUTABLE)
 # while it is there.
 __pg_program() {
+  local PATH=$PATH
+  if [[ -n $__pg_shims ]]; then
+    PATH=:$PATH:
+    while [[ $PATH == *":$__pg_shims:"* ]]; do PATH=${PATH/":$__pg_shims:"/:}; done
+    PATH=${PATH#:}; PATH=${PATH%:}
+  fi
   local alias_name=__pg_alias_$1 chosen=AGENTRIX_CODEX_EXECUTABLE
   [[ $1 == claude ]] && chosen=AGENTRIX_CLAUDE_EXECUTABLE
   __pg_words=()

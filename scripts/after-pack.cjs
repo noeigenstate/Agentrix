@@ -20,6 +20,15 @@ async function copyDispatchRuntime(integration) {
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, source);
   }
+  const shims = path.join(integration, 'shims');
+  await fs.mkdir(shims, { recursive: true });
+  const launchers = require('../integration/shims/intercept.cjs').shimFiles();
+  for (const [name, source] of Object.entries(launchers)) {
+    const target = path.join(shims, name);
+    await fs.writeFile(target, source);
+    if (name === 'codex' || name === 'claude') await fs.chmod(target, 0o755);
+  }
+  await fs.writeFile(path.join(shims, 'intercept.cjs'), files['shims/intercept.cjs']);
 }
 exports.copyDispatchRuntime = copyDispatchRuntime;
 

@@ -4,6 +4,12 @@
 $OutputEncoding = [Console]::OutputEncoding
 . (Join-Path $PSScriptRoot 'refresh-path.ps1')
 $global:AgentrixSession = Get-Content -LiteralPath $env:AGENTRIX_BOOTSTRAP -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($global:AgentrixSession.shims) {
+    $env:Path = $global:AgentrixSession.shims + ';' + (($env:Path -split ';' | Where-Object { $_.Trim('"').TrimEnd('\') -ine $global:AgentrixSession.shims.TrimEnd('\') }) -join ';')
+    $env:AGENTRIX_DISPATCH_DEPTH = '0'
+    $env:AGENTRIX_SHIM_NODE = $global:AgentrixSession.nodePath
+    Remove-Item Env:AGENTRIX_RUN_ID, Env:AGENTRIX_RUN_PROOF -ErrorAction SilentlyContinue
+}
 $global:AgentrixEventSequence = 0
 Remove-Item Env:AGENTRIX_ACCOUNT_BASELINE -ErrorAction SilentlyContinue
 # agent.ps1 (Command Prompt terminals) loads only the codex and claude wrappers below and keeps its own directory.
@@ -19,6 +25,7 @@ function global:Find-AgentrixProgram {
     foreach ($folder in ($env:Path -split ';')) {
         $folder = $folder.Trim().Trim('"')
         if (-not $folder) { continue }
+        if (Test-Path -LiteralPath ($folder.TrimEnd('\') + '\.agentrix-shims')) { continue }
         foreach ($suffix in $suffixes) {
             $candidate = $folder.TrimEnd('\') + '\' + $Name + $suffix
             if ([IO.File]::Exists($candidate)) { return $candidate }
