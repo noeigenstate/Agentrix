@@ -182,17 +182,18 @@ the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscr
 | Lead | Worker | How the worker runs | Billing |
 | --- | --- | --- | --- |
 | Codex | Codex | Native mode: the Codex app-server, for the lead and every worker | Codex account |
-| Claude, native mode | Claude | The lead's native subagent (an Agent call) | API |
-| Claude, terminal mode | Claude | The terminal's own subagent (Claude Code's Agent tool) | Subscription |
+| Claude, native mode | Claude | The lead's native subagent (an Agent call), or the dispatch helper, which follows the lead's mode | API |
+| Claude, terminal mode | Claude | The terminal's own subagent (Claude Code's Agent tool), or the dispatch helper, which follows the lead's mode | Subscription |
 | Claude, either mode | Codex | The dispatch helper, native mode | Codex account |
 | Codex | Claude | The dispatch helper, following Claude's run mode in Settings | API or subscription, see below |
 
 - **Codex always runs in native mode.** There is no terminal mode for Codex, as lead or as worker.
-- **A Claude lead's Claude workers follow the lead's run mode and never cross.** A lead in native mode uses native
-  subagents, billed to the API. A lead in terminal mode uses the terminal's own subagents, billed to the subscription.
-  A terminal-mode lead never starts a Claude worker on the API, and a native-mode lead never starts one on the
-  subscription. The helper's `claude` command takes its run mode from Settings, which may differ from the lead's, so a
-  Claude lead starts its Claude workers as its own subagents: only then do they stay on the lead's side.
+- **A Claude lead's Claude workers follow the lead's run mode and never cross.** A lead in native mode has its workers
+  run native, billed to the API. A lead in terminal mode has them run on the subscription. A terminal-mode lead never
+  starts a Claude worker on the API, and a native-mode lead never starts one on the subscription. This holds for the
+  helper's `claude` command too: Agentrix binds the authenticated lead's mode to the call, so the Settings choice does
+  not apply to a Claude lead's workers. A native lead's Claude worker that Agentrix refuses fails; it does not fall back to
+  the subscription. Agent calls remain the lead's own subagents and follow the same mode.
 - **A Codex lead starts Claude workers with the helper's `claude` command.** The helper asks Agentrix to run the worker
   as a native Claude session. Agentrix applies Claude's run mode from Settings:
 
@@ -202,22 +203,25 @@ the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscr
   | API only | Native, billed to the API; it fails to start without a usable key |
   | Terminal only (subscription) | As below |
 
-- **Without the native path, the helper runs Claude Code non-interactively** (`claude -p`, streamed output), billed to the
+- **Without the native path, the helper runs Claude Code non-interactively** (streamed output), billed to the
   subscription. This is not an interactive terminal worker; an interactive terminal worker is a planned improvement.
   The helper takes the same path when it has no connection to Agentrix, outside the app for example, and says so in a
-  `[dispatch] transport … claude-cli fallback` line.
+  `[dispatch] transport … claude-cli fallback` line. It never takes this path for a native-mode lead.
 
 ### Launching workers
 
-Codex workers, and the Claude workers of a Codex lead, are started through the dispatch helper, never by typing
-`codex exec` or `claude -p` yourself. The helper runs Codex on the app-server (native mode) and runs Claude as described in
+Codex workers, and Claude workers started from the command line, go through the dispatch helper. Agentrix reroutes
+these calls automatically: a `codex exec`, or Claude's non-interactive call, made from a terminal's Bash tool is turned
+into a helper dispatch, shows in the Agent tab with a self-started tag, and takes the lead's run mode. Prefer calling the
+helper yourself, because then you set the role, brief, output file and `--allow` scope. A rerouted call made from inside a
+dispatched worker is refused with `dispatch.intercept_nested`: a worker does not start workers of its own. The helper runs Codex on the app-server (native mode) and runs Claude as described in
 Run mode and billing. The helper's path is in the session's startup note (`Dispatch helper: node
 "<path>/dispatch.cjs"`); it declares the worker to Agentrix, so the activity pane's called models shows it, and reports how
 it ended. The helper also works outside Agentrix, where there is no startup note: run `integration/dispatch.cjs` from an
 Agentrix checkout with Node. With no connection to Agentrix it still runs Codex on the app-server (native mode) and runs
-Claude as `claude -p`. Codex workers always go through the helper, never `codex exec`. Only when no helper can be had,
-start a Claude worker directly (`claude -p --model <model> --effort <effort> --permission-mode <mode> < <brief.md>`)
-with the same settings.
+Claude non-interactively. Codex workers always go through the helper. Only when no helper can be had, start a Claude
+worker directly with Claude's non-interactive call, passing the same model, effort and permission mode and the brief on
+standard input.
 
 ```
 node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]

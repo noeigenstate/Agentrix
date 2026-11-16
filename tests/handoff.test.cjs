@@ -77,7 +77,7 @@ test('the startup note names the handoff and skills with forward slashes and no 
 
 test('the dispatch helper note uses an unquoted path for the quote-free startup envelope', () => {
   const note = startupNote('Read.', null, null, null, 'C:\\Program Files\\Agentrix\\integration\\dispatch.cjs');
-  assert.ok(note.includes('Dispatch helper: node C:/Program Files/Agentrix/integration/dispatch.cjs — start every command-line Codex or Claude worker through it (see the agent-dispatch rules).'));
+  assert.ok(note.includes('Dispatch helper: node C:/Program Files/Agentrix/integration/dispatch.cjs — start every command-line Codex or Claude worker through it; a call made from a terminal is rerouted through it automatically, and a Claude worker follows your run mode (see the agent-dispatch rules).'));
   assert.ok(!/["\\\n]/.test(note));
   const remote = startupNote('Read.', null, null, null, '{AGENTRIX_DISPATCH}');
   assert.ok(remote.includes('{AGENTRIX_DISPATCH_NOTE}'));
