@@ -405,8 +405,15 @@
       ],
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
+    "electron/features/lab/session.cjs": {
+      "digest": "69d2ba6a6b2c0671d12f37fcb0e4e23b673b23a2a8de238a223277fdc32134ff",
+      "targets": [
+        "integration/shims/intercept.cjs"
+      ],
+      "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
+    },
     "integration/shims/intercept.cjs": {
-      "digest": "61836a81296a4785e189639ac9b377be52166dca903bd6000781027d6693e343",
+      "digest": "778d1c79da995edd937d599277804521c09517aa934f5c52add31a7508c44e0e",
       "targets": [
         "integration/dispatch.cjs"
       ],

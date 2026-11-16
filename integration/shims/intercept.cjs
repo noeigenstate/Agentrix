@@ -6,7 +6,7 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const SHIM_NAMES = ['.agentrix-shims', 'codex', 'codex.cmd', 'codex.ps1', 'claude', 'claude.cmd', 'claude.ps1'];
 const ZSH_PHASES = ['.zshenv', '.zprofile', '.zshrc', '.zlogin'];
-const HOOK_FILES = ['hooks/path.sh', 'hooks/bash-env.sh', 'hooks/claude-env.sh', 'hooks/zsh/phase.zsh', ...ZSH_PHASES.map(name => `hooks/zsh/${name}`)];
+const HOOK_FILES = ['hooks/path.sh', 'hooks/bash-env.sh', 'hooks/claude-env.sh', 'hooks/owner.sh', 'hooks/zsh/phase.zsh', ...ZSH_PHASES.map(name => `hooks/zsh/${name}`)];
 const LIMIT = 4 * 1024 * 1024;
 // How long Claude Code's print mode waits for a first byte of piped input before it goes on without it (2.1.325).
 const CLAUDE_STDIN_WAIT = 3000;
