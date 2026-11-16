@@ -73,3 +73,16 @@ test('a menu opens up when the space below cannot show every option and the spac
   assert.deepEqual(selectMenuSide(230, 120, 100), { up: false, maxHeight: 120 }, 'neither fits: the larger side, scrolling');
   assert.deepEqual(selectMenuSide(230, 100, 150), { up: true, maxHeight: 150 });
 });
+
+test('a selected disabled option keeps the muted colour in every theme: no rule hands its row the selected text colour', () => {
+  const sheet = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  const select = sheet('src/shared/Select.css'), offenders = [];
+  // The light theme makes text-3 the main text colour on a selected row; a disabled row has no fill and must stay muted.
+  for (const [, selectors, body] of sheet('src/shared/styles/themes.css').matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!/--text-3\s*:\s*var\(--text-1\)/.test(body)) continue;
+    for (const selector of selectors.split(',')) if (/\.select-menu li/.test(selector) && !selector.includes(':not([aria-disabled="true"])')) offenders.push(selector.trim());
+  }
+  assert.deepEqual(offenders, [], 'a selected disabled option read as an enabled selected one');
+  const disabled = select.indexOf('.select-menu li[aria-disabled="true"] {'), selected = select.indexOf('.select-menu li[aria-selected="true"] {');
+  assert.ok(disabled > selected && /\.select-menu li\[aria-disabled="true"\] \{[^}]*color: var\(--text-3\)/.test(select), 'the disabled colour comes after the selected one, so it wins');
+});

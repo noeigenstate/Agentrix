@@ -49,8 +49,9 @@
   --fi-orange: #c1661a; --fi-red: #d25743; --fi-purple: #8b6bd8;
 }
 
-/* On a selected row text-3 is the main text colour: #69717d is 4.1:1 on the selected fill. Redefining the token on the row carries it to every descendant. */
-:root[data-theme="light"] :is(.inbox-row[aria-selected="true"], .tree-row.file-selected, .select-menu li[aria-selected="true"], .settings-nav button[aria-current="page"], .skills-item[aria-current="true"], .sticky tr[data-expanded="true"]) { --text-3: var(--text-1); }
+/* On a selected row text-3 is the main text colour: #69717d is 4.1:1 on the selected fill. Redefining the token on the row carries it to every descendant.
+   A disabled Select option has no fill and keeps text-3 (4.9:1 on the menu), so it still reads differently from the enabled selected one. */
+:root[data-theme="light"] :is(.inbox-row[aria-selected="true"], .tree-row.file-selected, .select-menu li[aria-selected="true"]:not([aria-disabled="true"]),.settings-nav button[aria-current="page"], .skills-item[aria-current="true"], .sticky tr[data-expanded="true"]) { --text-3: var(--text-1); }
 
 /* The workbench. This block must restate every token the dark block sets on .workspace-layout (app, sidebar, aside, well, card, input, hover, selected, divider):
    a rule on the layout beats the value inherited from :root, so a token left out here would keep its dark value inside the workbench. */
