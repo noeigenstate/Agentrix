@@ -50,7 +50,7 @@ function inputQueue(onTake = () => {}) {
 function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {} }) {
   const reportSubagent = kind => async (input, toolUseId) => {
     // Visibility must never block the CLI or add context to either conversation.
-    try { await onSubagent(kind, input, toolUseId); } catch { }
+    try { void Promise.resolve(onSubagent(kind, input, toolUseId)).catch(() => {}); } catch { }
     return {};
   };
   return {

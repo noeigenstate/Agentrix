@@ -10,10 +10,15 @@ const { queryOptions } = require('../electron/features/claude-sdk/query.cjs');
 const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
 const { encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+const { sameDirectory } = require('../electron/session-files.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 
 const at = seconds => Date.UTC(2026, 0, 1) + seconds * 1000;
 const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve)); };
+async function until(check) {
+  for (let i = 0; i < 1000; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 2)); }
+  assert.fail('native sub-agent reports did not settle');
+}
 
 function workspace(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-native-subagents-'));
@@ -48,8 +53,8 @@ function nativeHost(f, calls) {
   return { spec, s, context, sessions, nativeSpecs, scheduled: () => scheduled };
 }
 
-async function sessionFixture(t, f, onSubagent) {
-  const fake = fakeSdk({ auto: false, sessionId: f.parentId }), events = [];
+async function sessionFixture(t, f, onSubagent, options = {}) {
+  const fake = fakeSdk({ auto: false, sessionId: f.parentId, ...options }), events = [];
   let now = at(0);
   const spec = { owner: 'gui', agent: 'claude', terminalId: 'terminal', projectId: 'project', runtimeSessionId: 'native-run',
     cwd: f.cwd, env: { CLAUDE_CONFIG_DIR: f.home, PATH: '' }, model: 'claude-opus-5-5', effort: 'high', onSubagent };
@@ -57,6 +62,7 @@ async function sessionFixture(t, f, onSubagent) {
     loadSdk: async () => fake.sdk, resolveExecutable: async () => 'offline-only',
     credentials: { status: () => ({ saved: true }), read: () => 'sk-ant-offline-native-subagents' },
     usage: createUsage({ file: path.join(f.directory, 'usage.json'), now: () => now }), now: () => now,
+    canContinue: () => spec.mayContinue?.() !== false,
   });
   t.after(() => session.close());
   await session.start(); await session.send({ clientMessageId: 'parent-input', text: 'Parent task' }); await tick();
@@ -76,6 +82,7 @@ test("a native Claude session's Agent-tool sub-agent has its row from SubagentSt
   assert.equal(fs.existsSync(f.folder), false);
   assert.deepEqual(await runtime.hook('SubagentStart'), {});
   const rows = () => calls.snapshot().flatMap(group => group.items);
+  await until(() => rows().length === 1);
   assert.equal(rows().length, 1, 'the hook creates a row before the child transcript exists');
   assert.equal(calls.folder, f.folder);
   assert.equal(calls.snapshot()[0].rate, null);
@@ -92,6 +99,7 @@ test("a native Claude session's Agent-tool sub-agent has its row from SubagentSt
   assert.equal(calls.snapshot()[0].rate.samples, 2);
   runtime.clock(8);
   assert.deepEqual(await runtime.hook('SubagentStop', { agent_transcript_path: childFile }), {});
+  await until(() => child.done);
   await calls.work;
   assert.equal(rows().length, 1);
   assert.equal(child.done, true); assert.equal(rows()[0].endedAt, at(8));
@@ -125,6 +133,7 @@ test('native sub-agent signals stay ordered and ignore invalid or retired query 
   const f = workspace(t), reports = [];
   const runtime = await sessionFixture(t, f, (signal, binding) => reports.push({ signal, binding }));
   await Promise.all([runtime.hook('SubagentStart', {}, 'toolu_child'), runtime.hook('SubagentStop', { agent_transcript_path: path.join(f.folder, 'agent-child.jsonl') })]);
+  await until(() => reports.length === 2);
   assert.equal(reports.length, 2);
   assert.deepEqual(reports[0].signal, { kind: 'start', terminalId: 'terminal', agentId: 'child', agentType: 'Explore',
     transcriptPath: null, toolUseId: 'toolu_child', at: at(0) });
@@ -132,10 +141,105 @@ test('native sub-agent signals stay ordered and ignore invalid or retired query 
   assert.deepEqual(reports[0].binding, { runtimeSessionId: 'native-run', providerSessionId: f.parentId, folder: f.folder });
   await runtime.hook('SubagentStart', { session_id: 'other-session' });
   await runtime.hook('SubagentStart', { agent_id: '../escape' });
+  await tick();
   assert.equal(reports.length, 2);
   await runtime.session.close();
   assert.deepEqual(await runtime.hook('SubagentStart'), {});
   assert.equal(reports.length, 2);
+});
+
+for (const [title, retirement] of [
+  ['an interrupted native query reports stop for every open child before returning idle', 'interrupt'],
+  ['a native path change at turn end reports stop for every open child', 'turn-path'],
+  ['cancelling an idle native query for a path change reports stop for every open child', 'idle-path'],
+  ['a native query stream ending reports stop for every open child', 'stream'],
+]) test(title, async t => {
+  const f = workspace(t), reports = [];
+  const runtime = await sessionFixture(t, f, (signal, binding) => reports.push({ signal, binding }), { interruptResult: false });
+  for (const agent_id of ['first', 'second', 'finished']) await runtime.hook('SubagentStart', { agent_id });
+  await until(() => reports.length === 3);
+  await runtime.hook('SubagentStop', { agent_id: 'finished' });
+  await until(() => reports.length === 4);
+  runtime.clock(3);
+  const result = { type: 'result', uuid: 'parent-result', terminal_reason: 'completed', subtype: 'success', total_cost_usd: 0, modelUsage: {} };
+  if (retirement === 'interrupt') {
+    await runtime.session.interrupt(); runtime.fake.fail(new Error('offline interrupted query'));
+  } else if (retirement === 'stream') runtime.fake.end();
+  else {
+    if (retirement === 'turn-path') runtime.spec.mayContinue = () => false;
+    runtime.fake.emit(result);
+    await until(() => runtime.session.snapshot().state === 'idle');
+    if (retirement === 'idle-path') { runtime.spec.mayContinue = () => false; runtime.session.policyChanged(); }
+  }
+  await until(() => runtime.fake.closes.length === 1);
+  assert.deepEqual(reports.filter(entry => entry.signal.kind === 'stop').map(entry => entry.signal.agentId).sort(), ['finished', 'first', 'second']);
+  for (const entry of reports.slice(4)) {
+    assert.equal(entry.signal.kind, 'stop'); assert.equal(entry.signal.at, at(3));
+    assert.deepEqual(entry.binding, { runtimeSessionId: 'native-run', providerSessionId: f.parentId, folder: f.folder });
+  }
+  await runtime.hook('SubagentStart', { agent_id: 'late-child' }); await tick();
+  assert.equal(reports.length, 6, 'retirement stops once and a late callback cannot revive the run');
+  assert.notEqual(runtime.session.snapshot().state, 'failed');
+});
+
+test('invalid tool-use IDs keep native sub-agent signals by falling back to agent identity', async t => {
+  const f = workspace(t), reports = [];
+  const runtime = await sessionFixture(t, f, signal => reports.push(signal));
+  const ids = [['x'.repeat(161), null], ['not/a/tool-id', null], ['toolu_valid-1', 'toolu_valid-1'], ['', null]];
+  for (const [index, [id, expected]] of ids.entries()) {
+    await runtime.hook('SubagentStart', { agent_id: `child-${index}` }, id);
+    await until(() => reports.length === index + 1);
+    assert.equal(reports[index].toolUseId, expected);
+    assert.equal(reports[index].agentId, `child-${index}`);
+  }
+});
+
+test('SDK sub-agent callbacks answer before transcript discovery settles', async t => {
+  const f = workspace(t), abort = new AbortController();
+  t.after(() => abort.abort());
+  let release, answered = 0, discovered = false;
+  const discovery = new Promise(resolve => { release = resolve; }).then(() => { discovered = true; });
+  const options = queryOptions({ owner: 'gui', cwd: f.cwd, env: { PATH: '' } }, {
+    abort, key: 'offline-only', executable: 'offline-only', policy: () => ({ behavior: 'defer' }), onSubagent: () => discovery,
+  });
+  const pending = ['SubagentStart', 'SubagentStop'].map(event => options.hooks[event][0].hooks[0]({}).then(answer => {
+    assert.deepEqual(answer, {}); answered++;
+  }));
+  try {
+    await tick();
+    assert.equal(answered, 2, 'neither CLI hook waits for transcript discovery');
+    assert.equal(discovered, false);
+  } finally { release(); await Promise.all(pending); }
+});
+
+test('the host tracker keeps native rows through terminal folder aliases and drive-letter case changes', t => {
+  const f = workspace(t), host = nativeHost(f, null), project = { kind: 'local', path: f.cwd };
+  Object.assign(host.context, { fs, os, AgentCalls, sameDirectory, claudeConfigDir: () => f.home, send() {} });
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  vm.runInContext(source.slice(source.indexOf('function callsOf('), source.indexOf('// An owner intervention')), host.context);
+  host.s.nativeStructured = false;
+  const calls = host.context.callsOf(host.s, project); t.after(() => calls.dispose());
+  host.s.nativeStructured = true;
+  assert.equal(host.context.callsOf(host.s, project), calls, 'a native host also adopts an existing terminal tracker');
+  fs.mkdirSync(f.folder, { recursive: true }); calls.setFolder(f.folder);
+  calls.apply({ type: 'assistant', timestamp: new Date().toISOString(), message: { content: [
+    { type: 'tool_use', id: 'live-child', name: 'Agent', input: { subagent_type: 'Explore' } },
+  ] } });
+  const child = calls.calls.get('live-child'); assert.ok(child);
+  const terminal = { terminalId: 'terminal', agent: 'claude', nativeStructured: false };
+  host.sessions.set('terminal', terminal);
+  assert.equal(host.context.callsOf(terminal, project), calls);
+  const alias = path.join(f.home, 'project-alias');
+  fs.symlinkSync(path.dirname(f.transcript), alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const folders = [f.folder + path.sep, path.join(alias, f.parentId, 'subagents')];
+  if (process.platform === 'win32') folders.push(f.folder.toUpperCase());
+  for (const folder of folders) {
+    terminal.calls.setFolder(folder);
+    assert.equal(calls.calls.get('live-child'), child, 'equivalent folder spelling never resets the tracker');
+    assert.equal(calls.folder, f.folder);
+  }
+  terminal.calls.setFolder(null);
+  assert.equal(calls.folder, null); assert.equal(calls.calls.size, 0, 'a real unbind still clears native rows');
 });
 
 test('main binds the native rate folder before reporting a row and ignores stale runtimes', t => {
