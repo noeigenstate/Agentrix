@@ -7,7 +7,7 @@ function fixture({ rejectedIntervention = false } = {}) {
   let handler, answer, emit, turn = 0, finished = false, release;
   const events = [];
   const state = value => emit({ type: 'session.state', payload: { state: value } });
-  const claude = { facts: () => [], create(_spec, publish) {
+  const claude = { facts: () => [], apiState: () => ({ status: 'ready' }), create(_spec, publish) {
     emit = publish;
     return { start() { state('idle'); }, close() { state('stopped'); },
       send() { if (turn && rejectedIntervention) return new Promise(resolve => { release = () => resolve({ status: 'rejected' }); });
