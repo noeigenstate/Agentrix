@@ -7,6 +7,65 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { run } = require('../integration/dispatch.cjs');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
+const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
+const { registerClaudeWorker } = require('../electron/features/native-session/worker.cjs');
+const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
+
+test('Claude worker registration preserves the authenticated lead mode and client identity', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-lead-mode-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const key = 'sk-ant-api03-synthetic-worker-credential';
+  for (const leadMode of ['native', 'terminal', 'codex']) for (const claudePath of ['api-only', 'api-then-terminal', 'terminal-only']) {
+    const directory = path.join(root, leadMode, claudePath), fake = fakeSdk(), events = [];
+    const claude = createClaudeRuntime({ directory, safeStorage: { isEncryptionAvailable: () => true,
+      encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
+    loadSdk: async () => fake.sdk, resolveExecutable: async () => process.execPath });
+    claude.credentials.save(key);
+    const ownerEnv = { PATH: '', ANTHROPIC_API_KEY: 'synthetic-owner-key', CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-owner-oauth',
+      CLAUDE_CODE_ENTRYPOINT: 'synthetic-owner-entrypoint', claude_code_entrypoint: 'synthetic-owner-entrypoint',
+      AGENTRIX_BOOTSTRAP: 'synthetic-bootstrap', AGENTRIX_CONTROL_CAPABILITY: 'synthetic-control', AGENTRIX_SESSION_KEY: 'synthetic-session' };
+    const original = { ...ownerEnv }; let handler;
+    registerClaudeWorker({ control: { onRequest(_name, fn) { handler = fn; } }, claude, settings: () => ({ claudePath }), env: () => ownerEnv });
+    const binding = { runId: `${leadMode}-${claudePath}`, projectId: 'terminal', agent: 'claude', cwd: root, worktree: root,
+      readOnly: true, allow: ['docs/**'], leadMode };
+    try {
+      await handler(binding, { prompt: 'Synthetic task', model: 'fake' }, { emit: event => events.push(event), onControl: () => () => {} });
+      const terminal = leadMode === 'terminal' || leadMode === 'codex' && claudePath === 'terminal-only';
+      assert.equal(fake.calls.length, terminal ? 0 : 1, `${leadMode} / ${claudePath}`);
+      if (terminal) {
+        assert.equal(events.length, 1); assert.equal(events[0].type, 'path.changed'); assert.equal(events[0].payload.selected, 'terminal');
+        assert.equal(events[0].payload.reason, leadMode === 'terminal' ? 'terminal lead (subscription)' : 'terminal_selected');
+      } else {
+        const env = fake.calls[0].options.env;
+        assert.equal(env.ANTHROPIC_API_KEY, key); assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+        assert.ok(!Object.keys(env).some(name => /^CLAUDE_CODE_ENTRYPOINT$|^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|.*SESSION_KEY)/i.test(name)));
+        assert.equal(env.AGENTRIX_SDK_PARENT, '1'); assert.equal(env.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, '1');
+        assert.ok(events.some(event => event.type === 'turn.completed'));
+      }
+      assert.deepEqual(ownerEnv, original); assert.ok(!JSON.stringify(events).includes(key));
+      await assert.rejects(handler(binding, { prompt: 'Synthetic task', leadMode: 'forged' }, { emit() {}, onControl() {} }));
+    } finally { await claude.close(); }
+  }
+});
+
+test('a native Claude lead never falls back to subscription when startup cannot use the API', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-native-lead-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const keyReady of [false, true]) {
+    const fake = fakeSdk(), events = []; let handler;
+    const claude = createClaudeRuntime({ directory: path.join(root, String(keyReady)), safeStorage: { isEncryptionAvailable: () => true,
+      encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
+    loadSdk: async () => fake.sdk, resolveExecutable: async () => null });
+    if (keyReady) claude.credentials.save('sk-ant-api03-synthetic-native-credential');
+    registerClaudeWorker({ control: { onRequest(_name, fn) { handler = fn; } }, claude,
+      settings: () => ({ claudePath: 'api-then-terminal' }), env: () => ({ PATH: '' }) });
+    try {
+      await assert.rejects(handler({ runId: 'native-worker', projectId: 'terminal', cwd: root, readOnly: true, allow: [], leadMode: 'native' },
+        { prompt: 'Synthetic task' }, { emit: event => events.push(event), onControl: () => () => {} }));
+      assert.equal(fake.calls.length, 0); assert.ok(!events.some(event => event.type === 'path.changed'));
+    } finally { await claude.close(); }
+  }
+});
 
 const synthetic = { PATH: '', ANTHROPIC_API_KEY: 'synthetic-key', anthropic_auth_token: 'synthetic-token', CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-oauth',
   CLAUDE_CODE_ENTRYPOINT: 'agentrix-sdk', claude_code_entrypoint: 'agentrix-sdk',

@@ -93,6 +93,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
       if (name === 'electron') return { safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: forbidden } };
       if (name === './features/agents/dispatch-events.cjs') return require('../electron/features/agents/dispatch-events.cjs');
       if (name === './features/team/team-locate.cjs') return { locateTeam: locate || forbidden };
+      if (name === './features/agents/dispatch-registration.cjs') return require('../electron/features/agents/dispatch-registration.cjs');
       assert.fail(`unexpected require: ${name}`);
     },
     importFixture: async name => {
@@ -309,7 +310,8 @@ test('a slow Git lookup does not fail the control registration: the worker is bo
     fs.writeFileSync(path.join(root, '.git', 'agentrix', 'board', `${id}.json`), JSON.stringify({ id, pid: process.pid, title: 'Slow Git', role: '执行', agent: 'codex',
       model: 'synthetic-model', cwd: root, allow: [], startedAt: Date.now() }));
     const { controlAddress } = await mainAssembly(t, { locate: createTeamLocator({ execFile }), root });
-    const began = Date.now(), client = await connectDispatchControl({ address: controlAddress(), runId: id, projectId: 't', sessionKey: 'planner-key', capability: 'synthetic-capability' });
+    const began = Date.now(), client = await connectDispatchControl({ address: controlAddress(), runId: id, projectId: 't', sessionKey: 'planner-key', capability: 'synthetic-capability',
+      cwd: root, agent: 'codex', allow: [] });
     t.after(() => client.close());
     assert.ok(Date.now() - began >= delay - 50, `the registration really waited for Git (${delay} ms)`);
     assert.equal(client.accountKey, require('../electron/features/agents/codex-account-usage.cjs').accountKey, 'main\'s key reaches the worker, so its account has a name');
