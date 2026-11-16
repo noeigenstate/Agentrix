@@ -40,7 +40,7 @@ test('the Codex permission menu gives every option a description of at most two 
   assert.match(description, /-webkit-line-clamp: 2/); assert.match(description, /font-size: 12px/); assert.match(description, /line-height: 16px/); assert.match(description, /color: var\(--text-3\)/);
   assert.match(rules(select, '.select-menu li[aria-selected="true"] .select-option-description').join(' '), /color: var\(--text-1\)/);
   assert.match(rules(select, '.select-menu li[data-described="true"]').join(' '), /height: auto/, 'a described row grows past the 32px of a plain one');
-  const en = { ...require('../electron/locales/en.json'), ...JSON.parse(read('locale-additions-u1.json')) };
+  const en = require('../electron/locales/en.json');
   assert.equal(typeof en['不询问，不使用沙箱：Codex 可以直接运行任何命令、修改任何文件。请用在你信任的项目上。'], 'string');
 });
 
@@ -69,7 +69,7 @@ test('the reading view keeps its own small buttons at 12px/32px', () => {
 
 test('every card hint ladder gets strictly shorter, in Chinese and in English, and the agent ladder ends in the 240px fallback', () => {
   const source = read('src/features/reading/ReadingView.tsx'), statement = /const hints = [\s\S]*?;\n/.exec(source)[0];
-  const en = { ...require('../electron/locales/en.json'), ...JSON.parse(read('locale-additions-u1.json')) };
+  const en = require('../electron/locales/en.json');
   const width = text => [...text].reduce((sum, ch) => sum + (ch.charCodeAt(0) > 255 ? 14 : 7), 0);
   const arrays = [...statement.matchAll(/\[((?:t\('[^']*'(?:, \{ agent \})?\)(?:, )?)+)\]/g)];
   const ladders = arrays.map(match => [...match[1].matchAll(/t\('([^']*)'/g)].map(item => item[1])).filter(list => list.length > 1);
