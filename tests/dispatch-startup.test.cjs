@@ -18,13 +18,14 @@ async function visibilityFixture(t, refused, agent = 'claude') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-starting-row-'));
   const calls = new AgentCalls({ local: false });
   const parent = { terminalId: 'terminal', sessionKey: 'synthetic-admission-key' };
-  const events = [], helper = path.join(__dirname, '../integration/dispatch.cjs'), realRequire = createRequire(helper);
+  // Every row change arrives as a dispatch event, so each accepted event wakes the waiters.
+  const events = [], waiters = new Set(), helper = path.join(__dirname, '../integration/dispatch.cjs'), realRequire = createRequire(helper);
   const loaded = new Module(helper, module); loaded.filename = helper; loaded.paths = module.paths;
   loaded.require = name => {
     if (name === 'node:net') return { connect() {
       const socket = new EventEmitter(); socket.setTimeout = () => socket;
       socket.end = (bytes, callback) => queueMicrotask(() => {
-        const event = JSON.parse(bytes); events.push(event); acceptDispatch(parent, event, calls); callback?.(); socket.emit('close');
+        const event = JSON.parse(bytes); events.push(event); acceptDispatch(parent, event, calls); for (const wake of waiters) wake(); callback?.(); socket.emit('close');
       });
       socket.destroy = () => socket.emit('close'); queueMicrotask(() => socket.emit('connect')); return socket;
     } };
@@ -73,13 +74,11 @@ async function visibilityFixture(t, refused, agent = 'claude') {
   });
   t.after(async () => { child?.end(); await finished; calls.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
   await Promise.race([ready, finished]);
-  async function until(predicate) {
-    const end = Date.now() + 1500;
-    while (!predicate()) {
-      if (Date.now() > end) throw new Error('Synthetic visibility event was not received');
-      await new Promise(resolve => setTimeout(resolve, 5));
-    }
-  }
+  const until = predicate => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { waiters.delete(wake); reject(new Error('Synthetic visibility event was not received')); }, 1500);
+    const wake = () => { if (predicate()) { clearTimeout(timer); waiters.delete(wake); resolve(); } };
+    waiters.add(wake); wake();
+  });
   return { calls, events, child, until, finished, output: () => output };
 }
 

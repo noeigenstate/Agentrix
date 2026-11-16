@@ -100,7 +100,7 @@ test('one asynchronous team lookup distinguishes outside Git, failed Git and a r
   assert.equal((await locate(root, { details: true })).status, 'git_error');
   answer = { stdout: '.git\n' };
   const missing = await locate(root, { details: true });
-  assert.equal(missing.status, 'no_team'); assert.equal(missing.common, fs.realpathSync(path.join(root, '.git')));
+  assert.equal(missing.status, 'no_team'); assert.equal(missing.common, fs.realpathSync.native(path.join(root, '.git')));
   assert.equal(await locate(root), null, 'existing readers still receive a team or null');
   fs.mkdirSync(path.join(root, '.git', 'agentrix'));
   assert.equal((await locate(root, { details: true })).status, 'no_team', 'an incomplete team folder is not an admission board');
@@ -145,7 +145,7 @@ test('legacy team lookup retains an incomplete team while registration details r
   const locate = createTeamLocator({ execFile(_file, _args, _options, done) { calls++; queueMicrotask(() => done(null, '.git\n')); } });
   const team = await locate(root);
   assert.ok(team, 'the sub-agent feed must not cache null solely because the board is absent');
-  assert.equal(team.board, path.join(fs.realpathSync(root), '.git', 'agentrix', 'board'));
+  assert.equal(team.board, path.join(fs.realpathSync.native(root), '.git', 'agentrix', 'board'));
   assert.equal((await locate(root, { details: true })).status, 'no_team');
   assert.equal(calls, 1, 'both views share the same Git lookup');
 });

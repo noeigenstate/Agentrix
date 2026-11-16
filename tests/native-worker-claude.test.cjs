@@ -102,7 +102,10 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   const owner = { terminalId: 'terminal', sessionKey: 'synthetic-owner' };
   const eventServer = await createEventServer(event => { events.push(event); acceptDispatch(owner, event, calls); });
   lifetime.defer('close events', () => eventServer.close());
+  // The helper signs with the bootstrap it read first (dispatch-outbox), so a failed reopen is main refusing the second registration.
+  let registrations = 0;
   const control = createDispatchControl({ resolveRun: auth => {
+    if (reopenFailure && ++registrations > 1) return null;
     const entry = team.live().find(value => value.id === auth.runId);
     return auth.sessionKey === owner.sessionKey && auth.capability === 'synthetic-capability' && entry ? {
       runId: entry.id, projectId: owner.terminalId, cwd: repo, worktree: repo, allow: entry.allow, readOnly: false, roundtable: false, agent: entry.agent,
@@ -119,13 +122,6 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   const bootstrap = path.join(root, 'bootstrap.json'), brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
   fs.mkdirSync(path.dirname(out)); fs.writeFileSync(brief, 'Synthetic task');
   fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: eventServer.address, controlAddress: address, controlCapability: 'synthetic-capability', ...owner, projectId: owner.terminalId }));
-  if (reopenFailure) {
-    const read = fs.readFileSync; let bootstrapReads = 0;
-    t.mock.method(fs, 'readFileSync', function(file, ...args) {
-      if (file === bootstrap && ++bootstrapReads > 2) throw new Error('Synthetic control reopen failure');
-      return read.call(this, file, ...args);
-    });
-  }
   const take = RunInbox.prototype.take;
   if (late || disconnectAtFinish) t.mock.method(RunInbox.prototype, 'take', async function(finish) {
     if (finish && !sentLate) {

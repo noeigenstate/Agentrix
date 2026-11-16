@@ -28,19 +28,19 @@
     "id": "electron/features/agents/codex-account-usage.cjs:3a908719d731205401b693b4"
   },
   {
-    "text": "launch(file, ['app-server', '--listen', 'stdio://'], { cwd, env: { ...env, CODEX_HOME: codexHome }, windowsHide: true,\r\n      shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
+    "text": "launch(file, ['app-server', '--listen', 'stdio://'], { cwd, env: { ...env, CODEX_HOME: codexHome }, windowsHide: true,\n      shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
     "id": "electron/features/agents/codex-account-usage.cjs:7c067127cabbb32d99602cbb"
   },
   {
-    "text": "execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {\r\n      try { if (child.exitCode == null) child.kill('SIGKILL'); } catch { }\r\n    })",
+    "text": "execFile('taskkill.exe', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, timeout: 2000 }, () => {\n      try { if (child.exitCode == null) child.kill('SIGKILL'); } catch { }\n    })",
     "id": "electron/features/agents/codex-account-usage.cjs:0605990eb5d7ef5f9e45b74a"
   },
   {
-    "text": "launch(file, ['app-server', '--listen', 'stdio://'], {\r\n          cwd, env: { ...env, CODEX_HOME: codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex') },\r\n          windowsHide: true, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],\r\n        })",
+    "text": "launch(file, ['app-server', '--listen', 'stdio://'], {\n          cwd, env: { ...env, CODEX_HOME: codexHome || env.CODEX_HOME || path.join(os.homedir(), '.codex') },\n          windowsHide: true, shell: false, detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'],\n        })",
     "id": "electron/features/agents/codex-account-usage.cjs:88e087e71550c1efedf0cb78"
   },
   {
-    "text": "run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\r\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => resolve(error ? null : Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')))",
+    "text": "run(path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => resolve(error ? null : Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')))",
     "id": "electron/features/claude-runtime/path-env.cjs:efd579f4e757ba5afe754b99"
   },
   {
@@ -56,15 +56,15 @@
     "id": "electron/features/claude-sdk/shell.cjs:b6748e3be2e7a4318abe7f0a"
   },
   {
-    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'],\r\n          { windowsHide: true, timeout: 5000 }, error => { if (error) child.kill('SIGKILL'); done(); })",
+    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/PID', String(child.pid), '/T', '/F'],\n          { windowsHide: true, timeout: 5000 }, error => { if (error) child.kill('SIGKILL'); done(); })",
     "id": "electron/features/claude-sdk/shell.cjs:e3353df177c982aba01391d1"
   },
   {
-    "text": "spawn(shellExecutable(safe), ['-c', command + '\\n__agentrix_exit=$?\\nprintf \"%s\" \"$__agentrix_exit\" > ' + quoted + '\\nwait\\nexit \"$__agentrix_exit\"'],\r\n        { cwd, env: safe, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })",
+    "text": "spawn(shellExecutable(safe), ['-c', command + '\\n__agentrix_exit=$?\\nprintf \"%s\" \"$__agentrix_exit\" > ' + quoted + '\\nwait\\nexit \"$__agentrix_exit\"'],\n        { cwd, env: safe, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] })",
     "id": "electron/features/claude-sdk/shell.cjs:2d7dadcf31593105fd0dee50"
   },
   {
-    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],\r\n        { windowsHide: true, timeout: 2000 }, error => { if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); })",
+    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],\n        { windowsHide: true, timeout: 2000 }, error => { if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); })",
     "id": "electron/features/codex-app-server/index.cjs:99516e16cf4a76574364f0ca"
   },
   {
@@ -76,15 +76,15 @@
     "id": "electron/features/codex-app-server/index.cjs:74b6934bfd7d22001795421f"
   },
   {
-    "text": "spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,\r\n              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
+    "text": "spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,\n              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
     "id": "electron/features/codex-app-server/index.cjs:736ac26a2e0e631385a05a1a"
   },
   {
-    "text": "run(path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\r\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\r\n          const drives = error ? [] : String(stdout).trim().split(';').filter(drive => /^[A-Za-z]:$/.test(drive)).map(drive => `${drive.toUpperCase()}\\\\`);\r\n          resolve(drives.length ? drives : fallback);\r\n        })",
+    "text": "run(path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\n          const drives = error ? [] : String(stdout).trim().split(';').filter(drive => /^[A-Za-z]:$/.test(drive)).map(drive => `${drive.toUpperCase()}\\\\`);\n          resolve(drives.length ? drives : fallback);\n        })",
     "id": "electron/features/codex-runtime/drive-scan.cjs:5eed9e352c69a3abb86b5cbf"
   },
   {
-    "text": "run(nodePath.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\r\n        if (error) return resolve(null);\r\n        const found = { files: [], folders: [] };\r\n        for (const line of Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')) {\r\n          const [kind, raw] = line.split('\\t'), value = raw?.trim().replace(/^\"(.*)\"$/, '$1');\r\n          if (value && nodePath.win32.isAbsolute(value) && (kind === 'file' || kind === 'folder')) found[`${kind}s`].push(value);\r\n        }\r\n        resolve(found);\r\n      })",
+    "text": "run(nodePath.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\n        if (error) return resolve(null);\n        const found = { files: [], folders: [] };\n        for (const line of Buffer.from(String(stdout).trim(), 'base64').toString('utf8').split('\\0')) {\n          const [kind, raw] = line.split('\\t'), value = raw?.trim().replace(/^\"(.*)\"$/, '$1');\n          if (value && nodePath.win32.isAbsolute(value) && (kind === 'file' || kind === 'folder')) found[`${kind}s`].push(value);\n        }\n        resolve(found);\n      })",
     "id": "electron/features/codex-runtime/locator.cjs:5e1cb0fd74fce32e757a5400"
   },
   {
@@ -96,7 +96,7 @@
     "id": "electron/features/lab/executor.cjs:accd3ae28936d1ee46d9d7ad"
   },
   {
-    "text": "memoryModules(modules).run(config.args, {\r\n    env: process.env, launch: (file, args, options) => launch(file, args, options, true),\r\n  })",
+    "text": "memoryModules(modules).run(config.args, {\n    env: process.env, launch: (file, args, options) => launch(file, args, options, true),\n  })",
     "id": "electron/features/lab/executor.cjs:be69ee10568f04fe079f71d2"
   },
   {
@@ -104,19 +104,19 @@
     "id": "electron/features/lab/executor.cjs:75eb2158c5f8b4c19511c234"
   },
   {
-    "text": "launch(config.command.file, config.command.args, {\r\n    cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],\r\n  })",
+    "text": "launch(config.command.file, config.command.args, {\n    cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'],\n  })",
     "id": "electron/features/lab/executor.cjs:63fb36cd265994321b560259"
   },
   {
-    "text": "spawn('/usr/bin/sandbox-exec', [\r\n  '-p', config.profile, process.execPath, '--disable-sigusr1', config.executor,\r\n], { cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] })",
+    "text": "spawn('/usr/bin/sandbox-exec', [\n  '-p', config.profile, process.execPath, '--disable-sigusr1', config.executor,\n], { cwd: config.cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe', 'pipe', 'pipe'] })",
     "id": "electron/features/lab/host.cjs:332b1becc77a6729a75f6534"
   },
   {
-    "text": "spawn(file, args, {\r\n      cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],\r\n      windowsHide: true, windowsVerbatimArguments, detached: ipc && process.platform !== 'win32',\r\n    })",
+    "text": "spawn(file, args, {\n      cwd, env, stdio: [stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe', ...(ipc ? ['ipc'] : [])],\n      windowsHide: true, windowsVerbatimArguments, detached: ipc && process.platform !== 'win32',\n    })",
     "id": "electron/features/lab/process.cjs:9c56e50e9222810ea431a733"
   },
   {
-    "text": "source.context.tools.docker.exec(workspace.container.id, request.argv,\r\n        { stdin: request.stdin, timeoutMs: request.timeoutMs })",
+    "text": "source.context.tools.docker.exec(workspace.container.id, request.argv,\n        { stdin: request.stdin, timeoutMs: request.timeoutMs })",
     "id": "electron/features/lab/runner.cjs:6e211413270991f2c8ab54f3"
   },
   {
@@ -128,7 +128,7 @@
     "id": "electron/features/lab/sandbox-win32-executor.cjs:f2ad64c60ecf9c6217d04a65"
   },
   {
-    "text": "execFileSync(config.windows.executable, ['pipe-namespace', config.windows.runId, config.windows.job],\r\n        { windowsHide: true, timeout: 5000, maxBuffer: 4096, encoding: 'utf8' })",
+    "text": "execFileSync(config.windows.executable, ['pipe-namespace', config.windows.runId, config.windows.job],\n        { windowsHide: true, timeout: 5000, maxBuffer: 4096, encoding: 'utf8' })",
     "id": "electron/features/lab/sandbox-win32-host.cjs:1bfa3d0258deb027403ce574"
   },
   {
@@ -136,11 +136,11 @@
     "id": "electron/features/lab/sandbox-win32-host.cjs:f0bf83a8b34ab0b7f8237128"
   },
   {
-    "text": "exec(executable, args, {\r\n      windowsHide: true, timeout: args[0] === 'clean' ? 0 : 10000, maxBuffer: 1024 * 1024,\r\n      ...(diagnostics ? { env: { ...process.env, AGENTRIX_LAB_DIAGNOSTICS: '1' } } : {}), ...options,\r\n    })",
+    "text": "exec(executable, args, {\n      windowsHide: true, timeout: args[0] === 'clean' ? 0 : 10000, maxBuffer: 1024 * 1024,\n      ...(diagnostics ? { env: { ...process.env, AGENTRIX_LAB_DIAGNOSTICS: '1' } } : {}), ...options,\n    })",
     "id": "electron/features/lab/sandbox-win32.cjs:6faa63487ebe5760402e274f"
   },
   {
-    "text": "exec(compiler, ['/nologo', '/optimize+', '/target:exe', '/reference:System.Web.Extensions.dll', '/out:' + output, input], {\r\n        windowsHide: true, timeout: 30000, maxBuffer: 65536,\r\n        env: { SystemRoot: process.env.SystemRoot || 'C:\\\\Windows', TEMP: root, TMP: root },\r\n      })",
+    "text": "exec(compiler, ['/nologo', '/optimize+', '/target:exe', '/reference:System.Web.Extensions.dll', '/out:' + output, input], {\n        windowsHide: true, timeout: 30000, maxBuffer: 65536,\n        env: { SystemRoot: process.env.SystemRoot || 'C:\\\\Windows', TEMP: root, TMP: root },\n      })",
     "id": "electron/features/lab/sandbox-win32.cjs:0af5e1687aca6b56639c3c7c"
   },
   {
@@ -156,7 +156,7 @@
     "id": "electron/features/lab/sandbox-win32.cjs:1d21906143a54f2f6eacb749"
   },
   {
-    "text": "this.launch(args, {\r\n            cwd: await fs.realpath(request.cwd), signal: requestControl.signal, onLine: line => {\r\n              if (!socket.destroyed) socket.write(JSON.stringify({ output: line + '\\n' }) + '\\n');\r\n            },\r\n          })",
+    "text": "this.launch(args, {\n            cwd: await fs.realpath(request.cwd), signal: requestControl.signal, onLine: line => {\n              if (!socket.destroyed) socket.write(JSON.stringify({ output: line + '\\n' }) + '\\n');\n            },\n          })",
     "id": "electron/features/lab/session.cjs:a575eb834c073a5fb47a8d14"
   },
   {
@@ -208,7 +208,7 @@
     "id": "electron/features/native-session/router.cjs:5117c4e0d6425a550c8cc649"
   },
   {
-    "text": "execFileSync('git', ['rev-parse', '--git-common-dir'],\r\n      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
+    "text": "execFileSync('git', ['rev-parse', '--git-common-dir'],\n      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
     "id": "electron/features/skills/worker-proposals.cjs:79438176dda822c97079af8e"
   },
   {
@@ -220,8 +220,8 @@
     "id": "electron/features/ssh/runtime.cjs:79bbec512d97c859e141b177"
   },
   {
-    "text": "execFile('git', ['rev-parse', '--git-common-dir'],\r\n    { cwd, encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS }, (error, stdout) => resolve(error ? null : path.resolve(cwd, String(stdout).trim())))",
-    "id": "electron/features/team/team-locate.cjs:e0a4179524d43dc804f6e6d9"
+    "text": "execFile('git', ['rev-parse', '--git-common-dir'],\n    { cwd, encoding: 'utf8', windowsHide: true, timeout: GIT_TIMEOUT_MS, env: { ...process.env, LC_ALL: 'C' } }, (error, stdout, stderr) => {\n      if (error) {\n        const outside = error.code === 128 && !error.killed && !error.signal\n          && /^fatal: not a git repository \\(or any of the parent directories\\): \\.git(?:\\r?\\n|$)/.test(String(stderr || ''));\n        resolve({ status: outside ? 'outside_git' : 'git_error', common: null }); return;\n      }\n      const directory = String(stdout || '').trim();\n      if (!directory) { resolve({ status: 'git_error', common: null }); return; }\n      fs.realpath(path.resolve(cwd, directory)).then(common => resolve({ status: 'found', common }),\n        () => resolve({ status: 'git_error', common: null }));\n    })",
+    "id": "electron/features/team/team-locate.cjs:eed0e88bda6ebd12f2a4ef55"
   },
   {
     "text": "execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 })",
@@ -232,7 +232,7 @@
     "id": "electron/features/terminal/ipc.cjs:6f6cb011c8493d7a7e324bee"
   },
   {
-    "text": "execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MAC_SCRIPT, action, ...(action === 'copy' ? paths : [])], { timeout: 10000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (error, output) => {\r\n      if (error) { reject(new Error(error.killed ? '剪贴板暂时不可用，请重试。' : '无法访问文件剪贴板。')); return; }\r\n      try { resolve(JSON.parse(output)); } catch { reject(new Error('文件剪贴板返回了无效数据。')); }\r\n    })",
+    "text": "execFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MAC_SCRIPT, action, ...(action === 'copy' ? paths : [])], { timeout: 10000, maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' }, (error, output) => {\n      if (error) { reject(new Error(error.killed ? '剪贴板暂时不可用，请重试。' : '无法访问文件剪贴板。')); return; }\n      try { resolve(JSON.parse(output)); } catch { reject(new Error('文件剪贴板返回了无效数据。')); }\n    })",
     "id": "electron/file-clipboard.cjs:5b1e3fabde82e80c1ddea827"
   },
   {
@@ -244,15 +244,15 @@
     "id": "electron/file-clipboard.cjs:7e1f853fae1477457f300c1b"
   },
   {
-    "text": "this.run(project, '正在删除文件…', async (update, check) => {\r\n      const deleted = [];\r\n      for (const relative of chosen) {\r\n        check(); update(`正在删除：${path.posix.basename(relative)}`);\r\n        if (project.kind === 'ssh') await this.remote(project.id).request('remove', { path: relative });\r\n        else await this.trash(await entryPath(project, relative));\r\n        deleted.push(relative);\r\n      }\r\n      return { deleted };\r\n    })",
+    "text": "this.run(project, '正在删除文件…', async (update, check) => {\n      const deleted = [];\n      for (const relative of chosen) {\n        check(); update(`正在删除：${path.posix.basename(relative)}`);\n        if (project.kind === 'ssh') await this.remote(project.id).request('remove', { path: relative });\n        else await this.trash(await entryPath(project, relative));\n        deleted.push(relative);\n      }\n      return { deleted };\n    })",
     "id": "electron/file-operations.cjs:47d3951deb606658cc58b61b"
   },
   {
-    "text": "this.run(project, '正在复制文件…', async (update, check) => {\r\n      const revision = this.clipboardWrites.reserve();\r\n      const files = [];\r\n      let destination;\r\n      try {\r\n        if (project.kind !== 'ssh') {\r\n          for (const relative of chosen) files.push(await entryPath(project, relative, true));\r\n        } else {\r\n          await fs.mkdir(this.cacheRoot, { recursive: true });\r\n          destination = await fs.mkdtemp(path.join(this.cacheRoot, 'clipboard-'));\r\n          const connection = this.remote(project.id); await connection.ready;\r\n          for (const relative of chosen) {\r\n            check();\r\n            // Each selection keeps its basename for paste, even when another selection has the same name.\r\n            const staging = path.join(destination, String(files.length));\r\n            await fs.mkdir(staging);\r\n            const filename = path.join(staging, cleanName(path.posix.basename(relative || connection.info.root)));\r\n            await this.download(connection, relative, filename, update, check);\r\n            files.push(filename);\r\n          }\r\n        }\r\n        if (!await this.clipboardWrites.commit(revision, () => { check(); return this.clipboard('copy', files); })) return { count: 0, superseded: true };\r\n        // Committed FileDrop paths must remain available to the eventual paste.\r\n        destination = null;\r\n        return { count: files.length };\r\n      } finally {\r\n        if (destination && path.dirname(path.resolve(destination)) === path.resolve(this.cacheRoot)) await fs.rm(destination, { recursive: true, force: true });\r\n      }\r\n    })",
+    "text": "this.run(project, '正在复制文件…', async (update, check) => {\n      const revision = this.clipboardWrites.reserve();\n      const files = [];\n      let destination;\n      try {\n        if (project.kind !== 'ssh') {\n          for (const relative of chosen) files.push(await entryPath(project, relative, true));\n        } else {\n          await fs.mkdir(this.cacheRoot, { recursive: true });\n          destination = await fs.mkdtemp(path.join(this.cacheRoot, 'clipboard-'));\n          const connection = this.remote(project.id); await connection.ready;\n          for (const relative of chosen) {\n            check();\n            // Each selection keeps its basename for paste, even when another selection has the same name.\n            const staging = path.join(destination, String(files.length));\n            await fs.mkdir(staging);\n            const filename = path.join(staging, cleanName(path.posix.basename(relative || connection.info.root)));\n            await this.download(connection, relative, filename, update, check);\n            files.push(filename);\n          }\n        }\n        if (!await this.clipboardWrites.commit(revision, () => { check(); return this.clipboard('copy', files); })) return { count: 0, superseded: true };\n        // Committed FileDrop paths must remain available to the eventual paste.\n        destination = null;\n        return { count: files.length };\n      } finally {\n        if (destination && path.dirname(path.resolve(destination)) === path.resolve(this.cacheRoot)) await fs.rm(destination, { recursive: true, force: true });\n      }\n    })",
     "id": "electron/file-operations.cjs:5c92fc9b21c7d781583abafc"
   },
   {
-    "text": "this.run(project, '正在粘贴文件…', async (update, check) => {\r\n      const pasted = [];\r\n      for (const source of sources) {\r\n        check(); if (typeof source !== 'string' || !path.isAbsolute(source)) throw new Error('无效的剪贴板文件。');\r\n        const name = cleanName(path.basename(source)); update(`正在粘贴：${name}`);\r\n        if (project.kind === 'ssh') {\r\n          pasted.push(await this.upload(this.remote(project.id), source, directory, name, update, check));\r\n          continue;\r\n        }\r\n        const parent = await directoryPath(project, directory);\r\n        const info = await fs.lstat(source);\r\n        if (info.isDirectory() && inside(await fs.realpath(source), parent)) throw new Error('不能把文件夹复制到它自身内部。');\r\n        const targetName = await unusedName(parent, name);\r\n        const staging = path.join(parent, `.agentrix-copy-${randomUUID()}`);\r\n        try {\r\n          await fs.cp(source, staging, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, filter: () => { check(); return true; } });\r\n          check();\r\n          const target = path.join(parent, targetName);\r\n          try { await fs.lstat(target); throw new Error('目标文件已存在，请重试。'); } catch (error) { if (error.code !== 'ENOENT') throw error; }\r\n          await this.move(staging, target);\r\n          pasted.push(path.posix.join(directory, targetName));\r\n        } finally { if (path.dirname(path.resolve(staging)) === parent) await fs.rm(staging, { recursive: true, force: true }); }\r\n      }\r\n      return { pasted };\r\n    })",
+    "text": "this.run(project, '正在粘贴文件…', async (update, check) => {\n      const pasted = [];\n      for (const source of sources) {\n        check(); if (typeof source !== 'string' || !path.isAbsolute(source)) throw new Error('无效的剪贴板文件。');\n        const name = cleanName(path.basename(source)); update(`正在粘贴：${name}`);\n        if (project.kind === 'ssh') {\n          pasted.push(await this.upload(this.remote(project.id), source, directory, name, update, check));\n          continue;\n        }\n        const parent = await directoryPath(project, directory);\n        const info = await fs.lstat(source);\n        if (info.isDirectory() && inside(await fs.realpath(source), parent)) throw new Error('不能把文件夹复制到它自身内部。');\n        const targetName = await unusedName(parent, name);\n        const staging = path.join(parent, `.agentrix-copy-${randomUUID()}`);\n        try {\n          await fs.cp(source, staging, { recursive: true, force: false, errorOnExist: true, verbatimSymlinks: true, filter: () => { check(); return true; } });\n          check();\n          const target = path.join(parent, targetName);\n          try { await fs.lstat(target); throw new Error('目标文件已存在，请重试。'); } catch (error) { if (error.code !== 'ENOENT') throw error; }\n          await this.move(staging, target);\n          pasted.push(path.posix.join(directory, targetName));\n        } finally { if (path.dirname(path.resolve(staging)) === parent) await fs.rm(staging, { recursive: true, force: true }); }\n      }\n      return { pasted };\n    })",
     "id": "electron/file-operations.cjs:58cb494be6109fd8cc26b44e"
   },
   {
@@ -272,7 +272,7 @@
     "id": "electron/main.cjs:2cbf10f21f096f5b8a7cbb9d"
   },
   {
-    "text": "dashboard.run(project, { source: 'native', sourceAgent: 'claude', title: 'Claude API', startedAt: Date.now(), model: entry.spec.model },\r\n        { id: entry.usageRecordId, source: 'native', model: entry.spec.model, endedAt: Date.now(), reportedCostUsd: entry.deltaUsdMicros / 1e6,\r\n          billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 })",
+    "text": "dashboard.run(project, { source: 'native', sourceAgent: 'claude', title: 'Claude API', startedAt: Date.now(), model: entry.spec.model },\n        { id: entry.usageRecordId, source: 'native', model: entry.spec.model, endedAt: Date.now(), reportedCostUsd: entry.deltaUsdMicros / 1e6,\n          billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 })",
     "id": "electron/main.cjs:02134a465c95da7fd0bff75e"
   },
   {
@@ -364,7 +364,7 @@
     "id": "electron/windows-integration.cjs:5fcfe5b37114af710b593755"
   },
   {
-    "text": "run(shell, ['-ilc', `echo ${marker}; /usr/bin/printenv PATH; echo ${marker}`], { env, timeout, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (_error, stdout) => {\r\n        const value = String(stdout || '').split(marker)[1]?.trim();\r\n        resolve(value && !value.includes('\\n') ? value : null);\r\n      })",
+    "text": "run(shell, ['-ilc', `echo ${marker}; /usr/bin/printenv PATH; echo ${marker}`], { env, timeout, encoding: 'utf8', maxBuffer: 1024 * 1024 }, (_error, stdout) => {\n        const value = String(stdout || '').split(marker)[1]?.trim();\n        resolve(value && !value.includes('\\n') ? value : null);\n      })",
     "id": "electron/zsh-terminal.cjs:a5f63b7f6f661138fe716243"
   },
   {
@@ -396,7 +396,7 @@
     "id": "integration/dispatch.cjs:6f624c43b334bb3894e0654b"
   },
   {
-    "text": "launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,\r\n        detached: process.platform !== 'win32' })",
+    "text": "launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,\n        detached: process.platform !== 'win32' })",
     "id": "integration/dispatch.cjs:103c8de2b784c8dbc9d0e2a0"
   },
   {
@@ -476,7 +476,7 @@
     "id": "src/features/agents/ResetQuota.tsx:3f7e1aa4367a37c480556014"
   },
   {
-    "text": "run(window.agentrix.interveneAgent(terminalId, callId, value), sent => {\r\n      received(sent);\r\n      if (sent.status === 'rejected') return;\r\n      setText(current => current.trim() === value ? '' : current); onSent(sent);\r\n    })",
+    "text": "run(window.agentrix.interveneAgent(terminalId, callId, value), sent => {\n      received(sent);\n      if (sent.status === 'rejected') return;\n      setText(current => current.trim() === value ? '' : current); onSent(sent);\n    })",
     "id": "src/features/agents/SubagentInput.tsx:debaaa685309da5d25f81619"
   },
   {
@@ -496,7 +496,7 @@
     "id": "src/features/files/ExplorerFileActions.tsx:ecd51cdd6dfe079848538613"
   },
   {
-    "text": "run(async () => {\r\n    const result = await unwrap(window.agentrix.copyPaths(project.id, paths, format));\r\n    if (!result.superseded) setMessage(format === 'absolute' ? t('已复制绝对路径') : t('已复制相对路径'));\r\n  }, false)",
+    "text": "run(async () => {\n    const result = await unwrap(window.agentrix.copyPaths(project.id, paths, format));\n    if (!result.superseded) setMessage(format === 'absolute' ? t('已复制绝对路径') : t('已复制相对路径'));\n  }, false)",
     "id": "src/features/files/ExplorerFileActions.tsx:e5e6b149b2618a2b8dcacf9a"
   },
   {
@@ -504,7 +504,7 @@
     "id": "src/features/files/ExplorerFileActions.tsx:73a9793f0c36b5414b32bc18"
   },
   {
-    "text": "run(async () => {\r\n    const result = await unwrap(window.agentrix.pasteEntries(project.id, directory));\r\n    setSelected(result.pasted); anchor.current = result.pasted[0] || directory;\r\n    changed(directory); setMessage(t('已粘贴 {count} 项到{place}', { count: result.pasted.length, place: directory || t('项目根目录') }));\r\n  })",
+    "text": "run(async () => {\n    const result = await unwrap(window.agentrix.pasteEntries(project.id, directory));\n    setSelected(result.pasted); anchor.current = result.pasted[0] || directory;\n    changed(directory); setMessage(t('已粘贴 {count} 项到{place}', { count: result.pasted.length, place: directory || t('项目根目录') }));\n  })",
     "id": "src/features/files/ExplorerFileActions.tsx:1b86fcf9c66f4506ed2b5c6f"
   },
   {
@@ -596,7 +596,7 @@
     "id": "src/features/terminal/AgentLauncher.tsx:bd8744828cefec3360d570db"
   },
   {
-    "text": "entry.terminal.write(data, () => {\r\n    if (entries.get(id) !== entry) return;\r\n    entry.pending--;\r\n    if (serial === entry.writes && approval && approval.sessionId === entry.sessionId) entry.approval = { ...approval };\r\n    publish(entry);\r\n  })",
+    "text": "entry.terminal.write(data, () => {\n    if (entries.get(id) !== entry) return;\n    entry.pending--;\n    if (serial === entry.writes && approval && approval.sessionId === entry.sessionId) entry.approval = { ...approval };\n    publish(entry);\n  })",
     "id": "src/features/terminal/terminal-screen.ts:1383c5db210645a6d9b7bc25"
   },
   {

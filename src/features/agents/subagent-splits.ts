@@ -104,7 +104,8 @@ let uiVersion = 0;
 const finished = new Set<string>(), stopping = new Map<string, { pending: boolean; refusal?: string }>();
 const uiListeners = new Set<() => void>();
 const touch = () => { uiVersion++; uiListeners.forEach(listener => listener()); };
-export const useUiVersion = () => useSyncExternalStore(listener => { uiListeners.add(listener); return () => { uiListeners.delete(listener); }; }, () => uiVersion, () => uiVersion);
+export function subscribeUi(listener: () => void) { uiListeners.add(listener); return () => { uiListeners.delete(listener); }; }
+export const useUiVersion = () => useSyncExternalStore(subscribeUi, () => uiVersion, () => uiVersion);
 export const isFinishedOpen = (projectKey: string) => finished.has(projectKey);
 export const toggleFinished = (projectKey: string) => { if (!finished.delete(projectKey)) finished.add(projectKey); touch(); };
 export const stopState = (terminalId: string, callId: string) => stopping.get(feedKey(terminalId, callId));

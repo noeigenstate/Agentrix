@@ -205,8 +205,10 @@ test('停止 belongs to the starting state, waits while sent and says why a refu
   const stop = () => cardTree(terminals).find(node => node.type === 'button' && node.props.children === '停止');
   stop().props.onClick();
   assert.equal(stop().props.disabled, true, 'disabled while the request is out');
+  // The answer lands when the card's stop state changes, not after a guessed delay.
+  const answered = new Promise(resolve => { const stopListening = splits.subscribeUi(() => { if (!splits.stopState('t1', 'dispatch:r')?.pending) { stopListening(); resolve(); } }); });
   release({ ok: false, error: '工作者已经结束' });
-  await new Promise(resolve => setTimeout(resolve, 5));
+  await answered;
   assert.equal(stop().props.disabled, false);
   assert.ok(card(terminals).includes('没能停止它：工作者已经结束'), 'the refusal in words');
   window.agentrix.stopAgent = previous;

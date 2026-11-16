@@ -66,7 +66,9 @@ function runtime(overrides = {}) {
     claudeAccounts,
     resources: () => ({ claudeAccountTimer, claudeAccountSoon, claudeAccountPending, claudeAccountWatchers, usageRolloverTimer, usageRolloverAt })
   })`, context);
-  api.history = (s, agent) => vm.runInContext(`s => { ${histories[agent === 'claude' ? 0 : 1]}; return onHistory; }`, context)(s);
+  // Claude's handler also rebinds the transcript's background tasks; the handlers close over their project and file.
+  api.history = (s, agent) => vm.runInContext(`(s, project, file, callsOf) => { ${histories[agent === 'claude' ? 0 : 1]}; return onHistory; }`, context)(
+    s, { id: s.projectId, kind: 'local' }, 'transcript.jsonl', () => ({ bindBackground() {} }));
   api.close = () => { context.quitting = true; api.disposeClaudeAccounts(); api.scheduleUsageRollover(); };
   return api;
 }
