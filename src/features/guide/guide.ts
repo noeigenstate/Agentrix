@@ -3,10 +3,9 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "项目级 Agent 标签", text: "Agent 标签页列出项目里每个终端的 worker，并标明属于哪个终端。worker 一启动就有一行，写着「启动中 · 未确认」，15 秒还没确认会给出提示。" },
-  { title: "最近完成与后台", text: "刚结束的 worker 收在「最近完成 N 个」里，保留最近 10 个、最长 30 分钟。Claude Code 的后台任务显示在「后台任务」组并带输出，有任务运行时项目头部和 Agent 标签页会写「后台 N 个运行中」。" },
-  { title: "worker 不再丢失", text: "消息丢失或终端重启后，worker 的行仍然保留；被拒绝的 worker 会写明原因。Claude worker 跟随主终端的模式，原生模式下派出的 worker 不会退回订阅。" },
-  { title: "SSH 速率能恢复", text: "SSH 项目里子代理的速率读取遇到文件消失或被占用时，会在下次读取时恢复，不再一直卡住。" },
-  { title: "几处小修复", text: "一轮以 API 错误结束后，状态灯不再一直显示工作中；装在其他盘 pnpm 目录里的 Codex 也能被找到；Claude 工作时发送消息的几种边缘情况更稳。" },
-  { title: "界面微调", text: "浅色主题的淡色文字更清晰，Codex 权限菜单里每项都有说明，小按钮统一为一种尺寸，窄输入框里的占位文字更短。" },
+  { title: "强制调度", text: "Claude Code 或 Codex 在会话里用自己的命令行工具再启动 Codex 或 Claude 时，现在会经过调度器，显示为带「自启动」标记和速率的 worker 行，不再暗中运行。这样的调用默认只读，除非它要求写入权限；你自己在终端或用 ! 输入的命令照旧运行真正的命令行。" },
+  { title: "Claude 子代理行", text: "Claude Code 用 Agent 工具启动的子代理，在终端和原生模式里都会从启动那一刻起显示为一行。继续的子代理标「继续」；按 Esc 或停止的记为已停止，不再算成功；后台子代理按 Esc 也不会被打断。" },
+  { title: "Claude 路径统一", text: "连接测试和下一个新会话现在总是走同一条路径、用同一种计费。修好 Claude Code 的设置文件后，下一个新会话就生效，不必重启 Agentrix；「余额不足」的结果对所有项目里的 API key 都适用；Claude Code 缺失或版本太旧时，新会话会说明情况和原因。" },
+  { title: "终端状态更稳", text: "迟到或重复的事件不会再让 Claude 终端的状态倒退。有消息排队时，Claude 的「Press up to edit queued messages」占位提示不再被当成你输入的文字。" },
+  { title: "虚拟实验室调度", text: "调度助手在 Windows 和 macOS 的虚拟实验室里又能正常加载了。" },
 ];
