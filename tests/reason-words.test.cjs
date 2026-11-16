@@ -13,7 +13,9 @@ const tableOf = ns => require(`../electron/shared/reasons/${ns}.cjs`).codes;
 const placeholders = text => [...text.matchAll(/\{(\w+)\}/g)].map(match => match[1]).sort();
 const HAN = /[一-鿿]/;
 
-const english = require('../electron/locales/en.json');
+// English phrases a round adds in a root locale-additions-*.json are read too, until the lead folds them into en.json.
+const english = { ...require('../electron/locales/en.json') };
+for (const name of fs.readdirSync(root).filter(file => /^locale-additions-[\w-]+\.json$/.test(file))) Object.assign(english, JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')));
 
 test('every code in every namespace has Chinese words and an English entry, and main builds no user-facing sentence', () => {
   for (const ns of NAMESPACES) {

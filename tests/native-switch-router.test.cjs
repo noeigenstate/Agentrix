@@ -9,7 +9,7 @@ function fixture(t, agent = 'claude') {
   let config = { claudePath: 'api-then-terminal', codexView: 'native', monthlyBudgetUsd: 10 }, terminals = [], saved = true, fail = false, terminalFailure = false, attempts = 0;
   const created = [], events = [], paths = [];
   const provider = { usage: { summary: () => ({}) }, credentials: { clear() { saved = false; return { saved }; } },
-    apiState: () => ({ status: saved ? 'ready' : 'no_key' }), create(spec, emit) {
+    facts: () => saved ? [] : [{ name: 'key', reason: { code: 'claude.no_key' } }], create(spec, emit) {
       const stream = createEventStream(spec, emit); stream.provider('same-conversation');
       let state = 'idle';
       const value = { spec, stream, closed: false, prepared: false,

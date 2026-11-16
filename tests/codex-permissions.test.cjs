@@ -180,7 +180,7 @@ test('a sandbox Codex did not apply stops the start and says why: full, ask over
 test('the router names the sandbox Codex did not apply when a session fails to start', async t => {
   const root = directory(t), server = codexServer({ apply: () => ({ type: 'readOnly' }) }), events = [];
   const router = createRouter({ codex: createCodexRuntime({ platform: 'linux', resolveExecutable: async () => 'fake-only', spawnProcess: () => server.child }),
-    claude: { apiState: () => ({ status: 'no_key' }) }, settings: { get: () => ({}) }, emit: row => events.push(row),
+    claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, settings: { get: () => ({}) }, emit: row => events.push(row),
     resolveSpec: () => ({ terminalId: 't', projectId: 'p', owner: 'gui', cwd: root, env: { CODEX_HOME: root, PATH: '' } }) });
   t.after(() => router.close());
   await assert.rejects(router.start('t', { agent: 'codex' }), /Codex 未应用完全访问权限，已停止启动/);
@@ -440,7 +440,7 @@ test('the router keeps /permissions for this card’s session and its next conve
   const root = directory(t), servers = [];
   const factory = createCodexRuntime({ platform: 'linux', resolveExecutable: async () => 'fake-only', spawnProcess: () => { const server = codexServer({ threadId: `thread-${servers.length}` }); servers.push(server); return server.child; } });
   const settingsSpec = { terminalId: 't', projectId: 'p', owner: 'gui', cwd: root, env: { CODEX_HOME: root, PATH: '' }, permissions: 'ask' };
-  const router = createRouter({ codex: factory, claude: { apiState: () => ({ status: 'no_key' }) }, settings: { get: () => ({}) }, emit() {},
+  const router = createRouter({ codex: factory, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, settings: { get: () => ({}) }, emit() {},
     resolveSpec: () => ({ ...settingsSpec }) });
   t.after(() => router.close());
   const { runtimeSessionId } = await router.start('t', { agent: 'codex' });

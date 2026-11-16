@@ -2,7 +2,8 @@ const path = require('node:path');
 const { createSettings } = require('./settings.cjs');
 const { createRouter } = require('./router.cjs');
 const { registerIpc } = require('./ipc.cjs');
-const { choosePath } = require('./routing.cjs');
+const { decide } = require('../claude-runtime/decide.cjs');
+const { overlay, testFacts } = require('../claude-runtime/resolver.cjs');
 const { accountChanged, retainConnection, retainLimits, quotaRead } = require('../agents/agent-usage.cjs');
 // Nothing tells this module that a project was removed, so it holds the last usage of the most recently read ones.
 const HELD_PROJECTS = 64;
@@ -18,17 +19,12 @@ function createNativeSessions(options) {
   const router = createRouter({ ...options, settings });
   async function testConnection(projectId) {
     if (options.validateProject?.(projectId)?.kind === 'ssh') projectId = undefined;
-    const result = await options.claude.testConnection({ ...settings.get(), projectId }), config = settings.get();
-    const failures = { missing: 'no_key', invalid: 'invalid_key', forbidden: 'API 密钥没有调用权限。',
-      rate_limited: 'rate_limited', unreachable: '无法连接 Anthropic API。', error: '无法完成 API 连接检查。' };
-    const reason = result.key.status !== 'ok' ? failures[result.key.status]
-      : result.cli.status === 'too_old' ? 'Claude Code 版本过低，请升级到 2.1.317 或更高'
-        : result.cli.status === 'missing' ? (result.cli.reason && result.cli.reason !== 'not_found' ? 'native_cli_unverified' : 'native_cli_required')
-          : result.billing?.status !== 'ok' ? result.reason || 'billing_unconfirmed' : null;
-    const selection = choosePath({ agent: 'claude', ...config,
-      apiState: reason ? { reason } : options.claude.apiState(projectId) });
+    const result = await options.claude.testConnection({ ...settings.get(), projectId });
+    // The facts a new session in this scope is decided from, with what this test itself saw in place of the held ones.
+    const facts = overlay(options.claude.facts(projectId), testFacts(result)), chosen = decide(facts, settings.get());
     router.reconcile();
-    return { ...result, ...selection, reason: reason || selection.reason };
+    // The reason says why the API cannot be used, whichever path the settings then choose.
+    return { ...result, path: chosen.path, reason: decide(facts).wire ?? chosen.wire };
   }
   const facade = { ...router, testConnection,
     async close() { projects.clear(); await router.close(); },

@@ -14,7 +14,7 @@ async function fixture(t, delayedReceipt = false) {
   let releaseReceipt;
   const receipt = new Promise(resolve => { releaseReceipt = resolve; });
   const source = { identity: {}, path: 'terminal', spec: { owner: 'gui', projectId: 'p', terminalId: 't', runtimeSessionId: 'main-runtime', providerSessionId: 'same-provider', agent: 'claude' } };
-  const claude = { apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) }, create(spec, emit) {
+  const claude = { facts: () => [], usage: { summary: () => ({}) }, create(spec, emit) {
     const stream = createEventStream(spec, emit);
     return { resume() { stream.provider('same-provider'); stream.publish('session.state', { state: 'idle', reason: null }); },
       async prepareResume() { preparing = true; await pending; }, snapshot: () => ({ ...stream.snapshot(), state: 'idle' }), close() {} };

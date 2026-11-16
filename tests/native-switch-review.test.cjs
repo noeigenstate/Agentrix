@@ -47,7 +47,7 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
   vm.runInContext(main.slice(main.indexOf('function structuredEvent('), main.indexOf('async function initializeNativeSessions(')), context);
   const { activateNative } = context; assert.ok(activateNative);
   const provider = { resetAvailability() {}, credentials: { status: () => ({ saved }), clear() { saved = false; return { saved }; }, save() { saved = true; return { saved }; } },
-    usage: { summary: () => ({}) }, apiState: () => ({ status: saved ? 'ready' : 'no_key' }), create(spec, emit) {
+    usage: { summary: () => ({}) }, facts: () => saved ? [] : [{ name: 'key', reason: { code: 'claude.no_key' } }], create(spec, emit) {
       const stream = createEventStream(spec, emit); let state = 'idle';
       const runtime = { closed: false, sent: 0, background: { known: true, count: 2 },
         start() { stream.publish('session.state', { state: 'starting' }); stream.publish('session.state', { state }); }, resume() { return this.start(); }, prepareResume() {},

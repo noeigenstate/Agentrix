@@ -87,7 +87,7 @@ test('local slash output renders once as assistant text without becoming an owne
 
 test('a command reply resolved after its project closes is rejected before reaching the renderer', async () => {
   let alive = true, release;
-  const provider = { apiState: () => ({ status: 'ready' }), create: () => ({
+  const provider = { facts: () => [], create: () => ({
     start() {}, snapshot: () => ({ state: 'idle' }), close() {}, commands: () => new Promise(resolve => { release = resolve; }),
   }) };
   const router = createRouter({ claude: provider, codex: provider, emit() {}, settings: { get: () => ({ claudePath: 'api-only' }) },

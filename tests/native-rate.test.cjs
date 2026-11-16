@@ -107,7 +107,7 @@ test('native rate reads are bound to the current runtime, including SSH, with no
   for (const kind of ['local', 'ssh']) {
     const expected = { model: 'gpt-6.1-sol', outputTokens: 10, activeMs: 1000, samples: 1, updatedAt: 2000, partial: false };
     const provider = { create: () => ({ start: async () => ({}), close: async () => {}, snapshot: () => ({ state: 'idle' }), tokenRate: () => expected }) };
-    const router = createRouter({ codex: provider, claude: { apiState: () => ({ status: 'ready' }) }, settings: { get: () => ({}) },
+    const router = createRouter({ codex: provider, claude: { facts: () => [] }, settings: { get: () => ({}) },
       emit() {}, resolveSpec: () => ({ owner: 'gui', agent: 'codex', kind, cwd: '/fixture', projectId: 'p', terminalId: 't' }) });
     t.after(() => router.close()); const binding = await router.start('t', { agent: 'codex' });
     assert.deepEqual(router.tokenRate('t', binding.runtimeSessionId), expected);

@@ -61,7 +61,7 @@ test('the launcher sends every local and SSH Codex mode to app-server', async ()
 for (const [code, words] of [['codex_cli_required', '未找到 Codex'], ['unsupported_codex_version', '版本过低'], ['rpc_timeout', '连接失败']]) {
   test(`Codex ${code} gives a readable failure and the existing start action retries without a TUI`, async t => {
     let failed = true, closes = 0;
-    const router = createRouter({ claude: { apiState: () => ({ status: 'no_key' }) }, settings: { get: () => ({}) },
+    const router = createRouter({ claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, settings: { get: () => ({}) },
       resolveSpec: id => ({ owner: 'gui', projectId: 'p', terminalId: id, agent: 'codex' }), terminal: () => assert.fail('no TUI fallback'), emit() {},
       codex: { create(spec, emit) { const stream = createEventStream(spec, emit); let state = 'stopped';
         return { snapshot: () => ({ ...stream.snapshot(), state }), async start() { if (failed) throw Object.assign(new Error(code), { code, detail: `initialize: ${code}` });

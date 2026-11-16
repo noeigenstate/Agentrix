@@ -17,7 +17,7 @@ for (const [mode, status, cli, expected] of [
   fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify({ claudePath: mode, codexView: 'native', monthlyBudgetUsd: null }));
   let tests = 0, codex; const handlers = new Map();
   const native = createNativeSessions({ directory, claude: { testConnection: async () => { tests++; return { checkedAt: 1, key: { status, detail: null, latencyMs: 1 }, models: null, cli: { status: cli, version: null, required: '2.1.317' }, billing: { status: 'ok', source: 'ANTHROPIC_API_KEY' } }; },
-    apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) } },
+    facts: () => [], usage: { summary: () => ({}) } },
     connections: async () => ({ claude: { kind: 'api', source: 'init', observedAt: 1 }, ...(codex ? { codex } : {}) }) });
   native.register((name, handler) => handlers.set(name, handler)); assert.equal(tests, 0);
   assert.throws(() => handlers.get('native:test-connection')({ key: 'renderer-injection' }));
@@ -44,7 +44,7 @@ for (const mode of ['api-only', 'api-then-terminal', 'terminal-only']) for (cons
     const native = createNativeSessions({ directory, claude: { testConnection: async config => {
       passedConfig = config; return { checkedAt: 1, key: { status: 'ok', detail: null, latencyMs: 1 }, models: ['synthetic'],
         cli: { status: 'ok', version: '2.1.318', required: '2.1.317' }, billing, reason };
-    }, apiState: () => ({ status: 'ready' }) } });
+    }, facts: () => [] } });
     const result = await native.testConnection();
     assert.equal(result.path, mode === 'terminal-only' ? 'terminal' : billingStatus === 'ok' ? 'api' : mode === 'api-only' ? null : 'terminal');
     assert.deepEqual(result.billing, billing); assert.equal(Object.hasOwn(passedConfig, 'monthlyBudgetUsd'), false);

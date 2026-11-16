@@ -103,7 +103,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     for (const cause of ['owner', 'crash']) {
       const saved = { agent: 'codex', codex: true, threadId }, id = 'policy-' + cause;
       const makeFacade = () => createNativeSessions({ directory: path.join(root, id), codex,
-        claude: { apiState: () => ({ status: 'no_key' }) }, resolveSpec: name => spec(name), emit() {},
+        claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, resolveSpec: name => spec(name), emit() {},
         saveInterrupted(_id, value) { saved.interrupted = value; }, terminal() { assert.fail('no TUI'); } });
       let policy = makeFacade(); sessions.push(policy);
       const opened = await policy.start(id, { agent: 'codex', resume: true });
@@ -187,7 +187,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     const directory = path.join(root, 'native'); fs.mkdirSync(directory);
     const settingsFile = path.join(directory, 'settings.json');
     fs.writeFileSync(settingsFile, JSON.stringify({ claudePath: 'terminal-only', codexView: 'terminal', monthlyBudgetUsd: null, codexAutoReset: false }));
-    const facade = createNativeSessions({ directory, codex, claude: { apiState: () => ({ status: 'no_key' }), usage: { summary: () => ({}) } },
+    const facade = createNativeSessions({ directory, codex, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }], usage: { summary: () => ({}) } },
       resolveSpec: id => spec(id), terminal: () => assert.fail('Codex must never start a TUI'), emit: event => events.push(event) }); sessions.push(facade);
     assert.equal(facade.getSettings().codexView, undefined);
     assert.equal(JSON.parse(fs.readFileSync(settingsFile)).codexView, 'terminal', 'reading a legacy setting does not rewrite the file');
@@ -204,7 +204,7 @@ test('real app-server starts and resumes the same thread despite legacy terminal
     assert.ok(launches.length >= 3 && launches.every(args => args[0] === 'app-server'));
     let available = false;
     const missing = createNativeSessions({ directory: path.join(root, 'missing'), codex: createCodexRuntime({ resolveExecutable: async () => available ? process.env.AGENTRIX_REAL_CODEX : null, spawnProcess: launch }),
-      claude: { apiState: () => ({ status: 'no_key' }) }, resolveSpec: id => spec(id), terminal: () => assert.fail('missing Codex cannot fall back'), emit() {} }); sessions.push(missing);
+      claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, resolveSpec: id => spec(id), terminal: () => assert.fail('missing Codex cannot fall back'), emit() {} }); sessions.push(missing);
     await assert.rejects(missing.start('missing', { agent: 'codex' }), /未找到 Codex/);
     assert.equal(missing.snapshot('missing').state, 'failed');
     const failedId = missing.snapshot('missing').runtimeSessionId; available = true;

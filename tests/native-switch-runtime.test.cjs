@@ -192,7 +192,7 @@ test('IPC accepts bounded frozen switch/handoff shapes and rejects extra options
 
 test('I1: router freezes new input, preserves receipts, and never hands delivered or unknown messages back as unsent', async t => {
   let config = { claudePath: 'api-only', monthlyBudgetUsd: 10 }, source;
-  const provider = { credentials: { clear: () => ({ saved: false }) }, apiState: () => ({ status: 'ready' }), usage: { summary: () => ({}) }, create(spec, emit) {
+  const provider = { credentials: { clear: () => ({ saved: false }) }, facts: () => [], usage: { summary: () => ({}) }, create(spec, emit) {
     const stream = createEventStream(spec, emit); source = stream;
     return { start() { stream.provider('provider'); stream.publish('session.state', { state: 'idle', reason: null }); },
       snapshot: () => ({ ...stream.snapshot(), state: 'idle' }), activity: () => ({ known: true, count: 0 }),

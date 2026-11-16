@@ -95,7 +95,7 @@ test('SSH usage holds remote native limits without consulting local usage inputs
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-ssh-usage-'));
   t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const facade = require('../electron/features/native-session/index.cjs').createNativeSessions({ directory: root,
-    claude: { usage: { summary: () => ({}) }, apiState: () => ({ status: 'no_key' }) }, codex: {}, emit() {},
+    claude: { usage: { summary: () => ({}) }, facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, codex: {}, emit() {},
     validateProject: () => ({ kind: 'ssh' }), usageInputs: () => assert.fail('SSH read local accounts/CLI'),
     connections: () => ({ codex: { kind: 'subscription', active: true, source: 'remote app-server', observedAt: 1 } }),
   });

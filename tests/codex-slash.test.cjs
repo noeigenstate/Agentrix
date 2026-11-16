@@ -180,7 +180,7 @@ test('uncertain shell delivery stays unknown and duplicate command IDs never res
 
 test('Codex router controls and fresh conversation preserve identity checks and IPC exposes no execution parameters', async t => {
   const f = fixture(t, { remote: true });
-  const router = createRouter({ codex: f.factory, claude: { apiState: () => ({ status: 'ready' }) }, settings: { get: () => ({}) },
+  const router = createRouter({ codex: f.factory, claude: { facts: () => [] }, settings: { get: () => ({}) },
     resolveSpec: () => f.spec, emit() {}, terminal() { assert.fail('no terminal'); } }); t.after(() => router.close());
   const first = await router.start('t', { agent: 'codex' });
   await router.runOptions('t', first.runtimeSessionId, { effort: 'ultra', fast: true });

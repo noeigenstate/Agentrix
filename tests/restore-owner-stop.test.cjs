@@ -14,7 +14,7 @@ test('R5 restoreTerminal continues crashes once, but never an owner stop, includ
       store: { findTerminal: () => ({ project: { id: 'p', kind }, record: { restore: saved } }), expectCompletion() {}, setRestore(_id, patch) { Object.assign(saved, patch); } } });
     vm.runInContext(main.slice(main.indexOf('function structuredEvent('), main.indexOf('async function initializeNativeSessions(')), context);
     const persistence = main.slice(main.indexOf('    saveInterrupted: ') + '    saveInterrupted: '.length, main.indexOf('    terminal: async (spec, reason) =>')).trim().replace(/,$/, '');
-    const make = () => createRouter({ settings: { get: () => ({}) }, claude: { apiState: () => ({ status: 'no_key' }) },
+    const make = () => createRouter({ settings: { get: () => ({}) }, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] },
       resolveSpec: () => ({ kind, projectId: 'p', terminalId: 't', providerSessionId: saved.threadId }), emit() {},
       changed(id, event) { if (event) context.structuredEvent(id, event); },
       saveInterrupted: vm.runInContext('(' + persistence + ')', context),

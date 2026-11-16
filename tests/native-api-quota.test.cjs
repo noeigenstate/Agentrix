@@ -72,9 +72,9 @@ test('API-only stops on provider limits and retains the console action without s
   }
 });
 
-test('quota availability remains scoped and sticky; only one new session can claim a ten-minute trial', async t => {
+test('quota availability belongs to the key and is sticky; only one new session can claim a ten-minute trial', async t => {
   const f = fixture(t); await f.refuse(); await f.handoff();
-  assert.equal(f.runtime.apiState('other').status, 'ready');
+  assert.equal(f.runtime.apiState('other').status, 'credits_exhausted', 'credits belong to the key: every project shares them');
   assert.equal(f.runtime.apiState('p', null, 'dispatch').status, 'ready', 'an owner refusal cannot reroute a worker');
   f.time(599999); assert.equal(f.runtime.claimApiRetry('p'), null);
   f.time(1); const token = f.runtime.claimApiRetry('p'); assert.equal(typeof token, 'string');
@@ -162,11 +162,11 @@ test('a final rate limit stops and moves only the session that received it; anot
 });
 
 for (const [kind, refusal] of [['credits', {}], ['account limits', { error: 'spend_limit', text: 'enforced_spend_limit_reached' }]]) {
-  test(`${kind} stay project-wide: another owner session in the project moves to the terminal too`, async t => {
+  test(`${kind} belong to the key: another owner session moves to the terminal too, and another project meets them as well`, async t => {
     const f = fixture(t); await f.router.start('other', { agent: 'claude' });
     await f.refuse(refusal); await f.router.reconcile();
     assert.equal(f.router.switchState('other')?.target, 'terminal');
-    assert.equal(f.runtime.apiState('p').status, kind === 'credits' ? 'credits_exhausted' : 'account_limit');
+    for (const project of ['p', 'elsewhere']) assert.equal(f.runtime.apiState(project).status, kind === 'credits' ? 'credits_exhausted' : 'account_limit');
   });
 }
 

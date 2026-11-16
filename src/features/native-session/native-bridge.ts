@@ -63,18 +63,6 @@ export interface NativeBridge {
   testConnection(projectId?: string): Promise<Result<ConnectionTest>>;
 }
 
-// How a new agent session starts, from the settings and whether an API key is saved: the native view, today's terminal (with the reason when
-// a missing key is why), or not at all (the API only, and no key). Settings not read yet or a window without the bridge mean the terminal.
-export type Launch = { how: 'native' } | { how: 'terminal'; reason: 'no_key' | null } | { how: 'blocked'; reason: 'no_key' };
-export function launchRoute(agent: NativeAgent, settings: NativeSettings | null, keySaved: boolean | null): Launch {
-  // Codex runs on app-server only; nothing about Claude's key touches it.
-  if (agent === 'codex') return { how: 'native' };
-  if (!settings) return { how: 'terminal', reason: null };
-  if (settings.claudePath === 'terminal-only') return { how: 'terminal', reason: null };
-  if (keySaved !== false) return { how: 'native' };
-  return settings.claudePath === 'api-only' ? { how: 'blocked', reason: 'no_key' } : { how: 'terminal', reason: 'no_key' };
-}
-
 // The one place that reads the bridge off window (Bridge's own type is the main side's).
 export const nativeBridge = (): NativeBridge | null => (typeof window === 'undefined' ? null : (window.agentrix as unknown as { nativeSession?: NativeBridge } | undefined)?.nativeSession ?? null);
 

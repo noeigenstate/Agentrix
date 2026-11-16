@@ -143,16 +143,17 @@ function billingSkippedWhy(key, cli, keyStatus) {
   return null;
 }
 
-// A console balance that has run out, seen by the key check or the CLI, is told through `onCredits`, after the billing probe: a
-// probe that reads the key is not proof the account can pay.
+// What the test sees is told with the generation it began in: the key's answer through `onKey`, and a console balance that
+// has run out (seen by the key check or the CLI) through `onCredits`, after the billing probe: a probe that reads the key is
+// not proof the account can pay.
 function createConnectionTest({ credentials, inspectCli, request, probeBilling = async () => ({ status: 'unknown', source: null }), sessionModel = () => null,
-  onCredits = () => {}, availabilityGeneration = () => undefined, now = Date.now, timeoutMs = 5000 }) {
+  onKey = () => {}, onCredits = () => {}, availabilityGeneration = () => undefined, now = Date.now, timeoutMs = 5000 }) {
   const pending = new Map();
   async function check(config) {
     const checkedAt = now(), generation = availabilityGeneration();
     let key, observed = { status: 'error', models: null, latencyMs: null };
     try { key = credentials.read(); } catch { }
-    if (key) observed = await checkKey(key, probeModel(sessionModel, config), { request, timeoutMs }, now);
+    if (key) { observed = await checkKey(key, probeModel(sessionModel, config), { request, timeoutMs }, now); onKey(observed.status, generation); }
     else {
       try { observed.status = credentials.status().saved ? 'error' : 'missing'; } catch { observed.status = 'error'; }
     }

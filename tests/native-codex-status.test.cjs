@@ -48,7 +48,7 @@ async function fixture(t, tier = 'fast') {
   const provider = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: () => fake.child });
   const create = provider.create.bind(provider); let session;
   provider.create = (...args) => session = create(...args);
-  const router = createRouter({ codex: provider, claude: { apiState: () => ({ status: 'no_key' }) }, emit: row => events.push(row),
+  const router = createRouter({ codex: provider, claude: { facts: () => [{ name: 'key', reason: { code: 'claude.no_key' } }] }, emit: row => events.push(row),
     settings: { get: () => ({}) }, resolveSpec: () => ({ terminalId: 't', projectId: 'p', owner: 'gui', cwd: root, preserveRunOptions: true, env: { CODEX_HOME: root, PATH: '' } }) });
   t.after(async () => { await router.close(); fs.rmSync(root, { force: true, recursive: true }); });
   const started = await router.start('t', { agent: 'codex' });
@@ -167,7 +167,7 @@ test('read-only /status does not clear an owner stop when a late interrupted tur
     stream = createEventStream(spec, emit);
     return { start: async () => ({}), close: async () => {}, interrupt: async () => {}, snapshot: () => ({ state: 'idle' }), send: async () => ({ status: 'consumed' }) };
   } };
-  const router = createRouter({ codex: provider, claude: { apiState: () => ({ status: 'ready' }) }, resolveSpec: () => ({ projectId: 'p', terminalId: 't' }), settings: { get: () => ({}) }, emit() {}, saveInterrupted: (_id, value) => markers.push(value) });
+  const router = createRouter({ codex: provider, claude: { facts: () => [] }, resolveSpec: () => ({ projectId: 'p', terminalId: 't' }), settings: { get: () => ({}) }, emit() {}, saveInterrupted: (_id, value) => markers.push(value) });
   t.after(() => router.close());
   const { runtimeSessionId } = await router.start('t', { agent: 'codex' });
   await router.interrupt('t', runtimeSessionId);

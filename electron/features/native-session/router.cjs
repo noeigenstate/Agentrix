@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { choosePath } = require('./routing.cjs');
+const { decide, nameOf } = require('../claude-runtime/decide.cjs');
 const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
@@ -33,12 +33,13 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     }).finally(() => { if (historyReads.get(id) === entry) historyReads.delete(id); });
     historyReads.set(id, entry); return entry.task;
   }
+  // The facts a Claude session's path is decided from: its project's and its card's.
+  const factsOf = (spec, card = spec.terminalId) => spec.agent === 'codex' ? [] : claude.facts(spec.projectId, card);
+  // A running session's path; a failed switch that kept the API holds it there as if API-only.
   function selection(spec, retained = false) {
-    const config = { ...settings.get() };
-    if (retained && switches.retained(spec.terminalId)) config.claudePath = 'api-only';
-    const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner, spec.terminalId);
-    if (spec.agent === 'claude' && config.claudePath === 'api-only' && providerLimit(apiState.status)) return { path: 'api', reason: apiState.status };
-    return choosePath({ agent: spec.agent, ...config, apiState });
+    const { path, wire } = decide(factsOf(spec), settings.get(), { agent: spec.agent, owner: spec.owner, trial: spec.apiTrial,
+      retained: retained && switches.retained(spec.terminalId), running: true });
+    return { path, reason: wire };
   }
   function pathChanged(agent, path, reason) {
     agents[agent] = { ...agents[agent], path, reason, ...(agent === 'claude' && path === 'terminal' ? { limits: null } : {}) };
@@ -135,13 +136,12 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (previous) { await previous.runtime.close(); if (previous.lock) occupied.delete(previous.lock); sessions.delete(id); }
       if (agent === 'claude') await claude.refreshAvailability?.();
       if (agent === 'claude' && spec.owner !== 'dispatch' && spec.kind !== 'ssh' && config.claudePath === 'api-then-terminal') spec.apiTrial = claude.claimApiRetry?.(spec.projectId);
-      const apiState = claude.apiState(spec.projectId, spec.apiTrial, spec.owner, id);
-      const selection = choosePath({ agent, ...config, apiState });
-      if (!selection.path) throw new Error(apiState.reason || 'Claude API 路径当前不可用。');
-      if (selection.path === 'terminal') {
+      const decision = decide(factsOf(spec, id), config, { agent, owner: spec.owner, trial: spec.apiTrial });
+      if (!decision.path) throw new Error(decision.message || 'Claude API 路径当前不可用。');
+      if (decision.path === 'terminal') {
         const stream = createEventStream(spec, emit, now);
-        stream.publish('path.changed', { previous: null, selected: 'terminal', reason: selection.reason }); terminalStreams.set(id, stream);
-        await terminal(spec, selection.reason); pathChanged(agent, 'terminal', selection.reason); changed();
+        stream.publish('path.changed', { previous: null, selected: 'terminal', reason: decision.wire }); terminalStreams.set(id, stream);
+        await terminal(spec, decision.wire); pathChanged(agent, 'terminal', decision.wire); changed();
         return { runtimeSessionId: spec.runtimeSessionId };
       }
       const lock = spec.providerSessionId ? `${agent}:${spec.providerSessionId}` : null;
@@ -180,9 +180,9 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         flushFailures(record);
         throw error;
       }
-      const reason = startup?.reason || selection.reason;
-      record.stream.publish('path.changed', { previous: null, selected: selection.path === 'api' ? 'api' : 'subscription', reason });
-      pathChanged(agent, selection.path, reason); changed(); return { runtimeSessionId: spec.runtimeSessionId };
+      const reason = startup?.reason || decision.wire;
+      record.stream.publish('path.changed', { previous: null, selected: decision.path === 'api' ? 'api' : 'subscription', reason });
+      pathChanged(agent, decision.path, reason); changed(); return { runtimeSessionId: spec.runtimeSessionId };
     } finally { busy.delete(id); }
   }
   function localSessions() {
@@ -248,7 +248,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           carryHistory(previousStream, stream);
           let reason = old?.fallbackReason || null;
           // This card's state: a rate limit is this session's own, credits and account limits the project's.
-          const limit = spec.agent === 'claude' && claude.apiState(spec.projectId, null, spec.owner, id).status;
+          const limit = nameOf(decide(factsOf(spec, id), {}, { agent: spec.agent, owner: spec.owner, running: true }).reason);
           if (settings.get().claudePath === 'api-then-terminal' && providerLimit(limit)) {
             reason = LIMIT_SWITCHED[limit][0];
             const refused = old?.runtime.fallbackInput?.();
@@ -465,7 +465,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           snapshot[agent].path = running?.path || null;
           snapshot[agent].reason = running?.record?.stream.snapshot().events.findLast(event => event.type === 'path.changed')?.payload.reason || null;
         }
-        snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.apiState(projectId) : null, cli[agent]);
+        snapshot[agent].next = nextPath(agent, config, agent === 'claude' ? claude.facts(projectId) : [], cli[agent]);
         snapshot[agent].limits ||= structuredClone(limits[agent] || null);
         if (snapshot[agent].limits?.billingRoute === limits[agent]?.billingRoute &&
           Number.isFinite(limits[agent]?.observedAtMs) && limits[agent].observedAtMs > (snapshot[agent].limits.observedAtMs ?? -Infinity)) {
