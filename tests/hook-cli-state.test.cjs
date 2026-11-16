@@ -34,10 +34,26 @@ test('Bash, zsh and PowerShell register matching observation hooks', () => {
   }
 });
 
-test('PowerShell and Node emit equivalent progress and permission fields without output', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
+test('a StopFailure has its command hook in every shell and reports a failed turn, never a completed one', () => {
+  const input = JSON.stringify({ session_id: 'provider', hook_event_name: 'StopFailure', prompt_id: 'p1', error: 'unknown', last_assistant_message: 'API Error: 400' });
+  const event = claudeEvent(input, 'terminal', 'capability', 'stop-failed');
+  assert.equal(event.state, 'failed'); assert.equal(event.hookEvent, 'StopFailure'); assert.equal(event.prompt, null); assert.equal(event.message, null);
+  for (const shell of [{ posix: false, powershellPath: 'C:\\Windows\\powershell.exe', script: 'C:\\agentrix\\claude-hook.ps1' }, { posix: true, node: '/agentrix/node', helper: '/agentrix/agent-event.cjs' }]) {
+    for (const platform of ['linux', 'win32']) {
+      const { settings } = terminalHooks({ port: 1, terminalId: 'terminal', sessionKey: 'capability', eventServer: { name: 'pipe', address: '/socket' }, env: {}, cwd: '/project',
+        shell, platform, home: '/home', read: () => '{}' });
+      const [hook] = JSON.parse(settings.fallback).hooks.StopFailure[0].hooks;
+      assert.ok(hook.command.endsWith(shell.posix ? ' stop-failed' : ' -Kind stop-failed'), hook.command);
+      assert.equal(hook.async, undefined, `${platform}: K0b never proved StopFailure async`);
+    }
+  }
+});
+
+test('PowerShell and Node emit equivalent progress, permission and StopFailure fields without output', { skip: process.platform !== 'win32', timeout: 30000 }, async t => {
   const events = [], server = await createEventServer(event => events.push(event)); t.after(() => server.close());
   const executable = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
-  for (const [hookEvent, kind] of Object.entries(hooks)) {
+  const commandEvents = { ...hooks, StopFailure: 'stop-failed' };
+  for (const [hookEvent, kind] of Object.entries(commandEvents)) {
     const input = { ...payload(hookEvent), source: 'compact' };
     const result = await new Promise((resolve, reject) => {
       const child = spawn(executable, ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, '../integration/claude-hook.ps1'), '-PipeName', server.name, '-ProjectId', 'terminal', '-SessionKey', 'capability', '-Kind', kind], { windowsHide: true });
@@ -46,7 +62,7 @@ test('PowerShell and Node emit equivalent progress and permission fields without
     });
     assert.deepEqual(result, { code: 0, output: '' });
     const event = events.at(-1), expected = claudeEvent(JSON.stringify(input), 'terminal', 'capability', kind);
-    assert.equal(events.length, Object.keys(hooks).indexOf(hookEvent) + 1);
+    assert.equal(events.length, Object.keys(commandEvents).indexOf(hookEvent) + 1);
     for (const key of Object.keys(expected).filter(key => !['eventId', 'sentAt'].includes(key))) assert.deepEqual(event[key], expected[key], hookEvent + ': ' + key);
     assert.ok(Number.isFinite(event.sentAt));
   }

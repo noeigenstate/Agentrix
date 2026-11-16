@@ -209,17 +209,34 @@ test("Agentrix adds no NO_PROXY entry anywhere but system-proxy.cjs's adoption, 
 
 test('the channel field follows each launch, so a launch after a downgrade without a proxy reads http', () => {
   const s = { hooks: { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' } };
-  // Launch 1: the wrapper found a proxy and reported it before codex-started.
-  reportHookChannel(s, 'HTTP_PROXY'); startHookLaunch(s);
+  // Launch 1: the wrapper found a proxy and reported it (shell event 1) before codex-started (2).
+  reportHookChannel(s, 'HTTP_PROXY', 1); startHookLaunch(s, 2);
   assert.equal(s.hooks.channel, 'command-async'); assert.equal(s.hooks.channelReason.params.variable, 'HTTP_PROXY');
   // Launch 2: no proxy, so no report; the server still accepts HTTP and the field says so.
-  startHookLaunch(s);
+  startHookLaunch(s, 4);
   assert.equal(s.hooks.channel, 'http'); assert.equal(s.hooks.channelReason, null); assert.equal(s.hooks.key, 'k');
   // Launch 3: a proxy again; a repeated report in one launch changes nothing.
-  reportHookChannel(s, 'HTTPS_PROXY'); const fallen = s.hooks; reportHookChannel(s, 'HTTP_PROXY'); startHookLaunch(s);
+  reportHookChannel(s, 'HTTPS_PROXY', 6); const fallen = s.hooks; reportHookChannel(s, 'HTTP_PROXY', 6); startHookLaunch(s, 7);
   assert.equal(s.hooks, fallen); assert.equal(s.hooks.channel, 'command-async');
   // A terminal that began on command hooks stays there.
   const command = { hooks: { channel: 'command', fallback: 'command' } };
-  startHookLaunch(command); reportHookChannel(command, 'HTTP_PROXY'); startHookLaunch(command); startHookLaunch(command);
+  startHookLaunch(command, 1); reportHookChannel(command, 'HTTP_PROXY', 2); startHookLaunch(command, 3); startHookLaunch(command, 5);
   assert.equal(command.hooks.channel, 'command');
+});
+
+test('a report and its launch pair by sequence, since they land on separate pipe connections in either order', () => {
+  const s = { hooks: { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' } };
+  // Launch 1: codex-started (2) lands before the report (1) that precedes it; the report still downgrades it.
+  startHookLaunch(s, 2); reportHookChannel(s, 'HTTP_PROXY', 1);
+  assert.equal(s.hooks.channel, 'command-async');
+  // Launch 2 follows no report, so the late report does not carry into it.
+  startHookLaunch(s, 4);
+  assert.equal(s.hooks.channel, 'http');
+  // A report of a launch already past changes nothing; one of the launch to come downgrades at once and holds for it.
+  reportHookChannel(s, 'HTTP_PROXY', 1);
+  assert.equal(s.hooks.channel, 'http');
+  reportHookChannel(s, 'HTTP_PROXY', 6);
+  assert.equal(s.hooks.channel, 'command-async');
+  startHookLaunch(s, 7);
+  assert.equal(s.hooks.channel, 'command-async');
 });

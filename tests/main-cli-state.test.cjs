@@ -256,3 +256,38 @@ test('a StopFailure ends the round without rearming completion when the turn fai
   hook('UserPromptSubmit', { prompt: 'Try again', prompt_id: 'p2' }); hook('Stop', { prompt_id: 'p2' });
   assert.equal(h.notifications(), 1);
 });
+
+test('a StopFailure on the command channel ends the round as interrupted without rearming completion', () => {
+  const h = fixture(); h.s.hooks = { channel: 'command-async' };
+  // The event agent-event.cjs sends for the stop-failed kind; claude-hook.ps1 sends the same state (hook-cli-state.test.cjs).
+  const { claudeEvent } = require('../integration/agent-event.cjs');
+  let serial = 0;
+  const send = (kind, payload) => h.context.onEvent({ ...claudeEvent(JSON.stringify({ session_id: 'provider', ...payload }), 't', 'cap', kind), eventId: 'provider:command-' + ++serial });
+  send('start', { hook_event_name: 'UserPromptSubmit', prompt: 'Do the task' });
+  assert.equal(h.s.cliState.state, 'working'); assert.equal(h.beginnings(), 1);
+  send('stop-failed', { hook_event_name: 'StopFailure', error: 'unknown', last_assistant_message: 'API Error: 400' });
+  assert.equal(h.s.cliState.state, 'idle', 'the light leaves working at once, not at the next transcript read');
+  assert.equal(h.s.codexActivity, 'interrupted'); assert.equal(h.notifications(), 0);
+  send('stop', { hook_event_name: 'Stop' }); send('stop-failed', { hook_event_name: 'StopFailure' });
+  assert.equal(h.notifications(), 0, 'nothing later rearms the alert');
+});
+
+test("a hook-channel report and its claude launch pair by sequence, whichever pipe connection lands first", () => {
+  const h = fixture(), { startHookLaunch } = require('../electron/features/terminal-events/hook-channel.cjs');
+  // A version run keeps the launch branch short; the hook channel follows every claude launch alike.
+  Object.assign(h.context, { acceptShellEvent: require('../electron/terminal-input.cjs').acceptShellEvent, startHookLaunch, agentCommand: () => ({ name: 'version' }),
+    readingHistory: { close() {} }, stopUsageAccount() {}, startSkillSession() {} });
+  Object.assign(h.context.store, { findTerminal: () => null });
+  Object.assign(h.s, { actions: { reset() {} }, conversation: { reset() {} }, promptQueue: { reset() {} } });
+  h.s.hooks = { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' };
+  const shell = (type, sequence, extra = {}) => h.context.onEvent({ projectId: 't', sessionKey: 'cap', type, sequence, agent: 'claude', ...extra });
+  // Launch 1: codex-started (2) lands before the report (1) that precedes it.
+  shell('codex-started', 2); shell('hook-channel', 1, { command: 'HTTP_PROXY' });
+  assert.equal(h.s.hooks.channel, 'command-async');
+  // Launch 2 follows no report: the terminal's own channel again.
+  shell('codex-started', 4);
+  assert.equal(h.s.hooks.channel, 'http');
+  // A report of a past launch landing now changes nothing.
+  shell('hook-channel', 1, { command: 'HTTP_PROXY' });
+  assert.equal(h.s.hooks.channel, 'http');
+});

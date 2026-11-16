@@ -248,6 +248,11 @@ test('a pnpm shim naming its package by an absolute path on another drive is fou
   // The shim text is the guard: an absolute path that is not @openai/codex's bin/codex.js names nothing.
   const elsewhere = W.join('C:\\other', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
   assert.equal((await find({ [W.join(pnpmHome, 'codex.cmd')]: { text: '@"C:\\other\\bin\\codex.js" %*\r\n' }, [elsewhere]: { size: NATIVE } }, { PATH: pnpmHome })).found.file, null);
+  // An absolute path ends at bin/codex.js: a backup or another file beginning so names nothing, in any shim form.
+  for (const suffix of ['.bak', 'x']) for (const name of ['codex.ps1', 'codex.cmd', 'codex']) {
+    const text = pnpmShims(W.join(linked, 'bin', 'codex.js' + suffix))[name];
+    assert.equal((await find({ [W.join(pnpmHome, name)]: { text }, ...installed }, { PATH: pnpmHome, PNPM_HOME: pnpmHome })).found.file, null, name + ' ' + suffix);
+  }
   // A share: only from a shim whose folder is on that same share.
   const shared = '\\\\server\\share\\pnpm-global\\node_modules\\@openai\\codex', sharedProgram = W.join(shared, ...['node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe']);
   for (const [folder, runs] of [[pnpmHome, false], ['\\\\server\\share\\pnpm', true], ['\\\\other\\share\\pnpm', false]]) {
