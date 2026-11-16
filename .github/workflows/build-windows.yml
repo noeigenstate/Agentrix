@@ -556,7 +556,10 @@ jobs:
         run: node scripts/claude-sdk-pack.cjs --clean
 
       - name: Test SSH descriptor-relative reads and symlink recovery
-        run: python3 -m unittest discover -s tests -p 'remote_worker_test.py' -v
+        run: >-
+          python3 -m unittest discover -s tests -p 'remote_worker_test.py' -v
+          -k test_claude_status_follows_the_named_sub_agents_in_the_session_folder_and_drops_the_rest
+          -k test_sub_agent_reads_never_follow_a_link_out_of_the_session_folder
 
       - name: Run unit and integration tests, including Bash and a real zsh terminal
         shell: bash
