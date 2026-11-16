@@ -1,4 +1,4 @@
-const { test, resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
+const { test, resources, removeTree } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const os = require('node:os');
@@ -111,6 +111,27 @@ test('resumed threads have exclusive occupancy and release on close', async t =>
   t.after(() => second.close());
   await assert.rejects(second.resume({ providerSessionId: 'same-thread' }), /thread_in_use/);
   await f.runtime.close();
+});
+
+test('closing a local session stops every process its app-server started, and the folder they ran in can be removed', async t => {
+  const fs = require('node:fs'), lifetime = resources(t), root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-codex-tree-'));
+  const cwd = path.join(root, 'project'), pidFile = path.join(root, 'helper.pid'); fs.mkdirSync(cwd);
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+  let helper = null;
+  lifetime.defer('stop a surviving helper and remove the folder', async () => {
+    if (helper && alive(helper)) process.kill(helper, 'SIGKILL');
+    await removeTree(root);
+  });
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: (_file, args, options) => lifetime.child(spawn(process.execPath,
+    [path.join(__dirname, 'fixtures/codex-app-server.cjs'), ...args], { ...options, env: { ...options.env, SYNTHETIC_CODEX_MODE: 'grandchild', SYNTHETIC_GRANDCHILD_PID: pidFile } })) });
+  const session = factory.create({ projectId: 'project', terminalId: 'tree', cwd, env: { PATH: '', CODEX_HOME: path.join(root, 'home') } }, () => {});
+  lifetime.defer('close runtime', () => session.close());
+  await session.start();
+  helper = Number(fs.readFileSync(pidFile, 'utf8')); assert.ok(alive(helper));
+  // The stand-in leaves on end of input as Codex does: a tree stop that comes after that finds no tree to stop.
+  await session.close();
+  await until(() => !alive(helper));
+  fs.rmSync(cwd, { recursive: true });
 });
 
 test('sparse limits retain missing fields, never infer recovery, and reject unsafe integers', () => {
