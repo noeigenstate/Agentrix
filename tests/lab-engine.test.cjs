@@ -985,3 +985,23 @@ test('the lab copy of the real dispatch helper starts Codex on the file credenti
   assert.deepEqual(Object.keys(modules).filter(name => name !== 'dispatch.cjs').sort(),
     Object.keys(require(helper).runtimeFiles()).filter(name => name !== 'features/native-session/routing.cjs').map(name => 'electron/' + name).sort());
 });
+
+// Runs everywhere: every platform's executor loads the private bundle from memory, where no runtime file exists on disk.
+test('the lab executor runs the private bundle of the real dispatch helper from memory without an Agentrix session', async t => {
+  const directory = await temporary(t), tools = path.join(directory, 'tools'), home = path.join(directory, 'home');
+  await fs.mkdir(tools); await fs.mkdir(home);
+  for (const name of ['executor.cjs', 'meter-sink.cjs']) {
+    await fs.copyFile(path.join(__dirname, '../electron/features/lab', name), path.join(tools, name));
+  }
+  const modules = JSON.parse(await fs.readFile(await copyHelper(path.join(__dirname, '../integration/dispatch.cjs'), directory), 'utf8'));
+  const child = spawn(process.execPath, [path.join(tools, 'executor.cjs')], {
+    cwd: home, stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
+    env: { ...cleanEnvironment(process.env), HOME: home, USERPROFILE: home, APPDATA: home,
+      CODEX_HOME: path.join(directory, 'fake-codex'), CLAUDE_CONFIG_DIR: path.join(directory, 'fake-claude') },
+  });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', value => { stdout += value; }); child.stderr.on('data', value => { stderr += value; });
+  child.stdio[3].end(JSON.stringify({ config: { args: ['codex', '--help'] }, bootstrap: null, modules }));
+  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
+  assert.equal(code, 0, stderr); assert.match(stdout, /Usage: node dispatch/);
+});
