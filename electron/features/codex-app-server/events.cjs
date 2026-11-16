@@ -3,11 +3,14 @@ const { tokenUsage } = require('./account.cjs');
 const { commandPhrase } = require('../../command-phrase.cjs');
 const { isGeneratedImage } = require('../../generated-image-path.cjs');
 const { TokenRates } = require('../agents/token-rate.cjs');
+const { typedCommand } = require('../../shared/agentrix-shims.cjs');
 /** @typedef {import('../../../src/shared/agent-events').AgentEvent} AgentEvent */
 const KINDS = { userMessage: 'user-message', agentMessage: 'agent-message', reasoning: 'reasoning-summary', commandExecution: 'command',
   fileChange: 'file-change', mcpToolCall: 'tool', dynamicToolCall: 'tool', plan: 'plan', webSearch: 'web', imageGeneration: 'agent-message' };
 const bounded = value => typeof value === 'string' ? value.slice(0, 256 * 1024) : null;
 const UNFINISHED = ['running', 'in-progress', 'pending'];
+// An owner's ! command shows as typed, without the line that takes the planner's shims out (ownerShellCommand).
+const shownCommand = item => (item.commandActions?.length === 1 && typedCommand(item.commandActions[0]?.command)) || item.command;
 // History replays into an idle thread: an item it left unfinished ran in an earlier process and is no work of this one.
 // Only a turn recorded as interrupted proves the outcome; any other result is unknown, never running and never done.
 const settleReplayed = (payload, turnStatus) => UNFINISHED.includes(payload.status)
@@ -46,7 +49,7 @@ function itemPayload(item, completed, renderImage = () => null, translate = valu
   if (item.type === 'agentMessage' || item.type === 'plan') content = { text: bounded(item.text), phase: item.phase ?? null };
   else if (item.type === 'userMessage') content = { text: bounded((item.content || []).filter(x => x.type === 'text').map(x => x.text).join('\n')), clientMessageId: item.clientId ?? null };
   else if (item.type === 'reasoning') content = { text: bounded((item.summary || []).join('\n')) };
-  else if (item.type === 'commandExecution') content = { command: bounded(item.command), phrase: commandPhrase(item.command).phrase, cwd: item.cwd ?? null, output: bounded(item.aggregatedOutput), exitCode: item.exitCode ?? null, durationMs: item.durationMs ?? null };
+  else if (item.type === 'commandExecution') content = { command: bounded(shownCommand(item)), phrase: commandPhrase(shownCommand(item)).phrase, cwd: item.cwd ?? null, output: bounded(item.aggregatedOutput), exitCode: item.exitCode ?? null, durationMs: item.durationMs ?? null };
   else if (item.type === 'fileChange') content = { changes: (item.changes || []).slice(0, 100).map(x => ({ path: x.path, kind: x.kind, diff: bounded(x.diff) })) };
   else if (kind === 'tool') content = { tool: item.tool, server: item.server ?? null, output: bounded((item.result?.content || item.contentItems || []).filter(block => block.type === 'text').map(block => block.text).join('\n') || (typeof item.result === 'string' ? item.result : '')) };
   else if (item.type === 'imageGeneration' && completed && isGeneratedImage(item.savedPath)) content = imageContent(item, renderImage(item), translate);

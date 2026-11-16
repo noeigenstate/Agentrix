@@ -1,8 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 // The same module runs beside the source helper, beside the packaged helper, and inside its carried electron runtime.
+// The lab's private bundle runs from memory with nothing on disk to find: it carries the runtime beside this module.
 const runtime = [__dirname, path.join(__dirname, 'electron'), path.join(__dirname, '../electron')]
-  .find(folder => fs.existsSync(path.join(folder, 'features/agents/dispatch-events.cjs')));
+  .find(folder => fs.existsSync(path.join(folder, 'features/agents/dispatch-events.cjs'))) ?? __dirname;
 const { dispatchFrame, verifyDispatchFrame } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 
 class DispatchOutbox {
