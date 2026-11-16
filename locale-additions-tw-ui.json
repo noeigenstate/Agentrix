@@ -1,0 +1,6 @@
+{
+  "它在等你确认。点进下面的终端回答。": "It is waiting for your confirmation. Click into the terminal below to answer.",
+  "在上面的终端里输入你的回答；Esc 取消。": "Type your answer in the terminal above; Esc cancels.",
+  "这个 worker 的终端现在不能显示。": "This worker's terminal cannot be shown right now.",
+  "{name} 的终端": "Terminal of {name}"
+}

@@ -2,7 +2,7 @@
 // conversation it is having, followed live. The conversation is read-only; the owner's word for the agent goes through SubagentInput,
 // and what the owner sent shows under the conversation with the worker's delivery receipt.
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
-import { ArrowDown, X } from '@phosphor-icons/react';
+import { ArrowDown, DotsThreeCircle, X } from '@phosphor-icons/react';
 import type { AgentIntervention, SubagentFeed } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { useNow } from '../../shared/useNow';
@@ -13,6 +13,7 @@ import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
 import { CALL_STATES, failureWord, rateValue } from './AgentCalls';
 import { SubagentInput } from './SubagentInput';
+import { WorkerTerminal } from './WorkerTerminal';
 import { type Receipt, receiptLine } from '../native-session/native-words';
 import { type FeedState, deliveredIds, unreadAfter, useSubagentFeed } from './subagent-splits.ts';
 import './activity-pane.css';
@@ -46,7 +47,7 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   terminalId: string; callId: string; projectId: string; onClose(): void; onError(message: string): void; onOpenLink(target: string): void;
 }) {
   const { feed, status, error } = useSubagentFeed(terminalId, callId), now = useNow(Date.now);
-  const body = useRef<HTMLDivElement>(null), followingNow = useRef(true), [paused, setPaused] = useState<Paused>(null), [sent, setSent] = useState<AgentIntervention[]>([]);
+  const body = useRef<HTMLDivElement>(null), followingNow = useRef(true), [paused, setPaused] = useState<Paused>(null), [sent, setSent] = useState<AgentIntervention[]>([]), [noTerminal, setNoTerminal] = useState(false);
   const entries = feed?.entries ?? [], lastId = entries.at(-1)?.id ?? null, following = paused === null;
   const unread = paused ? unreadAfter(entries, paused.after) : 0;
   followingNow.current = following;
@@ -67,6 +68,8 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape') return;
     event.stopPropagation();
+    // Inside the worker's own terminal Escape is the CLI's key: the split stays open and focus stays where it is.
+    if ((event.target as HTMLElement).closest?.('.subagent-worker-term')) return;
     if ((event.target as HTMLElement).tagName === 'TEXTAREA') body.current?.focus(); else onClose();
   };
   const name = feed ? callModelName(feed) : t('子 agent'), Mark = feed?.agent === 'Codex' ? CodexLogo : ClaudeLogo;
@@ -81,6 +84,9 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
   for (const item of sent) receipts.set(item.id, receiptOf(item, receipts.get(item.id), delivered.has(item.id)));
   const how = feed ? [feed.effort === 'default' ? t('默认') : feed.effort, feed.fast != null && (feed.fast ? t('快速') : t('普通'))].filter(Boolean).join(' · ') : '';
   const rate = feed ? rateValue(feed.rate) : null;
+  // A worker waiting for the owner shows its own terminal instead of the conversation, for as long as it waits; when it stops waiting the view is the conversation again.
+  const asking = direct && feed?.awaiting === 'owner' && !over, terminal = asking && !noTerminal;
+  useEffect(() => { if (!asking) setNoTerminal(false); }, [asking]);
   // A finished view counts to its recorded end; without one, or with an end not after the start, the time it took is unknown, not 0:00.
   const ended = over ? feed?.endedAt ?? null : now;
   const elapsed = feed?.startedAt != null && ended !== null && (!over || ended > feed.startedAt) ? elapsedClock(ended - feed.startedAt) : '—';
@@ -97,9 +103,13 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       </div>
       {meta && <div className="subagent-meta" title={feed?.model ? `${meta} · ${feed.model}` : meta}>{meta}</div>}
     </header>
-    <div className="subagent-main">
+    {terminal ? <div className="subagent-main subagent-worker">
+      <div className="subagent-worker-banner"><DotsThreeCircle size={14} aria-hidden="true" /><div>{t('它在等你确认。点进下面的终端回答。')}</div></div>
+      <WorkerTerminal terminalId={terminalId} callId={callId} name={who} onError={onError} onUnavailable={() => setNoTerminal(true)} />
+    </div> : <div className="subagent-main">
       <div ref={body} className="subagent-body" tabIndex={0} role="log" aria-live="off" aria-label={t('{name} 的消息和工具步骤，只读', { name: who })}
         onScroll={event => { const end = atEnd(event.currentTarget); setPaused(current => end ? null : current ?? { after: lastId }); }}>
+        {asking && noTerminal && <p className="subagent-empty">{t('这个 worker 的终端现在不能显示。')}</p>}
         {feed ? <ConversationFeed entries={feed.entries} agent={feed.agent === 'Codex' ? 'codex' : 'claude'} projectId={projectId} live={feed.state === 'running' && status === 'ok'} onError={onError} onOpenLink={onOpenLink} />
           : <p className="subagent-empty">{status === 'error' ? t('读取失败：{message}', { message: error ?? '' }) : t('正在读取…')}</p>}
         {/* Once the conversation shows a word, it is not shown again; a refused one stays, with why. Having been read needs no saying. */}
@@ -110,9 +120,10 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       </div>
       {/* Scrolled up: the way back to the end, with how much came after. */}
       {(unread > 0 || !following && !over) && <button type="button" className="subagent-jump button" onClick={follow}><ArrowDown size={16} />{unread > 0 ? t('{count} 个新步骤', { count: unread }) : t('回到最新')}</button>}
-    </div>
+    </div>}
     {feed && status === 'error' && <p className="subagent-read-error" role="alert">{t('读取失败：{message}', { message: error ?? '' })}</p>}
-    {direct ? <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} receipts={receipts} onSent={item => setSent(items => [...items, item])} />
+    {terminal ? <div className="subagent-input"><p className="subagent-input-note">{t('在上面的终端里输入你的回答；Esc 取消。')}</p></div>
+      : direct ? <SubagentInput terminalId={terminalId} callId={callId} name={who} closed={over} receipts={receipts} onSent={item => setSent(items => [...items, item])} />
       : <div className="subagent-input"><p className="subagent-input-note">{t('会话内的子代理没有直达通道，只能通过主会话与它交流。')}</p></div>}
   </section>;
 }

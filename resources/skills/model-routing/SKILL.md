@@ -183,7 +183,7 @@ the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscr
 | --- | --- | --- | --- |
 | Codex | Codex | Native mode: the Codex app-server, for the lead and every worker | Codex account |
 | Claude, native mode | Claude | The lead's native subagent (an Agent call), or the dispatch helper, which follows the lead's mode | API |
-| Claude, terminal mode | Claude | The terminal's own subagent (Claude Code's Agent tool), or the dispatch helper, which follows the lead's mode | Subscription |
+| Claude, terminal mode | Claude | The terminal's own subagent (Claude Code's Agent tool), or the dispatch helper, which runs the worker as a hidden interactive Claude Code session | Subscription |
 | Claude, either mode | Codex | The dispatch helper, native mode | Codex account |
 | Codex | Claude | The dispatch helper, following Claude's run mode in Settings | API or subscription, see below |
 
@@ -203,8 +203,17 @@ the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscr
   | API only | Native, billed to the API; it fails to start without a usable key |
   | Terminal only (subscription) | As below |
 
+- **Under a terminal-mode lead, a Claude worker runs as a hidden interactive Claude Code session**, billed to the
+  subscription exactly like the owner's terminal. It is not a project terminal: it never appears in the grid, is never
+  restored and never arms a completion notification. It shows in the Agent tab with its own rate. When it asks for a
+  confirmation its row reads "waiting for your confirmation"; the owner clicks that row and answers in the worker's own
+  terminal inside the split. The owner's keys go only to that worker, only while it waits, and nothing is answered
+  automatically. When the worker stops, its final answer is written to `--out`. Only an authenticated terminal-mode lead
+  on a local project gets this; SSH projects and Codex leads keep the paths below.
+- **A Codex lead's Claude workers are unchanged:** they follow the Settings table above and, without the native path,
+  take the non-interactive call below.
 - **Without the native path, the helper runs Claude Code non-interactively** (streamed output), billed to the
-  subscription. This is not an interactive terminal worker; an interactive terminal worker is a planned improvement.
+  subscription. This is not an interactive terminal worker.
   The helper takes the same path when it has no connection to Agentrix, outside the app for example, and says so in a
   `[dispatch] transport … claude-cli fallback` line. It never takes this path for a native-mode lead.
 
