@@ -1,6 +1,13 @@
 const { isLocalCommand, isTerminalResponse } = require('../../terminal-input.cjs');
 const { approvalStamp } = require('./approval-guard.cjs');
 
+// terminal:screenFacts: what the renderer reads off a Claude terminal's screen, exactly these booleans, the PTY session
+// and a frame revision (C-4); no text.
+const SCREEN_FLAGS = ['inputPresent', 'busy', 'dialog', 'menu', 'queueShown', 'draft'];
+const validFacts = facts => !!facts && typeof facts === 'object' && !Array.isArray(facts) && Object.keys(facts).length === SCREEN_FLAGS.length + 2
+  && typeof facts.sessionId === 'string' && facts.sessionId.length <= 200 && Number.isSafeInteger(facts.revision) && facts.revision >= 0
+  && SCREEN_FLAGS.every(name => typeof facts[name] === 'boolean');
+
 // nativeHost: whether a native session holds the terminal or is starting on it, its PTY already gone.
 function registerTerminalIpc({ handle, listen, findProject, getSession, hasSession, nativeHost = () => false, startTerminal, addTerminal, removeTerminal, confirmTerminalClose, forgetRestorePlan, disposeTerminal, clearStartupError, broadcast, getProjectById, acknowledgeProject, expectCompletion, scheduleState, applyActivity, pollAfterSubmission, send, getActiveTerminal, setActiveTerminal, setActiveFileTree, now = () => Date.now(), platform = process.platform }) {
   handle('terminal:start', startTerminal);
@@ -102,6 +109,12 @@ function registerTerminalIpc({ handle, listen, findProject, getSession, hasSessi
     // Chinese text; Alt+Enter is its new line.
     const lineBreak = platform === 'win32' && session.codexActive && session.agent === 'codex' ? '\x1b\r' : null;
     send('terminal:paste', { id, sessionId, text, lineBreak });
+  });
+  // Facts for the session the renderer drew, on change only; the Claude session machine decides what they mean.
+  listen('terminal:screenFacts', (id, facts) => {
+    const s = getSession(id);
+    if (!validFacts(facts) || !s || s.nativeStructured || !s.codexActive || s.agent !== 'claude' || s.sessionId !== facts.sessionId) return;
+    s.cliStateMeta?.screenFacts?.(facts);
   });
   listen('terminal:focus', (id, focused) => { if (hasSession(id) && focused) { setActiveTerminal(id); setActiveFileTree(null); } else if (getActiveTerminal() === id) setActiveTerminal(null); });
   return { write: writeTerminal };

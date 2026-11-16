@@ -125,6 +125,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   copy: text => ipcRenderer.invoke('clipboard:copy', text),
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   terminalFocus: (id, focused) => ipcRenderer.send('terminal:focus', id, focused),
+  screenFacts: (id, facts) => ipcRenderer.send('terminal:screenFacts', id, facts),
   onState: callback => listen('workspace:changed', callback),
   onTerminalData: callback => listen('terminal:data', callback),
   onFocusProject: callback => listen('project:focus', callback),

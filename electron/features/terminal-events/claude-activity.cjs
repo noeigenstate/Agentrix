@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { createSessionMachine, reduce, cliFields } = require('./session-machine.cjs');
 
 // The hook events the pipe's claude-hook.ps1 kinds stood for (C-2), by the state claudeActivity takes.
 const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', StopFailure: 'failed', Notification: 'attention', PermissionRequest: 'attention',
@@ -6,9 +7,10 @@ const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', StopFailure
   ElicitationResult: 'progress' };
 // The notifications that mean Claude waits for an answer; an idle one must not turn a finished round back into a waiting one.
 const ATTENTION_NOTICES = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog'];
-// How many prompts a terminal remembers for ordering its hooks.
-const PROMPTS_KEPT = 32;
-const keep = (list, value) => { list.push(value); if (list.length > PROMPTS_KEPT) list.shift(); };
+// The session machine's signal for each state claudeActivity takes.
+const SIGNALS = { working: 'start', complete: 'stop', attention: 'attention', progress: 'progress', session: 'session' };
+// Prompts the CLI holds back while it works, as the prompt queue and the transcript's queue records show them.
+const queuedOf = s => s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
 
 // A terminal's Claude Code and Codex activity: hook events, the transcript Claude writes and the turn snapshots
 // readers produce become the CLI state, the lights and the completion alert. `deps` is the app shell (main.cjs),
@@ -116,12 +118,29 @@ function createClaudeActivity(deps) {
   }
 
 
+  // A PTY session's CLI-state watermarks and Claude session machine. Main drops them on every shell, launch and exit
+  // event; keyed by the session itself, a machine fed before the first publish survives that publish.
+  function metaOf(s) {
+    if (s.cliStateMeta && s.cliStateMeta.sessionId === s.sessionId) return s.cliStateMeta;
+    return s.cliStateMeta = { sessionId: s.sessionId, at: 0, events: new Set(), closed: new Set(), turnId: null, requestId: null,
+      machine: createSessionMachine({ terminalSession: s.sessionId, claudeSession: s.cliProviderId || s.claudeSessionId || s.claudeResumeId || null, launch: s.activitySince || 0 }),
+      // terminal/ipc.cjs reaches the machine through the session it holds, after validating the renderer's facts.
+      screenFacts: facts => claudeScreen(s, facts) };
+  }
+
+  // Feeds a signal to the session machine: its effects, or null when the signal changed nothing.
+  function feed(s, signal) {
+    const meta = metaOf(s), { state, effects } = reduce(meta.machine, signal);
+    if (state === meta.machine && !effects.length) return null;
+    meta.machine = state;
+    return effects;
+  }
+
   // CLI interaction is independent of project completion: progress never arms another completion notification.
   function publishCliState(s, state, { at = Date.now(), threadId, turnId, requestId, eventId, message: detail, bind = false, progress = false, expectedRevision, newTurn = false } = {}) {
     const { sessions, broadcast } = deps;
     if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at)) return false;
-    if (!s.cliStateMeta || s.cliState?.sessionId !== s.sessionId) s.cliStateMeta = { at: 0, events: new Set(), closed: new Set(), turnId: null, requestId: null };
-    const meta = s.cliStateMeta, before = s.cliState;
+    const meta = metaOf(s), before = s.cliState;
     if (expectedRevision != null && expectedRevision !== before?.revision) return false;
     const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId : s.reportedThreadId || s.rootThreadId);
     if (!bind && threadId && bound && threadId !== bound && !(s.agent === 'codex' && bound.length >= 8 && threadId.toLowerCase().startsWith(bound.toLowerCase()))) return false;
@@ -144,7 +163,7 @@ function createClaudeActivity(deps) {
     s.needsInput = state === 'waiting' ? { message, since: Date.now() } : null;
     s.cliStateRevision = (s.cliStateRevision || 0) + 1;
     s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
-      updatedAt: Date.now(), state, ...(message ? { message } : {}) };
+      updatedAt: Date.now(), state, ...(message ? { message } : {}), ...(s.agent === 'claude' ? cliFields(meta.machine, state) : {}) };
     s.observeNativeSwitch?.();
     broadcast();
     return true;
@@ -165,6 +184,8 @@ function createClaudeActivity(deps) {
     if (snapshot.updatedAt >= (s.activityRawSnapshot?.updatedAt || 0)) s.activityRawSnapshot = snapshot;
     // Neither a polled result from before new input nor a result from before newer attention can end this interaction.
     if (snapshot.updatedAt < Math.max(s.activityInputAt || 0, s.cliStateMeta?.at || 0)) return;
+    // Nor can a Claude transcript record the session machine finds late: one read after its turn ended.
+    if (s.agent === 'claude' && !feed(s, { type: 'record', at: snapshot.updatedAt, state: snapshot.state })) return;
     if (snapshot.ended || ['working', 'complete', 'interrupted'].includes(snapshot.state)) publishCliState(s, snapshot.state === 'working' ? 'working' : 'idle',
       { at: snapshot.updatedAt, threadId: snapshot.threadId, turnId: s.agent === 'codex' ? snapshot.turnId : undefined,
         eventId: `record:${snapshot.threadId}:${snapshot.turnId}:${snapshot.state}:${snapshot.updatedAt}` });
@@ -174,7 +195,7 @@ function createClaudeActivity(deps) {
       s.promptQueue.finish?.(snapshot.updatedAt);
     }
     s.activitySnapshot = snapshot;
-    const queued = s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
+    const queued = queuedOf(s);
     const state = s.completionWork?.state(snapshot, { queued })
       || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
     if (snapshot.ended && snapshot.state === 'unknown' || snapshot.state === 'interrupted' || state === 'interrupted') store.expectCompletion(project.id, false);
@@ -227,48 +248,40 @@ function createClaudeActivity(deps) {
     const failed = event.state === 'failed';
     if (failed) event = { ...event, state: 'complete' };
     const { store, publishCliState, followClaude, applyActivity, refreshClaudeAccounts, promptText, isLocalAgentCommand } = deps;
-    if (!s.codexActive || s.agent !== 'claude' || !['working', 'complete', 'attention', 'session', 'progress'].includes(event.state)) return;
+    if (!s.codexActive || s.agent !== 'claude' || !SIGNALS[event.state]) return;
     if (typeof event.sessionId !== 'string' || !/^[\w-]{1,100}$/.test(event.sessionId) || typeof event.eventId !== 'string' || event.eventId.length > 200) return;
     const at = Number.isFinite(event.sentAt) ? event.sentAt + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0) : Date.now();
     const bound = s.cliProviderId || s.claudeSessionId || s.claudeResumeId;
-    if (at < Math.max(s.activitySince || 0, s.cliStateMeta?.at || 0) || s.cliStateMeta?.events.has(event.eventId) || event.state !== 'session' && bound && bound !== event.sessionId) return;
-    // Every hook names the prompt whose turn it belongs to. Async command hooks (a proxied Windows terminal) can arrive out
-    // of order, and their send times follow PowerShell's start-up: a Stop for a prompt older than the newest one seen
-    // ended a turn that is already over. A dequeued prompt is new without a UserPromptSubmit, so first sight counts.
-    const turns = s.claudeTurns ||= { prompts: [], ended: [], toolAt: new Map() };
-    const prompt = typeof event.promptId === 'string' ? event.promptId : null;
-    if (prompt && !turns.prompts.includes(prompt)) keep(turns.prompts, prompt);
-    if (event.state === 'complete' && prompt && turns.prompts.at(-1) !== prompt) return;
-    // A tool hook's time counts even when it changes no state: it dates the permission notices that came before it.
-    if (event.state === 'progress' && prompt) {
-      turns.toolAt.delete(prompt); turns.toolAt.set(prompt, Math.max(at, turns.toolAt.get(prompt) || 0));
-      if (turns.toolAt.size > PROMPTS_KEPT) turns.toolAt.delete(turns.toolAt.keys().next().value);
-    }
-    // Only async hooks arrive late: a hook of a prompt whose Stop was applied, or a permission notice older than a tool
-    // hook of its prompt (the dialog it announced was answered), must not turn the light back to working or waiting.
-    if (s.hooks?.channel === 'command-async' && prompt && (event.state !== 'complete' && turns.ended.includes(prompt)
-      || event.state === 'attention' && event.hookEvent === 'Notification' && at < (turns.toolAt.get(prompt) || 0))) return;
+    if (at < Math.max(s.activitySince || 0, s.activityInputAt || 0, s.cliStateMeta?.at || 0) || s.cliStateMeta?.events.has(event.eventId)
+      || event.state !== 'session' && bound && bound !== event.sessionId) return;
+    // Claude Code runs its prompt hooks for automatic turns and some local slash commands (/context, /doctor, /compact)
+    // too. Neither is an owner round: an automatic one starts nothing, and a local one opens a screen or prints a line.
+    const typed = event.state === 'working' && typeof event.prompt === 'string';
+    const human = !typed || promptText(event.prompt, event) !== null, local = typed && isLocalAgentCommand('claude', event.prompt);
+    // Every hook names the prompt whose turn it belongs to, and the session machine orders them (session-machine.cjs).
+    const before = metaOf(s).machine;
+    if (human && !feed(s, { type: SIGNALS[event.state], at, prompt: typeof event.promptId === 'string' ? event.promptId : null, failed, local,
+      notice: event.hookEvent === 'Notification', dialog: event.dialog, agent: event.agentId, async: s.hooks?.channel === 'command-async',
+      claudeSession: event.sessionId, compact: event.sessionSource === 'compact' })) return;
+    const after = metaOf(s).machine;
     const evidence = { at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
     // Hook eventId is an event identity, not a native approval request ID. A different observed event invalidates
     // actions conservatively, even if its message is identical. Duplicate events leave the epoch alone.
     s.approval?.context('claude-event', [event.sessionId, event.eventId, event.state]);
     if (event.state === 'attention') { publishCliState(s, 'waiting', { ...evidence, message: event.message }); return; }
-    if (event.state === 'progress') { publishCliState(s, 'working', { ...evidence, progress: true }); return; }
+    // A tool hook only releases a matching wait, unless it is a dequeued prompt's first hook: that turn is working.
+    if (event.state === 'progress') { publishCliState(s, 'working', { ...evidence, progress: before.phase === 'working' || after.phase !== 'working' }); return; }
     if (event.state === 'session') {
-      if (publishCliState(s, event.sessionSource === 'compact' && s.cliState?.state === 'working' ? 'working' : 'idle', { ...evidence, bind: true })) {
+      if (publishCliState(s, after.phase === 'working' ? 'working' : 'idle', { ...evidence, bind: true })) {
         s.claudeSessionSource = event.sessionSource; followClaude(project, s, event);
       }
       return;
     }
     if (s.usage && project.kind !== 'ssh') void refreshClaudeAccounts();
-    // Claude Code runs its prompt hooks for some local slash commands (/context, /doctor, /compact) too. They open a screen
-    // or print a line and no round follows, so they neither start a round nor end one; the card would stay "working".
     if (event.state === 'working') {
-      if (typeof event.prompt === 'string' && promptText(event.prompt, event) === null) return;
-      const local = typeof event.prompt === 'string' && isLocalAgentCommand('claude', event.prompt);
-      if (local) { if (publishCliState(s, 'working', evidence)) s.claudeLocalCommand = true; return; }
+      if (!human) return;
+      if (local) { publishCliState(s, 'working', evidence); return; }
       if (!publishCliState(s, 'working', evidence)) return;
-      s.claudeLocalCommand = false;
       // UserPromptSubmit is actual input, unlike a polled working snapshot or a Stop callback.
       if (s.claudePromptEventId !== event.eventId) {
         s.claudePromptEventId = event.eventId;
@@ -278,31 +291,49 @@ function createClaudeActivity(deps) {
           s.completionWork?.begin(); store.expectCompletion(project.id);
         }
       }
-    } else if (event.state === 'complete' && s.claudeLocalCommand) {
-      if (publishCliState(s, 'idle', evidence)) { s.claudeLocalCommand = false; if (prompt) keep(turns.ended, prompt); }
-      return;
-    }
+    } else if (before.local) { publishCliState(s, 'idle', evidence); return; }
     if (event.state === 'complete' && !publishCliState(s, 'idle', evidence)) return;
-    if (event.state === 'complete' && prompt) keep(turns.ended, prompt);
     const revision = s.cliState.revision;
     const turnId = event.eventId.slice(event.sessionId.length + 1);
     // Remember the conversation and whether its turn is still open, so a restart can resume it and continue.
     store.setRestore(s.terminalId, { threadId: event.sessionId, interrupted: event.state === 'working' });
     followClaude(project, s, event);
     const snapshot = { threadId: event.sessionId, turnId: event.state === 'complete' && !failed ? turnId : null, state: failed ? 'interrupted' : event.state, updatedAt: at, prompt: typeof event.prompt === 'string' ? event.prompt.slice(0, 2000) : undefined };
+    if (event.state !== 'complete' || failed) { applyActivity(project, s, snapshot); return; }
+    // A round completes only on the machine's completion effect: the newest prompt's Stop, with nothing queued and no
+    // background work as CompletionWork reports it. The snapshot's turn is the completion key, so without the effect
+    // the round ends but raises nothing.
+    const work = s.completionWork;
+    const settled = () => (feed(s, { type: 'settled', at, queued: queuedOf(s), background: !!(work?.tasks?.size || work?.notifications?.size) }) || [])
+      .some(effect => effect.type === 'completion') ? snapshot.turnId : null;
+    if (!s.activityMonitor) { applyActivity(project, s, { ...snapshot, turnId: settled() }); return; }
     // Stop can beat the last tool-result write. Read it before granting a completion,
     // and let a newer turn/input win if it started while the read was in flight.
-    if (event.state === 'complete' && !failed && s.activityMonitor) {
-      const promptEvent = s.claudePromptEventId;
-      void Promise.resolve(s.activityMonitor.poll()).then(() => {
-        if (s.agent !== 'claude' || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
-        applyActivity(project, s, { ...snapshot, state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
-      }).catch(() => {});
-    } else applyActivity(project, s, snapshot);
+    const promptEvent = s.claudePromptEventId;
+    void Promise.resolve(s.activityMonitor.poll()).then(() => {
+      if (s.agent !== 'claude' || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
+      applyActivity(project, s, { ...snapshot, turnId: settled(), state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
+    }).catch(() => {});
   }
 
-  // An HTTP hook event (hook-ingest.cjs) as the event claude-hook.ps1 sends over the pipe, until the session machine (T2)
-  // reads hook events itself. An event that lost its payload to the size limit belongs to the session the terminal follows.
+  // Screen facts from the renderer (terminal:screenFacts, validated by terminal/ipc.cjs) act only through the machine,
+  // and only on the one end no hook reports: Esc interrupting a turn. The light goes idle at once, keeping the record
+  // watermark so the transcript's own interrupt record still lands. On HTTP a Stop reaches main before the screen goes
+  // idle, so a turn the screen ended was interrupted; a command hook's Stop can trail the screen, so there the Stop or
+  // the transcript ends the round and completion is never disarmed early.
+  function claudeScreen(s, facts) {
+    const { sessions, store, publishCliState, applyActivity } = deps;
+    if (sessions.get(s.terminalId) !== s || !s.codexActive || s.agent !== 'claude') return;
+    const at = Date.now(), before = metaOf(s).machine.phase;
+    if (!feed(s, { ...facts, type: 'screen', at, terminalSession: facts.sessionId }) || before === 'ready' || metaOf(s).machine.phase !== 'ready') return;
+    if (!publishCliState(s, 'idle', { at: metaOf(s).at, eventId: `screen:${s.sessionId}:${facts.revision}` })) return;
+    const project = store.projects.find(item => item.id === s.projectId);
+    if (project && s.hooks?.channel === 'http') applyActivity(project, s, { threadId: s.claudeSessionId, turnId: null, state: 'interrupted', updatedAt: at });
+  }
+
+  // An HTTP hook event (hook-ingest.cjs) as the event claude-hook.ps1 sends over the pipe, which claudeActivity hands to
+  // the session machine; sub-agent lifecycles and SessionEnd go to the machine directly. An event that lost its payload
+  // to the size limit belongs to the session the terminal follows.
   function claudeHook(hookEvent) {
     const { sessions, store, claudeActivity, callsOf, followClaude } = deps;
     const s = sessions.get(hookEvent.terminalId), project = s && store.projects.find(item => item.id === s.projectId);
@@ -313,24 +344,25 @@ function createClaudeActivity(deps) {
     const receipt = !hookEvent.agentId && hookEvent.toolUseId && ['PostToolUse', 'PostToolUseFailure', 'PermissionDenied'].includes(hookEvent.event);
     const kind = hookEvent.event === 'SubagentStart' ? 'start' : hookEvent.event === 'SubagentStop' ? 'stop'
       : hookEvent.event === 'PreToolUse' && message ? 'continue' : null;
-    if ((kind || receipt) && s.codexActive && s.agent === 'claude' && /^[\w-]{1,100}$/.test(sessionId)
-      && sessionId === (s.cliProviderId || s.claudeSessionId || s.claudeResumeId || sessionId) && hookEvent.at >= (s.activitySince || 0)) {
-      if (receipt) {
-        callsOf(s, project).finishContinuation(hookEvent.toolUseId, hookEvent.at, hookEvent.event !== 'PostToolUse');
-      }
-      const agentId = kind === 'continue' ? payload.tool_input?.to || payload.tool_input?.recipient : hookEvent.agentId;
-      if (kind && /^[\w-]{1,100}$/.test(typeof agentId === 'string' ? agentId : '')) {
-        // Bind the parent folder before delivering the signal: changing it resets the old transcript's tracker.
-        if (hookEvent.transcriptPath) followClaude(project, s, { sessionId, transcriptPath: hookEvent.transcriptPath });
-        callsOf(s, project).subagent({ kind, terminalId: s.terminalId, agentId, agentType: payload.agent_type || '',
-          transcriptPath: typeof payload.agent_transcript_path === 'string' ? payload.agent_transcript_path : null,
-          toolUseId: hookEvent.toolUseId || null, at: hookEvent.at });
-      }
+    const current = s.codexActive && s.agent === 'claude' && /^[\w-]{1,100}$/.test(sessionId)
+      && sessionId === (s.cliProviderId || s.claudeSessionId || s.claudeResumeId || sessionId) && hookEvent.at >= (s.activitySince || 0);
+    if (current && receipt) callsOf(s, project).finishContinuation(hookEvent.toolUseId, hookEvent.at, hookEvent.event !== 'PostToolUse');
+    const agentId = kind === 'continue' ? payload.tool_input?.to || payload.tool_input?.recipient : hookEvent.agentId;
+    if (current && kind && /^[\w-]{1,100}$/.test(typeof agentId === 'string' ? agentId : '')) {
+      // Bind the parent folder before delivering the signal: changing it resets the old transcript's tracker.
+      if (hookEvent.transcriptPath) followClaude(project, s, { sessionId, transcriptPath: hookEvent.transcriptPath });
+      const signal = { kind, terminalId: s.terminalId, agentId, agentType: payload.agent_type || '',
+        transcriptPath: typeof payload.agent_transcript_path === 'string' ? payload.agent_transcript_path : null,
+        toolUseId: hookEvent.toolUseId || null, at: hookEvent.at };
+      for (const effect of feed(s, { type: 'subagent', at: hookEvent.at, claudeSession: sessionId, signal }) || []) callsOf(s, project).subagent(effect.signal);
     }
+    if (current && hookEvent.event === 'SessionEnd') { feed(s, { type: 'end', at: hookEvent.at, claudeSession: sessionId }); return; }
     if (!state || hookEvent.event === 'Notification' && !ATTENTION_NOTICES.includes(payload.notification_type)) return;
+    const question = hookEvent.event === 'Elicitation' || /^elicitation/.test(payload.notification_type || '');
     claudeActivity(project, s, { state, sessionId, eventId: `${sessionId}:${hookEvent.at}-${hookEvent.seq}`, sentAt: hookEvent.at,
-      hookEvent: hookEvent.event, transcriptPath: hookEvent.transcriptPath, promptId: hookEvent.promptId,
+      hookEvent: hookEvent.event, transcriptPath: hookEvent.transcriptPath, promptId: hookEvent.promptId, agentId: hookEvent.agentId,
       message: state === 'attention' ? String(payload.message ?? payload.tool_name ?? '').slice(0, 300) : null,
+      ...(state === 'attention' ? { dialog: question ? 'question' : 'permission' } : {}),
       prompt: state === 'working' && payload.prompt ? payload.prompt : null,
       ...(hookEvent.toolUseId ? { requestId: hookEvent.toolUseId } : {}) });
   }

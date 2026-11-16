@@ -226,13 +226,17 @@ test('under command-async a late hook of a prompt whose Stop was applied changes
   h.hook('working', { prompt: 'Task', promptId: 'p1' }); h.advance();
   h.hook('working', { prompt: 'Queued', promptId: 'p1' }); h.advance();
   assert.equal(h.s.cliState.state, 'working'); assert.equal(h.beginnings(), 2);
+  // The light leaves working at once, but the queued prompt is still to run: no completion yet.
   h.hook('complete', { promptId: 'p1' });
-  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.notifications(), 1);
+  assert.equal(h.s.cliState.state, 'idle'); assert.equal(h.s.cliState.phase, 'stopping'); assert.equal(h.notifications(), 0);
   const revision = h.s.cliState.revision;
   for (const state of ['working', 'progress', 'attention']) { h.advance(); h.hook(state, { prompt: 'Task', promptId: 'p1', hookEvent: 'Notification', message: 'late' }); }
   assert.equal(h.s.cliState.revision, revision); assert.equal(h.s.cliState.state, 'idle');
-  assert.equal(h.beginnings(), 2); assert.equal(h.notifications(), 1);
+  assert.equal(h.beginnings(), 2); assert.equal(h.notifications(), 0);
   h.advance(); h.hook('complete', { promptId: 'p1' });
+  assert.equal(h.notifications(), 0);
+  // The dequeued prompt runs no UserPromptSubmit; its Stop, with nothing left queued, completes the round once.
+  h.advance(); h.hook('complete', { promptId: 'p1-queued' });
   assert.equal(h.notifications(), 1);
   // The next prompt is new and works as ever.
   h.advance(); h.hook('working', { prompt: 'Next', promptId: 'p2' });
