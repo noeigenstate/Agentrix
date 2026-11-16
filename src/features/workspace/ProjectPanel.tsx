@@ -7,6 +7,7 @@ import { terminalInUse, visibleTerminals } from '../terminal/terminal-visibility
 import { setActiveTerminal, useActiveTerminal } from '../terminal/active-terminal';
 import { ActivityPane } from '../agents/ActivityPane';
 import { SubagentChip } from '../agents/SubagentChip';
+import { BackgroundBadge } from '../agents/BackgroundBadge';
 import { toggleDictation, useVoice } from '../voice/voice-input';
 import { t } from '../../shared/i18n';
 import { shortcut } from '../shortcuts/shortcuts';
@@ -100,11 +101,13 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
         {project.kind === 'ssh' && <small className="ssh-project-label"><Globe size={11} />{project.ssh?.host}</small>}
       </button>
       {!!meta && <span className="panel-meta" title={focused ? project.path : undefined}>{meta}</span>}
+      {/* Background commands still running, so a reply that says it is complete is not taken for a finished project; the small card shows it in the same place. */}
+      <BackgroundBadge terminals={project.terminals} />
       {showHeaderActions && (!!project.unread && !focused && !working
         ? <button type="button" className={`${badgeClass} status-button`} title={status} onClick={() => onFocus(project.id)} aria-label={t('查看 {name} 的完成结果', { name: project.name })}>{badge}</button>
         : <span className={badgeClass} title={status}>{badge}</span>)}
       {/* The way into the sub-agent views where CSS hides the activity pane (a narrow window); never on a small card. */}
-      {focused && currentTerminal && <SubagentChip terminal={currentTerminal} />}
+      {focused && currentTerminal && <SubagentChip terminal={currentTerminal} terminals={project.terminals} />}
       {!multiple && stopped && hasTerminal && <button className="text-button panel-action" aria-label={t('重新启动')} onClick={() => onAction(api.startTerminal(first.id))}><Play size={12} weight="fill" /><span>{t('重启')}</span></button>}
       {showHeaderActions && <div className="panel-menu-anchor" ref={menu}>
         <IconButton label={t('{name} 的更多操作', { name: project.name })} onClick={() => setMenuOpen(!menuOpen)}><DotsThree size={20} weight="bold" /></IconButton>

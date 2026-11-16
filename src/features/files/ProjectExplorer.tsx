@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 import {
   ArrowsInLineVertical, CaretLeft, ArrowClockwise,
-  CaretDown, CaretRight, Folder,
+  CaretDown, CaretRight, CircleNotch, Folder,
   DotsThree, Eye, EyeSlash, GitBranch, LinkSimple, Robot, SidebarSimple, SpinnerGap, FilePlus, FolderPlus, Clipboard,
 } from '@phosphor-icons/react';
 import type { DirectoryListing, FileEntry, Project } from '../../shared/types';
@@ -156,10 +156,10 @@ function TreeNode(props: NodeProps) {
 // The three contents of the bar; a project opens on Agent and keeps the last one chosen while it stays open.
 type Tab = 'agent' | 'files' | 'git';
 
-export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, hideNoise, expandedPaths, selectedFile, changeRevision, onCollapse, onHideNoiseChange, onExpandedChange, onSelectFile, onOpenChange, onReturn, onFilesRemoved, onPathRenamed }: {
+export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, agentBackground, hideNoise, expandedPaths, selectedFile, changeRevision, onCollapse, onHideNoiseChange, onExpandedChange, onSelectFile, onOpenChange, onReturn, onFilesRemoved, onPathRenamed }: {
   project: Project; collapsed: boolean;
-  // The Agent tab's content (the models the current terminal called) arrives as a ready node, with how many of those calls are running; this module knows nothing of the agents behind it.
-  agentPanel: ReactNode; agentRunning: number;
+  // The Agent tab's content (the models every terminal of the project called) arrives as a ready node, with how many of those calls are running and how many background commands run; this module knows nothing of the agents behind it.
+  agentPanel: ReactNode; agentRunning: number; agentBackground: number;
   hideNoise: boolean; expandedPaths: string[]; selectedFile: string | null;
   // Counts up when the changes view kept or reverted a hunk, so the status and tree are read again at once.
   changeRevision: number;
@@ -217,7 +217,7 @@ export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, 
       {!collapsed && <button className="icon-button sidebar-toggle" onClick={onCollapse} title={t('收起目录栏 · {key}', { key: shortcut('explorer') })} aria-label={t('收起目录栏')} aria-expanded={!collapsed}><SidebarSimple size={17} /></button>}
     </div>
     {collapsed && <div className="explorer-rail">
-      <button className="icon-button" onClick={() => openTab('agent')} title={t('调用的模型')} aria-label="Agent"><Robot size={18} />{agentRunning > 0 && <span className="rail-dot" aria-hidden="true" />}</button>
+      <button className="icon-button" onClick={() => openTab('agent')} title={t('调用的模型')} aria-label="Agent"><Robot size={18} />{agentRunning + agentBackground > 0 && <span className="rail-dot" aria-hidden="true" />}</button>
       <button className="icon-button" onClick={() => openTab('files')} title={t('文件')} aria-label={t('资源管理器')}><Folder size={18} /></button>
       <button className="icon-button" onClick={() => openTab('git')} title={t('Git 历史与未提交更改')} aria-label={t('Git 历史')}><GitBranch size={18} />{!!changes && <span className="rail-dot" aria-hidden="true" />}</button>
     </div>}
@@ -228,7 +228,7 @@ export function ProjectExplorer({ project, collapsed, agentPanel, agentRunning, 
       </header>
       <div className="explorer-bar">
         <div className="explorer-tabs" role="group" aria-label={t('侧边栏内容')}>
-          <button aria-label="Agent" title={t('调用的模型')} aria-pressed={tab === 'agent'} onClick={() => openTab('agent')}>Agent{agentRunning > 0 && <span className="explorer-tab-count" title={t('{count} 个运行中', { count: agentRunning })}>{agentRunning > 999 ? '999+' : agentRunning}</span>}</button>
+          <button aria-label="Agent" title={t('调用的模型')} aria-pressed={tab === 'agent'} onClick={() => openTab('agent')}>Agent{agentRunning > 0 && <span className="explorer-tab-count" title={t('{count} 个运行中', { count: agentRunning })}>{agentRunning > 999 ? '999+' : agentRunning}</span>}{agentBackground > 0 && <span className="explorer-tab-count explorer-tab-background" title={t('{count} 个后台任务在运行', { count: agentBackground })}><CircleNotch size={12} weight="bold" className="loading-spinner" aria-hidden="true" />{t('后台 {count}', { count: agentBackground })}</span>}</button>
           <button aria-label={t('资源管理器')} aria-pressed={filesOpen} onClick={() => openTab('files')}>{t('文件')}</button>
           <button aria-label={t('Git 历史')} title={t('Git 历史与未提交更改')} aria-pressed={gitOpen} onClick={() => openTab('git')}>Git{!!changes && <span className="explorer-tab-count">{changes > 999 ? '999+' : changes}</span>}</button>
         </div>

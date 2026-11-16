@@ -10,6 +10,7 @@ import { actionText } from './action-text';
 import { ApiUsage } from './ApiUsage';
 import { CALL_STATES, ModelHead } from './AgentCalls';
 import { resetTime } from './Metric';
+import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import './activity-pane.css';
 
 // Beside an expanded project's terminal, two blocks and nothing else: the main model with what it is working on, and each agent's run mode and allowance (ApiUsage).
@@ -88,11 +89,4 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
         : <li className="is-idle"><span className="activity-row-icon">{failedEnd ? <WarningCircle size={14} aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />}</span><p>{state}</p><span /></li>)}
     </ul>
   </section>;
-}
-
-
-// How long a prompt has been going, as a clock: 2:14, or 1:05:09 past the hour.
-export function elapsedClock(ms: number) {
-  const total = Math.max(0, Math.floor(ms / 1000)), hours = Math.floor(total / 3600), minutes = Math.floor(total % 3600 / 60), seconds = String(total % 60).padStart(2, '0');
-  return hours ? `${hours}:${String(minutes).padStart(2, '0')}:${seconds}` : `${minutes}:${seconds}`;
 }

@@ -9,13 +9,16 @@ import { useNow } from '../../shared/useNow';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { ConversationFeed } from '../reading/ConversationFeed';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
-import { elapsedClock } from './ActivityPane';
+import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
 import { CALL_STATES, failureWord, rateValue } from './AgentCalls';
 import { SubagentInput } from './SubagentInput';
 import { type Receipt, receiptLine } from '../native-session/native-words';
 import { type FeedState, deliveredIds, unreadAfter, useSubagentFeed } from './subagent-splits.ts';
 import './activity-pane.css';
+
+// A background task opens in the same slot as a sub-agent; its view is the read-only tail of its output.
+export { BackgroundPane } from './BackgroundPane';
 
 // Within this many pixels of the end, the view is following the newest step.
 const FOLLOW_SLACK = 24;

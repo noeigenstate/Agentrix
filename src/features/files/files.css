@@ -20,6 +20,8 @@
 .explorer-tabs button:hover { color: var(--text-1); background: var(--bg-hover); }
 .explorer-tabs button[aria-pressed="true"] { color: var(--text-1); background: var(--bg-selected); }
 .explorer-tab-count { min-width: 18px; padding: 0 5px; border-radius: 999px; font: 400 11px/16px var(--font-mono); font-variant-numeric: tabular-nums; background: var(--bg-input); }
+.explorer-tab-background { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; font: 400 12px/16px var(--font-ui); color: var(--text-1); }
+.explorer-tab-background > svg { color: var(--running); }
 /* The actions share the tabs' row, so they need no row of their own: quiet until the pointer is over the header, tabs or actions, or focus is inside them. A touch screen has no hover, so they stay shown. */
 .explorer-tools { display: flex; flex-shrink: 0; gap: 2px; opacity: 0; }
 .explorer-tools .icon-button { width: 28px; }

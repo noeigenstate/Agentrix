@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { ArrowCounterClockwise, DotsSixVertical, X } from '@phosphor-icons/react';
-import { SubagentPane } from '../agents/SubagentPane';
-import { closeSplit, splitsOf, useSplits } from '../agents/subagent-splits.ts';
+import { BackgroundPane, SubagentPane } from '../agents/SubagentPane';
+import { closeSplit, isBackgroundCall, splitsOf, useSplits } from '../agents/subagent-splits.ts';
 import { AgentLauncher } from './AgentLauncher';
 import { TerminalPane } from './TerminalPane';
 import { terminalInUse, visibleTerminals } from './terminal-visibility.ts';
@@ -89,7 +89,9 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
       </section></div>;
     })}
     {views.map(view => <div key={`${view.terminalId}/${view.callId}`} className="subagent-slot">
-      <SubagentPane terminalId={view.terminalId} callId={view.callId} projectId={project.id} onClose={() => closeSplit(view.terminalId, view.callId)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />
+      {isBackgroundCall(view.callId)
+        ? <BackgroundPane terminal={records.get(view.terminalId)} callId={view.callId} onClose={() => closeSplit(view.terminalId, view.callId)} />
+        : <SubagentPane terminalId={view.terminalId} callId={view.callId} projectId={project.id} onClose={() => closeSplit(view.terminalId, view.callId)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
     </div>)}
     {!focused && !visible.length && <AgentLauncher terminalId={launcherTerminal.id} projectId={project.id} kind={project.kind} onAction={onAction} onOpenTerminal={openTerminal} runningCount={runningCount} onExpand={onExpand} />}
   </div>;
