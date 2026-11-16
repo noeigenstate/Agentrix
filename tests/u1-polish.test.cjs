@@ -73,7 +73,8 @@ test('every card hint ladder gets strictly shorter, in Chinese and in English, a
   const width = text => [...text].reduce((sum, ch) => sum + (ch.charCodeAt(0) > 255 ? 14 : 7), 0);
   const arrays = [...statement.matchAll(/\[((?:t\('[^']*'(?:, \{ agent \})?\)(?:, )?)+)\]/g)];
   const ladders = arrays.map(match => [...match[1].matchAll(/t\('([^']*)'/g)].map(item => item[1])).filter(list => list.length > 1);
-  assert.equal(ladders.length, 5, 'the result, agent and command ladders, and the two busy ones (a dialog open, input not ready)');
+  assert.equal(ladders.length, 8, 'the result, agent and command ladders, the two busy ones (a dialog open, input not ready), and the switching, history-preview and not-running ones');
+  for (const first of ['正在切换运行方式，稍后继续', '历史预览，等待会话输入就绪', '会话未启动或已退出']) assert.ok(ladders.some(list => list[0] === first && list.length >= 3), `${first} steps down to a short hint, so a narrow card is never blank`);
   for (const list of ladders) for (const [name, words] of [['zh', list.map(key => key.replace('{agent}', 'Codex'))], ['en', list.map(key => (en[key] ?? key).replace('{agent}', 'Codex'))]]) {
     words.forEach((word, index) => { if (index) assert.ok(width(word) < width(words[index - 1]), `${name}: "${word}" is shorter than "${words[index - 1]}"`); });
   }

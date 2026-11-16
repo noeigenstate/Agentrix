@@ -1339,7 +1339,7 @@ test('the composer offers its hint longest first and shows the one that fits, so
   assert.equal(note.props.style.position, 'absolute', 'the description is not drawn');
   Object.assign(h.props.terminal, { codexActive: false });
   h.render();
-  assert.equal(offered.length, 1); assert.equal(offered[0], en['会话未启动或已退出']);
+  assert.deepEqual(offered, [en['会话未启动或已退出'], en['会话未运行'], en['未运行']], 'a session that is not running also steps down to a short hint');
 });
 
 test('a restored preview cannot send until its own CLI input is ready, and a different thread disables it again', async t => {
