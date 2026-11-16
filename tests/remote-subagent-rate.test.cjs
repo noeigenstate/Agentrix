@@ -16,7 +16,7 @@ import contextlib, errno, json, os, sys, tempfile, threading, types
 from pathlib import Path
 from unittest import mock
 
-payload = json.load(sys.stdin)
+payload = json.loads(sys.stdin.buffer.read().decode("utf-8"))
 remote = types.ModuleType("remote_worker")
 remote.__file__ = payload["filename"]
 exec(compile(payload["source"], remote.__file__, "exec"), remote.__dict__)
