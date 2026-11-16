@@ -388,7 +388,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "integration/dispatch-outbox.cjs": {
-      "digest": "e80bc7ee17ac100123ad7c32b4b2311fa2c1ed758002b7f0f27f28b26486b8d4",
+      "digest": "d5a290113777eae05d7c765ad051eb69450a3466add8cc30cd2f7cc9bc6f3448",
       "targets": [
         "electron/features/agents/dispatch-events.cjs"
       ],
