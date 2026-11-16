@@ -6,17 +6,18 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { once, EventEmitter } = require('node:events');
 const { spawn, spawnSync } = require('node:child_process');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
-const { resources } = require('./fixtures/codex-app-server-lifecycle.cjs');
+const { resources, removeTree, CLEANUP_TIMEOUT } = require('./fixtures/codex-app-server-lifecycle.cjs');
 const { timeoutScale } = require('../scripts/wait.mjs');
 
-test('real app-server: each permissions choice starts as asked, and /permissions changes the running thread from its next turn', {
-  skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX', timeout: 90000 * timeoutScale,
-}, async t => {
+// A throwaway profile, an isolated PATH, an offline key and a local stand-in model; the sessions it opens close before the profile goes.
+async function offlineCodex(t) {
   const lifetime = resources(t), childCloses = [];
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-perm-real-')), cwd = path.join(root, 'project');
+  // The sessions close first (each stops its app-server's whole tree); a folder still held after that is named with what is left in it.
   lifetime.defer('remove profile after CLI close', async () => {
+    const until = Date.now() + CLEANUP_TIMEOUT - 500;
     await lifetime.wait(Promise.all(childCloses), 'CLI close receipts');
-    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    await removeTree(root, until);
   });
   fs.mkdirSync(cwd);
   const env = {};
@@ -63,13 +64,13 @@ test('real app-server: each permissions choice starts as asked, and /permissions
     spawnProcess: (file, args, options) => {
       const child = lifetime.child(spawn(file, args, options)); childCloses.push(new Promise(resolve => child.once('close', resolve))); return child;
     } });
-  const open = async permissions => {
+  const open = async (permissions, threadId) => {
     const events = [], signals = new EventEmitter();
-    const session = factory.create({ owner: 'gui', projectId: 'p', terminalId: permissions, cwd, env, permissions }, event => { events.push(event); signals.emit(event.type, event); });
+    const session = factory.create({ owner: 'gui', projectId: 'p', terminalId: permissions + (threadId ? '-resumed' : ''), cwd, env, permissions }, event => { events.push(event); signals.emit(event.type, event); });
     // EventEmitter's error channel is used by once() below; a startup error must also be observed before turn() subscribes.
     signals.on('error', () => {});
     lifetime.defer('close ' + permissions + ' session', () => session.close());
-    await session.start(); return { session, events, signals };
+    await (threadId ? session.resume({ providerSessionId: threadId }) : session.start()); return { session, events, signals };
   };
   const turn = async ({ session, signals }, text) => {
     const completed = once(signals, 'turn.completed', { signal: t.signal }); completed.catch(() => {});
@@ -80,7 +81,13 @@ test('real app-server: each permissions choice starts as asked, and /permissions
       const [event] = await completed; assert.equal(event.payload.status, 'completed');
     } finally { signals.off('request.opened', cancel); }
   };
+  return { open, turn, cwd, env };
+}
 
+test('real app-server: each permissions choice starts as asked, and /permissions changes the running thread from its next turn', {
+  skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX', timeout: 90000 * timeoutScale,
+}, async t => {
+  const { open, turn, cwd } = await offlineCodex(t);
   const full = await open('full');
   assert.deepEqual([full.session.threadResponse.sandbox.type, full.session.threadResponse.approvalPolicy], ['dangerFullAccess', 'never']);
   const configured = await open('config');
@@ -106,4 +113,23 @@ test('real app-server: each permissions choice starts as asked, and /permissions
   // Back to the CLI's configuration: what a new thread here gets.
   await ask.session.runOptions({ permissions: 'config' });
   assert.equal(ask.session.threadResponse.sandbox.type, configured.session.threadResponse.sandbox.type);
+});
+
+// Close stops Codex at once (with its whole tree), never through its own exit at end of input: what it saved by then is all a resume has.
+test('real app-server: a thread closed right after a turn resumes with that turn and its token count', {
+  skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX', timeout: 90000 * timeoutScale,
+}, async t => {
+  const { open, turn, env } = await offlineCodex(t);
+  const first = await open('full');
+  await turn(first, 'REMEMBER_ME');
+  const threadId = first.session.threadResponse.thread.id;
+  await first.session.close();
+  const resumed = await open('full', threadId);
+  const replayed = resumed.events.filter(event => event.type === 'item.upsert' && event.replay).map(event => [event.payload.kind, event.payload.content?.text]);
+  assert.deepEqual(replayed.filter(([kind]) => ['user-message', 'agent-message'].includes(kind)), [['user-message', 'REMEMBER_ME'], ['agent-message', 'OFFLINE']]);
+  // Codex keeps a thread's token count only in its rollout file; the stand-in model reports 2 tokens for the one response.
+  const rollouts = fs.readdirSync(path.join(env.CODEX_HOME, 'sessions'), { recursive: true }).map(String).filter(file => file.endsWith(threadId + '.jsonl'));
+  assert.equal(rollouts.length, 1, 'one rollout for the thread');
+  const records = fs.readFileSync(path.join(env.CODEX_HOME, 'sessions', rollouts[0]), 'utf8').split('\n').filter(line => line.includes('"token_count"'));
+  assert.ok(records.some(line => /"total_tokens":2\b/.test(line)), 'the turn’s token count was saved before the stop');
 });

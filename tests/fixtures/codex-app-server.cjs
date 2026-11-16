@@ -8,6 +8,13 @@ const mode = process.env.SYNTHETIC_CODEX_MODE || 'normal';
 let threadId = 'synthetic-thread', turnId = 'turn-1', turns = 0, skillReads = 0, account = process.env.SYNTHETIC_CODEX_ACCOUNT;
 const send = message => process.stdout.write(JSON.stringify(message) + '\n');
 const notify = (method, params) => send({ method, params: { threadId, ...params } });
+// A process of its own, like the shells and helpers the real CLI starts: it runs in the session's folder until something stops it.
+// Node would put it in a job that ends with this process on Windows; Codex's own children have no such job, so neither has this one.
+if (mode === 'grandchild') {
+  const helper = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 60000)'],
+    { stdio: 'ignore', windowsHide: true, detached: process.platform === 'win32' });
+  fs.writeFileSync(process.env.SYNTHETIC_GRANDCHILD_PID, String(helper.pid)); helper.unref();
+}
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 readline.createInterface({ input: process.stdin }).on('line', line => {
   const request = JSON.parse(line), params = request.params || {};

@@ -1,6 +1,7 @@
 // Bounded lifetimes for synthetic peers only. Track close before any await: a signal exit
 // leaves exitCode null, and subscribing to exit after it fired can wait forever.
 const { test: nodeTest } = require('node:test');
+const fs = require('node:fs');
 const scale = Math.max(1, Number(process.env.AGENTRIX_TEST_TIMEOUT_SCALE) || 1);
 const TEST_TIMEOUT = 15000 * scale, CLEANUP_TIMEOUT = 2500 * scale;
 
@@ -13,6 +14,20 @@ function deadline(promise, label, timeout = CLEANUP_TIMEOUT) {
   return Promise.race([promise, new Promise((_, reject) => {
     timer = setTimeout(() => reject(new Error(`Timed out: ${label} (${timeout} ms)`)), timeout);
   })]).finally(() => clearTimeout(timer));
+}
+// Windows refuses to remove a folder while a process still has a file, or its working folder, in it. Removal retries
+// those refusals until the deadline (inside the cleanup budget), then names the refusal and the entries still there.
+const HELD = new Set(['EBUSY', 'EPERM', 'ENOTEMPTY']);
+async function removeTree(directory, until = Date.now() + CLEANUP_TIMEOUT - 500) {
+  let refusal, attempts = 0;
+  for (; attempts === 0 || Date.now() < until; await new Promise(resolve => setTimeout(resolve, 100))) {
+    try { attempts++; return await fs.promises.rm(directory, { recursive: true, force: true }); }
+    catch (error) { if (!HELD.has(error.code)) throw error; refusal = error; }
+  }
+  let left;
+  try { left = fs.readdirSync(directory, { recursive: true }).map(String); } catch (error) { left = [`unreadable: ${error.code}`]; }
+  throw new Error(`${directory} still held after ${attempts} attempts: ${refusal.code} at ${refusal.path}; `
+    + `${left.length} entries left: ${left.slice(0, 15).join(', ')}${left.length > 15 ? ', ...' : ''}`);
 }
 function resources(t, label = t.name) {
   const children = [], cleanup = [];
@@ -45,4 +60,4 @@ function resources(t, label = t.name) {
     wait: (promise, name) => deadline(promise, `${label}: ${name}`),
   };
 }
-module.exports = { test, resources, deadline, TEST_TIMEOUT };
+module.exports = { test, resources, deadline, removeTree, TEST_TIMEOUT, CLEANUP_TIMEOUT };

@@ -8,12 +8,32 @@ const { createEvents } = require('../electron/features/codex-app-server/events.c
 const { createNormalizer } = require('../electron/features/claude-sdk/normalize.cjs');
 const { turnResult } = require('../electron/features/claude-sdk/result.cjs');
 
-test('an exited local app-server releases inherited pipes without reporting a process stop timeout', async () => {
+// The app-server's stopProcess as on Windows, with taskkill replaced by the given stand-in.
+function windowsStop(execFile) {
   const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
   const source = fs.readFileSync(path.join(__dirname, '../electron/features/codex-app-server/index.cjs'), 'utf8');
-  const stop = vm.runInNewContext(source.slice(source.indexOf('function stopProcess('), source.indexOf('function createCodexRuntime(')) + '\nstopProcess;', {
-    setTimeout, clearTimeout, path, process: { platform: 'win32', env: { SystemRoot: 'C:/Windows' } }, execFile() {},
+  return vm.runInNewContext(source.slice(source.indexOf('function stopProcess('), source.indexOf('function createCodexRuntime(')) + '\nstopProcess;', {
+    setTimeout, clearTimeout, path, process: { platform: 'win32', env: { SystemRoot: 'C:/Windows' } }, execFile,
   });
+}
+
+test('a Windows stop waits for taskkill to finish with the tree, even after the app-server has exited and closed', async () => {
+  let treeStopped = null, settled = false;
+  const stop = windowsStop((...args) => { treeStopped = args.at(-1); });
+  const child = new EventEmitter(); Object.assign(child, { pid: 12345, exitCode: null, signalCode: null,
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+  const stopping = stop(child).then(() => { settled = true; });
+  assert.equal(typeof treeStopped, 'function', 'the tree stop starts at once');
+  child.exitCode = 0; child.emit('exit', 0); child.emit('close', 0);
+  for (let turn = 0; turn < 10; turn++) await null;
+  assert.equal(settled, false, 'the server has gone, but taskkill may still be ending its children');
+  treeStopped(null); await stopping;
+  assert.equal(settled, true);
+});
+
+test('an exited local app-server releases inherited pipes without reporting a process stop timeout', async () => {
+  // taskkill has stopped the tree; only the inherited pipes are left open
+  const stop = windowsStop((...args) => args.at(-1)(null));
   const child = new EventEmitter(); Object.assign(child, { pid: 12345, exitCode: null, signalCode: null,
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
   const stopping = stop(child); child.exitCode = 0; child.emit('exit', 0);
