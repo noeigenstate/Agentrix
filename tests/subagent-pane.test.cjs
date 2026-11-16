@@ -740,3 +740,122 @@ test('the hook measures the box in its own font, minus its padding, and again wh
     for (const [name, descriptor] of saved) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
   }
 });
+
+// ---- a worker waiting for the owner: its own terminal in the split -----------------------------------------------------------------
+const workerStub = { WorkerTerminal: props => React.createElement('div', { className: 'worker-terminal-stub', 'data-terminal': props.terminalId, 'data-call': props.callId }) };
+const waiting = (patch = {}) => ok({ agent: 'Claude Code', awaiting: 'owner', ...patch });
+function workerPaneType(state, react = hookApi) {
+  const loader = makeLoader({ '../reading/ConversationFeed': feedStub, '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub, react, './WorkerTerminal': workerStub,
+    '../../shared/useNow': { useNow: () => 126_000 }, './subagent-splits.ts': { ...splits(), useSubagentFeed: () => state } });
+  loader('shared/i18n.ts').applyLanguage('zh');
+  return loader('features/agents/SubagentPane.tsx').SubagentPane;
+}
+const workerPane = (state, patch, react) => React.createElement(workerPaneType(state, react), paneProps(patch));
+
+test('a worker waiting for the owner shows its terminal in the split; keys reach only that terminal; Esc reaches the CLI and keeps the split open', () => zh(() => {
+  const html = renderToStaticMarkup(workerPane(waiting()));
+  assert.match(html, /worker-terminal-stub" data-terminal="t1" data-call="dispatch:a"/, 'the terminal of this very worker');
+  assert.match(html, /它在等你确认一条命令。点进下面的终端，按 1 \/ 2 或 Esc 回答。/);
+  assert.match(html, /在上面的终端里输入你的回答；Esc 取消。/, 'the hint takes the composer’s place');
+  assert.doesNotMatch(html, /conversation-feed|<textarea/, 'no conversation and no message box while the terminal shows');
+  // Otherwise today's view: not waiting, finished, or a sub-agent of the session (no channel of its own).
+  for (const [state, patch] of [[ok({ agent: 'Claude Code' }), {}], [waiting({ endedAt: 5000 }), {}], [waiting(), { callId: 'agent:a' }]]) {
+    const plain = renderToStaticMarkup(workerPane(state, patch));
+    assert.match(plain, /conversation-feed/); assert.doesNotMatch(plain, /worker-terminal-stub/);
+  }
+  // Escape inside the terminal is the CLI's: the split stays open and nothing else hears it; elsewhere it still closes the split.
+  const closed = [], stopped = [], focused = [];
+  const react = { ...hookApi, useRef: current => ({ current: current === null ? { focus: () => focused.push(true) } : current }) };
+  const tree = workerPaneType(waiting(), react)(paneProps({ onClose: () => closed.push(true) }));
+  const press = inside => tree.props.onKeyDown({ key: 'Escape', target: { tagName: 'DIV', closest: selector => inside && selector === '.subagent-worker-term' ? {} : null }, stopPropagation: () => stopped.push(inside) });
+  press(true);
+  assert.deepEqual([closed.length, focused.length, stopped], [0, 0, [true]], 'no close, no focus move, and the key goes no further');
+  press(false);
+  assert.deepEqual([closed.length, focused.length], [1, 0], 'Escape outside the terminal closes the split as before');
+}));
+
+// The terminal itself, with xterm and the bridge stood in and effects run at once.
+function workerTerminal({ attach, epoch = 3, selection = '' } = {}) {
+  const written = [], handlers = {}, cleanups = [], generation = [], log = [];
+  class FakeTerminal {
+    constructor(options) { this.options = options; this.cols = 80; this.rows = 24; }
+    open() {} write(data) { written.push(data); } hasSelection() { return Boolean(selection); } getSelection() { return selection; }
+    onData(callback) { handlers.data = callback; return { dispose() {} }; }
+    onResize(callback) { handlers.resize = callback; return { dispose() {} }; }
+    attachCustomKeyEventHandler(callback) { handlers.key = callback; }
+    resize(cols, rows) { this.cols = cols; this.rows = rows; handlers.resize?.({ cols, rows }); }
+    dispose() { log.push('dispose'); }
+  }
+  const calls = [], copies = [], unavailable = [], errors = [];
+  let push;
+  const bridge = {
+    attachWorkerTerminal: (...args) => { calls.push(['attach', ...args]); return attach ?? Promise.resolve({ epoch, seq: 5, data: 'old', cols: 100, rows: 30, awaiting: 'owner', exited: false }); },
+    onWorkerTerminalData: callback => { push = callback; return () => calls.push(['off']); },
+    workerTerminalKeys: (...args) => calls.push(['keys', ...args]), resizeWorkerTerminal: (...args) => calls.push(['resize', ...args]),
+    detachWorkerTerminal: (...args) => calls.push(['detach', ...args]), copy: text => { copies.push(text); return Promise.resolve({ ok: true }); },
+  };
+  const host = { clientWidth: 400, clientHeight: 300 };
+  const react = { ...React, useRef: current => ({ current: current === null ? host : current }), useState: start => [start, value => generation.push(typeof value === 'function' ? value(0) : value)], useEffect: effect => { cleanups.push(effect()); } };
+  const savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window'), savedObserver = globalThis.ResizeObserver;
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: bridge } });
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  const loader = makeLoader({ react, '@xterm/xterm': { Terminal: FakeTerminal }, '@xterm/xterm/css/xterm.css': {}, '../terminal/terminal-fit': { fitTerminal() {} },
+    '../terminal/terminal-font': { terminalFontFamily: () => 'mono' }, '../terminal/terminal-theme': { terminalOptions: {}, terminalTheme: () => ({}) }, '../../shared/platform': { isMac: false, isWindows: false } });
+  loader('shared/i18n.ts').applyLanguage('zh');
+  const tree = loader('features/agents/WorkerTerminal.tsx').WorkerTerminal({ terminalId: 't1', callId: 'dispatch:a', name: 'Opus', onError: message => errors.push(message), onUnavailable: () => unavailable.push(true) });
+  const restore = () => { if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow); else delete globalThis.window; globalThis.ResizeObserver = savedObserver; };
+  return { calls, written, handlers, host, log, copies, unavailable, errors, generation, tree, push: packet => push(packet), cleanup: () => cleanups.forEach(clean => clean?.()), restore };
+}
+
+test('the worker terminal reads the scrollback then the stream in order, sends keys and sizes only for its own live epoch, and cleans up', async () => zh(async () => {
+  const view = workerTerminal();
+  try {
+    const packet = (seq, data, over = {}) => ({ terminalId: 't1', callId: 'dispatch:a', epoch: 3, seq, data, ...over });
+    view.push(packet(4, 'stale')); view.push(packet(6, 'new')); view.push({ ...packet(1, 'other worker'), callId: 'dispatch:b' });
+    await settle();
+    assert.deepEqual(view.calls[0], ['attach', 't1', 'dispatch:a']);
+    assert.deepEqual(view.written, ['old', 'new'], 'the scrollback first, then what came after it; an older or another worker’s packet is dropped');
+    view.push(packet(6, 'again')); view.push(packet(7, '!'));
+    assert.deepEqual(view.written, ['old', 'new', '!'], 'a repeated sequence number is not written twice');
+    assert.equal(view.calls.some(call => call[0] === 'resize'), false, 'sizing the screen to the worker’s own size tells nobody');
+    view.handlers.data('1');
+    view.handlers.resize({ cols: 90, rows: 20 });
+    view.host.clientWidth = 0; view.handlers.resize({ cols: 91, rows: 20 }); view.host.clientWidth = 400;
+    assert.deepEqual(view.calls.filter(call => call[0] === 'keys' || call[0] === 'resize'), [['keys', 't1', 'dispatch:a', 3, '1'], ['resize', 't1', 'dispatch:a', 3, 90, 20]], 'keys and the size carry the epoch; a hidden view sends no size');
+    view.push({ terminalId: 't1', callId: 'dispatch:a', epoch: 4, seq: 1, data: 'x' });
+    assert.deepEqual(view.generation, [1], 'another epoch is a new mount');
+    view.push({ terminalId: 't1', callId: 'dispatch:a', epoch: 3, exited: true, exitCode: 0 });
+    view.handlers.data('2'); view.handlers.resize({ cols: 80, rows: 24 });
+    assert.equal(view.calls.filter(call => call[0] === 'keys' || call[0] === 'resize').length, 2, 'an exited worker takes no more keys or sizes');
+    view.cleanup();
+    assert.deepEqual([view.log.at(-1), view.calls.at(-1)], ['dispose', ['detach', 't1', 'dispatch:a']], 'the screen is disposed and the worker detached');
+    for (const name of ['onKeyDown', 'onPointerDown', 'onClick']) { const heard = []; view.tree.props[name]({ stopPropagation: () => heard.push(name) }); assert.deepEqual(heard, [name], `${name} goes no further`); }
+  } finally { view.restore(); }
+}));
+
+test('the worker terminal copies only a selection, never reads the clipboard, and says so when there is no terminal', async () => zh(async () => {
+  const key = (view, init) => view.handlers.key({ type: 'keydown', preventDefault() {}, isComposing: false, ...init });
+  const plain = workerTerminal();
+  try {
+    await settle();
+    assert.equal(key(plain, { ctrlKey: true, code: 'KeyC' }), true, 'Ctrl+C without a selection reaches the CLI');
+    assert.equal(key(plain, { ctrlKey: true, code: 'KeyV' }), false, 'paste is xterm’s own event, not a key it sends');
+    assert.deepEqual(plain.copies, []);
+  } finally { plain.restore(); }
+  const selected = workerTerminal({ selection: 'answer' });
+  try {
+    await settle();
+    assert.equal(key(selected, { ctrlKey: true, code: 'KeyC' }), false); assert.equal(key(selected, { ctrlKey: true, shiftKey: true, code: 'KeyC' }), false);
+    assert.deepEqual(selected.copies, ['answer', 'answer'], 'an explicit copy of the selection, through the bridge');
+  } finally { selected.restore(); }
+  const none = workerTerminal({ attach: Promise.resolve(null) });
+  try { await settle(); assert.deepEqual([none.unavailable, none.written], [[true], []], 'no terminal for this worker: the view says so'); } finally { none.restore(); }
+  const savedWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: {} } });
+  try {
+    const old = [];
+    const react = { ...React, useRef: current => ({ current: current === null ? {} : current }), useState: start => [start, () => {}], useEffect: effect => effect() };
+    makeLoader({ react, '@xterm/xterm': { Terminal: class {} }, '@xterm/xterm/css/xterm.css': {} })('features/agents/WorkerTerminal.tsx').WorkerTerminal({ terminalId: 't', callId: 'c', name: 'n', onError() {}, onUnavailable: () => old.push(true) });
+    assert.deepEqual(old, [true], 'an older preload without the worker terminal bridge is the same as none');
+  } finally { if (savedWindow) Object.defineProperty(globalThis, 'window', savedWindow); else delete globalThis.window; }
+}));

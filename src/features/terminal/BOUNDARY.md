@@ -16,6 +16,7 @@ split is in use.
 - `terminalFontFamily` (`src/features/terminal/terminal-font.ts`) — the CSS font list for the chosen terminal fonts
 - `setTerminalRenderer` (`src/features/terminal/terminal-renderer.ts`) — switches every terminal between the GPU and DOM renderers
 - `terminalTheme` (`src/features/terminal/terminal-theme.ts`) — the xterm colours of the current theme
+- `fitTerminal` (`src/features/terminal/terminal-fit.ts`) — sizes an xterm to its parent's room; the sub-agent view's worker terminal fits the same way
 - `setQueueCount` (`src/features/terminal/terminal-screen.ts`) — tells a terminal's screen how many messages main holds queued; with `setScreenAgent`, Claude's screen facts go to main from there
 - `mountReadingTerminal` (`src/features/terminal/terminal-popup.ts`) — shows a split's live xterm inside the reading view's terminal popup; `pruneReadingCli` drops closed ones
 

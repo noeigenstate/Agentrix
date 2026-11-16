@@ -43,9 +43,17 @@ test('a sub-agent view opens only on the owner’s click on a row, reads the sub
   assert.match(pane, /onClick=\{\(\) => toggleSplit\(terminalId, callId\)\}/);
   assert.doesNotMatch(read('src/features/terminal/ProjectTerminals.tsx'), /\b(openSplit|toggleSplit)\(/, 'the grid shows the views, it never opens one');
   const code = file => read(`src/features/agents/${file}`).replace(/\/\/.*$/gm, ''), view = ['SubagentPane.tsx', 'SubagentInput.tsx', 'subagent-splits.ts', 'BackgroundPane.tsx'].map(code).join('\n');
-  assert.doesNotMatch(view, /writeTerminal|writeApproval|answerTerminal|resizeTerminal|startTerminal|closeTerminal|restartTerminal|sendToAgent|readClipboard|\.copy\(/, 'no write to a terminal, no input, no clipboard');
+  assert.doesNotMatch(view, /writeTerminal|writeApproval|answerTerminal|resizeTerminal|startTerminal|closeTerminal|restartTerminal|sendToAgent|readClipboard|workerTerminalKeys|\.copy\(/, 'no write to a terminal, no input, no clipboard outside the worker terminal');
   assert.deepEqual([...view.matchAll(/window\.agentrix\.?(\w*)/g)].map(match => match[1]).sort(), ['', 'interveneAgent', 'stopAgent'], 'the bridge is handed to followFeed whole; the input only intervenes or stops');
   assert.deepEqual([...new Set([...view.matchAll(/bridge\.(\w+)/g)].map(match => match[1]))].sort(), ['onSubagentFeed', 'subagentFeed'], 'whose only calls are the two feed ones');
+  // The worker's terminal is the one place keys and the clipboard are touched: keys to its own worker with the epoch, a copy of a selection, no clipboard read, no planner terminal.
+  const worker = code('WorkerTerminal.tsx');
+  assert.deepEqual([...new Set([...worker.matchAll(/bridge\.(\w+)/g)].map(match => match[1]))].sort(), ['attachWorkerTerminal', 'copy', 'detachWorkerTerminal', 'onWorkerTerminalData', 'resizeWorkerTerminal', 'workerTerminalKeys'], 'the worker terminal’s whole bridge');
+  assert.match(worker, /bridge\.workerTerminalKeys\(terminalId, callId, epoch!, data\)/, 'keys carry this worker’s own address and epoch');
+  assert.doesNotMatch(worker, /readClipboard|writeTerminal|answerTerminal|sendToAgent|interveneAgent|stopAgent|\.paste\(/, 'no clipboard read, no planner terminal, no paste of its own');
+  assert.equal(worker.match(/bridge\.copy\(/g).length, 1, 'one clipboard write, for an explicit copy of a selection');
+  assert.match(worker, /event\.code === 'KeyC'[\s\S]*terminal\.hasSelection\(\)/, 'Ctrl+C copies only with a selection; without one it reaches the CLI');
+  assert.match(code('SubagentPane.tsx'), /feed\?\.awaiting === 'owner'/, 'the terminal shows only while the worker awaits the owner');
   assert.doesNotMatch(code('BackgroundPane.tsx'), /window\.agentrix|<textarea|<input/, 'a background view calls no bridge and takes no typing');
   assert.doesNotMatch(code('SubagentPane.tsx'), /<textarea|<input|contentEditable|interveneAgent|stopAgent/, 'the view itself takes no typing; its input is SubagentInput');
   assert.equal(code('SubagentInput.tsx').match(/<textarea/g).length, 1, 'one text box, for the owner’s word to the agent');
