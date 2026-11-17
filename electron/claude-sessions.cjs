@@ -124,7 +124,9 @@ async function listClaudeSessions(cwd, currentId = null, home = claudeConfigDir(
   // Team records are the authority for workers across restarts and worktrees.
   // Read the journal only; live() also prunes the board and is not a read API.
   const team = require('./features/team/team.cjs').projectTeam(cwd);
-  for (const entry of team?.entries() || []) if (entry.agent === 'claude' && entry.session) rememberClaudeSource(entry.session, 'dispatch');
+  // Journals written before `end` carried `agent` name the worker only on the skip/meeting entry of the same id.
+  const entries = team?.entries() || [], agentOf = new Map(entries.filter(entry => entry.id && entry.agent).map(entry => [entry.id, entry.agent]));
+  for (const entry of entries) if ((entry.agent ?? agentOf.get(entry.id)) === 'claude' && entry.session) rememberClaudeSource(entry.session, 'dispatch');
   const folders = await matchingFolders(cwd, home);
   const candidates = [];
   for (const candidate of folders) {

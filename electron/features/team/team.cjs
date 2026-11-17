@@ -269,7 +269,7 @@ class Team {
   async finish(options, report) {
     return this.locked(() => {
       recordFindings({ ...options, memory: this.memory }, report.answer, report.header);
-      this.append({ type: 'end', id: report.id, title: String(options.title || '').slice(0, 240), session: report.session || options.resume || null,
+      this.append({ type: 'end', id: report.id, agent: options.agent, title: String(options.title || '').slice(0, 240), session: report.session || options.resume || null,
         meeting: report.meeting || options.meeting || null, role: options.meeting ? '圆桌' : options.role, kind: report.kind ?? null, model: report.model || 'unreported',
         reason: report.reason, outputTokens: nonnegative(report.outputTokens) ? report.outputTokens : null,
         totalOutputTokens: nonnegative(report.totalOutputTokens) ? report.totalOutputTokens : null,
