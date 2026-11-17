@@ -160,6 +160,8 @@ contextBridge.exposeInMainWorld('agentrix', {
   fileCard: (id, file) => ipcRenderer.invoke('project:card', id, file),
   agentLaunch: (id, agent, mode) => ipcRenderer.invoke('agent:launch', id, agent, mode),
   listSkills: () => ipcRenderer.invoke('skills:list'),
+  skillSeats: (projectId, terminalId) => ipcRenderer.invoke('skills:seats', projectId, terminalId),
+  setSkillSeats: (scope, projectId, seats) => ipcRenderer.invoke('skills:setSeats', scope, projectId, seats),
   readSkill: id => ipcRenderer.invoke('skills:read', id),
   saveSkill: (id, draft) => ipcRenderer.invoke('skills:save', id, draft),
   deleteSkill: id => ipcRenderer.invoke('skills:delete', id),

@@ -4,6 +4,7 @@ const os = require('node:os');
 const { rolloutFiles, sessionMeta } = require('../../session-files.cjs');
 const { interactiveSession } = require('../../session-restore.cjs');
 const { listClaudeSessions } = require('../../claude-sessions.cjs');
+const { cleanSeats } = require('../skills/model-seats.cjs');
 
 // The latest Codex conversation started in this folder, found from the files' headers alone.
 async function latestCodexSession(folder, codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')) {
@@ -24,8 +25,12 @@ async function folderHistory(folder, { claude = listClaudeSessions, codex = late
 }
 
 // What is typed at the new terminal's first prompt.
-function launchCommand(agent, history) {
-  if (agent === 'claude') return history ? `claude --resume ${history.id}\r` : 'claude\r';
+function launchCommand(agent, history, seat = null) {
+  if (agent === 'claude') {
+    if (history) return `claude --resume ${history.id}\r`;
+    const selected = seat?.model ? cleanSeats({ lead: { claude: seat } }, ['lead']).lead.claude : null;
+    return selected ? `claude --model "${selected.model}" --effort ${selected.effort}\r` : 'claude\r';
+  }
   throw new Error('Codex 必须通过 app-server 启动。');
 }
 

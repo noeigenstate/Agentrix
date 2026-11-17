@@ -13,6 +13,63 @@ test('a new project starts each agent fresh, or resumes the conversation found f
   assert.throws(() => launchCommand('codex', { id: '01a12122-af65-73b0-88ef-19fd79292360', at: 1 }), /app-server/);
 });
 
+test('fresh Claude terminal launches carry the lead seat flags while resume carries no seat flags', () => {
+  const seat = { model: 'sonnet', effort: 'xhigh' };
+  assert.equal(launchCommand('claude', null, seat), 'claude --model "sonnet" --effort xhigh\r');
+  assert.equal(launchCommand('claude', { id: 'saved' }, seat), 'claude --resume saved\r');
+  assert.throws(() => launchCommand('claude', null, { model: 'opus;echo', effort: 'high' }), /model/);
+});
+
+test('native fresh launches take lead options, explicit launch choices win and resume ignores seat changes', () => {
+  const { leadOptions } = require('../electron/features/skills/model-seats.cjs');
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const seats = { lead: { codex: { model: 'gpt-next', effort: 'medium', fast: false }, claude: { model: 'sonnet', effort: 'max' } } };
+  const context = vm.createContext({ sessions: new Map(), nativeSpecs: new Map(), findProject: () => ({ id: 'p', path: '/isolated' }),
+    store: { settings: {}, findTerminal: () => ({ record: { restore: { agent: 'codex', threadId: 'saved' } } }) },
+    skills: { leadOptions: (_project, agent, explicit) => leadOptions(seats, agent, explicit), delivery: () => ({}) },
+    randomUUID: () => 'isolated-session', path, runtimeDir: '/isolated/runtime', integrationDir: '/isolated/integration',
+    writeBootstrap() {}, nativeEnvironment: () => ({}), startupNote: () => '', handoffFile: () => '', READING_NOTE: '',
+    eventServer: {}, controlAddress: '', nativeSubagent() {},
+  });
+  vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('\nfunction nativeSubagent(')), context);
+  const start = (agent, resume = false, launch = null) => context.nativeSpec('terminal', agent, resume, false, launch);
+  const fresh = start('codex'); assert.equal(fresh.model, 'gpt-next'); assert.equal(fresh.effort, 'medium'); assert.equal(fresh.fast, false);
+  const claude = start('claude'); assert.equal(claude.model, 'sonnet'); assert.equal(claude.effort, 'max'); assert.equal(claude.fast, false);
+  const explicit = start('codex', false, { model: 'gpt-explicit', effort: 'low', fast: true });
+  assert.equal(explicit.model, 'gpt-explicit'); assert.equal(explicit.effort, 'low'); assert.equal(explicit.fast, true);
+  const resume = start('codex', true); assert.equal(resume.providerSessionId, 'saved'); assert.equal(resume.model, null);
+  const pendingHistory = start('claude', true);
+  assert.equal(pendingHistory.providerSessionId, null); assert.equal(pendingHistory.seatResumeOptions.model, null);
+});
+
+test('a Claude resume resolved from folder history does not acquire the new lead seat model', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const start = source.indexOf('  const createClaude = claudeRuntime.create;'), end = source.indexOf('  // The first look at the CLI', start);
+  assert.ok(start >= 0 && end > start);
+  const context = vm.createContext({ claudeRuntime: { create: spec => spec } });
+  vm.runInContext(source.slice(start, end), context);
+  const resumed = context.claudeRuntime.create({ owner: 'gui', providerSessionId: 'saved', model: 'new-seat-model', effort: 'max',
+    seatResumeOptions: { model: null, effort: 'high', fast: false } });
+  assert.equal(resumed.model, null); assert.equal(resumed.effort, 'high');
+  assert.equal(Object.hasOwn(resumed, 'seatResumeOptions'), false);
+  const ownerChoice = context.claudeRuntime.create({ owner: 'gui', providerSessionId: 'saved', model: 'owner-menu-model', effort: 'max' });
+  assert.equal(ownerChoice.model, 'owner-menu-model'); assert.equal(ownerChoice.effort, 'max');
+  const fresh = context.claudeRuntime.create({ owner: 'gui', model: 'sonnet', effort: 'max' });
+  assert.equal(fresh.model, 'sonnet'); assert.equal(fresh.effort, 'max');
+});
+
+test('the seat catalog reuses models already read by the Codex model menu without making a request', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const start = source.indexOf('    const models = runtime.models;'), end = source.indexOf('    let accountBinding', start);
+  assert.ok(start >= 0 && end > start);
+  let reads = 0;
+  const rows = [{ value: 'gpt-menu-model', efforts: ['low', 'high'] }], cache = new Map();
+  const runtime = { models: async () => { reads++; return rows; } }, context = vm.createContext({ runtime, seatModelCatalog: cache });
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(reads, 0); assert.equal(cache.size, 0);
+  assert.equal(await runtime.models(), rows); assert.equal(reads, 1); assert.equal(cache.get('gpt-menu-model'), rows[0]);
+});
+
 test("the latest Codex conversation is this folder's own, never another project's newer one", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-codex-')), day = path.join(home, 'sessions', '2026', '10', '10');
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-project-')), other = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-other-'));

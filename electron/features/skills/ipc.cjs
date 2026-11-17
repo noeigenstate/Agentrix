@@ -1,4 +1,6 @@
 function registerSkillsIpc({ handle, skills, dialog, getWindow }) {
+  handle('skills:seats', (projectId, terminalId) => skills.seatsInfo(projectId, terminalId));
+  handle('skills:setSeats', (scope, projectId, seats) => skills.setSeats(scope, projectId, seats));
   handle('skills:list', () => skills.list());
   handle('skills:read', id => skills.read(id));
   handle('skills:save', (id, draft) => skills.save(id, draft));

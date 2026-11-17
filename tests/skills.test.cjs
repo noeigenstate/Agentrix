@@ -61,6 +61,34 @@ test('skill defaults, exact public shape, read-only built-ins and local-only pro
   assert.equal(scoped.projectName, 'First');
 });
 
+test('seat saves validate atomically, merge project choices, clear scopes and keep built-in text read-only', async t => {
+  const f = fixture(t), { store } = f, before = store.read('builtin:model-routing').text;
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  const choice = model => ({ model, effort: 'high' });
+  for (const [map, code] of [
+    [{ unknown: choice('opus') }, 'unknown-seat'], [{ core: choice('bad;id') }, 'invalid-model'],
+    [{ core: { model: 'gpt-6.1-sol', effort: 'max' } }, 'invalid-effort'],
+    [{ visual: { ...choice('sonnet'), fast: true } }, 'fast-not-allowed'],
+    [{ lead: { codex: choice('opus') } }, 'lead-family'], [{ reviewer: choice('gpt-6.1-sol') }, 'reviewer-same-model'],
+  ]) {
+    const result = store.setSeats('global', null, map);
+    assert.equal(result.ok, false); assert.equal(result.code, code); assert.deepEqual(store.seatsInfo().global, {});
+  }
+  assert.deepEqual(store.setSeats('global', null, { lookup: choice('sonnet') }), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p1', { visual: choice('opus') }), { ok: true });
+  assert.equal(store.seatsInfo('p1').effective.lookup.model, 'sonnet');
+  assert.equal(store.seatsInfo('p1').effective.visual.model, 'opus');
+  assert.equal(store.seatsInfo('p2').effective.visual.model, 'sonnet');
+  const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
+  assert.deepEqual(persisted.projects.p1, { visual: choice('opus') });
+  assert.ok(f.changes.some(change => change.deliveryChanged));
+  assert.equal(store.read('builtin:model-routing').text, before);
+  await assert.rejects(() => store.save('builtin:model-routing', draft('model-routing')), /只读/);
+  assert.deepEqual(store.setSeats('project', 'p1', {}), { ok: true }); assert.equal(store.seatsInfo('p1').project, null);
+  assert.deepEqual(store.setSeats('global', null, {}), { ok: true }); assert.deepEqual(store.seatsInfo().global, {});
+  assert.deepEqual(f.errors, []);
+});
+
 test('shipped code standard stays always and marks only the first agent session locally and over SSH', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-shipped-skills-'));
   const project = { id: 'p1', name: 'First', path: path.join(root, 'project') };
@@ -252,7 +280,7 @@ test('PowerShell wrappers reread the refreshed startup note before another CLI s
   assert.deepEqual(output.trim().split(/\r?\n/), ['First note.', 'Second note.']);
 });
 
-test('preload exposes all nine skill contract endpoints and unsubscribes onSkills', () => {
+test('preload exposes the skill and seat contract endpoints and unsubscribes onSkills', () => {
   const calls = [], listeners = new Map(); let bridge;
   const ipcRenderer = { invoke: (...args) => { calls.push(args); }, on: (channel, fn) => listeners.set(channel, fn), removeListener: (channel, fn) => { assert.equal(listeners.get(channel), fn); listeners.delete(channel); } };
   require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
@@ -260,7 +288,10 @@ test('preload exposes all nine skill contract endpoints and unsubscribes onSkill
   });
   bridge.listSkills(); bridge.readSkill('id'); bridge.saveSkill(null, draft('preload')); bridge.deleteSkill('id'); bridge.setSkillOptions('id', { enabled: false });
   bridge.revertSkill('id', 2); bridge.resolveSkillChange('id', true); bridge.importSkill('global', null);
-  assert.deepEqual(calls.map(call => call[0]), ['skills:list', 'skills:read', 'skills:save', 'skills:delete', 'skills:options', 'skills:revert', 'skills:resolve', 'skills:import']);
+  const seats = { lookup: { model: 'sonnet', effort: 'high' } };
+  bridge.skillSeats('p1', 'terminal'); bridge.setSkillSeats('project', 'p1', seats);
+  assert.deepEqual(calls.map(call => call[0]), ['skills:list', 'skills:read', 'skills:save', 'skills:delete', 'skills:options', 'skills:revert', 'skills:resolve', 'skills:import', 'skills:seats', 'skills:setSeats']);
+  assert.deepEqual(calls.slice(-2), [['skills:seats', 'p1', 'terminal'], ['skills:setSeats', 'project', 'p1', seats]]);
   let received;
   const stop = bridge.onSkills(skills => { received = skills; });
   const skills = [{ id: 'user:example' }]; listeners.get('skills:changed')({}, skills);

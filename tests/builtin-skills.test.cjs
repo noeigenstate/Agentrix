@@ -118,10 +118,23 @@ test('every shipped built-in passes the strict format and has English title, sum
   assert.ok(folders.length);
   for (const folder of folders) {
     const fields = builtinMetadata(fs.readFileSync(path.join(resources, folder.name, 'SKILL.md'), 'utf8'), folder.name);
-    assert.deepEqual(Object.keys(fields), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
+    assert.deepEqual(Object.keys(fields).filter(key => !['seats', 'fresh'].includes(key)), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
     assert.match(fields.description, /^Use (when|before|on|at|whenever)\b/, `${folder.name} description trigger`);
     for (const key of ['title', 'summary', 'when']) assert.match(english[fields[key]] || '', /[A-Za-z]/, `${folder.name} ${key} translation`);
   }
+});
+
+test('seat declarations and fresh roles come from front matter without a built-in name check', t => {
+  const fields = { seats: 'lead, architect, core, execution, visual, lookup, reviewer', fresh: 'visual, reviewer' };
+  const parsed = builtinMetadata(builtin('example', fields), 'example');
+  assert.deepEqual(parsed.seats, fields.seats.split(', ')); assert.deepEqual(parsed.fresh, ['visual', 'reviewer']);
+  for (const bad of [{ seats: 'core, core' }, { seats: 'invented' }, { seats: 'core', fresh: 'reviewer' }, { fresh: 'visual' }]) {
+    assert.throws(() => builtinMetadata(builtin('example', bad), 'example'));
+  }
+  const f = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'example', 'SKILL.md'), builtin('example', fields)));
+  assert.equal(f.store.seatsInfo().skill, 'builtin:example');
+  const shipped = builtinMetadata(fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8'), 'model-routing');
+  assert.deepEqual(shipped.seats, parsed.seats); assert.deepEqual(shipped.fresh, parsed.fresh);
 });
 
 test('shipped descriptions include trigger timing and system precedence without yielding', () => {
