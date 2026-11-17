@@ -3,7 +3,7 @@ import type { Terminal } from '@xterm/xterm';
 import type { ApprovalStamp } from '../../shared/types';
 import type { ScreenAgent, ScreenChoice } from '../agents/agent-screen-types';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen.ts';
-import { cliDialogShown, isAtPrompt, isCliWorking } from '../agents/agent-screen-input.ts';
+import { cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from '../agents/agent-screen-input.ts';
 import { createFactsPublisher } from '../agents/agent-screen-facts.ts';
 export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 
@@ -11,10 +11,11 @@ export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 // choices it is asking about) for the reading view to present without switching to the terminal. Each
 // UI updates coalesce over 100 ms. Delivery observes every completed parse, including the instant pending reaches zero.
 // parsed describes the cached rows, not permission to write: pending must be false before any mutation.
-export type Screen = { rows: string[]; sessionId: string | null; epoch?: number; revision: number; parse?: number; updatedAt: number; stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; queued?: number; approval?: ApprovalStamp | null; instances?: Record<ScreenAgent, number> };
+export type Screen = { rows: string[]; sessionId: string | null; epoch?: number; revision: number; parse?: number; updatedAt: number; stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; queued?: number; approval?: ApprovalStamp | null; instances?: Record<ScreenAgent, number>; inputFrames?: Record<ScreenAgent, number> };
 type Entry = { id: string; terminal: Terminal; listeners: Set<(screen: Screen) => void>; parses: Set<(screen: Screen) => void>; timer: number; dispose: () => void; frame?: Screen; epoch: number;
   sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; parse: number; updatedAt: number;
   states: Partial<Record<ScreenAgent, string | null>>; stateUpdatedAt: Record<ScreenAgent, number>;
+  inputShown: Record<ScreenAgent, boolean>; inputFrames: Record<ScreenAgent, number>;
   identities: Partial<Record<ScreenAgent, string | null>>; instances: Record<ScreenAgent, number>; rowsKey: string; facts: (frame: Screen) => void; factsTimer: number };
 const entries = new Map<string, Entry>();
 // What the terminal's owner knows about it (the agent running in it, the messages main holds queued), kept by id across a remount.
@@ -62,14 +63,19 @@ function capture(entry: Entry): Screen {
     entry.rowsKey = rowsKey;
     for (const agent of ['claude', 'codex'] as const) {
       const parsed = parseAgentScreen(agent, screen.rows), choice = parsed.choice;
-      const state = cliDialogShown(agent, screen.rows, parsed) ? 'waiting' : isCliWorking(agent, screen.rows, parsed) ? 'working' : isAtPrompt(agent, screen.rows, parsed) ? 'idle' : null;
+      const waiting = cliDialogShown(agent, screen.rows, parsed);
+      entry.inputShown[agent] = !waiting && hasCliInput(agent, screen.rows, parsed);
+      const state = waiting ? 'waiting' : isCliWorking(agent, screen.rows, parsed) ? 'working' : isAtPrompt(agent, screen.rows, parsed) ? 'idle' : null;
       if (entry.states[agent] !== state) { entry.states[agent] = state; entry.stateUpdatedAt[agent] = entry.updatedAt; }
       const identity = choice ? choiceIdentity(choice) : null;
       if (entry.identities[agent] !== identity) { entry.identities[agent] = identity; entry.instances[agent] = ++incarnation; }
     }
   }
+  // The terminal remains mounted in raw mode. Remember input observed on every parse, including while more output
+  // is queued, so a later identical prompt cannot inherit a dismissed episode the reader never saw end.
+  for (const agent of ['claude', 'codex'] as const) if (entry.inputShown[agent]) entry.inputFrames[agent]++;
   return entry.frame = { ...screen, sessionId: entry.sessionId ?? null, epoch: entry.epoch, revision: entry.revision, parse: ++entry.parse, updatedAt: entry.updatedAt, parsed: true,
-    stateUpdatedAt: { ...entry.stateUpdatedAt }, approval: entry.pending ? null : entry.approval, instances: { ...entry.instances } };
+    stateUpdatedAt: { ...entry.stateUpdatedAt }, approval: entry.pending ? null : entry.approval, instances: { ...entry.instances }, inputFrames: { ...entry.inputFrames } };
 }
 
 function snapshot(entry: Entry): Screen {
@@ -104,6 +110,7 @@ export function registerScreen(id: string, terminal: Terminal, sessionId?: strin
   const parses = previous?.parses ?? pendingParses.get(id) ?? new Set(); pendingParses.delete(id);
   previous?.dispose();
   const entry: Entry = { id, terminal, listeners, parses, timer: 0, dispose: () => {}, epoch: ++incarnation, sessionId, approval: null, writes: 0, pending: 0, parse: 0,
+    inputShown: { claude: false, codex: false }, inputFrames: { claude: 0, codex: 0 },
     revision: ++frameRevision, updatedAt: Date.now(), states: {}, stateUpdatedAt: { claude: 0, codex: 0 }, identities: {}, instances: { claude: ++incarnation, codex: ++incarnation }, rowsKey: '',
     facts: createFactsPublisher(facts => window.agentrix.screenFacts(id, facts)), factsTimer: 0 };
   const notify = () => {

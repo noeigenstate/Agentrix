@@ -640,6 +640,35 @@ test('a session and screen epoch change opens the new prompt without an idle fra
   assert.equal(h.popup().props.sessionId, 'next-session');
 });
 
+for (const agent of ['claude', 'codex']) for (const pending of [false, true]) test(`registry input ends a dismissed episode before an identical prompt ${pending ? 'during pending output' : 'while the reader is unmounted'} (${agent})`, t => {
+  const registry = require('../src/features/terminal/terminal-screen.ts');
+  const h = workingComposerHarness(t, agent, { './terminal-screen': {
+    useScreen: id => registry.readScreen(id), readScreen: registry.readScreen,
+    subscribeParsed: registry.subscribeParsed, subscribeScreen: registry.subscribeScreen,
+  } });
+  window.setTimeout = setTimeout; window.clearTimeout = clearTimeout;
+  let lines = composerRows(agent), parsed;
+  const completions = [];
+  const terminal = { get rows() { return lines.length; }, buffer: { active: { baseY: 0, getLine: index => ({ translateToString: () => lines[index] ?? '' }) } },
+    onWriteParsed(fn) { parsed = fn; return { dispose() {} }; }, onResize() { return { dispose() {} }; },
+    write(_text, done) { completions.push(done); },
+  };
+  const unregister = registry.registerScreen(h.props.terminal.id, terminal, 'session');
+  t.after(() => { for (const complete of completions) complete(); unregister(); });
+  const dialog = fs.readFileSync(path.join(__dirname, 'fixtures/screens', agent + '-permission.txt'), 'utf8').split(/\r?\n/);
+  const draw = (rows, render = true) => { lines = rows; parsed(); if (render) { h.render(); h.render(); } };
+  draw(dialog); assert.ok(h.popup()); h.popup().props.onClose(); h.render(); h.render(); assert.equal(h.popup(), undefined);
+  const before = registry.readScreen(h.props.terminal.id).inputFrames?.[agent];
+  if (pending) registry.writeScreen(h.props.terminal.id, 'output still queued');
+  else h.unmount();
+  draw(composerRows(agent), pending);
+  if (pending) assert.equal(registry.readScreen(h.props.terminal.id).pending, true);
+  draw(dialog, pending);
+  if (!pending) h.remount();
+  assert.ok(h.popup(), 'a parsed input in raw mode or under pending output separates the identical prompts');
+  assert.ok(registry.readScreen(h.props.terminal.id).inputFrames[agent] > before);
+});
+
 for (const agent of ['claude', 'codex']) {
   test(agent + ': dialog messages queue FIFO and drain after the first idle frame without answering the dialog', async t => {
     const h = workingComposerHarness(t, agent);

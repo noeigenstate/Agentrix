@@ -9,6 +9,7 @@ const screens = require('../src/features/terminal/terminal-screen.ts');
 const { canPasteScreen, beginScreenPaste, recordScreenPaste, hasScreenPaste } = screens;
 const { DIALOG_SETTLE } = require('../src/features/reading/reading-ready.ts');
 const { registerReadingTerminal, mountReadingTerminal } = require('../src/features/terminal/terminal-popup.ts');
+const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
 
 const prompt = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'];
 
@@ -125,7 +126,7 @@ test('send-to-agent reaches an untracked receiver during pending output and repo
 
 // The real screen registry, parser, popup mounting and fitting. A PTY redraw is represented by a null frame followed
 // by the same prompt at its new width; the popup harness never assigns instances itself.
-function resizingPrompt(t) {
+function resizingPrompt(t, wrappedOption = false) {
   const h = popupHarness(t, 'claude');
   const saved = { style: global.getComputedStyle, observer: global.ResizeObserver };
   window.setTimeout = setTimeout; window.clearTimeout = clearTimeout;
@@ -133,10 +134,14 @@ function resizingPrompt(t) {
   global.ResizeObserver = class { observe() {} disconnect() {} };
   const container = width => ({ clientWidth: width, clientHeight: 400,
     appendChild(node) { this.insertBefore(node); }, insertBefore(node) { node.parentElement = this; } });
-  const card = container(400), popup = container(800), element = { parentElement: card, nextSibling: null, contains: () => false };
+  const card = container(wrappedOption ? 800 : 400), popup = container(wrappedOption ? 1200 : 800), element = { parentElement: card, nextSibling: null, contains: () => false };
   let lines = ['────', '❯ ', '────'], parsed = () => {}, resized = () => {};
-  const atWidth = title => [title, ...(terminal.cols < 60 ? ['$ echo a long command', '  whose context wraps'] : ['$ echo a long command whose context wraps']), ...prompt.slice(1)];
-  const terminal = { cols: 40, rows: 20, element, options: { scrollback: 0 },
+  const option = "  2. Yes, and don't ask again for npm test commands in", folder = 'D:\\work\\workspace\\long-project-folder';
+  const atWidth = title => wrappedOption
+    ? ['─'.repeat(terminal.cols), title, '$ npm test', '', '❯ 1. Yes',
+      ...(terminal.cols < 100 ? [option, '     ' + folder] : [option + ' ' + folder]), '  3. No', 'Esc to cancel']
+    : [title, ...(terminal.cols < 60 ? ['$ echo a long command', '  whose context wraps'] : ['$ echo a long command whose context wraps']), ...prompt.slice(1)];
+  const terminal = { cols: wrappedOption ? 80 : 40, rows: 20, element, options: { scrollback: 0 },
     _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } }, clear() {} } },
     buffer: { active: { baseY: 0, getLine: index => ({ translateToString: () => lines[index] ?? '' }) } },
     onWriteParsed(fn) { parsed = fn; return { dispose() {} }; }, onResize(fn) { resized = fn; return { dispose() {} }; },
@@ -158,6 +163,17 @@ test('an explicit close survives real popup fit and restore resizes with a short
   assert.equal(h.popup(), undefined); h.tick(100); h.prompt(); assert.equal(h.popup(), undefined);
   h.props.autoFocus = true; h.render(); h.props.autoFocus = false; h.render(); h.prompt();
   assert.equal(h.popup(), undefined, 'collapse and another redraw preserve explicit dismissal');
+});
+
+test('a wrapped Claude Bash option moving between label and detail keeps dismissal across fit and restore', t => {
+  const h = resizingPrompt(t, true); h.prompt(); assert.ok(h.popup());
+  const narrow = parseAgentScreen('claude', h.view.rows).choice.options[1];
+  assert.match(narrow.detail, /long-project-folder/); assert.doesNotMatch(narrow.label, /long-project-folder/);
+  const restore = h.mount(); h.render(); h.prompt();
+  const wide = parseAgentScreen('claude', h.view.rows).choice.options[1];
+  assert.match(wide.label, /long-project-folder/); assert.equal(wide.detail, '');
+  h.popup().props.onClose(); h.render(); restore(); h.render(); h.prompt();
+  assert.equal(h.popup(), undefined, 'returning the path to detail cannot create another episode');
 });
 
 test('an open popup adopts real rewraps and a new prompt without remounting', t => {

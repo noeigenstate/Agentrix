@@ -4,27 +4,31 @@
 type Run = { session: string | null | undefined; thread: string | undefined; start: number | null | undefined; active: boolean };
 type Ready = { session: string; thread: string | undefined; start: number | null | undefined };
 const ready = new Map<string, Ready>(), dialogs = new Map<string, { instance: string; dismissed: boolean }>();
-const episodes = new Map<string, { scope: string; identity: string; key: string; missingAt?: number }>();
+const episodes = new Map<string, { scope: string; identity: string; key: string; missingAt?: number; inputFrames?: number }>();
 let nextEpisode = 0;
 
 // A dialog that disappears for less than this (a redraw frame) is still the same dialog.
 export const DIALOG_SETTLE = 3000;
 
 // Approval instances follow exact screen rows. A popup instead follows a prompt across rewraps and short redraw gaps.
-// Call only from effects; an actual input returning ends it immediately through endDialog.
-export function observeDialog(id: string, scope: string, identity: string | null, now = Date.now()): string | null {
+// Call only from effects. The registry's input count catches boundaries while the reader is unmounted or delivery
+// is blocked by pending output; endDialog still ends an episode immediately when this view sees returned input.
+export function observeDialog(id: string, scope: string, identity: string | null, now = Date.now(), inputFrames?: number): string | null {
   const previous = episodes.get(id);
+  const inputReturned = inputFrames !== undefined && previous?.inputFrames !== undefined && inputFrames !== previous.inputFrames;
   if (identity === null) {
     if (!previous || previous.scope !== scope) return null;
+    if (inputReturned) { episodes.delete(id); return null; }
     previous.missingAt ??= now;
     return previous.key;
   }
-  if (previous?.scope === scope && previous.identity === identity
+  if (previous?.scope === scope && previous.identity === identity && !inputReturned
     && (previous.missingAt === undefined || now - previous.missingAt < DIALOG_SETTLE)) {
+    previous.inputFrames = inputFrames ?? previous.inputFrames;
     previous.missingAt = undefined; return previous.key;
   }
   const key = JSON.stringify([scope, ++nextEpisode]);
-  episodes.set(id, { scope, identity, key }); return key;
+  episodes.set(id, { scope, identity, key, inputFrames }); return key;
 }
 
 // Two values that are both known and differ: an unknown one (a thread the first turn has not bound yet) is no change.

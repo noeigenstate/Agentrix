@@ -224,8 +224,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // Observe parse counters so collapse rearms on the next frame rather than the popup's own state commit.
   useEffect(() => {
     if (!live || !hasChoice && state.canDeliver) { endDialog(terminal.id); return; }
-    const prompt = observeDialog(terminal.id, dialogScope, dialogIdentity)
-      ?? (hasChoice ? observeDialog(terminal.id, dialogScope, 'waiting') : null);
+    const now = Date.now(), inputFrames = visibleScreen?.inputFrames?.[kind];
+    const prompt = observeDialog(terminal.id, dialogScope, dialogIdentity, now, inputFrames)
+      ?? (hasChoice ? observeDialog(terminal.id, dialogScope, 'waiting', now, inputFrames) : null);
     if (prompt) dialogInstance.current = prompt;
     if (!hasChoice) return;
     const popup = currentPopup.current;
@@ -241,7 +242,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       cancelSend(); setTerminalPopup({ command: '', focus, prompt });
     };
     open();
-  }, [terminal.id, dialogScope, dialogIdentity, visibleScreen?.parse, live, hasChoice, active, visible, autoFocus, inputBlocked, state.canDeliver]);
+  }, [terminal.id, dialogScope, dialogIdentity, visibleScreen?.parse, visibleScreen?.inputFrames?.[kind], live, hasChoice, active, visible, autoFocus, inputBlocked, state.canDeliver]);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
