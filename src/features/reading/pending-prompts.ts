@@ -1,3 +1,4 @@
+import type { PasteReceipt } from '../terminal/terminal-screen';
 // Renderer echoes are replaced only by newly observed user records, one record per send.
 export const PENDING_PROMPT_TIMEOUT = 20_000;
 // The reading view keeps 400 entries; the user records seen are bounded well above that.
@@ -5,7 +6,10 @@ const SEEN_LIMIT = 1000;
 type UserRecord = { id: string; role: string; text?: string; original?: string; at?: number; receivedAt?: number; queued?: boolean; cancelled?: boolean; images?: string[] };
 export type PendingPrompt = { id: string; role: 'user'; text: string; at: number; sending: boolean; images?: string[]; imageCount?: number };
 export type PendingPrompts = { sessionId: string | null; prompts: readonly PendingPrompt[]; seen: readonly string[] };
-export type WaitingMessage = { id: number; text: string; at: number; uncertain?: boolean; seen?: readonly string[]; earlier?: readonly PendingPrompt[] };
+// A paste request in flight is ambiguous even if no echo has appeared. Only an unattempted/rejected paste can be
+// retried from an empty input; a confirmed paste may instead be finished from its exact, still-unsent input.
+export type WaitingAttempt = { epoch?: number; parse?: number; phase: 'ready' | 'pasting' | 'pasted' | 'entered' | 'rejected'; echo?: string; resuming?: boolean; paste?: PasteReceipt };
+export type WaitingMessage = { id: number; text: string; at: number; uncertain?: boolean; seen?: readonly string[]; earlier?: readonly PendingPrompt[]; attempt?: WaitingAttempt; recoveries?: number };
 type ReceiptPrompt = Pick<PendingPrompt, 'text' | 'at'> & { seen?: readonly string[] };
 
 export const normalizePrompt = (text: string) => text.trim().replace(/\s+/g, ' ');

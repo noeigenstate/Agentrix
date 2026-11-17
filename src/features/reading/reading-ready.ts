@@ -3,7 +3,7 @@
 // component. Rendering only reads this; the view writes it from effects.
 type Run = { session: string | null | undefined; thread: string | undefined; start: number | null | undefined; active: boolean };
 type Ready = { session: string; thread: string | undefined; start: number | null | undefined };
-const ready = new Map<string, Ready>(), dialogs = new Map<string, string>();
+const ready = new Map<string, Ready>(), dialogs = new Map<string, { instance: string; dismissed: boolean }>();
 
 // A dialog that disappears for less than this (a redraw frame) is still the same dialog.
 export const DIALOG_SETTLE = 3000;
@@ -29,10 +29,16 @@ export function rememberReady(id: string, run: Run, inputShown: boolean) {
   else ready.delete(id);
 }
 
-// A dialog the CLI is waiting on opens the terminal popup once, however often the view mounts or the screen redraws.
-// True the first time this dialog is seen; endDialog forgets it once the CLI has moved on, so the next one opens again.
-export function startDialog(id: string, dialog: string): boolean {
-  if (dialogs.get(id) === dialog) return false;
-  dialogs.set(id, dialog); return true;
+// Explicit dismissal belongs to the screen's prompt instance and survives remounts. An implicit close rearms only
+// an open instance; endDialog forgets it once the CLI has moved on. Manual opening replaces an earlier dismissal.
+export function startDialog(id: string, dialog: string, manual = false): boolean {
+  if (!manual && dialogs.get(id)?.instance === dialog) return false;
+  dialogs.set(id, { instance: dialog, dismissed: false }); return true;
+}
+export function dismissDialog(id: string, instance: string) { dialogs.set(id, { instance, dismissed: true }); }
+// Losing the surface is not an owner's dismissal. A stale surface cannot rearm a newer prompt.
+export function rearmDialog(id: string, instance: string) {
+  const dialog = dialogs.get(id);
+  if (dialog?.instance === instance && !dialog.dismissed) dialogs.delete(id);
 }
 export const endDialog = (id: string) => { dialogs.delete(id); };

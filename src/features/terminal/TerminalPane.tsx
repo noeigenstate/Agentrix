@@ -9,7 +9,7 @@ import { styleTerminal } from './terminal-styling';
 import { terminalOptions, terminalTheme } from './terminal-theme';
 import { gpuRenderer, setTerminalWeight, terminalRenderer, useTerminalRenderer } from './terminal-renderer';
 import { terminalFontFamily } from './terminal-font';
-import { registerScreen, setQueueCount, setScreenAgent, writeScreen } from './terminal-screen';
+import { canPasteScreen, readScreen, recordScreenPaste, registerScreen, setQueueCount, setScreenAgent, writeScreen } from './terminal-screen';
 import '@xterm/xterm/css/xterm.css';
 import { t } from '../../shared/i18n';
 import { isMac, isWindows } from '../../shared/platform';
@@ -30,6 +30,7 @@ export function TerminalPane({ id, sessionId, agent = null, queue = 0, fontSize,
   const menuRef = useRef<HTMLDivElement>(null);
   const report = useRef(onError);
   report.current = onError;
+  const currentAgent = useRef(agent); currentAgent.current = agent;
   const openLink = useRef(onOpenLink);
   openLink.current = onOpenLink;
   // Read-only: the screen registry learns which agent runs here and how many messages main holds queued for it.
@@ -163,6 +164,10 @@ export function TerminalPane({ id, sessionId, agent = null, queue = 0, fontSize,
     // main process names the key that starts a new line instead, and the text is typed with it.
     const offPaste = window.agentrix.onTerminalPaste(packet => {
       if (disposed || packet.id !== id || packet.sessionId !== sessionId) return;
+      const agent = currentAgent.current;
+      const accepted = !agent || canPasteScreen(agent, readScreen(id));
+      recordScreenPaste(id, sessionId, packet.text, accepted);
+      if (!accepted) return;
       if (packet.lineBreak) terminal.input(packet.text.replace(/\r\n?|\n/g, packet.lineBreak), true);
       else terminal.paste(packet.text);
     });

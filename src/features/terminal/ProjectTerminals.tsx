@@ -22,8 +22,8 @@ function WithHandoff({ terminal, children }: { terminal: ProjectTerminal; childr
   return <>{children(useHandoff(terminal.id, terminal.nativeRuntimeSessionId ?? null, terminal.switchState, surface))}</>;
 }
 
-export function ProjectTerminals({ project, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink }: {
-  project: Project; focused: boolean; fontSize: number; activeId: string | null; setActiveId: (id: string) => void; onExpand: () => void;
+export function ProjectTerminals({ project, visible: projectVisible = true, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink }: {
+  project: Project; visible?: boolean; focused: boolean; fontSize: number; activeId: string | null; setActiveId: (id: string) => void; onExpand: () => void;
   onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
   onError: (message: string) => void; onOpenLink: (projectId: string, target: string) => void;
 }) {
@@ -79,7 +79,7 @@ export function ProjectTerminals({ project, focused, fontSize, activeId, setActi
           <button className="icon-button" title={t('关闭此终端')} aria-label={t('关闭 {name}', { name })} onClick={() => void onAction(window.agentrix.closeTerminal(terminal.id))}><X size={13} /></button>
         </div>}
         <WithHandoff terminal={terminal}>{handoff => <div className="terminal-split-body" data-reading={reading || native || !!terminal.agentStarting}>
-          {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} autoFocus={focused && selected === terminal.id} active={selected === terminal.id} handoff={handoff} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
+          {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} visible={projectVisible && visibleIds.has(terminal.id)} autoFocus={projectVisible && focused && selected === terminal.id} active={selected === terminal.id} handoff={handoff} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
           {/* A change of run mode on its way to a terminal card, and the note of a path that did not go as chosen; the native view draws its own line and question. */}
           <NativePathNote terminalId={terminal.id} terminalActive={!!terminal.sessionId} switchState={terminal.switchState} sessionId={terminal.nativeRuntimeSessionId ?? null} />
           {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} agent={terminal.agent} queue={terminal.cliState?.queue ?? 0} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />

@@ -4,11 +4,11 @@ import type { AgentCommand, ProjectTerminal } from '../../shared/types';
 import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
 import { VoiceButton } from '../voice/VoiceButton';
-import { bindApproval, useScreen } from '../terminal/terminal-screen';
+import { beginScreenPaste, bindApproval, useScreen } from '../terminal/terminal-screen';
 import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
 import { cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { readingState, nextCliState, type CliState } from './reading-state.ts';
-import { cliReady, endDialog, rememberReady, startDialog } from './reading-ready';
+import { cliReady, dismissDialog, endDialog, rearmDialog, rememberReady, startDialog } from './reading-ready';
 import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
 import { typeReadingCommand } from './reading-command';
@@ -33,7 +33,7 @@ import { MentionPalette } from './MentionPalette';
 import { useComposerHistory } from './useComposerHistory';
 import { useCommandPalette } from './useCommandPalette';
 import { commandList, composerAria } from './CommandList';
-import { isTypedCommand, pendingPromptCards, reconcileOutbox, sameMessage, type PendingPrompt, type WaitingMessage } from './pending-prompts';
+import { isTypedCommand, matchesPrompt, pendingPromptCards, reconcileOutbox, sameMessage, type PendingPrompt, type WaitingAttempt, type WaitingMessage } from './pending-prompts';
 import { usePendingPrompts } from './usePendingPrompts';
 import { PendingPromptEntries, UserImages } from './PendingPromptEntries';
 import { AgentMark, TimelineStep } from './Timeline';
@@ -75,7 +75,7 @@ const IMAGE_PLACEHOLDER = /\[Image #\d+\]/;
 // and its tool calls folded between them. The real terminal stays underneath; what is written here goes to
 // it, and the toggle in the card header switches back to it at any time. autoFocus: the card is expanded and
 // this is its terminal in use, so the message box takes the keyboard (never a small card's).
-export function ReadingView({ projectId, terminal, remote = false, autoFocus, active = true, handoff, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; handoff?: ReadingHandoff; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
+export function ReadingView({ projectId, terminal, remote = false, autoFocus, active = true, visible = true, handoff, onShowTerminal, onError, onOpenLink }: { projectId: string; terminal: ProjectTerminal; remote?: boolean; autoFocus: boolean; active?: boolean; visible?: boolean; handoff?: ReadingHandoff; onShowTerminal: () => void; onError: (message: string) => void; onOpenLink: (target: string) => void }) {
   const readingView = useRef<HTMLDivElement>(null);
   const kind = (terminal.agent ?? terminal.readingHistory?.agent) === 'claude' ? 'claude' : 'codex';
   const readingSession = terminal.sessionId;
@@ -174,7 +174,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const holdQuote = (next: MessageQuote | null) => { quoteRef.current = next; setQuote(next); };
   useLayoutEffect(() => { holdQuote(null); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
-  const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean; automatic?: boolean } | null>(null);
+  const dialogInstance = JSON.stringify([terminal.id, readingSession, visibleScreen?.epoch, visibleScreen?.instances?.[kind] ?? 0]);
+  const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean; prompt?: string } | null>(null);
+  const currentPopup = useRef(terminalPopup); currentPopup.current = terminalPopup;
   const inputBlocked = preview || !live || !!handoff?.locked;
   // As in its terminal, a busy agent takes a message: only a dialog, a menu or the popup holds one back.
   const deliveryBlocked = !state.accepting || terminalPopup !== null;
@@ -189,11 +191,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const popupReady = useRef<(() => void) | null>(null);
   const readyPopup = () => { popupReady.current?.(); popupReady.current = null; };
   const cancelSend = () => { sendCounter.current++; interaction.current++; sending.current = false; readyPopup(); };
-  const closePopup = (restoreFocus = true) => {
+  const closePopup = (restoreFocus = true, implicit = false) => {
+    if (terminalPopup?.prompt) (implicit ? rearmDialog : dismissDialog)(terminal.id, terminalPopup.prompt);
     cancelSend(); focusAfterPopup.current = restoreFocus; setTerminalPopup(null);
   };
   useEffect(() => {
-    if (!hasChoice && state.canDeliver && terminalPopup?.automatic) closePopup(false);
+    if (!hasChoice && state.canDeliver && terminalPopup?.prompt) closePopup(false, true);
   }, [hasChoice, state.canDeliver, terminalPopup]);
   // Restore focus after the popup has left the DOM, without taking it from another editor.
   useLayoutEffect(() => {
@@ -203,25 +206,30 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   }, [terminalPopup, inputBlocked]);
   useLayoutEffect(() => {
     setTerminalPopup(null);
-    return cancelSend;
+    return () => {
+      if (currentPopup.current?.prompt) rearmDialog(terminal.id, currentPopup.current.prompt);
+      cancelSend();
+    };
   }, [terminal.id, terminal.sessionId, epoch, terminal.codexActive]);
-  const ownership = useRef({ active, autoFocus });
+  const ownership = useRef({ active, autoFocus, visible, locked: handoff?.locked });
   useLayoutEffect(() => {
-    const previous = ownership.current; ownership.current = { active, autoFocus };
-    if (previous.active && !active || previous.autoFocus && !autoFocus) { cancelSend(); setTerminalPopup(null); }
-  }, [active, autoFocus]);
+    const previous = ownership.current; ownership.current = { active, autoFocus, visible, locked: handoff?.locked };
+    if (previous.active && !active || previous.autoFocus && !autoFocus || previous.visible && !visible || !previous.locked && handoff?.locked) closePopup(false, true);
+  }, [active, autoFocus, visible, handoff?.locked]);
   // Only positive waiting evidence opens the TUI. One dialog episode is shared across remounts;
-  // a hidden view never consumes its opening, and closing it does not rearm it on redraw.
+  // a hidden view never consumes its opening, and explicit dismissal survives redraws and remounts.
   useEffect(() => {
     if (!live || !hasChoice && (state.canDeliver || working || signal?.state === 'idle')) { endDialog(terminal.id); return; }
     if (!hasChoice) return;
     const open = () => {
-      if (!active || !startDialog(terminal.id, conversation) || terminalPopup !== null) return;
+      if (!visible || !active || inputBlocked) return;
+      if (terminalPopup && (!terminalPopup.prompt || terminalPopup.prompt === dialogInstance)) return;
+      if (!startDialog(terminal.id, dialogInstance)) return;
       const focus = !editingAtChoice.current && !hasEditingFocus(document.body) && !hasEditingFocus(readingView.current) && !isTyping(document.activeElement);
-      cancelSend(); setTerminalPopup({ command: '', focus, automatic: true });
+      cancelSend(); setTerminalPopup({ command: '', focus, prompt: dialogInstance });
     };
     open();
-  }, [terminal.id, conversation, live, hasChoice, active, state.canDeliver, working, signal?.state]);
+  }, [terminal.id, dialogInstance, live, hasChoice, active, visible, autoFocus, inputBlocked, state.canDeliver, working, signal?.state]);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -304,7 +312,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const ownsSend = (owner: number) => mounted.current && sendCounter.current === owner;
   const ownsPicture = (generation: number) => mounted.current && pictureGeneration.current === generation;
   const pictureNotAccepted = () => onError(t('图片未发送。请在输入框中移除后重新粘贴。'));
-  const send = async (text = draft.trim(), own = true, automatic = false) => {
+  const send = async (text = draft.trim(), own = true, automatic = false, attempt?: WaitingAttempt) => {
     if (inputBlocked || !text && !images.length && !serverPictures.current.length) return false;
     // The gate is the held one the box shows: a half-drawn redraw does not send a message to the outbox; the send waits
     // for the input itself. A dialog, a menu or the popup holds it at once.
@@ -317,7 +325,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     const owner = ++sendCounter.current, place = ++nextWaitingMessage;
     sending.current = true; sendingDraft.current = own ? text : null;
     try {
-      const sent = await deliver(text, own, owner, automatic, place);
+      const sent = await deliver(text, own, owner, automatic, place, attempt);
       // The input went away between this render and the write (a dialog came up): the message waits, as one sent then would.
       if (sent === false && !automatic && ownsSend(owner) && !images.length && !serverPictures.current.length && (!own || input.current?.value.trim() === text)) hold(text, own);
       return sent;
@@ -409,7 +417,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // The CLI recognises slash commands and shell mode from typed keys, not bracketed paste.
   // own: written in the composer here (it is cleared, with its pictures); otherwise a message sent again, which leaves
   // whatever is being written now alone and takes no pictures with it.
-  const deliver = async (words: string, own: boolean, owner: number, automatic: boolean, place: number) => {
+  const deliver = async (words: string, own: boolean, owner: number, automatic: boolean, place: number, attempt?: WaitingAttempt) => {
     if (inputBlocked || shownBlocked && !automatic) return false;
     if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
@@ -496,7 +504,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     // This message's own words still in the input, unconfirmed, are its earlier send waiting for Enter: an automatic
     // retry, or an owner's send while that send's card still waits here. Any other words of ours there hold this message
     // until the owner submits or clears them.
-    const unsent = sameMessage(text, left) && !queuedLeft && !receivedInput(left) && (automatic || pending.some(prompt => sameMessage(prompt.text, left)));
+    const unsent = sameMessage(text, left) && (attempt?.resuming || !queuedLeft && !receivedInput(left) && (automatic || pending.some(prompt => sameMessage(prompt.text, left))));
     if (ownedLeft && !returnedQueued && !unsent) {
       if (pendingId && (own || !automatic)) cancelEcho(pendingId);
       if (automatic) {
@@ -518,12 +526,15 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (carried && quoteRef.current === carried) holdQuote(null);
     const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
     const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
-    if (left && (!queuedLeft || returnedQueued) && sameMessage(text, left)) {
+    if (left && (attempt?.resuming || !queuedLeft || returnedQueued) && sameMessage(text, left)) {
       if (!readyInput()) return false;
       if (automatic) echo(text, [], 0); // These words were already pasted by the earlier send.
       uploads.forEach(picture => { picture.sent = true; });
       if (pictureSend) clearDraft(); if (own) clearPictures();
+      if (attempt) attempt.phase = 'entered';
       toBottom(); window.agentrix.writeTerminal(terminal.id, '\r');
+      // Recovery owns only this Enter. Until its receipt arrives it stays uncertain, never a fresh automatic send.
+      if (attempt?.resuming) { remember(); return; }
       await submitted(text, owner, returnedQueued, initialInput.epoch);
       remember(); return true;
     }
@@ -556,15 +567,18 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       hold(words, own, carried, place); return;
     }
     if (text) {
+      if (attempt) { attempt.phase = 'pasting'; attempt.paste = beginScreenPaste(terminal.id, terminal.sessionId, text); }
       const pasted = await window.agentrix.pasteTerminal(terminal.id, text, terminal.sessionId);
+      if (attempt) attempt.phase = pasted.ok ? 'pasted' : 'rejected';
       if (!ownsSend(owner)) return;
+      if (attempt?.paste?.status === 'refused') return;
       if (!pasted.ok) {
         if (pendingId) cancelEcho(pendingId);
         restoreQuote();
         if (own && !pictureSend && !input.current?.value) edit(words);
         onError(pasted.error); return;
       }
-      if (automatic) pendingId = echo(text, [], 0);
+      if (automatic) { pendingId = echo(text, [], 0); if (attempt && pendingId) attempt.echo = pendingId; }
       remember();
     }
     if (pictureSend) clearDraft();
@@ -573,6 +587,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     // The words are in the terminal now. Handing them back on a frame that only has not parsed yet would leave them in
     // both places, so this waits longer for one (a send of them again still meets them there as a leftover).
     if (native.parsing()) await native.settle(() => ownsSend(owner), 2000);
+    if (attempt?.paste?.status === 'refused') { if (pendingId) cancelEcho(pendingId); return; }
     if (!readyInput()) {
       if (pendingId) cancelEcho(pendingId);
       restoreQuote();
@@ -587,6 +602,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     }
     uploads.forEach(picture => { picture.sent = true; });
     if (own) clearPictures();
+    if (attempt) attempt.phase = 'entered';
     window.agentrix.writeTerminal(terminal.id, '\r');
     if (text) await submitted(text, owner, false, initialInput.epoch);
     return true;
@@ -609,23 +625,38 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const outboxAttempt = useRef('');
   drainOutbox.current = (parsed = false) => {
     const messages = waitingMessages.get(ownHistory) ?? [], head = messages[0];
-    if (!active || inputBlocked || !head || head.uncertain || sending.current || leftoverClearing.current || images.length || serverPictures.current.length) return;
+    if (!active || !visible || inputBlocked || !head || sending.current || choiceVisible.current || leftoverClearing.current || images.length || serverPictures.current.length) return;
     const input = native.readInput(true);
     if (!input) return;
     const held = input.text;
+    let resume = false;
+    if (head.uncertain) {
+      const attempt = head.attempt;
+      // Absence from history alone proves nothing. Require this attempt's same PTY and a completed, newer parse.
+      if (!attempt || native.parsing() || input.epoch !== attempt.epoch || (input.parse ?? 0) <= (attempt.parse ?? 0)) return;
+      const receipt = latestMessages.current.entries.some(entry => entry.role === 'user' && !entry.cancelled && !head.seen?.includes(entry.id)
+        && Number.isFinite(entry.receivedAt ?? entry.at) && matchesPrompt(head, entry));
+      resume = attempt.phase === 'pasted' && attempt.paste?.status === 'accepted' && sameMessage(head.text, held) && !receipt;
+      const neverPasted = !held && (attempt.phase === 'ready' || attempt.phase === 'rejected' || attempt.paste?.status === 'refused');
+      if (!resume && (!neverPasted || (head.recoveries ?? 0) >= 1)) return;
+      if (attempt.echo) cancelEcho(attempt.echo);
+    }
     // Never replace a draft the owner is editing in the terminal. Words of ours there (an Enter the CLI did not take)
     // get the notice that sends or clears them; the same words as the waiting message are that message.
-    if (held) { if (!parsed && !leftoverShown && ownInput(held)) leftBehind(held, head); return; }
-    const attempt = JSON.stringify([conversation, head.id, input.epoch, input.parse, signal?.revision]);
-    if (outboxAttempt.current === attempt) return;
-    outboxAttempt.current = attempt;
+    if (held && !resume) { if (!parsed && !leftoverShown && ownInput(held)) leftBehind(held, head); return; }
+    const attemptKey = JSON.stringify([conversation, head.id, input.epoch, input.parse, signal?.revision]);
+    if (outboxAttempt.current === attemptKey) return;
+    outboxAttempt.current = attemptKey;
     // A raw/reading switch can interrupt this async send. Persist uncertainty before writing so a remount never replays it.
+    const attempt: WaitingAttempt = { phase: 'ready', epoch: input.epoch, parse: input.parse, resuming: resume };
     saveOutbox(messages.map(message => message.id === head.id
-      ? { ...message, uncertain: true, at: Date.now(), seen: latestMessages.current.entries.map(entry => entry.id),
-        earlier: latestMessages.current.pending.filter(prompt => !latestMessages.current.cards.queuedIds.has(prompt.id)) } : message));
-    void sendRef.current(head.text, false, true).then(sent => {
+      ? { ...message, uncertain: true, attempt, recoveries: (message.recoveries ?? 0) + (message.uncertain ? 1 : 0),
+        ...(!message.uncertain ? { at: Date.now(), seen: latestMessages.current.entries.map(entry => entry.id),
+          earlier: latestMessages.current.pending.filter(prompt => !latestMessages.current.cards.queuedIds.has(prompt.id)) } : {}) } : message));
+    void sendRef.current(head.text, false, true, attempt).then(sent => {
       if (!mounted.current || identity.current.epoch !== epoch) return;
       const messages = waitingMessages.get(ownHistory) ?? [];
+      if (!messages.some(message => message.id === head.id && message.attempt === attempt)) return;
       saveOutbox(sent ? messages.filter(message => message.id !== head.id)
         : messages.map(message => message.id === head.id ? { ...message, uncertain: sent !== false } : message));
     });
@@ -650,7 +681,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const [idleSince, setIdleSince] = useState(() => Date.now()), [, setTick] = useState(0);
   useEffect(() => { if (!working) setIdleSince(Date.now()); }, [working]);
   // A message in Claude Code's queue has arrived: it is taken up when the current step is done, never sent again.
-  const stalled = pending.filter(prompt => !prompt.sending && !queued(prompt)), idle = !preview && !working && terminalPopup === null && !hasChoice && Date.now() - idleSince >= 5000;
+  const stalled = pending.filter(prompt => !prompt.sending && !queued(prompt) && !outbox.some(message => message.uncertain && sameMessage(message.text, prompt.text))), idle = !preview && !working && terminalPopup === null && !hasChoice && Date.now() - idleSince >= 5000;
   useEffect(() => {
     if (preview || !stalled.length || working || terminalPopup !== null || hasChoice || images.length) return;
     const wait = idleSince + 5000 - Date.now();
@@ -834,7 +865,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         <button type="button" className="button small" disabled={inputBlocked || deliveryBlocked} onClick={() => void clearLeftover(leftoverShown)}>{t('清空它，再发送新消息')}</button></div></li></ul></div>}
     {outbox.length > 0 && <div className="reading-outbox" role="status"><span data-reason={outboxReason ?? undefined}>{outboxReason ? reasonWords(outboxReason) : t('发送中')}</span><ul>{outbox.map(message => <li key={message.id}><span className="reading-notice-text" title={message.text}>{message.text}</span>{message.uncertain && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}
       <div className="reading-notice-actions"><button type="button" className="button small" onClick={() => { if (draft || sending.current) return; saveOutbox(outbox.filter(item => item.id !== message.id)); edit(message.text); }} disabled={!!draft || sending.current}>{t('取回')}</button></div></li>)}</ul></div>}
-    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => setTerminalPopup({ command: '' })} /></div>}
+    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => { startDialog(terminal.id, dialogInstance, true); setTerminalPopup({ command: '', prompt: dialogInstance }); }} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {commandList(palette)}
     <div ref={composer} tabIndex={-1} className="reading-composer" style={terminal.agentCommand ? { display: 'none' } : undefined}>

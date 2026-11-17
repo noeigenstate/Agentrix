@@ -125,7 +125,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
       </div>}
     </header>
     {imageOpen && <ProjectImageDialog project={project} index={index} onClose={() => setImageOpen(false)} />}
-    <ProjectTerminals project={project} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
+    <ProjectTerminals project={project} visible={!hidden} focused={focused} fontSize={fontSize} activeId={activeTerminalId} setActiveId={id => setActiveTerminal(project.id, id)} onExpand={() => onFocus(project.id)} onAction={onAction} onError={onError} onOpenLink={onOpenLink} />
     {showActivity && <ActivityPane terminal={currentTerminal} projectId={project.id} />}
     {project.error && !project.terminals.some(terminal => nativeTells(natives.get(terminal.id), project.error!)) && <div className="panel-error"><Info size={13} /><span>{t(project.error)}</span></div>}
   </article>;

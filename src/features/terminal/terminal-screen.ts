@@ -24,6 +24,21 @@ let incarnation = 0;
 let frameRevision = 0;
 const pending = new Map<string, Set<(screen: Screen) => void>>();
 const pendingParses = new Map<string, Set<(screen: Screen) => void>>();
+export type PasteReceipt = { sessionId: string; text: string; status: 'pending' | 'accepted' | 'refused' };
+const pastes = new Map<string, PasteReceipt>();
+
+// IPC acceptance is not terminal acceptance. The packet receiver can prove it refused this paste without writing it.
+export function beginScreenPaste(id: string, sessionId: string, text: string): PasteReceipt {
+  const receipt: PasteReceipt = { sessionId, text, status: 'pending' };
+  pastes.set(id, receipt); return receipt;
+}
+export function recordScreenPaste(id: string, sessionId: string, text: string, accepted: boolean) {
+  const receipt = pastes.get(id);
+  if (receipt?.sessionId !== sessionId || receipt.text !== text) return;
+  receipt.status = accepted ? 'accepted' : 'refused'; pastes.delete(id);
+}
+export const canPasteScreen = (agent: ScreenAgent, frame: Screen | null) => !!frame && !frame.pending
+  && !cliDialogShown(agent, frame.rows, parseAgentScreen(agent, frame.rows));
 
 function read(terminal: Terminal): Pick<Screen, 'rows'> {
   const buffer = terminal.buffer.active, rows: string[] = [];
@@ -99,7 +114,7 @@ export function registerScreen(id: string, terminal: Terminal, sessionId?: strin
   notify();
   return () => {
     if (entries.get(id) !== entry) return;
-    entry.dispose(); entries.delete(id);
+    entry.dispose(); entries.delete(id); pastes.delete(id);
     entry.listeners.forEach(listener => listener({ rows: [], sessionId: null, revision: ++frameRevision, updatedAt: Date.now() }));
     entry.parses.forEach(listener => listener({ rows: [], sessionId: null, revision: frameRevision, updatedAt: Date.now() }));
     if (entry.listeners.size) pending.set(id, entry.listeners);

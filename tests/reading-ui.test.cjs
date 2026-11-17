@@ -38,7 +38,7 @@ function loadUI(name, overrides = {}) {
     const key = name.startsWith('.') ? './' + path.basename(name) : name;
     if (name === 'react' && overrides.react) return { ...React, ...overrides.react };
     // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
-    if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { bindApproval: require('../src/features/terminal/terminal-screen.ts').bindApproval, subscribeScreen: () => () => {}, subscribeParsed: () => () => {}, ...overrides[key] };
+    if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { ...require('../src/features/terminal/terminal-screen.ts'), subscribeScreen: () => () => {}, subscribeParsed: () => () => {}, ...overrides[key] };
     if (Object.hasOwn(overrides, key) && key === './agent-screen') { const { choiceIdentity, waitingTitle } = require('../src/features/agents/agent-screen.ts'); return { choiceIdentity, waitingTitle, ...overrides[key] }; }
     if (Object.hasOwn(overrides, key)) return overrides[key];
     if (name.endsWith('.css')) return {};
@@ -199,6 +199,14 @@ test('the unread status button still opens a grid card with either activity togg
     assert.equal(button.type, 'button'); button.props.onClick();
   }
   assert.deepEqual(h.focused, ['project', 'project']);
+});
+
+test('a project panel passes its hidden state to its terminal grid', t => {
+  const h = projectHeaderHarness(t);
+  for (const hidden of [true, false]) {
+    h.props.hidden = hidden;
+    assert.equal(h.render().find(node => node.type?.name === 'ProjectTerminals').props.visible, !hidden);
+  }
 });
 
 test('the project badge follows the work gate for orphan receipts and genuinely open jobs', t => {
@@ -492,7 +500,11 @@ function workingComposerHarness(t, agent, overrides = {}) {
   });
   Object.assign(h.props.terminal, { id: 'working-' + agent, agent, codexActivity: 'working' });
   window.agentrix.terminalCommands = async () => ({ ok: true, value: [{ name: '/model', source: 'builtin', description: '', view: 'terminal' }] });
-  window.agentrix.pasteTerminal = async (id, text) => { h.pasted.push({ id, text }); view.draft += text; return { ok: true }; };
+  window.agentrix.pasteTerminal = async (id, text, sessionId) => {
+    h.pasted.push({ id, text }); view.draft += text;
+    require('../src/features/terminal/terminal-screen.ts').recordScreenPaste(id, sessionId, text, true);
+    return { ok: true };
+  };
   window.agentrix.writeTerminal = (id, text) => {
     h.written.push({ id, text });
     if (text === '\x15') view.draft = '';
@@ -507,6 +519,92 @@ function workingComposerHarness(t, agent, overrides = {}) {
     async tick(ms) { clock += ms; if (!view.pending || view.parsed) parsed(); await h.tick(ms); },
     async advance(ms, notify = true) { clock += ms; if (notify && (!view.pending || view.parsed)) parsed(false); await h.advance(ms); } };
 }
+
+test('a WaitingCard popup closes after its prompt ends and the held message sends', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
+  h.popup().props.onClose(); h.render(); h.render();
+  elements(h.tree()).find(node => node.type?.name === 'WaitingCard').props.onOpenTerminal(); h.render(); h.render();
+  assert.ok(h.popup()); h.edit('after answering'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), ['after answering']);
+  delete h.view.rows; h.render(); h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.equal(h.popup(), undefined);
+  assert.deepEqual(h.view.records.map(record => record.text), ['after answering']); assert.deepEqual(outboxTexts(h), []);
+});
+
+for (const olderReceipt of [false, true]) test(`an interrupted automatic paste still in the input finishes with one Enter and no second paste${olderReceipt ? ' despite older identical history' : ''}`, async t => {
+  const h = workingComposerHarness(t, 'claude');
+  if (olderReceipt) h.view.records.push({ id: 'older-identical', role: 'user', text: 'finish this paste', at: Date.now() - 10000 });
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('finish this paste'); h.press('Enter');
+  delete h.view.rows; h.render(); h.render(); await h.tick(0); assert.equal(h.pasted.length, 1);
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); await h.tick(400);
+  assert.deepEqual(h.written, []); assert.deepEqual(outboxTexts(h), ['finish this paste']);
+  delete h.view.rows; h.render(); h.render(); await h.tick(0); h.render();
+  h.view.records = [...h.view.records]; h.render(); h.render();
+  await h.tick(10000);
+  assert.deepEqual(h.written.map(write => write.text), ['\r']);
+  assert.deepEqual(h.pasted.map(paste => paste.text), ['finish this paste']);
+  assert.equal(h.view.records.filter(record => record.id !== 'older-identical').length, 1); assert.deepEqual(outboxTexts(h), []);
+});
+
+test('an interrupted paste positively refused before arrival retries once on parsed empty input', async t => {
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
+  let refuse;
+  window.agentrix.pasteTerminal = () => new Promise(resolve => { refuse = () => resolve({ ok: false, error: 'refused before paste' }); });
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('try the refused paste'); h.press('Enter');
+  delete h.view.rows; h.render(); h.render(); await h.tick(0); assert.equal(typeof refuse, 'function');
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); refuse(); await h.tick(0);
+  window.agentrix.pasteTerminal = paste;
+  delete h.view.rows; h.render(); h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.pasted.map(item => item.text), ['try the refused paste']);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.deepEqual(outboxTexts(h), []);
+});
+
+test('an interrupted paste with no arrival proof stays held without a second write', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  let acknowledge, requests = 0;
+  window.agentrix.pasteTerminal = () => { requests++; return new Promise(resolve => { acknowledge = () => resolve({ ok: true }); }); };
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('ambiguous paste'); h.press('Enter');
+  delete h.view.rows; h.render(); h.render(); await h.tick(0);
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); acknowledge(); await h.tick(0);
+  delete h.view.rows; h.render(); h.render(); await h.tick(10000); await h.tick(10000);
+  assert.equal(requests, 1); assert.deepEqual(h.written, []); assert.deepEqual(outboxTexts(h), ['ambiguous paste']);
+});
+
+for (const refuseAgain of [false, true]) test(`a receiver refusal retries once despite IPC success (${refuseAgain ? 'second refusal stays held' : 'input returns'})`, async t => {
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
+  const { recordScreenPaste } = require('../src/features/terminal/terminal-screen.ts');
+  let requests = 0;
+  window.agentrix.pasteTerminal = async (id, text, sessionId) => {
+    requests++;
+    if (requests === 1 || refuseAgain) {
+      recordScreenPaste(id, sessionId, text, false);
+      h.view.rows = ['Settings', 'Esc to close'];
+      return { ok: true };
+    }
+    return paste(id, text, sessionId);
+  };
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('refused by receiver'); h.press('Enter');
+  delete h.view.rows; h.render(); h.render(); await h.tick(0); h.render(); h.render();
+  assert.deepEqual(h.written, []);
+  delete h.view.rows; h.render(); h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
+  delete h.view.rows; h.render(); h.render(); await h.tick(10000);
+  assert.equal(requests, 2);
+  assert.deepEqual(h.written.map(write => write.text), refuseAgain ? [] : ['\r']);
+  assert.deepEqual(outboxTexts(h), refuseAgain ? ['refused by receiver'] : []);
+});
+
+for (const explicit of [false, true]) test(`a prompt remount ${explicit ? 'keeps explicit dismissal' : 'rearms an implicit closure'}`, t => {
+  const h = workingComposerHarness(t, 'claude'); h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); assert.ok(h.popup());
+  if (explicit) { h.popup().props.onClose(); h.render(); h.render(); }
+  h.remount(); assert.equal(!!h.popup(), !explicit);
+});
+
+test('a session and screen epoch change opens the new prompt without an idle frame', t => {
+  const h = workingComposerHarness(t, 'claude'); h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); assert.ok(h.popup());
+  h.props.terminal.sessionId = 'next-session'; h.view.epoch = 2; h.render(); h.render(); assert.ok(h.popup());
+  assert.equal(h.popup().props.sessionId, 'next-session');
+});
 
 for (const agent of ['claude', 'codex']) {
   test(agent + ': dialog messages queue FIFO and drain after the first idle frame without answering the dialog', async t => {
@@ -913,7 +1011,7 @@ test('a late receipt for a direct send cannot clear an identical outbox send', a
     h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit(text); h.press('Enter'); await h.tick(0);
     h.popup()?.props.onClose(); delete h.view.rows; h.render(); h.render(); await h.tick(0);
     assert.equal(h.pasted.length, 2);
-    h.remount(); h.props.active = false; h.render();
+    h.props.active = false; h.remount(); h.render();
     const receipt = { id: 'first-send', role: 'user', text, at: Date.now(), queued };
     h.view.records = [receipt]; h.render(); h.render();
     assert.deepEqual(outboxTexts(h), [text], 'one receipt belongs to the earlier pending echo');
@@ -972,7 +1070,8 @@ test('turn end retains uncertain delivery without another paste', async t => {
   assert.equal(h.pasted.length, 1);
   h.view.pending = true; await h.tick(400);
   for (let i = 0; i < 50; i++) await h.tick(50);
-  h.view.pending = false; h.view.working = false; h.render(); h.render();
+  // No exact unsent words remain: an empty input after an accepted paste is still ambiguous.
+  h.view.draft = ''; h.view.pending = false; h.view.working = false; h.render(); h.render();
   for (let i = 0; i < 8; i++) await h.tick(10000);
   assert.equal(h.pasted.length, 1); assert.deepEqual(h.written, []);
   assert.deepEqual(outboxTexts(h), ['uncertain message']);
@@ -1396,6 +1495,22 @@ test('the terminal surface follows reading intent even before the reading subtre
   const raw = render(value);
   assert.match(raw, /data-reading="false"/); assert.match(raw, /data-focused="true"/);
   assert.match(render({ ...value, codexActive: false }), /data-reading="false"/, 'ordinary shells remain visible');
+});
+
+test('the terminal grid forwards project visibility to the reader without focusing a hidden project', () => {
+  const seen = [], mode = readingMode(), value = terminal('visibility', null);
+  const { ProjectTerminals } = loadUI('features/terminal/ProjectTerminals.tsx', {
+    './reading-mode': mode,
+    './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
+    './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
+    './ReadingView': { ReadingView: props => { seen.push(props); return null; } }, './TerminalPane': { TerminalPane: () => null },
+    './AgentLauncher': { AgentLauncher: () => null }, './useProjectReorder': { useReorder: () => ({}) },
+  });
+  for (const visible of [false, true]) {
+    renderToStaticMarkup(React.createElement(ProjectTerminals, { project: { id: 'project', name: 'Project', terminals: [value] },
+      focused: true, visible, activeId: value.id, setActiveId() {}, fontSize: 14 }));
+    assert.equal(seen.at(-1).visible, visible); assert.equal(seen.at(-1).autoFocus, visible);
+  }
 });
 
 test('a restored preview and live splits keep the same order and fallback selection in small and expanded cards', () => {
@@ -2529,7 +2644,7 @@ test('/resume opens the live terminal like every slash command, here and over SS
   }
 });
 
-test('the terminal popup closes only by its button or backdrop and never translates a key', () => {
+test('the terminal popup closes explicitly by its button, backdrop or cancellation and never translates a key', () => {
   let closes = 0;
   const hooks = { useRef: value => ({ current: value }), useLayoutEffect() {} };
   const { ReadingTerminalPopup } = loadUI('features/reading/ReadingTerminalPopup.tsx', { react: hooks, './terminal-popup': {} });
@@ -2542,16 +2657,16 @@ test('the terminal popup closes only by its button or backdrop and never transla
   const dialog = elements(root).find(element => element.type === 'dialog');
   assert.equal(dialog.props.open, true); let prevented = false;
   dialog.props.onCancel({ preventDefault() { prevented = true; } });
-  assert.equal(prevented, true); assert.equal(closes, 0);
+  assert.equal(prevented, true); assert.equal(closes, 1);
   // The backdrop press keeps its default focus change from landing under the closed popup.
   const backdrop = {}; let pressPrevented = false;
   root.props.onMouseDown({ button: 0, target: backdrop, currentTarget: backdrop, preventDefault() { pressPrevented = true; } });
   assert.equal(pressPrevented, true);
   elements(root).find(element => element.type === 'button').props.onClick();
-  assert.equal(closes, 2);
+  assert.equal(closes, 3);
 });
 
-test('switching to a terminal in another small card closes the popup without restoring the old composer focus', t => {
+test('switching to a terminal in another small card leaves this popup and focus alone', t => {
   const saved = globalThis.document, listeners = new Map(), cleanups = [], closes = [];
   globalThis.document = { addEventListener: (name, take) => listeners.set(name, take), removeEventListener: name => listeners.delete(name) };
   t.after(() => { for (const cleanup of cleanups) cleanup?.(); globalThis.document = saved; });
@@ -2562,7 +2677,7 @@ test('switching to a terminal in another small card closes the popup without res
   assert.equal(ready, 1);
   const target = id => ({ closest: () => ({ dataset: { terminalId: id } }) });
   listeners.get('pointerdown')({ target: target('A') }); assert.deepEqual(closes, []);
-  listeners.get('focusin')({ target: target('B') }); assert.deepEqual(closes, [false]);
+  listeners.get('focusin')({ target: target('B') }); assert.deepEqual(closes, []);
   cleanups.shift()(); assert.equal(restored, 1);
 });
 
