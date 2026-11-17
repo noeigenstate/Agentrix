@@ -24,6 +24,7 @@ not the rest of electron/.
 - `ownMessage` (`electron/prompt-queue.cjs`) — messages the CLI writes as the user
 
 ## May import
+- `electron/agent-commands.cjs` (shared classification of local commands that run no model turn)
 - `electron/session-restore.cjs`
 - `electron/session-files.cjs`
 - `electron/transcript-window.cjs`
@@ -31,7 +32,7 @@ not the rest of electron/.
 - `electron/terminal-title.cjs`
 
 ## Invariants
-- Outstanding background work keeps the project working after the main round ends, while mainTurn still reports the main round as it ended — the card shows both, and only the project gate folds them — test: `tests/completion-work.test.cjs` › "pending work keeps the project working after main interruption without changing the main round"
+- Outstanding background work keeps the project working after the main round ends, while mainTurn still reports the main round as it ended — the card shows both, and only the project gate folds them. An owner receipt that runs a model turn holds an older Stop until its own end, including custom slash commands, headings and markup; local commands and machine receipts do not create review — test: `tests/completion-work.test.cjs` › "pending work keeps the project working after main interruption without changing the main round"; test: `tests/completion-work.test.cjs` › "queued owner model input holds an older Stop regardless of its prefix"; test: `tests/completion-work.test.cjs` › "local commands and machine receipts never create owner review"
 - Persistent services (dev servers, watchers, follow-mode tails) never count as pending work — they never end, so the project would never complete — test: `tests/completion-work.test.cjs` › "Claude services never become pending work"
 - In Codex only child agents hold completion; shells and yielded cells do not — they cannot wake an ended parent — test: `tests/completion-work.test.cjs` › "Codex shell sessions and yielded cells do not hold completion"
 - Missing receipts fail closed: lost work ends as interrupted 12 hours after launch, and uncertain history is interrupted, never complete — a false complete is worse than a late one — test: `tests/completion-work.test.cjs` › "missing receipts and discarded history fail closed while partial history holds completion"
