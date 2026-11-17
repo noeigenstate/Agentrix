@@ -135,8 +135,9 @@ test('human queue handoff blocks the idle gap, while cancelled task notification
 });
 
 test('queued owner model input holds an older Stop regardless of its prefix', t => {
-  const prompts = ['/custom-review the patch', '/review', '<request>Review the patch</request>', '# Review the patch', '!Important\nReview the patch',
-    '<command-name>/custom-review</command-name>\n<command-message>custom-review</command-message>'];
+  const prompts = ['/custom-review the patch', '/review', '/doctor', '/statusline', '<request>Review the patch</request>', '# Review the patch', '!Important\nReview the patch',
+    '<command-name>/custom-review</command-name>\n<command-message>custom-review</command-message>',
+    '<command-message>example:settings</command-message>\n<command-name>/example:settings</command-name>'];
   for (const prompt of prompts) for (const receipt of ['user', 'attachment', 'sdk']) {
     const h = fixture(t), { work } = h;
     h.claude({ type: 'user', message: { content: 'First task' } }, 1000);
@@ -190,6 +191,29 @@ test('local commands and machine receipts never create owner review', t => {
     assert.equal(work.reviewAt, 0, `${receipt}: ${prompt}`);
     assert.equal(work.state(previous), 'complete');
     assert.equal(work.mainTurn().state, 'complete', 'local output cannot invent a working model turn');
+  }
+});
+
+test('catalogued local commands and command-message-first wrappers never arm or hold a round', t => {
+  const names = ['theme', 'ide', 'sandbox', 'privacy-settings', 'feedback', 'bug', 'upgrade',
+    'cd', 'color', 'copy', 'desktop', 'diff', 'keybindings', 'install-github-app', 'install-slack-app',
+    'mobile', 'voice', 'rename', 'session', 'scroll-speed', 'skills', 'tasks', 'skill-doctor', 'tui',
+    'reload-plugins', 'reload-skills', 'chrome', 'stickers', 'radio', 'advisor', 'remote-env', 'use-case',
+    'usage-credits', 'rate-limit-options', 'focus', 'cloud-plugins', 'artifacts',
+    'allowed-tools', 'settings', 'reset', 'new', 'share', 'app', 'ios', 'android', 'name', 'continue',
+    'remote', 'stats', 'plugins', 'marketplace', 'checkpoint', 'undo', 'quit', 'extra-usage'];
+  for (const name of ['model', ...names]) for (const wrapped of [false, true]) for (const receipt of ['user', 'attachment', 'remove', 'dequeue']) {
+    const h = fixture(t), { work } = h;
+    const prompt = wrapped ? `<command-message>${name}</command-message>\n<command-name>/${name}</command-name>\n<command-args></command-args>` : '/' + name;
+    h.claude({ type: 'queue-operation', operation: 'enqueue', content: prompt }, 1500);
+    h.claude({ type: 'system', subtype: 'stop_hook_summary' }, 2000);
+    const previous = work.turn;
+    if (receipt === 'user') h.claude({ type: 'user', message: { content: prompt } }, 2100);
+    else if (receipt === 'attachment') h.claude({ type: 'attachment', attachment: { type: 'queued_command', prompt } }, 2100);
+    else h.claude({ type: 'queue-operation', operation: receipt, content: prompt }, 2100);
+    assert.equal(work.reviewAt, 0, `${receipt}: ${prompt}`);
+    assert.equal(work.turn, previous, 'no local command creates a model turn');
+    assert.equal(work.state(previous), 'complete');
   }
 });
 

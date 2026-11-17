@@ -1,9 +1,9 @@
-const { messageText, promptText, promptSummary, promptCommand } = require('./prompt-queue.cjs');
+const { messageText, promptText, promptSummary } = require('./prompt-queue.cjs');
 const { isLocalAgentCommand } = require('./agent-commands.cjs');
 
 function isClaudeTurnInput(content, record) {
   const prompt = promptText(content, record);
-  if (prompt === null || isLocalAgentCommand('claude', promptCommand(prompt))) return false;
+  if (prompt === null || isLocalAgentCommand('claude', prompt)) return false;
   // Match the reading view's single-line ! shell mode, and Claude's recorded shell context.
   // A heading, markup or custom slash command can still be an owner's model turn.
   return !/^![^\r\n]*$/.test(prompt.trim()) && !/^\s*<bash-(?:input|stdout|stderr)>/.test(prompt);
