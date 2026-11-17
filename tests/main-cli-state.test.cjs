@@ -44,6 +44,44 @@ test('host CLI transitions broadcast synchronously and Stop does not await a sta
   assert.equal(h.frames.at(-1).revision, 4);
 });
 
+test('delayed permission hooks publish their send time in the local clock, not their arrival time', () => {
+  for (const kind of ['local', 'ssh']) for (const hookEvent of ['PermissionRequest', 'Notification']) {
+    const h = fixture(); h.project.kind = kind; h.s.activityClockOffset = 100;
+    h.hook('working', { prompt: 'Task', sentAt: kind === 'ssh' ? 1900 : 2000 }); h.advance(100);
+    h.hook('attention', { hookEvent, sentAt: kind === 'ssh' ? 1910 : 2010, message: 'Approve' });
+    assert.equal(h.s.cliState.state, 'waiting');
+    assert.equal(h.s.cliState.updatedAt, 2010, `${kind} ${hookEvent} keeps its observation time`);
+    assert.equal(h.beginnings(), 1); assert.equal(h.notifications(), 0);
+  }
+});
+
+test('HTTP permission state uses the ingest receipt time even when delivery is delayed', () => {
+  const h = fixture(); h.project.kind = 'local';
+  h.hook('working', { prompt: 'Task' }); h.advance(10);
+  const { createHookIngest } = require('../electron/features/terminal-events/hook-ingest.cjs');
+  const ingest = createHookIngest({ keyOf: () => 'key', now: () => 2010,
+    deliver(event) { h.advance(100); h.context.claudeHook(event); } });
+  ingest.take('t', 'PermissionRequest', JSON.stringify({ session_id: 'provider', tool_name: 'Bash' }));
+  assert.equal(h.s.cliState.state, 'waiting'); assert.equal(h.s.cliState.updatedAt, 2010);
+  assert.equal(h.beginnings(), 1); assert.equal(h.notifications(), 0);
+});
+
+test('hook state timestamps are bounded by now and never regress within the PTY session', () => {
+  const h = fixture(); h.hook('working', { prompt: 'Task' }); h.advance(100);
+  // A screen relight or another publisher can have a newer publication time than its event watermark.
+  h.context.publishCliState(h.s, 'working', { at: 2000 });
+  h.advance(100); h.hook('attention', { sentAt: 2050 });
+  assert.equal(h.s.cliState.updatedAt, 2100, 'an older hook cannot move the published time backwards');
+  h.hook('attention', { sentAt: 2300 });
+  assert.equal(h.s.cliState.updatedAt, 2200, 'a future send time cannot outrank future screen frames');
+});
+
+test('a hook without a send time uses the current host time', () => {
+  const h = fixture(); h.hook('working', { prompt: 'Task' }); h.advance(100);
+  h.hook('attention', { sentAt: undefined });
+  assert.equal(h.s.cliState.updatedAt, 2100);
+});
+
 test('old session, old event time, duplicate events and another tool cannot clear newer attention', () => {
   const h = fixture(); h.hook('working', { prompt: 'Task' }); h.advance(10);
   h.hook('attention', { requestId: 'new-tool', eventId: 'new-attention' });

@@ -58,6 +58,18 @@ function fixture({ channel = 'http', native = false, real = false } = {}) {
 // A working turn whose working line the screen has shown.
 const working = h => { h.hook('UserPromptSubmit', { prompt: 'Do the task', prompt_id: 'p1' }); h.advance(); h.screen({ busy: true }); h.advance(); };
 
+test('an answer key without a new hook leaves the host CLI state and completion unchanged', () => {
+  for (const key of ['\r', '\x1b', '1']) {
+    const h = fixture(); h.hook('PermissionRequest', { tool_name: 'Bash' });
+    const before = h.s.cliState, machine = h.s.cliStateMeta.machine;
+    h.advance(); h.key(key);
+    assert.equal(h.s.needsInput, null);
+    assert.equal(h.s.cliState, before, 'keys can be note text and cannot assert a CLI state transition');
+    assert.equal(h.s.cliStateMeta.machine, machine);
+    assert.equal(h.armed(), false); assert.equal(h.notifications(), 0);
+  }
+});
+
 test('Esc without Stop reaches idle', () => {
   const h = fixture();
   h.hook('UserPromptSubmit', { prompt: 'Do the task', prompt_id: 'p1' }); h.advance();
