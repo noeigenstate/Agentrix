@@ -37,8 +37,12 @@ export function recordScreenPaste(id: string, sessionId: string, text: string, a
   if (receipt?.sessionId !== sessionId || receipt.text !== text) return;
   receipt.status = accepted ? 'accepted' : 'refused'; pastes.delete(id);
 }
-export const canPasteScreen = (agent: ScreenAgent, frame: Screen | null) => !!frame && !frame.pending
+export const canPasteScreen = (agent: ScreenAgent, frame: Screen | null) => !!frame
   && !cliDialogShown(agent, frame.rows, parseAgentScreen(agent, frame.rows));
+export const hasScreenPaste = (id: string, sessionId: string, text: string) => {
+  const receipt = pastes.get(id);
+  return receipt?.sessionId === sessionId && receipt.text === text;
+};
 
 function read(terminal: Terminal): Pick<Screen, 'rows'> {
   const buffer = terminal.buffer.active, rows: string[] = [];

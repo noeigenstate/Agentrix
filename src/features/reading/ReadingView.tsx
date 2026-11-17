@@ -8,7 +8,8 @@ import { beginScreenPaste, bindApproval, useScreen } from '../terminal/terminal-
 import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
 import { cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
 import { readingState, nextCliState, type CliState } from './reading-state.ts';
-import { cliReady, dismissDialog, endDialog, rearmDialog, rememberReady, startDialog } from './reading-ready';
+import { cliReady, dismissDialog, endDialog, observeDialog, rearmDialog, rememberReady, startDialog } from './reading-ready';
+import { popupIdentity } from './popup-identity.ts';
 import { WaitingCard } from './WaitingCard';
 import { ReadingWelcome } from './ReadingWelcome';
 import { typeReadingCommand } from './reading-command';
@@ -174,7 +175,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const holdQuote = (next: MessageQuote | null) => { quoteRef.current = next; setQuote(next); };
   useLayoutEffect(() => { holdQuote(null); }, [conversation]);
   const scroller = useRef<HTMLDivElement>(null), content = useRef<HTMLDivElement>(null), input = useRef<HTMLTextAreaElement>(null), composer = useRef<HTMLDivElement>(null);
-  const dialogInstance = JSON.stringify([terminal.id, readingSession, visibleScreen?.epoch, visibleScreen?.instances?.[kind] ?? 0]);
+  const dialogScope = JSON.stringify([terminal.id, readingSession, visibleScreen?.epoch]);
+  const dialogIdentity = preview ? null : popupIdentity(parsedScreen), dialogInstance = useRef('');
   const [terminalPopup, setTerminalPopup] = useState<{ command: string; focus?: boolean; prompt?: string } | null>(null);
   const currentPopup = useRef(terminalPopup); currentPopup.current = terminalPopup;
   const inputBlocked = preview || !live || !!handoff?.locked;
@@ -205,6 +207,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     (inputBlocked ? composer.current : input.current)?.focus({ preventScroll: true });
   }, [terminalPopup, inputBlocked]);
   useLayoutEffect(() => {
+    currentPopup.current = null;
     setTerminalPopup(null);
     return () => {
       if (currentPopup.current?.prompt) rearmDialog(terminal.id, currentPopup.current.prompt);
@@ -218,18 +221,27 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   }, [active, autoFocus, visible, handoff?.locked]);
   // Only positive waiting evidence opens the TUI. One dialog episode is shared across remounts;
   // a hidden view never consumes its opening, and explicit dismissal survives redraws and remounts.
+  // Observe parse counters so collapse rearms on the next frame rather than the popup's own state commit.
   useEffect(() => {
-    if (!live || !hasChoice && (state.canDeliver || working || signal?.state === 'idle')) { endDialog(terminal.id); return; }
+    if (!live || !hasChoice && state.canDeliver) { endDialog(terminal.id); return; }
+    const prompt = observeDialog(terminal.id, dialogScope, dialogIdentity)
+      ?? (hasChoice ? observeDialog(terminal.id, dialogScope, 'waiting') : null);
+    if (prompt) dialogInstance.current = prompt;
     if (!hasChoice) return;
+    const popup = currentPopup.current;
+    if (popup?.prompt && prompt && popup.prompt !== prompt) {
+      startDialog(terminal.id, prompt, true);
+      setTerminalPopup(current => current?.prompt ? { ...current, prompt } : current);
+      return;
+    }
     const open = () => {
       if (!visible || !active || inputBlocked) return;
-      if (terminalPopup && (!terminalPopup.prompt || terminalPopup.prompt === dialogInstance)) return;
-      if (!startDialog(terminal.id, dialogInstance)) return;
+      if (popup || !prompt || !startDialog(terminal.id, prompt)) return;
       const focus = !editingAtChoice.current && !hasEditingFocus(document.body) && !hasEditingFocus(readingView.current) && !isTyping(document.activeElement);
-      cancelSend(); setTerminalPopup({ command: '', focus, prompt: dialogInstance });
+      cancelSend(); setTerminalPopup({ command: '', focus, prompt });
     };
     open();
-  }, [terminal.id, dialogInstance, live, hasChoice, active, visible, autoFocus, inputBlocked, state.canDeliver, working, signal?.state]);
+  }, [terminal.id, dialogScope, dialogIdentity, visibleScreen?.parse, live, hasChoice, active, visible, autoFocus, inputBlocked, state.canDeliver]);
   const { stuck, unseen, toBottom, ready, holdPosition } = useStickToBottom(scroller, content, entries, conversation);
   useEffect(() => { if (stuck) void historyPage.compact(); }, [stuck, conversationEntries, historyPage.compact]);
   // A step hops only when the pointer moves onto it: moving arms the hops, any scroll disarms them until it moves again,
@@ -625,7 +637,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const outboxAttempt = useRef('');
   drainOutbox.current = (parsed = false) => {
     const messages = waitingMessages.get(ownHistory) ?? [], head = messages[0];
-    if (!active || !visible || inputBlocked || !head || sending.current || choiceVisible.current || leftoverClearing.current || images.length || serverPictures.current.length) return;
+    if (!active || inputBlocked || !head || isTypedCommand(head.text) && !visible || sending.current || choiceVisible.current || leftoverClearing.current || images.length || serverPictures.current.length) return;
     const input = native.readInput(true);
     if (!input) return;
     const held = input.text;
@@ -638,7 +650,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         && Number.isFinite(entry.receivedAt ?? entry.at) && matchesPrompt(head, entry));
       resume = attempt.phase === 'pasted' && attempt.paste?.status === 'accepted' && sameMessage(head.text, held) && !receipt;
       const neverPasted = !held && (attempt.phase === 'ready' || attempt.phase === 'rejected' || attempt.paste?.status === 'refused');
-      if (!resume && (!neverPasted || (head.recoveries ?? 0) >= 1)) return;
+      if (!resume && (!neverPasted || attempt.paste?.status !== 'refused' && (head.recoveries ?? 0) >= 1)) return;
       if (attempt.echo) cancelEcho(attempt.echo);
     }
     // Never replace a draft the owner is editing in the terminal. Words of ours there (an Enter the CLI did not take)
@@ -865,7 +877,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         <button type="button" className="button small" disabled={inputBlocked || deliveryBlocked} onClick={() => void clearLeftover(leftoverShown)}>{t('清空它，再发送新消息')}</button></div></li></ul></div>}
     {outbox.length > 0 && <div className="reading-outbox" role="status"><span data-reason={outboxReason ?? undefined}>{outboxReason ? reasonWords(outboxReason) : t('发送中')}</span><ul>{outbox.map(message => <li key={message.id}><span className="reading-notice-text" title={message.text}>{message.text}</span>{message.uncertain && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}
       <div className="reading-notice-actions"><button type="button" className="button small" onClick={() => { if (draft || sending.current) return; saveOutbox(outbox.filter(item => item.id !== message.id)); edit(message.text); }} disabled={!!draft || sending.current}>{t('取回')}</button></div></li>)}</ul></div>}
-    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => { startDialog(terminal.id, dialogInstance, true); setTerminalPopup({ command: '', prompt: dialogInstance }); }} /></div>}
+    {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => { startDialog(terminal.id, dialogInstance.current, true); setTerminalPopup({ command: '', prompt: dialogInstance.current }); }} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}
     {commandList(palette)}
     <div ref={composer} tabIndex={-1} className="reading-composer" style={terminal.agentCommand ? { display: 'none' } : undefined}>

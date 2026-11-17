@@ -4,9 +4,28 @@
 type Run = { session: string | null | undefined; thread: string | undefined; start: number | null | undefined; active: boolean };
 type Ready = { session: string; thread: string | undefined; start: number | null | undefined };
 const ready = new Map<string, Ready>(), dialogs = new Map<string, { instance: string; dismissed: boolean }>();
+const episodes = new Map<string, { scope: string; identity: string; key: string; missingAt?: number }>();
+let nextEpisode = 0;
 
 // A dialog that disappears for less than this (a redraw frame) is still the same dialog.
 export const DIALOG_SETTLE = 3000;
+
+// Approval instances follow exact screen rows. A popup instead follows a prompt across rewraps and short redraw gaps.
+// Call only from effects; an actual input returning ends it immediately through endDialog.
+export function observeDialog(id: string, scope: string, identity: string | null, now = Date.now()): string | null {
+  const previous = episodes.get(id);
+  if (identity === null) {
+    if (!previous || previous.scope !== scope) return null;
+    previous.missingAt ??= now;
+    return previous.key;
+  }
+  if (previous?.scope === scope && previous.identity === identity
+    && (previous.missingAt === undefined || now - previous.missingAt < DIALOG_SETTLE)) {
+    previous.missingAt = undefined; return previous.key;
+  }
+  const key = JSON.stringify([scope, ++nextEpisode]);
+  episodes.set(id, { scope, identity, key }); return key;
+}
 
 // Two values that are both known and differ: an unknown one (a thread the first turn has not bound yet) is no change.
 function differ<T>(a: T | null | undefined, b: T | null | undefined) { return a != null && b != null && a !== b; }
@@ -41,4 +60,4 @@ export function rearmDialog(id: string, instance: string) {
   const dialog = dialogs.get(id);
   if (dialog?.instance === instance && !dialog.dismissed) dialogs.delete(id);
 }
-export const endDialog = (id: string) => { dialogs.delete(id); };
+export const endDialog = (id: string) => { dialogs.delete(id); episodes.delete(id); };

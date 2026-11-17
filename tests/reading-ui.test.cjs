@@ -571,13 +571,13 @@ test('an interrupted paste with no arrival proof stays held without a second wri
   assert.equal(requests, 1); assert.deepEqual(h.written, []); assert.deepEqual(outboxTexts(h), ['ambiguous paste']);
 });
 
-for (const refuseAgain of [false, true]) test(`a receiver refusal retries once despite IPC success (${refuseAgain ? 'second refusal stays held' : 'input returns'})`, async t => {
+for (const refusals of [1, 3]) test(`receiver no-write proof permits another attempt after ${refusals} refusals`, async t => {
   const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
   const { recordScreenPaste } = require('../src/features/terminal/terminal-screen.ts');
   let requests = 0;
   window.agentrix.pasteTerminal = async (id, text, sessionId) => {
     requests++;
-    if (requests === 1 || refuseAgain) {
+    if (requests <= refusals) {
       recordScreenPaste(id, sessionId, text, false);
       h.view.rows = ['Settings', 'Esc to close'];
       return { ok: true };
@@ -587,11 +587,45 @@ for (const refuseAgain of [false, true]) test(`a receiver refusal retries once d
   h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('refused by receiver'); h.press('Enter');
   delete h.view.rows; h.render(); h.render(); await h.tick(0); h.render(); h.render();
   assert.deepEqual(h.written, []);
-  delete h.view.rows; h.render(); h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
-  delete h.view.rows; h.render(); h.render(); await h.tick(10000);
-  assert.equal(requests, 2);
-  assert.deepEqual(h.written.map(write => write.text), refuseAgain ? [] : ['\r']);
-  assert.deepEqual(outboxTexts(h), refuseAgain ? ['refused by receiver'] : []);
+  for (let reply = 0; reply < refusals; reply++) {
+    delete h.view.rows; h.render(); h.render(); await h.tick(0); h.render(); h.render();
+  }
+  await h.tick(400); await h.tick(700);
+  assert.equal(requests, refusals + 1);
+  assert.deepEqual(h.written.map(write => write.text), ['\r']); assert.deepEqual(outboxTexts(h), []);
+});
+
+test('a direct reading send reaches the receiver during pending output and is not lost', async t => {
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
+  const screen = require('../src/features/terminal/terminal-screen.ts');
+  const source = fs.readFileSync(path.join(__dirname, '../src/features/terminal/TerminalPane.tsx'), 'utf8');
+  const start = source.indexOf('    const offPaste = '), end = source.indexOf('    const selection = ', start);
+  let receive;
+  Function('window', 'disposed', 'id', 'sessionId', 'readScreen', 'currentAgent', 'terminal', 'canPasteScreen', 'recordScreenPaste', 'hasScreenPaste', source.slice(start, end))(
+    { agentrix: { onTerminalPaste(fn) { receive = fn; } } }, false, h.props.terminal.id, 'session',
+    () => ({ rows: ['────', '❯ ', '────'], parsed: true, pending: true }), { current: 'claude' },
+    { paste: text => { void paste(h.props.terminal.id, text, 'session'); } }, screen.canPasteScreen, screen.recordScreenPaste, screen.hasScreenPaste);
+  window.agentrix.pasteTerminal = async (id, text, sessionId) => { receive({ id, text, sessionId }); return { ok: true }; };
+  h.edit('direct during output'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.view.records.map(record => record.text), ['direct during output']);
+  assert.deepEqual(h.pasted.map(item => item.text), ['direct during output']); assert.deepEqual(outboxTexts(h), []);
+});
+
+test('an ordinary held message drains when its hidden project returns to input', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('send while away'); h.press('Enter');
+  h.props.visible = false; h.render(); h.render(); delete h.view.rows;
+  h.render(); h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.equal(h.popup(), undefined); assert.deepEqual(h.view.records.map(record => record.text), ['send while away']);
+  assert.deepEqual(outboxTexts(h), []);
+});
+
+test('a held slash command waits for project visibility before opening its terminal', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render(); h.edit('/status'); h.press('Enter');
+  h.props.visible = false; h.render(); h.render(); delete h.view.rows;
+  h.render(); h.render(); await h.tick(0); assert.deepEqual(h.written, []); assert.equal(h.popup(), undefined);
+  h.props.visible = true; h.render(); h.render(); await h.tick(0); assert.ok(h.popup());
 });
 
 for (const explicit of [false, true]) test(`a prompt remount ${explicit ? 'keeps explicit dismissal' : 'rearms an implicit closure'}`, t => {
