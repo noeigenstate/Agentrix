@@ -167,20 +167,27 @@ class Team {
         }
       }
       if (!stale) {
+        let fd;
         try {
-          const fd = fs.openSync(file, 'wx');
+          fd = fs.openSync(file, 'wx');
+        } catch (error) {
+          // Windows can deny an exclusive open while the previous lock is pending deletion. Wait without touching it.
+          if (error.code === 'EEXIST') {
+            let expired = false;
+            try { expired = Date.now() - fs.statSync(file).mtimeMs > 10000; }
+            catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+            if (expired) {
+              const candidate = file + '.' + randomUUID() + '.stale';
+              try { fs.renameSync(file, candidate); stale = candidate; continue; }
+              catch (failure) { if (!['ENOENT', 'EPERM', 'EBUSY'].includes(failure.code)) throw failure; }
+            }
+          } else if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
+            throw error;
+          }
+        }
+        if (fd !== undefined) {
           try { fs.writeFileSync(fd, token); } finally { fs.closeSync(fd); }
           break;
-        } catch (error) {
-          if (error.code !== 'EEXIST') throw error;
-          let expired = false;
-          try { expired = Date.now() - fs.statSync(file).mtimeMs > 10000; }
-          catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
-          if (expired) {
-            const candidate = file + '.' + randomUUID() + '.stale';
-            try { fs.renameSync(file, candidate); stale = candidate; continue; }
-            catch (failure) { if (!['ENOENT', 'EPERM', 'EBUSY'].includes(failure.code)) throw failure; }
-          }
         }
       }
       if (Date.now() <= deadline) await delay(25);
