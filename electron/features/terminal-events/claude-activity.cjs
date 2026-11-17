@@ -161,9 +161,9 @@ function createClaudeActivity(deps) {
   }
 
   // CLI interaction is independent of project completion: progress never arms another completion notification.
-  function publishCliState(s, state, { at = Date.now(), threadId, turnId, requestId, eventId, message: detail, bind = false, progress = false, expectedRevision, newTurn = false } = {}) {
+  function publishCliState(s, state, { at = Date.now(), observedAt = Date.now(), threadId, turnId, requestId, eventId, message: detail, bind = false, progress = false, expectedRevision, newTurn = false } = {}) {
     const { sessions, broadcast } = deps;
-    if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at)) return false;
+    if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at) || !Number.isFinite(observedAt)) return false;
     const meta = metaOf(s), before = s.cliState;
     if (expectedRevision != null && expectedRevision !== before?.revision) return false;
     const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId : s.reportedThreadId || s.rootThreadId);
@@ -186,8 +186,10 @@ function createClaudeActivity(deps) {
     meta.requestId = state === 'waiting' ? requestId || null : null;
     s.needsInput = state === 'waiting' ? { message, since: Date.now() } : null;
     s.cliStateRevision = (s.cliStateRevision || 0) + 1;
+    // A delayed hook must not outrank a screen drawn after it was sent. Keep publication time monotone in this PTY.
     s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
-      updatedAt: Date.now(), state, ...(message ? { message } : {}), ...(s.agent === 'claude' ? cliFields(meta.machine, state, backgroundOf(s)) : {}) };
+      updatedAt: Math.max(before?.sessionId === s.sessionId ? before.updatedAt : 0, Math.min(observedAt, Date.now())),
+      state, ...(message ? { message } : {}), ...(s.agent === 'claude' ? cliFields(meta.machine, state, backgroundOf(s)) : {}) };
     s.observeNativeSwitch?.();
     broadcast();
     return true;
@@ -297,7 +299,7 @@ function createClaudeActivity(deps) {
       notice: event.hookEvent === 'Notification', dialog: event.dialog, agent: event.agentId, async: s.hooks?.channel === 'command-async',
       claudeSession: event.sessionId, compact: event.sessionSource === 'compact' })) return;
     const after = metaOf(s).machine;
-    const evidence = { at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
+    const evidence = { at, observedAt: at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
     // Hook eventId is an event identity, not a native approval request ID. A different observed event invalidates
     // actions conservatively, even if its message is identical. Duplicate events leave the epoch alone.
     s.approval?.context('claude-event', [event.sessionId, event.eventId, event.state]);
