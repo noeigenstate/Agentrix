@@ -60,7 +60,14 @@ The numbered steps below apply to both; where a step differs for a beta or outsi
    no internals and no repeating the title. Add the English of every title and sentence to the end of
    `electron/locales/en.json` (keep the older entries). The notes show as a list in the guide, which opens on this page
    after an update, and on the About page; about seven fit the guide card, a longer list scrolls.
-4. **Local checks, in order.** First preview `node scripts/affected-tests.mjs --base <last-tested-ref>` (or
+4. **Local checks: only what the change touched.** The owner's rule (restated 2026-11-17: "Reduce unnecessary
+   testing and speed up the development process"): run the changed test files, the test files that import a changed
+   module directly, the three packaging guards above, `tsc --noEmit`, `node scripts/module-boundaries.cjs` and
+   `tests/affected-tests.test.cjs` (dynamic-load digests). No broad sweeps (every test that reads `main.cjs`, every
+   guard, the whole suite) and no rerunning files that already passed. A beta dispatch is `build_only=true`; the full
+   Windows tests and the full matrix run once, when preparing the stable release. Dispatching every beta with
+   `build_only=false` cost 4–6 CI rounds of 25–40 minutes per beta in 1.6.0.
+   To see what a change selects, preview `node scripts/affected-tests.mjs --base <last-tested-ref>` (or
    `npm run test:affected -- --base <last-tested-ref>`). It prints the unit, offline real-CLI and GUI selections with
    reasons. Add `--run --kind unit` to run selected unit tests; `--kind real --locked-prefix <private-directory>` runs
    the selected real-CLI contracts with the locked CLI, and `--kind gui --packaged` runs the selected desktop suites.
