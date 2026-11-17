@@ -5,7 +5,7 @@ const { realpath } = require('node:fs');
 const { promisify } = require('node:util');
 const path = require('node:path');
 const os = require('node:os');
-const { listAgentCommands, isLocalAgentCommand } = require('../electron/agent-commands.cjs');
+const { listAgentCommands, isLocalAgentCommand, agentCommand } = require('../electron/agent-commands.cjs');
 
 async function fixture(t) {
   const root = await promisify(realpath.native)(await fs.mkdtemp(path.join(os.tmpdir(), 'pg-commands-')));
@@ -27,6 +27,22 @@ test('builtins have the requested views and sorted names; no project means built
     assert.ok(commands.every(item => item.source === 'builtin' && item.description && item.name.startsWith('/')));
     assert.equal(commands.find(item => item.name === '/compact').view, 'terminal');
     assert.deepEqual(await listAgentCommands({ agent, home: path.join(home, 'missing'), projectPath }), commands, 'missing folders are ignored');
+  }
+});
+
+test('Claude picker keeps its original names, views and model-command descriptions', async () => {
+  const commands = await listAgentCommands({ agent: 'claude' });
+  const terminal = ['help', 'model', 'fast', 'effort', 'resume', 'status', 'config', 'permissions', 'mcp', 'hooks',
+    'memory', 'context', 'cost', 'usage', 'doctor', 'clear', 'compact', 'rewind', 'export', 'add-dir',
+    'login', 'logout', 'bashes', 'plugin', 'output-style', 'statusline', 'terminal-setup', 'release-notes', 'exit'];
+  const reading = ['init', 'review', 'security-review', 'btw'];
+  assert.deepEqual(commands.map(({ name, view }) => ({ name, view })),
+    [...terminal.map(name => ({ name: '/' + name, view: 'terminal' })),
+      ...reading.map(name => ({ name: '/' + name, view: 'reading' }))].sort((a, b) => a.name.localeCompare(b.name)));
+  for (const [name, description] of [['doctor', '检查安装'], ['statusline', '状态栏']]) {
+    assert.deepEqual(commands.find(command => command.name === '/' + name),
+      { name: '/' + name, description, source: 'builtin', view: 'terminal' });
+    assert.equal(isLocalAgentCommand('claude', '/' + name), false, 'picker placement does not make a model prompt local');
   }
 });
 
@@ -143,8 +159,34 @@ test('a linked commands root is read, but linked folders inside it are not follo
 });
 
 test('local slash commands (no model turn) are told apart from prompts and prompt commands', () => {
-  for (const text of ['/context', '/doctor', '/compact', '/model', '/model opus', '/fast', '/effort high', ' /status ']) assert.equal(isLocalAgentCommand('claude', text), true, text);
-  for (const text of ['/init', '/review', '/btw why', '/fix-issue 3', 'fix /context parsing', '/contextual', '']) assert.equal(isLocalAgentCommand('claude', text), false, text);
+  for (const text of ['/context', '/compact', '/model', '/model opus', '/fast', '/effort high', ' /status ']) assert.equal(isLocalAgentCommand('claude', text), true, text);
+  for (const text of ['/init', '/review', '/doctor', '/statusline', '/btw why', '/fork task', '/subtask task', '/fix-issue 3', 'fix /context parsing', '/contextual', '']) assert.equal(isLocalAgentCommand('claude', text), false, text);
   assert.equal(isLocalAgentCommand('codex', '/status'), true);
   assert.equal(isLocalAgentCommand('codex', '/init'), false);
+});
+
+test('Claude 2.1.326 settings commands and aliases are local without a CLI or account lookup', () => {
+  // Names and aliases read from the installed executable's command descriptors, not inferred from a slash.
+  const names = ['theme', 'ide', 'sandbox', 'privacy-settings', 'feedback', 'bug', 'upgrade',
+    'cd', 'color', 'copy', 'desktop', 'diff', 'keybindings', 'install-github-app', 'install-slack-app',
+    'mobile', 'voice', 'rename', 'session', 'scroll-speed', 'skills', 'tasks', 'skill-doctor', 'tui',
+    'reload-plugins', 'reload-skills', 'chrome', 'stickers', 'radio', 'advisor', 'remote-env', 'use-case',
+    'usage-credits', 'rate-limit-options', 'focus', 'cloud-plugins', 'artifacts',
+    'allowed-tools', 'settings', 'reset', 'new', 'share', 'app', 'ios', 'android', 'name', 'continue',
+    'remote', 'stats', 'plugins', 'marketplace', 'checkpoint', 'undo', 'quit', 'extra-usage'];
+  for (const name of names) {
+    assert.equal(isLocalAgentCommand('claude', '/' + name), true, name);
+    assert.equal(isLocalAgentCommand('claude', '/' + name + ' argument'), true, name);
+    assert.equal(isLocalAgentCommand('claude', '/' + name + '-unknown'), false, name);
+  }
+});
+
+test('command names are read anywhere in the leading wrapper block, never from quoted prompt tags', () => {
+  for (const name of ['model', 'theme', 'custom.plugin:review']) {
+    const wrapped = `<command-message>${name}</command-message>\n<command-args>argument</command-args>\n<command-name>/${name}</command-name>`;
+    assert.equal(agentCommand(wrapped), '/' + name);
+    assert.equal(isLocalAgentCommand('claude', wrapped), name !== 'custom.plugin:review');
+    assert.equal(agentCommand('Explain this:\n' + wrapped), '');
+  }
+  assert.equal(agentCommand('<command-message>quoted <command-name>/theme</command-name></command-message>'), '');
 });

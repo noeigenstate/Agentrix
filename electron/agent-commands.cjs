@@ -39,6 +39,27 @@ const BUILTINS = {
 };
 const byName = (a, b) => a.name.localeCompare(b.name);
 const short = value => String(value || '').trim().slice(0, 80);
+// Classifier-only names and aliases from installed CLI 2.1.326's offline command descriptors.
+// They add no picker entries or descriptions. local-jsx alone is insufficient: /btw can run a model.
+const CLAUDE_EXTRA_LOCAL_COMMANDS = new Set(['theme', 'ide', 'sandbox', 'privacy-settings', 'feedback', 'bug', 'upgrade',
+  'cd', 'color', 'copy', 'desktop', 'diff', 'keybindings', 'install-github-app', 'install-slack-app',
+  'mobile', 'voice', 'rename', 'session', 'scroll-speed', 'skills', 'tasks', 'skill-doctor', 'tui',
+  'reload-plugins', 'reload-skills', 'chrome', 'stickers', 'radio', 'advisor', 'remote-env', 'use-case',
+  'usage-credits', 'rate-limit-options', 'focus', 'cloud-plugins', 'artifacts',
+  'allowed-tools', 'settings', 'reset', 'new', 'share', 'app', 'ios', 'android',
+  'name', 'continue', 'remote', 'stats', 'plugins', 'marketplace', 'checkpoint', 'undo', 'quit', 'extra-usage']);
+// The same bundle runs these as model prompts; preserve their legacy picker entries and positions.
+const CLAUDE_MODEL_COMMANDS = new Set(['doctor', 'statusline']);
+
+function agentCommand(text) {
+  const value = String(text || '');
+  // Only the leading wrapper block is metadata; quoted tags in a normal prompt are content.
+  const wrappers = /^\s*(?:<(command-name|command-message|command-args)>[\s\S]*?<\/\1>\s*)+/.exec(value)?.[0] || '';
+  for (const [, tag, body] of wrappers.matchAll(/<(command-name|command-message|command-args)>([\s\S]*?)<\/\1>/g)) {
+    if (tag === 'command-name') return /^\s*(\/[\w:.-]+)\s*$/.exec(body)?.[1] || '';
+  }
+  return /^\s*(\/[\w:.-]+)(?=\s|$)/.exec(value)?.[1] || '';
+}
 
 function metadata(text) {
   const match = /^\uFEFF?---\s*\r?\n([\s\S]*?)\r?\n---[^\S\r\n]*(?:\r?\n|$)/.exec(text);
@@ -109,11 +130,13 @@ async function listAgentCommands({ agent, projectPath, home = os.homedir(), clau
   return Object.values(groups).flatMap(group => group.sort(byName)).filter(command => { if (seen.has(command.name)) return false; seen.add(command.name); return true; });
 }
 
-// A built-in command that only opens the CLI's own screen or prints a line (the terminal view above), with no model
-// turn. Claude Code still runs its prompt hooks for some of these, and no Stop follows.
+// Commands handled without an owner model turn. The legacy picker's view is not execution metadata.
+// Claude Code still runs its prompt hooks for some of these, and no Stop follows.
 function isLocalAgentCommand(agent, text) {
-  const name = /^\/([\w:-]+)(?:\s|$)/.exec(String(text || '').trim())?.[1];
-  return !!name && (BUILTINS[agent]?.terminal || []).some(([command]) => command === name);
+  const name = agentCommand(text).slice(1);
+  if (!name || agent === 'claude' && CLAUDE_MODEL_COMMANDS.has(name)) return false;
+  return (BUILTINS[agent]?.terminal || []).some(([command]) => command === name)
+    || agent === 'claude' && CLAUDE_EXTRA_LOCAL_COMMANDS.has(name);
 }
 
-module.exports = { listAgentCommands, isLocalAgentCommand };
+module.exports = { listAgentCommands, isLocalAgentCommand, agentCommand };
