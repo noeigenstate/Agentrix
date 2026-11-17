@@ -38,6 +38,7 @@ const iso = ms => new Date(ms).toISOString();
 function fakeSpawn(spawned) {
   return (file, args, options) => {
     const pty = { pid: 4242, file, args, options, writes: [], killed: 0, size: null,
+      on(event, callback) { assert.equal(event, 'error'); this.onError = callback; },
       onData(callback) { this.emit = callback; }, onExit(callback) { this.exit = callback; },
       write(data) { this.writes.push(data); }, resize(cols, rows) { this.size = [cols, rows]; },
       kill() { this.killed++; this.exit?.({ exitCode: 0 }); } };
@@ -481,8 +482,65 @@ test('closeAll waits for tree shutdown and overlapping folder-removal retries', 
   assert.equal(removed, 2); assert.deepEqual(f.clock.pending(), []);
 });
 
+for (const platform of ['win32', 'linux']) {
+  test(`${platform} real tree shutdown never signals pid zero`, async t => {
+    const signals = [], original = process.kill;
+    process.kill = (pid, signal) => { signals.push([pid, signal]); return true; };
+    try {
+      for (const pid of [0, -0]) {
+        const f = launchHarness(t, deps => {
+          deps.platform = platform;
+          delete deps.kill; // Exercise the real killTree, with no taskkill at pid zero.
+          const spawn = deps.spawn;
+          deps.spawn = (...args) => Object.assign(spawn(...args), { pid });
+        });
+        const result = f.start();
+        await until(() => f.spawned.length === 1, 'the not-ready PTY');
+        await f.control({ type: 'stop' }); await result; await f.terminals.closeAll();
+        assert.equal(f.spawned[0].killed, 1, 'the PTY public kill still runs');
+        assert.deepEqual(signals, [], 'neither zero nor negative zero reaches process.kill');
+        assert.deepEqual(f.clock.pending(), []);
+      }
+    } finally { process.kill = original; }
+  });
+}
+
+test('POSIX real tree shutdown signals only a positive integer process group', async t => {
+  const signals = [], original = process.kill;
+  process.kill = (pid, signal) => { signals.push([pid, signal]); return true; };
+  try {
+    for (const pid of [undefined, null, -1, 1.5, '4242', NaN, Infinity, 4242]) {
+      const f = launchHarness(t, deps => {
+        deps.platform = 'linux'; delete deps.kill;
+        const spawn = deps.spawn;
+        deps.spawn = (...args) => Object.assign(spawn(...args), { pid });
+      });
+      const result = f.start();
+      await until(() => f.spawned.length === 1, 'the PTY');
+      await f.control({ type: 'stop' }); await result; await f.terminals.closeAll();
+      assert.equal(f.spawned[0].killed, 1);
+    }
+    assert.deepEqual(signals, [[-4242, 'SIGTERM']]);
+  } finally { process.kill = original; }
+});
+
+test('a PTY exiting during listener registration cannot arm a startup notice', async t => {
+  const f = launchHarness(t, deps => {
+    deps.platform = 'linux';
+    const spawn = deps.spawn;
+    deps.spawn = (...args) => {
+      const pty = spawn(...args);
+      pty.onExit = callback => { pty.exit = callback; callback({ exitCode: 0 }); };
+      return pty;
+    };
+  });
+  assert.deepEqual(await f.start(), { status: 'failed' });
+  await f.terminals.closeAll();
+  assert.deepEqual(f.clock.pending(), [], 'launch must not schedule after exit and close');
+});
+
 test('Windows quiet ConPTY teardown closes its sockets and output worker without another data event', async t => {
-  for (const ready of [false, true]) {
+  for (const ready of [false, true, undefined]) {
     const released = [], timers = [];
     const timeout = () => { const timer = setTimeout(() => assert.fail('node-pty cleanup timer survived'), 10000); timers.push(timer); return timer; };
     t.after(() => { for (const timer of timers) clearTimeout(timer); });
@@ -494,7 +552,11 @@ test('Windows quiet ConPTY teardown closes its sockets and output worker without
         pty._isReady = ready;
         pty._agent = { _useConptyDll: true, _connectionTimeout: timeout(), _closeTimeout: timeout(),
           kill: () => released.push('agent'),
-          _inSocket: { destroy: () => released.push('input') }, _outSocket: { destroy: () => released.push('output') },
+          _inSocket: { destroy: () => released.push('input') }, _outSocket: { destroy() {
+            assert.equal(typeof pty.onError, 'function', 'launch registers a PTY error listener');
+            pty.onError(Object.assign(new Error('synthetic socket close'), { code: 'ECONNRESET' }));
+            released.push('output');
+          } },
           _conoutSocketWorker: { dispose() { released.push('dispose'); this._drainTimeout = timeout(); },
             _worker: { terminate: async () => { await Promise.resolve(); released.push('worker'); } } } };
         return pty;
@@ -503,9 +565,45 @@ test('Windows quiet ConPTY teardown closes its sockets and output worker without
     const result = f.start();
     await until(() => f.spawned.length === 1, 'the quiet PTY');
     await f.control({ type: 'stop' }); await result; await f.terminals.closeAll();
-    assert.deepEqual(released, [...(!ready ? ['agent'] : []), 'dispose', 'input', 'output', 'worker']);
+    assert.deepEqual(released, [...(ready === false ? ['agent'] : []), 'dispose', 'input', 'output', 'worker']);
     assert.ok(timers.every(timer => timer._destroyed), 'node-pty connection, flush and drain timers are cleared');
     assert.deepEqual(f.clock.pending(), []);
+  }
+});
+
+test('Windows conout worker termination cannot extend the exit deadline', async t => {
+  for (const naturalExit of [false, true]) {
+    let terminated = false, outputDestroyed = false;
+    const f = launchHarness(t, deps => {
+      deps.platform = 'win32';
+      deps.kill = () => {}; // No exit: the original deadline must bound every awaited teardown step.
+      const spawn = deps.spawn;
+      deps.spawn = (...args) => {
+        const pty = spawn(...args);
+        pty.kill = () => {};
+        pty._isReady = true;
+        pty._agent = { _useConptyDll: true,
+          _outSocket: { destroy: () => { outputDestroyed = true; } },
+          _conoutSocketWorker: { dispose() {}, _worker: { terminate() {
+            assert.ok(outputDestroyed, 'the output socket must be destroyed before termination');
+            terminated = true; return new Promise(() => {});
+          } } } };
+        return pty;
+      };
+    });
+    const result = f.start();
+    await until(() => f.spawned.length === 1, 'the PTY');
+    if (naturalExit) f.spawned[0].exit({ exitCode: 0 });
+    const stopped = naturalExit ? Promise.resolve() : f.control({ type: 'stop' });
+    let closed = false;
+    const closing = f.terminals.closeAll().then(() => { closed = true; });
+    await until(() => terminated, 'the conout termination request');
+    assert.deepEqual(f.clock.pending(), [5000], 'cleanup shares the existing exit deadline');
+    f.clock.advance(4999);
+    await Promise.resolve(); assert.equal(closed, false);
+    f.clock.advance(1);
+    await Promise.all([stopped, closing, result]);
+    assert.deepEqual(f.clock.pending(), [], 'deadline expiry leaves no scheduled handle');
   }
 });
 

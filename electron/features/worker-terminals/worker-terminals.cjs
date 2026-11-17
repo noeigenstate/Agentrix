@@ -104,30 +104,35 @@ function launchCommand(file, args, { platform, cmdPath, powershellPath }) {
 
 function killTree(pty, platform = process.platform) {
   const end = () => { try { pty.kill(); } catch {} };
-  if (platform === 'win32' && pty.pid) {
+  if (platform === 'win32') {
+    if (!pty.pid) { end(); return; }
     return new Promise(resolve => {
       execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(pty.pid), '/t', '/f'],
         { windowsHide: true, timeout: EXIT_WAIT_MS }, () => { end(); resolve(); });
     });
   }
-  try { process.kill(-pty.pid, 'SIGTERM'); } catch {}
+  if (Number.isInteger(pty.pid) && pty.pid > 0) {
+    try { process.kill(-pty.pid, 'SIGTERM'); } catch {}
+  }
   end();
 }
 
 // node-pty 1.2.0-beta.15's DLL path disposes its ConoutConnection only on output *after* kill. A quiet CLI leaves
 // that worker's pipe server alive forever. The public kill also defers until first output, so an unopened PTY needs
 // the agent kill directly. Keep this compatibility cleanup with the pinned node-pty version, not in its dependency.
-async function disposeWindowsPty(pty) {
+async function disposeWindowsPty(pty, deadline) {
   const agent = pty?._agent;
   if (!agent?._useConptyDll) return;
-  if (!pty._isReady) { try { agent.kill(); } catch {} }
+  if (pty._isReady === false) { try { agent.kill(); } catch {} }
   const output = agent._conoutSocketWorker;
   try { output?.dispose(); } catch {}
   clearTimeout(output?._drainTimeout);
   clearTimeout(agent._connectionTimeout); clearTimeout(agent._closeTimeout);
   try { agent._inSocket?.destroy(); } catch {}
+  // Destroy the out socket before terminating its conout worker: this order is load-bearing. WindowsTerminal
+  // rethrows non-EIO socket errors with fewer than two PTY error listeners; launch adds the second listener.
   try { agent._outSocket?.destroy(); } catch {}
-  try { await output?._worker?.terminate(); } catch {}
+  try { await Promise.race([output?._worker?.terminate(), deadline]); } catch {}
 }
 
 // A terminal lead's Claude workers, each a hidden interactive `claude` in a PTY of its own (worker-terminals/BOUNDARY.md).
@@ -140,12 +145,16 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   const workers = new Map();
   const byId = id => workers.get(id) || null;
   const byCall = (terminalId, callId) => [...workers.values()].find(w => w.parent === terminalId && `dispatch:${w.runId}` === callId) || null;
-  function later(w, fn, ms, resolve = null) {
+  function trackTimer(w, fn, ms, resolve = null) {
     const timer = schedule(() => { w.timers.delete(timer); fn(); }, ms);
     w.timers.set(timer, resolve);
     // Notices, polling and automatic Enter must never keep the app alive. Awaited cleanup waits stay referenced.
     if (!resolve) timer?.unref?.();
     return timer;
+  }
+  function later(w, fn, ms, resolve = null) {
+    if (w.closed || w.exited) { resolve?.(); return null; }
+    return trackTimer(w, fn, ms, resolve);
   }
   function clearTimer(w, timer) {
     if (!w.timers.has(timer)) return;
@@ -200,6 +209,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const command = launchCommand(file, args, { platform, cmdPath, powershellPath });
     w.pty = spawn(command.file, command.args, { name: 'xterm-256color', cols: w.cols, rows: w.rows, cwd: w.spec.cwd, env: w.env,
       ...(platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}) });
+    w.pty.on?.('error', () => {});
     w.epoch = randomUUID(); w.launchedAt = now(); w.tag = clientMessageId;
     w.listeners.push(w.pty.onData(data => receive(w, data)), w.pty.onExit(({ exitCode } = {}) => exited(w, exitCode)));
     w.notice = later(w, () => { w.noticeDue = true; startNotice(w); }, START_NOTICE_MS);
@@ -380,18 +390,18 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     w.close = () => w.closing ||= (async () => {
       w.closed = true; w.running = false; clearTimers(w); setAwaiting(w, null);
       try {
-        if (w.pty && !w.exited) {
+        if (w.pty) {
           const exit = new Promise(resolve => { w.onExited = resolve; });
           let timeout;
-          const deadline = new Promise(resolve => { timeout = later(w, resolve, EXIT_WAIT_MS, resolve); });
+          // Cleanup waits remain tracked after close; normal worker callbacks may no longer arm.
+          const deadline = new Promise(resolve => { timeout = trackTimer(w, resolve, EXIT_WAIT_MS, resolve); });
           try {
-            try { await kill(w.pty, platform); }
-            finally { if (platform === 'win32') await disposeWindowsPty(w.pty); }
-            await Promise.race([exit, deadline]);
+            try {
+              if (!w.exited) await kill(w.pty, platform);
+              else if (platform === 'win32') { try { w.pty.kill(); } catch {} }
+            } finally { if (platform === 'win32') await disposeWindowsPty(w.pty, deadline); }
+            if (!w.exited) await Promise.race([exit, deadline]);
           } finally { clearTimer(w, timeout); w.onExited = null; }
-        } else if (w.pty && platform === 'win32') {
-          try { w.pty.kill(); } catch {}
-          await disposeWindowsPty(w.pty);
         }
       } catch {}
       // A Stop may be asleep in settle or a tail may still hold a file. Cancel its wait and drain both before removal.
@@ -400,7 +410,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       for (const listener of w.listeners) { try { listener?.dispose(); } catch {} }
       for (let tries = 1; ; tries++) {
         try { remove(w.folder); break; } catch { if (tries >= REMOVE_TRIES) break; }
-        await delay(w, SETTLE_MS * tries);
+        await new Promise(resolve => trackTimer(w, resolve, SETTLE_MS * tries, resolve));
       }
       workers.delete(w.id);
     })();
