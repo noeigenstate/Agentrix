@@ -2,7 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const jsx = require('react/jsx-runtime');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
-const { popupHarness, elements } = require('./reading-popup-coverage.test.cjs');
+const { popupHarness, elements, idle } = require('./reading-popup-coverage.test.cjs');
+const wrapAnsi = require('wrap-ansi');
 const fs = require('node:fs');
 const path = require('node:path');
 const screens = require('../src/features/terminal/terminal-screen.ts');
@@ -126,22 +127,35 @@ test('send-to-agent reaches an untracked receiver during pending output and repo
 
 // The real screen registry, parser, popup mounting and fitting. A PTY redraw is represented by a null frame followed
 // by the same prompt at its new width; the popup harness never assigns instances itself.
-function resizingPrompt(t, wrappedOption = false) {
-  const h = popupHarness(t, 'claude');
+function resizingPrompt(t, { wrappedOption = false, hardWrap = false, agent = 'claude' } = {}) {
+  const h = popupHarness(t, agent);
   const saved = { style: global.getComputedStyle, observer: global.ResizeObserver };
   window.setTimeout = setTimeout; window.clearTimeout = clearTimeout;
   global.getComputedStyle = node => ({ getPropertyValue: name => String(name === 'width' ? node.clientWidth : name === 'height' ? node.clientHeight : 0) });
   global.ResizeObserver = class { observe() {} disconnect() {} };
   const container = width => ({ clientWidth: width, clientHeight: 400,
     appendChild(node) { this.insertBefore(node); }, insertBefore(node) { node.parentElement = this; } });
-  const card = container(wrappedOption ? 800 : 400), popup = container(wrappedOption ? 1200 : 800), element = { parentElement: card, nextSibling: null, contains: () => false };
-  let lines = ['────', '❯ ', '────'], parsed = () => {}, resized = () => {};
-  const option = "  2. Yes, and don't ask again for npm test commands in", folder = 'D:\\work\\workspace\\long-project-folder';
-  const atWidth = title => wrappedOption
-    ? ['─'.repeat(terminal.cols), title, '$ npm test', '', '❯ 1. Yes',
-      ...(terminal.cols < 100 ? [option, '     ' + folder] : [option + ' ' + folder]), '  3. No', 'Esc to cancel']
-    : [title, ...(terminal.cols < 60 ? ['$ echo a long command', '  whose context wraps'] : ['$ echo a long command whose context wraps']), ...prompt.slice(1)];
-  const terminal = { cols: wrappedOption ? 80 : 40, rows: 20, element, options: { scrollback: 0 },
+  const cardCols = hardWrap ? 50 : wrappedOption ? 80 : 40, popupCols = hardWrap || wrappedOption ? 120 : 80;
+  const card = container(cardCols * 10), popup = container(popupCols * 10), element = { parentElement: card, nextSibling: null, contains: () => false };
+  let lines = idle[agent], parsed = () => {}, resized = () => {};
+  const option = "  2. Yes, and don't ask again for npm test commands in";
+  const folder = hardWrap ? 'C:\\work\\' + 'worktree-'.repeat(12) + 'module\\file.ts' : 'D:\\work\\workspace\\long-project-folder';
+  if (hardWrap) assert.ok(folder.length > cardCols, 'the path itself must wrap mid-token');
+  const atWidth = title => {
+    if (hardWrap) {
+      const text = agent === 'claude' ? option.replace(/^\s*2\.\s*/, '') + ' ' + folder
+        : "Yes, and don't ask again for commands that start with `Get-Content -LiteralPath " + folder + '` (p)';
+      const rows = wrapAnsi(text, terminal.cols - 5, { hard: true }).split('\n').map((line, index) => (index ? '     ' : '  2. ') + line);
+      return ['─'.repeat(terminal.cols), title, '$ npm test', '', agent === 'claude' ? '❯ 1. Yes' : '› 1. Yes, proceed (y)',
+        ...rows, agent === 'claude' ? '  3. No' : '  3. No, and tell Codex what to do differently (esc)',
+        agent === 'claude' ? 'Esc to cancel' : 'Press enter to confirm or esc to cancel'];
+    }
+    return wrappedOption
+      ? ['─'.repeat(terminal.cols), title, '$ npm test', '', '❯ 1. Yes',
+        ...(terminal.cols < 100 ? [option, '     ' + folder] : [option + ' ' + folder]), '  3. No', 'Esc to cancel']
+      : [title, ...(terminal.cols < 60 ? ['$ echo a long command', '  whose context wraps'] : ['$ echo a long command whose context wraps']), ...prompt.slice(1)];
+  };
+  const terminal = { cols: cardCols, rows: 20, element, options: { scrollback: 0 },
     _core: { _renderService: { dimensions: { css: { cell: { width: 10, height: 20 } } }, clear() {} } },
     buffer: { active: { baseY: 0, getLine: index => ({ translateToString: () => lines[index] ?? '' }) } },
     onWriteParsed(fn) { parsed = fn; return { dispose() {} }; }, onResize(fn) { resized = fn; return { dispose() {} }; },
@@ -152,8 +166,8 @@ function resizingPrompt(t, wrappedOption = false) {
   const unregisterPopup = registerReadingTerminal(h.props.terminal.id, h.props.terminal.sessionId, terminal);
   const draw = next => { lines = next; parsed(); h.render(); };
   t.after(() => { off(); unregisterPopup(); unregister(); global.getComputedStyle = saved.style; global.ResizeObserver = saved.observer; });
-  return { ...h, draw, prompt: (title = prompt[0]) => draw(atWidth(title)),
-    mount: () => mountReadingTerminal(h.props.terminal.id, h.props.terminal.sessionId, popup, false) };
+  return { ...h, draw, prompt: (title = agent === 'claude' ? prompt[0] : 'Would you like to run the following command?') => draw(atWidth(title)),
+    mount: (cols = popupCols) => { popup.clientWidth = cols * 10; return mountReadingTerminal(h.props.terminal.id, h.props.terminal.sessionId, popup, false); } };
 }
 
 test('an explicit close survives real popup fit and restore resizes with a short null redraw', t => {
@@ -166,7 +180,7 @@ test('an explicit close survives real popup fit and restore resizes with a short
 });
 
 test('a wrapped Claude Bash option moving between label and detail keeps dismissal across fit and restore', t => {
-  const h = resizingPrompt(t, true); h.prompt(); assert.ok(h.popup());
+  const h = resizingPrompt(t, { wrappedOption: true }); h.prompt(); assert.ok(h.popup());
   const narrow = parseAgentScreen('claude', h.view.rows).choice.options[1];
   assert.match(narrow.detail, /long-project-folder/); assert.doesNotMatch(narrow.label, /long-project-folder/);
   const restore = h.mount(); h.render(); h.prompt();
@@ -174,6 +188,39 @@ test('a wrapped Claude Bash option moving between label and detail keeps dismiss
   assert.match(wide.label, /long-project-folder/); assert.equal(wide.detail, '');
   h.popup().props.onClose(); h.render(); restore(); h.render(); h.prompt();
   assert.equal(h.popup(), undefined, 'returning the path to detail cannot create another episode');
+});
+
+for (const agent of ['claude', 'codex']) test(`${agent}: a hard-wrapped long option token keeps dismissal across real popup fits`, t => {
+  const h = resizingPrompt(t, { agent, hardWrap: true }); h.prompt(); assert.ok(h.popup());
+  const optionText = () => { const option = parseAgentScreen(agent, h.view.rows).choice.options[1]; return option.label + ' ' + option.detail; };
+  const narrow = optionText();
+  for (const cols of [70, 80, 120, 160]) {
+    if (!h.popup()) { h.waiting().props.onOpenTerminal(); h.render(); }
+    const key = h.popup().key, restore = h.mount(cols); h.render(); h.prompt();
+    assert.notEqual(optionText(), narrow, 'the real parser places hard-wrap spaces differently');
+    assert.equal(h.popup().key, key, 'rewrapping keeps the mounted popup');
+    h.popup().props.onClose(); h.render(); restore(); h.render(); h.prompt();
+    assert.equal(h.popup(), undefined, `restoring the 50-column card from ${cols} columns preserves explicit dismissal`);
+  }
+});
+
+for (const agent of ['claude', 'codex']) for (const source of ['cliState', 'needsInput']) test(`${agent}: host-only ${source} waiting stays dismissed across spinner input frames`, t => {
+  const h = resizingPrompt(t, { agent });
+  if (source === 'cliState') h.props.terminal.cliState = { sessionId: h.props.terminal.sessionId, revision: 1, state: 'waiting', updatedAt: Date.now() + 1 };
+  else h.props.terminal.needsInput = 'reported permission';
+  const spinner = step => agent === 'claude' ? `✶ Working… (${step}s)` : `• Working (${step}s · esc to interrupt)`;
+  const input = agent === 'claude' ? ['────', '❯ ', '────'] : idle[agent];
+  h.draw([spinner(0), ...input]); assert.ok(h.popup());
+  h.popup().props.onClose(); h.render(); assert.equal(h.popup(), undefined);
+  let count = h.view.frame.inputFrames[agent];
+  for (const step of [1, 2]) {
+    h.draw([spinner(step), ...input]);
+    assert.equal(parseAgentScreen(agent, h.view.rows).choice, null);
+    assert.ok(h.view.frame.inputFrames[agent] > count, 'the registry really observed another parsed input frame');
+    count = h.view.frame.inputFrames[agent];
+    assert.equal(h.popup(), undefined); assert.ok(h.waiting()); assert.equal(h.node.disabled, false);
+  }
+  assert.deepEqual(h.writes, []); assert.deepEqual(h.pastes, []);
 });
 
 test('an open popup adopts real rewraps and a new prompt without remounting', t => {

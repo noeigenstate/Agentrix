@@ -15,13 +15,13 @@ export const DIALOG_SETTLE = 3000;
 // is blocked by pending output; endDialog still ends an episode immediately when this view sees returned input.
 export function observeDialog(id: string, scope: string, identity: string | null, now = Date.now(), inputFrames?: number): string | null {
   const previous = episodes.get(id);
-  const inputReturned = inputFrames !== undefined && previous?.inputFrames !== undefined && inputFrames !== previous.inputFrames;
   if (identity === null) {
     if (!previous || previous.scope !== scope) return null;
-    if (inputReturned) { episodes.delete(id); return null; }
     previous.missingAt ??= now;
     return previous.key;
   }
+  // Input may remain visible under host-only waiting. Only a parsed prompt returning can use its changed count.
+  const inputReturned = inputFrames !== undefined && previous?.inputFrames !== undefined && inputFrames !== previous.inputFrames;
   if (previous?.scope === scope && previous.identity === identity && !inputReturned
     && (previous.missingAt === undefined || now - previous.missingAt < DIALOG_SETTLE)) {
     previous.inputFrames = inputFrames ?? previous.inputFrames;
