@@ -1,4 +1,13 @@
-const { messageText, promptText, promptSummary } = require('./prompt-queue.cjs');
+const { messageText, promptText, promptSummary, promptCommand } = require('./prompt-queue.cjs');
+const { isLocalAgentCommand } = require('./agent-commands.cjs');
+
+function isClaudeTurnInput(content, record) {
+  const prompt = promptText(content, record);
+  if (prompt === null || isLocalAgentCommand('claude', promptCommand(prompt))) return false;
+  // Match the reading view's single-line ! shell mode, and Claude's recorded shell context.
+  // A heading, markup or custom slash command can still be an owner's model turn.
+  return !/^![^\r\n]*$/.test(prompt.trim()) && !/^\s*<bash-(?:input|stdout|stderr)>/.test(prompt);
+}
 
 // Jobs with missing end receipts expire from launch, without success; services are excluded.
 const LOST_WORK_TIMEOUT = 12 * 60 * 60 * 1000;
@@ -147,9 +156,9 @@ class CompletionWork {
         }
       }
     }
-    const prompt = promptText(record.attachment?.prompt ?? content, record.attachment ? { ...record, ...record.attachment } : record);
-    const humanDelivery = (record.type === 'user' || record.attachment?.type === 'queued_command') && prompt !== null && !/^\s*[\/!#<]/.test(prompt);
-    const handoff = queued && ['remove', 'dequeue'].includes(record.operation) && promptText(record.content, record) !== null
+    const humanDelivery = (record.type === 'user' || record.attachment?.type === 'queued_command')
+      && isClaudeTurnInput(record.attachment?.prompt ?? content, record.attachment ? { ...record, ...record.attachment } : record);
+    const handoff = queued && ['remove', 'dequeue'].includes(record.operation) && isClaudeTurnInput(record.content, record)
       && !['cleared_on_cancel', 'dropped_by_hook'].includes(record.reason);
     if ((humanDelivery || handoff) && at > (this.turn?.updatedAt || 0)) {
       this.reviewAt = Math.max(this.reviewAt, at); delivered = true;

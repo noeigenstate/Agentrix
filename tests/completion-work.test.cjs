@@ -134,6 +134,65 @@ test('human queue handoff blocks the idle gap, while cancelled task notification
   assert.equal(work.state({ ...complete, updatedAt: 2400 }), 'complete');
 });
 
+test('queued owner model input holds an older Stop regardless of its prefix', t => {
+  const prompts = ['/custom-review the patch', '/review', '<request>Review the patch</request>', '# Review the patch', '!Important\nReview the patch',
+    '<command-name>/custom-review</command-name>\n<command-message>custom-review</command-message>'];
+  for (const prompt of prompts) for (const receipt of ['user', 'attachment', 'sdk']) {
+    const h = fixture(t), { work } = h;
+    h.claude({ type: 'user', message: { content: 'First task' } }, 1000);
+    h.claude({ type: 'queue-operation', operation: 'enqueue', content: prompt }, 1500);
+    const stop = { type: 'system', subtype: 'stop_hook_summary', uuid: 'first-stop' };
+    h.claude(stop, 2000);
+    const previous = { ...work.turn };
+    // No named remove/dequeue: the actual receipt must guard the stored Stop on its own.
+    h.now(2100);
+    if (receipt === 'attachment') h.claude({ type: 'attachment', attachment: { type: 'queued_command', commandMode: 'prompt', prompt } });
+    else if (receipt === 'sdk') work.native({ type: 'user', turnOrigin: 'sdk', promptSource: 'sdk', entrypoint: 'agentrix-sdk', message: { content: prompt } }, 'claude', 2100);
+    else h.claude({ type: 'user', turnOrigin: 'human', promptSource: 'queued', message: { content: prompt } });
+    assert.equal(work.reviewAt, 2100, `${receipt}: ${prompt}`);
+    h.claude(stop, 2000);
+    work.end(previous.updatedAt); // applyActivity replays the stored Stop too.
+    assert.equal(work.state(previous), 'working', 'the predecessor cannot finish delivered owner work');
+    assert.equal(work.mainTurn().state, 'working');
+    h.now(2300);
+    const ownStop = { type: 'system', subtype: 'stop_hook_summary', uuid: 'second-stop' };
+    h.claude(ownStop);
+    assert.equal(work.reviewAt, 0);
+    assert.equal(work.state(work.turn), 'complete', 'only this input\'s end releases review');
+    h.claude(ownStop); h.claude(stop, 2000);
+    assert.equal(work.reviewAt, 0, 'repeated or old Stops never start review');
+    assert.equal(work.state(work.turn), 'complete');
+  }
+});
+
+test('local commands and machine receipts never create owner review', t => {
+  const inputs = [
+    ['/model'], ['/model opus'], ['/clear'], ['/context'],
+    ['<command-name>/model</command-name>\n<command-message>model</command-message>'],
+    ['!echo done'], ['<bash-input>echo done</bash-input>'],
+    ['<bash-stdout>done</bash-stdout><bash-stderr></bash-stderr>'],
+    ['echo done', { commandMode: 'bash' }],
+    ['<local-command-stdout>Saved locally</local-command-stdout>'],
+    ['<system-reminder>Injected context</system-reminder>'],
+    ['# AGENTS.md instructions for /synthetic\n<INSTRUCTIONS>Rules</INSTRUCTIONS>'],
+    ['<request>Machine work</request>', { promptSource: 'system' }],
+    ['# Machine work', { isMeta: true }],
+    ['/custom-review', { humanTurn: false }],
+  ];
+  for (const [prompt, flags = {}] of inputs) for (const receipt of ['user', 'attachment', 'remove', 'dequeue']) {
+    const h = fixture(t), { work } = h;
+    h.claude({ type: 'system', subtype: 'stop_hook_summary' }, 2000);
+    const previous = { ...work.turn };
+    h.now(2100);
+    if (receipt === 'user') h.claude({ type: 'user', ...flags, message: { content: prompt } });
+    else if (receipt === 'attachment') h.claude({ type: 'attachment', attachment: { type: 'queued_command', prompt, ...flags } });
+    else h.claude({ type: 'queue-operation', operation: receipt, content: prompt, ...flags });
+    assert.equal(work.reviewAt, 0, `${receipt}: ${prompt}`);
+    assert.equal(work.state(previous), 'complete');
+    assert.equal(work.mainTurn().state, 'complete', 'local output cannot invent a working model turn');
+  }
+});
+
 test('Codex CLI-style agent ids, wait statuses and resumed workers count each outstanding task', t => {
   const h = fixture(t), { work } = h;
   h.codex(call('spawn_agent', 'spawn', {})); h.codex(output('spawn', { agent_id: 'worker' }));

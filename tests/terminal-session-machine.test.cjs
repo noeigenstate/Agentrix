@@ -182,6 +182,36 @@ test('a round held by background work completes once when that work ends and the
   assert.equal(h.notifications(), 1);
 });
 
+test('a queued owner model receipt holds a predecessor Stop replay until its own Stop, then notifies once', t => {
+  for (const prompt of ['/custom-review the patch', '<request>Review the patch</request>', '# Review the patch', '!Important\nReview the patch']) {
+    const h = fixture({ real: true });
+    t.after(() => { h.s.promptQueue.reset(); h.s.completionWork.reset(); });
+    h.hook('UserPromptSubmit', { prompt: 'First task', prompt_id: 'p1' }); h.advance();
+    h.s.completionWork.start('child', h.context.Date.now());
+    h.hook('Stop', { prompt_id: 'p1' });
+    assert.equal(h.notifications(), 0);
+    const predecessor = h.s.activityRawSnapshot;
+    h.advance();
+    // Prefix/work-only history can deliver the owner receipt before the full reader publishes its new snapshot.
+    // No remove/dequeue or new prompt hook has arrived, so only CompletionWork guards the saved Stop.
+    h.s.completionWork.record({ type: 'user', promptSource: 'queued', turnOrigin: 'human', timestamp: new Date(h.context.Date.now()).toISOString(), message: { content: prompt } }, 'claude');
+    h.s.completionWork.finish('child');
+    h.context.applyActivity(h.project, h.s, predecessor);
+    assert.equal(h.s.codexActivity, 'working', prompt);
+    assert.equal(h.notifications(), 0, 'the older Stop must not notify while this input runs');
+    assert.equal(h.armed(), true);
+    // The delayed prompt hook and this turn's own Stop release the final gate.
+    h.advance(); h.hook('UserPromptSubmit', { prompt, prompt_id: 'p2' }); h.advance();
+    h.hook('Stop', { prompt_id: 'p2' });
+    assert.equal(h.notifications(), 1); assert.equal(h.armed(), false);
+    const completedAt = h.project.lastCompletedAt;
+    h.context.applyActivity(h.project, h.s, h.s.activityRawSnapshot);
+    h.advance(); h.hook('Stop', { prompt_id: 'p2' });
+    h.hook('PostToolUse', { prompt_id: 'p2' }); h.screen({ busy: false }); h.elapse(2000);
+    assert.equal(h.project.lastCompletedAt, completedAt); assert.equal(h.notifications(), 1);
+  }
+});
+
 test('a Stop with nothing held completes at once, whatever the screen showed before it', () => {
   for (const confirmed of [true, false]) {
     const h = fixture();
