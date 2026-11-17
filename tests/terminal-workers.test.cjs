@@ -607,6 +607,43 @@ test('Windows conout worker termination cannot extend the exit deadline', async 
   }
 });
 
+test('PTY exit during kill preserves the conout termination wait and its deadline', async t => {
+  for (const expire of [false, true]) {
+    let finishTerminate;
+    const f = launchHarness(t, deps => {
+      deps.platform = 'win32';
+      deps.kill = pty => { pty.kill(); return Promise.resolve(); }; // Exit precedes the kill callback.
+      const spawn = deps.spawn;
+      deps.spawn = (...args) => {
+        const pty = spawn(...args);
+        pty._isReady = true;
+        pty._agent = { _useConptyDll: true, _conoutSocketWorker: { dispose() {},
+          _worker: { terminate: () => new Promise(resolve => { finishTerminate = resolve; }) } } };
+        return pty;
+      };
+    });
+    const result = f.start();
+    await until(() => f.spawned.length === 1, 'the PTY');
+    const stopped = f.control({ type: 'stop' });
+    let closed = false;
+    const closing = f.terminals.closeAll().then(() => { closed = true; });
+    await until(() => finishTerminate, 'the pending conout termination');
+    try {
+      assert.equal(closed, false, 'PTY exit alone must not finish close');
+      assert.deepEqual(f.clock.pending(), [5000], 'PTY exit must preserve the cleanup deadline');
+      assert.ok(fs.existsSync(path.join(f.root, 'worker-launch')), 'the folder stays until cleanup finishes');
+      f.clock.advance(4999);
+      await Promise.resolve(); assert.equal(closed, false);
+      if (expire) f.clock.advance(1); else finishTerminate();
+      await Promise.all([stopped, closing, result]);
+      assert.deepEqual(f.clock.pending(), [], 'settlement or deadline cancels every remaining timer');
+    } finally {
+      finishTerminate(); f.clock.advance(5000);
+      await Promise.all([stopped, closing, result]);
+    }
+  }
+});
+
 test('worker hook server awaits HTTP keep-alive socket shutdown', async t => {
   const http = require('node:http'), { once } = require('node:events');
   const { createHookServer } = require('../electron/features/terminal-events/hook-server.cjs');

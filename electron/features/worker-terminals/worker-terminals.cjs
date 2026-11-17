@@ -145,21 +145,22 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   const workers = new Map();
   const byId = id => workers.get(id) || null;
   const byCall = (terminalId, callId) => [...workers.values()].find(w => w.parent === terminalId && `dispatch:${w.runId}` === callId) || null;
-  function trackTimer(w, fn, ms, resolve = null) {
-    const timer = schedule(() => { w.timers.delete(timer); fn(); }, ms);
-    w.timers.set(timer, resolve);
+  function trackTimer(timers, fn, ms, resolve = null) {
+    const timer = schedule(() => { timers.delete(timer); fn(); }, ms);
+    timers.set(timer, resolve);
     // Notices, polling and automatic Enter must never keep the app alive. Awaited cleanup waits stay referenced.
     if (!resolve) timer?.unref?.();
     return timer;
   }
   function later(w, fn, ms, resolve = null) {
     if (w.closed || w.exited) { resolve?.(); return null; }
-    return trackTimer(w, fn, ms, resolve);
+    return trackTimer(w.timers, fn, ms, resolve);
   }
   function clearTimer(w, timer) {
-    if (!w.timers.has(timer)) return;
-    const resolve = w.timers.get(timer);
-    w.timers.delete(timer); cancel(timer); resolve?.();
+    const timers = w.timers.has(timer) ? w.timers : w.cleanupTimers;
+    if (!timers.has(timer)) return;
+    const resolve = timers.get(timer);
+    timers.delete(timer); cancel(timer); resolve?.();
   }
   const clearTimers = w => { for (const timer of w.timers.keys()) clearTimer(w, timer); };
   const delay = (w, ms) => new Promise(resolve => later(w, resolve, ms, resolve));
@@ -382,7 +383,8 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const folder = path.join(runtimeDir(), `worker-${run.runId}`);
     const w = { run, runId: run.runId, parent: run.projectId, id: `worker-${run.runId}`, key: randomUUID(), spec, stream, folder,
       briefs: path.join(folder, 'brief'), cols: 120, rows: 30, chunks: [], bytes: 0, seq: 0, pending: [], messages: 0, last: null,
-      awaiting: null, asks: new Set(), closedAsks: new Set(), attachments: new Map(), ownerDraft: false, timers: new Map(), listeners: [],
+      awaiting: null, asks: new Set(), closedAsks: new Set(), attachments: new Map(), ownerDraft: false,
+      timers: new Map(), cleanupTimers: new Map(), listeners: [],
       startAt: -Infinity, queue: Promise.resolve(), reading: Promise.resolve() };
     workers.set(w.id, w);
     stream.publish('path.changed', { previous: null, selected: 'terminal-worker', reason: 'terminal lead (subscription)' });
@@ -393,8 +395,8 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
         if (w.pty) {
           const exit = new Promise(resolve => { w.onExited = resolve; });
           let timeout;
-          // Cleanup waits remain tracked after close; normal worker callbacks may no longer arm.
-          const deadline = new Promise(resolve => { timeout = trackTimer(w, resolve, EXIT_WAIT_MS, resolve); });
+          // Only close cancels cleanup waits: PTY exit must not release conout termination early.
+          const deadline = new Promise(resolve => { timeout = trackTimer(w.cleanupTimers, resolve, EXIT_WAIT_MS, resolve); });
           try {
             try {
               if (!w.exited) await kill(w.pty, platform);
@@ -410,7 +412,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       for (const listener of w.listeners) { try { listener?.dispose(); } catch {} }
       for (let tries = 1; ; tries++) {
         try { remove(w.folder); break; } catch { if (tries >= REMOVE_TRIES) break; }
-        await new Promise(resolve => trackTimer(w, resolve, SETTLE_MS * tries, resolve));
+        await new Promise(resolve => trackTimer(w.cleanupTimers, resolve, SETTLE_MS * tries, resolve));
       }
       workers.delete(w.id);
     })();
