@@ -89,6 +89,7 @@ function registerClaudeWorker({ control, claude, settings, terminals = null, con
         await runtime.send({ clientMessageId: randomUUID(), text: payload.prompt, images: payload.images });
       }
       catch (error) {
+        if (terminal && error.beforeInput === true) { pathEvent(error.code || error.message); return; }
         if (claudePath === 'api-then-terminal' && (error.code === 'native_cli_required' || error.beforeInput === true)) {
           pathEvent(error.beforeInput ? error.message : error.code); return;
         }

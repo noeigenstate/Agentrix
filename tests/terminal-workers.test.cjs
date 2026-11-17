@@ -119,7 +119,7 @@ async function fixture(t) {
     stdout: () => stdout, item: () => calls.snapshot().flatMap(group => group.items).find(item => item.id === `dispatch:${id}`),
     feed: () => calls.feeds.owned(calls.byId(`dispatch:${id}`))?.snapshot,
     log: transcript(parent.claudeHome, repo, sessionId),
-    hook: (event, payload = {}) => terminals.hook({ terminalId: `worker-${id}`, event, sessionId, payload }) };
+    hook: (event, payload = {}) => terminals.hook({ terminalId: `worker-${id}`, event, sessionId, payload: { tool_use_id: 'synthetic-tool', ...payload } }) };
 }
 
 test("a terminal planner's worker shows its rate, waits for the owner and writes output on Stop", async t => {
@@ -230,7 +230,7 @@ test('an intervention is written once when idle and never resent', async t => {
 // One worker terminal behind main's worker handler, without the helper. The clock is the test's: the 15 s notice and the
 // one-second poll run when the test says, every other wait at once.
 const SESSION = '11111111-1111-4111-8111-111111111111';
-async function unit(t, { calls = null, send, register, remove, kill } = {}) {
+async function unit(t, { calls = null, send, register, remove, kill, clock } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-unit-')));
   t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const parent = parentTerminal(root); parent.write({ sessionKey: 'synthetic-owner' });
@@ -239,7 +239,8 @@ async function unit(t, { calls = null, send, register, remove, kill } = {}) {
     parent: () => ({ env: parent.env, sessionKey: 'synthetic-owner', bootstrapFile: parent.bootstrap }),
     calls: () => calls || { setAwaiting: (id, value) => awaited.push([id, value]) }, runtimeDir: () => root, claudeHome: () => parent.claudeHome,
     send: send || ((channel, data) => sent.push([channel, data])), ...(remove ? { remove } : {}),
-    schedule: (fn, ms) => ms === 15000 ? notices.push(fn) : ms === 1000 ? polls.push(fn) : setTimeout(fn, 0),
+    ...(clock ? { now: clock.now, cancel: clock.cancel } : {}),
+    schedule: (fn, ms) => ms === 15000 ? notices.push(fn) : ms === 1000 ? polls.push(fn) : clock ? clock.schedule(fn, ms) : setTimeout(fn, 0),
     kill: kill || (pty => { killed.push(pty); pty.kill(); }) });
   if (register) register(terminals);
   else terminals.register({ handle: (channel, fn) => { channels[channel] = fn; }, listen: (channel, fn) => { channels[channel] = fn; } });
@@ -253,8 +254,9 @@ async function unit(t, { calls = null, send, register, remove, kill } = {}) {
   const f = { root, terminals, spawned, pty: spawned[0], notices, polls, sent, channels, killed, awaited, events, result, parent, handler, binding, stream,
     log: transcript(parent.claudeHome, binding.cwd, SESSION), control: message => control(message),
     of: type => events.filter(event => event.type === type),
-    hook: (event, payload = {}) => terminals.hook({ terminalId: 'worker-run-1', event, sessionId: SESSION, payload }),
-    command: (hookEvent, state, sentAt) => terminals.event({ projectId: 'worker-run-1', sessionKey: keyOfWorker(f), type: 'agent-activity', hookEvent, state, sessionId: SESSION, sentAt }) };
+    hook: (event, payload = {}, facts = {}) => terminals.hook({ terminalId: 'worker-run-1', event, sessionId: SESSION, payload: { tool_use_id: 'synthetic-tool', ...payload }, ...facts }),
+    command: (hookEvent, state, sentAt, facts = {}) => terminals.event({ projectId: 'worker-run-1', sessionKey: keyOfWorker(f), type: 'agent-activity', hookEvent, state,
+      sessionId: SESSION, sentAt, requestId: 'synthetic-tool', ...facts }) };
   return f;
 }
 // The worker's private session key is the module's; a test reads it back from the command its hooks run.
@@ -265,6 +267,251 @@ function keyOfWorker(f) {
 const toolReply = (uuid, parentUuid, id, text, at) => ({ type: 'assistant', uuid, parentUuid, timestamp: iso(at),
   message: { id, role: 'assistant', model: 'synthetic-model', stop_reason: 'tool_use', content: [{ type: 'text', text }, { type: 'tool_use', id: `tool-${uuid}`, name: 'Bash', input: {} }], usage: { output_tokens: 10 } } });
 const finalReply = (log, uuid, parentUuid, id, text, at) => { const record = log.reply(uuid, parentUuid, id, text, at); record.message.stop_reason = 'end_turn'; return record; };
+
+test('parallel questions close only for their own result and late notices cannot reopen them', async t => {
+  const f = await unit(t), call = 'dispatch:run-1', at = Date.now();
+  const attached = f.channels['worker-terminal:attach']('terminal', call);
+  const keys = text => f.channels['worker-terminal:keys']('terminal', call, attached.epoch, text);
+  const checkpoint = async id => {
+    f.log.append(f.log.reply(id, null, id, id, at)); f.hook('SessionStart');
+    await until(() => f.of('transcript.record').some(event => event.payload.uuid === id), id);
+  };
+  f.hook('UserPromptSubmit');
+  await until(() => f.of('turn.started').length === 1, 'the turn');
+  // Use the fields hook-ingest extracted, without their raw-payload counterparts.
+  f.hook('PermissionRequest', { tool_use_id: null }, { toolUseId: 'tool-a', agentId: 'agent-a' });
+  await until(() => f.awaited.at(-1)?.[1] === 'owner', 'agent A\'s question');
+  f.hook('PostToolUse', { tool_use_id: null }, { toolUseId: 'tool-b', agentId: 'agent-b' });
+  f.hook('PreToolUse', { tool_use_id: null }, { toolUseId: 'tool-b', agentId: 'agent-b' });
+  await checkpoint('other-agent-progress');
+  assert.equal(f.awaited.at(-1)[1], 'owner'); keys('y'); assert.deepEqual(f.pty.writes, ['y']);
+  f.hook('PostToolUse', { tool_use_id: null }, { toolUseId: 'tool-a', agentId: 'agent-a' });
+  await until(() => f.awaited.at(-1)[1] === null, 'agent A\'s result');
+  f.hook('Notification', { notification_type: 'permission_prompt', tool_use_id: 'tool-a' });
+  f.hook('Notification', { notification_type: 'permission_prompt', tool_use_id: null });
+  await checkpoint('late-notices');
+  assert.equal(f.awaited.at(-1)[1], null); keys('z'); assert.deepEqual(f.pty.writes, ['y']);
+
+  // Command hooks carry requestId; one answer cannot clear the other question.
+  f.command('PermissionRequest', 'attention', 200, { requestId: 'cmd-a', agentId: 'a' });
+  f.command('PermissionRequest', 'attention', 201, { requestId: 'cmd-b', agentId: 'b' });
+  f.command('PostToolUseFailure', 'progress', 202, { requestId: 'cmd-a' });
+  await checkpoint('one-command-open');
+  assert.equal(f.awaited.at(-1)[1], 'owner');
+  f.command('PermissionDenied', 'progress', 203, { requestId: 'cmd-b' });
+  await until(() => f.awaited.at(-1)[1] === null, 'both command questions answered');
+  f.command('Notification', 'attention', 204, { requestId: 'cmd-b' });
+  await checkpoint('late-command-notice');
+  assert.equal(f.awaited.at(-1)[1], null);
+
+  f.hook('Elicitation', { elicitation_id: 'question-a' });
+  f.hook('Elicitation', { elicitation_id: 'question-b' });
+  f.hook('ElicitationResult', { elicitation_id: 'question-a' });
+  await checkpoint('one-elicitation-open');
+  assert.equal(f.awaited.at(-1)[1], 'owner');
+  f.hook('ElicitationResult', { elicitation_id: 'question-b' });
+  await until(() => f.awaited.at(-1)[1] === null, 'both elicitations answered');
+  for (const reset of ['Stop', 'StopFailure', 'SessionEnd', 'UserPromptSubmit']) {
+    f.hook('PermissionRequest', { tool_use_id: `reset-${reset}` });
+    await until(() => f.awaited.at(-1)[1] === 'owner', 'the next question');
+    f.hook(reset, { last_assistant_message: 'late-command-notice' });
+    await until(() => f.awaited.at(-1)[1] === null, `${reset} clears all questions`);
+  }
+  await f.control({ type: 'stop' }); await f.result;
+});
+
+test('two attached splits keep data and keys until the last view detaches', async t => {
+  const f = await unit(t), call = 'dispatch:run-1';
+  const attach = view => f.channels['worker-terminal:attach']('terminal', call, view);
+  const detach = view => f.channels['worker-terminal:detach']('terminal', call, view);
+  const keys = (view, text, epoch) => f.channels['worker-terminal:keys']('terminal', call, epoch, text, view);
+  const a = attach('a'); attach('b');
+  f.pty.emit('Question'); f.notices[0]();
+  detach('a'); detach('a');
+  f.pty.emit('Still open');
+  assert.equal(f.sent.at(-1)[1].data, 'Still open');
+  keys('a', 'no', a.epoch); keys('b', 'yes', a.epoch);
+  assert.deepEqual(f.pty.writes, ['yes']);
+  detach('b'); const count = f.sent.length;
+  f.pty.emit('Closed'); keys('b', 'no', a.epoch);
+  assert.equal(f.sent.length, count); assert.deepEqual(f.pty.writes, ['yes']);
+  // The existing preload has no view id: count its two views under the adapter's one accepted owner sender.
+  attach(); attach(); detach();
+  f.pty.emit('Legacy view remains'); keys(undefined, 'legacy', a.epoch);
+  assert.equal(f.sent.at(-1)[1].data, 'Legacy view remains');
+  assert.deepEqual(f.pty.writes, ['yes', 'legacy']);
+  detach(); const last = f.sent.length;
+  f.pty.emit('All closed'); assert.equal(f.sent.length, last);
+  await f.control({ type: 'stop' }); await f.result;
+});
+
+function inputClock() {
+  let at = Date.now(), id = 0;
+  const tasks = new Map();
+  return { now: () => at, schedule: (fn, ms) => { tasks.set(++id, { fn, at: at + ms }); return id; }, cancel: key => tasks.delete(key),
+    advance(ms) {
+      const target = at + ms;
+      for (;;) {
+        const next = [...tasks].filter(([, task]) => task.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next) break;
+        tasks.delete(next[0]); at = next[1].at; next[1].fn();
+      }
+      at = target;
+    } };
+}
+
+function launchHarness(t, configure) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-launch-')));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
+  const parent = parentTerminal(root); parent.write({});
+  const spawned = [], events = [], clock = inputClock();
+  const deps = { spawn: fakeSpawn(spawned), claudeFile: () => path.join(root, 'stand-in', 'claude'),
+    parent: () => ({ env: parent.env, sessionKey: 'synthetic', bootstrapFile: parent.bootstrap }),
+    calls: () => null, hooks: hooksFor, runtimeDir: () => root, claudeHome: () => parent.claudeHome,
+    now: clock.now, schedule: clock.schedule, cancel: clock.cancel, kill: pty => pty.kill() };
+  configure?.(deps, root, parent);
+  const terminals = createWorkerTerminals(deps);
+  t.after(() => terminals.closeAll());
+  let handler, control;
+  registerClaudeWorker({ control: { onRequest: (_name, fn) => { handler = fn; } }, claude: {}, settings: () => ({}), terminals });
+  const binding = { runId: 'launch', projectId: 'terminal', agent: 'claude', cwd: root, worktree: root, allow: [], local: true, leadMode: 'terminal' };
+  const stream = { emit: event => events.push(event), onControl: fn => { control = fn; return () => {}; } };
+  return { root, parent, spawned, events, start: () => handler(binding, { prompt: 'Synthetic brief' }, stream), control: message => control(message) };
+}
+
+test('each terminal launch failure before input selects the subscription CLI fallback', async t => {
+  const cases = [
+    ['native_cli_required', deps => { deps.claudeFile = () => null; }],
+    ['worker_parent_unavailable', deps => { deps.parent = () => null; }],
+    ['worker_shims_unavailable', (_deps, _root, parent) => parent.write({ shims: null })],
+    ['worker_launch_unquotable', (deps, root) => { deps.platform = 'win32'; deps.claudeFile = () => path.join(root, 'percent%path', 'claude.cmd'); }],
+  ];
+  for (const [reason, configure] of cases) {
+    const f = launchHarness(t, configure);
+    assert.equal(await f.start(), undefined, reason);
+    assert.equal(f.spawned.length, 0, 'no initial prompt reached a CLI');
+    const fallback = f.events.filter(event => event.type === 'path.changed' && event.payload.selected === 'terminal');
+    assert.equal(fallback.length, 1, reason); assert.equal(fallback[0].payload.reason, reason);
+    assert.ok(!fs.existsSync(path.join(f.root, 'worker-launch')), 'startup cleanup is complete before fallback returns');
+  }
+});
+
+test('the parent terminal executable is tried only when it is an existing absolute file', async t => {
+  for (const kind of ['file', 'relative', 'missing', 'directory']) {
+    const f = launchHarness(t, (deps, root, parent) => {
+      deps.claudeFile = () => null;
+      const file = path.join(root, 'parent-claude');
+      if (kind === 'file') fs.writeFileSync(file, 'stand-in only');
+      if (kind === 'directory') fs.mkdirSync(file);
+      parent.env.AGENTRIX_CLAUDE_EXECUTABLE = kind === 'relative' ? 'relative-claude' : file;
+    });
+    const result = f.start();
+    if (kind === 'file') {
+      await until(() => f.spawned.length === 1, 'the parent executable');
+      assert.equal(f.spawned[0].file, f.parent.env.AGENTRIX_CLAUDE_EXECUTABLE);
+      await f.control({ type: 'stop' }); assert.deepEqual(await result, { status: 'interrupted' });
+    } else {
+      await result;
+      assert.equal(f.spawned.length, 0, kind);
+      assert.equal(f.events.at(-1).payload.reason, 'native_cli_required', kind);
+    }
+  }
+});
+
+test('a terminal launch failure after its initial input fails visibly without CLI fallback', async t => {
+  const f = launchHarness(t, deps => {
+    const schedule = deps.schedule;
+    deps.schedule = (fn, ms) => {
+      if (ms === 15000) throw Object.assign(new Error('after initial input'), { code: 'after_input' });
+      return schedule(fn, ms);
+    };
+  });
+  await assert.rejects(f.start(), error => error.code === 'after_input' && error.beforeInput !== true);
+  assert.equal(f.spawned.length, 1);
+  assert.ok(f.spawned[0].args.at(-1).startsWith('Read the task brief'), 'spawn already received the initial prompt');
+  assert.equal(f.events.some(event => event.type === 'path.changed' && event.payload.selected === 'terminal'), false);
+  assert.equal(f.spawned[0].killed, 1);
+});
+
+test('cmd worker launch disables delayed expansion for exclamation marks in paths', async t => {
+  const f = launchHarness(t, (deps, root) => {
+    deps.platform = 'win32'; deps.cmdPath = 'synthetic-cmd.exe';
+    deps.claudeFile = () => path.join(root, 'claude!install', 'claude.cmd');
+  });
+  const result = f.start();
+  await until(() => f.spawned.length === 1, 'the cmd launch');
+  assert.equal(f.spawned[0].file, 'synthetic-cmd.exe');
+  assert.match(f.spawned[0].args, /^\/d \/v:off \/s \/c /i);
+  assert.ok(f.spawned[0].args.includes('claude!install'), 'the stand-in receives the literal path');
+  await f.control({ type: 'stop' }); await result;
+});
+
+test('quit waits for worker terminal tree shutdown before asking Electron to quit again', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const start = source.indexOf("app.on('before-quit', event => {");
+  const end = source.indexOf("app.on('window-all-closed'", start);
+  let beforeQuit, release, recordDrains, recordQuit, drains, quit = 0, prevented = 0, closed = 0;
+  const pending = new Promise(resolve => { release = resolve; });
+  const drainsRegistered = new Promise(resolve => { recordDrains = resolve; });
+  const quitCalled = new Promise(resolve => { recordQuit = resolve; });
+  const dashboardDrain = Promise.resolve();
+  const context = { app: { on: (_name, fn) => { beforeQuit = fn; }, quit: () => { quit++; recordQuit(); } }, process: { platform: 'win32' },
+    Promise: { allSettled: values => {
+      if (values.includes(dashboardDrain)) { drains = values; recordDrains(); }
+      return Promise.allSettled(values);
+    } },
+    quitCleaned: false, quitting: true, window: null, nativeSessions: null, claudeRuntime: null, runtimeDir: null,
+    dashboard: { waitForQuit: () => dashboardDrain }, dashboardWindow: null, labWindow: null, voiceManager: null, fileOperations: null,
+    skills: null, updateManager: null, sshAuth: null, eventServer: null, hookServer: null, dispatchControl: null, tray: null,
+    projectAccounts: { close() {} }, codexAccounts: { dispose() {} }, claudeAccounts: { dispose() {} },
+    workerTerminals: { closeAll: () => { closed++; return pending; } }, sessions: new Map(),
+    disposeDispatchInbox() {}, disposeClaudeAccounts() {}, cleanupAskpass() {}, clearTimeout() {},
+    attentionTimer: null, usageRolloverTimer: null, stateTimer: null };
+  vm.runInNewContext(source.slice(start, end), context);
+  beforeQuit({ preventDefault: () => { prevented++; } });
+  await drainsRegistered;
+  assert.ok(drains.includes(pending), 'the quit drain includes worker tree shutdown');
+  assert.equal(closed, 1); assert.equal(prevented, 1); assert.equal(quit, 0, 'taskkill/PTY exit is still outstanding');
+  release();
+  await quitCalled;
+  assert.equal(quit, 1, 'quit resumes once the bounded, non-rejecting worker drain settles');
+});
+
+test('a queued intervention waits for split typing to be quiet or for the owner turn to finish', async t => {
+  for (const submits of [false, true]) {
+    const clock = inputClock(), f = await unit(t, { clock }), call = 'dispatch:run-1', at = clock.now();
+    const attached = f.channels['worker-terminal:attach']('terminal', call);
+    const keys = text => f.channels['worker-terminal:keys']('terminal', call, attached.epoch, text);
+    const pasted = () => f.pty.writes.filter(text => text.includes('message-1.md')).length;
+    f.hook('UserPromptSubmit');
+    await until(() => f.of('turn.started').length === 1, 'the first turn');
+    f.hook('PermissionRequest');
+    await until(() => f.awaited.at(-1)?.[1] === 'owner', 'the question');
+    keys('Owner is typing');
+    assert.equal(await f.control({ type: 'intervene', messageId: 'queued', text: 'Queued correction' }), 'queued');
+    f.hook('PermissionDenied');
+    f.log.append(f.log.prompt('p1', 'Synthetic', at), { type: 'user', uuid: 'interruption', timestamp: iso(at + 1),
+      message: { content: '[Request interrupted by user]' } });
+    f.polls.at(-1)();
+    await until(() => f.of('transcript.record').some(event => event.payload.uuid === 'interruption'), 'the interruption');
+    assert.equal(pasted(), 0, 'the queued sentence cannot join the owner\'s text');
+    clock.advance(2999); assert.equal(pasted(), 0);
+    keys(' more'); clock.advance(2999); assert.equal(pasted(), 0, 'each key renews the hold');
+    if (submits) {
+      keys('\r'); f.hook('UserPromptSubmit');
+      await until(() => f.of('turn.started').length === 2, 'the owner\'s turn');
+      clock.advance(10000); assert.equal(pasted(), 0, 'the owner\'s submitted turn runs first');
+      assert.equal(f.of('input.receipt').length, 0, 'the owner prompt cannot consume the queued intervention');
+      f.log.append(finalReply(f.log, 'final', 'interruption', 'final', 'Owner answer', at + 2));
+      f.hook('Stop', { last_assistant_message: 'Owner answer' });
+      await until(() => pasted() === 1, 'the queued intervention after the owner\'s turn');
+    } else { clock.advance(1); assert.equal(pasted(), 1, 'quiet input releases the queued intervention'); }
+    clock.advance(100);
+    assert.equal(pasted(), 1);
+    assert.equal(fs.readFileSync(path.join(f.root, 'worker-run-1/brief/message-1.md'), 'utf8'), 'Queued correction');
+    await f.control({ type: 'stop' }); await f.result;
+  }
+});
 
 test("a worker's hooks never reach a project terminal or its completion", async t => {
   let finishedCount = 0, changes = 0;
@@ -337,14 +584,14 @@ test('keys reach the worker only while it awaits the owner', async t => {
   await until(() => f.awaited.at(-1)[1] === null, 'the submitted prompt');
   keys('x'); assert.deepEqual(f.pty.writes, ['1'], 'no keys once the worker went on');
 
-  // After a denial the CLI waits for guidance without a hook: the wait holds until the next progress hook.
+  // An idle notice and a tool starting cannot answer an open question; its own result does.
   const mark = f.awaited.length;
   f.hook('PermissionRequest', { tool_name: 'Bash' });
   await until(() => f.awaited.length > mark, 'the permission wait');
   keys('n'); keys('Use the docs folder instead');
   assert.deepEqual(f.pty.writes, ['1', 'n', 'Use the docs folder instead']);
-  f.hook('Notification', { notification_type: 'idle_prompt' }); f.hook('PreToolUse');
-  await until(() => f.awaited.at(-1)[1] === null, 'the next progress hook');
+  f.hook('Notification', { notification_type: 'idle_prompt' }); f.hook('PreToolUse'); f.hook('PostToolUse');
+  await until(() => f.awaited.at(-1)[1] === null, 'the matching result');
   assert.deepEqual(f.awaited.slice(mark), [['run-1', 'owner'], ['run-1', null]], 'an idle notice is no progress');
   keys('y'); assert.equal(f.pty.writes.at(-1), 'Use the docs folder instead');
 

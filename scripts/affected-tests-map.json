@@ -421,7 +421,7 @@
       "reason": "The intercept entrypoint invokes the existing dispatch helper beside the source, packaged or SSH runtime."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "bc7aaa1a7b24d1cf148d589db37db1b35c6f65ff183ac071a2c2259d044cdc02",
+      "digest": "ffe7d30e45c6d03184e216cb41c7bafbdaf3021f59307ede828937901ba096e2",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

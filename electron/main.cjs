@@ -1828,7 +1828,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 app.on('before-quit', event => {
-  let nativeDrain;
+  let nativeDrain, workerDrain;
   // On macOS the Dock's Quit and logging out reach here directly; they ask about running terminals like ⌘Q.
   if (process.platform === 'darwin' && !quitting && window && !window.isDestroyed()) { event.preventDefault(); showWindow(); requestQuit().catch(report); return; }
   if (!quitCleaned) {
@@ -1849,7 +1849,7 @@ app.on('before-quit', event => {
     clearTimeout(usageRolloverTimer);
     clearTimeout(stateTimer);
     for (const id of sessions.keys()) disposeTerminal(id);
-    workerTerminals.closeAll();
+    workerDrain = workerTerminals.closeAll();
     sshAuth?.close();
     eventServer?.close();
     hookServer?.close();
@@ -1866,7 +1866,7 @@ app.on('before-quit', event => {
       } catch { }
     }
   }
-  const drains = [dashboard.waitForQuit(), labWindow?.waitForQuit(), nativeDrain].filter(Boolean);
+  const drains = [dashboard.waitForQuit(), labWindow?.waitForQuit(), nativeDrain, workerDrain].filter(Boolean);
   if (drains.length) {
     event.preventDefault();
     void Promise.allSettled(drains).then(() => app.quit());
