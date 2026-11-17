@@ -104,8 +104,8 @@ async function fixture(t, { agent = 'codex', descendant = false, badSession = fa
       const child = spawn(file, argv, options); children.push(child);
       child.once('exit', () => completedAtExit.push(fs.existsSync(path.join(root, 'completed-1'))));
       if (closeWithSignal) {
-        // Reproduce POSIX app-server shutdown on Windows too: it is a persistent
-        // server, so closing the transport need not give process exit code zero.
+        // Legacy signal-on-EOF fallback. Local close now stops the tree before
+        // ending stdin, so Windows taskkill records an exit code instead.
         const end = child.stdin.end.bind(child.stdin);
         child.stdin.end = (...args) => { child.kill('SIGKILL'); return end(...args); };
       }
@@ -208,7 +208,12 @@ test('a failed final empty check reports an error after completion and server sh
     assert.equal(fs.existsSync(path.join(f.root, 'completed-1')), false); f.release(1);
     assert.equal(await f.result, 1); assert.equal(finalChecks, 1);
     assert.notEqual(f.children[0].exitCode ?? f.children[0].signalCode, null, 'the persistent server must be reaped after its completed turn');
-    if (closeWithSignal) assert.equal(f.children[0].signalCode, 'SIGKILL');
+    if (closeWithSignal) {
+      if (process.platform === 'win32') {
+        assert.equal(f.children[0].exitCode, 1);
+        assert.equal(f.children[0].signalCode, null);
+      } else assert.equal(f.children[0].signalCode, 'SIGKILL');
+    }
     assert.deepEqual(f.completedAtExit, [true]);
     assert.equal(fs.readFileSync(path.join(f.root, 'rpc-methods'), 'utf8').split('\n').includes('turn/interrupt'), false);
     assert.equal(f.captures().length, 1); assert.match(f.stdout(), /reason error/);
