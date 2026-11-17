@@ -14,6 +14,9 @@ const PRIVATE = /^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|READING_NOTE|SOCKET|P
 // Hooks that mean the CLI asks the owner, and the ones that mean it went on.
 const ASKS = new Set(['PermissionRequest', 'Elicitation']);
 const ASK_NOTICES = new Set(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog']);
+const ANSWERS = new Set(['PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult']);
+const CLEAR_ASKS = new Set(['UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd']);
+const OWNER_INPUT_MS = 3000;
 const PROGRESS = new Set(['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult', 'Stop', 'StopFailure', 'SessionEnd']);
 const STOPS = new Set(['Stop', 'StopFailure']);
 const PROVENANCE = ['isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly', 'queueTranscriptOnly', 'promptSource', 'turnOrigin', 'humanTurn', 'commandMode'];
@@ -93,7 +96,7 @@ function launchCommand(file, args, { platform, cmdPath, powershellPath }) {
   if (/\.(?:cmd|bat)$/i.test(file)) {
     const words = [file, ...args];
     if (words.some(word => /["%\r\n]/.test(word))) throw new Error('worker_launch_unquotable');
-    return { file: cmdPath, args: `/d /s /c "${words.map(word => `"${word}"`).join(' ')}"` };
+    return { file: cmdPath, args: `/d /v:off /s /c "${words.map(word => `"${word}"`).join(' ')}"` };
   }
   if (/\.ps1$/i.test(file)) return { file: powershellPath, args: ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', file, ...args] };
   return { file, args };
@@ -112,9 +115,9 @@ function killTree(pty, platform = process.platform) {
 // A terminal lead's Claude workers, each a hidden interactive `claude` in a PTY of its own (worker-terminals/BOUNDARY.md).
 // deps: spawn (pty.spawn), claudeFile(), parent(run) → { env, sessionKey, bootstrapFile } | null, calls(run) → the
 // parent's AgentCalls | null, hooks({ terminalId, sessionKey, env, cwd }) → terminalHooks(), runtimeDir(), claudeHome(), send.
-// schedule/cancel are the one clock (tests inject it); remove deletes a folder.
+// now/schedule/cancel are the one clock (tests inject it); remove deletes a folder.
 function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtimeDir, claudeHome, send = () => {},
-  schedule = (fn, ms) => setTimeout(fn, ms), cancel = clearTimeout, kill = killTree, platform = process.platform,
+  schedule = (fn, ms) => setTimeout(fn, ms), cancel = clearTimeout, now = Date.now, kill = killTree, platform = process.platform,
   remove = folder => fs.rmSync(folder, { recursive: true, force: true }), cmdPath = process.env.ComSpec || 'cmd.exe', powershellPath = 'powershell.exe' } = {}) {
   const workers = new Map();
   const byId = id => workers.get(id) || null;
@@ -136,7 +139,11 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   function launch(w, prompt, clientMessageId) {
     const env0 = parent(w.run);
     if (!env0?.env || !env0.sessionKey || !env0.bootstrapFile) throw new Error('worker_parent_unavailable');
-    const file = claudeFile();
+    let file = claudeFile();
+    if (!file) {
+      const used = env0.env.AGENTRIX_CLAUDE_EXECUTABLE;
+      try { if (typeof used === 'string' && path.isAbsolute(used) && fs.statSync(used).isFile()) file = used; } catch {}
+    }
     if (!file) throw Object.assign(new Error('Claude Code was not found for the worker terminal'), { code: 'native_cli_required' });
     const { shims } = JSON.parse(fs.readFileSync(env0.bootstrapFile, 'utf8').replace(/^\uFEFF/, ''));
     if (!shims) throw new Error('worker_shims_unavailable');
@@ -154,23 +161,25 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const command = launchCommand(file, args, { platform, cmdPath, powershellPath });
     w.pty = spawn(command.file, command.args, { name: 'xterm-256color', cols: w.cols, rows: w.rows, cwd: w.spec.cwd, env: w.env,
       ...(platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}) });
-    w.epoch = randomUUID(); w.launchedAt = Date.now(); w.tag = clientMessageId;
+    w.epoch = randomUUID(); w.launchedAt = now(); w.tag = clientMessageId;
     w.pty.onData(data => receive(w, data));
     w.pty.onExit(({ exitCode } = {}) => exited(w, exitCode));
     w.notice = schedule(() => { w.noticeDue = true; startNotice(w); }, START_NOTICE_MS);
   }
   // A start-up dialog fires no hook: drawn output with no prompt submitted after 15 s shows as waiting (display only).
-  function startNotice(w) { if (w.noticeDue && w.drawn && !w.prompted && !w.exited) setAwaiting(w, 'owner'); }
+  function startNotice(w) {
+    if (w.noticeDue && w.drawn && !w.prompted && !w.exited && !w.closed) { w.promptWait = true; setAwaiting(w, 'owner'); }
+  }
   function receive(w, data) {
     w.drawn = true; w.chunks.push(data); w.bytes += data.length; w.seq++;
     while (w.bytes > SCROLLBACK && w.chunks.length > 1) w.bytes -= w.chunks.shift().length;
-    if (w.attached) send('worker-terminal:data', { terminalId: w.parent, callId: `dispatch:${w.runId}`, epoch: w.epoch, seq: w.seq, data });
+    if (w.attachments.size) send('worker-terminal:data', { terminalId: w.parent, callId: `dispatch:${w.runId}`, epoch: w.epoch, seq: w.seq, data });
     startNotice(w);
   }
   function exited(w, exitCode) {
     if (w.exited) return;
-    w.exited = true; cancel(w.notice); cancel(w.poll); setAwaiting(w, null);
-    if (w.attached) send('worker-terminal:data', { terminalId: w.parent, callId: `dispatch:${w.runId}`, epoch: w.epoch, exited: true, exitCode: exitCode ?? null });
+    w.exited = true; cancel(w.notice); cancel(w.poll); cancel(w.inputTimer); setAwaiting(w, null);
+    if (w.attachments.size) send('worker-terminal:data', { terminalId: w.parent, callId: `dispatch:${w.runId}`, epoch: w.epoch, exited: true, exitCode: exitCode ?? null });
     w.onExited?.();
     publish(w, 'session.state', { state: 'stopped' });
   }
@@ -184,10 +193,19 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     w.pty.write(sentence(`Read the owner's message in ${file} and act on it.`));
     schedule(() => { if (!w.exited) w.pty.write('\r'); }, ENTER_DELAY_MS);
   }
-  // The CLI waits for a prompt: an intervention waiting for this moment goes in now.
+  // Recent split keys belong to the owner's prompt. Leave it alone until the owner submits it or stops typing.
+  function flushInput(w) {
+    cancel(w.inputTimer);
+    if (w.closed || w.exited || !w.idle || w.inFlight || w.asks.size || !w.pending.length) return;
+    const remaining = OWNER_INPUT_MS - (now() - w.ownerKeyAt);
+    if (remaining > 0) { w.inputTimer = schedule(() => flushInput(w), remaining); return; }
+    write(w, w.pending.shift());
+  }
+  // The CLI waits for a prompt: deliver a queued intervention when the owner's input is quiet.
   function idle(w) {
-    const next = w.pending.shift();
-    if (next) write(w, next); else { w.idle = true; publish(w, 'session.state', { state: 'idle' }); }
+    w.idle = true;
+    flushInput(w);
+    if (w.idle && !w.pending.length) publish(w, 'session.state', { state: 'idle' });
   }
   function poll(w) {
     cancel(w.poll);
@@ -232,24 +250,38 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   function interrupted(w) {
     if (!w.running) return;
     w.running = false; cancel(w.poll);
-    setAwaiting(w, 'owner');
+    w.promptWait = true; setAwaiting(w, 'owner');
     idle(w);
   }
   // The turn's final reply: the latest reply when it has text and ends the turn (a final stop reason, or no tool call).
   const finalText = w => w.last?.texts.length && (FINAL_REASONS.has(w.last.reason) || !w.last.tool) ? w.last.texts.join('\n\n') : null;
 
-  async function onHook(w, name, { sessionId, sentAt, payload = {} }) {
+  async function onHook(w, name, { sessionId, sentAt, toolUseId, agentId, requestId, elicitationId, payload = {} }) {
     if (w.closed) return;
     if (typeof sessionId === 'string' && /^[\w-]{1,160}$/.test(sessionId) && !w.sessionId) { w.sessionId = sessionId; w.stream.provider(sessionId); }
     const timed = Number.isFinite(sentAt);
-    if (ASKS.has(name) || name === 'Notification' && ASK_NOTICES.has(payload.notification_type)) {
-      if (timed) w.askAt = Math.max(w.askAt, sentAt);
-      setAwaiting(w, 'owner'); return;
+    const notice = name === 'Notification' && ASK_NOTICES.has(payload.notification_type);
+    const elicitation = name.startsWith('Elicitation') || notice && payload.notification_type !== 'permission_prompt';
+    const id = elicitation ? elicitationId || payload.elicitation_id || requestId : toolUseId || payload.tool_use_id || requestId;
+    // Missing identity cannot prove that a different tool answered a question. Unkeyed notices add no new wait.
+    const key = id ? `${elicitation ? 'elicitation' : 'tool'}:${id}` : null;
+    if (ASKS.has(name) || notice) {
+      if (key && !w.closedAsks.has(key)) w.asks.add(key);
+      else if (!notice && !key) w.asks.add(`unknown:${agentId || payload.agent_id || ''}`);
+      setAwaiting(w, w.asks.size || w.promptWait ? 'owner' : null); return;
     }
-    // Command hooks arrive on separate connections, the status ones asynchronously: one sent before the last ask cannot
-    // end it, and a Stop sent before the turn's start belongs to an earlier turn.
-    if (PROGRESS.has(name) && !(timed && sentAt < w.askAt)) setAwaiting(w, null);
+    // A Stop from an earlier turn cannot clear this turn's questions.
+    if (STOPS.has(name) && timed && sentAt < w.startAt) return;
+    if (CLEAR_ASKS.has(name)) {
+      for (const ask of w.asks) w.closedAsks.add(ask);
+      w.asks.clear();
+    } else if (ANSWERS.has(name) && key) { w.asks.delete(key); w.closedAsks.add(key); }
+    if (PROGRESS.has(name)) {
+      w.promptWait = false;
+      setAwaiting(w, w.asks.size ? 'owner' : null);
+    }
     if (name === 'UserPromptSubmit') {
+      w.ownerKeyAt = -Infinity; cancel(w.inputTimer);
       if (timed) w.startAt = sentAt;
       w.prompted = true; w.running = true; w.idle = false; w.last = null;
       const input = w.inFlight; w.inFlight = null;
@@ -265,13 +297,13 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       return;
     }
     if (STOPS.has(name)) {
-      if (timed && sentAt < w.startAt) return;
       if (!w.running) { if (timed) w.earlyStop = { name, sentAt, facts: { sessionId, sentAt, payload } }; return; }
       cancel(w.poll); w.running = false;
       await settle(w, name, payload);
       return;
     }
     await read(w);
+    flushInput(w);
   }
   // The final reply can be written a moment after Stop: read until the turn's final record agrees with the Stop hook's
   // text (when it carries one), a bounded number of times. --out gets that record's whole text; without it, the hook's
@@ -296,12 +328,13 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const folder = path.join(runtimeDir(), `worker-${run.runId}`);
     const w = { run, runId: run.runId, parent: run.projectId, id: `worker-${run.runId}`, key: randomUUID(), spec, stream, folder,
       briefs: path.join(folder, 'brief'), cols: 120, rows: 30, chunks: [], bytes: 0, seq: 0, pending: [], messages: 0, last: null,
-      awaiting: null, askAt: -Infinity, startAt: -Infinity, queue: Promise.resolve(), reading: Promise.resolve() };
+      awaiting: null, asks: new Set(), closedAsks: new Set(), attachments: new Map(), ownerKeyAt: -Infinity,
+      startAt: -Infinity, queue: Promise.resolve(), reading: Promise.resolve() };
     workers.set(w.id, w);
     stream.publish('path.changed', { previous: null, selected: 'terminal-worker', reason: 'terminal lead (subscription)' });
     // Never rejects: the run always finishes. The folder goes once the PTY's exit is seen, retried while Windows holds it.
     w.close = () => w.closing ||= (async () => {
-      w.closed = true; cancel(w.notice); cancel(w.poll); setAwaiting(w, null);
+      w.closed = true; cancel(w.notice); cancel(w.poll); cancel(w.inputTimer); setAwaiting(w, null);
       try {
         if (w.pty && !w.exited) {
           const exit = new Promise(resolve => { w.onExited = resolve; });
@@ -320,9 +353,14 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       get pid() { return w.pty?.pid ?? null; },
       async send({ clientMessageId, text }) {
         if (w.closed || w.exited) return { status: 'rejected', reason: 'worker_ended' };
-        if (!w.pty) { launch(w, text, clientMessageId); return { status: 'delivered' }; }
-        if (w.idle && !w.inFlight) { write(w, { clientMessageId, text }); return { status: 'delivered' }; }
-        w.pending.push({ clientMessageId, text }); return { status: 'queued' };
+        if (!w.pty) {
+          try { launch(w, text, clientMessageId); }
+          catch (error) { error.beforeInput = !w.pty; throw error; }
+          return { status: 'delivered' };
+        }
+        const input = { clientMessageId, text };
+        w.pending.push(input); flushInput(w);
+        return { status: w.inFlight === input ? 'delivered' : 'queued' };
       },
       close: () => w.close(),
     };
@@ -335,7 +373,8 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     hook(event) {
       const w = byId(event?.terminalId);
       if (!w) return false;
-      deliver(w, event.event, { sessionId: event.sessionId, payload: event.payload });
+      deliver(w, event.event, { sessionId: event.sessionId, toolUseId: event.toolUseId, agentId: event.agentId,
+        requestId: event.requestId, elicitationId: event.elicitationId, payload: event.payload });
       return true;
     },
     // An event-pipe event from a worker's command hooks, ordered by when the hook sent it; anything else naming a
@@ -345,28 +384,34 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       if (!w) return false;
       if (event.sessionKey === w.key && event.type === 'agent-activity' && typeof event.hookEvent === 'string') {
         deliver(w, event.hookEvent, { sessionId: event.sessionId, sentAt: Number.isFinite(event.sentAt) ? event.sentAt : undefined,
+          toolUseId: event.toolUseId, agentId: event.agentId, requestId: event.requestId, elicitationId: event.elicitationId,
           payload: event.state === 'attention' && event.hookEvent === 'Notification' ? { notification_type: 'permission_prompt' } : {} });
       }
       return true;
     },
     register({ handle, listen }) {
-      handle('worker-terminal:attach', (terminalId, callId) => {
+      handle('worker-terminal:attach', (terminalId, callId, viewId = 'owner') => {
         const w = byCall(terminalId, callId);
         if (!w?.pty || w.closed) return null;
-        w.attached = true;
+        w.attachments.set(viewId, (w.attachments.get(viewId) || 0) + 1);
         return { epoch: w.epoch, seq: w.seq, data: w.chunks.join(''), cols: w.cols, rows: w.rows, awaiting: w.awaiting, exited: !!w.exited };
       });
       // Keys only from an attached split, only while the worker waits for the owner.
-      listen('worker-terminal:keys', (terminalId, callId, epoch, data) => {
+      listen('worker-terminal:keys', (terminalId, callId, epoch, data, viewId = 'owner') => {
         const w = byCall(terminalId, callId);
-        if (w?.pty && w.attached && !w.exited && !w.closed && w.epoch === epoch && w.awaiting === 'owner' && typeof data === 'string' && data.length <= KEYS_LIMIT) w.pty.write(data);
+        if (w?.pty && w.attachments.has(viewId) && !w.exited && !w.closed && !w.inFlight && w.epoch === epoch && w.awaiting === 'owner' && typeof data === 'string' && data.length <= KEYS_LIMIT) {
+          w.pty.write(data); w.ownerKeyAt = now(); flushInput(w);
+        }
       });
       listen('worker-terminal:resize', (terminalId, callId, epoch, cols, rows) => {
         const w = byCall(terminalId, callId);
         if (!w?.pty || w.exited || w.epoch !== epoch || !Number.isInteger(cols) || !Number.isInteger(rows) || cols < 2 || rows < 2 || cols > 500 || rows > 250) return;
         w.cols = cols; w.rows = rows; w.pty.resize(cols, rows);
       });
-      listen('worker-terminal:detach', (terminalId, callId) => { const w = byCall(terminalId, callId); if (w) w.attached = false; });
+      listen('worker-terminal:detach', (terminalId, callId, viewId = 'owner') => {
+        const w = byCall(terminalId, callId), count = w?.attachments.get(viewId) || 0;
+        if (count > 1) w.attachments.set(viewId, count - 1); else w?.attachments.delete(viewId);
+      });
     },
     closeAll: () => Promise.all([...workers.values()].map(w => w.close())),
   };
