@@ -320,6 +320,47 @@ test('parallel questions close only for their own result and late notices cannot
   await f.control({ type: 'stop' }); await f.result;
 });
 
+test('an interruption closes every open ask without an answer hook and releases the queued message', async t => {
+  const clock = inputClock(), f = await unit(t, { clock }), at = clock.now();
+  f.hook('UserPromptSubmit');
+  await until(() => f.of('turn.started').length === 1, 'the turn');
+  f.hook('PermissionRequest', { tool_use_id: 'cancelled-tool' });
+  f.hook('Elicitation', { elicitation_id: 'cancelled-dialog' });
+  await until(() => f.awaited.at(-1)?.[1] === 'owner', 'the open questions');
+  assert.equal(await f.control({ type: 'intervene', messageId: 'queued', text: 'Queued correction' }), 'queued');
+  f.log.append({ type: 'user', uuid: 'cancelled', timestamp: iso(at), message: { content: '[Request interrupted by user]' } });
+  f.polls.at(-1)();
+  await until(() => f.of('transcript.record').some(event => event.payload.uuid === 'cancelled'), 'the cancellation record');
+  assert.equal(f.pty.writes.filter(text => text.includes('message-1.md')).length, 1, 'no stale question holds the message');
+  clock.advance(100);
+  f.hook('UserPromptSubmit');
+  await until(() => f.of('turn.started').length === 2, 'the queued turn');
+  f.hook('Notification', { notification_type: 'permission_prompt', tool_use_id: 'cancelled-tool' });
+  f.hook('Notification', { notification_type: 'elicitation_dialog', elicitation_id: 'cancelled-dialog' });
+  f.log.append(f.log.reply('after-cancelled-notices', null, 'm1', 'Working', at + 1));
+  f.hook('SessionStart');
+  await until(() => f.of('transcript.record').some(event => event.payload.uuid === 'after-cancelled-notices'), 'the late notices');
+  assert.equal(f.awaited.at(-1)[1], null, 'both cancelled questions stay closed');
+  await f.control({ type: 'stop' }); await f.result;
+});
+
+test('closed questions retain only the most recent 512 identities', async t => {
+  const clock = inputClock(), f = await unit(t, { clock });
+  f.hook('UserPromptSubmit');
+  await until(() => f.of('turn.started').length === 1, 'the turn');
+  for (let n = 0; n <= 512; n++) f.hook('PostToolUse', { tool_use_id: `answered-${n}` });
+  f.hook('Notification', { notification_type: 'permission_prompt', tool_use_id: 'answered-1' });
+  f.hook('Notification', { notification_type: 'permission_prompt', tool_use_id: 'answered-512' });
+  f.hook('UserPromptSubmit');
+  await until(() => f.of('turn.started').length === 2, 'the retained notices before the next turn');
+  assert.equal(f.awaited.some(([, value]) => value === 'owner'), false, 'the newest 512 answers suppress late notices');
+  f.hook('Notification', { notification_type: 'permission_prompt', tool_use_id: 'answered-0' });
+  f.hook('UserPromptSubmit');
+  await until(() => f.of('turn.started').length === 3, 'the evicted notice before the next turn');
+  assert.equal(f.awaited.some(([, value]) => value === 'owner'), true, 'the oldest identity was dropped first');
+  await f.control({ type: 'stop' }); await f.result;
+});
+
 test('two attached splits keep data and keys until the last view detaches', async t => {
   const f = await unit(t), call = 'dispatch:run-1';
   const attach = view => f.channels['worker-terminal:attach']('terminal', call, view);
@@ -477,7 +518,7 @@ test('quit waits for worker terminal tree shutdown before asking Electron to qui
   assert.equal(quit, 1, 'quit resumes once the bounded, non-rejecting worker drain settles');
 });
 
-test('a queued intervention waits for split typing to be quiet or for the owner turn to finish', async t => {
+test('a queued intervention waits for the owner draft to be cleared or its submitted turn to finish', async t => {
   for (const submits of [false, true]) {
     const clock = inputClock(), f = await unit(t, { clock }), call = 'dispatch:run-1', at = clock.now();
     const attached = f.channels['worker-terminal:attach']('terminal', call);
@@ -495,8 +536,8 @@ test('a queued intervention waits for split typing to be quiet or for the owner 
     f.polls.at(-1)();
     await until(() => f.of('transcript.record').some(event => event.payload.uuid === 'interruption'), 'the interruption');
     assert.equal(pasted(), 0, 'the queued sentence cannot join the owner\'s text');
-    clock.advance(2999); assert.equal(pasted(), 0);
-    keys(' more'); clock.advance(2999); assert.equal(pasted(), 0, 'each key renews the hold');
+    clock.advance(10000); assert.equal(pasted(), 0, 'a long pause cannot release an unsent draft');
+    keys(' more'); clock.advance(10000); assert.equal(pasted(), 0, 'continued editing still holds the message');
     if (submits) {
       keys('\r'); f.hook('UserPromptSubmit');
       await until(() => f.of('turn.started').length === 2, 'the owner\'s turn');
@@ -505,10 +546,43 @@ test('a queued intervention waits for split typing to be quiet or for the owner 
       f.log.append(finalReply(f.log, 'final', 'interruption', 'final', 'Owner answer', at + 2));
       f.hook('Stop', { last_assistant_message: 'Owner answer' });
       await until(() => pasted() === 1, 'the queued intervention after the owner\'s turn');
-    } else { clock.advance(1); assert.equal(pasted(), 1, 'quiet input releases the queued intervention'); }
+    } else {
+      keys('\x15replacement'); clock.advance(10000);
+      assert.equal(pasted(), 0, 'text after a clear is another unsent draft');
+      keys('\x15'); assert.equal(pasted(), 1, 'an explicit draft clear releases the queued intervention');
+    }
     clock.advance(100);
     assert.equal(pasted(), 1);
     assert.equal(fs.readFileSync(path.join(f.root, 'worker-run-1/brief/message-1.md'), 'utf8'), 'Queued correction');
+    await f.control({ type: 'stop' }); await f.result;
+  }
+});
+
+test('an unconfirmed queued sentence never blocks owner keys or sends Enter into a new dialog', async t => {
+  for (const opensDialog of [false, true]) {
+    const clock = inputClock(), f = await unit(t, { clock }), call = 'dispatch:run-1', at = clock.now();
+    const attached = f.channels['worker-terminal:attach']('terminal', call);
+    const keys = text => f.channels['worker-terminal:keys']('terminal', call, attached.epoch, text);
+    f.hook('UserPromptSubmit');
+    await until(() => f.of('turn.started').length === 1, 'the turn');
+    assert.equal(await f.control({ type: 'intervene', messageId: 'queued', text: 'Queued correction' }), 'queued');
+    f.log.append({ type: 'user', uuid: 'interrupted', timestamp: iso(at), message: { content: '[Request interrupted by user]' } });
+    f.polls.at(-1)();
+    await until(() => f.of('transcript.record').some(event => event.payload.uuid === 'interrupted'), 'the interruption');
+    assert.equal(f.pty.writes.length, 1, 'the sentence is typed but not confirmed');
+    if (opensDialog) {
+      f.hook('PermissionRequest', { tool_use_id: 'new-dialog' });
+      f.log.append(f.log.reply('dialog-open', null, 'm1', 'Waiting', at + 1)); f.hook('SessionStart');
+      await until(() => f.of('transcript.record').some(event => event.payload.uuid === 'dialog-open'), 'the new dialog');
+      clock.advance(100);
+      assert.equal(f.pty.writes.length, 1, 'the delayed Enter cannot answer the dialog');
+    }
+    keys('n'); assert.equal(f.pty.writes.at(-1), 'n', 'owner keys are available immediately without a receipt');
+    clock.advance(10000);
+    keys('\x15'); assert.equal(f.pty.writes.at(-1), '\x15', 'owner keys remain available after ten seconds');
+    assert.equal(f.pty.writes.filter(text => text.includes('message-1.md')).length, 1, 'an uncertain message is never resent');
+    assert.equal(f.of('input.receipt').length, 0, 'keys alone do not confirm the message');
+    if (!opensDialog) assert.equal(f.pty.writes.includes('\r'), false, 'owner input cancels the delayed Enter');
     await f.control({ type: 'stop' }); await f.result;
   }
 });

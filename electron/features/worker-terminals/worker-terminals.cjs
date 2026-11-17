@@ -16,7 +16,7 @@ const ASKS = new Set(['PermissionRequest', 'Elicitation']);
 const ASK_NOTICES = new Set(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog']);
 const ANSWERS = new Set(['PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult']);
 const CLEAR_ASKS = new Set(['UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd']);
-const OWNER_INPUT_MS = 3000;
+const CLOSED_ASKS_LIMIT = 512;
 const PROGRESS = new Set(['UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult', 'Stop', 'StopFailure', 'SessionEnd']);
 const STOPS = new Set(['Stop', 'StopFailure']);
 const PROVENANCE = ['isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly', 'queueTranscriptOnly', 'promptSource', 'turnOrigin', 'humanTurn', 'commandMode'];
@@ -129,6 +129,14 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     w.awaiting = value;
     try { calls(w.run)?.setAwaiting(w.runId, value); } catch {}
   }
+  function closeAsks(w, asks = w.asks) {
+    for (const ask of asks) {
+      w.asks.delete(ask);
+      w.closedAsks.delete(ask);
+      w.closedAsks.add(ask);
+    }
+    while (w.closedAsks.size > CLOSED_ASKS_LIMIT) w.closedAsks.delete(w.closedAsks.values().next().value);
+  }
   function publish(w, type, payload, options) { if (!w.closed) w.stream.publish(type, payload, options); }
   // A sentence the worker reads, naming a file in its brief folder; no part of a brief or message is ever typed.
   function sentence(text) {
@@ -178,7 +186,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   }
   function exited(w, exitCode) {
     if (w.exited) return;
-    w.exited = true; cancel(w.notice); cancel(w.poll); cancel(w.inputTimer); setAwaiting(w, null);
+    w.exited = true; cancel(w.notice); cancel(w.poll); cancel(w.enterTimer); setAwaiting(w, null);
     if (w.attachments.size) send('worker-terminal:data', { terminalId: w.parent, callId: `dispatch:${w.runId}`, epoch: w.epoch, exited: true, exitCode: exitCode ?? null });
     w.onExited?.();
     publish(w, 'session.state', { state: 'stopped' });
@@ -191,17 +199,16 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const file = path.join(w.briefs, `message-${++w.messages}.md`);
     fs.writeFileSync(file, input.text, { mode: 0o600 });
     w.pty.write(sentence(`Read the owner's message in ${file} and act on it.`));
-    schedule(() => { if (!w.exited) w.pty.write('\r'); }, ENTER_DELAY_MS);
+    w.enterTimer = schedule(() => {
+      if (!w.closed && !w.exited && !w.asks.size && !w.ownerDraft && w.inFlight === input) w.pty.write('\r');
+    }, ENTER_DELAY_MS);
   }
-  // Recent split keys belong to the owner's prompt. Leave it alone until the owner submits it or stops typing.
+  // A pause says nothing about a half-written prompt: leave it alone until submission or an explicit clear.
   function flushInput(w) {
-    cancel(w.inputTimer);
-    if (w.closed || w.exited || !w.idle || w.inFlight || w.asks.size || !w.pending.length) return;
-    const remaining = OWNER_INPUT_MS - (now() - w.ownerKeyAt);
-    if (remaining > 0) { w.inputTimer = schedule(() => flushInput(w), remaining); return; }
+    if (w.closed || w.exited || !w.idle || w.inFlight || w.asks.size || w.ownerDraft || !w.pending.length) return;
     write(w, w.pending.shift());
   }
-  // The CLI waits for a prompt: deliver a queued intervention when the owner's input is quiet.
+  // The CLI waits for a prompt: deliver a queued intervention when the owner has no draft.
   function idle(w) {
     w.idle = true;
     flushInput(w);
@@ -248,6 +255,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   // Esc or a rejected tool ends the turn without Stop: the CLI waits for the owner's prompt, so the row waits for the
   // owner and a queued message can go in. The turn itself stays open; the next prompt starts a new one.
   function interrupted(w) {
+    closeAsks(w);
     if (!w.running) return;
     w.running = false; cancel(w.poll);
     w.promptWait = true; setAwaiting(w, 'owner');
@@ -268,20 +276,19 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     if (ASKS.has(name) || notice) {
       if (key && !w.closedAsks.has(key)) w.asks.add(key);
       else if (!notice && !key) w.asks.add(`unknown:${agentId || payload.agent_id || ''}`);
+      if (w.asks.size) cancel(w.enterTimer);
       setAwaiting(w, w.asks.size || w.promptWait ? 'owner' : null); return;
     }
     // A Stop from an earlier turn cannot clear this turn's questions.
     if (STOPS.has(name) && timed && sentAt < w.startAt) return;
-    if (CLEAR_ASKS.has(name)) {
-      for (const ask of w.asks) w.closedAsks.add(ask);
-      w.asks.clear();
-    } else if (ANSWERS.has(name) && key) { w.asks.delete(key); w.closedAsks.add(key); }
+    if (CLEAR_ASKS.has(name)) closeAsks(w);
+    else if (ANSWERS.has(name) && key) closeAsks(w, [key]);
     if (PROGRESS.has(name)) {
       w.promptWait = false;
       setAwaiting(w, w.asks.size ? 'owner' : null);
     }
     if (name === 'UserPromptSubmit') {
-      w.ownerKeyAt = -Infinity; cancel(w.inputTimer);
+      w.ownerDraft = false; cancel(w.enterTimer);
       if (timed) w.startAt = sentAt;
       w.prompted = true; w.running = true; w.idle = false; w.last = null;
       const input = w.inFlight; w.inFlight = null;
@@ -328,13 +335,13 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const folder = path.join(runtimeDir(), `worker-${run.runId}`);
     const w = { run, runId: run.runId, parent: run.projectId, id: `worker-${run.runId}`, key: randomUUID(), spec, stream, folder,
       briefs: path.join(folder, 'brief'), cols: 120, rows: 30, chunks: [], bytes: 0, seq: 0, pending: [], messages: 0, last: null,
-      awaiting: null, asks: new Set(), closedAsks: new Set(), attachments: new Map(), ownerKeyAt: -Infinity,
+      awaiting: null, asks: new Set(), closedAsks: new Set(), attachments: new Map(), ownerDraft: false,
       startAt: -Infinity, queue: Promise.resolve(), reading: Promise.resolve() };
     workers.set(w.id, w);
     stream.publish('path.changed', { previous: null, selected: 'terminal-worker', reason: 'terminal lead (subscription)' });
     // Never rejects: the run always finishes. The folder goes once the PTY's exit is seen, retried while Windows holds it.
     w.close = () => w.closing ||= (async () => {
-      w.closed = true; cancel(w.notice); cancel(w.poll); cancel(w.inputTimer); setAwaiting(w, null);
+      w.closed = true; cancel(w.notice); cancel(w.poll); cancel(w.enterTimer); setAwaiting(w, null);
       try {
         if (w.pty && !w.exited) {
           const exit = new Promise(resolve => { w.onExited = resolve; });
@@ -399,8 +406,14 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       // Keys only from an attached split, only while the worker waits for the owner.
       listen('worker-terminal:keys', (terminalId, callId, epoch, data, viewId = 'owner') => {
         const w = byCall(terminalId, callId);
-        if (w?.pty && w.attachments.has(viewId) && !w.exited && !w.closed && !w.inFlight && w.epoch === epoch && w.awaiting === 'owner' && typeof data === 'string' && data.length <= KEYS_LIMIT) {
-          w.pty.write(data); w.ownerKeyAt = now(); flushInput(w);
+        if (w?.pty && w.attachments.has(viewId) && !w.exited && !w.closed && w.epoch === epoch && w.awaiting === 'owner' && typeof data === 'string' && data.length <= KEYS_LIMIT) {
+          if (data) {
+            // Ctrl+C and Ctrl+U clear the prompt; text following that clear starts a new draft. Enter waits for its hook.
+            const cleared = Math.max(data.lastIndexOf('\x03'), data.lastIndexOf('\x15'));
+            w.ownerDraft = cleared < 0 || cleared < data.length - 1;
+            cancel(w.enterTimer);
+          }
+          w.pty.write(data); flushInput(w);
         }
       });
       listen('worker-terminal:resize', (terminalId, callId, epoch, cols, rows) => {
