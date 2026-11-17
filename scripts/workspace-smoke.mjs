@@ -337,7 +337,7 @@ try {
   await voiceItem('语音输入'); await recording().waitFor(); await page.keyboard.press('Escape');
   await page.locator('.voice-overlay').waitFor({ state: 'detached' });
   console.log(`PASS: voice input from the card menu, choose it to talk and again to insert ${assets ? 'real SenseVoice recognition' : 'stubbed recognition'} into the terminal without submitting; Escape cancels`);
-  // Ctrl+T: a microphone appears in the middle of the project card; Enter inserts the text and then sends it.
+  // Ctrl+T: a microphone appears in the middle of the project card; Enter inserts the text and sends nothing.
   await page.locator('.project-panel.is-focused .xterm-helper-textarea').first().focus();
   await application.evaluate(() => { globalThis.voicePastes = []; });
   await page.keyboard.press('Control+t');
@@ -352,14 +352,14 @@ try {
   await page.waitForTimeout(5500);
   await page.screenshot({ path: path.join(output, 'voice-shortcut.png') });
   await page.keyboard.press('Enter');
-  await waitFor(async () => application.evaluate(() => { const pasted = globalThis.voicePastes.findIndex(item => /project folder/i.test(item.data)); return pasted >= 0 && globalThis.voicePastes.findIndex(item => item.data === '\r') > pasted; }), 'Enter inserts the text, then submits it', 60000);
-  assert.equal(await application.evaluate(() => globalThis.voicePastes.filter(item => item.data === '\r').length), 1, 'the Enter that stops recording is not also typed into the terminal');
-  await overlay.waitFor({ state: 'detached' });
+  await waitFor(async () => application.evaluate(() => globalThis.voicePastes.some(item => /project folder/i.test(item.data))), 'Enter inserts the text into the terminal', 60000);
+  await overlay.waitFor({ state: 'detached' }); await page.waitForTimeout(1000);
+  assert.equal(await application.evaluate(() => globalThis.voicePastes.some(item => item.data === '\r')), false, 'the Enter that stops recording inserts only: nothing presses Enter in the terminal');
   await application.evaluate(() => { globalThis.voicePastes = []; });
   await page.keyboard.press('Control+t'); await overlay.waitFor(); await page.keyboard.press('Escape'); await overlay.waitFor({ state: 'detached' });
   await page.waitForTimeout(500);
   assert.equal(await application.evaluate(() => globalThis.voicePastes.some(item => item.data === '\r' || item.data === '\x1b' || /project folder/i.test(item.data))), false, 'Escape cancels without inserting, submitting or reaching the terminal');
-  console.log('PASS: Ctrl+T shows a microphone centred on the project card; Enter inserts and sends, Escape cancels');
+  console.log('PASS: Ctrl+T shows a microphone centred on the project card; Enter inserts without sending, Escape cancels');
   // Recent projects: a removed local project is offered again in the add dialog and comes back in one click.
   await page.getByRole('button', { name: `${project.name} 的更多操作`, exact: true }).click();
   await page.getByRole('menuitem', { name: '移除项目', exact: true }).click();
