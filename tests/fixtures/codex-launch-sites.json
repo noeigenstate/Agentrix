@@ -618,9 +618,5 @@
   {
     "text": "run()",
     "id": "src/features/titlebar/AppMenu.tsx:5c24355bd061257885bd20db"
-  },
-  {
-    "text": "window.agentrix.writeTerminal(current.id, '\\r')",
-    "id": "src/features/voice/voice-input.ts:bab99e42e605b391e4ea93fb"
   }
 ]
