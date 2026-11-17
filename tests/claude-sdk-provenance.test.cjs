@@ -39,6 +39,19 @@ test('team session identities exclude CLI workers from restore and project memor
   assert.ok(rounds.every(row => row.session !== worker));
 });
 
+test('a worker whose end entry lacks agent stays out of the history list; owner and Codex-worker sessions do not', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-end-agent-')); t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  execFileSync('git', ['init', '-q'], { cwd: root, windowsHide: true });
+  const home = path.join(root, 'fake-home'), folder = path.join(home, 'projects', encodeClaudeCwd(root)); fs.mkdirSync(folder, { recursive: true });
+  const [worker, owner, codex] = [randomUUID(), randomUUID(), randomUUID()];
+  for (const id of [worker, owner, codex]) fs.writeFileSync(path.join(folder, id + '.jsonl'), JSON.stringify({ type: 'user', sessionId: id, message: { content: 'Same text' } }) + '\n');
+  const journal = path.join(root, '.git/agentrix/journal.jsonl'); fs.mkdirSync(path.dirname(journal));
+  const lines = [{ type: 'skip', id: 'w1', agent: 'claude', session: null }, { type: 'end', id: 'w1', session: worker },
+    { type: 'skip', id: 'c1', agent: 'codex', session: null }, { type: 'end', id: 'c1', session: codex }];
+  fs.writeFileSync(journal, lines.map(line => JSON.stringify(line)).join('\n') + '\n');
+  assert.deepEqual((await listClaudeSessions(root, null, home)).map(row => row.id).sort(), [owner, codex].sort());
+});
+
 test('host owner identities survive a fresh process without a query or a transcript marker', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-owner-source-')); t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const id = randomUUID(), runtimeFile = path.join(__dirname, '../electron/features/claude-sdk/index.cjs'), promptFile = path.join(__dirname, '../electron/prompt-queue.cjs');
