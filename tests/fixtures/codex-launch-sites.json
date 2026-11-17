@@ -232,8 +232,8 @@
     "id": "electron/features/terminal/ipc.cjs:6f6cb011c8493d7a7e324bee"
   },
   {
-    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(pty.pid), '/t', '/f'], { windowsHide: true, timeout: 5000 }, end)",
-    "id": "electron/features/worker-terminals/worker-terminals.cjs:cb6de93d747f81f3952e267c"
+    "text": "execFile(path.join(process.env.SystemRoot || 'C:\\\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(pty.pid), '/t', '/f'],\n        { windowsHide: true, timeout: EXIT_WAIT_MS }, () => { end(); resolve(); })",
+    "id": "electron/features/worker-terminals/worker-terminals.cjs:59a55d40f8949cda148cdfc8"
   },
   {
     "text": "spawn(command.file, command.args, { name: 'xterm-256color', cols: w.cols, rows: w.rows, cwd: w.spec.cwd, env: w.env,\n      ...(platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}) })",

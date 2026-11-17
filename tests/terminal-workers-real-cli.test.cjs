@@ -25,11 +25,21 @@ test('a real Claude Code worker terminal reports through its hooks and gives its
   fs.mkdirSync(runtimeDir);
   const bootstrapFile = path.join(runtimeDir, 'bootstrap.json');
   fs.writeFileSync(bootstrapFile, JSON.stringify({ shims: path.join(integration, 'shims') }));
-  let terminals;
-  const eventServer = await createEventServer(event => terminals.event(event));
-  const hookServer = await createHookServer(createHookIngest({ keyOf: id => terminals.keyOf(id), deliver: event => terminals.hook(event) }));
-  t.after(() => { terminals.closeAll(); hookServer.close(); eventServer.close(); });
-  terminals = createWorkerTerminals({ spawn: (file, args, options) => pty.spawn(file, args, options), claudeFile: () => process.env.AGENTRIX_REAL_CLAUDE,
+  let terminals, eventServer, hookServer;
+  // The harness drains these before removing the profile. Also covers setup/assertion failures, while the CLI's hook
+  // endpoints stay available until its PTY and ConPTY resources have actually gone.
+  f.cleanup(async () => {
+    try { await terminals?.closeAll(); }
+    finally { await Promise.all([hookServer?.close(), eventServer?.close()]); }
+  });
+  eventServer = await createEventServer(event => terminals.event(event));
+  hookServer = await createHookServer(createHookIngest({ keyOf: id => terminals.keyOf(id), deliver: event => terminals.hook(event) }));
+  let workerPty, exited = false;
+  terminals = createWorkerTerminals({ spawn: (file, args, options) => {
+    workerPty = pty.spawn(file, args, options);
+    workerPty.onExit(() => { exited = true; });
+    return workerPty;
+  }, claudeFile: () => process.env.AGENTRIX_REAL_CLAUDE,
     parent: () => ({ env, sessionKey: 'offline-owner', bootstrapFile }), calls: () => ({ setAwaiting() {} }), runtimeDir: () => runtimeDir,
     claudeHome: () => env.CLAUDE_CONFIG_DIR,
     hooks: ({ terminalId, sessionKey, env: workerEnv, cwd }) => terminalHooks({ port: hookServer.port, terminalId, sessionKey, eventServer, env: workerEnv, cwd,
@@ -50,4 +60,10 @@ test('a real Claude Code worker terminal reports through its hooks and gives its
   assert.equal(events.find(event => event.type === 'path.changed').payload.selected, 'terminal-worker');
   assert.ok(f.stats.keys.every(key => key === env.ANTHROPIC_API_KEY), 'the worker used the throwaway profile\'s key only');
   await runtime.close();
+  assert.ok(exited, 'close waits for the PTY exit, not just the shutdown deadline');
+  if (process.platform === 'win32') {
+    const agent = workerPty._agent;
+    assert.equal(agent._conoutSocketWorker._worker.threadId, -1, 'the ConPTY output worker terminated');
+    assert.ok(agent._inSocket.destroyed && agent._outSocket.destroyed, 'both ConPTY sockets closed');
+  }
 });

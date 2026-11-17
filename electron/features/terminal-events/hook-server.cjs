@@ -31,7 +31,13 @@ async function createHookServer(ingest, { limit = BODY_LIMIT } = {}) {
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  return { port: server.address().port, close() { server.closeAllConnections(); server.close(); } };
+  let closing;
+  return { port: server.address().port, close() {
+    return closing ||= new Promise(resolve => {
+      server.close(() => resolve());
+      server.closeAllConnections();
+    });
+  } };
 }
 
 module.exports = { createHookServer, BODY_LIMIT };

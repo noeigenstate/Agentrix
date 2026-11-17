@@ -104,12 +104,35 @@ function launchCommand(file, args, { platform, cmdPath, powershellPath }) {
 
 function killTree(pty, platform = process.platform) {
   const end = () => { try { pty.kill(); } catch {} };
-  if (platform === 'win32' && pty.pid) {
-    execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(pty.pid), '/t', '/f'], { windowsHide: true, timeout: 5000 }, end);
-    return;
+  if (platform === 'win32') {
+    if (!pty.pid) { end(); return; }
+    return new Promise(resolve => {
+      execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'), ['/pid', String(pty.pid), '/t', '/f'],
+        { windowsHide: true, timeout: EXIT_WAIT_MS }, () => { end(); resolve(); });
+    });
   }
-  try { process.kill(-pty.pid, 'SIGTERM'); } catch {}
+  if (Number.isInteger(pty.pid) && pty.pid > 0) {
+    try { process.kill(-pty.pid, 'SIGTERM'); } catch {}
+  }
   end();
+}
+
+// node-pty 1.2.0-beta.15's DLL path disposes its ConoutConnection only on output *after* kill. A quiet CLI leaves
+// that worker's pipe server alive forever. The public kill also defers until first output, so an unopened PTY needs
+// the agent kill directly. Keep this compatibility cleanup with the pinned node-pty version, not in its dependency.
+async function disposeWindowsPty(pty, deadline) {
+  const agent = pty?._agent;
+  if (!agent?._useConptyDll) return;
+  if (pty._isReady === false) { try { agent.kill(); } catch {} }
+  const output = agent._conoutSocketWorker;
+  try { output?.dispose(); } catch {}
+  clearTimeout(output?._drainTimeout);
+  clearTimeout(agent._connectionTimeout); clearTimeout(agent._closeTimeout);
+  try { agent._inSocket?.destroy(); } catch {}
+  // Destroy the out socket before terminating its conout worker: this order is load-bearing. WindowsTerminal
+  // rethrows non-EIO socket errors with fewer than two PTY error listeners; launch adds the second listener.
+  try { agent._outSocket?.destroy(); } catch {}
+  try { await Promise.race([output?._worker?.terminate(), deadline]); } catch {}
 }
 
 // A terminal lead's Claude workers, each a hidden interactive `claude` in a PTY of its own (worker-terminals/BOUNDARY.md).
@@ -122,7 +145,24 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   const workers = new Map();
   const byId = id => workers.get(id) || null;
   const byCall = (terminalId, callId) => [...workers.values()].find(w => w.parent === terminalId && `dispatch:${w.runId}` === callId) || null;
-  const delay = ms => new Promise(resolve => schedule(resolve, ms));
+  function trackTimer(w, fn, ms, resolve = null) {
+    const timer = schedule(() => { w.timers.delete(timer); fn(); }, ms);
+    w.timers.set(timer, resolve);
+    // Notices, polling and automatic Enter must never keep the app alive. Awaited cleanup waits stay referenced.
+    if (!resolve) timer?.unref?.();
+    return timer;
+  }
+  function later(w, fn, ms, resolve = null) {
+    if (w.closed || w.exited) { resolve?.(); return null; }
+    return trackTimer(w, fn, ms, resolve);
+  }
+  function clearTimer(w, timer) {
+    if (!w.timers.has(timer)) return;
+    const resolve = w.timers.get(timer);
+    w.timers.delete(timer); cancel(timer); resolve?.();
+  }
+  const clearTimers = w => { for (const timer of w.timers.keys()) clearTimer(w, timer); };
+  const delay = (w, ms) => new Promise(resolve => later(w, resolve, ms, resolve));
 
   function setAwaiting(w, value) {
     if (w.awaiting === value) return;
@@ -169,16 +209,17 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const command = launchCommand(file, args, { platform, cmdPath, powershellPath });
     w.pty = spawn(command.file, command.args, { name: 'xterm-256color', cols: w.cols, rows: w.rows, cwd: w.spec.cwd, env: w.env,
       ...(platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}) });
+    w.pty.on?.('error', () => {});
     w.epoch = randomUUID(); w.launchedAt = now(); w.tag = clientMessageId;
-    w.pty.onData(data => receive(w, data));
-    w.pty.onExit(({ exitCode } = {}) => exited(w, exitCode));
-    w.notice = schedule(() => { w.noticeDue = true; startNotice(w); }, START_NOTICE_MS);
+    w.listeners.push(w.pty.onData(data => receive(w, data)), w.pty.onExit(({ exitCode } = {}) => exited(w, exitCode)));
+    w.notice = later(w, () => { w.noticeDue = true; startNotice(w); }, START_NOTICE_MS);
   }
   // A start-up dialog fires no hook: drawn output with no prompt submitted after 15 s shows as waiting (display only).
   function startNotice(w) {
     if (w.noticeDue && w.drawn && !w.prompted && !w.exited && !w.closed) { w.promptWait = true; setAwaiting(w, 'owner'); }
   }
   function receive(w, data) {
+    if (w.closed || w.exited) return;
     w.drawn = true; w.chunks.push(data); w.bytes += data.length; w.seq++;
     while (w.bytes > SCROLLBACK && w.chunks.length > 1) w.bytes -= w.chunks.shift().length;
     if (w.attachments.size) send('worker-terminal:data', { terminalId: w.parent, callId: `dispatch:${w.runId}`, epoch: w.epoch, seq: w.seq, data });
@@ -186,10 +227,11 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   }
   function exited(w, exitCode) {
     if (w.exited) return;
-    w.exited = true; cancel(w.notice); cancel(w.poll); cancel(w.enterTimer); setAwaiting(w, null);
+    w.exited = true; w.running = false; clearTimers(w); setAwaiting(w, null);
     if (w.attachments.size) send('worker-terminal:data', { terminalId: w.parent, callId: `dispatch:${w.runId}`, epoch: w.epoch, exited: true, exitCode: exitCode ?? null });
     w.onExited?.();
     publish(w, 'session.state', { state: 'stopped' });
+    if (!w.closed) void w.close();
   }
 
   // An owner's message goes in as the brief does: a file in the brief folder, named by one typed sentence, written once
@@ -199,7 +241,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const file = path.join(w.briefs, `message-${++w.messages}.md`);
     fs.writeFileSync(file, input.text, { mode: 0o600 });
     w.pty.write(sentence(`Read the owner's message in ${file} and act on it.`));
-    w.enterTimer = schedule(() => {
+    w.enterTimer = later(w, () => {
       if (!w.closed && !w.exited && !w.asks.size && !w.ownerDraft && w.inFlight === input) w.pty.write('\r');
     }, ENTER_DELAY_MS);
   }
@@ -210,26 +252,29 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   }
   // The CLI waits for a prompt: deliver a queued intervention when the owner has no draft.
   function idle(w) {
+    if (w.closed || w.exited) return;
     w.idle = true;
     flushInput(w);
     if (w.idle && !w.pending.length) publish(w, 'session.state', { state: 'idle' });
   }
   function poll(w) {
-    cancel(w.poll);
-    w.poll = schedule(() => { if (w.running && !w.closed) { void read(w); poll(w); } }, POLL_MS);
+    clearTimer(w, w.poll);
+    if (!w.running || w.closed || w.exited) return;
+    w.poll = later(w, () => { if (w.running && !w.closed && !w.exited) { void read(w); poll(w); } }, POLL_MS);
   }
 
   // The transcript, found by the session the hooks name under the worker's own Claude home, never by a path a hook
   // gives. One read at a time: a tail is not re-entrant, and two reads would repeat or skip records.
   function read(w) { return w.reading = w.reading.then(() => readTail(w)).catch(() => {}); }
   async function readTail(w) {
-    if (!w.sessionId || w.closed) return;
+    if (!w.sessionId || w.closed || w.exited) return;
     if (!w.tail) {
       const filename = await findClaudeSession(w.spec.cwd, w.sessionId, w.env.CLAUDE_CONFIG_DIR || claudeHome(), { strict: true });
-      if (!filename) return;
+      if (!filename || w.closed || w.exited) return;
       w.tail = new TranscriptTail(filename);
     }
     await w.tail.read(record => {
+      if (w.closed || w.exited) return;
       if (record.isSidechain || w.resume && Date.parse(record.timestamp) < w.launchedAt - 2000) return;
       if (record.type === 'user') {
         const text = userText(record);
@@ -257,7 +302,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   function interrupted(w) {
     closeAsks(w);
     if (!w.running) return;
-    w.running = false; cancel(w.poll);
+    w.running = false; clearTimer(w, w.poll);
     w.promptWait = true; setAwaiting(w, 'owner');
     idle(w);
   }
@@ -265,7 +310,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   const finalText = w => w.last?.texts.length && (FINAL_REASONS.has(w.last.reason) || !w.last.tool) ? w.last.texts.join('\n\n') : null;
 
   async function onHook(w, name, { sessionId, sentAt, toolUseId, agentId, requestId, elicitationId, payload = {} }) {
-    if (w.closed) return;
+    if (w.closed || w.exited) return;
     if (typeof sessionId === 'string' && /^[\w-]{1,160}$/.test(sessionId) && !w.sessionId) { w.sessionId = sessionId; w.stream.provider(sessionId); }
     const timed = Number.isFinite(sentAt);
     const notice = name === 'Notification' && ASK_NOTICES.has(payload.notification_type);
@@ -276,7 +321,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     if (ASKS.has(name) || notice) {
       if (key && !w.closedAsks.has(key)) w.asks.add(key);
       else if (!notice && !key) w.asks.add(`unknown:${agentId || payload.agent_id || ''}`);
-      if (w.asks.size) cancel(w.enterTimer);
+      if (w.asks.size) clearTimer(w, w.enterTimer);
       setAwaiting(w, w.asks.size || w.promptWait ? 'owner' : null); return;
     }
     // A Stop from an earlier turn cannot clear this turn's questions.
@@ -288,7 +333,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       setAwaiting(w, w.asks.size ? 'owner' : null);
     }
     if (name === 'UserPromptSubmit') {
-      w.ownerDraft = false; cancel(w.enterTimer);
+      w.ownerDraft = false; clearTimer(w, w.enterTimer); clearTimer(w, w.notice);
       if (timed) w.startAt = sentAt;
       w.prompted = true; w.running = true; w.idle = false; w.last = null;
       const input = w.inFlight; w.inFlight = null;
@@ -299,13 +344,14 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       publish(w, 'session.state', { state: 'running' });
       poll(w);
       await read(w);
+      if (w.closed || w.exited) return;
       const early = w.earlyStop; w.earlyStop = null;
       if (early && early.sentAt >= sentAt) await onHook(w, early.name, early.facts);
       return;
     }
     if (STOPS.has(name)) {
       if (!w.running) { if (timed) w.earlyStop = { name, sentAt, facts: { sessionId, sentAt, payload } }; return; }
-      cancel(w.poll); w.running = false;
+      clearTimer(w, w.poll); w.running = false;
       await settle(w, name, payload);
       return;
     }
@@ -320,9 +366,10 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const agreed = () => { const text = finalText(w); return text !== null && (!hookText || plain(text).startsWith(plain(hookText))) ? text : null; };
     for (let tries = 0; name === 'Stop'; tries++) {
       await read(w);
-      if (agreed() !== null || tries >= SETTLE_TRIES || w.closed) break;
-      await delay(SETTLE_MS);
+      if (agreed() !== null || tries >= SETTLE_TRIES || w.closed || w.exited) break;
+      await delay(w, SETTLE_MS);
     }
+    if (w.closed || w.exited) return;
     const text = name === 'Stop' ? agreed() ?? hookText : null;
     if (text !== null) publish(w, 'item.upsert', { kind: 'agent-message', status: 'completed', content: { text } }, { itemId: `final:${randomUUID()}` });
     publish(w, 'turn.completed', { status: name === 'Stop' ? 'completed' : 'failed' });
@@ -335,25 +382,37 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     const folder = path.join(runtimeDir(), `worker-${run.runId}`);
     const w = { run, runId: run.runId, parent: run.projectId, id: `worker-${run.runId}`, key: randomUUID(), spec, stream, folder,
       briefs: path.join(folder, 'brief'), cols: 120, rows: 30, chunks: [], bytes: 0, seq: 0, pending: [], messages: 0, last: null,
-      awaiting: null, asks: new Set(), closedAsks: new Set(), attachments: new Map(), ownerDraft: false,
+      awaiting: null, asks: new Set(), closedAsks: new Set(), attachments: new Map(), ownerDraft: false, timers: new Map(), listeners: [],
       startAt: -Infinity, queue: Promise.resolve(), reading: Promise.resolve() };
     workers.set(w.id, w);
     stream.publish('path.changed', { previous: null, selected: 'terminal-worker', reason: 'terminal lead (subscription)' });
     // Never rejects: the run always finishes. The folder goes once the PTY's exit is seen, retried while Windows holds it.
     w.close = () => w.closing ||= (async () => {
-      w.closed = true; cancel(w.notice); cancel(w.poll); cancel(w.enterTimer); setAwaiting(w, null);
+      w.closed = true; w.running = false; clearTimers(w); setAwaiting(w, null);
       try {
-        if (w.pty && !w.exited) {
+        if (w.pty) {
           const exit = new Promise(resolve => { w.onExited = resolve; });
-          kill(w.pty, platform);
-          await Promise.race([exit, delay(EXIT_WAIT_MS)]);
+          let timeout;
+          // Cleanup waits remain tracked after close; normal worker callbacks may no longer arm.
+          const deadline = new Promise(resolve => { timeout = trackTimer(w, resolve, EXIT_WAIT_MS, resolve); });
+          try {
+            try {
+              if (!w.exited) await kill(w.pty, platform);
+              else if (platform === 'win32') { try { w.pty.kill(); } catch {} }
+            } finally { if (platform === 'win32') await disposeWindowsPty(w.pty, deadline); }
+            if (!w.exited) await Promise.race([exit, deadline]);
+          } finally { clearTimer(w, timeout); w.onExited = null; }
         }
       } catch {}
-      workers.delete(w.id);
+      // A Stop may be asleep in settle or a tail may still hold a file. Cancel its wait and drain both before removal.
+      clearTimers(w);
+      await w.queue; await w.reading;
+      for (const listener of w.listeners) { try { listener?.dispose(); } catch {} }
       for (let tries = 1; ; tries++) {
-        try { remove(w.folder); return; } catch { if (tries >= REMOVE_TRIES) return; }
-        await delay(SETTLE_MS * tries);
+        try { remove(w.folder); break; } catch { if (tries >= REMOVE_TRIES) break; }
+        await new Promise(resolve => trackTimer(w, resolve, SETTLE_MS * tries, resolve));
       }
+      workers.delete(w.id);
     })();
     return {
       start: async () => {}, resume: async () => { w.resume = spec.providerSessionId; },
@@ -411,7 +470,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
             // Ctrl+C and Ctrl+U clear the prompt; text following that clear starts a new draft. Enter waits for its hook.
             const cleared = Math.max(data.lastIndexOf('\x03'), data.lastIndexOf('\x15'));
             w.ownerDraft = cleared < 0 || cleared < data.length - 1;
-            cancel(w.enterTimer);
+            clearTimer(w, w.enterTimer);
           }
           w.pty.write(data); flushInput(w);
         }

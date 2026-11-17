@@ -39,7 +39,13 @@ async function createEventServer(onEvent, { dispatchControl } = {}) {
     socket.on('close', () => connections.delete(socket));
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(address, resolve); });
-  return { name, address, close() { for (const socket of connections) socket.destroy(); server.close(); } };
+  let closing;
+  return { name, address, close() {
+    return closing ||= new Promise(resolve => {
+      server.close(() => resolve());
+      for (const socket of connections) socket.destroy();
+    });
+  } };
 }
 
 module.exports = { createEventServer, socketAddress };
