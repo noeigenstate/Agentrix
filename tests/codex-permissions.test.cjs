@@ -324,7 +324,8 @@ test('/permissions changes the running session only, from its next turn, with wh
     assert.equal(mine.server.wire.filter(row => row.method === 'thread/settings/update').length, updates);
     assert.equal((await mine.session.runOptions({})).permissions, 'config');
     await assert.rejects(mine.session.runOptions({ permissions: 'bypass' }), /无效的权限选项/);
-    await assert.rejects(mine.session.runOptions({ permissions: 'full', fast: true }), /无效的运行选项/);
+    await assert.rejects(mine.session.runOptions({ permissions: 'full', fast: true }), { code: 'routing-owned' });
+    assert.equal(mine.server.wire.filter(row => row.method === 'thread/settings/update').length, updates, 'the rejected patch also leaves permissions alone');
   }
 });
 

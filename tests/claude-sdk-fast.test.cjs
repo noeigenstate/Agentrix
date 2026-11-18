@@ -5,7 +5,7 @@ const { randomUUID } = require('node:crypto');
 const { createClaudeSession } = require('../electron/features/claude-sdk/session.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 
-test('Claude SDK fast and effort survive acknowledged changes and model rows retain capabilities', async t => {
+test('Claude SDK keeps the launch seat effort and fast, and model rows retain capabilities', async t => {
   const fake = fakeSdk({ auto: false }), flags = [];
   const query = fake.sdk.query;
   fake.sdk.query = spec => Object.assign(query(spec), {
@@ -22,10 +22,11 @@ test('Claude SDK fast and effort survive acknowledged changes and model rows ret
   const rows = await session.models();
   assert.deepEqual(rows, [{ value: 'claude-opus-6-0', alias: 'opus', displayName: 'Opus', description: 'Synthetic', efforts: ['high', 'adaptive'], fast: true }]);
   assert.equal(JSON.parse(fs.readFileSync(fake.calls[0].options.settings, 'utf8')).fastMode, true);
-  assert.equal((await session.runOptions({ fast: false, effort: 'adaptive' })).fast, false);
-  assert.deepEqual(flags, [{ effortLevel: 'adaptive', fastMode: false }]);
-  assert.equal(spec.fast, false); assert.equal(spec.effort, 'adaptive');
-  assert.equal((await session.runOptions({ fast: true })).fast, true);
-  assert.equal((await session.runOptions({})).fast, true);
+  assert.equal(fake.calls[0].options.effort, 'high');
+  await assert.rejects(session.runOptions({ fast: false, effort: 'adaptive' }), { code: 'routing-owned' });
+  assert.deepEqual(flags, []);
+  assert.deepEqual([spec.effort, spec.fast], ['high', true]);
+  const { effort, fast } = await session.runOptions({});
+  assert.deepEqual([effort, fast], ['high', true]);
   assert.equal(fake.inputs.length, 0, 'model and option reads perform no inference');
 });

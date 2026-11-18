@@ -115,10 +115,10 @@ test('D1 D3 D5 real CLI shell then compact completes and notifies once through t
   await session.start(); await session.send({ clientMessageId: 'warmup', text: 'Warmup' }); await wait(1);
   assert.equal(h.alerts(), 1); h.store.acknowledge(h.project.id);
   const beforeModel = events.length;
-  await session.runOptions({ model: 'claude-sonnet-4-5' });
+  await assert.rejects(session.runOptions({ model: 'claude-sonnet-4-5' }), { code: 'routing-owned' });
   await session.shell('bang', 'echo UI_BACKEND_BANG'); await wait(2);
   assert.ok(!events.slice(beforeModel).some(event => event.type === 'item.upsert' && event.itemId?.startsWith('local-command:')),
-    'control model receipt is only an unlabelled transcript replay, never a live conversation reply');
+    'a refused model change leaves no local command reply after shell delivery');
   assert.equal(h.alerts(), 2); h.store.acknowledge(h.project.id);
   const start = events.length, requestStart = bodies.length;
   await session.send({ clientMessageId: 'compact-after-bang', text: '/compact' }); await wait(3);

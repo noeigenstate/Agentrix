@@ -6,6 +6,8 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 - `src/features/agents/SeatsDialog.tsx`
 - `src/features/agents/skill-seats.ts`
 - `src/features/agents/ActivityPane.tsx`
+- `src/features/agents/RoutingKeyCard.tsx`
+- `src/features/agents/SeatsHost.tsx`
 - `src/features/agents/ApiUsage.tsx` (per agent: connection, context, limits, API spend shown as information)
 - `src/features/agents/AgentCalls.tsx` (the called models' list and its rows, with the state words and the rate column)
 - `src/features/agents/Metric.tsx` (the one bar and the figures both blocks share)

@@ -56,7 +56,8 @@ test('main Opus and a running Opus child keep separate rates, resolved grouping 
   const group = calls.snapshot()[0];
   assert.equal(group.model, 'claude-opus-5-5', 'the actual child model replaces its requested alias');
   assert.deepEqual(group.rate, expected(80, 3000, 1, 4));
-  assert.deepEqual(group.items, [{ id: 'agent:worker', state: 'running', role: '通用', title: 'Exact parser inspection', startedAt: Date.parse(at(0)), endedAt: null, viewable: true, hidden: false }]);
+  assert.deepEqual(group.items, [{ id: 'agent:worker', state: 'running', role: '通用', title: 'Exact parser inspection',
+    startedAt: Date.parse(at(0)), endedAt: null, viewable: true, hidden: false, seat: 'developer', seatSource: 'inferred' }]);
   assert.deepEqual(group.tasks, ['Exact parser inspection']);
   assert.ok(positions[1] > 0, 'the next child read starts at its retained byte offset');
   assert.deepEqual(meter.snapshot().rate, mainRate);
@@ -80,8 +81,10 @@ test('groups sum worker tokens and durations, including overlap, while preservin
   assert.equal(calls.snapshot().length, 1);
   assert.deepEqual(calls.snapshot()[0].rate, expected(140, 6000, 3, 7));
   assert.deepEqual(calls.snapshot()[0].items, [
-    { id: 'agent:b', state: 'running', role: '通用', title: 'Exact b', startedAt: Date.parse(at(0)), endedAt: null, viewable: true, hidden: false },
-    { id: 'agent:a', state: 'reviewing', role: '通用', title: 'Exact a', startedAt: Date.parse(at(0)), endedAt: Date.parse(at(9)), viewable: true, hidden: false },
+    { id: 'agent:b', state: 'running', role: '通用', title: 'Exact b', startedAt: Date.parse(at(0)), endedAt: null, viewable: true, hidden: false,
+      seat: 'developer', seatSource: 'inferred' },
+    { id: 'agent:a', state: 'reviewing', role: '通用', title: 'Exact a', startedAt: Date.parse(at(0)), endedAt: Date.parse(at(9)), viewable: true, hidden: false,
+      seat: 'developer', seatSource: 'inferred' },
   ]);
   calls.apply(use('unreadable', 'Agent', { model: 'claude-opus-5-5', description: 'Exact unreadable' })); await calls.work;
   assert.deepEqual(calls.snapshot()[0].rate, expected(140, 6000, 3, 7, true), 'the readable members still sum; the unreadable one marks the sum partial');

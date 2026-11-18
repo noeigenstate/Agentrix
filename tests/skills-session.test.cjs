@@ -433,7 +433,7 @@ test('PowerShell compact/clear reads updated per-session instructions and keeps 
     assert.match(context, /this is its first run/);
     assert.equal(sessionContext({ session_id: 'ps-cli', source: 'resume' }, note), null);
   }
-  f.store.setOptions('user:sample', { trigger: 'auto' });
+  f.store.setOptions('user:sample', { firstOpenRun: false });
   const updated = await hookProcess(powershell, args, { session_id: 'ps-cli', source: 'compact' }, noteFile);
   assert.equal(updated.code, 0); assert.equal(updated.stderr, '');
   const context = JSON.parse(updated.stdout).hookSpecificOutput.additionalContext;
