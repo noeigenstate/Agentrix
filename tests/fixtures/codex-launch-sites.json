@@ -96,8 +96,8 @@
     "id": "electron/features/lab/executor.cjs:accd3ae28936d1ee46d9d7ad"
   },
   {
-    "text": "memoryModules(modules).run(config.args, {\n    env: process.env, launch: (file, args, options) => launch(file, args, options, true),\n  })",
-    "id": "electron/features/lab/executor.cjs:be69ee10568f04fe079f71d2"
+    "text": "memoryModules(modules).run(config.args, {\n    ...(config.dispatchId ? { detached: { id: config.dispatchId, admitted() {} } } : {}),\n    env: process.env, launch: (file, args, options) => launch(file, args, options, true),\n  })",
+    "id": "electron/features/lab/executor.cjs:ecc89c51ff97131a58a0a627"
   },
   {
     "text": "launch(file, args, options, true)",
@@ -156,16 +156,16 @@
     "id": "electron/features/lab/sandbox-win32.cjs:1d21906143a54f2f6eacb749"
   },
   {
-    "text": "this.launch(args, {\n            cwd: await fs.realpath(request.cwd), signal: requestControl.signal, onLine: line => {\n              if (!socket.destroyed) socket.write(JSON.stringify({ output: line + '\\n' }) + '\\n');\n            },\n          })",
-    "id": "electron/features/lab/session.cjs:a575eb834c073a5fb47a8d14"
+    "text": "this.launch(args, options)",
+    "id": "electron/features/lab/session.cjs:017142ed0cfb5a29cc2426ff"
+  },
+  {
+    "text": "this.launch(args.filter(arg => arg !== '--detach'), { ...options, dispatchId: id,\n      signal: AbortSignal.any([control.signal, this.controller.signal]), onLine: line => {\n        entry.activityAt = now();\n        if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line;\n      } })",
+    "id": "electron/features/lab/session.cjs:4d14f1728516d5b24afb5adb"
   },
   {
     "text": "backend.resolveExecutable(executable.file, env)",
     "id": "electron/features/lab/session.cjs:b65afab70924c94e3cc63f4d"
-  },
-  {
-    "text": "this.launch(args, options)",
-    "id": "electron/features/lab/session.cjs:017142ed0cfb5a29cc2426ff"
   },
   {
     "text": "this.launch([], { ...options, network, command: { file, args } })",

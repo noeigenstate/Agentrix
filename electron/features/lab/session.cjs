@@ -20,9 +20,9 @@ async function copyHelper(helper, directory) {
     const rate = "send({ type: 'dispatch-rate', id, ...lastRate });";
     if (!source.includes(rate)) throw new Error('The dispatch helper cannot provide authenticated live cost measurements.');
     instrumented = source.replace(rate, "send({ type: 'dispatch-rate', id, ...lastRate, ...output.usage() });");
-    const meter = 'const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);';
+    const meter = 'send = eventSink(env.AGENTRIX_BOOTSTRAP);';
     if (!instrumented.includes(meter)) throw new Error('The dispatch helper cannot isolate its metering credentials.');
-    instrumented = instrumented.replace(meter, 'const id = randomUUID(), send = globalThis.__AGENTRIX_LAB_SINK;');
+    instrumented = instrumented.replace(meter, 'send = globalThis.__AGENTRIX_LAB_SINK;');
     instrumented = instrumented.replace(
       "path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron')",
       "path.join(__dirname, 'electron')",
@@ -78,7 +78,7 @@ class LabSession {
     this.privateDirectory = path.join(this.labRoot, 'private', this.runId);
     this.tools = path.join(this.labRoot, 'tools', this.runId);
     this.control = path.join(this.workspaceRoot, 'control');
-    this.sockets = new Set(); this.jobs = new Set(); this.controller = new AbortController();
+    this.sockets = new Set(); this.jobs = new Set(); this.dispatches = new Map(); this.controller = new AbortController();
     this.brokerSockets = new Set(); this.brokerJobs = new Set();
     this.brokerWork = new Set();
     this.capability = randomUUID(); this.invocations = 0; this.active = false; this.closed = false; this.modelStarted = false;
@@ -214,11 +214,16 @@ class LabSession {
             throw new Error('Invalid lab dispatch request.');
           }
           const args = await this.checkArguments(request.args, request.cwd);
-          const result = await this.launch(args, {
+          const options = {
             cwd: await fs.realpath(request.cwd), signal: requestControl.signal, onLine: line => {
               if (!socket.destroyed) socket.write(JSON.stringify({ output: line + '\n' }) + '\n');
             },
-          });
+          };
+          let result;
+          if (args[0] === 'wait') result = await this.waitDispatch(args, options);
+          else if (args[0] === 'stop') result = await this.stopDispatch(args, options);
+          else if (args.includes('--detach')) result = this.detachDispatch(args, options);
+          else result = await this.launch(args, options);
           finished = true;
           if (!socket.destroyed) socket.end(JSON.stringify({ exitCode: result.code ?? 1 }) + '\n');
         } catch (error) {
@@ -236,9 +241,10 @@ class LabSession {
   async checkArguments(args, cwd) {
     if (!Array.isArray(args) || args.length > 160 ||
       args.some(arg => typeof arg !== 'string' || arg.length > 8192 || /[\0\r\n]/.test(arg)) ||
-      !['codex', 'claude', 'minutes', 'consolidate'].includes(args[0])) throw new Error('Invalid lab dispatch arguments.');
+      !['codex', 'claude', 'minutes', 'consolidate', 'wait', 'stop'].includes(args[0])) throw new Error('Invalid lab dispatch arguments.');
     const roots = [this.workspaceRoot];
     await localPath(cwd, cwd, roots, true);
+    if (args.includes('--detach') && !['codex', 'claude'].includes(args[0])) throw new Error('Only workers can detach.');
     const inputPaths = new Set(['--cwd', '--brief', '--ledger', '--summary', '--issues', '--incidents', '--findings', '--image']);
     for (let index = 1; index < args.length; index++) {
       const option = args[index];
@@ -254,17 +260,78 @@ class LabSession {
         }
       }
     }
+    if (['wait', 'stop'].includes(args[0])) this.dispatchSelection(args);
     return args;
+  }
+  dispatchSelection(args) {
+    const ids = []; let timeout = 540;
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '--timeout' && args[0] === 'wait') timeout = Number(args[++i]);
+      else if (args[i] === '--cwd') { if (!args[++i]) throw new Error('Missing dispatch path.'); }
+      else if (this.dispatches.has(args[i]) && !ids.includes(args[i])) ids.push(args[i]);
+      else throw new Error('Unknown lab dispatch run.');
+    }
+    if (!ids.length || args[0] === 'stop' && ids.length !== 1 || !Number.isFinite(timeout) || timeout <= 0 || timeout > 570) {
+      throw new Error('Invalid lab wait or stop arguments (timeout must be at most 570 seconds).');
+    }
+    return { ids, timeout };
+  }
+  detachDispatch(args, options) {
+    const id = randomUUID(), control = new AbortController(), now = this.now || Date.now;
+    const entry = { id, control, createdAt: now(), activityAt: now(), settled: false, endedLine: null };
+    // Retain the job in this session; the short-lived RPC is not its lifetime or its meter authority.
+    const running = this.launch(args.filter(arg => arg !== '--detach'), { ...options, dispatchId: id,
+      signal: AbortSignal.any([control.signal, this.controller.signal]), onLine: line => {
+        entry.activityAt = now();
+        if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line;
+      } });
+    this.dispatches.set(id, entry);
+    entry.done = running.then(result => { entry.code = result.code ?? 1; }, error => {
+      entry.code = 1; entry.error = String(error.message).replace(/[\r\n]/g, ' ').slice(0, 500);
+    }).then(() => {
+      entry.settled = true; entry.activityAt = now();
+      entry.endedLine ||= `[dispatch] ended ${id} · exit ${entry.code} reason ${control.signal.aborted ? 'stopped' : 'error'}${entry.error ? ' · ' + entry.error : ''}`;
+    });
+    options.onLine(`[dispatch] detached ${id} · session follows in wait`);
+    return { code: 0 };
+  }
+  async waitDispatch(args, { signal, onLine }) {
+    const { ids, timeout } = this.dispatchSelection(args), entries = ids.map(id => this.dispatches.get(id));
+    let timer, cancel;
+    const schedule = this.schedule || setTimeout, clear = this.cancel || clearTimeout;
+    const stopped = new Promise(resolve => {
+      timer = schedule(() => resolve(75), timeout * 1000);
+      cancel = () => resolve(1);
+      signal?.addEventListener('abort', cancel, { once: true });
+      if (signal?.aborted) cancel();
+    });
+    let open = true;
+    try {
+      const complete = Promise.all(entries.map(async entry => {
+        await entry.done;
+        if (open) onLine(entry.endedLine);
+      })).then(() => 0);
+      const code = await Promise.race([complete, stopped]);
+      if (code === 75) for (const entry of entries) if (!entry.settled) {
+        onLine(`[dispatch] still running ${entry.id} · ${Math.floor(((this.now || Date.now)() - entry.createdAt) / 1000)} s · last activity ${new Date(entry.activityAt).toISOString()}`);
+      }
+      return { code };
+    } finally { open = false; clear(timer); signal?.removeEventListener('abort', cancel); }
+  }
+  async stopDispatch(args, { onLine }) {
+    const { ids } = this.dispatchSelection(args), entry = this.dispatches.get(ids[0]);
+    entry.control.abort(); await entry.done; onLine(entry.endedLine);
+    return { code: 0 };
   }
   launch(args, options = {}) {
     aborted(this.controller.signal);
     if (this.closed || ++this.invocations > 80 || this.jobs.size >= 4) throw new Error('The lab dispatch limit was reached.');
-    const running = this.launchJob(randomUUID(), args, options).finally(() => this.jobs.delete(running));
+    const running = this.launchJob(options.dispatchId || randomUUID(), args, options).finally(() => this.jobs.delete(running));
     this.jobs.add(running);
     return running;
   }
   async launchJob(job, args, {
-    cwd, log, onLine, timeoutMs = 20 * 60000, command: executable, review = false, signal, network = true,
+    cwd, log, onLine, timeoutMs = 20 * 60000, command: executable, review = false, signal, network = true, dispatchId,
   }) {
     const root = review ? path.join(this.labRoot, 'reviews', this.runId) : this.workspaceRoot;
     await localPath(cwd, cwd, [root], true);
@@ -306,7 +373,7 @@ class LabSession {
     }
     const config = path.join(this.privateDirectory, job + '.json');
     await fs.writeFile(config, JSON.stringify({
-      runId: this.runId, job, profile, helper: this.trustedHelper, args, cwd, command: executable,
+      runId: this.runId, job, profile, helper: this.trustedHelper, args, cwd, command: executable, dispatchId,
       executor: path.join(this.tools, process.platform === 'win32' ? 'sandbox-win32-executor.cjs' : 'executor.cjs'), windows,
     }), { mode: 0o600 });
     const host = process.platform === 'win32' ? 'sandbox-win32-host.cjs' : 'host.cjs';

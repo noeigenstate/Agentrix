@@ -46,6 +46,7 @@ async function execute(payload) {
     throw new Error('Authenticated lab metering is unavailable. No model worker was started.');
   }
   if (!config.command) return memoryModules(modules).run(config.args, {
+    ...(config.dispatchId ? { detached: { id: config.dispatchId, admitted() {} } } : {}),
     env: process.env, launch: (file, args, options) => launch(file, args, options, true),
   });
   const child = launch(config.command.file, config.command.args, {

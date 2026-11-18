@@ -47,12 +47,12 @@ test('main registration applies the current background choice to each SDK worker
   assert.equal(source[variable], 'inherited');
 });
 
-test('open terminals read a refreshed bootstrap at every Claude start in both directions', t => {
+test('open terminals read a refreshed bootstrap at every Claude start in both directions', async t => {
   const folder = temporary(t), file = path.join(folder, 'session.json');
   writeBootstrap({ file, eventServer: { name: 'fixture', address: 'fixture' }, sessionKey: 'fixture', claudeBackgroundTasks: false });
   const source = { AGENTRIX_BOOTSTRAP: file, PATH: '', [variable]: 'old', claude_code_disable_background_tasks: 'old' };
   for (const allow of [false, true, false]) {
-    updateBootstrapBackground(file, allow);
+    await updateBootstrapBackground(file, allow);
     const env = { ...source }, words = shimWords(env, { depth: 0 });
     for (let i = 0; i < words.length; i++) {
       if (words[i] === '-u') delete env[words[++i]];
@@ -63,6 +63,22 @@ test('open terminals read a refreshed bootstrap at every Claude start in both di
     assert.equal(JSON.parse(fs.readFileSync(file)).sessionKey, 'fixture');
   }
   removeBootstrap(file);
+});
+
+test('bootstrap refresh retries busy renames and leaves fresh launch policy after exhaustion', async t => {
+  const folder = temporary(t), file = path.join(folder, 'session.json'), delays = [];
+  writeBootstrap({ file, eventServer: { name: 'fixture', address: 'fixture' }, claudeBackgroundTasks: false });
+  let attempts = 0;
+  await updateBootstrapBackground(file, true, { rename: (from, to) => {
+    if (++attempts < 4) throw Object.assign(new Error('busy'), { code: ['EPERM', 'EACCES', 'EBUSY'][attempts - 1] });
+    fs.renameSync(from, to);
+  }, delay: async ms => { delays.push(ms); } });
+  assert.deepEqual(delays, [25, 50, 100]);
+  await assert.rejects(updateBootstrapBackground(file, false, { rename: () => { throw Object.assign(new Error('busy'), { code: 'EPERM' }); },
+    delay: async () => {} }), /busy/);
+  assert.equal(JSON.parse(fs.readFileSync(file)).claudeBackgroundTasks, true, 'bootstrap remains old after the locked rename');
+  const words = shimWords({ AGENTRIX_BOOTSTRAP: file, PATH: '' }, { depth: 0 });
+  assert.ok(words.includes(variable + '=1'), 'next launch re-reads the latest policy despite the old bootstrap');
 });
 
 test('Settings changes refresh existing local and SSH terminal launch policy', () => {
@@ -77,6 +93,18 @@ test('Settings changes refresh existing local and SSH terminal launch policy', (
   context.updateStoreSettings({ claudeBackgroundTasks: true });
   context.updateStoreSettings({ claudeBackgroundTasks: false });
   assert.deepEqual(refreshed, [['fixture', true], ['ssh', true], ['fixture', false], ['ssh', false]]);
+});
+
+test('a failed bootstrap refresh is reported and keeps the terminal marked for a launch re-read', async () => {
+  const settings = { theme: 'dark', uiZoom: 100, language: 'en', shortcuts: [], claudeBackgroundTasks: false };
+  const session = { bootstrapFile: 'fixture' }, reports = [], failure = new Error('synthetic lock');
+  const context = { store: { settings, updateSettings: patch => Object.assign(settings, patch) }, sessions: new Map([['fixture', session]]),
+    updateBootstrapBackground: async () => { throw failure; }, RemoteConnection: Object, process: { platform: 'win32' }, report: error => reports.push(error) };
+  vm.runInNewContext(main.slice(main.indexOf('function updateStoreSettings('), main.indexOf('\nconst sessions =')), context);
+  context.updateStoreSettings({ claudeBackgroundTasks: true });
+  await assert.rejects(session.backgroundPolicyUpdate, /synthetic lock/);
+  assert.equal(session.backgroundPolicyPending, true);
+  assert.deepEqual(reports, [failure]);
 });
 
 test('terminal worker environments override the saved parent choice', t => {

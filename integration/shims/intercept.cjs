@@ -84,7 +84,10 @@ function shimWords(source, options) {
 function claudeLaunchEnvironment(source) {
   const next = { ...source };
   for (const name of Object.keys(next)) if (name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') delete next[name];
-  if (bootstrapField(source.AGENTRIX_BOOTSTRAP, 'claudeBackgroundTasks') !== true) next.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
+  const policy = source.AGENTRIX_BOOTSTRAP && source.AGENTRIX_BOOTSTRAP + '.background.json';
+  const allow = policy && fs.existsSync(policy) ? bootstrapField(policy, 'claudeBackgroundTasks')
+    : bootstrapField(source.AGENTRIX_BOOTSTRAP, 'claudeBackgroundTasks');
+  if (allow !== true) next.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
   return next;
 }
 

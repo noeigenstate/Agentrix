@@ -362,11 +362,8 @@ PY
     local settings_file
     settings_file=$(mktemp "${__pg_note_file%/*}/claude-settings.XXXXXX") || return 1
     printf '%s' "$settings" > "$settings_file"
-    local name allowed
-    local -a background=()
-    while IFS= read -r name; do
-        [[ ${name^^} == CLAUDE_CODE_DISABLE_BACKGROUND_TASKS ]] && background+=(-u "$name")
-    done < <(compgen -e)
+    local allowed
+    local -a background=(-u CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)
     allowed=$(cat "$AGENTRIX_CLAUDE_BACKGROUND_FILE" 2>/dev/null)
     [[ $allowed == 1 ]] || background+=(CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1)
     command env "${background[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings_file" "${note[@]}" "$@"
@@ -1873,9 +1870,14 @@ class Channel:
         op, worker = message.get("op"), self.worker
         if op == "claude-background":
             # Ordered on the channel reader, before a later input starts another Claude.
-            worker.allow_background_tasks = message.get("allow") is True
-            worker.write_background_choice()
-            worker.emit({"type": "response", "id": message.get("id"), "ok": True, "value": True})
+            previous = worker.allow_background_tasks
+            try:
+                worker.allow_background_tasks = message.get("allow") is True
+                worker.write_background_choice()
+                worker.emit({"type": "response", "id": message.get("id"), "ok": True, "value": True})
+            except Exception:
+                worker.allow_background_tasks = previous
+                worker.emit({"type": "response", "id": message.get("id"), "ok": False, "error": "Could not update the Claude background setting."})
         elif op == "resize": worker.resize(message["cols"], message["rows"])
         elif op == "input": self.typing.submit(worker.input, message["data"])
         else: self.requests.submit(self.dispatch, message)
