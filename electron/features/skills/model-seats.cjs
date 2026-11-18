@@ -10,7 +10,7 @@ function cleanSeat(raw, seat, expectedFamily, models, stored = false) {
   if (expectedFamily && agent !== expectedFamily) fail('lead-family', seat, `The ${seat} slot requires a ${expectedFamily} model.`);
   const row = models?.find(row => row.model === raw.model);
   if (typeof raw.effort !== 'string' || !EFFORT.test(raw.effort) || !stored && !(row?.efforts || EFFORTS[agent]).includes(raw.effort)) fail('invalid-effort', seat, `Unsupported ${agent} effort.`);
-  if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && row && !row.fast)) fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
+  if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && (row ? !row.fast : agent === 'claude'))) fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
   return { model: raw.model, effort: raw.effort, ...(raw.fast !== undefined ? { fast: raw.fast } : {}) };
 }
 

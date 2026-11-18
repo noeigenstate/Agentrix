@@ -1,11 +1,11 @@
 // Catalog probes never start a thread or submit input. All process/SDK access is injected by main.
-async function probeCodex({ spawn, executable, rpcFactory, cwd, env, timers = globalThis, timeoutMs = 10000 }) {
+async function probeCodex({ spawn, executable, rpcFactory, stop, workerEnvironment, cwd, env, timers = globalThis, timeoutMs = 10000 }) {
   let child, rpc, timer, stopped = false;
   try {
     return await Promise.race([(async () => {
       const file = await executable();
       if (stopped) throw new Error('model_probe_timeout');
-      child = spawn(file, ['app-server', '--listen', 'stdio://'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child = spawn(file, ['app-server', '--listen', 'stdio://'], { cwd, env: workerEnvironment(env), detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       rpc = rpcFactory(child);
       await rpc.request('initialize', { clientInfo: { name: 'agentrix-models', version: '1.0.0' }, capabilities: { experimentalApi: true } });
       rpc.notify('initialized');
@@ -20,7 +20,9 @@ async function probeCodex({ spawn, executable, rpcFactory, cwd, env, timers = gl
       return rows;
     })(), new Promise((_, reject) => { timer = timers.setTimeout(() => reject(new Error('model_probe_timeout')), timeoutMs); })]);
   } finally {
-    stopped = true; timers.clearTimeout(timer); rpc?.close(); child?.kill(); child?.stdin?.destroy(); child?.stdout?.destroy(); child?.stderr?.destroy();
+    stopped = true; timers.clearTimeout(timer); rpc?.close();
+    try { if (child) await stop(child); }
+    finally { child?.stdin?.destroy(); child?.stdout?.destroy(); child?.stderr?.destroy(); }
   }
 }
 
@@ -31,7 +33,7 @@ async function probeClaude({ loadSdk, options = {}, timers = globalThis, timeout
     return await Promise.race([(async () => {
       const sdk = await loadSdk();
       if (abort.signal.aborted) throw new Error('model_probe_timeout');
-      query = sdk.query({ prompt, options: { ...options, abortController: abort } });
+      query = sdk.query({ prompt, options: { ...options, settingSources: [], persistSession: false, abortController: abort } });
       return await query.supportedModels();
     })(), new Promise((_, reject) => { timer = timers.setTimeout(() => reject(new Error('model_probe_timeout')), timeoutMs); })]);
   } finally {

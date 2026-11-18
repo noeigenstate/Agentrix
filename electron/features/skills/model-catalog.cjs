@@ -75,7 +75,11 @@ class ModelCatalog {
     const ids = new Set(fresh.map(row => row.model));
     const retained = this.data[family].rows.filter(row => !ids.has(row.model) && at - row.lastSeen < RETAIN)
       .map(row => ({ ...row, listed: false, source: 'cached' }));
-    this.data[family] = { at, rows: [...fresh, ...retained].slice(0, 300) };
+    const next = { at, rows: [...fresh, ...retained].slice(0, 300) };
+    const content = rows => JSON.stringify(rows.map(({ lastSeen, source, ...row }) => row));
+    const changed = content(next.rows) !== content(this.data[family].rows);
+    this.data[family] = next;
+    if (!changed) return;
     try { writeFileAtomic(this.file, JSON.stringify(this.data)); } catch (error) { this.report(error); }
     this.changed();
   }

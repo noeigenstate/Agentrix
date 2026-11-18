@@ -2,6 +2,24 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createTerminalEnvironment } = require('../electron/terminal-env.cjs');
 
+test('a fast terminal lead keeps both hook channels in its single settings file', t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const { writeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-hooks-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'bootstrap.json'), hooks = { settings: {
+    http: JSON.stringify({ hooks: { SessionStart: ['session'], Stop: ['http'] } }),
+    fallback: JSON.stringify({ hooks: { SessionStart: ['session'], Stop: ['command'] } }) } };
+  writeBootstrap({ file, eventServer: { name: 'injected', address: 'injected' }, claudeFast: true, hooks });
+  const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+  for (const channel of ['http', 'fallback']) {
+    const settings = JSON.parse(saved.hooks.settings[channel]);
+    assert.equal(settings.fastMode, true); assert.deepEqual(settings.hooks.SessionStart, ['session']);
+    assert.equal(settings.hooks.Stop[0], channel === 'http' ? 'http' : 'command');
+    assert.equal(hooks.settings[channel], saved.hooks.settings[channel]);
+  }
+});
+
 test('a terminal drops inherited SDK entrypoints in every letter case', () => {
   const env = createTerminalEnvironment({ CLAUDE_CODE_ENTRYPOINT: 'agentrix-sdk', claude_code_entrypoint: 'agentrix-sdk' }, 'fake-bootstrap');
   assert.equal(Object.keys(env).some(name => name.toUpperCase() === 'CLAUDE_CODE_ENTRYPOINT'), false);

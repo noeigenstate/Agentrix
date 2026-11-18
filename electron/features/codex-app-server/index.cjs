@@ -815,4 +815,4 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
   };
 }
 
-module.exports = { createCodexRuntime, workerEnvironment, createRpc };
+module.exports = { createCodexRuntime, workerEnvironment, createRpc, stopProcess };

@@ -181,6 +181,19 @@ test('seat catalog refresh unwraps the real IPC adapter and reports moved defaul
   assert.deepEqual(JSON.parse(fs.readFileSync(store.fastSettingsFile(), 'utf8')), { fastMode: true });
 });
 
+test('background seat reads neither probe nor consume the defaults-moved notice', async t => {
+  const { store } = fixture(t); store.getAgents = () => ({ codex: { installed: true }, claude: { installed: true } });
+  let calls = 0; store.modelCatalog.probes.codex = async () => { calls++; return [{ model: 'gpt-6.2-sol' }]; };
+  const bridge = seatPreload(store);
+  await bridge.skillSeats('p1', null); assert.equal(calls, 0);
+  store.observeModels('codex', [{ model: 'gpt-6.2-sol' }]);
+  await bridge.skillSeats('p1', null); assert.equal(calls, 0);
+  const opened = await bridge.skillSeatsRefresh('p1', null, 'dialog');
+  assert.ok(opened.defaultsMoved.length); assert.equal(calls, 0);
+  await bridge.skillSeatsRefresh('p1', null, 'manual'); assert.equal(calls, 1);
+  assert.equal((await bridge.skillSeatsRefresh('p1', null, 'dialog')).defaultsMoved, undefined);
+});
+
 for (const selected of [false, true]) test(`seat delivery stays frozen through catalog refresh, default movement and compact/clear (${selected ? 'selected' : 'empty'} block)`, async t => {
   const { store, projects } = fixture(t), project = projects[0];
   const { sessionContext } = require('../electron/features/skills/session.cjs');
@@ -219,8 +232,8 @@ test('a catalog-validated Claude fast lead reaches the merged terminal launcher 
   assert.deepEqual(store.setSeats('global', null, { lead: { claude: { model: 'claude-opus-6-0', effort: 'adaptive', fast: true } } }), { ok: true });
   const seat = store.leadOptions('p1', 'claude'), file = store.fastSettingsFile();
   const command = launchCommand('claude', null, seat, { fastSettingsFile: file });
-  assert.match(command, /--model "claude-opus-6-0" --effort adaptive --settings/);
-  assert.ok(command.includes(`"${file}"`)); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { fastMode: true });
+  assert.match(command, /--model "claude-opus-6-0" --effort adaptive/);
+  assert.equal(command.includes('--settings'), false); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { fastMode: true });
   assert.equal(launchCommand('claude', { id: 'previous' }, seat, { fastSettingsFile: file }), 'claude --resume previous\r');
 });
 

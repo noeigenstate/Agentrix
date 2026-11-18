@@ -16,7 +16,7 @@ test('efforts follow the catalog, fast follows capabilities and lead slots keep 
   rejected({ execution: seat('sonnet', 'ultra') }, 'invalid-effort');
   assert.throws(() => cleanSeats({ visual: seat('claude-sonnet-5-5', 'high', true) }, ids,
     [{ model: 'claude-sonnet-5-5', efforts: ['high'], fast: false }]), error => error.code === 'fast-not-allowed');
-  assert.equal(cleanSeats({ visual: seat('claude-next', 'high', true) }, ids).visual.fast, true);
+  assert.throws(() => cleanSeats({ visual: seat('claude-next', 'high', true) }, ids), error => error.code === 'fast-not-allowed');
   rejected({ core: seat('gpt-next', 'high', 'true') }, 'fast-not-allowed');
   rejected({ lead: { claude: seat('gpt-6.1-sol') } }, 'lead-family');
   rejected({ lead: { codex: seat('opus') } }, 'lead-family');
