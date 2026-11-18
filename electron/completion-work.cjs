@@ -50,12 +50,12 @@ class CompletionWork {
     this.tasks = new Map(); this.calls = new Map(); this.services = new Set(); this.notifications = new Set();
     this.deliveries = new Map();
     this.reviewAt = 0; this.endedAt = 0; this.turn = null; this.reading = false;
-    this.expired = false; this.version = 0;
+    this.expired = false; this.heldDeadline = null; this.version = 0;
     this.uncertain = false;
     return pending;
   }
   begin(at) {
-    this.expired = false;
+    this.expired = false; this.heldDeadline = null;
     if (at > this.endedAt) this.reviewAt = Math.max(this.reviewAt, at);
   }
   discardBackground() {
@@ -274,8 +274,12 @@ class CompletionWork {
     if (pending !== this.tasks.size || reviewAt !== this.reviewAt) this.changed();
   }
   state(snapshot, { queued = false, held = null } = {}) {
-    const pending = this.tasks.size || this.notifications.size || this.reviewAt || this.reading || queued || held?.count;
-    if (held?.count && Number.isFinite(held.deadline) && held.deadline <= this.now()) this.expired = true;
+    const ended = ['complete', 'interrupted'].includes(snapshot.state), now = this.now();
+    // Expire only a round that waited on this deadline. The board has already stopped counting lapsed runs.
+    if (ended && this.heldDeadline !== null && this.heldDeadline <= now) this.expired = true;
+    const heldPending = held?.count && (!Number.isFinite(held.deadline) || held.deadline > now);
+    this.heldDeadline = ended && heldPending && Number.isFinite(held.deadline) ? held.deadline : null;
+    const pending = this.tasks.size || this.notifications.size || this.reviewAt || this.reading || queued || heldPending;
     if (this.uncertain) this.expired = true;
     clearTimeout(this.timer); this.timer = null;
     if (this.tasks.size && ['complete', 'interrupted'].includes(snapshot.state) && !this.expired) {

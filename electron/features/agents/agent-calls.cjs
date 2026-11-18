@@ -70,9 +70,9 @@ class AgentCalls {
     this.schedule();
     this.watchDispatch();
   }
-  // Only this process's live run board holds completion; display retirement and retained done rows do not.
+  // Only unexpired runs in this process hold completion; lapsed rows remain available for display and late receipts.
   openDispatch(now = this.now()) {
-    const open = [...this.calls.values()].filter(call => call.dispatch && !call.done && !call.reviewed);
+    const open = [...this.calls.values()].filter(call => call.dispatch && !call.done && !call.reviewed && (call.startedAt ?? now) + LOST_WORK_TIMEOUT > now);
     return { count: open.length, deadline: open.length ? Math.min(...open.map(call => call.startedAt ?? now)) + LOST_WORK_TIMEOUT : null };
   }
   watchDispatch() {
@@ -82,6 +82,7 @@ class AgentCalls {
     this.dispatchTimer = setTimeout(() => {
       this.dispatchTimer = null;
       this.dispatchEnded?.();
+      this.watchDispatch();
     }, remaining);
     this.dispatchTimer.unref?.();
   }

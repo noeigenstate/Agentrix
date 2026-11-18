@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { createSessionMachine, reduce, cliFields, SCREEN_IDLE_MS } = require('./session-machine.cjs');
+const { AgentCalls } = require('../agents/agent-calls.cjs');
 
 // The hook events the pipe's claude-hook.ps1 kinds stood for (C-2), by the state claudeActivity takes.
 const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', StopFailure: 'failed', Notification: 'attention', PermissionRequest: 'attention',
@@ -20,6 +21,22 @@ const backgroundOf = s => !!(s.completionWork?.tasks?.size || s.completionWork?.
 // through it too, so a later round can replace one of them without editing the rest. A closure a call leaves behind
 // (the transcript tail's and monitor's callbacks) keeps the members that call read.
 function createClaudeActivity(deps) {
+  // Publication observes an existing tracker, including the host retained during a switch; it never creates one.
+  function dispatchOf(s) {
+    while (s.switchPreviousHost) s = s.switchPreviousHost;
+    return (s.calls || AgentCalls.forTerminal(deps.sessions, s.terminalId))?.openDispatch?.() || null;
+  }
+  function fallbackState(s, snapshot, queued, held) {
+    if (!['complete', 'interrupted'].includes(snapshot.state)) { s.dispatchWait = null; return snapshot.state; }
+    const previous = s.dispatchWait, now = Date.now();
+    const same = previous && previous.threadId === snapshot.threadId && previous.turnId === snapshot.turnId
+      && (snapshot.turnId != null || previous.updatedAt === snapshot.updatedAt);
+    const expired = !!(same && (previous.expired || Number.isFinite(previous.deadline) && previous.deadline <= now)
+      || held?.count && Number.isFinite(held.deadline) && held.deadline <= now);
+    s.dispatchWait = { threadId: snapshot.threadId, turnId: snapshot.turnId, updatedAt: snapshot.updatedAt,
+      deadline: held?.count ? held.deadline : null, expired };
+    return expired ? 'interrupted' : queued || held?.count ? 'working' : snapshot.state;
+  }
   function replayCompletion(project, s) {
     if (s && deps.sessions.get(s.terminalId) === s && s.codexActive && (s.activityRawSnapshot || s.activitySnapshot)) {
       deps.applyActivity(project, s, s.activityRawSnapshot || s.activitySnapshot);
@@ -170,7 +187,6 @@ function createClaudeActivity(deps) {
     const { sessions, broadcast } = deps;
     if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at) || !Number.isFinite(observedAt)) return false;
     const meta = metaOf(s), before = s.cliState;
-    s.dispatchHold = deps.callsOf?.(s, deps.store.projects?.find(project => project.id === s.projectId))?.openDispatch?.() || null;
     if (expectedRevision != null && expectedRevision !== before?.revision) return false;
     const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId : s.reportedThreadId || s.rootThreadId);
     if (!bind && threadId && bound && threadId !== bound && !(s.agent === 'codex' && bound.length >= 8 && threadId.toLowerCase().startsWith(bound.toLowerCase()))) return false;
@@ -192,6 +208,7 @@ function createClaudeActivity(deps) {
     meta.requestId = state === 'waiting' ? requestId || null : null;
     s.needsInput = state === 'waiting' ? { message, since: Date.now() } : null;
     s.cliStateRevision = (s.cliStateRevision || 0) + 1;
+    s.dispatchHold = dispatchOf(s);
     // A delayed hook must not outrank a screen drawn after it was sent. Keep publication time monotone in this PTY.
     s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
       updatedAt: Math.max(before?.sessionId === s.sessionId ? before.updatedAt : 0, Math.min(observedAt, Date.now())),
@@ -227,11 +244,11 @@ function createClaudeActivity(deps) {
       s.promptQueue.finish?.(snapshot.updatedAt);
     }
     s.activitySnapshot = snapshot;
-    const queued = queuedOf(s), held = deps.callsOf?.(s, project)?.openDispatch?.() || null;
+    const queued = queuedOf(s), held = dispatchOf(s);
     s.dispatchHold = held;
     if (s.cliState && s.agent === 'claude' && !s.nativeStructured) s.cliState = { ...s.cliState, background: backgroundOf(s) };
     const state = s.completionWork?.state(snapshot, { queued, held })
-      || ((queued || held?.count) && snapshot.state === 'complete' ? 'working' : snapshot.state);
+      || fallbackState(s, snapshot, queued, held);
     // A Claude terminal's Stop completes its round only on the session machine's completion effect: the newest prompt's
     // Stop, once the final gate agrees it is complete. Asked with the queue as it stands after this round's finish,
     // and asked again whenever this snapshot is replayed (a typed submission expiring, background work ending), as

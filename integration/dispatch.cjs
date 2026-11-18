@@ -174,9 +174,9 @@ function argumentsOf(argv) {
 }
 
 function routingVerdict(actual, declared) {
-  // Aliases may move forward with releases, but an older resolved model is still a mismatch.
-  const versions = { opus: [5, 5], sonnet: [5, 5], haiku: [5, 5] };
-  const current = versions[declared?.model];
+  // Bundled alias floor (major, minor): bump this one line with a supported release. Older versions stay mismatches.
+  const CLAUDE_ALIAS_FLOOR = [5, 5];
+  const current = /^(opus|sonnet|haiku)$/.test(declared?.model) && CLAUDE_ALIAS_FLOOR;
   const model = actual.model?.replace(/(?:\[(?:1m|fast)\]|-\d{8})+$/gi, '');
   const resolved = /^claude-(opus|sonnet|haiku)-(\d+)(?:[.-](\d+))?(?:[.-]\d+)*$/.exec(model || '');
   const follows = current && resolved?.[1] === declared.model && (Number(resolved[2]) > current[0]

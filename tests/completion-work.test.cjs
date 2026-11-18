@@ -8,10 +8,17 @@ test('dispatch holds keep an ended main turn working and expire without completi
   const held = { count: 1, deadline: now + LOST_WORK_TIMEOUT };
   assert.equal(work.state(snapshot, { held }), 'working');
   assert.equal(snapshot.state, 'complete');
-  assert.equal(work.state(snapshot, { held: { count: 0, deadline: null } }), 'complete');
   now = held.deadline;
-  assert.equal(work.state(snapshot, { held }), 'interrupted');
+  assert.equal(work.state(snapshot, { held: { count: 0, deadline: null } }), 'interrupted');
   assert.equal(work.state(snapshot), 'interrupted');
+  work.begin();
+  assert.equal(work.state({ state: 'working', updatedAt: now }), 'working');
+  assert.equal(work.state({ state: 'complete', updatedAt: now + 1 }, { held }), 'complete', 'an already lapsed run cannot expire a new round');
+  const fresh = { count: 1, deadline: now + LOST_WORK_TIMEOUT };
+  assert.equal(work.state(snapshot, { held: fresh }), 'working');
+  assert.equal(work.state(snapshot), 'complete');
+  now = fresh.deadline;
+  assert.equal(work.state(snapshot), 'complete', 'a run released before its deadline cannot expire that completed round');
 });
 const { CompletionWork, LOST_WORK_TIMEOUT, isServiceCommand } = require('../electron/completion-work.cjs');
 
