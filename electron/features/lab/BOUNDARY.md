@@ -11,6 +11,7 @@ and each approach in its own sandboxed workspace through the dispatch helper, gr
 - `assertProvider` (`electron/features/lab/sources/contract.cjs`) — the task-source contract providers meet: its typedefs, LAB_SOURCES, LAB_ARMS, TASK_ID and taskKey
 
 ## May import
+- `electron/shared/claude-background.cjs` (current launch policy for each Lab run)
 - `electron/i18n.cjs`
 - `electron/shared/ipc.cjs`
 - `electron/features/dashboard/cost.cjs`

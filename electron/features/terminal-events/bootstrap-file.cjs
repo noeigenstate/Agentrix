@@ -25,4 +25,15 @@ function removeBootstrap(file) {
   for (const name of [file, claudeEnvFile(file)]) fs.rmSync(name, { force: true });
 }
 
-module.exports = { writeBootstrap, removeBootstrap };
+// Refresh only launch policy: keys, hook settings and the private startup hook remain unchanged.
+function updateBootstrapBackground(file, allow) {
+  const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  data.claudeBackgroundTasks = allow === true;
+  const temporary = file + '.background.tmp';
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
+    fs.renameSync(temporary, file);
+  } finally { fs.rmSync(temporary, { force: true }); }
+}
+
+module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground };

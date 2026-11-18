@@ -73,12 +73,12 @@ const userText = record => typeof record.message?.content === 'string' ? record.
 
 // The parent terminal's own environment as a worker's: no Agentrix credentials or shell wiring, the user's own zsh folder
 // back, then the shims at depth 1 with this run's identity and a private copy of the Claude Code start-up hook.
-function workerEnvironment(parentEnv, { shims, runId, sessionKey, claudeEnvFile }) {
+function workerEnvironment(parentEnv, { shims, runId, sessionKey, claudeEnvFile, allowBackgroundTasks }) {
   const source = { ...parentEnv };
   if (Object.hasOwn(source, 'AGENTRIX_USER_ZDOTDIR')) {
     if (source.AGENTRIX_USER_ZDOTDIR) source.ZDOTDIR = source.AGENTRIX_USER_ZDOTDIR; else delete source.ZDOTDIR;
   }
-  const env = withoutShims(source);
+  const env = require('../../shared/claude-background.cjs').claudeBackgroundEnvironment(withoutShims(source), allowBackgroundTasks);
   for (const name of Object.keys(env)) if (PRIVATE.test(name)) delete env[name];
   const proof = createHmac('sha256', sessionKey).update(`agentrix-run:${runId}`).digest('hex');
   const shimmed = require(path.join(shims, 'intercept.cjs')).withShims(env, { depth: 1, runId, proof });
@@ -139,7 +139,7 @@ async function disposeWindowsPty(pty, deadline) {
 // deps: spawn (pty.spawn), claudeFile(), parent(run) → { env, sessionKey, bootstrapFile } | null, calls(run) → the
 // parent's AgentCalls | null, hooks({ terminalId, sessionKey, env, cwd }) → terminalHooks(), runtimeDir(), claudeHome(), send.
 // now/schedule/cancel are the one clock (tests inject it); remove deletes a folder.
-function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtimeDir, claudeHome, send = () => {},
+function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtimeDir, claudeHome, send = () => {}, allowBackgroundTasks = () => false,
   schedule = (fn, ms) => setTimeout(fn, ms), cancel = clearTimeout, now = Date.now, kill = killTree, platform = process.platform,
   remove = folder => fs.rmSync(folder, { recursive: true, force: true }), cmdPath = process.env.ComSpec || 'cmd.exe', powershellPath = 'powershell.exe' } = {}) {
   const workers = new Map();
@@ -201,7 +201,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     fs.mkdirSync(w.briefs, { recursive: true, mode: 0o700 });
     const brief = path.join(w.briefs, 'brief.md'), settings = path.join(w.folder, 'settings.json');
     fs.writeFileSync(brief, prompt, { mode: 0o600 });
-    w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh') });
+    w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() });
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
     fs.writeFileSync(settings, w.hooks.channel === 'http' ? w.hooks.settings.http : w.hooks.settings.fallback, { mode: 0o600 });
     const args = [...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs, '--permission-mode', w.spec.permission,

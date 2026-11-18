@@ -15,7 +15,8 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
 const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
-const { writeBootstrap, removeBootstrap } = require('./features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, removeBootstrap, updateBootstrapBackground } = require('./features/terminal-events/bootstrap-file.cjs');
+const { claudeBackgroundEnvironment } = require('./shared/claude-background.cjs');
 const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
 const { createHookIngest } = require('./features/terminal-events/hook-ingest.cjs');
 const { terminalHooks, reportHookChannel, startHookLaunch } = require('./features/terminal-events/hook-channel.cjs');
@@ -153,8 +154,13 @@ function systemTheme() { try { return nativeTheme.shouldUseDarkColors ? 'dark' :
 // macOS draws its own window parts (the full-screen title strip, menus, dialogs) in the system appearance unless given the theme's.
 function applyNativeTheme() { if (process.platform === 'darwin') nativeTheme.themeSource = store.settings.theme === 'light' ? 'light' : 'dark'; }
 function updateStoreSettings(patch) {
-  const { theme, uiZoom, language, shortcuts } = store.settings;
+  const { theme, uiZoom, language, shortcuts, claudeBackgroundTasks } = store.settings || {};
   store.updateSettings(patch);
+  if (claudeBackgroundTasks !== store.settings?.claudeBackgroundTasks) for (const session of sessions.values()) {
+    if (session.bootstrapFile) try { updateBootstrapBackground(session.bootstrapFile, store.settings?.claudeBackgroundTasks); } catch (error) { report(error); }
+    const remote = session.remoteConnection || (session.terminal instanceof RemoteConnection ? session.terminal : null);
+    remote?.setBackgroundTasks?.(store.settings?.claudeBackgroundTasks).catch(error => report(error));
+  }
   if (theme !== store.settings.theme) applyNativeTheme();
   // An active system backdrop needs its transparent ground, including when the theme changes.
   if (theme !== store.settings.theme && window && !window.isDestroyed() && !desktopGlassActive) window.setBackgroundColor(windowBackgroundColor());
@@ -250,6 +256,7 @@ function send(channel, data) { if (window && !window.isDestroyed()) window.webCo
 const claudeLocator = createLocator();
 // A local terminal lead's Claude workers, each in a hidden terminal of its own, never in `sessions` (worker-terminals/BOUNDARY.md).
 const workerTerminals = createWorkerTerminals({ spawn: (file, args, options) => pty.spawn(file, args, options), send, cmdPath, powershellPath,
+  allowBackgroundTasks: () => store.settings?.claudeBackgroundTasks,
   claudeFile: () => claudeLocator.peek()?.terminal?.path || null, runtimeDir: () => runtimeDir, claudeHome: () => claudeConfigDir(),
   // Only a Claude terminal lead's own environment: a terminal that switched to a native session since registration has none.
   parent: run => { const s = sessions.get(run.projectId); return s?.usageEnv && s.agent === 'claude' && !s.nativeStructured ? { env: s.usageEnv, sessionKey: s.sessionKey, bootstrapFile: s.bootstrapFile } : null; },
@@ -1095,7 +1102,8 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   }
   // The outbox is beside this file and outlives a host process restart.
   const bootstrapFile = path.join(runtimeDir, `${id}.json`);
-  writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability });
+  writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability,
+    claudeBackgroundTasks: store.settings?.claudeBackgroundTasks });
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
@@ -1213,6 +1221,7 @@ async function initializeNativeSessions() {
       const project = findProject(spec.terminalId);
       const delivery = readOnly ? null : skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
+        allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
         skills: delivery?.bundle, readingNote: readOnly ? '' : startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
           path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
@@ -1298,7 +1307,8 @@ async function initializeNativeSessions() {
       startTerminal(spec.terminalId, null, true);
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
     } });
-  registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings, terminals: workerTerminals });
+  registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings, terminals: workerTerminals,
+    env: () => claudeBackgroundEnvironment(withoutAppImage(process.env), store.settings?.claudeBackgroundTasks) });
 }
 
 function restoreTerminal(id, ...args) {
@@ -1336,14 +1346,14 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${id}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
-  let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '', { allowBackgroundTasks: store.settings.claudeBackgroundTasks });
+  let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '', { allowBackgroundTasks: store.settings?.claudeBackgroundTasks });
   // How this terminal's Claude Code reports to main (hook-channel.cjs): HTTP hooks, or command hooks behind a proxy.
   const claudeHookPath = path.join(integrationDir, 'claude-hook.ps1');
   const hooks = bootstrapFile && terminalHooks({ port: hookServer?.port, terminalId: id, sessionKey, eventServer, env, cwd: startPath,
     shell: { posix: ['zsh', 'bash'].includes(shellKind), powershellPath, script: claudeHookPath, node: process.execPath,
       helper: path.join(integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
   if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
-    powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
+    claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
     nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks });
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
@@ -1377,6 +1387,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
     ...(!['zsh', 'bash'].includes(shellKind) ? { useConpty: true, useConptyDll: true } : {}) };
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
   const terminal = project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
+    allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
     readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)

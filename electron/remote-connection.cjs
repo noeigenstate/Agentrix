@@ -114,6 +114,7 @@ class RemoteConnection {
     }, 1000);
     this.connectTimer.unref?.();
     this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills, native: options.native === true,
+      allowBackgroundTasks: options.allowBackgroundTasks === true,
       dispatchHelper: fs.readFileSync(path.join(options.integrationDir, 'dispatch.cjs'), 'utf8'),
       dispatchModules: require(path.join(options.integrationDir, 'dispatch.cjs')).runtimeFiles() });
   }
@@ -156,6 +157,7 @@ class RemoteConnection {
   send(message) {
     if (!this.closed) this.link.send({ ...message, channel: this.channel });
   }
+  setBackgroundTasks(allow) { return this.request('claude-background', { allow: allow === true }); }
   async request(op, data = {}, { signal, timeout = 30000, timeoutMessage = '读取远程文件超时，请重试。' } = {}) {
     await this.ready;
     if (signal?.aborted) throw new Error('Remote request cancelled');

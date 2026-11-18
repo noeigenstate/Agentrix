@@ -362,7 +362,14 @@ PY
     local settings_file
     settings_file=$(mktemp "${__pg_note_file%/*}/claude-settings.XXXXXX") || return 1
     printf '%s' "$settings" > "$settings_file"
-    AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings_file" "${note[@]}" "$@"
+    local name allowed
+    local -a background=()
+    while IFS= read -r name; do
+        [[ ${name^^} == CLAUDE_CODE_DISABLE_BACKGROUND_TASKS ]] && background+=(-u "$name")
+    done < <(compgen -e)
+    allowed=$(cat "$AGENTRIX_CLAUDE_BACKGROUND_FILE" 2>/dev/null)
+    [[ $allowed == 1 ]] || background+=(CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1)
+    command env "${background[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings_file" "${note[@]}" "$@"
     result=$?
     rm -f -- "$settings_file"
     __pg_emit codex-exited "$result" claude
@@ -1050,6 +1057,7 @@ class Worker:
         self.emit = emit
         self.root = None
         self.temp = None
+        self.allow_background_tasks = False
         self.skills_bundle = None
         self.dispatch_source = None
         self.dispatch_note = None
@@ -1173,6 +1181,7 @@ class Worker:
         return result if not self.stopping and route is self.claude_route else {"state": "skipped", "reason": "cancelled"}
 
     def initialize(self, config):
+        self.allow_background_tasks = config.get("allowBackgroundTasks") is True
         self.root = os.path.realpath(os.path.expanduser(config["path"]))
         if not os.path.isdir(self.root): raise ValueError("远程项目目录不存在或不是文件夹。")
         self.coding_root = os.path.realpath(os.path.expanduser(config.get("codingPath") or self.root))
@@ -1682,6 +1691,7 @@ class Worker:
 
     def agent_environment(self, reading_note, native=False):
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.write_background_choice()
         self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
         reading_note = self.startup_note(reading_note, native=native)
         with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
@@ -1700,6 +1710,7 @@ class Worker:
         self.listener.listen(8)
         self.listener.settimeout(0.5)
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root, AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path, AGENTRIX_TOKEN=self.token, AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
+        env["AGENTRIX_CLAUDE_BACKGROUND_FILE"] = os.path.join(self.temp, "claude-background")
         if os.path.isfile(os.path.join(self.temp, "dispatch.json")): env["AGENTRIX_BOOTSTRAP"] = os.path.join(self.temp, "dispatch.json")
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
@@ -1712,6 +1723,15 @@ class Worker:
         self.agent_env, self.agent_context = env, reading_note
         threading.Thread(target=self.events_loop, daemon=True).start()
         return env, rc_file
+
+    def write_background_choice(self):
+        if self.temp:
+            filename = os.path.join(self.temp, "claude-background")
+            temporary = filename + ".tmp"
+            with open(temporary, "w", encoding="utf-8") as output:
+                output.write("1" if self.allow_background_tasks else "0")
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, filename)
 
     def start_terminal(self, cols, rows, reading_note=""):
         with self.lock:
@@ -1851,7 +1871,12 @@ class Channel:
 
     def receive(self, message):
         op, worker = message.get("op"), self.worker
-        if op == "resize": worker.resize(message["cols"], message["rows"])
+        if op == "claude-background":
+            # Ordered on the channel reader, before a later input starts another Claude.
+            worker.allow_background_tasks = message.get("allow") is True
+            worker.write_background_choice()
+            worker.emit({"type": "response", "id": message.get("id"), "ok": True, "value": True})
+        elif op == "resize": worker.resize(message["cols"], message["rows"])
         elif op == "input": self.typing.submit(worker.input, message["data"])
         else: self.requests.submit(self.dispatch, message)
 

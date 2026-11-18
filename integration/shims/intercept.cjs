@@ -75,9 +75,17 @@ function bootstrapField(file, name) {
 
 // What withShims changes, as words for env(1): -u NAME or NAME=VALUE. A shell wrapper starts one planner with them.
 function shimWords(source, options) {
-  const next = withShims(source, options);
+  const next = withShims(claudeLaunchEnvironment(source), options);
   return [...Object.keys(source).filter(name => !(name in next)).flatMap(name => ['-u', name]),
     ...Object.entries(next).filter(([name, value]) => source[name] !== value).map(([name, value]) => `${name}=${value}`)];
+}
+
+// Wrappers call this immediately before each Claude launch, including terminals opened before a Settings change.
+function claudeLaunchEnvironment(source) {
+  const next = { ...source };
+  for (const name of Object.keys(next)) if (name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS') delete next[name];
+  if (bootstrapField(source.AGENTRIX_BOOTSTRAP, 'claudeBackgroundTasks') !== true) next.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
+  return next;
 }
 
 function unsupported(option) { return Object.assign(new Error(option), { option }); }
@@ -221,7 +229,7 @@ async function passThrough(agent, args, { env, cwd, stderr, locate, launch }) {
   const file = await Promise.resolve().then(() => locate(agent, env)).catch(() => null);
   if (!file) { stderr.write(`[dispatch] not run: ${agent} was not found outside the Agentrix shim folder\n`); return 127; }
   // The launcher set this only to run Node; a CLI that starts an Electron app must not inherit it.
-  const childEnv = { ...env }; delete childEnv.ELECTRON_RUN_AS_NODE;
+  const childEnv = agent === 'claude' ? claudeLaunchEnvironment(env) : { ...env }; delete childEnv.ELECTRON_RUN_AS_NODE;
   return new Promise(resolve => {
     const child = launch(file, args, { cwd, env: childEnv, stdio: 'inherit' });
     // Ctrl+C reaches the child from the terminal; a signal sent to this process alone is passed on.
