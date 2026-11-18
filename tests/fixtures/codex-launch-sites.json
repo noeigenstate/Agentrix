@@ -400,6 +400,14 @@
     "id": "integration/dispatch.cjs:7eeedc98678a9064e3c1cd6f"
   },
   {
+    "text": "launch(process.execPath, ['-e', script, __filename, file], {\n      cwd: options.cwd, env, detached: true, windowsHide: true, stdio: ['ignore', descriptor, descriptor],\n    })",
+    "id": "integration/dispatch.cjs:0d06e497f7ec9a5ac21b7973"
+  },
+  {
+    "text": "run(entry.argv, { ...deps, stdout, source: entry.source, detached: { id, admitted: () => store.update(id, { admitted: true }) }, startTimeout: 60000 })",
+    "id": "integration/dispatch.cjs:eb499088b44068e493bf3da7"
+  },
+  {
     "text": "run(args, { ...deps, launch, resolveExecutable, locate, locateClaude: findClaude, startTimeout, rateInterval, requestTimeout })",
     "id": "integration/dispatch.cjs:3a415e86a410071d1b452c5f"
   },
