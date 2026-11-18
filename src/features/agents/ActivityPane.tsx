@@ -1,6 +1,6 @@
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
-import { CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
-import type { CliState, ProjectTerminal } from '../../shared/types';
+import { Fragment, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
+import { CheckCircle, Circle, Path, WarningCircle } from '@phosphor-icons/react';
+import type { CliState, ProjectTerminal, SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
@@ -21,7 +21,31 @@ export function ActivityPane({ terminal, projectId }: { terminal: ProjectTermina
       <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。')}</p>
     </section>}
     <ApiUsage terminal={terminal} projectId={projectId} />
+    <SeatsEntry projectId={projectId} terminalId={terminal.id} />
   </aside>;
+}
+
+// The model-routing dialog loads when it is first opened.
+const SeatsDialog = lazy(() => import('./SeatsDialog').then(module => ({ default: module.SeatsDialog })));
+
+// 模型路由: a quiet button under the blocks, there only while a skill declares seats; it re-reads them whenever the skills change (a save, or a session starting).
+export function SeatsEntry({ projectId, terminalId }: { projectId?: string; terminalId: string }) {
+  const [info, setInfo] = useState<SeatsInfo | null>(null), [open, setOpen] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const api = window.agentrix;
+    if (!api?.skillSeats) return;
+    let live = true;
+    const load = () => { api.skillSeats(projectId ?? null, terminalId).then(next => { if (live) setInfo(next); }, () => { if (live) setInfo(null); }); };
+    load();
+    const stop = api.onSkills(load);
+    return () => { live = false; stop(); };
+  }, [projectId, terminalId]);
+  if (!info) return null;
+  return <div className="activity-seats">
+    <button ref={button} type="button" className="activity-seats-button" aria-haspopup="dialog" onClick={() => setOpen(true)}><Path size={14} aria-hidden="true" />{t('模型路由')}</button>
+    {open && <Suspense fallback={null}><SeatsDialog info={info} projectId={projectId} terminalId={terminalId} onClose={() => { setOpen(false); button.current?.focus(); }} /></Suspense>}
+  </div>;
 }
 
 
