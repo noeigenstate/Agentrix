@@ -1,0 +1,14 @@
+[
+  { "model": "opus", "rank": 3 },
+  { "model": "sonnet", "rank": 2 },
+  { "model": "haiku", "rank": 1 },
+  { "model": "claude-opus-5-5", "rank": 3 },
+  { "model": "claude-sonnet-5-5", "rank": 2 },
+  { "model": "claude-haiku-5-5", "rank": 1 },
+  { "model": "gpt-6.1-sol", "rank": 3 },
+  { "model": "gpt-6.2-sol", "rank": 3 },
+  { "model": "gpt-6.2-sol-mini", "rank": 1 },
+  { "model": "gpt-6.1-nano", "rank": 1 },
+  { "model": "gpt-6.3-lite", "rank": 1 },
+  { "model": "some-unknown-model", "rank": 3 }
+]

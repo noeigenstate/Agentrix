@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowCounterClockwise, CheckCircle, ListBullets, Prohibit, Warning, X } from '@phosphor-icons/react';
-import type { SeatId, SeatMap, SeatModel, SeatsInfo } from '../../shared/types';
+import { ArrowCounterClockwise, ArrowsClockwise, CheckCircle, ListBullets, Prohibit, Warning, X } from '@phosphor-icons/react';
+import type { SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import {
-  PHASES, assignModel, baselineFor, changedCount, changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, lowerLayer, modelRow, reviewerBlock, reviewerSameButAllowed,
+  PHASES, ageOf, assignCustom, assignModel, baselineFor, changedCount, changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, lowerLayer, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
   sameSeat, saveSeats, scopePayload, withSlot, seatOfSlot, setEffort, setFast, slotFamily, slotsOf, startScope, swapSlots, familyOf,
   type Edit, type Phase, type Scope, type SlotId,
 } from './skill-seats';
@@ -26,13 +26,31 @@ const arc = (center: number, radius: number) => {
   const [x0, y0] = at(center - 33), [x1, y1] = at(center + 33);
   return `M${x0} ${y0}A${radius} ${radius} 0 0 1 ${x1} ${y1}`;
 };
-const REFUSALS = { 'unknown-model': '没有这个模型', unavailable: '不可用', family: '这个座位只放 {family} 模型', same: '', effort: '这个模型不支持该强度', fast: '只有 GPT 座位能开快速' };
+const REFUSALS = {
+  'unknown-model': '没有这个模型', unavailable: '不可用', family: '这个座位只放 {family} 模型', same: '', effort: '这个模型不支持该强度', fast: '这个模型不能开快速',
+  'invalid-id': '模型名只能含字母、数字和 . : @ + / [ ] - _，以字母或数字开头，最多 160 个字符',
+};
+// Why a model has no fast switch, and what a model that has one costs.
+const FAST_REASONS = { unsupported: '这个模型不支持快速', unknown: '还不确定这个模型是否支持快速', 'agent-tool': '通过 Agent 工具运行，没有快速模式' };
+const FAST_BILLING = '快速模式可能按不同价格计费（例如 Opus 快速）';
+// What main did with a saved seat it could not run as saved.
+const ISSUES: Record<SeatIssue['code'], string> = {
+  'model-unlisted': '已调整：这个模型不在当前列表里，实际使用 {substitute}',
+  'effort-unsupported': '已调整：这个模型不支持所存的强度，实际使用 {substitute}',
+  'fast-unsupported': '已调整：这个模型不支持快速，实际使用 {substitute}',
+};
+const issueText = (issue: SeatIssue) => t(ISSUES[issue.code] ?? issue.code, { substitute: issue.substitute });
+const ageText = (at: number | null) => {
+  const { unit, count } = ageOf(at, Date.now());
+  return unit === 'never' ? t('未刷新') : unit === 'now' ? t('刚刚') : t(unit === 'min' ? '{count} 分钟前' : unit === 'hour' ? '{count} 小时前' : '{count} 天前', { count });
+};
 
 type Notice = { kind: 'info' | 'ok' | 'error'; text: string };
 type Menu = { slot: SlotId; left: number; top: number };
+type Custom = { text: string; error: string };
 
-export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: SeatsInfo; projectId?: string; terminalId?: string; onClose: () => void }) {
-  const [scope, setScope] = useState<Scope>(() => startScope(info, projectId));
+export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { info: SeatsInfo; projectId?: string; terminalId?: string; onClose: () => void }) {
+  const [scope, setScope] = useState<Scope>(() => startScope(given, projectId));
   const [draft, setDraft] = useState<SeatMap | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [listMode, setListMode] = useState(false);
@@ -43,8 +61,14 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
   const [over, setOver] = useState<SlotId | null>(null);
   const [ghost, setGhost] = useState<{ model: string; x: number; y: number } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [refreshed, setRefreshed] = useState<SeatsInfo | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [custom, setCustom] = useState<Custom | null>(null);
+  const [moved, setMoved] = useState(() => given.defaultsMoved ?? []);
   const [saving, setSaving] = useState(false);
   const dialog = useRef<HTMLDivElement>(null), body = useRef<HTMLDivElement>(null), menuBox = useRef<HTMLDivElement>(null), opener = useRef<HTMLElement | null>(null);
+  // A refresh answers with a newer record until the pane loads the next one.
+  const info = refreshed ?? given;
   const { catalog, seats } = info, lower = lowerLayer(info, scope), baseline = baselineFor(info, scope), working = draft ?? baseline;
   const count = changedCount(seats, working, baseline), dirty = count > 0, block = reviewerBlock(working, catalog), refusal = firstRefusal(working, catalog);
   const narrow = width < NARROW, list = listMode || narrow;
@@ -53,6 +77,7 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
 
   const keepButton = useRef<HTMLButtonElement>(null);
   useEffect(() => { dialog.current?.focus(); }, []);
+  useEffect(() => { setRefreshed(null); if (given.defaultsMoved?.length) setMoved(given.defaultsMoved); }, [given]);
   useEffect(() => { if (discarding) keepButton.current?.focus({ preventScroll: true }); }, [discarding]);
   // A refreshed record that already holds the draft makes the draft redundant (after a save), so later changes made elsewhere show.
   useEffect(() => { if (draft && !changedCount(seats, draft, baseline)) setDraft(null); }, [info, scope]);
@@ -79,6 +104,18 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
     if (result.reason === 'unavailable') return t('{model}（{reason}）不能放入座位', { model: label(model), reason: modelRow(catalog, model)?.reason ?? t(REFUSALS.unavailable) });
     return t(REFUSALS[result.reason], { family: slotFamily(slot) === 'codex' ? 'Codex' : 'Claude' });
   };
+  // 刷新: main reads the model lists again (throttled there) and answers with the seats; a failed read leaves the dialog as it was.
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const next = await window.agentrix.skillSeatsRefresh(projectId ?? null, terminalId ?? null);
+      if (next) { setRefreshed(next); setNotice({ kind: 'ok', text: t('模型列表已刷新') }); } else setNotice({ kind: 'error', text: t('没有刷新：没有可用的座位信息') });
+    } catch (error) {
+      setNotice({ kind: 'error', text: t('没有刷新：{message}', { message: error instanceof Error ? error.message : String(error) }) });
+    }
+    setRefreshing(false);
+  };
   const apply = (result: Edit, slot: SlotId, success: string, failedFor = slot, model = '') => {
     if (result.ok) { setDraft(result.map); setDiscarding(false); setLanded(slot); setNotice({ kind: 'info', text: success }); return; }
     const text = refusalText(result, failedFor, model);
@@ -91,6 +128,13 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
     apply(result, slot, t('{first} 与 {second} 互换了模型；下一次对话生效', { first: slotName(from), second: slotName(slot) }), lead);
   };
   const drop = (slot: SlotId, model: string, from: SlotId | null) => { if (from) swap(from, slot); else assign(slot, model); };
+  // 其他模型…: a refused id stays in the box with its reason; an accepted one is assigned like a listed model.
+  const submitCustom = (slot: SlotId) => {
+    const model = (custom?.text ?? '').trim(), result = assignCustom(working, slot, model, catalog);
+    if (!result.ok && result.reason !== 'same') { setCustom({ text: model, error: refusalText(result, slot, model) ?? '' }); return; }
+    apply(result, slot, t('{seat} 换成 {model}；下一次对话生效', { seat: slotName(slot), model: label(model) }));
+    closeMenu();
+  };
   const edit = (result: Edit) => { if (result.ok) { setDraft(result.map); setDiscarding(false); } };
   const changeScope = (next: Scope) => {
     // Only the slots the owner changed (working differs from the old scope's saved view) move to the new scope; its own saved seats stay.
@@ -125,9 +169,10 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
     if (menu?.slot === slot) { closeMenu(); return; }
     const box = button.getBoundingClientRect();
     opener.current = button;
-    setMenu({ slot, left: Math.max(8, Math.min(window.innerWidth - 288, Math.round(box.left))), top: Math.max(8, Math.min(window.innerHeight - 320, Math.round(box.bottom + 4))) });
+    setCustom(null);
+    setMenu({ slot, left: Math.max(8, Math.min(window.innerWidth - 288, Math.round(box.left))), top: Math.max(8, Math.min(window.innerHeight - 440, Math.round(box.bottom + 4))) });
   };
-  const closeMenu = () => { setMenu(null); opener.current?.focus({ preventScroll: true }); };
+  const closeMenu = () => { setMenu(null); setCustom(null); opener.current?.focus({ preventScroll: true }); };
   const pick = (slot: SlotId, model: string) => { assign(slot, model); closeMenu(); };
 
   const reset = () => { setDraft(lower); setDiscarding(false); setNotice({ kind: 'info', text: t('已恢复默认座位；下一次对话生效') }); setMenu(null); };
@@ -143,7 +188,7 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key === 'Escape') { event.stopPropagation(); if (menu) closeMenu(); else if (discarding) setDiscarding(false); else close(); return; }
     if (event.key === 'Tab') {
-      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select, [tabindex="0"]') ?? []).filter(item => !item.closest('[hidden]'));
+      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select, input, [tabindex="0"]') ?? []).filter(item => !item.closest('[hidden]'));
       const first = focusable[0], last = focusable[focusable.length - 1];
       if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last?.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
@@ -163,6 +208,8 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
     if (!seat) return null;
     if (slot === 'reviewer' && block) return { kind: 'bad', short: t('已阻止 · 同模型'), title: blockMessage() };
     if (slot === 'reviewer' && reviewerSameButAllowed(working, catalog)) return { kind: 'warn', short: t('同模型 · 无更强可换'), title: t('账户里没有不弱于它的其他模型，允许保留') };
+    const issues = sameSeat(seat, getSlot(baseline, slot)) ? issuesOf(info, slot) : [];
+    if (issues.length) return { kind: 'warn', short: t('已调整 · {substitute}', { substitute: issues[0].substitute }), title: issues.map(issueText).join('；') };
     if (isAvailable(catalog, seat.model)) return null;
     const fallback = fallbackFor(info, slot, working), reason = modelRow(catalog, seat.model)?.reason ?? '';
     if (fallback) return { kind: 'warn', short: t('回退 {model}', { model: label(fallback.model) }), title: t('{model}（{reason}）；实际使用 {fallback}', { model: label(seat.model), reason, fallback: label(fallback.model) }) };
@@ -180,7 +227,7 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
     const row = modelRow(catalog, model), off = !isAvailable(catalog, model);
     return <span className={`seats-gem${off ? ' is-off' : ''}${landing && landed ? ' is-landing' : ''}`} data-family={row?.family ?? familyOf(model)} aria-disabled={off || undefined}
       title={off ? t('{model}（{reason}）不能放入座位', { model: label(model), reason: row?.reason ?? '' }) : t('{model} · 拖到座位上', { model: label(model) })}
-      onPointerDown={event => startDrag(event, model, from)}><i className="seats-mk" />{label(model)}{off && <small>{row?.reason}</small>}</span>;
+      onPointerDown={event => startDrag(event, model, from)}><i className="seats-mk" />{label(model)}{off ? <small>{row?.reason}</small> : row?.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
   };
   const changeButton = (slot: SlotId) => <button type="button" className="seats-btn is-small" data-pick={slot} aria-haspopup="menu" aria-expanded={menu?.slot === slot}
     aria-label={t('{seat}：更换模型、强度、快速', { seat: slotName(slot) })} onClick={event => openMenu(slot, event.currentTarget)}>{t('更换')}</button>;
@@ -225,7 +272,7 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
     const seat = getSlot(working, slot), state = slotState(slot), row = seat && modelRow(catalog, seat.model);
     return <div key={slot} className={`seats-row${slot === 'reviewer' && block ? ' is-blocked' : ''}`} role="listitem" data-slot={slot}>
       <b>{slotName(slot)}{info.fresh.includes(seatOfSlot(slot)) && <span className="seats-tag">{t('新实例')}</span>}</b>
-      <span className="seats-row-model"><i className="seats-mk" data-family={row?.family ?? (seat && familyOf(seat.model))} />{seat ? label(seat.model) : t('未设置')}{row && !row.available && <small>{row.reason}</small>}</span>
+      <span className="seats-row-model"><i className="seats-mk" data-family={row?.family ?? (seat && familyOf(seat.model))} />{seat ? label(seat.model) : t('未设置')}{row && !row.available ? <small>{row.reason}</small> : row?.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>
       <span className="seats-row-effort">{seat ? effortLine(seat) : ''}</span>
       <span className="seats-row-state">{state ? stateMark(state) : changedSeats(seats, working, baseline).includes(seatOfSlot(slot)) ? t('已改，待生效') : t('正常')}</span>
       {changeButton(slot)}
@@ -238,7 +285,7 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
     const text = (map: SeatMap) => shown.map(slot => { const seat = getSlot(map, slot); return seat ? `${label(seat.model)} ${effortLine(seat)}` : ''; }).join(' + ');
     return <span key={id} className={`seats-now${changed ? ' is-diff' : ''}`}><b>{seatName(id)}</b>{text(current)}{changed && ` → ${text(working)}`}</span>;
   });
-  const menuSeat = menu && getSlot(working, menu.slot), menuFamily = menu && slotFamily(menu.slot), menuModel = menuSeat && modelRow(catalog, menuSeat.model);
+  const menuSeat = menu && getSlot(working, menu.slot), menuFamily = menu && slotFamily(menu.slot), menuModel = menuSeat && rowFor(catalog, menuSeat.model);
   const menuRows = menu ? catalog.filter((row: SeatModel) => !menuFamily || row.family === menuFamily) : [];
 
   return createPortal(<div className="seats-overlay" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
@@ -246,6 +293,7 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
       <header className="seats-head">
         <div><h2 id="seats-title">{t('模型路由')}</h2><p>{t('每个座位放哪个模型由你定。把模型拖到座位上，或点座位上的「更换」。')}</p></div>
         <div className="seats-head-actions">
+          <button type="button" className="seats-btn" data-refresh disabled={refreshing} aria-label={t('刷新模型列表')} onClick={() => { void refresh(); }}><ArrowsClockwise size={14} aria-hidden="true" />{t('刷新')}</button>
           {!narrow && <button type="button" className="seats-btn" aria-pressed={listMode} onClick={() => setListMode(!listMode)}><ListBullets size={14} aria-hidden="true" />{t('座位清单')}</button>}
           <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} onClick={close}><X size={14} aria-hidden="true" /></button>
         </div>
@@ -261,6 +309,9 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
             <button type="button" className="seats-btn" data-reset disabled={!Object.keys(scopePayload(working, lower)).length} onClick={reset}><ArrowCounterClockwise size={14} aria-hidden="true" />{t('恢复默认')}</button>
             <button type="button" className="seats-btn is-primary" data-save disabled={!dirty || !!refusal || saving} title={block ? blockMessage() : undefined} onClick={() => { void save(); }}>{t('保存')}</button>
           </div>
+          <div className="seats-strip-row"><span>{t('模型列表更新于')}</span><span data-catalog-at>{`Claude ${ageText(info.catalogAt?.claude ?? null)} · Codex ${ageText(info.catalogAt?.codex ?? null)}`}</span></div>
+          {moved.length > 0 && <div className="seats-banner" role="status" data-moved><CheckCircle size={14} aria-hidden="true" />
+            <span>{t('默认已更新为 {changes}', { changes: moved.map(item => `${item.seat.includes('.') ? slotName(item.seat as SlotId) : seatName(item.seat as SeatId)}：${label(item.from)} → ${label(item.to)}`).join('；') })}</span></div>}
           {block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" />
             <span><b>{t('审查座位被阻止。')}</b>{blockMessage()}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join('、') })}`}</span>
             <span className="seats-grow" />{block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: block.fix.label })}</button>}</div>}
@@ -276,12 +327,20 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
       {menu && menuSeat && <div ref={menuBox} className="seats-menu" role="menu" aria-label={t('{seat}：选择模型', { seat: slotName(menu.slot) })} style={{ left: menu.left, top: menu.top }} onKeyDown={menuKeys}>
         <h3>{t('{seat}：选择模型', { seat: slotName(menu.slot) })}</h3>
         {menuRows.map(row => <button key={row.model} type="button" role="menuitemradio" className="seats-menu-item" aria-checked={row.model === menuSeat.model} data-assign={row.model} disabled={!row.available} onClick={() => pick(menu.slot, row.model)}>
-          <i className="seats-mk" data-family={row.family} />{row.label}{!row.available ? <small>{row.reason}</small> : row.model === menuSeat.model && <small>{t('当前')}</small>}</button>)}
+          <i className="seats-mk" data-family={row.family} />{row.label}{!row.available ? <small>{row.reason}</small> : row.listed === false ? <small data-unlisted>{t('不在最新列表')}</small> : row.model === menuSeat.model && <small>{t('当前')}</small>}</button>)}
+        {custom ? <div className="seats-menu-custom">
+          <input type="text" data-custom-input maxLength={160} autoFocus spellCheck={false} aria-label={t('模型名')} placeholder={t('模型名，例如 gpt-6.3-sol')} value={custom.text}
+            onChange={event => setCustom({ text: event.target.value, error: '' })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submitCustom(menu.slot); } }} />
+          <button type="button" className="seats-btn is-small" data-custom-apply onClick={() => submitCustom(menu.slot)}>{t('使用')}</button>
+          {custom.error && <small className="seats-menu-error" role="alert" data-custom-error>{custom.error}</small>}
+        </div> : <button type="button" role="menuitem" className="seats-menu-item" data-custom onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
         <div className="seats-menu-settings">
-          <select data-effort={menu.slot} aria-label={t('{seat}的推理强度', { seat: slotName(menu.slot) })} value={menuSeat.effort} onChange={event => edit(setEffort(working, menu.slot, event.target.value))}>
+          <select data-effort={menu.slot} aria-label={t('{seat}的推理强度', { seat: slotName(menu.slot) })} value={menuSeat.effort} onChange={event => edit(setEffort(working, menu.slot, event.target.value, catalog))}>
             {(menuModel?.efforts ?? [menuSeat.effort]).map(effort => <option key={effort} value={effort}>{t('强度 {effort}', { effort })}</option>)}</select>
-          {familyOf(menuSeat.model) === 'codex' && <button type="button" className="seats-switch" role="switch" aria-checked={!!menuSeat.fast} data-fast={menu.slot} aria-label={t('{seat}快速模式', { seat: slotName(menu.slot) })}
-            onClick={() => edit(setFast(working, menu.slot, !menuSeat.fast))}>{t('快速')}<i /></button>}
+          <button type="button" className="seats-switch" role="switch" aria-checked={!!menuSeat.fast} data-fast={menu.slot} disabled={!menuModel?.fast && !menuSeat.fast} aria-label={t('{seat}快速模式', { seat: slotName(menu.slot) })}
+            onClick={() => edit(setFast(working, menu.slot, !menuSeat.fast, catalog))}>{t('快速')}<i /></button>
+          {!menuModel?.fast ? <small className="seats-menu-note" data-fast-note>{t(FAST_REASONS[menuModel?.fastReason ?? 'unsupported'])}</small>
+            : menuModel.family === 'claude' && <small className="seats-menu-note" data-fast-note>{t(FAST_BILLING)}</small>}
         </div>
       </div>}
       {ghost && <span className="seats-ghost" style={{ left: ghost.x, top: ghost.y }} data-family={modelRow(catalog, ghost.model)?.family}><i className="seats-mk" />{label(ghost.model)}</span>}
