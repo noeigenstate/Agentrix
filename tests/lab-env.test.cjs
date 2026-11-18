@@ -15,7 +15,7 @@ function sessionFixture(t) {
   session.active = true;
   const launched = [];
   session.launchJob = (id, args, options) => new Promise(resolve => {
-    const job = { id, args, options, finish: (code = 0) => {
+    const job = { id, args, options, settle: (code = 0) => resolve({ code }), finish: (code = 0) => {
       options.onLine(`[dispatch] ended ${id} codex model fixture · exit ${code} reason completed`); resolve({ code });
     } };
     options.signal.addEventListener('abort', () => job.finish(130), { once: true });
@@ -68,6 +68,76 @@ test('Lab detach outlives the start RPC and wait returns its end line', async t 
   const reply = await rpc(session, root, ['wait', id]);
   assert.match(reply[0].output, new RegExp('ended ' + id));
   assert.equal(reply.at(-1).exitCode, 0);
+});
+
+test('Lab wait delivers the live session start once across timeouts and retains request receipts', async t => {
+  const { session, root, launched } = sessionFixture(t);
+  await rpc(session, root, ['codex', '--detach']);
+  const [id] = session.dispatches.keys(), job = launched[0], lines = [];
+  let expire;
+  session.schedule = callback => { expire = callback; return 1; };
+  session.cancel = () => {};
+  const first = session.waitDispatch(['wait', id], { onLine: line => lines.push(line) });
+  const start = `[dispatch] started ${id} codex model fixture · pid 7 session X`;
+  job.options.onLine(start);
+  assert.deepEqual(lines, [start], 'the lead receives the session id before the worker ends');
+  job.options.onLine(`[dispatch] request ${id} question-1 approval opened: fixture`);
+  assert.match(lines[1], /request .*approval opened/);
+  expire(); assert.equal((await first).code, 75);
+  assert.equal(session.dispatches.get(id).listeners.size, 0);
+  const second = session.waitDispatch(['wait', id], { onLine: line => lines.push(line) });
+  job.finish(); assert.equal((await second).code, 0);
+  assert.equal(lines.filter(line => line.startsWith('[dispatch] started ')).length, 1);
+  assert.match(lines.at(-1), new RegExp('ended ' + id));
+});
+
+for (const kind of ['failed to start', 'failed:']) test(`Lab wait preserves ${kind} admission diagnostics in its fallback end`, async t => {
+  const { session, root, launched } = sessionFixture(t);
+  await rpc(session, root, ['claude', '--detach']);
+  const [id] = session.dispatches.keys(), job = launched[0];
+  const failure = kind === 'failed:' ? '[dispatch] failed: invalid --model argument'
+    : `[dispatch] failed to start ${id}: confirmed roundtable required`;
+  job.options.onLine(failure);
+  job.options.onLine('[dispatch] request: confirm the roundtable first');
+  job.settle(1);
+  const reply = await rpc(session, root, ['wait', id]);
+  const lines = reply.filter(value => value.output).map(value => value.output.trim());
+  assert.equal(lines[0], failure);
+  assert.match(lines[1], /request: confirm the roundtable/);
+  assert.ok(lines[2].startsWith(`[dispatch] ended ${id} `));
+  assert.ok(lines[2].includes(failure), 'the fallback end retains the actionable refusal');
+  assert.equal(reply.at(-1).exitCode, 0, 'wait reports completion; the worker exit code is in its end line');
+});
+
+test('Lab detached receipts are bounded while the lead is away', async t => {
+  const { session, root, launched } = sessionFixture(t);
+  await rpc(session, root, ['claude', '--detach']);
+  const [id] = session.dispatches.keys(), job = launched[0], entry = session.dispatches.get(id);
+  for (let n = 0; n < 30; n++) job.options.onLine(`[dispatch] request ${id} ${n} ` + 'x'.repeat(10000));
+  assert.equal(entry.messages.length, 16);
+  assert.ok(entry.messages.every(line => line.length === 4096));
+  job.finish(); await entry.done;
+});
+
+test('Lab wait reports unknown ids and still completes known runs with exit 1', async t => {
+  const { session, root, launched } = sessionFixture(t);
+  await rpc(session, root, ['codex', '--detach']);
+  const [id] = session.dispatches.keys(); launched[0].finish();
+  const reply = await rpc(session, root, ['wait', 'unknown-run', id, '--cwd', root]);
+  assert.match(reply[0].output, /unknown run unknown-run/);
+  assert.match(reply[1].output, new RegExp('ended ' + id));
+  assert.equal(reply.at(-1).exitCode, 1);
+});
+
+test('Lab stop accepts its documented reason and keeps option validation strict', async t => {
+  const { session, root, launched } = sessionFixture(t);
+  await rpc(session, root, ['claude', '--detach']);
+  const [id] = session.dispatches.keys(), reason = 'Owner stopped this review';
+  const reply = await rpc(session, root, ['stop', id, '--reason', reason, '--cwd', root, '--no-resume']);
+  assert.equal(reply.at(-1).exitCode, 0);
+  assert.equal(launched[0].options.signal.reason, reason);
+  assert.throws(() => session.dispatchSelection(['stop', id, '--reason']), /Missing/);
+  assert.throws(() => session.dispatchSelection(['wait', id, '--reason', reason]), /option/);
 });
 
 test('Lab wait caps its timeout and returns 75 without stopping either parallel run', async t => {

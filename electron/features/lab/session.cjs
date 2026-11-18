@@ -244,6 +244,11 @@ class LabSession {
       !['codex', 'claude', 'minutes', 'consolidate', 'wait', 'stop'].includes(args[0])) throw new Error('Invalid lab dispatch arguments.');
     const roots = [this.workspaceRoot];
     await localPath(cwd, cwd, roots, true);
+    if (['wait', 'stop'].includes(args[0])) {
+      const selection = this.dispatchSelection(args);
+      if (selection.cwd) await localPath(selection.cwd, cwd, roots, true);
+      return args;
+    }
     if (args.includes('--detach') && !['codex', 'claude'].includes(args[0])) throw new Error('Only workers can detach.');
     const inputPaths = new Set(['--cwd', '--brief', '--ledger', '--summary', '--issues', '--incidents', '--findings', '--image']);
     for (let index = 1; index < args.length; index++) {
@@ -260,34 +265,51 @@ class LabSession {
         }
       }
     }
-    if (['wait', 'stop'].includes(args[0])) this.dispatchSelection(args);
     return args;
   }
   dispatchSelection(args) {
-    const ids = []; let timeout = 540;
+    const ids = [], seen = new Set(); let timeout = 540, cwd, reason;
     for (let i = 1; i < args.length; i++) {
-      if (args[i] === '--timeout' && args[0] === 'wait') timeout = Number(args[++i]);
-      else if (args[i] === '--cwd') { if (!args[++i]) throw new Error('Missing dispatch path.'); }
-      else if (this.dispatches.has(args[i]) && !ids.includes(args[i])) ids.push(args[i]);
-      else throw new Error('Unknown lab dispatch run.');
+      const option = args[i];
+      if (option.startsWith('--')) {
+        if (seen.has(option) || !(option === '--cwd' || option === '--timeout' && args[0] === 'wait'
+          || ['--reason', '--no-resume'].includes(option) && args[0] === 'stop')) throw new Error('Unknown or repeated lab dispatch option.');
+        seen.add(option);
+        if (option === '--no-resume') continue;
+        const value = args[++i];
+        if (!value || value.startsWith('--')) throw new Error('Missing lab dispatch option value.');
+        if (option === '--timeout') timeout = Number(value);
+        else if (option === '--cwd') cwd = value;
+        else reason = value;
+      } else if (/^[\w.-]{1,128}$/.test(option)) { if (!ids.includes(option)) ids.push(option); }
+      else throw new Error('Invalid lab dispatch run id.');
     }
     if (!ids.length || args[0] === 'stop' && ids.length !== 1 || !Number.isFinite(timeout) || timeout <= 0 || timeout > 570) {
       throw new Error('Invalid lab wait or stop arguments (timeout must be at most 570 seconds).');
     }
-    return { ids, timeout };
+    return { ids, timeout, cwd, reason };
   }
   detachDispatch(args, options) {
     const id = randomUUID(), control = new AbortController(), now = this.now || Date.now;
-    const entry = { id, control, createdAt: now(), activityAt: now(), settled: false, endedLine: null };
+    const entry = { id, control, createdAt: now(), activityAt: now(), settled: false, endedLine: null,
+      startedLine: null, startReported: false, messages: [], listeners: new Set() };
     // Retain the job in this session; the short-lived RPC is not its lifetime or its meter authority.
     const running = this.launch(args.filter(arg => arg !== '--detach'), { ...options, dispatchId: id,
       signal: AbortSignal.any([control.signal, this.controller.signal]), onLine: line => {
         entry.activityAt = now();
-        if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line;
+        if (line.startsWith(`[dispatch] started ${id} `)) entry.startedLine ||= line.slice(0, 8192);
+        else if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line.slice(0, 8192);
+        else if (line.startsWith(`[dispatch] failed to start ${id}:`) || line.startsWith('[dispatch] failed:')
+          || line.startsWith(`[dispatch] request ${id} `) || line.startsWith('[dispatch] request:')) {
+          entry.messages.push(line.slice(0, 4096));
+          if (entry.messages.length > 16) entry.messages.shift();
+          if (line.startsWith('[dispatch] failed')) entry.error ||= line.slice(0, 1000);
+        }
+        for (const listener of entry.listeners) listener();
       } });
     this.dispatches.set(id, entry);
     entry.done = running.then(result => { entry.code = result.code ?? 1; }, error => {
-      entry.code = 1; entry.error = String(error.message).replace(/[\r\n]/g, ' ').slice(0, 500);
+      entry.code = 1; entry.error ||= String(error.message).replace(/[\r\n]/g, ' ').slice(0, 500);
     }).then(() => {
       entry.settled = true; entry.activityAt = now();
       entry.endedLine ||= `[dispatch] ended ${id} · exit ${entry.code} reason ${control.signal.aborted ? 'stopped' : 'error'}${entry.error ? ' · ' + entry.error : ''}`;
@@ -296,7 +318,13 @@ class LabSession {
     return { code: 0 };
   }
   async waitDispatch(args, { signal, onLine }) {
-    const { ids, timeout } = this.dispatchSelection(args), entries = ids.map(id => this.dispatches.get(id));
+    const { ids, timeout } = this.dispatchSelection(args), entries = [];
+    let unknown = false;
+    for (const id of ids) {
+      const entry = this.dispatches.get(id);
+      if (entry) entries.push(entry);
+      else { onLine(`[dispatch] unknown run ${id}`); unknown = true; }
+    }
     let timer, cancel;
     const schedule = this.schedule || setTimeout, clear = this.cancel || clearTimeout;
     const stopped = new Promise(resolve => {
@@ -306,21 +334,34 @@ class LabSession {
       if (signal?.aborted) cancel();
     });
     let open = true;
+    const listeners = entries.map(entry => {
+      const flush = () => {
+        if (!open) return;
+        if (entry.startedLine && !entry.startReported) { entry.startReported = true; onLine(entry.startedLine); }
+        for (const line of entry.messages.splice(0)) onLine(line);
+      };
+      entry.listeners.add(flush); flush();
+      return flush;
+    });
     try {
-      const complete = Promise.all(entries.map(async entry => {
+      const complete = Promise.all(entries.map(async (entry, index) => {
         await entry.done;
-        if (open) onLine(entry.endedLine);
-      })).then(() => 0);
+        if (open) { listeners[index](); onLine(entry.endedLine); }
+      })).then(() => unknown ? 1 : 0);
       const code = await Promise.race([complete, stopped]);
       if (code === 75) for (const entry of entries) if (!entry.settled) {
         onLine(`[dispatch] still running ${entry.id} · ${Math.floor(((this.now || Date.now)() - entry.createdAt) / 1000)} s · last activity ${new Date(entry.activityAt).toISOString()}`);
       }
       return { code };
-    } finally { open = false; clear(timer); signal?.removeEventListener('abort', cancel); }
+    } finally {
+      open = false; clear(timer); signal?.removeEventListener('abort', cancel);
+      entries.forEach((entry, index) => entry.listeners.delete(listeners[index]));
+    }
   }
   async stopDispatch(args, { onLine }) {
-    const { ids } = this.dispatchSelection(args), entry = this.dispatches.get(ids[0]);
-    entry.control.abort(); await entry.done; onLine(entry.endedLine);
+    const { ids, reason } = this.dispatchSelection(args), entry = this.dispatches.get(ids[0]);
+    if (!entry) { onLine(`[dispatch] unknown run ${ids[0]}`); return { code: 1 }; }
+    entry.control.abort(reason); await entry.done; onLine(entry.endedLine);
     return { code: 0 };
   }
   launch(args, options = {}) {
