@@ -1,0 +1,12 @@
+{
+  "{seat}的强度：{effort}": "{seat}: effort {effort}",
+  "{seat}：选择强度": "{seat}: choose effort",
+  "{seat} 属于 {step}": "{seat} belongs to {step}",
+  "{seat} 不在流程的某一步里": "{seat} is not in a step of the flow",
+  "悬停一步，看谁在这一步；悬停座位，看它属于哪一步": "Hover a step to see who is in it; hover a seat to see its step",
+  "流程": "Flow",
+  "搜索模型": "Search models",
+  "更早版本 ({count})": "Earlier versions ({count})",
+  "没有匹配的模型": "No matching models",
+  "开启后更快，用量与计费可能不同": "Faster when on; usage and billing may differ"
+}
