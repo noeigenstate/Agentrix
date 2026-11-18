@@ -3399,5 +3399,11 @@
   "搜索模型": "Search models",
   "更早版本 ({count})": "Earlier versions ({count})",
   "没有匹配的模型": "No matching models",
-  "开启后更快，用量与计费可能不同": "Faster when on; usage and billing may differ"
+  "开启后更快，用量与计费可能不同": "Faster when on; usage and billing may differ",
+  "模型路由改版": "Model routing redesign",
+  "圆桌现在占满整个弹窗，文字更大；模型放在右侧面板里，按系列和线路分组、最新的在前、旧版本折叠起来，还能搜索。中间显示 规划 → 构建 → 审查 → 验收，以及每一步用到哪些座位。": "The table now fills the dialog with larger text. Models sit in a right-hand panel grouped by family and line, newest first with older versions folded, and you can search them. The centre shows Plan → Build → Review → Accept and which seats belong to each step.",
+  "强度直接调": "Set effort on the seat",
+  "每个座位的思考深度和快速开关，现在直接在座位上点就能改；以前只能在「更换」里改，有些座位上的控件还点不了。": "Each seat's thinking depth and fast switch can now be clicked right on the seat. They used to be only inside Change, and some seat controls could not be clicked.",
+  "菜单能关掉": "Menus can be closed",
+  "「更换」和强度弹窗，点外面、再点一次、点 ✕ 或按 Esc 都能关掉。": "The Change and effort popovers close when you click outside, click again, click ✕ or press Escape."
 }
