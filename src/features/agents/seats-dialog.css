@@ -10,15 +10,15 @@
   --tbl-a: #ffffff; --tbl-b: #e3e7ed; --edge-a: #c9cfd8; --edge-b: #a3acb9; --floor-a: #f6f7fa; --floor-b: #cfd5de;
 }
 .seats-overlay { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--bg-app) 72%, transparent); -webkit-app-region: no-drag; }
-.seats-dialog { position: relative; display: flex; flex-direction: column; width: min(960px, 100%); max-height: 100%; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-menu); color: var(--text-1);
-  box-shadow: 0 16px 40px var(--lo2); outline: none; font-size: 13px; line-height: 20px; }
+.seats-dialog { position: relative; display: flex; flex-direction: column; width: min(1560px, 100%); height: min(100%, 1000px); border: 1px solid var(--border); border-radius: 16px; background: var(--bg-menu); color: var(--text-1);
+  box-shadow: 0 16px 40px var(--lo2); outline: none; font-size: 14px; line-height: 20px; overflow: hidden; }
 .seats-dialog :is(h2, h3, p) { margin: 0; }
 .seats-dialog :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.seats-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--divider); }
+.seats-head { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--divider); }
 .seats-head h2 { font-size: 20px; line-height: 28px; font-weight: 600; }
-.seats-head p { margin-top: 4px; color: var(--text-2); }
+.seats-age { color: var(--text-3); font-size: 13px; line-height: 20px; }
 .seats-head-actions { display: flex; flex: none; gap: 8px; }
-.seats-body { display: flex; flex-direction: column; gap: 16px; min-height: 0; padding: 16px 24px 24px; overflow: auto; overscroll-behavior: contain; }
+.seats-body { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; }
 
 .seats-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-2);
   font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background .12s ease, border-color .12s ease; }
@@ -36,8 +36,8 @@
 .seats-chg { border: 1px solid var(--border-hover); color: var(--text-1); }
 
 /* The strip: whether a change is waiting, the scope, the actions, the blocked reviewer's banner and this conversation's seats (read-only). */
-.seats-strip { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-app); }
-.seats-strip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.seats-strip { position: relative; z-index: 6; display: flex; flex-direction: column; gap: 8px; padding: 8px 20px; border-bottom: 1px solid var(--divider); background: var(--bg-app); }
+.seats-strip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 13px; line-height: 20px; color: var(--text-2); }
 .seats-grow { flex: 1; }
 .seats-effective { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; line-height: 20px; font-weight: 600; color: var(--text-1); }
 .seats-dot { width: 8px; height: 8px; border: 1px solid var(--text-3); border-radius: 50%; flex: none; }
@@ -63,7 +63,8 @@
 .seats-notice[data-kind="error"] { color: var(--danger); }
 .seats-notice > svg { color: var(--success); }
 
-.seats-state { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: var(--text-1); }
+.seats-state { display: inline-flex; align-items: center; gap: 4px; min-width: 0; font-weight: 600; color: var(--text-1); }
+.seats-state > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seats-state.is-bad { color: var(--danger); }
 .seats-state > svg { flex: none; color: var(--warning); }
 .seats-state.is-bad > svg { color: var(--danger); }
@@ -88,36 +89,29 @@
 .seats-empty { color: var(--text-3); font-size: 12px; }
 
 /* The disc, scaled to the dialog's width (zoom): a 900px stage whose plane is tilted back, floating a few pixels. */
-.seats-scene { position: relative; width: min(900px, 100%); margin: 0 auto; border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
-  background: radial-gradient(ellipse 55% 45% at 50% 42%, var(--hi), transparent 72%), radial-gradient(ellipse 90% 90% at 50% 40%, var(--floor-a), var(--floor-b)); }
-.seats-zoom { width: 900px; margin: 0 auto; }
-.seats-stage { position: relative; width: 900px; height: 580px; perspective: 1900px; perspective-origin: 50% 24%; }
+.seats-work { display: flex; flex: 1; min-height: 0; position: relative; }
+.seats-scene { position: relative; flex: 1; min-width: 0; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  background: radial-gradient(ellipse 55% 50% at 50% 50%, var(--hi), transparent 72%), radial-gradient(ellipse 90% 90% at 50% 45%, var(--floor-a), var(--floor-b)); }
+.seats-zoom { flex: none; width: 1130px; }
+.seats-stage { position: relative; width: 1130px; height: 700px; perspective: 2200px; perspective-origin: 50% 22%; }
 .seats-float { position: absolute; inset: 0; transform-style: preserve-3d; animation: seats-bob 7s ease-in-out infinite alternate; }
 @keyframes seats-bob { from { translate: 0 6px; } to { translate: 0 -6px; } }
-.seats-plane { position: absolute; left: 50%; top: 318px; width: 700px; height: 700px; margin: -350px 0 0 -350px; transform: rotateX(var(--tilt)); transform-style: preserve-3d; }
-.seats-gshadow { position: absolute; inset: 40px; border-radius: 50%; background: var(--lo3); filter: blur(30px); transform: translateZ(-170px); }
+.seats-plane { position: absolute; left: 50%; top: 380px; width: 940px; height: 940px; margin: -470px 0 0 -470px; transform: rotateX(var(--tilt)); transform-style: preserve-3d; }
+.seats-gshadow { position: absolute; inset: 50px; border-radius: 50%; background: var(--lo3); filter: blur(34px); transform: translateZ(-170px); }
 .seats-glow { position: absolute; inset: -40px; border-radius: 50%; background: radial-gradient(circle, transparent 54%, var(--hi2) 62%, transparent 72%); transform: translateZ(-22px); }
 .seats-under { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 90deg, var(--edge-b), var(--edge-a), var(--edge-b)); }
 .seats-top { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 30% 22%, var(--hi) 0, transparent 42%), radial-gradient(circle at 50% 50%, var(--tbl-a) 0 45%, var(--tbl-b) 100%);
   box-shadow: inset 0 0 0 1px var(--border), inset 0 0 0 18px var(--hi2), inset 0 0 0 19px var(--lo), inset 0 -10px 30px var(--lo); }
-.seats-track { position: absolute; inset: 40px; border-radius: 50%; border: 1px solid var(--lo2); box-shadow: inset 0 2px 4px var(--lo), 0 1px 0 var(--hi); }
-.seats-hole { position: absolute; inset: 232px; border-radius: 50%; background: radial-gradient(circle at 40% 30%, var(--tbl-a), var(--tbl-b)); box-shadow: inset 0 3px 8px var(--lo2), 0 1px 0 var(--hi); border: 1px solid var(--lo); }
-.seats-flow { position: absolute; inset: 208px; width: 284px; height: 284px; overflow: visible; }
-.seats-flow path { fill: none; stroke: var(--border); stroke-width: 14; stroke-linecap: round; transition: stroke .25s ease; }
-.seats-flow path.is-lit { stroke: var(--text-3); }
-.seats-phase { position: absolute; left: 50%; top: 50%; display: grid; place-items: center; width: 72px; height: 28px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card); font-size: 12px; font-weight: 600; color: var(--text-2);
-  transform-origin: 0 0; transform-style: preserve-3d; transform: translate3d(var(--x), var(--y), 6px) rotateX(calc(var(--tilt) * -1)) translate(-50%, -100%);
-  box-shadow: inset 0 1px 0 var(--hi), 0 2px 0 var(--edge-a), 0 8px 10px var(--lo2); transition: box-shadow .3s var(--seats-ease), color .25s ease, border-color .25s ease; }
-.seats-phase.is-lit { color: var(--text-1); border-color: var(--text-2); box-shadow: inset 0 1px 0 var(--hi), 0 2px 0 var(--edge-a), 0 12px 14px var(--lo3); }
+.seats-track { position: absolute; inset: 44px; border-radius: 50%; border: 1px solid var(--lo2); box-shadow: inset 0 2px 4px var(--lo), 0 1px 0 var(--hi); }
 
 /* A seat tile on the rim: a pedestal under a flat plate that stands up out of the tilted plane. Hover or a drag over it lifts it. */
 .seats-tile { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; transform: translate3d(var(--x), var(--y), var(--z, 0px)); transition: transform .3s var(--seats-ease); }
 .seats-tile:is(:hover, :focus-within, .is-over) { --z: 24px; }
-.seats-ped { position: absolute; left: calc(var(--w) * -.5 - 10px); top: -34px; width: calc(var(--w) + 20px); height: 72px; border-radius: 18px; transform-style: preserve-3d;
+.seats-ped { position: absolute; left: calc(var(--w) * -.5 - 10px); top: calc(var(--h) * -.5 + 10px); width: calc(var(--w) + 20px); height: 80px; border-radius: 18px; transform-style: preserve-3d;
   background: linear-gradient(135deg, var(--hi), transparent 50%), var(--tbl-a); box-shadow: inset 0 0 0 1px var(--border), inset 0 -2px 0 var(--lo); transition: box-shadow .3s var(--seats-ease); }
 .seats-ped i { position: absolute; inset: 0; border-radius: 18px; background: var(--edge-a); }
 .seats-tile.is-over .seats-ped { box-shadow: inset 0 0 0 1px var(--text-2), 0 0 0 4px var(--hi2); }
-.seats-tsh { position: absolute; left: calc(var(--w) * -.5); top: -28px; width: var(--w); height: 66px; border-radius: 22px; background: var(--lo3); filter: blur(12px);
+.seats-tsh { position: absolute; left: calc(var(--w) * -.5); top: -28px; width: var(--w); height: 72px; border-radius: 22px; background: var(--lo3); filter: blur(12px);
   transform: translateZ(calc(var(--z, 0px) * -1 - 2px)); opacity: .5; transition: opacity .3s ease, transform .3s var(--seats-ease); }
 .seats-tile:is(:hover, :focus-within, .is-over) .seats-tsh { opacity: .9; }
 .seats-bb { position: absolute; left: 0; top: 0; width: var(--w); height: var(--h); transform-origin: 0 0; transform-style: preserve-3d; transform: translate3d(0, 6px, 10px) rotateX(calc(var(--tilt) * -1)) translate(-50%, -100%); }
@@ -128,30 +122,26 @@
 .seats-plate.is-blocked { border-color: var(--danger); }
 .seats-plate.is-ripple { animation: seats-ripple .8s ease-out; }
 @keyframes seats-ripple { 0% { box-shadow: inset 0 0 0 1px var(--text-2), 0 0 0 0 var(--hi); } 100% { box-shadow: inset 0 0 0 1px var(--border), 0 0 0 26px transparent; } }
-.seats-plate-head { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; height: 20px; }
-.seats-plate-head b { font-size: 14px; line-height: 20px; font-weight: 600; white-space: nowrap; }
-.seats-plate-body { position: relative; z-index: 1; display: flex; flex: 1; min-height: 0; gap: 8px; }
-.seats-slot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; border-radius: 8px; }
+.seats-plate-head { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; height: 22px; min-width: 0; }
+.seats-plate-head b { font-size: 15px; line-height: 22px; font-weight: 600; white-space: nowrap; }
+.seats-plate-body { position: relative; z-index: 1; display: flex; flex: 1; min-height: 0; gap: 10px; }
+.seats-slot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; border-radius: 8px; }
 .seats-slot.is-over { background: var(--bg-selected); outline: 2px solid var(--text-2); outline-offset: 1px; }
-.seats-slot-label { font-size: 12px; line-height: 16px; color: var(--text-3); }
+.seats-slot-label { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; line-height: 14px; color: var(--text-3); }
 .seats-slot-token { display: flex; align-items: center; min-width: 0; min-height: 32px; }
 .seats-slot-token .seats-gem { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.seats-slot-foot { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 32px; }
-.seats-slot-info { display: flex; flex-direction: column; min-width: 0; font-size: 12px; line-height: 16px; color: var(--text-2); }
-.seats-slot-info > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.seats-dock { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px; width: max-content; max-width: calc(100% - 48px); margin: 0 auto 16px; padding: 8px 20px; border: 1px solid var(--border); border-radius: 999px;
-  background: linear-gradient(180deg, var(--hi), transparent 55%), var(--bg-card); box-shadow: inset 0 1px 0 var(--hi), 0 2px 0 var(--edge-a), 0 18px 30px var(--lo2); }
-.seats-dock-title { font-size: 13px; line-height: 20px; font-weight: 600; }
+.seats-slot-foot { display: flex; align-items: center; gap: 6px; min-height: 30px; }
+.seats-slot-foot .seats-btn { margin-left: auto; height: 30px; font-size: 13px; }
 
 /* 座位清单: the same seats as rows, for the keyboard and for a dialog too narrow for the disc. */
 .seats-roster { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
-.seats-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(120px, 1.2fr) minmax(64px, .6fr) minmax(112px, 1fr) auto; align-items: center; gap: 8px 16px; padding: 8px 16px; border-top: 1px solid var(--divider); font-size: 13px; }
+.seats-row { display: grid; grid-template-columns: minmax(120px, 1.1fr) minmax(120px, 1.2fr) minmax(150px, .9fr) minmax(112px, 1fr) auto; align-items: center; gap: 8px 16px; padding: 8px 16px; border-top: 1px solid var(--divider); font-size: 14px; }
 .seats-row:first-child { border-top: 0; }
 .seats-row.is-blocked { box-shadow: inset 0 0 0 1px var(--danger); border-radius: 8px; }
 .seats-row b { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-weight: 600; }
 .seats-row-model { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .seats-row-model small { font-size: 12px; color: var(--text-3); }
-.seats-row-effort, .seats-row-state { font-size: 12px; color: var(--text-2); }
+.seats-row-effort, .seats-row-state { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); }
 @container (max-width: 520px) { .seats-row { grid-template-columns: 1fr auto; } }
 .seats-body { container-type: inline-size; }
 @media (max-width: 640px) { .seats-row { grid-template-columns: 1fr auto; } .seats-head, .seats-body { padding-left: 16px; padding-right: 16px; } }
@@ -159,9 +149,10 @@
 /* The 更换 menu: model, effort, fast. */
 .seats-menu { position: fixed; z-index: 460; display: flex; flex-direction: column; gap: 4px; width: 280px; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-menu); box-shadow: 0 4px 12px rgb(0 0 0 / .05), 0 16px 40px var(--lo2); }
 .seats-menu-list { display: flex; flex: 0 1 auto; flex-direction: column; gap: 4px; min-height: 96px; overflow-y: auto; overscroll-behavior: contain; }
-.seats-menu h3, .seats-menu-settings { flex: none; }
-.seats-menu h3 { padding: 4px 8px; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-3); }
-.seats-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
+.seats-menu-head, .seats-menu-settings { flex: none; }
+.seats-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.seats-menu h3 { padding: 4px 8px; font-size: 13px; line-height: 16px; font-weight: 400; color: var(--text-3); }
+.seats-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
 .seats-menu-item:hover:not(:disabled) { background: var(--bg-hover); }
 .seats-menu-item[aria-checked="true"] { background: var(--bg-selected); font-weight: 600; }
 .seats-menu-item:disabled { color: var(--text-disabled); cursor: not-allowed; }
@@ -181,6 +172,60 @@
 .seats-menu-note { flex-basis: 100%; font-size: 12px; line-height: 16px; color: var(--text-3); }
 .seats-switch:disabled { color: var(--text-disabled); cursor: not-allowed; }
 .seats-gem small[data-unlisted], .seats-row-model small[data-unlisted], .seats-menu-item small[data-unlisted] { font-style: italic; }
+
+/* The effort button and the fast switch on a tile and in the list. */
+.seats-effort { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.seats-effort:hover { border-color: var(--border-hover); background: var(--bg-hover); }
+.seats-effort[aria-expanded="true"] { background: var(--bg-selected); border-color: var(--border-hover); }
+.seats-fast { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.seats-fast i { position: relative; width: 32px; height: 18px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); }
+.seats-fast i::before { content: ''; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-3); }
+.seats-fast[aria-checked="true"] i { background: var(--bg-selected); border-color: var(--border-hover); }
+.seats-fast[aria-checked="true"] i::before { left: 16px; background: var(--text-1); }
+.seats-fast:disabled { color: var(--text-disabled); cursor: not-allowed; }
+.seats-tile.is-lit .seats-plate { outline: 2px solid var(--text-2); outline-offset: 2px; }
+
+/* The flow in the middle of the table: flat, large, and linked to the seats. */
+.seats-flowbar { position: absolute; left: 50%; top: 190px; z-index: 4; width: 452px; margin-left: -226px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.seats-steps { display: flex; align-items: center; gap: 4px; }
+.seats-stepwrap { display: inline-flex; align-items: center; gap: 4px; }
+.seats-step { display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card); color: var(--text-2); font-size: 16px; font-weight: 600; cursor: default;
+  box-shadow: inset 0 1px 0 var(--hi), 0 2px 0 var(--edge-a), 0 8px 12px var(--lo2); transition: border-color .25s ease, background .25s ease, color .25s ease; }
+.seats-step em { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--bg-selected); color: var(--text-2); font-size: 12px; font-style: normal; }
+.seats-step.is-lit { color: var(--text-1); border-color: var(--text-2); background: var(--bg-selected); }
+.seats-arrow { color: var(--text-3); font-size: 16px; }
+.seats-readout { width: 100%; min-height: 62px; margin: 0; padding: 8px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); color: var(--text-2); font-size: 14px; line-height: 22px; text-align: center; box-shadow: 0 6px 12px var(--lo); }
+.seats-readout b { color: var(--text-1); }
+.seats-member { display: inline-flex; align-items: center; height: 26px; margin: 2px 4px; padding: 0 10px; border-radius: 999px; background: var(--bg-selected); color: var(--text-1); font-size: 13px; }
+
+/* 模型盘: the right-hand panel, grouped by family and model line. Under a wide dialog it is a drawer opened from the strip. */
+.seats-palette { display: flex; flex: none; flex-direction: column; gap: 12px; width: 340px; min-height: 0; padding: 16px; border-left: 1px solid var(--divider); background: var(--bg-app); }
+.seats-palette.is-drawer { position: absolute; top: 0; right: 0; bottom: 0; z-index: 8; box-shadow: -12px 0 28px var(--lo2); background: var(--bg-menu); }
+.seats-palette h3 { font-size: 15px; line-height: 20px; }
+.seats-search { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-3); }
+.seats-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text-1); font: inherit; font-size: 14px; }
+.seats-groups { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.seats-group h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--text-2); }
+.seats-group h4 .seats-mk { width: 10px; height: 10px; }
+.seats-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0; border-top: 1px solid var(--divider); }
+.seats-group h4 + .seats-line { border-top: 0; }
+.seats-line-name { width: 56px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+.seats-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 28px; padding: 0 10px 0 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-card); color: var(--text-1); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: grab; user-select: none; touch-action: none;
+  box-shadow: inset 0 1px 0 var(--hi), 0 3px 6px var(--lo); }
+.seats-chip:hover { border-color: var(--border-hover); }
+.seats-chip .seats-mk { width: 10px; height: 10px; }
+.seats-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.seats-chip.is-old { font-weight: 400; color: var(--text-2); }
+.seats-chip.is-off { border-style: dashed; background: transparent; box-shadow: none; color: var(--text-disabled); cursor: not-allowed; filter: grayscale(1); }
+.seats-chip small { font-size: 12px; font-weight: 400; color: var(--text-3); font-style: italic; }
+.seats-fold { height: 28px; padding: 0 10px; border: 1px dashed var(--border-hover); border-radius: 14px; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
+.seats-fold:hover { background: var(--bg-hover); color: var(--text-1); }
+.seats-fold[aria-expanded="true"] { background: var(--bg-selected); color: var(--text-1); }
+.seats-none { color: var(--text-3); }
+.seats-listcol { flex: 1; min-height: 0; padding: 16px 20px 20px; overflow: auto; }
+
+/* 本次对话, folded behind a button in the strip. */
+.seats-nowbox { position: absolute; left: 20px; top: 100%; z-index: 30; display: flex; flex-direction: column; gap: 8px; max-width: calc(100% - 40px); margin-top: 4px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-menu); box-shadow: 0 8px 24px var(--lo2); font-size: 13px; }
 
 @media (prefers-reduced-motion: reduce) {
   .seats-float, .seats-gem.is-landing, .seats-plate.is-ripple { animation: none; }

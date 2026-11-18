@@ -17,29 +17,33 @@ const AUTHORS: Exclude<SeatId, 'lead'>[] = ['core', 'execution'];
 // Which step of the flow a seat belongs to; the dialog's inner ring lights it while the seat is hovered.
 export const PHASES: Record<string, Phase> = { architect: 'plan', core: 'build', execution: 'build', reviewer: 'review', visual: 'accept' };
 
-// Where each seat's tile stands on the disc (plane coordinates). A tile stands upright above its plane point, whose y the tilt flattens by cos(tilt), so overlap is judged on the screen
-// rectangles. The ring starts evenly spaced and any tile that would touch the lead tile slides outward until it clears it, whatever the tile widths are.
+// Where each seat's tile stands on the table (plane coordinates). A tile stands upright above its plane point, whose y the tilt flattens by cos(tilt), so overlap is judged on the screen
+// rectangles. The seven fixed seats have set spots (checked clear of each other and of the wide lead tile); a seat without one goes on the rim and slides outward off the lead tile.
 export const TILT = 55;
 export type SeatSpot = { x: number; y: number; w: number; h: number };
-const sizeOf = (id: SeatId) => id === 'lead' ? { w: 400, h: 124 } : { w: 164, h: 108 };
+const SPOTS: Partial<Record<SeatId, SeatSpot>> = {
+  lead: { x: 0, y: -330, w: 470, h: 150 }, architect: { x: 364, y: -168, w: 224, h: 120 }, reviewer: { x: -364, y: -168, w: 224, h: 120 }, core: { x: 404, y: 92, w: 224, h: 120 },
+  lookup: { x: -404, y: 92, w: 224, h: 120 }, execution: { x: 160, y: 268, w: 224, h: 120 }, visual: { x: -160, y: 268, w: 224, h: 120 },
+};
 const flat = Math.cos(TILT * Math.PI / 180);
 export const spotsTouch = (a: SeatSpot, b: SeatSpot, gap: number) => Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && a.y * flat - a.h < b.y * flat + gap && b.y * flat - b.h < a.y * flat + gap;
 export function seatLayout(ids: SeatId[]): Record<string, SeatSpot> {
   const spots: Record<string, SeatSpot> = {};
-  if (ids.includes('lead')) spots.lead = { x: 0, y: -282, ...sizeOf('lead') };
   ids.forEach((id, index) => {
-    if (id === 'lead') return;
+    const known = SPOTS[id];
+    if (known) { spots[id] = known; return; }
     const angle = (-90 + index * 360 / ids.length) * Math.PI / 180;
-    let spot: SeatSpot = { x: Math.round(Math.cos(angle) * 270), y: Math.round(Math.sin(angle) * 270), ...sizeOf(id) };
-    while (spots.lead && spotsTouch(spot, spots.lead, 12) && Math.abs(spot.x) + spot.w / 2 < 440) spot = { ...spot, x: spot.x + (spot.x < 0 ? -4 : 4) };
+    let spot: SeatSpot = { x: Math.round(Math.cos(angle) * 410), y: Math.round(Math.sin(angle) * 270), w: 224, h: 120 };
+    const lead = SPOTS.lead!;
+    while (ids.includes('lead') && spotsTouch(spot, lead, 12) && Math.abs(spot.x) + spot.w / 2 < 560) spot = { ...spot, x: spot.x + (spot.x < 0 ? -4 : 4) };
     spots[id] = spot;
   });
   return spots;
 }
 // A shorter name for a small tile: "Opus (follows latest)" is "Opus (latest)"; the menu and the list keep the full text.
 export const shortLabel = (label: string) => label.replace(/\s*\(follows latest\)$/i, ' (latest)');
-// The disc's size (the 900 x 580 stage), and the scale that fits it in the width and in the height left by the rest of the dialog.
-export const STAGE_W = 900, STAGE_H = 580;
+// The table's size (the 1130 x 700 stage), and the scale that fits it in the width and in the height left by the rest of the dialog.
+export const STAGE_W = 1130, STAGE_H = 700;
 export const sceneScale = (width: number, space: number) => Math.max(0.5, Math.min(1, width / STAGE_W, space / STAGE_H));
 // Where the 更换 menu goes: under its button, else above it, else on the roomier side; it never leaves the viewport, and the model list scrolls inside it (maxHeight).
 export function menuPlacement(anchor: { left: number; top: number; bottom: number }, view: { width: number; height: number }, rows: number): { left: number; top?: number; bottom?: number; maxHeight: number } {
@@ -229,4 +233,39 @@ export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string |
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
+}
+
+// The seats that belong to a step of the flow, in the skill's seat order.
+export const seatsOfPhase = (phase: Phase, seats: SeatId[]) => seats.filter(id => PHASES[id] === phase);
+
+// 模型盘: the catalog grouped by family and then by model line, the line read from the id (never from a list of names, so a new line shows up by itself). Each line shows its aliases
+// and its newest version first; older versions fold away. A search keeps only the matching rows.
+export type PaletteLine = { name: string; shown: SeatModel[]; older: SeatModel[] };
+export type PaletteGroup = { family: Family; total: number; lines: PaletteLine[] };
+const idVersion = (model: string): number[] => (model.replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '').match(/\d+(?:\.\d+)*/g) ?? []).flatMap(part => part.split('.').map(Number));
+const versionNewer = (a: number[], b: number[]) => { for (let at = 0; at < Math.max(a.length, b.length); at++) if ((a[at] ?? 0) !== (b[at] ?? 0)) return (a[at] ?? 0) > (b[at] ?? 0); return false; };
+const isAliasRow = (row: SeatModel) => row.source === 'alias' || /^[a-z]+$/i.test(row.model);
+// The line is the first word of the id that is not the vendor prefix or a number ("claude-opus-5" and "opus" are Opus, "gpt-6.2-sol" is Sol, "gpt-5.5" has none).
+export function lineOf(row: SeatModel): string {
+  const word = row.model.replace(/\[[^\]]*\]$/, '').split(/[-_\s.:/]+/).find(part => /^[a-z]/i.test(part) && !/^(gpt|claude)$/i.test(part));
+  return word ? word[0].toUpperCase() + word.slice(1).toLowerCase() : '';
+}
+export function paletteGroups(catalog: SeatModel[], query = ''): PaletteGroup[] {
+  const q = query.trim().toLowerCase(), match = (row: SeatModel) => !q || row.label.toLowerCase().includes(q) || row.model.toLowerCase().includes(q);
+  const groups = (['claude', 'codex'] as Family[]).map(family => {
+    const rows = catalog.filter(row => row.family === family), names: string[] = [], byLine = new Map<string, SeatModel[]>();
+    for (const row of rows) { const name = lineOf(row); if (!byLine.has(name)) { byLine.set(name, []); names.push(name); } byLine.get(name)!.push(row); }
+    names.sort((a, b) => Number(a === '') - Number(b === ''));
+    const lines = names.map(name => {
+      const all = byLine.get(name)!, versions = all.filter(row => !isAliasRow(row)).map(row => idVersion(row.model)).filter(version => version.length);
+      const top = versions.reduce<number[]>((best, version) => versionNewer(version, best) ? version : best, []);
+      const current = (row: SeatModel) => isAliasRow(row) || !idVersion(row.model).length || (!versionNewer(idVersion(row.model), top) && !versionNewer(top, idVersion(row.model)));
+      const weight = (row: SeatModel) => isAliasRow(row) ? 0 : idVersion(row.model).length ? 2 : 1;
+      const shown = all.filter(current).sort((a, b) => weight(a) - weight(b));
+      const older = all.filter(row => !current(row)).sort((a, b) => versionNewer(idVersion(a.model), idVersion(b.model)) ? -1 : versionNewer(idVersion(b.model), idVersion(a.model)) ? 1 : 0);
+      return { name, shown: shown.filter(match), older: older.filter(match) };
+    }).filter(line => line.shown.length || line.older.length);
+    return { family, total: rows.length, lines };
+  });
+  return q ? groups.filter(group => group.lines.length) : groups;
 }

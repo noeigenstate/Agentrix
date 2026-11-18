@@ -6,10 +6,10 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const seatsLib = require('../src/features/agents/skill-seats.ts');
-const { seatLayout, spotsTouch, shortLabel, pickFix, sceneScale, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
+const { paletteGroups, lineOf, STAGE_W, STAGE_H, seatLayout, spotsTouch, shortLabel, pickFix, sceneScale, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
 
 const en = require('../electron/locales/en.json');
-const additions = path.join(__dirname, '../locale-additions-cat.json');
+const additions = path.join(__dirname, '../locale-additions-seats2.json');
 if (fs.existsSync(additions)) Object.assign(en, JSON.parse(fs.readFileSync(additions, 'utf8')));
 
 // ---- fixtures: the catalog and defaults main sends (model-seats.cjs: opus = sol = 3, sonnet 2, haiku 1) ----
@@ -168,9 +168,10 @@ function dialogHarness(t, info, props = {}) {
   const api = { setSkillSeats: async (...args) => { calls.push(args); return props.reply ?? { ok: true }; },
     skillSeatsRefresh: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; } };
   globalThis.window = { agentrix: api, innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
-  globalThis.document = { activeElement: null, elementFromPoint: () => null };
+  const listeners = [];
+  globalThis.document = { activeElement: null, elementFromPoint: () => null, addEventListener: (type, fn) => listeners.push([type, fn]), removeEventListener: (type, fn) => { const at = listeners.findIndex(entry => entry[0] === type && entry[1] === fn); if (at >= 0) listeners.splice(at, 1); } };
   const h = mount(t, 'SeatsDialog.tsx', 'SeatsDialog', { info, projectId: 'p1', terminalId: 't1', onClose: () => closed.push(true), ...props.dialog });
-  return Object.assign(h, { calls, closed, refreshes });
+  return Object.assign(h, { calls, closed, refreshes, outsideMouseDown: target => listeners.filter(entry => entry[0] === 'mousedown').forEach(entry => entry[1]({ target })) });
 }
 const keyEvent = key => ({ key, stopPropagation() {}, preventDefault() {} });
 
@@ -259,6 +260,8 @@ test('unavailable models are greyed with their reason, cannot be picked, and thi
   const gems = findAll(tree, node => node.props.className?.includes('seats-gem is-off'));
   assert.ok(gems.length >= 1, 'the tray token is greyed');
   assert.match(textOf(gems[0]), /Codex is not installed\./);
+  byAttr(tree, 'data-now').props.onClick();
+  tree = h.render();
   assert.match(textOf(tree), /This conversation \(read-only\)/);
   assert.match(textOf(find(tree, node => node.props.className?.includes('seats-now is-diff'))), /Architect\s*Sonnet low → Opus high/, 'a seat that differs from this conversation shows both');
   byAttr(tree, 'data-pick', 'core').props.onClick(pickButton('core'));
@@ -290,8 +293,7 @@ test('dragging a seat’s model onto another seat swaps them, and a tray model r
   const modelOf = slot => textOf(find(byAttr(tree, 'data-slot', slot), node => node.props.className?.startsWith('seats-gem')));
   assert.equal(modelOf('core'), 'Sonnet');
   assert.equal(modelOf('execution'), 'GPT-6.1-Sol');
-  const trayGem = findAll(tree, node => node.props.className?.startsWith('seats-dock'))[0];
-  const haiku = findAll(trayGem, node => node.props.className?.startsWith('seats-gem')).find(node => textOf(node) === 'Haiku');
+  const haiku = byAttr(tree, 'data-chip', 'haiku');
   haiku.props.onPointerDown({ button: 0, clientX: 0, clientY: 0 });
   target = 'visual';
   listeners.pointermove({ clientX: 80, clientY: 80 });
@@ -529,12 +531,12 @@ test('the refresh button asks main for the seats, shows the new catalog and when
   const refreshed = seatsInfo({ catalog: [...catalog(), row('gpt-6.2-sol', 'GPT-6.2-Sol', 'codex', 3)], catalogAt: { claude: now, codex: now - 120000 } });
   const h = dialogHarness(t, seatsInfo({ catalogAt: at }), { refreshed });
   let tree = h.render();
-  assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude 3 h ago · Codex not refreshed');
+  assert.match(textOf(byAttr(tree, 'data-catalog-at')), /Claude 3 h ago · Codex not refreshed$/);
   byAttr(tree, 'data-refresh').props.onClick();
   await settle();
   assert.deepEqual(h.refreshes, [['p1', 't1', 'dialog'], ['p1', 't1', 'manual']], 'once when the dialog opens (throttled in main), once for the button (always)');
   tree = h.render();
-  assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude just now · Codex 2 min ago');
+  assert.match(textOf(byAttr(tree, 'data-catalog-at')), /Claude just now · Codex 2 min ago$/);
   assert.match(textOf(find(tree, node => node.props.role === 'status')), /Model lists refreshed/);
   assert.ok(assignable(openMenu(h, 'architect')).includes('gpt-6.2-sol'), 'the new model is offered');
   const failing = dialogHarness(t, seatsInfo(), { refreshError: 'probe timed out' });
@@ -654,9 +656,9 @@ test('the 更换 menu and the stage stay inside the viewport: the menu flips or 
   const tall = menuPlacement({ left: 400, top: 500, bottom: 532 }, view, 18);
   assert.ok(tall.maxHeight <= 500, '18 rows with 468 px each side: the roomier side, the list scrolls inside');
   for (const place of [roomy, flipped, tall, menuPlacement({ left: 1590, top: 20, bottom: 52 }, view, 18), menuPlacement({ left: -5, top: 990, bottom: 999 }, view, 18)]) inside(place);
-  assert.equal(sceneScale(1400, 4000), 1, 'a roomy window keeps the stage whole');
-  assert.equal(sceneScale(1400, 456), 456 / 580, 'a short window scales the stage to the height left');
-  assert.equal(sceneScale(600, 4000), 600 / 900, 'a narrow dialog scales to its width');
+  assert.equal(sceneScale(2000, 4000), 1, 'a roomy window keeps the stage whole');
+  assert.equal(sceneScale(2000, 456), 456 / STAGE_H, 'a short window scales the stage to the height left');
+  assert.equal(sceneScale(600, 4000), 600 / STAGE_W, 'a narrow dialog scales to its width');
   assert.equal(sceneScale(100, 50), 0.5, 'never below half');
 });
 
@@ -665,13 +667,13 @@ test('the lead tile is wide enough for two slots, every model dot carries its fa
   const h = dialogHarness(t, info);
   const tree = h.render();
   const lead = byAttr(tree, 'data-seat', 'lead');
-  assert.equal(lead.props.style['--w'], '400px', 'two slots side by side with room for "Opus (follows latest)"');
-  assert.equal(byAttr(tree, 'data-seat', 'core').props.style['--w'], '164px');
+  assert.equal(lead.props.style['--w'], '470px', 'two slots side by side with room for "Opus (follows latest)"');
+  assert.equal(byAttr(tree, 'data-seat', 'core').props.style['--w'], '224px');
   const dots = findAll(tree, node => node.props.className === 'seats-mk');
   assert.ok(dots.length > 0 && dots.every(node => node.props['data-family'] === 'claude' || node.props['data-family'] === 'codex'), 'no dot is left without a family');
   assert.ok(dots.some(node => node.props['data-family'] === 'codex') && dots.some(node => node.props['data-family'] === 'claude'));
-  const off = findAll(tree, node => node.props.className?.includes('seats-gem is-off'));
-  assert.ok(off.length >= 1 && off.every(gem => /Codex is not installed/.test(textOf(gem))), 'a Codex model is greyed with its reason');
+  const off = findAll(tree, node => node.props.className?.includes('seats-chip') && node.props.className.includes('is-off'));
+  assert.ok(off.length >= 1 && off.every(chip => /Codex is not installed/.test(chip.props.title)), 'a Codex model is greyed in the panel with its reason');
   assert.deepEqual(assignModel(clone(DEFAULTS), 'execution', 'gpt-6.1-sol', withInstalled(catalog(), { claude: true, codex: false }, () => 'x')), { ok: false, reason: 'unavailable' });
   assert.equal(withInstalled(catalog(), undefined, () => 'x').every(entry => entry.available), true, 'a record without the field changes nothing');
   byAttr(tree, 'data-pick', 'core').props.onClick(pickButton('core'));
@@ -701,7 +703,7 @@ test('no seat tile touches the wide lead tile, or another seat, at 1600×1000 an
       const spots = seatLayout(ids);
       for (const id of ids.slice(1)) {
         assert.equal(spotsTouch(spots[id], spots.lead, 12), false, `${id} clears the lead tile with 12px to spare (${count} seats, ${width}×${height})`);
-        assert.ok(Math.abs(spots[id].x) + spots[id].w / 2 <= 450, `${id} stays on the 900px stage`);
+        assert.ok(Math.abs(spots[id].x) + spots[id].w / 2 <= STAGE_W / 2, `${id} stays on the stage`);
       }
     }
     // The seven real seats: their screen rectangles do not overlap each other either (the perspective gives the ring neighbours about 12px more room than this flat model).
@@ -709,8 +711,8 @@ test('no seat tile touches the wide lead tile, or another seat, at 1600×1000 an
     for (const [index, [first, a]] of list.entries()) for (const [second, b] of list.slice(index + 1)) assert.equal(spotsTouch(a, b, -12), false, `${first} and ${second} do not overlap`);
   }
   const spots = seatLayout(['lead', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']);
-  assert.equal(spots.lead.w, 400);
-  assert.ok(spots.reviewer.x + 82 <= -200 - 12 && spots.architect.x - 82 >= 200 + 12, 'the two seats beside the lead slid out from under its corners');
+  assert.equal(spots.lead.w, 470);
+  assert.ok(spots.reviewer.x + spots.reviewer.w / 2 <= -spots.lead.w / 2 - 12 && spots.architect.x - spots.architect.w / 2 >= spots.lead.w / 2 + 12, 'the two seats beside the lead stand clear of its corners');
 });
 
 test('a small tile shows a shorter alias name and ends a long one in an ellipsis; the full text stays in the title, the tray and the menu', t => {
@@ -723,8 +725,8 @@ test('a small tile shows a shorter alias name and ends a long one in an ellipsis
   const gem = find(slot, node => node.props.className?.startsWith('seats-gem'));
   assert.equal(textOf(find(gem, node => node.props.className === 'seats-gem-name')), 'Opus (latest)');
   assert.match(gem.props.title, /Opus \(follows latest\)/, 'the tooltip has the full name');
-  const dock = find(tree, node => node.props.className === 'seats-dock');
-  assert.match(textOf(dock), /Opus \(follows latest\)/, 'the tray keeps the full name');
+  assert.match(byAttr(tree, 'data-chip', 'opus').props.title, /Opus \(follows latest\)/, 'the panel chip keeps the full name in its title');
+  assert.match(textOf(openMenu(h, 'architect')), /Opus \(follows latest\)/, 'the menu keeps the full name');
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
   assert.match(css, /\.seats-gem-name \{[^}]*text-overflow: ellipsis/);
 });
@@ -740,4 +742,202 @@ test('the one-click fix is the reviewer’s default if it is a candidate, else t
   assert.equal(strongest.fix.model, 'gpt-6.2-sol', 'no other seat runs a candidate: the strongest, newest id (not Fable, which is only first in the list)');
   assert.equal(reviewerBlock({ ...none, core: { model: 'opus', effort: 'high' }, reviewer: { model: 'opus', effort: 'high' } }, [...rows].reverse(), undefined).fix.model, 'gpt-6.2-sol', 'the same pick in any list order');
   assert.equal(pickFix([], map, rows), null);
+});
+
+// ---- layout A (round cat-r2): effort on the tile, menus that close, the grouped 模型盘 ----
+// The owner's real catalog (28 models): three "follows latest" aliases, the bare-named rows, and the versioned ids of Claude and Codex.
+const REAL = [
+  row('opus', 'Opus (follows latest)', 'claude', 3, { source: 'alias', fast: true }), row('sonnet', 'Sonnet (follows latest)', 'claude', 2, { source: 'alias' }), row('haiku', 'Haiku (follows latest)', 'claude', 1, { source: 'alias' }),
+  row('claude-opus-5[1m]', 'Opus', 'claude', 3), row('claude-fable-5-1[1m]', 'Fable', 'claude', 3), row('claude-sonnet-5[1m]', 'Sonnet', 'claude', 2), row('claude-haiku-4-5[1m]', 'Haiku', 'claude', 1),
+  row('claude-fable-5-1', 'claude-fable-5-1', 'claude', 3), row('claude-opus-5', 'claude-opus-5', 'claude', 3), row('claude-sonnet-5', 'claude-sonnet-5', 'claude', 2), row('claude-fable-5', 'claude-fable-5', 'claude', 3),
+  row('claude-opus-4-8', 'claude-opus-4-8', 'claude', 3), row('claude-opus-4-7', 'claude-opus-4-7', 'claude', 3), row('claude-sonnet-4-6', 'claude-sonnet-4-6', 'claude', 2), row('claude-opus-4-6', 'claude-opus-4-6', 'claude', 3),
+  row('claude-opus-4-5-20251101', 'claude-opus-4-5-20251101', 'claude', 3), row('claude-haiku-4-5-20251001', 'claude-haiku-4-5-20251001', 'claude', 1),
+  ...[['gpt-6.2-sol', 'GPT-6.2-Sol'], ['gpt-6.2-astra', 'GPT-6.2-Astra'], ['gpt-6.1-terra', 'GPT-6.1 Terra'], ['gpt-6.1-sol', 'GPT-6.1-Sol'], ['gpt-6-astra', 'GPT-6-Astra'], ['gpt-6-sol', 'GPT-6-Sol'],
+    ['gpt-6-luna', 'GPT-6-Luna'], ['gpt-5.6-sol', 'GPT-5.6-Sol'], ['gpt-5.6-terra', 'GPT-5.6-Terra'], ['gpt-5.6-luna', 'GPT-5.6-Luna'], ['gpt-5.5', 'GPT-5.5']].map(([id, label]) => row(id, label, 'codex', 3)),
+];
+const lineNamed = (groups, family, name) => groups.find(group => group.family === family).lines.find(line => line.name === name);
+const ids = rows => rows.map(entry => entry.model);
+
+test('the 模型盘 groups the real 28-model catalog by family and line, aliases and the newest version first, older versions folded; a new line appears by itself', () => {
+  const groups = paletteGroups(REAL);
+  assert.deepEqual(groups.map(group => [group.family, group.total]), [['claude', 17], ['codex', 11]]);
+  assert.deepEqual(groups[0].lines.map(line => line.name), ['Opus', 'Sonnet', 'Haiku', 'Fable'], 'Claude lines in catalog order');
+  assert.deepEqual(groups[1].lines.map(line => line.name), ['Sol', 'Astra', 'Terra', 'Luna', ''], 'Codex lines, the unnamed one last');
+  const opus = lineNamed(groups, 'claude', 'Opus');
+  assert.deepEqual(ids(opus.shown), ['opus', 'claude-opus-5[1m]', 'claude-opus-5'], 'the alias first, then the newest version');
+  assert.deepEqual(ids(opus.older), ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5-20251101'], 'older versions newest first, a date suffix is not a version');
+  assert.deepEqual(ids(lineNamed(groups, 'claude', 'Fable').older), ['claude-fable-5'], 'Fable 5.1 is newer than 5');
+  assert.equal(lineNamed(groups, 'claude', 'Haiku').older.length, 0, 'a line with nothing older has no fold');
+  const sol = lineNamed(groups, 'codex', 'Sol');
+  assert.deepEqual(ids(sol.shown), ['gpt-6.2-sol']);
+  assert.deepEqual(ids(sol.older), ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol']);
+  assert.deepEqual(ids(lineNamed(groups, 'codex', '').shown), ['gpt-5.5']);
+  const total = groups.flatMap(group => group.lines).reduce((n, line) => n + line.shown.length + line.older.length, 0);
+  assert.equal(total, REAL.length, 'every model is in exactly one place');
+  const withNew = paletteGroups([...REAL, row('gpt-7-nova', 'GPT-7-Nova', 'codex', 3), row('gpt-6.9-nova', 'GPT-6.9-Nova', 'codex', 3), row('claude-quill-1', 'claude-quill-1', 'claude', 3)]);
+  assert.deepEqual(ids(lineNamed(withNew, 'codex', 'Nova').shown), ['gpt-7-nova'], 'a new line is a new group, its newest first');
+  assert.deepEqual(ids(lineNamed(withNew, 'codex', 'Nova').older), ['gpt-6.9-nova']);
+  assert.deepEqual(ids(lineNamed(withNew, 'claude', 'Quill').shown), ['claude-quill-1']);
+  assert.deepEqual(['Opus', 'Sol', ''].map((name, at) => lineOf(REAL.find(entry => entry.model === ['claude-opus-4-7', 'gpt-6-sol', 'gpt-5.5'][at]))), ['Opus', 'Sol', '']);
+});
+
+test('the search in the 模型盘 keeps only matching models, in their lines, and says when nothing matches', t => {
+  const groups = paletteGroups(REAL, 'opus');
+  assert.deepEqual(groups.map(group => group.family), ['claude'], 'a family with no match disappears');
+  assert.deepEqual(groups[0].lines.map(line => line.name), ['Opus']);
+  assert.equal(groups[0].lines[0].shown.length + groups[0].lines[0].older.length, 7, 'every Opus row matches, old ones too');
+  assert.deepEqual(ids(lineNamed(paletteGroups(REAL, 'SOL'), 'codex', 'Sol').older), ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol'], 'case does not matter');
+  assert.deepEqual(paletteGroups(REAL, 'zzz'), []);
+  const h = dialogHarness(t, seatsInfo({ catalog: REAL }));
+  let tree = h.render();
+  const chips = () => findAll(h.render(), node => node.props['data-chip'] !== undefined).map(node => node.props['data-chip']);
+  assert.equal(chips().length, 16, 'the 12 older versions are folded away');
+  byAttr(tree, 'data-palette-search').props.onChange({ target: { value: 'sol' } });
+  assert.deepEqual(chips(), ['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol'], 'a search opens the folds of the lines it matches in');
+  byAttr(h.render(), 'data-palette-search').props.onChange({ target: { value: 'zzz' } });
+  assert.match(textOf(h.render()), /No matching models/);
+});
+
+test('the palette shows the newest of each line, folds the rest under 更早版本 (N), and a fold opens and closes', t => {
+  const h = dialogHarness(t, seatsInfo({ catalog: REAL }));
+  let tree = h.render();
+  const shown = () => findAll(h.render(), node => node.props['data-chip'] !== undefined).map(node => node.props['data-chip']);
+  assert.ok(shown().includes('claude-opus-5') && !shown().includes('claude-opus-4-8'));
+  const fold = byAttr(tree, 'data-fold', 'claudeOpus');
+  assert.equal(textOf(fold), 'Earlier versions (4)');
+  assert.equal(fold.props['aria-expanded'], false);
+  fold.props.onClick();
+  assert.ok(shown().includes('claude-opus-4-8') && shown().includes('claude-opus-4-5-20251101'), 'the fold shows the four older versions');
+  assert.equal(byAttr(h.render(), 'data-fold', 'claudeOpus').props['aria-expanded'], true);
+  byAttr(h.render(), 'data-fold', 'claudeOpus').props.onClick();
+  assert.ok(!shown().includes('claude-opus-4-8'), 'and closes again');
+  assert.equal(byAttr(h.render(), 'data-fold', 'claudeHaiku'), undefined, 'a line with nothing older has no fold');
+  const groups = findAll(h.render(), node => node.props['data-group'] !== undefined).map(node => node.props['data-group']);
+  assert.deepEqual(groups, ['claude', 'codex']);
+});
+
+test('dragging a model from the 模型盘 onto a seat assigns it, and a model the agent cannot run is greyed there', t => {
+  const h = dialogHarness(t, seatsInfo({ catalog: REAL, installed: { claude: true, codex: false } }));
+  const listeners = {};
+  globalThis.window.addEventListener = (type, listener) => { listeners[type] = listener; };
+  globalThis.window.removeEventListener = type => { delete listeners[type]; };
+  let target = null;
+  globalThis.document.elementFromPoint = () => target && { closest: () => ({ dataset: { slot: target } }) };
+  let tree = h.render();
+  const sonnet = byAttr(tree, 'data-chip', 'claude-sonnet-5');
+  sonnet.props.onPointerDown({ button: 0, clientX: 0, clientY: 0 });
+  target = 'lookup';
+  listeners.pointermove({ clientX: 60, clientY: 60 });
+  listeners.pointerup({ clientX: 60, clientY: 60 });
+  tree = h.render();
+  assert.equal(textOf(find(byAttr(tree, 'data-slot', 'lookup'), node => node.props.className?.startsWith('seats-gem-name'))), 'claude-sonnet-5');
+  const off = byAttr(tree, 'data-chip', 'gpt-6.2-sol');
+  assert.match(off.props.className, /is-off/);
+  assert.match(off.props.title, /Codex is not installed/);
+  off.props.onPointerDown({ button: 0, clientX: 0, clientY: 0 });
+  assert.equal(Object.keys(listeners).length, 0, 'a greyed chip cannot be dragged');
+});
+
+test('the effort button on every tile opens a popover with the model’s own levels and the fast switch, and a pick changes the seat', async t => {
+  const rows = catalog({ opus: { fast: true, efforts: ['low', 'high', 'ultra'] }, 'gpt-6.1-sol': { efforts: ['low', 'high'] }, sonnet: { fastReason: 'unsupported' } });
+  const h = dialogHarness(t, seatsInfo({ catalog: rows }));
+  let tree = h.render();
+  const slotsWithButtons = findAll(tree, node => node.props['data-tile-effort'] !== undefined).map(node => node.props['data-tile-effort']);
+  assert.deepEqual(slotsWithButtons, ['lead.claude', 'lead.codex', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer'], 'every tile and both lead slots');
+  assert.equal(textOf(byAttr(tree, 'data-tile-effort', 'architect')), 'high');
+  byAttr(tree, 'data-tile-effort', 'architect').props.onClick(pickButton('architect'));
+  const pop = liveMenu(h);
+  assert.match(pop.props.className, /is-effort/);
+  assert.deepEqual(findAll(pop, node => node.props['data-pop-effort'] !== undefined).map(node => node.props['data-pop-effort']), ['low', 'high', 'ultra'], 'the model’s own levels');
+  assert.equal(byAttr(pop, 'data-pop-fast', 'architect').props.disabled, false, 'Opus lists fast');
+  assert.match(textOf(byAttr(pop, 'data-fast-note')), /billed at a different price \(for example Opus fast\)/);
+  byAttr(pop, 'data-pop-effort', 'ultra').props.onClick();
+  assert.equal(liveMenu(h), undefined, 'a pick closes the popover');
+  tree = h.render();
+  assert.equal(textOf(byAttr(tree, 'data-tile-effort', 'architect')), 'ultra');
+  assert.match(textOf(tree), /Unsaved draft · 1 seats changed/);
+  byAttr(tree, 'data-tile-effort', 'core').props.onClick(pickButton('core'));
+  assert.deepEqual(findAll(liveMenu(h), node => node.props['data-pop-effort'] !== undefined).map(node => node.props['data-pop-effort']), ['low', 'high']);
+  byAttr(liveMenu(h), 'data-pop-fast', 'core').props.onClick();
+  assert.equal(byAttr(liveMenu(h), 'data-pop-fast', 'core').props['aria-checked'], false, 'fast turned off in the popover');
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls, [['global', null, { architect: { model: 'opus', effort: 'ultra' }, core: { model: 'gpt-6.1-sol', effort: 'high', fast: false } }]], 'the tile controls are saved like the menu’s');
+  // The fast switch on the tile is the same switch: on where the row lists fast, disabled with its reason where not.
+  const tile = h.render();
+  assert.equal(byAttr(tile, 'data-tile-fast', 'execution').props.disabled, true);
+  assert.match(byAttr(tile, 'data-tile-fast', 'execution').props.title, /does not support fast mode/);
+  byAttr(tile, 'data-tile-fast', 'core').props.onClick();
+  assert.equal(byAttr(h.render(), 'data-tile-fast', 'core').props['aria-checked'], true);
+});
+
+test('the effort and the fast switch also sit on every row of the 座位清单', t => {
+  const h = dialogHarness(t, seatsInfo({ catalog: catalog({ opus: { efforts: ['low', 'ultra'] } }) }));
+  byAttr(h.render(), 'aria-pressed', false).props.onClick();
+  const tree = h.render();
+  const row = byAttr(tree, 'data-slot', 'architect');
+  assert.equal(textOf(byAttr(row, 'data-tile-effort', 'architect')), 'high');
+  byAttr(row, 'data-tile-effort', 'architect').props.onClick(pickButton('architect'));
+  assert.deepEqual(findAll(liveMenu(h), node => node.props['data-pop-effort'] !== undefined).map(node => node.props['data-pop-effort']), ['low', 'ultra']);
+  assert.ok(byAttr(row, 'data-tile-fast', 'architect'), 'the fast switch is in the row');
+});
+
+test('the 更换 menu and the effort popover close on an outside click, on a second click of their button, on ✕ and on Escape', t => {
+  const h = dialogHarness(t, seatsInfo());
+  const closes = [];
+  for (const [kind, attr, open] of [['model', 'data-pick', 'core'], ['effort', 'data-tile-effort', 'core']]) {
+    byAttr(h.render(), attr, open).props.onClick(pickButton(open));
+    assert.ok(liveMenu(h), `${kind} menu opens`);
+    h.outsideMouseDown({ outside: true });
+    closes.push(`${kind} outside: ${!liveMenu(h)}`);
+    byAttr(h.render(), attr, open).props.onClick(pickButton(open));
+    byAttr(h.render(), attr, open).props.onClick(pickButton(open));
+    closes.push(`${kind} second click: ${!liveMenu(h)}`);
+    byAttr(h.render(), attr, open).props.onClick(pickButton(open));
+    byAttr(liveMenu(h), 'data-menu-close').props.onClick();
+    closes.push(`${kind} ✕: ${!liveMenu(h)}`);
+    byAttr(h.render(), attr, open).props.onClick(pickButton(open));
+    byAttr(h.render(), 'role', 'dialog').props.onKeyDown({ key: 'Escape', stopPropagation() {}, preventDefault() {} });
+    closes.push(`${kind} Escape: ${!liveMenu(h)}`);
+    assert.equal(h.closed.length, 0, 'none of these closes the dialog itself');
+  }
+  assert.deepEqual(closes.filter(line => !line.endsWith('true')), [], closes.join('; '));
+  // Another button moves the menu instead of closing it.
+  byAttr(h.render(), 'data-pick', 'core').props.onClick(pickButton('core'));
+  byAttr(h.render(), 'data-tile-effort', 'architect').props.onClick(pickButton('architect'));
+  assert.match(liveMenu(h).props.className, /is-effort/);
+});
+
+test('hovering a step names the seats in it and lights their tiles; hovering a seat lights its step; both lead slots and 本次对话 are folded', t => {
+  const h = dialogHarness(t, seatsInfo());
+  let tree = h.render();
+  assert.match(textOf(byAttr(tree, 'role', 'group')), /Hover a step/);
+  byAttr(tree, 'data-step', 'build').props.onMouseEnter();
+  tree = h.render();
+  assert.match(textOf(find(tree, node => node.props.className === 'seats-readout')), /Build.*Core engineer · GPT-6\.1-Sol · high.*Execution engineer · Sonnet · high/);
+  assert.deepEqual(findAll(tree, node => node.props.className?.includes('seats-tile') && node.props.className.includes('is-lit')).map(node => node.props['data-seat']), ['core', 'execution']);
+  assert.equal(byAttr(tree, 'data-step', 'build').props.className.includes('is-lit'), true);
+  byAttr(tree, 'data-step', 'build').props.onMouseLeave();
+  byAttr(h.render(), 'data-seat', 'reviewer').props.onMouseEnter();
+  tree = h.render();
+  assert.match(textOf(find(tree, node => node.props.className === 'seats-readout')), /Review belongs to Review/);
+  assert.equal(byAttr(tree, 'data-step', 'review').props.className.includes('is-lit'), true, 'the seat’s step lights');
+  byAttr(h.render(), 'data-seat', 'lead').props.onMouseEnter();
+  assert.match(textOf(find(h.render(), node => node.props.className === 'seats-readout')), /Lead is not in a step of the flow/);
+  assert.equal(find(tree, node => node.props.className === 'seats-nowbox'), undefined, '本次对话 starts folded');
+  byAttr(tree, 'data-now').props.onClick();
+  assert.ok(find(h.render(), node => node.props.className === 'seats-nowbox'));
+});
+
+test('the strip is one row, the table fills the left and the 模型盘 is a 340px panel on the right; a narrow dialog turns the panel into a drawer', t => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  assert.match(css, /\.seats-palette \{[^}]*width: 340px/);
+  assert.match(css, /\.seats-scene \{[^}]*flex: 1/);
+  assert.match(css, /\.seats-palette\.is-drawer \{[^}]*position: absolute/);
+  const h = dialogHarness(t, seatsInfo());
+  const tree = h.render();
+  assert.ok(find(tree, node => node.props.className === 'seats-palette'), 'a wide dialog shows the panel beside the table');
+  assert.equal(find(tree, node => node.props['data-palette-toggle'] !== undefined), undefined, 'and has no drawer button');
+  const strip = find(tree, node => node.props.className === 'seats-strip');
+  assert.equal(findAll(strip, node => node.props.className === 'seats-strip-row').length, 1, 'one row: no 本次对话 or catalog line in the strip');
 });
