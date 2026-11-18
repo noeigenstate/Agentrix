@@ -232,7 +232,7 @@ test('the key goes only to keySave and is never read back, logged or stored; the
   const dialog = code('src/features/settings/SettingsDialog.tsx');
   assert.match(dialog, /id: 'runtime', title: t\('运行方式'\)/); assert.match(dialog, /<AgentRuntimeSettings[ >]/);
   // The project in view reaches the page, so the connection test and the usage numbers are read for its scope.
-  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} focusOnOpen=\{focusOnOpen\} codexPermissions=\{settings\.codexPermissions\} onCodexPermissions=\{codexPermissions => update\(\{ codexPermissions \}\)\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
+  assert.match(dialog, /<AgentRuntimeSettings projectId=\{projectId\} focusOnOpen=\{focusOnOpen\} codexPermissions=\{settings\.codexPermissions\} onCodexPermissions=\{codexPermissions => update\(\{ codexPermissions \}\)\} claudeBackgroundTasks=\{settings\.claudeBackgroundTasks\} onClaudeBackgroundTasks=\{claudeBackgroundTasks => update\(\{ claudeBackgroundTasks \}\)\} \/>/); assert.match(code('src/App.tsx'), /<SettingsDialog [^>]*projectId=\{focus\?\.id\}/);
 });
 
 test('Codex’s automatic reset is a switch that is off by default, saves alone without a path change or a stale test, and a refusal leaves it as it was', async () => {
@@ -492,4 +492,17 @@ test('the Codex permission row keeps its own note and does not repeat the select
   const source = fs.readFileSync(path.join(__dirname, '..', 'src/features/settings/AgentRuntimeSettings.tsx'), 'utf8');
   assert.doesNotMatch(source, /permissionOptions\.find\(option => option\.value === permission\)\?\.hint/);
   assert.match(source, /只影响之后新建的原生 Codex 会话/);
+});
+
+test('Claude Code background tasks: a switch that is off unless the setting says true, and a click is handed on as a boolean', async () => {
+  const chosen = [], onClaudeBackgroundTasks = value => chosen.push(value);
+  const box = view => view.tree().find(node => node.type === 'input' && node.props['aria-label'] === '允许 Claude Code 后台任务');
+  for (const [stored, shown] of [[undefined, false], ['true', false], [1, false], [false, false], [true, true]]) {
+    const view = page(fake(), wordsStub, { claudeBackgroundTasks: stored, onClaudeBackgroundTasks });
+    try { view.render(); await settle(); assert.equal(box(view).props.checked, shown, String(stored)); assert.match(view.html(), /下一次启动的会话生效/); } finally { view.done(); }
+  }
+  const view = page(fake(), wordsStub, { claudeBackgroundTasks: false, onClaudeBackgroundTasks });
+  try { view.render(); await settle(); box(view).props.onChange({ target: { checked: true } }); assert.deepEqual(chosen, [true]); } finally { view.done(); }
+  const readonly = page(fake(), wordsStub, {});
+  try { readonly.render(); await settle(); assert.equal(box(readonly).props.disabled, true); } finally { readonly.done(); }
 });

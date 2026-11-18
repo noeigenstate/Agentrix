@@ -1,6 +1,8 @@
 const { withoutShims } = require('./shared/agentrix-shims.cjs');
+const { claudeBackgroundEnvironment } = require('./shared/claude-background.cjs');
 
-function createTerminalEnvironment(source, bootstrapFile) {
+// allowBackgroundTasks: the Settings switch (shared/claude-background.cjs); off, Claude Code runs without background tasks.
+function createTerminalEnvironment(source, bootstrapFile, { allowBackgroundTasks = false } = {}) {
   // Agentrix started inside a planner (a worker's GUI check, beta beside stable): its terminals start as the owner's.
   const env = withoutShims(source);
   // A terminal window can be launched from a non-interactive host (including
@@ -15,7 +17,7 @@ function createTerminalEnvironment(source, bootstrapFile) {
     }
   }
   return {
-    ...env,
+    ...claudeBackgroundEnvironment(env, allowBackgroundTasks),
     AGENTRIX_BOOTSTRAP: bootstrapFile,
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',

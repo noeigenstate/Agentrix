@@ -80,7 +80,7 @@ function createHostInputs(deps) {
   // (`planner: false`) run without them.
   function nativeEnvironment(bootstrapFile, codexHome, { planner = true } = {}) {
     const { createTerminalEnvironment, withoutAppImage } = deps;
-    let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile);
+    let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile, { allowBackgroundTasks: deps.store?.settings?.claudeBackgroundTasks });
     if (planner && bootstrapFile && fs.existsSync(bootstrapFile)) {
       const { shims } = JSON.parse(fs.readFileSync(bootstrapFile, 'utf8'));
       if (shims) env = require(path.join(shims, 'intercept.cjs')).withShims(env, { depth: 0 });

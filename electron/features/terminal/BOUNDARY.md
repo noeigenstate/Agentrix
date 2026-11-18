@@ -26,6 +26,7 @@ resolution and title tracking. Agentrix starts Codex only through app-server; te
 ## May import
 - `electron/project-files.cjs`
 - `electron/shared/agentrix-shims.cjs` (withoutShims: a terminal starts as the owner's, inside a planner too)
+- `electron/shared/claude-background.cjs` (claudeBackgroundEnvironment: a terminal's Claude Code runs with background tasks off while Settings keeps the switch off)
 
 ## Invariants
 - Only a submitted line arms completion; typing, an empty Enter and xterm's protocol replies never do — AGENTS.md: completion is never rearmed by idle or background input — test: `tests/terminal-input.test.cjs` › "completion is rearmed by submitted input, not typing, empty Enter or terminal reports"
