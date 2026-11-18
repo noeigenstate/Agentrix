@@ -31,7 +31,7 @@
 .seats-btn.is-primary:hover:not(:disabled) { background: var(--button-primary); border-color: var(--button-primary); color: var(--button-primary-text); opacity: .88; }
 .seats-btn.is-primary:disabled { background: transparent; border-color: var(--border); color: var(--text-disabled); }
 .seats-dialog select { height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; font-size: 12px; }
-.seats-tag, .seats-chg { display: inline-flex; align-items: center; flex: none; height: 16px; padding: 0 8px; border-radius: 999px; font-size: 12px; line-height: 16px; white-space: nowrap; }
+.seats-tag, .seats-chg { display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 8px; border-radius: 999px; font-size: 14px; line-height: 20px; white-space: nowrap; }
 .seats-tag { background: var(--bg-selected); color: var(--text-2); }
 .seats-chg { border: 1px solid var(--border-hover); color: var(--text-1); }
 
@@ -72,13 +72,13 @@
 .seats-mk[data-family="codex"] { background: radial-gradient(circle at 32% 28%, rgb(255 255 255 / .6), transparent 55%), var(--agent-codex); }
 
 /* The model token (a gem): draggable from the tray or from a seat; an unavailable one is greyed, dashed, and says why. */
-.seats-gem { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 8px; border: 1px solid var(--border); border-radius: 16px; font-size: 13px; font-weight: 600; color: var(--text-1);
+.seats-gem { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 8px; border: 1px solid var(--border); border-radius: 16px; font-size: 14px; font-weight: 600; color: var(--text-1);
   white-space: nowrap; user-select: none; touch-action: none; cursor: grab;
   background: linear-gradient(180deg, var(--hi) 0, transparent 52%), var(--bg-card); box-shadow: inset 0 1px 0 var(--hi), inset 0 -6px 10px var(--lo), 0 1px 0 var(--edge-a), 0 8px 14px var(--lo2);
   transition: transform .25s var(--seats-ease), box-shadow .25s var(--seats-ease); }
 .seats-gem:hover { transform: translateY(-4px); box-shadow: inset 0 1px 0 var(--hi), inset 0 -6px 10px var(--lo), 0 1px 0 var(--edge-a), 0 18px 22px var(--lo3); }
 .seats-gem-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.seats-gem small { font-size: 12px; font-weight: 400; color: var(--text-3); }
+.seats-gem small { font-size: 14px; font-weight: 400; color: var(--text-3); }
 .seats-gem.is-off { border-style: dashed; background: transparent; box-shadow: none; color: var(--text-disabled); filter: grayscale(1); cursor: not-allowed; }
 .seats-gem.is-off:hover { transform: none; }
 .seats-gem.is-off .seats-mk { opacity: .45; }
@@ -86,7 +86,7 @@
 @keyframes seats-land { 0% { transform: translateY(-56px) scale(1.2); opacity: 0; } 55% { transform: translateY(3px) scale(.97); opacity: 1; } 100% { transform: none; } }
 .seats-ghost { position: fixed; z-index: 450; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 8px; border: 1px solid var(--border-hover); border-radius: 16px; background: var(--bg-card);
   color: var(--text-1); font-size: 13px; font-weight: 600; white-space: nowrap; pointer-events: none; transform: translate(-50%, -62%) scale(1.1); box-shadow: 0 28px 36px var(--lo3); }
-.seats-empty { color: var(--text-3); font-size: 12px; }
+.seats-empty { color: var(--text-3); font-size: 14px; }
 
 /* The disc, scaled to the dialog's width (zoom): a 900px stage whose plane is tilted back, floating a few pixels. */
 .seats-work { display: flex; flex: 1; min-height: 0; position: relative; }
@@ -94,8 +94,6 @@
   background: radial-gradient(ellipse 55% 50% at 50% 50%, var(--hi), transparent 72%), radial-gradient(ellipse 90% 90% at 50% 45%, var(--floor-a), var(--floor-b)); }
 .seats-zoom { flex: none; width: 1130px; }
 .seats-stage { position: relative; width: 1130px; height: 700px; perspective: 2200px; perspective-origin: 50% 22%; }
-.seats-float { position: absolute; inset: 0; transform-style: preserve-3d; animation: seats-bob 7s ease-in-out infinite alternate; }
-@keyframes seats-bob { from { translate: 0 6px; } to { translate: 0 -6px; } }
 .seats-plane { position: absolute; left: 50%; top: 380px; width: 940px; height: 940px; margin: -470px 0 0 -470px; transform: rotateX(var(--tilt)); transform-style: preserve-3d; }
 .seats-gshadow { position: absolute; inset: 50px; border-radius: 50%; background: var(--lo3); filter: blur(34px); transform: translateZ(-170px); }
 .seats-glow { position: absolute; inset: -40px; border-radius: 50%; background: radial-gradient(circle, transparent 54%, var(--hi2) 62%, transparent 72%); transform: translateZ(-22px); }
@@ -106,7 +104,7 @@
 
 /* A seat tile on the rim: a pedestal under a flat plate that stands up out of the tilted plane. Hover or a drag over it lifts it. */
 .seats-tile { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; transform: translate3d(var(--x), var(--y), var(--z, 0px)); transition: transform .3s var(--seats-ease); }
-.seats-tile:is(:hover, :focus-within, .is-over) { --z: 24px; }
+.seats-tile.is-over { --z: 24px; }
 .seats-ped { position: absolute; left: calc(var(--w) * -.5 - 10px); top: calc(var(--h) * -.5 + 10px); width: calc(var(--w) + 20px); height: 80px; border-radius: 18px; transform-style: preserve-3d;
   background: linear-gradient(135deg, var(--hi), transparent 50%), var(--tbl-a); box-shadow: inset 0 0 0 1px var(--border), inset 0 -2px 0 var(--lo); transition: box-shadow .3s var(--seats-ease); }
 .seats-ped i { position: absolute; inset: 0; border-radius: 18px; background: var(--edge-a); }
@@ -114,7 +112,7 @@
 .seats-tsh { position: absolute; left: calc(var(--w) * -.5); top: -28px; width: var(--w); height: 72px; border-radius: 22px; background: var(--lo3); filter: blur(12px);
   transform: translateZ(calc(var(--z, 0px) * -1 - 2px)); opacity: .5; transition: opacity .3s ease, transform .3s var(--seats-ease); }
 .seats-tile:is(:hover, :focus-within, .is-over) .seats-tsh { opacity: .9; }
-.seats-bb { position: absolute; left: 0; top: 0; width: var(--w); height: var(--h); transform-origin: 0 0; transform-style: preserve-3d; transform: translate3d(0, 6px, 10px) rotateX(calc(var(--tilt) * -1)) translate(-50%, -100%); }
+.seats-bb { position: absolute; left: 0; top: 0; width: var(--w); height: var(--h); transform-origin: 0 0; transform: translate3d(0, 6px, 10px) rotateX(calc(var(--tilt) * -1)) translate(-50%, -100%); }
 .seats-plate { position: relative; display: flex; flex-direction: column; gap: 4px; height: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(180deg, var(--hi) 0, transparent 38%), var(--bg-card);
   box-shadow: inset 0 1px 0 var(--hi), inset 0 -3px 6px var(--lo), 0 2px 0 var(--edge-a), 0 6px 10px var(--lo), 0 16px 26px var(--lo2); transition: box-shadow .3s var(--seats-ease); }
 .seats-plate::after { content: ''; position: absolute; left: 6px; right: 6px; top: 3px; height: 22px; border-radius: 10px 10px 40px 40px / 10px 10px 14px 14px; background: linear-gradient(180deg, var(--hi), transparent); pointer-events: none; opacity: .7; }
@@ -127,11 +125,12 @@
 .seats-plate-body { position: relative; z-index: 1; display: flex; flex: 1; min-height: 0; gap: 10px; }
 .seats-slot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; border-radius: 8px; }
 .seats-slot.is-over { background: var(--bg-selected); outline: 2px solid var(--text-2); outline-offset: 1px; }
-.seats-slot-label { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; line-height: 14px; color: var(--text-3); }
+.seats-slot-label { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 14px; line-height: 16px; color: var(--text-3); }
 .seats-slot-token { display: flex; align-items: center; min-width: 0; min-height: 32px; }
 .seats-slot-token .seats-gem { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .seats-slot-foot { display: flex; align-items: center; gap: 6px; min-height: 30px; }
-.seats-slot-foot .seats-btn { margin-left: auto; height: 30px; font-size: 13px; }
+.seats-slot-foot > * { flex: none; }
+.seats-slot-foot .seats-btn { margin-left: auto; height: 30px; font-size: 14px; }
 
 /* 座位清单: the same seats as rows, for the keyboard and for a dialog too narrow for the disc. */
 .seats-roster { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
@@ -177,7 +176,7 @@
 .seats-effort { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
 .seats-effort:hover { border-color: var(--border-hover); background: var(--bg-hover); }
 .seats-effort[aria-expanded="true"] { background: var(--bg-selected); border-color: var(--border-hover); }
-.seats-fast { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.seats-fast { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 14px; white-space: nowrap; cursor: pointer; }
 .seats-fast i { position: relative; width: 32px; height: 18px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); }
 .seats-fast i::before { content: ''; position: absolute; left: 2px; top: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-3); }
 .seats-fast[aria-checked="true"] i { background: var(--bg-selected); border-color: var(--border-hover); }
@@ -227,7 +226,13 @@
 /* 本次对话, folded behind a button in the strip. */
 .seats-nowbox { position: absolute; left: 20px; top: 100%; z-index: 30; display: flex; flex-direction: column; gap: 8px; max-width: calc(100% - 40px); margin-top: 4px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-menu); box-shadow: 0 8px 24px var(--lo2); font-size: 13px; }
 
+/* Hit-testing in the 3D table: the plate is flat (no preserve-3d on .seats-bb), or the controls inside it lose the hit-test to the plate itself; the disc, its shadows and the tile's stand are decoration and let every pointer event through; only the tile's own plate (its controls) takes them.
+   Nothing that holds a control moves on its own (no bobbing) or lifts when hovered, so a control stays where the pointer is. */
+.seats-plane, .seats-tile, .seats-ped, .seats-tsh, .seats-under, .seats-top, .seats-track, .seats-glow, .seats-gshadow { pointer-events: none; }
+.seats-bb { pointer-events: auto; }
+.seats-readout { pointer-events: none; }
+
 @media (prefers-reduced-motion: reduce) {
-  .seats-float, .seats-gem.is-landing, .seats-plate.is-ripple { animation: none; }
+  .seats-gem.is-landing, .seats-plate.is-ripple { animation: none; }
   .seats-dialog *, .seats-dialog *::before, .seats-dialog *::after { transition: none !important; }
 }

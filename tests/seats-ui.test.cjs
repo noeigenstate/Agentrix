@@ -365,7 +365,7 @@ test('no seats info, no button: a skill-less install keeps the pane exactly as i
 test('the dialog’s motion stops under prefers-reduced-motion, its colours are the product tokens and the English strings exist', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
   const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
-  for (const rule of ['.seats-float', '.seats-gem.is-landing', '.seats-plate.is-ripple']) assert.ok(reduced.includes(rule), `${rule} has no motion when reduced`);
+  for (const rule of ['.seats-gem.is-landing', '.seats-plate.is-ripple']) assert.ok(reduced.includes(rule), `${rule} has no motion when reduced`);
   assert.match(reduced, /transition: none !important/);
   const stray = css.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter(line => /#[0-9a-fA-F]{3,6}\b/.test(line) && !line.includes('--'));
   assert.deepEqual(stray, [], 'a literal colour appears only where a lighting variable is defined');
@@ -629,7 +629,8 @@ test('the blocked banner names the three strongest alternatives and counts the r
   const { shown, total } = topAlternatives(alternatives);
   assert.equal(shown.length, 3);
   assert.equal(total, alternatives.length);
-  assert.ok(shown.every(entry => entry.rank === 3), 'the strongest come first');
+  assert.ok(shown.every((entry, at) => !at || shown[at - 1].rank >= entry.rank), 'the strongest first');
+  assert.equal(new Set(shown.map(entry => lineOf(entry))).size, shown.length, 'one per model line');
   const info = seatsInfo({ catalog: many, defaults: { ...clone(DEFAULTS), core: { model: 'opus', effort: 'high' } } });
   const h = dialogHarness(t, info);
   const banner = find(h.render(), node => node.props.className === 'seats-banner is-bad' && node.props.role === 'alert');
@@ -667,8 +668,8 @@ test('the lead tile is wide enough for two slots, every model dot carries its fa
   const h = dialogHarness(t, info);
   const tree = h.render();
   const lead = byAttr(tree, 'data-seat', 'lead');
-  assert.equal(lead.props.style['--w'], '470px', 'two slots side by side with room for "Opus (follows latest)"');
-  assert.equal(byAttr(tree, 'data-seat', 'core').props.style['--w'], '224px');
+  assert.equal(lead.props.style['--w'], '500px', 'two slots side by side with room for "Opus (follows latest)"');
+  assert.equal(byAttr(tree, 'data-seat', 'core').props.style['--w'], '248px');
   const dots = findAll(tree, node => node.props.className === 'seats-mk');
   assert.ok(dots.length > 0 && dots.every(node => node.props['data-family'] === 'claude' || node.props['data-family'] === 'codex'), 'no dot is left without a family');
   assert.ok(dots.some(node => node.props['data-family'] === 'codex') && dots.some(node => node.props['data-family'] === 'claude'));
@@ -711,7 +712,7 @@ test('no seat tile touches the wide lead tile, or another seat, at 1600×1000 an
     for (const [index, [first, a]] of list.entries()) for (const [second, b] of list.slice(index + 1)) assert.equal(spotsTouch(a, b, -12), false, `${first} and ${second} do not overlap`);
   }
   const spots = seatLayout(['lead', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']);
-  assert.equal(spots.lead.w, 470);
+  assert.equal(spots.lead.w, 500);
   assert.ok(spots.reviewer.x + spots.reviewer.w / 2 <= -spots.lead.w / 2 - 12 && spots.architect.x - spots.architect.w / 2 >= spots.lead.w / 2 + 12, 'the two seats beside the lead stand clear of its corners');
 });
 
@@ -940,4 +941,86 @@ test('the strip is one row, the table fills the left and the 模型盘 is a 340p
   assert.equal(find(tree, node => node.props['data-palette-toggle'] !== undefined), undefined, 'and has no drawer button');
   const strip = find(tree, node => node.props.className === 'seats-strip');
   assert.equal(findAll(strip, node => node.props.className === 'seats-strip-row').length, 1, 'one row: no 本次对话 or catalog line in the strip');
+});
+
+// ---- second acceptance of layout A: controls must be clickable, nothing that holds a control moves, tile text is 14px, the banner names what the fix prefers ----
+const cssText = () => fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+const rulesOf = css => [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}@]+)\{([^{}]*)\}/g)].map(match => ({ selectors: match[1].split(',').map(part => part.trim()), body: match[2] }));
+const declared = (css, selector, property) => rulesOf(css).filter(rule => rule.selectors.includes(selector)).map(rule => new RegExp(`(?:^|;|\\s)${property}:\\s*([^;]+)`).exec(rule.body)?.[1]?.trim()).filter(Boolean);
+const pathTo = (tree, target) => {
+  const trail = [];
+  const walkPath = node => {
+    if (Array.isArray(node)) return node.some(walkPath);
+    if (!node || typeof node !== 'object' || !node.props) return false;
+    if (node === target) return true;
+    trail.push(node);
+    if (walkPath(node.props.children)) return true;
+    trail.pop();
+    return false;
+  };
+  return walkPath(tree) ? trail : null;
+};
+
+test('the 3D table lets pointer events through its decoration, so every control on every tile is the top element at its own centre', t => {
+  const css = cssText();
+  const decoration = ['.seats-plane', '.seats-tile', '.seats-ped', '.seats-tsh', '.seats-under', '.seats-top', '.seats-track', '.seats-glow', '.seats-gshadow'];
+  for (const selector of decoration) assert.deepEqual(declared(css, selector, 'pointer-events'), ['none'], `${selector} is decoration: pointer-events none`);
+  assert.deepEqual(declared(css, '.seats-bb', 'pointer-events'), ['auto'], 'the tile’s plate takes the pointer back');
+  assert.equal(css.includes('.seats-float'), false, 'no wrapper that covers the tiles in the 3D order');
+  const h = dialogHarness(t, seatsInfo());
+  const tree = h.render();
+  const controls = [];
+  for (const slot of ['lead.claude', 'lead.codex', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']) {
+    controls.push(byAttr(tree, 'data-tile-effort', slot), byAttr(tree, 'data-tile-fast', slot), byAttr(tree, 'data-pick', slot), find(byAttr(tree, 'data-slot', slot), node => node.props.className?.startsWith('seats-gem')));
+  }
+  assert.equal(controls.length, 32);
+  for (const control of controls) {
+    assert.ok(control, 'the control exists');
+    const trail = pathTo(tree, control), classes = (trail ?? []).map(node => node.props.className ?? '');
+    assert.ok(trail, 'the control is in the tree');
+    assert.ok(classes.some(name => name.split(' ').includes('seats-bb')), 'it sits in the tile’s plate');
+    const outside = classes.slice(0, classes.findIndex(name => name.split(' ').includes('seats-bb')));
+    assert.deepEqual(outside.filter(name => decoration.some(selector => name.split(' ').includes(selector.slice(1))) && !/seats-(plane|tile)\b/.test(name)), [], 'and in no decorative element');
+    const inner = classes.slice(classes.findIndex(name => name.split(' ').includes('seats-bb')));
+    assert.equal(inner.some(name => /seats-(ped|tsh|under|top|track|glow|gshadow)\b/.test(name)), false, 'nor inside the plate');
+  }
+});
+
+test('nothing that holds a control moves on its own or lifts when hovered', () => {
+  const css = cssText();
+  assert.doesNotMatch(css, /infinite/, 'no endless animation');
+  assert.doesNotMatch(css, /seats-bob/);
+  assert.equal(rulesOf(css).some(rule => rule.selectors.some(selector => /^\.seats-tile:is\(:hover/.test(selector)) && /--z:/.test(rule.body)), false, 'a hovered tile does not lift (the controls would shift under the pointer)');
+  const reduced = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
+  for (const rule of ['.seats-gem.is-landing', '.seats-plate.is-ripple']) assert.ok(reduced.includes(rule), `${rule} has no motion when reduced`);
+  assert.match(reduced, /transition: none !important/);
+});
+
+test('all text on a seat tile is 14px or larger', () => {
+  const css = cssText();
+  for (const selector of ['.seats-plate-head b', '.seats-slot-label', '.seats-tag', '.seats-gem', '.seats-gem small', '.seats-effort', '.seats-fast', '.seats-slot-foot .seats-btn', '.seats-empty', '.seats-state']) {
+    const sizes = declared(css, selector, 'font-size');
+    const size = sizes.length ? parseFloat(sizes[sizes.length - 1]) : parseFloat(declared(css, '.seats-dialog', 'font-size')[0]);
+    assert.ok(size >= 14, `${selector} is ${size}px`);
+  }
+  assert.ok(parseFloat(declared(css, '.seats-chg', 'font-size')[0] ?? declared(css, '.seats-tag', 'font-size')[0]) >= 14);
+});
+
+test('the blocked banner names what the one-click fix prefers, one per model line, the fix first, at most three', t => {
+  const rows = REAL.slice();
+  const map = { ...clone(DEFAULTS), core: { model: 'opus', effort: 'high' } };
+  const block = reviewerBlock(map, rows, DEFAULTS);
+  assert.ok(block && block.fix, 'the reviewer shares the core seat’s model');
+  const { shown, total } = topAlternatives(block.alternatives, 3, { fix: block.fix, map, catalog: rows, defaults: DEFAULTS });
+  assert.equal(shown.length, 3);
+  assert.equal(shown[0].model, block.fix.model, 'the fix is named first');
+  assert.equal(new Set(shown.map(entry => entry.family + lineOf(entry))).size, 3, 'three different lines, not Fable and Fable 5.1');
+  assert.ok(shown.every(entry => !/^claude-opus-4|^claude-fable-5$|^gpt-5|^gpt-6-/.test(entry.model)), 'no old version stands for its line');
+  assert.equal(total, block.alternatives.length);
+  const reversed = topAlternatives([...block.alternatives].reverse(), 3, { fix: block.fix, map, catalog: rows, defaults: DEFAULTS });
+  assert.deepEqual(reversed.shown.map(entry => entry.model), shown.map(entry => entry.model), 'the same names in any list order');
+  const h = dialogHarness(t, seatsInfo({ catalog: rows, defaults: { ...clone(DEFAULTS), core: { model: 'opus', effort: 'high' } } }));
+  const text = textOf(find(h.render(), node => node.props.className === 'seats-banner is-bad' && node.props.role === 'alert'));
+  assert.doesNotMatch(text, /Fable.*Fable/, 'the banner does not name one line twice');
+  assert.match(text, /and others \(\d+ in all\)/);
 });

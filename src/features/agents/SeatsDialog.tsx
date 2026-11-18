@@ -243,7 +243,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   };
   function blockMessage() {
     const model = label(working.reviewer?.model ?? '');
-    const { shown, total } = topAlternatives(block?.alternatives ?? []), names = shown.map(row => row.label).join('、');
+    const { shown, total } = topAlternatives(block?.alternatives ?? [], 3, { fix: block?.fix ?? null, map: working, catalog, defaults: info.defaults }), names = shown.map(row => row.label).join('、');
     return t('审查（{model}）与{seats}使用同一模型，账户里还有不弱于它的 {others}，所以不能保存。', {
       model, seats: block?.hit.map(seatName).join('、') ?? '', others: total > shown.length ? t('{names} 等 {count} 个', { names, count: total }) : names });
   }
@@ -307,10 +307,10 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
       : <>{t('悬停一步，看谁在这一步；悬停座位，看它属于哪一步')}</>;
   const scale = sceneScale(size.w - 24, size.h - 16);
   const disc = <div ref={scene} className="seats-scene">
-    <div className="seats-zoom" style={{ zoom: scale } as CSSProperties}><div className="seats-stage" style={{ '--tilt': `${TILT}deg` } as CSSProperties}><div className="seats-float"><div className="seats-plane">
+    <div className="seats-zoom" style={{ zoom: scale } as CSSProperties}><div className="seats-stage" style={{ '--tilt': `${TILT}deg` } as CSSProperties}><div className="seats-plane">
       <i className="seats-gshadow" /><i className="seats-glow" />{UNDER}<i className="seats-top" /><i className="seats-track" />
       {seats.map(tile)}
-    </div></div>
+    </div>
     <div className="seats-flowbar" role="group" aria-label={t('流程')}>
       <div className="seats-steps">{STEPS.map(([key, name], index) => <span key={key} className="seats-stepwrap">
         <span className={`seats-step${activePhase === key ? ' is-lit' : ''}`} tabIndex={0} data-step={key} onMouseEnter={() => setPhase(key)} onMouseLeave={() => setPhase(null)} onFocus={() => setPhase(key)} onBlur={() => setPhase(null)}><em>{index + 1}</em>{t(name)}</span>
