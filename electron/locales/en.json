@@ -3389,5 +3389,15 @@
   "worker 分离启动": "Workers start detached",
   "调度器现在把 worker 分离启动，主控负责等待它们，所以耗时长的 worker 不会被中途切断，也可以几个并排运行；主控的这一轮会一直显示「工作中」，直到它的 worker 全部结束。": "The dispatcher now starts workers detached and the lead waits for them, so long workers are not cut off and several can run side by side. A lead's round stays \"working\" until its workers finish.",
   "确认弹窗更可靠": "More reliable confirmation popup",
-  "阅读视图的终端弹窗，即使项目当时不在屏幕上，每个提示也只会打开一次；你主动关闭后，这个提示不会再弹出。提示期间暂存的消息会在提示结束后发送一次（你在看别的项目时也一样）；迟到的权限信号不再让你回答之后还亮着等待灯。": "The reading view's terminal popup opens once per prompt even if the project was not on screen, and a popup you close stays closed for that prompt. A message held during a prompt is sent once when the prompt ends, also while you look at another project, and a late permission signal no longer keeps the waiting light on after you answered."
+  "阅读视图的终端弹窗，即使项目当时不在屏幕上，每个提示也只会打开一次；你主动关闭后，这个提示不会再弹出。提示期间暂存的消息会在提示结束后发送一次（你在看别的项目时也一样）；迟到的权限信号不再让你回答之后还亮着等待灯。": "The reading view's terminal popup opens once per prompt even if the project was not on screen, and a popup you close stays closed for that prompt. A message held during a prompt is sent once when the prompt ends, also while you look at another project, and a late permission signal no longer keeps the waiting light on after you answered.",
+  "{seat}的强度：{effort}": "{seat}: effort {effort}",
+  "{seat}：选择强度": "{seat}: choose effort",
+  "{seat} 属于 {step}": "{seat} belongs to {step}",
+  "{seat} 不在流程的某一步里": "{seat} is not in a step of the flow",
+  "悬停一步，看谁在这一步；悬停座位，看它属于哪一步": "Hover a step to see who is in it; hover a seat to see its step",
+  "流程": "Flow",
+  "搜索模型": "Search models",
+  "更早版本 ({count})": "Earlier versions ({count})",
+  "没有匹配的模型": "No matching models",
+  "开启后更快，用量与计费可能不同": "Faster when on; usage and billing may differ"
 }
