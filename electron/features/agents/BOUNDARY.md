@@ -4,7 +4,6 @@ The pane beside an expanded project's terminal — the main model and its tasks,
 
 ## Owns
 - `src/features/agents/SeatsDialog.tsx`
-- `src/features/agents/seats-dialog.css`
 - `src/features/agents/skill-seats.ts`
 - `src/features/agents/ActivityPane.tsx`
 - `src/features/agents/ApiUsage.tsx` (per agent: connection, context, limits, API spend shown as information)
