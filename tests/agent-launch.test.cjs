@@ -22,9 +22,9 @@ test('fresh Claude terminal launches carry the lead seat flags while resume carr
 
 test('validated Claude fast seats never add a second settings flag to the terminal wrapper', () => {
   const seat = { model: 'claude-opus-6-0', effort: 'adaptive', fast: true }, options = { fastSettingsFile: 'C:\\Synthetic Data\\claude-fast-on.json' };
-  assert.equal(launchCommand('claude', null, seat, options), 'claude --model "claude-opus-6-0" --effort adaptive\r');
+  assert.equal(launchCommand('claude', null, seat, options), 'claude --agentrix-seat-fast --model "claude-opus-6-0" --effort adaptive\r');
   assert.equal(launchCommand('claude', { id: 'saved' }, seat, options), 'claude --resume saved\r');
-  assert.equal(launchCommand('claude', null, seat), 'claude --model "claude-opus-6-0" --effort adaptive\r');
+  assert.equal(launchCommand('claude', null, seat), 'claude --agentrix-seat-fast --model "claude-opus-6-0" --effort adaptive\r');
   assert.ok(!launchCommand('claude', null, { ...seat, fast: false }, options).includes('--settings'));
   assert.throws(() => launchCommand('claude', null, { ...seat, effort: 'high; command' }, options), /invalid-effort/);
 });

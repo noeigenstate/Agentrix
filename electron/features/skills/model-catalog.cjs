@@ -79,9 +79,8 @@ class ModelCatalog {
     const content = rows => JSON.stringify(rows.map(({ lastSeen, source, ...row }) => row));
     const changed = content(next.rows) !== content(this.data[family].rows);
     this.data[family] = next;
-    if (!changed) return;
     try { writeFileAtomic(this.file, JSON.stringify(this.data)); } catch (error) { this.report(error); }
-    this.changed();
+    if (changed) this.changed();
   }
   async refresh(reason = 'dialog') {
     await Promise.all(['codex', 'claude'].map(async family => {

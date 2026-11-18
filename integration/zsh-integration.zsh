@@ -30,6 +30,8 @@ typeset -g __pg_socket=$AGENTRIX_SOCKET __pg_project=$AGENTRIX_PROJECT_ID __pg_k
 typeset -g __pg_node=$AGENTRIX_NODE __pg_helper=$AGENTRIX_EVENT_HELPER __pg_start=$AGENTRIX_START_DIR __pg_note=$AGENTRIX_READING_NOTE
 typeset -g __pg_note_file=$AGENTRIX_READING_NOTE_FILE
 typeset -g __pg_hook_port=$AGENTRIX_HOOK_PORT __pg_hook_channel=$AGENTRIX_HOOK_CHANNEL __pg_hook_settings=$AGENTRIX_HOOK_SETTINGS __pg_hook_fallback=$AGENTRIX_HOOK_FALLBACK
+typeset -g __pg_fast_hook_settings=$AGENTRIX_FAST_HOOK_SETTINGS __pg_fast_hook_fallback=$AGENTRIX_FAST_HOOK_FALLBACK
+unset AGENTRIX_FAST_HOOK_SETTINGS AGENTRIX_FAST_HOOK_FALLBACK
 typeset -gi __pg_sequence=0
 unset AGENTRIX_SOCKET AGENTRIX_PROJECT_ID AGENTRIX_SESSION_KEY AGENTRIX_NODE AGENTRIX_EVENT_HELPER AGENTRIX_START_DIR AGENTRIX_USER_ZDOTDIR AGENTRIX_READING_NOTE AGENTRIX_READING_NOTE_FILE AGENTRIX_ACCOUNT_BASELINE
 unset AGENTRIX_HOOK_PORT AGENTRIX_HOOK_CHANNEL AGENTRIX_HOOK_SETTINGS AGENTRIX_HOOK_FALLBACK
@@ -189,9 +191,14 @@ claude() {
     return 127
   fi
   program=("${reply[@]}")
-  local settings=$__pg_hook_fallback
+  local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
+  if [[ ${1-} == --agentrix-seat-fast ]]; then
+    shift
+    launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback
+  fi
+  local settings=$launch_fallback
   if [[ $__pg_hook_channel == http ]]; then
-    if __pg_hook_proxy $__pg_hook_port; then __pg_send hook-channel 0 claude $REPLY; else settings=$__pg_hook_settings; fi
+    if __pg_hook_proxy $__pg_hook_port; then __pg_send hook-channel 0 claude $REPLY; else settings=$launch_http; fi
   fi
   __pg_send codex-started 0 claude "$(__pg_command "$@")"
   # What the reading view can show; a later --append-system-prompt of the user's wins.

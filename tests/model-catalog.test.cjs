@@ -108,14 +108,16 @@ test('one-shot Claude probe never yields a prompt and always interrupts', async 
   assert.deepEqual(options.settingSources, []); assert.equal(options.persistSession, false);
 });
 
-test('unchanged catalog rows update freshness without writing or publishing again', t => {
+test('unchanged catalog rows persist freshness across restart without publishing again', t => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-quiet-')); t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
   let now = 100, published = 0;
   const catalog = new ModelCatalog({ dataDir, now: () => now, changed: () => published++ });
   const rows = [{ model: 'gpt-6.2-sol' }]; catalog.accept('codex', rows);
   const bytes = fs.readFileSync(catalog.file, 'utf8'); now++;
   catalog.accept('codex', rows); assert.equal(published, 1); assert.equal(catalog.timestamps().codex, now);
-  assert.equal(fs.readFileSync(catalog.file, 'utf8'), bytes);
+  assert.notEqual(fs.readFileSync(catalog.file, 'utf8'), bytes);
+  const restored = new ModelCatalog({ dataDir, now: () => now });
+  assert.equal(restored.timestamps().codex, now); assert.equal(restored.rows()[0].lastSeen, now);
 });
 
 test('main uses a neutral probe folder and still lists keyed models after SDK startup fails', async t => {
@@ -207,7 +209,7 @@ test('merged Claude model rows preserve resolved ids, aliases, efforts and fast 
 
 test('Codex deadline cleans a stalled handshake and late executable resolution never spawns', async () => {
   const timers = deadline(), child = new EventEmitter(), initialized = deferred(); let killed = 0;
-  child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => killed++;
+  child.pid = 12345; child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => killed++;
   child.stdin = new Writable({ write(_chunk, _encoding, done) { initialized.resolve(); done(); } });
   const run = probeCodex({ rpcFactory: createRpc, stop: child => child.kill(), workerEnvironment: env => env || {}, executable: async () => 'injected', spawn: () => child, timers });
   await initialized.promise; timers.expire(); await assert.rejects(run, /model_probe_timeout/);
@@ -240,4 +242,16 @@ test('a failed model-only Claude read still interrupts and closes the query', as
   await assert.rejects(probeClaude({ loadSdk: async () => ({ query: () => ({ supportedModels: async () => { throw new Error('injected-failure'); },
     interrupt: () => { interrupted++; }, close: () => { closed++; } }) }) }), /injected-failure/);
   assert.equal(interrupted, 1); assert.equal(closed, 1);
+});
+
+test('an asynchronous spawn failure without a pid preserves its error and skips tree stop', async () => {
+  const child = new EventEmitter(); let stopped = false;
+  child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.stdin = new Writable({ write(_chunk, _encoding, done) {
+    done(); queueMicrotask(() => child.emit('error', Object.assign(new Error('missing injected executable'), { code: 'ENOENT' })));
+  } });
+  await assert.rejects(probeCodex({ executable: async () => 'missing', spawn: () => child,
+    rpcFactory: createRpc, workerEnvironment: env => env || {}, stop: async () => { stopped = true; throw Error('process_stop_timeout'); } }),
+  error => error.code === 'ENOENT');
+  assert.equal(stopped, false);
 });

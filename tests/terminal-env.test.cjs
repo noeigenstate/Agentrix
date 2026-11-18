@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createTerminalEnvironment } = require('../electron/terminal-env.cjs');
 
-test('a fast terminal lead keeps both hook channels in its single settings file', t => {
+for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} preserves base hooks and prepares only a one-shot override`, t => {
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
   const { writeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-hooks-'));
@@ -10,13 +10,20 @@ test('a fast terminal lead keeps both hook channels in its single settings file'
   const file = path.join(root, 'bootstrap.json'), hooks = { settings: {
     http: JSON.stringify({ hooks: { SessionStart: ['session'], Stop: ['http'] } }),
     fallback: JSON.stringify({ hooks: { SessionStart: ['session'], Stop: ['command'] } }) } };
-  writeBootstrap({ file, eventServer: { name: 'injected', address: 'injected' }, claudeFast: true, hooks });
+  const before = JSON.stringify(hooks);
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const start = source.indexOf('  if (hooks && launchPlans.get(id)?.fast === true)'), end = source.indexOf('  if (bootstrapFile) writeBootstrap', start);
+  require('node:vm').runInNewContext(source.slice(start, end), { hooks, env: {}, id: 'terminal', launchPlans: new Map([['terminal', { fast }]]) });
+  assert.equal(JSON.stringify({ settings: hooks.settings }), before);
+  if (fast !== true) assert.equal(JSON.stringify(hooks), before);
+  writeBootstrap({ file, eventServer: { name: 'injected', address: 'injected' }, claudeFast: fast, hooks });
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   for (const channel of ['http', 'fallback']) {
     const settings = JSON.parse(saved.hooks.settings[channel]);
-    assert.equal(settings.fastMode, true); assert.deepEqual(settings.hooks.SessionStart, ['session']);
+    assert.equal(settings.fastMode, undefined); assert.deepEqual(settings.hooks.SessionStart, ['session']);
     assert.equal(settings.hooks.Stop[0], channel === 'http' ? 'http' : 'command');
     assert.equal(hooks.settings[channel], saved.hooks.settings[channel]);
+    if (fast === true) assert.equal(JSON.parse(saved.hooks.fastSettings[channel]).fastMode, true);
   }
 });
 

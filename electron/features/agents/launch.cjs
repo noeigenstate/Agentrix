@@ -31,7 +31,7 @@ function launchCommand(agent, history, seat = null) {
     // Skills validates capabilities; the shell boundary also rejects executable syntax.
     if (seat.model.length > 160 || !/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(seat.model)) throw new Error('invalid-model');
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(seat.effort)) throw new Error('invalid-effort');
-    return `claude --model "${seat.model}" --effort ${seat.effort}\r`;
+    return `claude${seat.fast === true ? ' --agentrix-seat-fast' : ''} --model "${seat.model}" --effort ${seat.effort}\r`;
   }
   throw new Error('Codex 必须通过 app-server 启动。');
 }

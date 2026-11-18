@@ -1,6 +1,6 @@
 // Catalog probes never start a thread or submit input. All process/SDK access is injected by main.
 async function probeCodex({ spawn, executable, rpcFactory, stop, workerEnvironment, cwd, env, timers = globalThis, timeoutMs = 10000 }) {
-  let child, rpc, timer, stopped = false;
+  let child, rpc, timer, stopped = false, failure;
   try {
     return await Promise.race([(async () => {
       const file = await executable();
@@ -19,9 +19,10 @@ async function probeCodex({ spawn, executable, rpcFactory, stop, workerEnvironme
       } while (cursor && rows.length < 300 && cursors.size < 10);
       return rows;
     })(), new Promise((_, reject) => { timer = timers.setTimeout(() => reject(new Error('model_probe_timeout')), timeoutMs); })]);
-  } finally {
+  } catch (error) { failure = error; throw error; }
+  finally {
     stopped = true; timers.clearTimeout(timer); rpc?.close();
-    try { if (child) await stop(child); }
+    try { if (child && (!failure || child.pid)) await stop(child); }
     finally { child?.stdin?.destroy(); child?.stdout?.destroy(); child?.stderr?.destroy(); }
   }
 }

@@ -191,10 +191,15 @@ function global:claude {
         return
     }
     $hooks = $global:AgentrixSession.hooks
-    $settings = $hooks.settings.fallback
+    $launchSettings = $hooks.settings
+    if ($args.Count -gt 0 -and $args[0] -eq '--agentrix-seat-fast') {
+        $args = @($args | Select-Object -Skip 1)
+        $launchSettings = $hooks.fastSettings
+    }
+    $settings = $launchSettings.fallback
     if ($hooks.channel -eq 'http') {
         $proxy = Get-AgentrixHookProxy $hooks.port
-        if ($proxy) { Send-AgentrixEvent 'hook-channel' -Agent 'claude' -Command $proxy } else { $settings = $hooks.settings.http }
+        if ($proxy) { Send-AgentrixEvent 'hook-channel' -Agent 'claude' -Command $proxy } else { $settings = $launchSettings.http }
     }
     Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
     $currentNote = Get-AgentrixReadingNote

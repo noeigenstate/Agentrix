@@ -1356,9 +1356,15 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const hooks = bootstrapFile && terminalHooks({ port: hookServer?.port, terminalId: id, sessionKey, eventServer, env, cwd: startPath,
     shell: { posix: ['zsh', 'bash'].includes(shellKind), powershellPath, script: claudeHookPath, node: process.execPath,
       helper: path.join(integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
+  if (hooks && launchPlans.get(id)?.fast === true) {
+    hooks.fastSettings = Object.fromEntries(Object.entries(hooks.settings).map(([channel, text]) =>
+      [channel, JSON.stringify({ ...JSON.parse(text), fastMode: true })]));
+    env.AGENTRIX_FAST_HOOK_SETTINGS = hooks.fastSettings.http;
+    env.AGENTRIX_FAST_HOOK_FALLBACK = hooks.fastSettings.fallback;
+  }
   if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
-    claudeFast: launchPlans.get(id)?.fast, nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks });
+    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks });
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
