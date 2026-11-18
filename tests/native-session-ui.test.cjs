@@ -6,7 +6,8 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
-const { hookHarness } = require('./helpers/hook-harness.cjs');
+const { hookHarness: harnessFor } = require('./helpers/hook-harness.cjs');
+const hookHarness = (filename, overrides) => harnessFor(filename, { './routing-command.ts': routingCommand, ...overrides });
 
 // The native session view: the model the events fold into, the store that keeps it, the view and its request cards, the launcher's choice of
 // route, the grid cell it takes and the parent relay that no longer types. A fake bridge stands in for the main process everywhere: no real
@@ -46,6 +47,7 @@ const load = makeLoader({
   '../voice/voice-input': { dictateInto: () => () => {} },
   '../voice/VoiceButton': { VoiceButton: ({ disabled, name }) => React.createElement('button', { type: 'button', className: 'icon-button voice-button', disabled, 'aria-label': `语音输入 ${name}` }) },
 });
+const routingCommand = load('shared/routing-command.ts');
 const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
 before(() => { Object.defineProperty(globalThis, 'document', { configurable: true, value: { documentElement: { dataset: {}, lang: '' }, getElementById: () => null } }); load('shared/i18n.ts').applyLanguage('zh'); });
 after(() => { if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument); else delete globalThis.document; });
@@ -534,7 +536,7 @@ test('words: receipts, routes, money and quota windows say what is known and "�
 // ---- the store ----------------------------------------------------------------------------------------------------------------------
 async function withBridge(bridge, run) {
   const store = load('features/native-session/native-store.ts'), saved = Object.getOwnPropertyDescriptor(globalThis, 'window');
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: Object.assign(new EventTarget(), { agentrix: { nativeSession: bridge } }) });
   try { await run(store); } finally { store.disposeNativeStore(); if (saved) Object.defineProperty(globalThis, 'window', saved); else delete globalThis.window; }
 }
 // The hooks read the store without a browser: a server render takes the current snapshot.
@@ -641,7 +643,7 @@ function nextOf({ settings, saved, next }) {
   if (saved) return { path: 'api', reason: settings.claudePath === 'api-only' ? 'set_api' : null };
   return { path: settings.claudePath === 'api-only' ? null : 'terminal', reason: 'no_key' };
 }
-function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null }, claude = { installed: true } } = {}) {
+function launcher(runtime, calls, { kind = 'local', codexHere = true, startError = null, history = { claude: null, codex: null }, claude = { installed: true }, routing = null } = {}) {
   const bridge = {
     getSettings: async () => ({ ok: true, value: runtime.settings }), keyStatus: async () => ({ ok: true, value: { saved: runtime.saved } }),
     usage: async () => ({ ok: true, value: { agents: { claude: { next: nextOf(runtime) } } } }),
@@ -650,6 +652,7 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { dispatchEvent: event => { calls.push(['event', event.type, event.detail]); return true; }, agentrix: {
     getAgents: async () => ({ ok: true, value: { npm: true, installing: null, error: null, codex: { installed: codexHere }, claude } }), onAgents: () => () => {},
+    skillSeats: async () => routing, onSkills: () => () => {},
     startTerminal: async id => { calls.push(['terminal', id]); return { ok: true, value: null }; },
     installAgent: async agent => { calls.push(['install', agent]); return { ok: true, value: null }; }, openNode: async () => { calls.push(['node']); return { ok: true, value: null }; },
     agentHistory: async () => ({ ok: true, value: history }),
@@ -667,6 +670,19 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
   const note = agent => elements(button(agent)).find(node => node.type === 'small').props.children;
   return { render, button, note, errors, text: () => renderToStaticMarkup(render()), done() { harness.dispose(); if (previous) Object.defineProperty(globalThis, 'window', previous); else delete globalThis.window; } };
 }
+
+test('the launcher puts the orchestrator family first and labels both leads from C0', async () => {
+  const team = require('./fixtures/team-seats.json');
+  const routing = { ...team, leadAgent: 'codex', leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer } };
+  const h = launcher({ settings: { claudePath: 'terminal-only' }, saved: false }, [], { routing });
+  try {
+    h.render(); await settle();
+    const primary = elements(h.render()).filter(node => node.props.className?.startsWith('agent-launcher-agent is-'))[0];
+    assert.equal(primary.props['data-routing-primary'], true);
+    assert.match(h.note('codex'), /总指挥 · GPT-6\.2-Sol/);
+    assert.match(h.note('claude'), /默认 · Opus/);
+  } finally { h.done(); }
+});
 
 test('the launcher always calls start and shows main decision with today texts: the labels, the missing-key notice, and no note of its own for a terminal main chose', async () => {
   const set = claudePath => ({ claudePath }), started = [['start', 't1', { agent: 'claude', resume: false }], ['refresh', 't1']];
@@ -1025,7 +1041,7 @@ function sessionView(events, bridge, base = {}) {
   let change = null, voice = null;
   const VoiceButton = () => null, NativePanel = function NativePanel() {}, NativeToast = function NativeToast() {};
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: Object.assign(new EventTarget(), { agentrix: { nativeSession: bridge } }) });
   const build = list => ({ model: model.applyEvents(model.emptyModel(), list).model, dismissed: null, noteDismissed: false, handoff: null });
   const parts = { AgentMark() {}, PendingPromptEntries() {}, QuoteChip() {}, quoteExcerpt: load('features/reading/message-quote.ts').quoteExcerpt, withQuote: load('features/reading/message-quote.ts').withQuote, ResultActions() {}, ResultChecks() {}, ResultStatus() {}, TimelineStep() {}, UserImages() {}, WorkingLine() {}, pastedPicture: load('features/reading/image-input.ts').pastedPicture, latestResult: load('features/reading/result-round.ts').latestResult, useStickToBottom: () => ({ stuck: true, unseen: 0, toBottom: () => toBottom.push(true), ready: true }) };
   // The message box's helpers are the reading view's real ones, run on the same hooks as the view (the harness is made just below).
@@ -1038,6 +1054,7 @@ function sessionView(events, bridge, base = {}) {
   });
   const feed = { ConversationDecorations: { Provider() {} }, ConversationFeed() {} };
   const harness = hookHarness('src/features/native-session/NativeSessionView.tsx', {
+    './routing-command.ts': routingCommand,
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './useFittingHint': { fullHintProps: () => ({}), HIDDEN_NOTE: {}, useFittingHint: (box, hints) => hints[0] },
     './action-text': { actionText: tool => `${tool.kind}:${tool.target}` }, './ConversationFeed': feed, './feed-parts': parts,
     './native-entries.ts': load('features/native-session/native-entries.ts'), './native-pictures.ts': load('features/native-session/native-pictures.ts'), './native-bridge.ts': load('features/native-session/native-bridge.ts'), './mention-tokens': load('features/reading/mention-tokens.ts'), './NativeRequestCard': { NativeRequestCard() {} }, './NativePanel': { NativePanel }, './NativeToast': { NativeToast }, './panel-read.ts': load('features/native-session/panel-read.ts'), './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './native-session.css': {},
@@ -1460,7 +1477,7 @@ test('each pending request gets its card, for this session; a stopped session ha
 // ---- the request cards --------------------------------------------------------------------------------------------------------------
 function cardView(request, bridge) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: Object.assign(new EventTarget(), { agentrix: { nativeSession: bridge } }) });
   const harness = hookHarness('src/features/native-session/NativeRequestCard.tsx', { '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill } });
   const tree = () => deep(harness.render('NativeRequestCard', { request, terminalId: 't1', sessionId: 'rs1' }).result);
   const button = label => tree().find(node => node.type === 'button' && node.props.children === label), input = index => tree().filter(node => node.type === 'input')[index];
@@ -1689,7 +1706,7 @@ test('a quota change reported for one project makes only that project’s usage 
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window'), store = load('features/native-session/native-store.ts');
   const bridge = { onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: null }), usage: async id => { reads.push(id); return { ok: true, value: usageOf() }; }, onUsageChanged: listener => { bridge.changed = listener; return () => {}; } }, reads = [];
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: Object.assign(new EventTarget(), { agentrix: { nativeSession: bridge } }) });
   const mount = projectId => {
     const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: id => read(() => store.useUsageRevision(id)) }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './activity-pane.css': {} });
     harness.render('ApiUsage', { terminal: quietTerminal, projectId }); return harness;
@@ -1711,7 +1728,7 @@ test('a burst of quota changes is read at most once a second and never moves the
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'] });
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window'), store = load('features/native-session/native-store.ts'), reads = [];
   const bridge = { onEvent: () => () => {}, snapshot: async () => ({ ok: true, value: null }), usage: async () => { reads.push(Date.now()); return { ok: true, value: usageOf() }; }, onUsageChanged: listener => { bridge.changed = listener; return () => {}; } };
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: Object.assign(new EventTarget(), { agentrix: { nativeSession: bridge } }) });
   const harness = hookHarness('src/features/agents/ApiUsage.tsx', { './i18n': { t: fill }, './native-store.ts': { useUsageRevision: id => read(() => store.useUsageRevision(id)) }, './native-words': words(), './Metric': load('features/agents/Metric.tsx'), './ResetQuota': { ResetQuota: () => null }, './native-billing-link.ts': load('features/native-session/native-billing-link.ts'), './activity-pane.css': {} });
   const render = () => harness.render('ApiUsage', { terminal: quietTerminal, projectId: 'a' });
   try {
@@ -2061,7 +2078,7 @@ test('a live switch.updated moves the usage count of waiting sessions; a replaye
 
 function noticeView(bridge) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: Object.assign(new EventTarget(), { agentrix: { nativeSession: bridge } }) });
   const harness = hookHarness('src/features/native-session/SwitchNotice.tsx', {
     '@phosphor-icons/react': new Proxy({}, { get: () => () => null }), './i18n': { t: fill }, './native-session.css': {}, './native-store.ts': { resolveSwitch: (terminal, entry) => terminal ?? entry?.model.switchState ?? null, useNativeEntries: () => new Map() },
     './native-words': words(), './native-bridge.ts': { nativeBridge: () => bridge },
@@ -2209,7 +2226,7 @@ test('a card nobody offers a draft for (the raw terminal) hands main an empty dr
 
 function handoffHook(bridge, current) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window'), taken = [];
-  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: { nativeSession: bridge } } });
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: Object.assign(new EventTarget(), { agentrix: { nativeSession: bridge } }) });
   const harness = hookHarness('src/features/native-session/draft-handoff.ts', {
     './native-bridge.ts': { nativeBridge: () => bridge },
     './native-store.ts': { resolveSwitch: terminal => terminal, useNativeEntries: () => new Map([['t1', { model: { identity: current.identity, switchState: current.eventState }, handoff: current.incoming ? { changeId: current.incomingChange ?? 9, draft: current.incoming } : null }]]), takeHandoff: id => { taken.push(id); const draft = current.incoming; current.incoming = null; return draft; } },
@@ -2671,7 +2688,6 @@ test('a compaction and a dropped result are lines of the conversation, and the c
   i18n.applyLanguage('en');
   try {
     assert.equal(lines([next('context.compacted', { trigger: 'auto', preTokens: 180000, postTokens: 20000 })])[0][2], 'Context compacted (automatic) · 180k → 20k tokens', 'in English: a space before the dot, and tokens');
-    assert.deepEqual(load('features/native-session/native-composer.ts').fastChoices(true).map(choice => choice.description), ['On', 'Off'], 'the /fast menu says On and Off, not another button’s words');
   } finally { i18n.applyLanguage('zh'); }
   for (const end of [next('context.compacting', { active: false }), next('context.compacted', { trigger: 'auto', preTokens: null, postTokens: null }), next('turn.completed', { status: 'completed' }), next('session.state', { state: 'stopped', reason: 'user' })])
     assert.equal(applyEvents(model, [end]).model.compacting, false, end.type);
@@ -2718,55 +2734,27 @@ test('/clear, /new and /reset begin a new conversation, the box shut meanwhile; 
   try { codex.type('/clear'); codex.press(); await settle(); assert.deepEqual(sent, []); assert.deepEqual(codex.refreshed, ['t1'], 'Codex also starts a new conversation through main'); } finally { codex.done(); }
 });
 
-test('/model, /effort and /fast set with an argument and open a menu without one: the current value is marked, ↑↓ Enter and Esc work, a refusal brings the words back', async () => {
-  const MODELS = [{ value: 'opus', displayName: 'Opus', description: 'Most capable', efforts: ['low', 'high', 'max'] }, { value: 'sonnet', displayName: 'sonnet', description: 'Balanced', efforts: ['low', 'high'] }];
-  const patches = []; let now = { model: 'sonnet', effort: 'high', fast: false }, refuse = null;
-  const bridge = { runOptions: async (...args) => { patches.push(args[2]); return refuse ?? { ok: true, value: (now = { ...now, ...args[2] }) }; }, models: ok(MODELS), send: async () => { throw new Error('sent as a message'); }, commands: ok([{ name: '/model', description: 'Model', source: 'builtin', view: 'reading' }]) };
-  const view = sessionView(idle, bridge);
-  const enter = async () => { keyIn(view, 'Enter'); await settle(); view.tree(); };
-  const marked = () => options(view).map(node => [elements(node).find(child => child.type === 'code').props.children, elements(node).some(child => child.type === 'small' && child.props.children === '当前')]);
-  try {
-    await typeIn(view, '/model opus'); await enter();
-    assert.deepEqual([patches, view.box().props.value, statuses(view)], [[{ model: 'opus' }], '', ['模型已设为 opus']], 'with an argument it is set at once and told');
-    await typeIn(view, '/model default'); await enter();
-    assert.deepEqual([patches.at(-1), statuses(view)], [{ model: null }, ['模型已恢复默认']], '"default" is the default model: null, not a name');
-    await typeIn(view, '/effort max'); await enter(); assert.deepEqual([patches.at(-1), statuses(view)], [{ effort: 'max' }, ['思考强度已设为 max']]);
-    await typeIn(view, '/fast on'); await enter(); assert.deepEqual([patches.at(-1), statuses(view)], [{ fast: true }, ['快速模式已开启']]);
-    patches.length = 0; await typeIn(view, '/fast maybe'); await enter();
-    assert.deepEqual([patches, view.box().props.value, alertOf(view)], [[], '/fast maybe', '用法：/fast on 或 /fast off'], 'a value /fast does not take sets nothing and keeps the words');
-    now = { model: 'sonnet', effort: 'high', fast: false };
-    await typeIn(view, '/model'); assert.ok(listbox(view), 'the command list is open'); await enter();
-    assert.deepEqual([patches, view.box().props.value, marked()], [[{}], '', [['opus', false], ['sonnet', true]]], 'no argument: the current values are asked for (an empty patch) and the models listed, the current one marked');
-    assert.equal(options(view).findIndex(node => node.props['aria-selected']), 1, 'the current one is chosen first');
-    assert.equal(keyIn(view, 'ArrowUp'), 1); keyIn(view, 'Escape'); view.tree(); assert.deepEqual([listbox(view), patches.length], [undefined, 1], 'Esc closes the menu and sets nothing');
-    await typeIn(view, '/model'); await enter(); await enter(); await settle();
-    assert.deepEqual([patches.at(-1), listbox(view), statuses(view)], [{ model: 'sonnet' }, undefined, ['模型已设为 sonnet']], 'Enter chooses the line');
-    await typeIn(view, '/effort'); await enter();
-    assert.deepEqual(marked(), [['low', false], ['high', true]], 'the efforts of the model that runs');
-    now = { ...now, model: null }; view.type('x'); await typeIn(view, '/effort'); await enter();
-    assert.deepEqual(marked().map(line => line[0]), ['low', 'high', 'max'], 'a model not known: the efforts of every model');
-    keyIn(view, 'ArrowDown'); await enter(); assert.deepEqual(patches.at(-1), { effort: 'max' }, 'the current one is chosen first and ↓ goes on from it');
-    now = { model: 'sonnet', effort: 'high', fast: false }; await typeIn(view, '/fast'); await enter();
-    assert.deepEqual(marked(), [['on', false], ['off', true]], '/fast is on or off');
-    options(view)[0].props.onClick(); await settle(); assert.deepEqual([patches.at(-1), listbox(view)], [{ fast: true }, undefined], 'a click chooses too');
-    await typeIn(view, '/fast'); await enter(); view.type('a'); assert.equal(listbox(view), undefined, 'typing leaves the menu');
-    refuse = { ok: false, error: 'not now' }; await typeIn(view, '/model opus'); await enter();
-    assert.deepEqual([view.box().props.value, alertOf(view)], ['/model opus', 'not now'], 'a refusal brings the words back with the reason');
-    await typeIn(view, '/fast'); await enter(); assert.deepEqual([view.box().props.value, listbox(view)], ['/fast', undefined], 'and no menu opens');
-  } finally { view.done(); }
-  const nothing = sessionView(idle, { runOptions: ok({ model: null, effort: null, fast: false }), send: async () => ({ ok: true, value: {} }) });
-  try { nothing.type('/model'); nothing.press(); await settle(); assert.deepEqual([nothing.box().props.value, alertOf(nothing)], ['/model', '当前版本还不支持这个命令'], 'a main without the model list refuses'); } finally { nothing.done(); }
-  const sent = [], codex = sessionView(idle, { ...bridge, send: async (...args) => { sent.push(args); return { ok: true, value: {} }; } }, CODEX);
-  refuse = null; now = { model: 'sonnet', effort: 'high', fast: false };
-  try {
-    codex.type('/model'); codex.press(); await settle(); codex.tree();
-    assert.deepEqual(optionNames(codex), ['opus', 'sonnet'], 'Codex uses the same native model menu');
-    keyIn(codex, 'Escape'); await typeIn(codex, '/model opus'); keyIn(codex, 'Enter'); await settle();
-    assert.deepEqual(patches.at(-1), { model: 'opus' });
-    await typeIn(codex, '/effort max'); keyIn(codex, 'Enter'); await settle(); assert.deepEqual(patches.at(-1), { effort: 'max' });
-    await typeIn(codex, '/fast on'); keyIn(codex, 'Enter'); await settle(); assert.deepEqual(patches.at(-1), { fast: true });
-    assert.deepEqual(sent, [], 'no model control is sent as model text');
-  } finally { codex.done(); }
+test('native routing commands request the seats dialog without sending text or changing run options', async () => {
+  for (const provider of ['claude', 'codex']) {
+    const requests = [], runtime = [];
+    const bridge = {
+      runOptions: async (...args) => { runtime.push(args); return { ok: true, value: {} }; },
+      send: async (...args) => { runtime.push(args); return { ok: true, value: {} }; },
+      commands: ok(['/model', '/effort', '/fast'].map(name => ({ name, source: 'builtin', view: 'reading' }))),
+    };
+    const view = sessionView(idle, bridge, { provider });
+    window.addEventListener('agentrix:open-seats', event => requests.push(event.detail));
+    try {
+      for (const command of ['/model opus', '/effort', '/fast on']) {
+        await typeIn(view, command); keyIn(view, 'Enter'); await settle();
+        assert.equal(view.box().props.value, '');
+        assert.deepEqual(view.toasts(), ['模型由模型路由决定']);
+        assert.equal(listbox(view), undefined);
+      }
+      assert.deepEqual(requests, Array(3).fill({ projectId: 'p1', terminalId: 't1' }));
+      assert.deepEqual(runtime, []);
+    } finally { view.done(); }
+  }
 });
 
 test('a line that starts with ! is a shell command: noted over the box, sent as the command without the !, kept in the history, and never a message', async () => {
@@ -2810,20 +2798,7 @@ test('Codex unknown shell delivery is told without restoring an executable draft
   finally { view.done(); }
 });
 
-test('a /fast the runtime cannot do shows its reason and never says fast mode is on: typed, or chosen from the menu', async () => {
-  const reason = 'Claude Agent SDK 目前不支持快速模式', patches = [];
-  const view = sessionView(idle, { runOptions: async (...args) => { patches.push(args[2]); return args[2].fast === true ? { ok: false, error: reason } : { ok: true, value: { model: null, effort: null, fast: false } }; } });
-  try {
-    await typeIn(view, '/fast on'); keyIn(view, 'Enter'); await settle(); view.tree();
-    assert.deepEqual([patches, view.box().props.value, alertOf(view), statuses(view)], [[{ fast: true }], '/fast on', reason, []], 'the words come back with the reason, and nothing is told as set');
-    patches.length = 0; await typeIn(view, '/fast'); keyIn(view, 'Enter'); await settle(); view.tree();
-    assert.deepEqual(optionNames(view), ['on', 'off']);
-    options(view)[0].props.onClick(); await settle(); view.tree();
-    assert.deepEqual([patches.at(-1), alertOf(view), statuses(view), listbox(view)], [{ fast: true }, reason, [], undefined], 'choosing 开 from the menu ends the same way');
-    await typeIn(view, '/fast off'); keyIn(view, 'Enter'); await settle(); view.tree();
-    assert.deepEqual([alertOf(view), statuses(view)], [undefined, ['快速模式已关闭']], 'what it can do is still told');
-  } finally { view.done(); }
-});
+
 
 // ---- a turn that ended unknown, a "!" round, and a sentence told once (round r13) -----------------------------------------------------------
 const statusLines = view => elements(view.tree()).filter(node => node.props?.role === 'status' && node.props.className === 'reading-status').map(node => node.props.children);
@@ -2963,13 +2938,13 @@ test('what a setting was changed to is a note of two seconds in the place of the
   const view = sessionView(idle, bridge);
   try {
     await typeIn(view, '/model opus'); keyIn(view, 'Enter'); await settle(); view.tree();
-    assert.deepEqual([view.toasts(), statusLines(view)], [['模型已设为 opus'], []], 'told by the note, in no <p> of the tail');
-    t.mock.timers.tick(1999); view.tree(); assert.deepEqual(view.toasts(), ['模型已设为 opus'], 'still there just before two seconds');
+    assert.deepEqual([view.toasts(), statusLines(view)], [['模型由模型路由决定'], []], 'told by the note, in no <p> of the tail');
+    t.mock.timers.tick(1999); view.tree(); assert.deepEqual(view.toasts(), ['模型由模型路由决定'], 'still there just before two seconds');
     t.mock.timers.tick(1); view.tree(); assert.deepEqual(view.toasts(), [], 'gone at two seconds');
     await typeIn(view, '/effort max'); keyIn(view, 'Enter'); await settle(); view.tree(); t.mock.timers.tick(1000);
     await typeIn(view, '/effort low'); keyIn(view, 'Enter'); await settle(); view.tree();
-    assert.deepEqual(view.toasts(), ['思考强度已设为 low'], 'a newer note replaces the older');
-    t.mock.timers.tick(1000); view.tree(); assert.deepEqual(view.toasts(), ['思考强度已设为 low'], 'and has its own two seconds');
+    assert.deepEqual(view.toasts(), ['模型由模型路由决定'], 'a newer note replaces the older');
+    t.mock.timers.tick(1000); view.tree(); assert.deepEqual(view.toasts(), ['模型由模型路由决定'], 'and has its own two seconds');
     view.type('x'); assert.deepEqual(view.toasts(), [], 'the owner typing again clears it');
     await typeIn(view, '/effort max'); keyIn(view, 'Enter'); await settle(); view.tree(); assert.equal(view.toasts().length, 1);
     view.type('/context'); view.press(); await settle(); view.tree();

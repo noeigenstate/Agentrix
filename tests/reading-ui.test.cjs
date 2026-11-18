@@ -47,6 +47,7 @@ function loadUI(name, overrides = {}) {
     if (name === '@phosphor-icons/react') return new Proxy({}, { get: () => props => React.createElement('svg', { className: props.className }) });
     if (key === './i18n') return { currentLanguage: () => 'en', t: (text, values = {}) => (en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) };
     if (key === './platform') return { isMac: true, isLinux: false, isWindows: false };
+    if (key === './routing-command.ts') return loadUI('shared/routing-command.ts', overrides);
     if (key === './reading-command') return require('../src/features/reading/reading-command.ts');
     if (key === './reply-files') return require('../src/features/reading/reply-files.ts');
     if (key === './reading-paths') return { pathTooltip: () => 'Ctrl+click to show in File Explorer', markReadingPaths() {} };
@@ -294,14 +295,14 @@ test('screen parser stub preserves its replacement contract', () => {
 test('welcome renders CLI metadata and the cached agent commands without a terminal toggle', () => {
   const { ReadingWelcome } = loadUI('features/reading/ReadingWelcome.tsx');
   for (const agent of ['claude', 'codex']) {
-    const names = agent === 'claude' ? ['/init', '/help', '/model', '/status', '/review'] : ['/init', '/model', '/status', '/review', '/permissions'];
-    const commands = names.map(name => ({ name, source: 'builtin', description: '审查代码', view: 'reading' }));
+    const names = agent === 'claude' ? ['/init', '/help', '/status', '/review'] : ['/init', '/status', '/review', '/permissions'];
+    const commands = [...names, '/model'].map(name => ({ name, source: 'builtin', description: '审查代码', view: 'reading' }));
     const html = renderToStaticMarkup(React.createElement(ReadingWelcome, { agent, screen: fakeScreen(), commands, complete: () => {}, disabled: false }));
     assert.match(html, /Claude Code/); assert.match(html, /v2\.1\.293/); assert.match(html, /Opus 5\.5/); assert.match(html, /high/);
     assert.match(html, /Claude Max/); assert.match(html, /C:\\work\\demo-app/); assert.match(html, /Review code/);
-    assert.equal((html.match(/<button/g) ?? []).length, 5);
+    assert.equal((html.match(/<button/g) ?? []).length, names.length);
     for (const name of names) assert.ok(html.includes(name));
-    assert.doesNotMatch(html, /切换到终端|Switch to terminal/);
+    assert.doesNotMatch(html, /切换到终端|Switch to terminal|\/model/);
   }
 });
 
@@ -499,7 +500,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
     ...overrides,
   });
   Object.assign(h.props.terminal, { id: 'working-' + agent, agent, codexActivity: 'working' });
-  window.agentrix.terminalCommands = async () => ({ ok: true, value: [{ name: '/model', source: 'builtin', description: '', view: 'terminal' }] });
+  window.agentrix.terminalCommands = async () => ({ ok: true, value: [{ name: '/status', source: 'builtin', description: '', view: 'terminal' }] });
   window.agentrix.pasteTerminal = async (id, text, sessionId) => {
     h.pasted.push({ id, text }); view.draft += text;
     require('../src/features/terminal/terminal-screen.ts').recordScreenPaste(id, sessionId, text, true);
@@ -750,13 +751,13 @@ for (const agent of ['claude', 'codex']) {
     assert.deepEqual(h.written.map(item => item.text), ['\x1b', '\x1b']);
     assert.equal(h.node.value, 'keep editing');
     assert.equal(h.written.length, 2);
-    h.edit('/mo'); await h.tick(0);
+    h.edit('/sta'); await h.tick(0);
     const palette = () => elements(h.tree()).find(element => element.props.role === 'listbox');
     assert.ok(palette()); h.press('Escape'); assert.equal(palette(), undefined); assert.equal(h.written.length, 2);
-    h.edit('/mo'); elements(h.tree()).find(element => element.props.role === 'option').props.onClick(); h.render();
-    assert.equal(h.node.value, '/model ');
-    h.edit('/model'); h.press('Enter'); await h.tick(0);
-    assert.equal(h.popup().props.command, '/model'); assert.equal(h.node.disabled, false); assert.equal(stop().props.disabled, true);
+    h.edit('/sta'); elements(h.tree()).find(element => element.props.role === 'option').props.onClick(); h.render();
+    assert.equal(h.node.value, '/status ');
+    h.edit('/status'); h.press('Enter'); await h.tick(0);
+    assert.equal(h.popup().props.command, '/status'); assert.equal(h.node.disabled, false); assert.equal(stop().props.disabled, true);
     const before = h.written.slice(); h.press('Escape'); h.press('Enter');
     assert.deepEqual(h.written, before, 'an open popup still owns the keys');
     h.popup().props.onClose(); h.render();
@@ -775,7 +776,7 @@ for (const agent of ['claude', 'codex']) {
     h.node.selectionStart = h.node.selectionEnd = 'first note'.length; h.press('ArrowDown'); assert.equal(h.node.value, 'second note');
     h.node.selectionStart = h.node.selectionEnd = 'second note'.length; h.press('ArrowDown'); assert.equal(h.node.value, 'unsent draft');
     h.node.selectionStart = h.node.selectionEnd = 'unsent draft'.length; assert.notEqual(h.press('ArrowDown').prevented, true, 'the walk is over');
-    h.edit('/mo'); await h.tick(0); const listed = () => elements(h.tree()).some(element => element.props.role === 'listbox');
+    h.edit('/sta'); await h.tick(0); const listed = () => elements(h.tree()).some(element => element.props.role === 'listbox');
     assert.equal(listed(), true); h.edit('');
   });
 
@@ -1312,9 +1313,21 @@ test('dictation inserts at the end and focuses the box when it had no focus', as
   await h.tick(2000); assert.deepEqual(h.pasted, []);
 });
 
+test('reading routing commands show a notice and never enter the PTY or outbox', async t => {
+  const h = workingComposerHarness(t, 'claude'), requests = [];
+  window.dispatchEvent = event => requests.push([event.type, event.detail]);
+  for (const command of ['/model opus', '/effort', '/fast off']) {
+    h.edit(command); h.press('Enter'); await h.tick(0);
+    assert.equal(h.node.value, '');
+    assert.deepEqual([h.pasted, h.written, h.popup()], [[], [], undefined]);
+    assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['模型由模型路由决定'])));
+  }
+  assert.deepEqual(requests, Array(3).fill(['agentrix:open-seats', { projectId: h.props.projectId, terminalId: h.props.terminal.id }]));
+});
+
 test('welcome command rows call the existing completion callback with the cached command', () => {
   const { ReadingWelcome } = loadUI('features/reading/ReadingWelcome.tsx');
-  const command = { name: '/model', source: 'builtin', description: '切换模型', view: 'terminal' };
+  const command = { name: '/status', source: 'builtin', description: '状态', view: 'terminal' };
   const picked = [];
   const root = ReadingWelcome({ agent: 'claude', screen: fakeScreen(), commands: [command], complete: value => picked.push(value), disabled: false });
   elements(root).find(node => node.type === 'button').props.onClick();

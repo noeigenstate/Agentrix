@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../../shared/i18n';
+import { openSeats } from '../../shared/routing-command.ts';
 import type { Result } from '../../shared/types';
 import { nativeBridge } from './native-bridge.ts';
-import { effortChoices, fastChoices, modelChoices, optionPatch, optionTold, optionUsage, permissionChoices, type Choice, type ComposerAction, type ComposerOption } from './native-composer.ts';
+import { optionPatch, optionTold, optionUsage, permissionChoices, type Choice, type ComposerAction } from './native-composer.ts';
 import { nativeItem, refreshNativeSession } from './native-store.ts';
 import { readPanel } from './panel-read.ts';
 import type { PanelAgent, PanelCommand, PanelState } from './native-panel.ts';
@@ -15,10 +16,10 @@ function ask<T>(call: Promise<Result<T>> | undefined): Promise<Result<T>> {
 // The native controls of both providers: the main-process calls, shared choice menus,
 // and the line that says what was set. `clear` empties the box when the words are taken, `restore` puts them back if main refuses them (unless something new
 // was typed meanwhile), `onError` shows a refusal. A new conversation shuts the box until the card shows the new session: the view of this one goes with it.
-export function useComposerActions({ terminalId, sessionId, agent, clear, restore, onError }: {
-  terminalId: string; sessionId: string; agent: PanelAgent; clear: () => void; restore: (words: string) => void; onError: (message: string | null) => void;
+export function useComposerActions({ projectId, terminalId, sessionId, agent, clear, restore, onError }: {
+  projectId: string; terminalId: string; sessionId: string; agent: PanelAgent; clear: () => void; restore: (words: string) => void; onError: (message: string | null) => void;
 }) {
-  const [menu, setMenu] = useState<{ option: ComposerOption; items: Choice[] } | null>(null), [told, setTold] = useState<string | null>(null), [renewing, setRenewing] = useState(false);
+  const [menu, setMenu] = useState<Choice[] | null>(null), [told, setTold] = useState<{ text: string } | null>(null), [renewing, setRenewing] = useState(false);
   const [panel, setPanel] = useState<PanelState | null>(null), asked = useRef(0);
   // What was set is told for two seconds.
   useEffect(() => {
@@ -28,20 +29,16 @@ export function useComposerActions({ terminalId, sessionId, agent, clear, restor
   }, [told]);
   const fail = (words: string, message: string) => { restore(words); onError(message); };
 
-  const apply = async (option: ComposerOption, value: string, words: string) => {
-    const result = await ask(nativeBridge()?.runOptions?.(terminalId, sessionId, optionPatch(option, value)!));
-    if (result.ok) setTold(optionTold(option, result.value, value)); else fail(words, result.error);
+  const apply = async (value: string, words: string) => {
+    const patch = optionPatch('permissions', value);
+    if (!patch) return onError(optionUsage());
+    const result = await ask(nativeBridge()?.runOptions?.(terminalId, sessionId, patch));
+    if (result.ok) setTold({ text: optionTold('permissions', result.value, value) }); else fail(words, result.error);
   };
-  // The menu of an option: the current values and, for a model or an effort, the models the session can run.
-  const choices = async (option: ComposerOption, words: string) => {
-    const bridge = nativeBridge(), catalog = option === 'model' || option === 'effort';
-    const [now, models] = await Promise.all([ask(bridge?.runOptions?.(terminalId, sessionId, {})), catalog ? ask(bridge?.models?.(terminalId, sessionId)) : null]);
+  const choices = async (words: string) => {
+    const now = await ask(nativeBridge()?.runOptions?.(terminalId, sessionId, {}));
     if (!now.ok) return fail(words, now.error);
-    if (models && !models.ok) return fail(words, models.error);
-    const known = models?.ok ? models.value : [];
-    const items = option === 'fast' ? fastChoices(now.value.fast) : option === 'permissions' ? permissionChoices(now.value.permissions)
-      : option === 'model' ? modelChoices(known, now.value.model) : effortChoices(known, now.value.model, now.value.effort);
-    if (items.length) setMenu({ option, items }); else fail(words, t('没有可选的项'));
+    setMenu(permissionChoices(now.value.permissions));
   };
   const renew = async (words: string) => {
     setRenewing(true); clear();
@@ -68,6 +65,12 @@ export function useComposerActions({ terminalId, sessionId, agent, clear, restor
   // `action` is what `composerAction` found in `words`.
   const run = async (action: ComposerAction, words: string) => {
     setTold(null); onError(null);
+    if (action.kind === 'routing') {
+      clear(); setMenu(null); closePanel();
+      setTold({ text: t('模型由模型路由决定') });
+      openSeats({ projectId, terminalId });
+      return;
+    }
     if (action.kind === 'new') return renew(words);
     if (action.kind === 'panel') return query(action.command);
     if (action.kind === 'shell') {
@@ -80,18 +83,17 @@ export function useComposerActions({ terminalId, sessionId, agent, clear, restor
       if (card && (card.exitCode != null || card.output || card.modelDelivery === 'unknown')) onError(result.error); else fail(words, result.error);
       return;
     }
-    const { option, value } = action;
-    if (value && !optionPatch(option, value)) return onError(optionUsage(option));
+    const { value } = action;
+    if (value && !optionPatch('permissions', value)) return onError(optionUsage());
     clear();
-    return value ? apply(option, value, words) : choices(option, words);
+    return value ? apply(value, words) : choices(words);
   };
-  // A line of the menu was picked: the option is set to it.
   const choose = (value: string) => {
-    const option = menu?.option;
+    if (!menu) return;
     setMenu(null);
-    if (option) void apply(option, value, '');
+    void apply(value, '');
   };
   const forget = () => { setMenu(null); setTold(null); };
 
-  return { menu: menu?.items ?? null, told, renewing, panel, closePanel, refresh, run, choose, close: () => setMenu(null), forget };
+  return { menu, told: told?.text ?? null, renewing, panel, closePanel, refresh, run, choose, close: () => setMenu(null), forget };
 }

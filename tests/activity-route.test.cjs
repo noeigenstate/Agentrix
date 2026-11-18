@@ -24,9 +24,12 @@ function compileFile(filename, language) {
   const original = mod.require.bind(mod);
   mod.require = name => {
     if (name.endsWith('.css')) return {};
-    if (name === '../../shared/i18n') return { t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
+    if (name === '../../shared/i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
+    if (name === '../../shared/routing-command.ts') return compileFile(path.join(__dirname, '../src/shared/routing-command.ts'), language);
+    if (name === './skill-seats.ts') return require('../src/features/agents/skill-seats.ts');
+    if (name === './RoutingKeyCard') return loadAgentsFile('RoutingKeyCard.tsx', language);
     if (name === '../../shared/call-model-name') return compileFile(path.join(__dirname, '../src/shared/call-model-name.ts'), language);
-    if (name === './i18n') return { t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
+    if (name === './i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
     if (name === './model-name') return require('../src/shared/model-name.ts');
     if (name === '../../shared/model-name') return require('../src/shared/model-name.ts');
     if (name === '../../shared/useNow') return require('../src/shared/useNow.ts');
@@ -755,4 +758,14 @@ test('the main card says 失败 for a round that failed (a /compact that compact
       assert.match(html, /已中断/); assert.doesNotMatch(html, /失败/, JSON.stringify(typed.nativeRuntimeSessionId));
     }
   } finally { nativeTurns.clear(); }
+});
+
+test('activity shows the working prompt and three most recent queued prompts, with an accessible fold', () => {
+  const prompts = [{ id: 'working', state: 'working', text: 'Work now', summary: 'Work now', at: 1 },
+    ...Array.from({ length: 5 }, (_, n) => ({ id: 'queued-' + n, state: 'queued', text: 'Prompt ' + n, summary: 'Prompt ' + n, at: n + 2 }))];
+  const html = activityMarkup([], 'zh', { codexActivity: 'working', prompts });
+  const list = /class="activity-call-rows activity-main-tasks"[\s\S]*?<\/ul>/.exec(html)[0];
+  assert.match(list, /Work now[\s\S]*Prompt 4[\s\S]*Prompt 3[\s\S]*Prompt 2/);
+  assert.doesNotMatch(list, /Prompt [01]/);
+  assert.match(list, /aria-expanded="false"[\s\S]*还有 2 条/);
 });

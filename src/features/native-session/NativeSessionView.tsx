@@ -53,7 +53,7 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const caret = useRef<number | null>(null);
   useLayoutEffect(() => { if (caret.current !== null) { box.current?.setSelectionRange(caret.current, caret.current); caret.current = null; } });
   // Both providers use the same native controls; a new conversation shuts this binding's box until its replacement arrives.
-  const actions = useComposerActions({ terminalId, sessionId, agent: kind, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
+  const actions = useComposerActions({ projectId, terminalId, sessionId, agent: kind, clear: () => edit(''), restore: words => setText(current => current || words), onError: setError });
   const locked = handoff.locked, open = canSend(model) && !locked && !actions.renewing, over = isOver(model), working = !over && (isWorking(model) || model.compacting), waiting = model.session?.state === 'waiting';
   const entries = useMemo(() => nativeEntries(model, Object.fromEntries(sent.flatMap(message => message.images?.length ? [[message.id, message.images]] : []))), [model, sent]);
   const pending = useMemo(() => nativePending(model, sent, discarded), [model, sent, discarded]);

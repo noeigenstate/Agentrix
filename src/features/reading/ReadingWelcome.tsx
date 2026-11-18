@@ -8,7 +8,7 @@ export function ReadingWelcome({ agent, screen, commands, complete, disabled, st
 }) {
   const banner = screen.banner;
   const model = screen.status.model ?? banner?.model, effort = screen.status.effort ?? banner?.effort;
-  const names = (agent === 'claude' ? ['/init', '/help', '/model', '/status', '/review'] : ['/init', '/model', '/status', '/review', '/permissions']);
+  const names = (agent === 'claude' ? ['/init', '/help', '/status', '/review'] : ['/init', '/status', '/review', '/permissions']);
   const suggestions = names.flatMap(name => {
     const command = commands.find(item => item.name === name && item.source === 'builtin');
     return command ? [command] : [];

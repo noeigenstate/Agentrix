@@ -1,13 +1,17 @@
+import { routingRoleName } from '../../shared/routing-command.ts';
+import { createContext, useEffect, useState, type ReactNode } from 'react';
 import { CaretRight, CheckCircle, Circle, CircleNotch, DotsThreeCircle, Record as RecordDot, Terminal, WarningCircle } from '@phosphor-icons/react';
-import type { AgentCall, ProjectTerminal, TokenRate } from '../../shared/types';
+import type { AgentCall, CallFileResult, ProjectTerminal, SeatsInfo, SeatRole, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
-import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
+import { roleGroups, routeVerdict } from './skill-seats.ts';
+import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, openSplit, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
 import './activity-pane.css';
+import './agent-calls.css';
 
 // How fast a model writes, at the right end of its head: the average over its recent replies (output tokens per second of the time it spent writing). The column is a fixed width, so
 // a figure arriving or changing moves nothing. Not yet a finished reply: waiting. Records that cannot be read: a dash, and the tooltip says so.
@@ -121,18 +125,104 @@ function backgroundItem({ row, open, now, label }: { row: BackgroundRow; open: R
 // calls, per model one head (its mark, name, settings, service and rate) and two lines for each call (what it does; its role and state in words, the terminal at the right when the project
 // has several), then a 「后台任务」 group of commands left running, and a collapsed 「最近完成 N 个」 (the last 10, none older than 30 minutes). Without `terminals` it is the one terminal's calls.
 // A model's calls past the fourth fold into "+N". With nothing to list there is one quiet line saying what will appear. Hidden calls are left out and not counted in "+N".
+export const AgentTabScope = createContext<string | null>(null);
+
+type TeamInfo = Record<string, SeatsInfo | null>;
+
+function TeamSeats({ projectId, terminals, children }: { projectId: string; terminals: readonly ProjectTerminal[]; children: (info: TeamInfo) => ReactNode }) {
+  const [info, setInfo] = useState<TeamInfo>({});
+  const sessions = JSON.stringify(terminals.map(terminal => [terminal.id, terminal.sessionId, terminal.nativeRuntimeSessionId]));
+  useEffect(() => {
+    const api = window.agentrix;
+    if (!api?.skillSeats) return;
+    let active = true, request = 0;
+    const load = async () => {
+      const mine = ++request;
+      const entries = await Promise.all(terminals.map(async ({ id }) => [id, await api.skillSeats(projectId, id).catch(() => null)] as const));
+      if (active && request === mine) setInfo(Object.fromEntries(entries));
+    };
+    setInfo({}); void load();
+    const off = api.onSkills?.(load);
+    return () => { active = false; off?.(); };
+  }, [projectId, sessions]);
+  return children(info);
+}
+
+const FILE_LABELS = { brief: '简报', log: '日志' } as const;
+const FILE_ERRORS = { unavailable: '文件不可用', missing: '文件尚未写入', 'too-large': '文件过大', refused: '无法读取文件' } as const;
+
+function CallArtifact({ row, kind }: { row: CallRow; kind: keyof typeof FILE_LABELS }) {
+  const [result, setResult] = useState<CallFileResult | null>(null);
+  useEffect(() => {
+    let active = true;
+    const read = window.agentrix?.callFile?.(row.terminalId, row.item.id, kind);
+    if (read) void read.then(value => { if (active) setResult(value); }, () => { if (active) setResult({ ok: false, code: 'refused' }); });
+    else setResult({ ok: false, code: 'unavailable' });
+    return () => { active = false; };
+  }, [row.terminalId, row.item.id, kind]);
+  return <section className="agent-call-artifact">
+    <h5>{t(FILE_LABELS[kind])}</h5>
+    {result?.ok ? <><pre>{result.text}</pre>{result.truncated && <small>{t('仅显示文件的前 256 KB')}</small>}</>
+      : <p role="status">{t(result ? FILE_ERRORS[result.code] : '正在读取…')}</p>}
+  </section>;
+}
+
+const VERDICTS = { mismatch: '核对不符', match: '核对一致', unknown: '核对未确认' } as const;
+const SPECIALTIES: Record<string, string> = { frontend: 'Frontend', backend: 'Backend', desktop: 'Desktop', database: 'Database', ai: 'AI' };
+
+function TeamCallRow({ row, role, info, now, labels }: { row: CallRow; role?: SeatRole; info?: SeatsInfo | null; now: number; labels: boolean }) {
+  const { item, call, terminalId } = row, [expanded, setExpanded] = useState(false);
+  const status = item.failure ? failureWord(item.failure) : t(item.awaiting === 'owner' && item.state !== 'done' ? AWAITING_WORD : CALL_STATES[item.state].word);
+  const age = item.startedAt == null ? '—' : elapsedClock(Math.max(0, (item.endedAt ?? now) - item.startedAt));
+  const model = callModelName(call), verdict = routeVerdict(row, info);
+  const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
+  const roleLabel = [role ? routingRoleName(role.name, t) : t(item.role), item.specialty && (SPECIALTIES[item.specialty] ?? item.specialty)].filter(Boolean).join(' · ');
+  return <li className="agent-team-call">
+    <button type="button" className="agent-team-row" aria-expanded={expanded} onClick={() => setExpanded(open => !open)}>
+      <span className="agent-team-subject"><strong>{item.title || model}</strong><time>{age}</time></span>
+      <span className="agent-team-line"><b>{roleLabel}</b><span>{[model, call.effort ?? '—', call.fast == null ? '—' : t(call.fast ? '快速' : '普通')].join(' · ')}</span></span>
+      <span className="agent-team-line"><span>{status}</span>{labels && <span>{row.title ?? t('终端 {number}', { number: row.number })}</span>}
+        {item.worktree && <span className="agent-team-worktree" title={item.worktree}>{item.worktree}</span>}
+        <span data-routing-verdict={verdict}>{t(VERDICTS[verdict])}</span></span>
+    </button>
+    {late && <div className="activity-call-notice" role="status">
+      <span>{t('已到 15 秒未确认，可能没有启动')}</span>
+      <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, item.id)}>{t('停止')}</button>
+      <button type="button" className="button secondary small" onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
+      {stop?.refusal && <span role="alert">{t('没能停止：{message}', { message: stop.refusal })}</span>}
+    </div>}
+    {expanded && <div className="agent-team-details">
+      {item.brief && <CallArtifact row={row} kind="brief" />}
+      {item.log && <CallArtifact row={row} kind="log" />}
+      {!item.brief && !item.log && <p>{t('本次调用没有简报或日志')}</p>}
+      {item.viewable && <button type="button" className="button secondary small" onClick={() => openSplit(terminalId, item.id)}>{t('打开工作会话')}</button>}
+    </div>}
+  </li>;
+}
+
 export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]; terminalId: string; terminals?: readonly ProjectTerminal[] }) {
   const open = useSplits(), project = !!terminals, sources: CallSource[] = terminals ? callSources(terminals) : [{ id: terminalId, number: 1, calls, background: [] }];
   useUiVersion();
   const projectKey = sources[0]?.id ?? terminalId, finishedOpen = isFinishedOpen(projectKey);
-  // The clock runs only while a running background command or a 再等等 timer is on the card.
-  const moving = sources.some(source => source.background.some(task => task.state === 'running')), now = useClock(moving || hasWaitTimer(Date.now()));
+  // Tick for elapsed worker times, running background tasks and wait timers.
+  const moving = sources.some(source => source.background.some(task => task.state === 'running')
+    || source.calls.some(call => call.items.some(item => !!item.seat && item.startedAt != null && item.endedAt == null)));
+  const now = useClock(moving || hasWaitTimer(Date.now()));
   const { groups, background, recent } = projectCalls(sources, open, now, project), label = sources.length > 1;
   const empty = !groups.length && !background.length, nothing = empty && !recent.length;
-  return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
+  const render = (info?: TeamInfo) => {
+    const seats = Object.values(info ?? {}).find(entry => entry?.roles?.length);
+    const roles = seats ? seats.seats.flatMap(id => seats.roles.filter(role => role.id === id)) : [];
+    const team = roles.length > 0;
+    const renderRow = (row: CallRow) => <TeamCallRow key={JSON.stringify([row.terminalId, row.item.id])} row={row}
+      role={roles.find(role => role.id === (row.item.seat ?? 'developer'))} info={info?.[row.terminalId]} now={now} labels={label} />;
+    return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     {nothing && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
     {!empty && <ul className="activity-call-groups">
-      {groups.map(({ call, rate, rows }) => {
+      {team ? roleGroups(roles, groups.flatMap(group => group.rows)).map(({ role, rows }) =>
+        <li key={role.id} className="agent-team-group" data-role={role.id}>
+          <h4>{routingRoleName(role.name, t)}</h4><ul>{rows.map(renderRow)}</ul>
+        </li>) : groups.map(({ call, rate, rows }) => {
         const name = callModelName({ model: call.model }); // the head does not repeat 「未确认」: the starting row says it
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.modelUnconfirmed, call.effort, call.fast])}>
           <ul className="activity-call-rows">
@@ -150,8 +240,13 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
     {recent.length > 0 && <div className="activity-finished">
       <button type="button" className="activity-finished-head" aria-expanded={finishedOpen} onClick={() => toggleFinished(projectKey)}><CaretRight size={14} aria-hidden="true" />{t('最近完成 {count} 个', { count: recent.length })}</button>
       {finishedOpen && <ul className="activity-call-rows">
-        {recent.map(entry => entry.call ? callItem({ row: entry.call, open, now, label }) : backgroundItem({ row: entry.background!, open, now, label }))}
+        {recent.map(entry => entry.call ? (team ? renderRow(entry.call) : callItem({ row: entry.call, open, now, label })) : backgroundItem({ row: entry.background!, open, now, label }))}
       </ul>}
     </div>}
-  </section>;
+    </section>;
+  };
+  if (!terminals || !sources.some(source => source.calls.some(call => call.items.some(item => !!item.seat)))) return render();
+  return <AgentTabScope.Consumer>{projectId => projectId
+    ? <TeamSeats projectId={projectId} terminals={terminals}>{render}</TeamSeats> : render()}
+  </AgentTabScope.Consumer>;
 }
