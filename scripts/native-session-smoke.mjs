@@ -218,6 +218,17 @@ async function runtimeSmoke(output, stages) {
       const first = await stage(`start fake ${agent === 'claude' ? 'claude SDK' : 'codex app-server'}`, () => page.evaluate(({ terminalId, agent }) => window.agentrix.nativeSession.start(terminalId, { agent }), { terminalId, agent }), 30000);
       assert.equal(first.ok, true, JSON.stringify(first));
       let id = first.value.runtimeSessionId;
+      if (agent === 'claude') await stage('routing commands open the packaged seats dialog', async () => {
+        const composer = page.locator('[data-native-session="' + id + '"] textarea');
+        await composer.fill('/model opus');
+        await composer.press('Enter');
+        const seats = page.locator('.seats-dialog');
+        await page.locator('[data-native-session="' + id + '"] .native-toast').waitFor();
+        await seats.waitFor();
+        assert.equal(await seats.locator('[data-seat]').count(), 10);
+        await page.keyboard.press('Escape');
+        await seats.waitFor({ state: 'detached' });
+      });
       for (const text of ['first', 'second']) {
         const marker = agent === 'claude' ? 'PACKAGED_CLAUDE_OK' : 'PACKAGED_CODEX_OK';
         const messageId = randomUUID();
@@ -391,16 +402,24 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
     limits: [{ id: 'five_hour', usedPercent: 100, resetsAtMs: now + 2 * HOUR }, { id: 'seven_day', usedPercent: 40, resetsAtMs: now + 2 * DAY }] };
   const claudeStatus = { command: 'status', context: claudeContext.context, errors: [], account: { kind: 'api' }, session: { model: 'claude-opus-5-5', effort: 'high', cwd: 'C:\\work', sessionId: 'abc-123', version: '2.1.318', permission: 'default', mcp: [{ name: 'playwright', status: 'connected' }] } };
 
+  const team = JSON.parse(await fs.readFile(new URL('../tests/fixtures/team-seats.json', import.meta.url), 'utf8'));
+  const routing = { ...team, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors: ['developer'], fresh: ['reviewer', 'qa'],
+    leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer }, global: {}, project: null, current: null,
+    effective: team.defaults, installed: { claude: true, codex: true }, issues: [], catalogAt: { claude: null, codex: null } };
   // Main side: canned answers; mode 'hold' keeps the next answer back until released so the loading state can be seen.
-  await app.evaluate(({ ipcMain }) => {
+  await app.evaluate(({ ipcMain }, seats) => {
     globalThis.__panel = { answers: {}, mode: 'ok', error: '' };
     ipcMain.removeHandler('native:send'); ipcMain.removeHandler('native:run-options');
     ipcMain.handle('native:send', (_event, _terminal, _runtime, _id, text) => {
       const cfg = globalThis.__panel, result = cfg.mode === 'fail' ? { ok: false, error: cfg.error } : { ok: true, value: { status: 'consumed', local: cfg.answers[String(text).slice(1)] } };
       return cfg.mode === 'hold' ? new Promise(resolve => { globalThis.__panelRelease = () => resolve(result); }) : result;
     });
-    ipcMain.handle('native:run-options', (_event, _terminal, _runtime, patch) => ({ ok: true, value: { model: patch?.model ?? 'opus', effort: patch?.effort ?? 'high', fast: false } }));
-  });
+    ipcMain.handle('native:run-options', () => ({ ok: true, value: { permissions: 'config' } }));
+    for (const channel of ['skills:seats', 'skills:seats-refresh']) {
+      ipcMain.removeHandler(channel);
+      ipcMain.handle(channel, () => ({ ok: true, value: seats }));
+    }
+  }, routing);
   const configure = (answers, mode = 'ok', error = '') => app.evaluate((_e, cfg) => { globalThis.__panel = cfg; }, { answers, mode, error });
   // A terminal's native identity is fixed by its first event, so the Codex pass runs in an application of its own (panelCodexApp).
   const provider = async () => {
@@ -513,9 +532,14 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
   await open('usage'); await ready(); await record('claude-usage-dark'); await close();
   await open('status'); await ready(); await record('claude-status-dark'); await close();
 
-  // The note after a setting change, timed.
+  // Routing-owned commands show a notice and open the seats dialog.
   await box.click(); await box.fill('/model opus'); await page.keyboard.press('Enter');
-  const toast = page.locator('.native-toast'); await toast.waitFor({ timeout: 4000 });
+  const toast = page.locator('.native-toast'), seats = page.locator('.seats-dialog');
+  await toast.waitFor({ timeout: 4000 });
+  await seats.waitFor({ timeout: 4000 });
+  assert.match(await toast.innerText(), /模型由模型路由决定|Model routing decides/);
+  assert.equal(await seats.locator('[data-seat]').count(), team.seats.length);
+  await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached', timeout: 4000 });
   const shown = Date.now();
   measures.toast = await page.evaluate(() => {
     const t = document.querySelector('.native-toast'), b = t.getBoundingClientRect(), c = getComputedStyle(t), a = t.closest('.reading-scroll-area').getBoundingClientRect(), field = t.closest('.reading-view').querySelector('textarea').getBoundingClientRect();
@@ -525,8 +549,25 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
   await toast.waitFor({ state: 'detached', timeout: 4000 }); measures.toast.visibleMs = Date.now() - shown;
   measures.toastBubbles = await view.locator('.reading-user').count();
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-  await box.click(); await box.fill('/effort max'); await page.keyboard.press('Enter'); await toast.waitFor({ timeout: 4000 }); await page.waitForTimeout(300); await shot('claude-toast-light');
-  await toast.waitFor({ state: 'detached', timeout: 4000 }); await page.evaluate(() => { document.documentElement.dataset.theme = 'mono'; });
+  await box.click(); await box.fill('/effort max'); await page.keyboard.press('Enter'); await toast.waitFor({ timeout: 4000 });
+  await seats.waitFor({ timeout: 4000 });
+  assert.match(await toast.innerText(), /模型由模型路由决定|Model routing decides/);
+  await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached', timeout: 4000 });
+  await shot('claude-toast-light');
+  await toast.waitFor({ state: 'detached', timeout: 4000 });
+  await box.fill('/fast'); await box.press('Enter'); await seats.waitFor({ timeout: 4000 });
+  const controls = await seats.locator('[data-pick], [data-tile-effort], [data-tile-fast]').all();
+  assert.equal(controls.length, team.seats.length * 3);
+  for (const control of controls) {
+    await control.scrollIntoViewIfNeeded();
+    assert.equal(await control.evaluate(node => {
+      const { left, top, width, height } = node.getBoundingClientRect();
+      const hit = document.elementFromPoint(left + width / 2, top + height / 2);
+      return node.contains(hit) && parseFloat(getComputedStyle(node).fontSize) >= 14;
+    }), true, 'a card control is reachable at its centre and at least 14 px');
+  }
+  await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached', timeout: 4000 });
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'mono'; });
 
   }
   await fs.writeFile(path.join(output, `panel-measures-${agent}.json`), JSON.stringify(measures, null, 2));
@@ -594,7 +635,11 @@ async function recheckApp(output, stages) {
       event(index, 'turn.completed', { status: 'completed', error: null }), event(index, 'session.state', { state: 'idle', reason: null })]);
     for (const view of views) await view.waitFor({ timeout: 15000 });
 
-    // Main side: canned answers; the interrupts that reach main are counted per terminal.
+    const team = JSON.parse(await fs.readFile(new URL('../tests/fixtures/team-seats.json', import.meta.url), 'utf8'));
+  const routing = { ...team, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors: ['developer'], fresh: ['reviewer', 'qa'],
+    leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer }, global: {}, project: null, current: null,
+    effective: team.defaults, installed: { claude: true, codex: true }, issues: [], catalogAt: { claude: null, codex: null } };
+  // Main side: canned answers; the interrupts that reach main are counted per terminal.
     await app.evaluate(({ ipcMain }) => {
       globalThis.__re = { answers: {}, interrupts: [] };
       for (const channel of ['native:send', 'native:interrupt']) ipcMain.removeHandler(channel);

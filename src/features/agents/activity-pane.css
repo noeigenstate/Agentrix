@@ -214,7 +214,21 @@
 .subagent-background-tail:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
 /* 模型路由: a quiet 32px row under the blocks, grey like the other pane text until hovered. */
-.activity-seats { flex: none; }
-.activity-seats-button { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0; border: 0; background: none; color: var(--flow-muted); font: inherit; font-size: 12px; cursor: pointer; }
-.activity-seats-button:hover { color: var(--flow-ink); }
-.activity-seats-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 8px; }
+/* Compact key rows keep the pane usable at short heights. The entire raised surface is a button. */
+.activity-pane:has(.activity-routing-key) { gap: 12px; }
+.activity-routing-key {
+  flex: 0 1 auto; display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 60px; gap: 4px; padding: 8px; margin: 0 1px 4px; text-align: start;
+  border: 1px solid var(--divider); border-radius: 8px; background: var(--flow-inset); color: var(--flow-ink);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--flow-ink) 10%, transparent), 0 3px 0 var(--divider);
+  font: inherit; cursor: pointer;
+}
+.activity-routing-key:hover { background: var(--bg-hover); }
+.activity-routing-key:active { transform: translateY(2px); }
+.activity-routing-key:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.activity-routing-title { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+.activity-routing-rows { min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--flow-line); padding-top: 4px; }
+.activity-routing-row { display: grid; grid-template-columns: minmax(44px, 30%) minmax(0, 1fr) auto; gap: 8px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
+.activity-routing-row > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-routing-row strong { color: var(--flow-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-call-rows .activity-task-fold button { grid-column: 2 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 0; background: none; color: var(--flow-muted); font: inherit; cursor: pointer; }
+.activity-task-fold button[aria-expanded="true"] svg { transform: rotate(180deg); }

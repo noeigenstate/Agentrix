@@ -3,6 +3,8 @@ import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, ListC
 import type { AgentsState, AppUpdateState, MenuCommand, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
 import { ProjectExplorer } from './features/files/ProjectExplorer';
+import { AgentTabScope } from './features/agents/AgentCalls';
+import { SeatsHost } from './features/agents/SeatsHost';
 import { AgentSidebar } from './features/agents/AgentSidebar';
 import { AddProjectDialog } from './features/workspace/AddProjectDialog';
 import { SSHAuthDialog } from './features/ssh/SSHAuthDialog';
@@ -361,14 +363,14 @@ export function App() {
       <div className="window-actions"><IconButton label={t('最小化')} onClick={() => api.minimize()}><Minus size={16} /></IconButton><IconButton label={t('最大化或还原')} onClick={() => api.maximize()}><Square size={12} /></IconButton><IconButton label={t('关闭窗口')} className="window-close" onClick={() => api.close()}><X size={17} /></IconButton></div>
     </div>}
     <div className="workspace-layout">
-      {focus && <AgentSidebar project={focus}>{agent => <ProjectExplorer key={focus.id} project={focus} agentPanel={agent.panel} agentRunning={agent.running} agentBackground={agent.background} collapsed={settings.explorerCollapsed} hideNoise={settings.hideTreeNoise} onHideNoiseChange={hideTreeNoise => setPreference({ hideTreeNoise })}
+      {focus && <AgentTabScope.Provider value={focus.id}><AgentSidebar project={focus}>{agent => <ProjectExplorer key={focus.id} project={focus} agentPanel={agent.panel} agentRunning={agent.running} agentBackground={agent.background} collapsed={settings.explorerCollapsed} hideNoise={settings.hideTreeNoise} onHideNoiseChange={hideTreeNoise => setPreference({ hideTreeNoise })}
         onFilesRemoved={paths => setPreviewFile(current => current?.projectId === focus.id && paths.some(path => current.path === path || current.path.startsWith(path + '/')) ? null : current)}
         onPathRenamed={(oldPath, newPath) => setPreviewFile(current => current?.projectId === focus.id && (current.path === oldPath || current.path.startsWith(oldPath + '/')) ? { projectId: focus.id, path: newPath + current.path.slice(oldPath.length) } : current)}
         expandedPaths={expandedByProject[focus.id] ?? ['']} selectedFile={previewFile?.projectId === focus.id ? previewFile.path : null} changeRevision={changeRevision}
         onOpenChange={async (path, mode) => { if (previewFile?.projectId === focus.id && previewFile.path === path && previewFile.diff === mode) return; if (await allowNavigation()) setPreviewFile({ projectId: focus.id, path, diff: mode === 'file' ? undefined : mode }); }}
         onCollapse={() => setPreference({ explorerCollapsed: !settings.explorerCollapsed })}
         onExpandedChange={paths => setExpandedByProject(value => ({ ...value, [focus.id]: paths }))}
-        onSelectFile={async path => { if (previewFile?.projectId === focus.id && previewFile.path === path && !previewFile.diff) return; if (await allowNavigation()) setPreviewFile({ projectId: focus.id, path }); }} onReturn={returnToGrid} />}</AgentSidebar>}
+        onSelectFile={async path => { if (previewFile?.projectId === focus.id && previewFile.path === path && !previewFile.diff) return; if (await allowNavigation()) setPreviewFile({ projectId: focus.id, path }); }} onReturn={returnToGrid} />}</AgentSidebar></AgentTabScope.Provider>}
       <main className="main-workspace" inert={shownView !== 'workspace'}>
         <ProjectSwitchHud target={projectSwitch && switchProject && switchPosition > 0 ? { name: switchProject.name, index: orderedProjects.indexOf(switchProject) + 1, position: switchPosition, total: navigation.current.length, sequence: projectSwitch.sequence } : null} />
         {agents && !agents.codex.installed && !agents.claude.installed && !agentsDismissed && <div className="workspace-warning agents-warning"><Info size={15} /><span>{t('未检测到 Codex 或 Claude Code。Agentrix 基于这两个命令行工具工作，安装其中一个后才能使用任务提醒和会话恢复。')}</span><button type="button" className="button secondary small" onClick={() => { setSettingsSection('agents'); setSettingsOpen(true); }}>{t('去安装')}</button><IconButton label={t('关闭提示')} onClick={() => setAgentsDismissed(true)}><X size={14} /></IconButton></div>}
@@ -403,6 +405,7 @@ export function App() {
       </div>}
     </div>
     {popup && <Suspense fallback={null}><FilePopup target={popup} onError={reportError} /></Suspense>}
+    <SeatsHost />
     {error && <div className="error-toast" role="alert"><Info size={18} /><span>{error}</span><IconButton label={t('关闭提示')} onClick={() => setError(null)}><X size={16} /></IconButton></div>}
     {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} nativeTitlebar={nativeTitlebar} onClose={closeGuide} />}
     {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={closeGuide} />}

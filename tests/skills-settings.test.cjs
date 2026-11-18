@@ -553,16 +553,18 @@ test('English exists for each built-in skill title and summary', () => {
   }
 });
 
-test('the trigger offers 首次打开项目, which sets first-open, in Chinese and English', async t => {
-  for (const [language, labels] of [['zh', ['始终', '按需', '首次打开项目']], ['en', ['Always', 'On demand', 'First project open']]]) {
-    const h = mount(t, [builtinRouting({ trigger: 'first-open' }), release], { language });
-    await h.settle(); h.clear();
-    const trigger = h.byLabel(language === 'zh' ? '触发' : 'Trigger');
-    assert.equal(trigger.props.value, 'first-open');
-    assert.deepEqual(trigger.props.options.map(option => option.value), ['always', 'auto', 'first-open']);
-    assert.deepEqual(trigger.props.options.map(option => option.label), labels);
-    trigger.props.onChange('first-open'); await h.settle();
-    assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:model-routing', { trigger: 'first-open' }]]);
+test('the trigger has two choices and a separate first-open switch', async t => {
+  for (const [language, labels, switchLabel] of [['zh', ['每个任务', '相关任务'], '首次打开项目时先运行一次'],
+    ['en', ['Every task', 'Relevant tasks'], 'Run once when a project is first opened']]) {
+    const h = mount(t, [builtinRouting({ trigger: 'auto', firstOpenRun: true }), release], { language });
+    await h.settle();
+    const trigger = h.one(node => node.props.className === 'skills-trigger');
+    assert.equal(trigger.props.value, 'auto');
+    assert.deepEqual(trigger.props.options.map(option => [option.value, option.label]), [['always', labels[0]], ['auto', labels[1]]]);
+    const firstOpen = h.byLabel(switchLabel);
+    assert.equal(firstOpen.props.checked, true);
+    firstOpen.props.onChange({ target: { checked: false } }); await h.settle();
+    assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:model-routing', { firstOpenRun: false }]]);
   }
 });
 
@@ -665,4 +667,14 @@ test('skillBody strips only the leading front matter', () => {
   assert.equal(skillBody('---\r\nname: a\r\n---\r\n# 标题\r\n\r\n---\r\n结尾'), '# 标题\r\n\r\n---\r\n结尾');
   assert.equal(skillBody('---\n---\n正文'), '正文');
   assert.equal(skillBody('没有前置信息\n---\n不是前置信息\n---'), '没有前置信息\n---\n不是前置信息\n---');
+});
+
+test('the global seat summary describes the routing skill using the shared team order', async t => {
+  const fixture = require('./fixtures/team-seats.json');
+  const seatSummary = fixture.roles.map(({ id, name }) => ({ seat: id, name, ...fixture.defaults[id] }));
+  const h = mount(t, [builtinRouting({ seatSummary }), release], { language: 'en' });
+  await h.settle();
+  const description = h.text(h.one(node => node.props.className === 'skills-desc skills-summary'));
+  assert.match(description, /Orchestrator Agent Opus/);
+  assert.match(description, /Developer\/DevOps GPT-6\.2-Sol/);
 });

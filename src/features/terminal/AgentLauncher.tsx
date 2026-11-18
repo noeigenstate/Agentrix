@@ -1,6 +1,7 @@
+import { routingModelName } from '../../shared/routing-command.ts';
 import { useEffect, useState, type ReactNode } from 'react';
 import { CircleNotch, Terminal as TerminalIcon } from '@phosphor-icons/react';
-import type { AgentsState, Result } from '../../shared/types';
+import type { AgentsState, Result, SeatsInfo } from '../../shared/types';
 import { relativeTime } from '../../shared/time';
 import { t } from '../../shared/i18n';
 import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon.ts';
@@ -21,6 +22,22 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   terminalId: string; projectId: string; kind?: 'local' | 'ssh'; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
   onOpenTerminal: (id: string) => void; runningCount?: number; onExpand?: () => void;
 }) {
+  const [routing, setRouting] = useState<SeatsInfo | null>(null);
+  useEffect(() => {
+    const api = window.agentrix;
+    if (!api?.skillSeats) return;
+    let active = true, request = 0;
+    const load = () => {
+      const mine = ++request;
+      void api.skillSeats(projectId, null).then(
+        info => { if (active && request === mine) setRouting(info); },
+        () => { if (active && request === mine) setRouting(null); },
+      );
+    };
+    setRouting(null); load();
+    const off = api.onSkills?.(load);
+    return () => { active = false; off?.(); };
+  }, [projectId]);
   const [history, setHistory] = useState<History | null>(null);
   const [mode, setMode] = useState<'new' | 'continue' | null>(null);
   const [starting, setStarting] = useState<Agent | 'terminal' | null>(null);
@@ -113,15 +130,22 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
     if (next?.path === 'api' || next?.path === 'native') return t('API · 原生模式');
     return noKey ? (next?.path ? t('没有 API key，改用终端') : t('需先保存 API key')) : null;
   };
+  const choices = AGENTS.filter(({ agent }) => !remote || agent === 'codex');
+  const primary = routing?.leadAgent;
+  if (primary) choices.sort((a, b) => Number(b.agent === primary) - Number(a.agent === primary));
+  const seatLabel = (agent: Agent) => {
+    const seat = routing?.leads?.[agent];
+    return seat ? t(agent === primary ? '总指挥 · {model}' : '默认 · {model}', { model: routingModelName(seat.model) }) : null;
+  };
   return <div className="agent-launcher"><div className="agent-launcher-body">
     <p className="agent-launcher-title">{t('选择助手，开始开发')}</p>
     <div className="agent-launcher-mode" role="radiogroup" aria-label={t('开发方式')}>
       <button type="button" role="radio" aria-checked={chosen === 'new'} onClick={() => setMode('new')}>{t('开始新开发')}</button>
       <button type="button" role="radio" aria-checked={chosen === 'continue'} disabled={!known && !remote} title={history && !known && !remote ? t('这个文件夹还没有开发记录') : undefined} onClick={() => setMode('continue')}>{t('继承开发历史')}</button>
     </div>
-    <div className="agent-launcher-agents">{AGENTS.filter(({ agent }) => !remote || agent === 'codex').map(({ agent, name, mark }) => <button type="button" key={agent} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || (runsHere(agent) && !!agents?.installing)} onClick={() => void start(agent)}>
+    <div className="agent-launcher-agents">{choices.map(({ agent, name, mark }) => <button type="button" key={agent} data-routing-primary={agent === primary || undefined} className={`agent-launcher-agent is-${agent}${missing(agent) ? ' is-missing' : ''}`} disabled={!!starting || (runsHere(agent) && !!agents?.installing)} onClick={() => void start(agent)}>
       <span className="agent-launcher-mark" aria-hidden="true" data-audit-ignore>{starting === agent || (runsHere(agent) && agents?.installing === agent) ? <CircleNotch size={16} className="loading-spinner" /> : mark}</span>
-      <b>{name}</b><small>{[note(agent), routeNote(agent)].filter(Boolean).join(' · ')}</small>
+      <b>{name}</b><small>{[seatLabel(agent), note(agent), routeNote(agent)].filter(Boolean).join(' · ')}</small>
     </button>)}</div>
     {(agents?.error || notice) && <p className="agent-launcher-error" role="alert">{agents?.error || notice}</p>}
     <div className="agent-launcher-more">

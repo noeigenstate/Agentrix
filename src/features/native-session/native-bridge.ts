@@ -1,7 +1,7 @@
 // The renderer's one view of the main process's native sessions: window.agentrix.nativeSession (contract-addendum 4). The bridge itself
 // and its preload wiring belong to the main side; this file is the consumer-side shape of it, so the rest of the module never reaches
 // into window. Every call returns a Result; a build or a test without the bridge reads as "no native sessions" (null).
-import type { AgentCommand, ConnectionTest, NativeModelOption, NativeRunOptions, NativeRunOptionsPatch, Result } from '../../shared/types';
+import type { AgentCommand, ConnectionTest, NativeRunOptions, NativeRunOptionsPatch, Result } from '../../shared/types';
 import type { AgentEvent, LimitsPayload as SharedLimits, NativeAnswer, NativeSnapshot } from '../../shared/agent-events';
 export type { NativeAnswer, NativeSnapshot, NativeDraft, NativeHandoff, NativeHandoffReceipt, NativePendingInput, SwitchState } from '../../shared/agent-events';
 
@@ -42,8 +42,7 @@ export interface NativeBridge {
   commands?(terminalId: string, runtimeSessionId: string): Promise<Result<AgentCommand[]>>;
   // Native provider controls: an empty patch reads choices without starting a turn.
   // A new conversation replaces the binding; shell execution stays with the provider.
-  runOptions?(terminalId: string, runtimeSessionId: string, patch: NativeRunOptionsPatch): Promise<Result<NativeRunOptions>>;
-  models?(terminalId: string, runtimeSessionId: string): Promise<Result<NativeModelOption[]>>;
+  runOptions?(terminalId: string, runtimeSessionId: string, patch: Pick<NativeRunOptionsPatch, 'permissions'>): Promise<Result<NativeRunOptions>>;
   newConversation?(terminalId: string, runtimeSessionId: string): Promise<Result<{ runtimeSessionId: string }>>;
   shell?(terminalId: string, runtimeSessionId: string, clientMessageId: string, command: string): Promise<Result<{ exitCode: number | null }>>;
   stop(terminalId: string, runtimeSessionId: string): Promise<Result<unknown>>;

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
-import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
+import { ArrowDown, Image as ImageIcon, Info, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import type { AgentCommand, ProjectTerminal } from '../../shared/types';
 import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
@@ -27,6 +27,7 @@ import { blocks, useVisibleTail } from './useVisibleTail';
 import './reading.css';
 import './reading-flow.css';
 import { t } from '../../shared/i18n';
+import { isRoutingCommand, openSeats } from '../../shared/routing-command.ts';
 import { termWords } from '../../shared/reason-words/term.ts';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
 import { useMentions } from './useMentions';
@@ -143,6 +144,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const choiceVisible = useRef(hasChoice), mounted = useRef(true);
   const choiceHost = useRef<HTMLDivElement>(null), restoreComposer = useRef(false), wasChoice = useRef(false), editingAtChoice = useRef(false);
   const [draft, setDraft] = useState('');
+  const [routingNotice, setRoutingNotice] = useState(0);
+  useEffect(() => {
+    if (!routingNotice) return;
+    const timer = setTimeout(() => setRoutingNotice(0), 2000);
+    return () => clearTimeout(timer);
+  }, [routingNotice]);
   const [outbox, setOutbox] = useState<WaitingMessage[]>(() => waitingMessages.get(ownHistory) ?? []);
   const saveOutbox = (messages: WaitingMessage[]) => {
     if (messages.length) waitingMessages.set(ownHistory, messages); else waitingMessages.delete(ownHistory);
@@ -325,8 +332,16 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const ownsSend = (owner: number) => mounted.current && sendCounter.current === owner;
   const ownsPicture = (generation: number) => mounted.current && pictureGeneration.current === generation;
   const pictureNotAccepted = () => onError(t('图片未发送。请在输入框中移除后重新粘贴。'));
+  const routeCommand = (text: string, own: boolean) => {
+    if (!isRoutingCommand(text)) return false;
+    if (own) edit('');
+    setRoutingNotice(count => count + 1);
+    openSeats({ projectId, terminalId: terminal.id });
+    return true;
+  };
   const send = async (text = draft.trim(), own = true, automatic = false, attempt?: WaitingAttempt) => {
     if (inputBlocked || !text && !images.length && !serverPictures.current.length) return false;
+    if (routeCommand(text, own)) return true;
     // The gate is the held one the box shows: a half-drawn redraw does not send a message to the outbox; the send waits
     // for the input itself. A dialog, a menu or the popup holds it at once.
     if (shownBlocked && !automatic || outbox.length && !automatic || sending.current) {
@@ -432,6 +447,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // whatever is being written now alone and takes no pictures with it.
   const deliver = async (words: string, own: boolean, owner: number, automatic: boolean, place: number, attempt?: WaitingAttempt) => {
     if (inputBlocked || shownBlocked && !automatic) return false;
+    if (routeCommand(words, own)) return true;
     if (!own && images.length) { onError(t('请先发送或移除输入框中的图片，再发送这条消息。')); return; }
     const batch = own ? images : [], uploads = own ? serverPictures.current.slice() : [];
     const pictureSend = !!(batch.length || uploads.length);
@@ -864,6 +880,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         {unseen > 0 && <span className="reading-unseen" role="status">{t('{count} 条新消息', { count: unseen })}</span>}
         <button type="button" className="icon-button reading-jump" title={t('跳到最新消息')} aria-label={t('跳到最新消息')} onClick={() => toBottom('smooth')}><ArrowDown size={18} /></button>
       </div>}
+      {routingNotice > 0 && <div className="native-toast" role="status"><Info size={16} aria-hidden="true" />{t('模型由模型路由决定')}</div>}
       {terminalPopup !== null && <ReadingTerminalPopup key={sendCounter.current} terminalId={terminal.id} sessionId={terminal.sessionId} command={terminalPopup.command} focus={terminalPopup.focus} onReady={readyPopup} onClose={closePopup} onError={onError} />}
     </div>
     {attachedCount > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: attachedCount })}<UserImages images={shownImages} numbers={imageNumbers} onRemove={index => void removeImage(index)} /></div>}

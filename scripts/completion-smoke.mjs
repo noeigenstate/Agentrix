@@ -186,9 +186,17 @@ try {
   await fs.appendFile(transcript, replied([{ type: 'text', text: '再看验证码。' }], used(10000, 70000, 800)));
   await waitFor(async () => (await text('.api-agent .activity-tokens[title] > small')).join() === '输入 400k · 缓存命中 90% · 输出 5k', 'a later count updates the tokens');
   assert.deepEqual(await text('.api-agent .activity-figure > small'), ['共 1M tokens · 还可容纳 919k']);
+  const key = pane.locator('.activity-routing-key');
+  await key.waitFor();
+  assert.equal(await key.locator('.activity-routing-row').count(), 10, 'the routing key lists all team seats');
+  await key.click();
+  const seats = page.locator('.seats-dialog');
+  await seats.waitFor();
+  await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached' });
+  await overview.locator('li').first().scrollIntoViewIfNeeded();
   const overflow = await pane.evaluate(node => {
     const right = node.getBoundingClientRect().right + 1;
-    return [...node.querySelectorAll('.activity-card, .activity-metric, .activity-call-rows li')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
+    return [...node.querySelectorAll('.activity-card, .activity-metric, .activity-call-rows li, .activity-routing-key, .activity-routing-row')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
   });
   assert.deepEqual(overflow, [], 'nothing in the activity pane reaches past its edge');
   await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await waitFor(async () => !await pane.count(), 'activity pane can be hidden');
@@ -289,5 +297,22 @@ try {
   assert.equal(await notices(), 0);
   assert.notEqual((await state()).codexActivity, 'complete', 'old lastCompletedAt is not the current running state');
   console.log('PASS: completed history and restarting never generate a new completion notice');
+  await page.getByRole('button', { name: '进入 Parent task status', exact: true }).click();
+  await input('fold active\r');
+  await fs.appendFile(transcript, said('fold active')); await hook('start', { prompt: 'fold active' });
+  await waitFor(async () => (await state()).terminals[0].prompts.some(item => item.state === 'working' && item.text === 'fold active'), 'the fold fixture starts a round');
+  for (let n = 1; n <= 5; n++) {
+    await input('fold queued ' + n + '\r');
+    await waitFor(async () => (await state()).terminals[0].prompts.some(item => item.state === 'queued' && item.text === 'fold queued ' + n), 'the fold fixture records the queued prompt');
+  }
+  const folded = page.locator('.activity-main-tasks');
+  const fold = folded.locator('.activity-task-fold button');
+  await fold.waitFor();
+  assert.equal(await fold.innerText(), '还有 2 条');
+  assert.equal(await fold.getAttribute('aria-expanded'), 'false');
+  assert.deepEqual(await folded.locator('.is-queued p').evaluateAll(rows => rows.map(row => row.lastChild.textContent)), ['fold queued 5', 'fold queued 4', 'fold queued 3']);
+  await fold.click();
+  assert.equal(await fold.getAttribute('aria-expanded'), 'true');
+  assert.equal(await folded.locator('.is-queued').count(), 5);
   console.log(`Fixture: ${output}`);
 } finally { if (application) await application.close(); }

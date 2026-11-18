@@ -1,50 +1,21 @@
-import type { Seat, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, SeatsSaveError } from '../../shared/types';
+import type { CallRow } from './subagent-splits.ts';
+import type { Seat, SeatId, SeatIssue, SeatMap, SeatModel, SeatRole, SeatsInfo, SeatsSaveError } from '../../shared/types';
 
 // The seats dialog's rules, as pure functions: they mirror electron/features/skills/model-seats.cjs so 保存 can be disabled before main refuses
 // (main still validates and its refusal is shown). The catalog carries each model's family, rank and efforts, so nothing here names a model.
-export type SlotId = 'lead.claude' | 'lead.codex' | Exclude<SeatId, 'lead'>;
+export type SlotId = SeatId;
 export type Scope = 'global' | 'project';
 export type Family = 'claude' | 'codex';
-export type Phase = 'plan' | 'build' | 'review' | 'accept';
-export type EditRefusal = 'unknown-model' | 'unavailable' | 'family' | 'same' | 'effort' | 'fast' | 'invalid-id';
+export type EditRefusal = 'unknown-model' | 'unavailable' | 'same' | 'effort' | 'fast' | 'invalid-id';
 export type Edit = { ok: true; map: SeatMap } | { ok: false; reason: EditRefusal };
 export type ReviewerBlock = { hit: SeatId[]; alternatives: SeatModel[]; fix: SeatModel | null };
 
 // The base lists apply to a model the catalog does not know (an id typed in by the owner).
 const EFFORTS: Record<Family, string[]> = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['low', 'medium', 'high', 'xhigh'] };
-// A reviewer must differ from the author seats; the rule compares these.
-const AUTHORS: Exclude<SeatId, 'lead'>[] = ['core', 'execution'];
-// Which step of the flow a seat belongs to; the dialog's inner ring lights it while the seat is hovered.
-export const PHASES: Record<string, Phase> = { architect: 'plan', core: 'build', execution: 'build', reviewer: 'review', visual: 'accept' };
+const AUTHORS: SeatId[] = ['developer'];
 
-// Where each seat's tile stands on the table (plane coordinates). A tile stands upright above its plane point, whose y the tilt flattens by cos(tilt), so overlap is judged on the screen
-// rectangles. The seven fixed seats have set spots (checked clear of each other and of the wide lead tile); a seat without one goes on the rim and slides outward off the lead tile.
-export const TILT = 55;
-export type SeatSpot = { x: number; y: number; w: number; h: number };
-const SPOTS: Partial<Record<SeatId, SeatSpot>> = {
-  lead: { x: 0, y: -330, w: 500, h: 150 }, architect: { x: 388, y: -168, w: 248, h: 120 }, reviewer: { x: -388, y: -168, w: 248, h: 120 }, core: { x: 404, y: 92, w: 248, h: 120 },
-  lookup: { x: -404, y: 92, w: 248, h: 120 }, execution: { x: 140, y: 268, w: 248, h: 120 }, visual: { x: -140, y: 268, w: 248, h: 120 },
-};
-const flat = Math.cos(TILT * Math.PI / 180);
-export const spotsTouch = (a: SeatSpot, b: SeatSpot, gap: number) => Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && a.y * flat - a.h < b.y * flat + gap && b.y * flat - b.h < a.y * flat + gap;
-export function seatLayout(ids: SeatId[]): Record<string, SeatSpot> {
-  const spots: Record<string, SeatSpot> = {};
-  ids.forEach((id, index) => {
-    const known = SPOTS[id];
-    if (known) { spots[id] = known; return; }
-    const angle = (-90 + index * 360 / ids.length) * Math.PI / 180;
-    let spot: SeatSpot = { x: Math.round(Math.cos(angle) * 410), y: Math.round(Math.sin(angle) * 270), w: 248, h: 120 };
-    const lead = SPOTS.lead!;
-    while (ids.includes('lead') && spotsTouch(spot, lead, 12) && Math.abs(spot.x) + spot.w / 2 < 560) spot = { ...spot, x: spot.x + (spot.x < 0 ? -4 : 4) };
-    spots[id] = spot;
-  });
-  return spots;
-}
 // A shorter name for a small tile: "Opus (follows latest)" is "Opus (latest)"; the menu and the list keep the full text.
 export const shortLabel = (label: string) => label.replace(/\s*\(follows latest\)$/i, ' (latest)');
-// The table's size (the 1130 x 700 stage), and the scale that fits it in the width and in the height left by the rest of the dialog.
-export const STAGE_W = 1130, STAGE_H = 700;
-export const sceneScale = (width: number, space: number) => Math.max(0.5, Math.min(1, width / STAGE_W, space / STAGE_H));
 // Where the 更换 menu goes: under its button, else above it, else on the roomier side; it never leaves the viewport, and the model list scrolls inside it (maxHeight).
 export function menuPlacement(anchor: { left: number; top: number; bottom: number }, view: { width: number; height: number }, rows: number): { left: number; top?: number; bottom?: number; maxHeight: number } {
   const need = Math.min(rows * 32 + 200, view.height - 16), below = view.height - anchor.bottom - 12, above = anchor.top - 12;
@@ -58,12 +29,8 @@ export const MODEL_ID = /^[A-Za-z0-9][\w.:@+/[\]-]*$/;
 export const isModelId = (model: string) => model.length <= 160 && MODEL_ID.test(model);
 // The rank rule for a model without a provider tier (parity fixture: tests/fixtures/seat-ranks.json).
 export const rankByName = (model: string): 1 | 2 | 3 => /(^|[-_.])(haiku|mini|nano|lite)([-_.]|$)/.test(model) ? 1 : /(^|[-_.])sonnet([-_.]|$)/.test(model) ? 2 : 3;
-export const slotsOf = (seat: SeatId): SlotId[] => seat === 'lead' ? ['lead.claude', 'lead.codex'] : [seat];
-export const seatOfSlot = (slot: SlotId): SeatId => slot.startsWith('lead.') ? 'lead' : slot as SeatId;
-// A lead slot holds only its own agent's family; every other seat takes any.
-export const slotFamily = (slot: SlotId): Family | null => slot === 'lead.claude' ? 'claude' : slot === 'lead.codex' ? 'codex' : null;
-export const getSlot = (map: SeatMap, slot: SlotId): Seat | undefined => slot === 'lead.claude' ? map.lead?.claude : slot === 'lead.codex' ? map.lead?.codex : map[slot];
-export const withSlot = (map: SeatMap, slot: SlotId, seat: Seat): SeatMap => slot.startsWith('lead.') ? { ...map, lead: { ...map.lead, [slot.slice(5)]: seat } } : { ...map, [slot]: seat };
+export const getSlot = (map: SeatMap, slot: SlotId): Seat | undefined => map[slot];
+export const withSlot = (map: SeatMap, slot: SlotId, seat: Seat): SeatMap => ({ ...map, [slot]: seat });
 export const sameSeat = (a?: Seat, b?: Seat) => !!a && !!b && a.model === b.model && a.effort === b.effort && !!a.fast === !!b.fast;
 export const modelRow = (catalog: SeatModel[], model: string) => catalog.find(row => row.model === model);
 // A model the catalog does not know is not judged unavailable.
@@ -80,7 +47,7 @@ export function canonicalModel(catalog: SeatModel[], model: string): string {
   const id = bare(model);
   if (!/^(opus|sonnet|haiku)$/.test(id)) return id.replace(/-\d{8}$/, '');
   let best: string | null = null;
-  for (const row of catalog) if (TIER.exec(bare(row.model))?.[1] === id && (!best || newer(versionOf(row.model), versionOf(best)))) best = row.model;
+  for (const row of catalog) if (row.listed !== false && TIER.exec(bare(row.model))?.[1] === id && (!best || newer(versionOf(row.model), versionOf(best)))) best = row.model;
   return best ? bare(best).replace(/-\d{8}$/, '') : id;
 }
 export const sameModel = (catalog: SeatModel[], a: string, b: string) => a === b || canonicalModel(catalog, a) === canonicalModel(catalog, b);
@@ -111,12 +78,8 @@ export function ageOf(at: number | null, now: number): { unit: 'never' | 'now' |
   return minutes < 1 ? { unit: 'now', count: 0 } : minutes < 60 ? { unit: 'min', count: minutes } : minutes < 2880 ? { unit: 'hour', count: Math.floor(minutes / 60) } : { unit: 'day', count: Math.floor(minutes / 1440) };
 }
 
-// defaults ← global ← project, seat by seat (the lead's two slots too).
-export function mergeSeats(...layers: (SeatMap | null | undefined)[]): SeatMap {
-  const merged: SeatMap = {};
-  for (const layer of layers) if (layer) for (const [id, seat] of Object.entries(layer)) Object.assign(merged, { [id]: id === 'lead' ? { ...merged.lead, ...seat } : seat });
-  return merged;
-}
+// defaults ? global ? project, seat by seat.
+const mergeSeats = (...layers: (SeatMap | null | undefined)[]): SeatMap => Object.assign({}, ...layers);
 
 // What a scope's save starts from, and the layer under it: the owner's choice is only what differs from that layer.
 export const lowerLayer = (info: SeatsInfo, scope: Scope): SeatMap => scope === 'project' ? mergeSeats(info.defaults, info.global) : info.defaults;
@@ -134,7 +97,6 @@ function assignRow(map: SeatMap, slot: SlotId, row: SeatModel | undefined): Edit
   const current = getSlot(map, slot);
   if (!row) return { ok: false, reason: 'unknown-model' };
   if (!row.available) return { ok: false, reason: 'unavailable' };
-  if (slotFamily(slot) && slotFamily(slot) !== row.family) return { ok: false, reason: 'family' };
   if (current?.model === row.model) return { ok: false, reason: 'same' };
   return { ok: true, map: withSlot(map, slot, fitSeat(current ?? { model: row.model, effort: 'high' }, row)) };
 }
@@ -146,7 +108,6 @@ export function swapSlots(map: SeatMap, a: SlotId, b: SlotId, catalog: SeatModel
   const first = getSlot(map, a), second = getSlot(map, b), rows = [first, second].map(seat => seat && modelRow(catalog, seat.model));
   if (!first || !second || !rows[0] || !rows[1]) return { ok: false, reason: 'unknown-model' };
   if (a === b || first.model === second.model && sameSeat(first, second)) return { ok: false, reason: 'same' };
-  if (slotFamily(a) && slotFamily(a) !== rows[1].family || slotFamily(b) && slotFamily(b) !== rows[0].family) return { ok: false, reason: 'family' };
   return { ok: true, map: withSlot(withSlot(map, a, fitSeat(second, rows[1])), b, fitSeat(first, rows[0])) };
 }
 
@@ -163,13 +124,13 @@ export function setFast(map: SeatMap, slot: SlotId, fast: boolean, catalog: Seat
   return !fast || rowFor(catalog, seat.model)?.fast ? { ok: true, map: withSlot(map, slot, { ...seat, fast }) } : { ok: false, reason: 'fast' };
 }
 
-// The reviewer rule: refused when the reviewer runs the core's or the execution seat's model while another AVAILABLE model of at least its rank exists.
+// The reviewer rule: refused when the reviewer runs the developer seat's model while another AVAILABLE model of at least its rank exists.
 // The fix is such a model that none of the author seats runs, or null when the author seats themselves must change.
 const strength = (a: SeatModel, b: SeatModel) => b.rank - a.rank || b.model.localeCompare(a.model, 'en', { numeric: true });
 // The candidates in the order the one-click fix and the banner prefer them, never by list order: the reviewer seat's default first, then models another seat already runs, then the rest;
 // within each the strongest.
 export function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel[] {
-  const running = [map.lead?.claude, map.lead?.codex, map.architect, map.execution, map.visual, map.lookup].filter((seat): seat is Seat => !!seat);
+  const running = Object.entries(map).filter(([id]) => id !== 'reviewer' && !AUTHORS.includes(id)).map(([, seat]) => seat);
   const tier = (row: SeatModel) => defaults?.reviewer && sameModel(catalog, row.model, defaults.reviewer.model) ? 0 : running.some(seat => sameModel(catalog, seat.model, row.model)) ? 1 : 2;
   return [...candidates].sort((a, b) => tier(a) - tier(b) || strength(a, b));
 }
@@ -196,39 +157,33 @@ export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[]) =>
 // The first refusal main would give for this map, or null: 保存 is disabled on it.
 export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError | null {
   const refuse = (code: SeatsSaveError['code'], seat: string, message: string): SeatsSaveError => ({ ok: false, code, seat, message });
-  for (const seat of ['lead.claude', 'lead.codex', ...Object.keys(map).filter(id => id !== 'lead')] as SlotId[]) {
+  for (const seat of Object.keys(map)) {
     const value = getSlot(map, seat);
     if (!value) continue;
     const family = familyOf(value.model);
-    if (slotFamily(seat) && slotFamily(seat) !== family) return refuse('lead-family', seat, `The ${seat} slot requires a ${slotFamily(seat)} model.`);
     const row = rowFor(catalog, value.model);
     if (!(row?.efforts ?? EFFORTS[family]).includes(value.effort)) return refuse('invalid-effort', seat, `Unsupported ${family} effort.`);
     if (value.fast && !row?.fast) return refuse('fast-not-allowed', seat, 'This model has no fast mode.');
   }
-  return reviewerBlock(map, catalog) && refuse('reviewer-same-model', 'reviewer', 'Choose a reviewer different from core and execution when another available model is at least as strong.');
+  return reviewerBlock(map, catalog) && refuse('reviewer-same-model', 'reviewer', 'Choose a reviewer different from developer when another available model is at least as strong.');
 }
 
 // The seats whose slots differ between two maps, in the skill's own order.
 export const changedSeats = (seats: SeatId[], working: SeatMap, baseline: SeatMap) =>
-  seats.filter(id => slotsOf(id).some(slot => !sameSeat(getSlot(working, slot), getSlot(baseline, slot))));
+  seats.filter(id => !sameSeat(getSlot(working, id), getSlot(baseline, id)));
 export const changedCount = (seats: SeatId[], working: SeatMap, baseline: SeatMap) => changedSeats(seats, working, baseline).length;
 export const isEmptyMap = (map: SeatMap) => !Object.keys(map).length;
-// An unavailable model's seat runs its default instead (a lead slot has none: its agent is not installed).
+// An unavailable seat can use its default instead.
 export function fallbackFor(info: SeatsInfo, slot: SlotId, working: SeatMap): Seat | null {
   const seat = getSlot(working, slot);
-  if (!seat || isAvailable(info.catalog, seat.model) || slot.startsWith('lead.')) return null;
+  if (!seat || isAvailable(info.catalog, seat.model)) return null;
   const fallback = getSlot(info.defaults, slot);
   return fallback && isAvailable(info.catalog, fallback.model) ? fallback : null;
 }
 
 // Only the seats that differ from the layer under the scope are saved; no difference is an empty map, which clears the scope (恢复默认).
 export function scopePayload(working: SeatMap, lower: SeatMap): SeatMap {
-  let payload: SeatMap = {};
-  for (const id of Object.keys(working) as SeatId[]) for (const slot of slotsOf(id)) {
-    const seat = getSlot(working, slot);
-    if (seat && !sameSeat(seat, getSlot(lower, slot))) payload = withSlot(payload, slot, seat);
-  }
-  return payload;
+  return Object.fromEntries(Object.entries(working).filter(([id, seat]) => !sameSeat(seat, getSlot(lower, id))));
 }
 
 type SeatsApi = Pick<Window['agentrix'], 'setSkillSeats'>;
@@ -242,8 +197,6 @@ export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string |
   }
 }
 
-// The seats that belong to a step of the flow, in the skill's seat order.
-export const seatsOfPhase = (phase: Phase, seats: SeatId[]) => seats.filter(id => PHASES[id] === phase);
 
 // 模型盘: the catalog grouped by family and then by model line, the line read from the id (never from a list of names, so a new line shows up by itself). Each line shows its aliases
 // and its newest version first; older versions fold away. A search keeps only the matching rows.
@@ -275,4 +228,21 @@ export function paletteGroups(catalog: SeatModel[], query = ''): PaletteGroup[] 
     return { family, total: rows.length, lines };
   });
   return q ? groups.filter(group => group.lines.length) : groups;
+}
+
+export function roleGroups(roles: readonly SeatRole[], rows: CallRow[]) {
+  return roles.map(role => ({ role, rows: rows.filter(row => (row.item.seat ?? 'developer') === role.id) })).filter(group => group.rows.length > 0);
+}
+
+export function routeVerdict(row: CallRow, info?: SeatsInfo | null) {
+  const { call, item } = row, expected = item.seat && info?.current?.[item.seat], declared = item.declared;
+  if (!call.model || call.modelUnconfirmed) return 'unknown';
+  const matches = (model: string) => sameModel(info?.catalog ?? [], model, call.model!);
+  if (expected && !matches(expected.model)) return 'mismatch';
+  if (declared) {
+    if (!matches(declared.model) || declared.effort != null && call.effort != null && declared.effort !== call.effort
+      || declared.fast != null && call.fast != null && declared.fast !== call.fast) return 'mismatch';
+    if (declared.effort != null && call.effort == null || declared.fast != null && call.fast == null) return 'unknown';
+  }
+  return expected || declared ? 'match' : 'unknown';
 }

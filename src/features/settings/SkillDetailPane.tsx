@@ -76,10 +76,13 @@ export function SkillDetailPane({ skill, detail, scopes, tab, now, actions }: {
         <button type="button" className="text-button" data-skill-discard onClick={() => actions.onResolve(false)}>{t('放弃')}</button></dd></div>}
       <div className={mine ? 'skills-trigger-row skills-facts-pair' : 'skills-trigger-row'}>
         <div className="skills-pair"><dt>{t('触发')}</dt><dd><Select label={t('触发')} className="skills-trigger" value={skill.trigger} onChange={value => actions.onOptions({ trigger: value as SkillInfo['trigger'] })}
-          options={[{ value: 'always', label: t('始终') }, { value: 'auto', label: t('按需') }, { value: 'first-open', label: t('首次打开项目') }]} /></dd></div>
+          options={[{ value: 'always', label: t('每个任务') }, { value: 'auto', label: t('相关任务') }]} /></dd></div>
         {mine && <div className="skills-pair"><dt>{t('范围')}</dt><dd><Select label={t('范围')} className="skills-scope" value={skill.scope === 'project' && skill.projectId ? skill.projectId : 'global'} options={scopes} onChange={actions.onScope} /></dd></div>}
         <dd className="skills-when" data-skill-when>{skillWhen(skill)}</dd>
       </div>
+      <div><dt>{t('首次打开项目时先运行一次')}</dt>
+        <dd><Switch label={t('首次打开项目时先运行一次')} checked={!!skill.firstOpenRun} disabled={skill.trigger === 'always'}
+          onChange={firstOpenRun => actions.onOptions({ firstOpenRun })} /></dd></div>
       {needs && <div><dt>{t('依赖')}</dt><dd className="skills-dependency"><i className={`skills-dot${needs.hollow ? ' is-hollow' : ''}`} aria-hidden="true" />
         <span>{needs.text}{needs.state && <small>{needs.state}</small>}</span></dd></div>}
       {mine && <>

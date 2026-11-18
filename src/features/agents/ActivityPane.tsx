@@ -1,12 +1,13 @@
-import { Fragment, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from 'react';
-import { CheckCircle, Circle, Path, WarningCircle } from '@phosphor-icons/react';
-import type { CliState, ProjectTerminal, SeatsInfo } from '../../shared/types';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { CaretDown, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
+import type { CliState, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
 import { readScreen, subscribeScreen, cliStateFor, nextCliState } from '../terminal/terminal-screen.ts';
 import { useNativeEntries } from '../native-session/native-store.ts';
 import { actionText } from './action-text';
+import { RoutingKeyCard } from './RoutingKeyCard';
 import { ApiUsage } from './ApiUsage';
 import { CALL_STATES, ModelHead } from './AgentCalls';
 import { resetTime } from './Metric';
@@ -21,33 +22,9 @@ export function ActivityPane({ terminal, projectId }: { terminal: ProjectTermina
       <p className="activity-empty">{t('在终端里启动 Codex 或 Claude Code 后，这里显示它的主模型、任务、上下文长度和用量。')}</p>
     </section>}
     <ApiUsage terminal={terminal} projectId={projectId} />
-    <SeatsEntry projectId={projectId} terminalId={terminal.id} />
+    <RoutingKeyCard projectId={projectId} terminalId={terminal.id} sessionId={terminal.sessionId} />
   </aside>;
 }
-
-// The model-routing dialog loads when it is first opened.
-const SeatsDialog = lazy(() => import('./SeatsDialog').then(module => ({ default: module.SeatsDialog })));
-
-// 模型路由: a quiet button under the blocks, there only while a skill declares seats; it re-reads them whenever the skills change (a save, or a session starting).
-export function SeatsEntry({ projectId, terminalId }: { projectId?: string; terminalId: string }) {
-  const [info, setInfo] = useState<SeatsInfo | null>(null), [open, setOpen] = useState(false);
-  const button = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const api = window.agentrix;
-    if (!api?.skillSeats) return;
-    let live = true;
-    const load = () => { api.skillSeats(projectId ?? null, terminalId).then(next => { if (live) setInfo(next); }, () => { if (live) setInfo(null); }); };
-    load();
-    const stop = api.onSkills(load);
-    return () => { live = false; stop(); };
-  }, [projectId, terminalId]);
-  if (!info) return null;
-  return <div className="activity-seats">
-    <button ref={button} type="button" className="activity-seats-button" aria-haspopup="dialog" onClick={() => setOpen(true)}><Path size={14} aria-hidden="true" />{t('模型路由')}</button>
-    {open && <Suspense fallback={null}><SeatsDialog info={info} projectId={projectId} terminalId={terminalId} onClose={() => { setOpen(false); button.current?.focus(); }} /></Suspense>}
-  </div>;
-}
-
 
 // The prompt each terminal's agent last worked on (kept across the pane closing and opening), for the finished row.
 const workedPrompts = new Map<string, { session: string | null; summary: string; text: string }>();
@@ -81,16 +58,34 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
   const summary = source ? t('处理后台结果：{summary}', { summary: source.summary }) + (source.count > 1 ? t(' 等 {count} 项', { count: source.count }) : '') : '';
   const current = source ? { session: terminal.sessionId, summary, text: source.text } : working ? { session: terminal.sessionId, summary: working.summary, text: working.text } : null;
   if (activity === 'working') { if (current) workedPrompts.set(terminal.id, current); else workedPrompts.delete(terminal.id); }
+  const [fold, setFold] = useState<string | null>(null);
+  const foldSession = terminal.sessionId ?? terminal.id;
+  const expanded = fold === foldSession;
   const last = source ? current : workedPrompts.get(terminal.id), ended = !prompts.length && (activity === 'complete' || activity === 'interrupted') && last?.session === terminal.sessionId ? last : null;
   const action = terminal.action, running = !!action && !action.done && activity === 'working';
   const endedAt = terminal.mainTurn?.updatedAt ?? terminal.lastCompletedAt;
   const state = activity === 'working' ? t('正在处理') : activity === 'complete' ? t('本轮已完成') : unknownEnd ? t('本轮已结束，完成状态未知。') : failedEnd ? t('失败') : t('已中断');
-  const step = running && <li className="is-step" title={action.detail || action.target}>
+  const step = running && <li key="step" className="is-step" title={action.detail || action.target}>
     <span className="activity-row-icon">{CALL_STATES.running.icon}</span><p><span className="activity-call-role">{t('正在')}</span>{actionText(action)}</p><span />
   </li>;
-  const task = (icon: ReactNode, className: string, word: string, summary: string, text: string, time: string) => <li className={className} title={`${text}\n${word}${time ? ` · ${time}` : ''}`}>
+  const task = (icon: ReactNode, className: string, word: string, summary: string, text: string, time: string, key = className) => <li key={key} className={className} title={`${text}\n${word}${time ? ` · ${time}` : ''}`}>
     <span className="activity-row-icon">{icon}</span><p>{word && <span className="activity-call-role">{word}</span>}{summary}</p><time>{time}</time>
   </li>;
+  const rows = [
+    cli.waiting && <li key="waiting" className="is-idle" role="status"><span className="activity-row-icon"><WarningCircle size={14} /></span><p>{cli.message || t('等待你确认')}</p><span /></li>,
+    background && task(CALL_STATES.running.icon, 'is-working', '', summary, background.text, elapsedClock(now - background.at)),
+    activity === 'working' && !working && !background && task(CALL_STATES.running.icon, 'is-working', running ? t('正在') : '', running ? actionText(action) : state, running ? action.detail || action.target : state, ''),
+    ...prompts.filter(prompt => prompt.state === 'working').flatMap(prompt =>
+      prompt === working && !background && step ? [promptTask(prompt), step] : [promptTask(prompt)]),
+    background && step,
+    ...prompts.filter(prompt => prompt.state !== 'working').sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).map(promptTask),
+  ].filter(Boolean);
+  function promptTask(prompt: (typeof prompts)[number]) {
+    const active = prompt.state === 'working' && activity === 'working';
+    return task(active ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, active ? 'is-working' : 'is-queued',
+      t(active ? '处理中' : activity === 'waiting' ? '等待你确认' : '排队中'), prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '', prompt.id);
+  }
+  const hidden = Math.max(0, rows.length - 4);
   return <section className="activity-card activity-main" aria-label={t('主模型')}>
     <h4 className="activity-card-title">{t('主模型')}</h4>
     <ul className="activity-call-rows">
@@ -98,14 +93,10 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
     </ul>
     <ul className="activity-call-rows activity-main-tasks" aria-label={t('提示')}>
-      {cli.waiting && <li className="is-idle" role="status"><span className="activity-row-icon"><WarningCircle size={14} /></span><p>{cli.message || t('等待你确认')}</p><span /></li>}
-      {background && <>{task(CALL_STATES.running.icon, 'is-working', '', summary, background.text, elapsedClock(now - background.at))}{step}</>}
-      {activity === 'working' && !working && !background && task(CALL_STATES.running.icon, 'is-working', running ? t('正在') : '', running ? actionText(action) : state, running ? action.detail || action.target : state, '')}
-      {prompts.map(prompt => <Fragment key={prompt.id}>
-        {task(prompt.state === 'working' && activity === 'working' ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, prompt.state === 'working' && activity === 'working' ? 'is-working' : 'is-queued', t(prompt.state === 'working' && activity === 'working' ? '处理中' : activity === 'waiting' ? '等待你确认' : '排队中'),
-          prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '')}
-        {prompt === working && !background && step}
-      </Fragment>)}
+      {expanded ? rows : rows.slice(0, 4)}
+      {hidden > 0 && <li className="activity-task-fold"><button type="button" aria-expanded={expanded} onClick={() => setFold(expanded ? null : foldSession)}>
+        <CaretDown size={14} aria-hidden="true" />{expanded ? t('收起') : t('还有 {count} 条', { count: hidden })}
+      </button></li>}
       {!prompts.length && !background && unknownEnd && <li className="is-idle"><span className="activity-row-icon"><Circle size={14} aria-hidden="true" /></span><p>{state}</p><span /></li>}
       {!prompts.length && !background && (activity === 'complete' || activity === 'interrupted') && (ended
         ? task(activity === 'complete' ? <CheckCircle size={14} weight="fill" aria-hidden="true" /> : failedEnd ? <WarningCircle size={14} aria-hidden="true" /> : <Circle size={14} aria-hidden="true" />, activity === 'complete' ? 'is-done' : 'is-idle', state, ended.summary, ended.text,

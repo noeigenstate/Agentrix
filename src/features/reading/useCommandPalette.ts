@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { isRoutingCommand } from '../../shared/routing-command.ts';
 import type { AgentCommand } from '../../shared/types';
 
 // A draft that is only the start of a command: "/" and its letters, no space yet.
@@ -11,13 +12,13 @@ export type PaletteItem = Pick<AgentCommand, 'name' | 'description' | 'source'> 
 export function matchCommands<Item extends PaletteItem>(commands: readonly Item[], draft: string) {
   const query = draft.slice(1).toLowerCase(), name = (command: Item) => command.name.slice(1).toLowerCase();
   const rank = (command: Item) => name(command) === query ? 0 : name(command).startsWith(query) ? 1 : 2;
-  return commands.filter(command => name(command).includes(query)).sort((a, b) => rank(a) - rank(b));
+  return commands.filter(command => !isRoutingCommand(command.name) && name(command).includes(query)).sort((a, b) => rank(a) - rank(b));
 }
 
 // The command list over the message box, shared by the reading view and the native session's box. `blocked`: the box takes nothing now;
 // `recalled`: the draft was taken from the walk through sent messages (↑), which keeps the list shut so ↑ goes on through them; `showEmpty`: a list
 // with no match is still drawn (the reading view does) or leaves the keys to the box. `complete` puts a command into the box, `send` sends the
-// draft as it is. `menu`: a menu of choices drawn in place of the commands (the native session's /model); it is open while it has lines, the one marked
+// draft as it is. `menu`: a menu of choices drawn in place of the commands (Codex's /permissions); it is open while it has lines, the one marked
 // `current` is chosen first, Enter and Tab choose, and Esc calls `close`. `note`: a line the list draws while it is shut.
 export function useCommandPalette<Item extends PaletteItem>({ id, commands, draft, blocked, recalled, showEmpty, menu = null, note = null, complete, send, close }: {
   id: string; commands: readonly Item[]; draft: string; blocked: boolean; recalled: () => boolean; showEmpty: boolean; menu?: readonly Item[] | null; note?: PaletteItem | null;
