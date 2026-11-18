@@ -18,6 +18,7 @@ function compile(basename, frame) {
     '../home/send-to-agent': { sendToAgent: () => assert.fail('state display never sends input') },
     './AgentBrandIcon': require('../src/features/agents/AgentBrandIcon.ts'), './action-text': { actionText: () => 'step' },
     './RoutingKeyCard': { RoutingKeyCard: () => null },
+    './SeatsHost': { SeatsHost: () => null },
     './ApiUsage': { ApiUsage: () => null }, './ResetCountdown': { ResetCountdown: () => null }, './reset-count': require('../src/features/agents/reset-count.ts'),
     './subagent-splits.ts': { useSplits: () => [], isSplitOpen: () => false, toggleSplit() {} },
     get './AgentCalls'() { return compile('AgentCalls.tsx', frame); }, get './Metric'() { return compile('Metric.tsx', frame); },

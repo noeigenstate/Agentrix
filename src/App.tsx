@@ -4,7 +4,7 @@ import type { AgentsState, AppUpdateState, MenuCommand, Project, ProjectLocation
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
 import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AgentTabScope } from './features/agents/AgentCalls';
-import { SeatsHost } from './features/agents/SeatsHost';
+import { SeatsHost } from './features/agents/ActivityPane';
 import { AgentSidebar } from './features/agents/AgentSidebar';
 import { AddProjectDialog } from './features/workspace/AddProjectDialog';
 import { SSHAuthDialog } from './features/ssh/SSHAuthDialog';
