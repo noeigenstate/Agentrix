@@ -3,6 +3,7 @@ const path = require('node:path');
 const { createHmac, randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { withoutShims } = require('../../shared/agentrix-shims.cjs');
+const { claudeBackgroundEnvironment } = require('../../shared/claude-background.cjs');
 const { TranscriptTail } = require('../../transcript-tail.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
 
@@ -78,7 +79,7 @@ function workerEnvironment(parentEnv, { shims, runId, sessionKey, claudeEnvFile,
   if (Object.hasOwn(source, 'AGENTRIX_USER_ZDOTDIR')) {
     if (source.AGENTRIX_USER_ZDOTDIR) source.ZDOTDIR = source.AGENTRIX_USER_ZDOTDIR; else delete source.ZDOTDIR;
   }
-  const env = require('../../shared/claude-background.cjs').claudeBackgroundEnvironment(withoutShims(source), allowBackgroundTasks);
+  const env = claudeBackgroundEnvironment(withoutShims(source), allowBackgroundTasks);
   for (const name of Object.keys(env)) if (PRIVATE.test(name)) delete env[name];
   const proof = createHmac('sha256', sessionKey).update(`agentrix-run:${runId}`).digest('hex');
   const shimmed = require(path.join(shims, 'intercept.cjs')).withShims(env, { depth: 1, runId, proof });

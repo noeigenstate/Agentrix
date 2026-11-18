@@ -63,6 +63,8 @@ function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirec
     'integrate diffs without commits and test; an independent Opus architecture review and fresh Sonnet acceptance;',
     'fix confirmed findings, then consolidate the round journal. Pick a fresh meeting id.',
     'Use the dispatch entrypoint above for all workers so their usage and phases are measured.',
+    'Start workers with --detach, then run wait <run-id> --timeout 540. Start parallel workers separately and wait on all their ids together.',
+    'Give every wait shell call at least 600000 ms. Exit 75 means still running: wait again; stop <run-id> cancels a worker.',
     'Record review findings and fixed status in the consolidation findings JSON. Keep roles and kinds accurate.',
     'Do not wait for owner approval. Omit UI driving when there is no UI. Finish with changes in this starting worktree.',
   ];

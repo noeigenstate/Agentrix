@@ -339,7 +339,7 @@
       "reason": "Loads the installed external Agent SDK; dependency changes force full coverage."
     },
     "electron/features/lab/executor.cjs": {
-      "digest": "af6fc420d002304d13b4d22f5d9530b87d6c281dd1ed58caa681071abc1e3aa0",
+      "digest": "e533fb26d5fb352265df5129b25110c399da059946398672a074da70bc82904c",
       "targets": [],
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
@@ -407,21 +407,22 @@
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "electron/features/lab/session.cjs": {
-      "digest": "661a31dca37787ee6981b1974d222c475502dc141afc2e67b7024cd4cfce99e2",
+      "digest": "b423d7f78fa0b1b19795d37281ca43751a253223303b5621e299317523e3f626",
       "targets": [
-        "integration/shims/intercept.cjs"
+        "integration/shims/intercept.cjs",
+        "integration/dispatch.cjs"
       ],
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "e728100c9ec6cbaa150998ef1af914e66f5a1f493684308e1fc6ef8008893c7c",
+      "digest": "042fdd2eea95fa458226e0ef768f5a2959899336ae2f845afc95147225aad7bd",
       "targets": [
         "integration/dispatch.cjs"
       ],
       "reason": "The intercept entrypoint invokes the existing dispatch helper beside the source, packaged or SSH runtime."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "ff6acfc45d2f402cb570804c1febdd631a1eff8802460b68f7fe2f18fbc6745b",
+      "digest": "1d0ef4a692c6620835fb363ee6d093d14d29948aeb5e6f413ac1deaa3030c986",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

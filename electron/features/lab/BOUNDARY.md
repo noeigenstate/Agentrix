@@ -34,6 +34,6 @@ and each approach in its own sandboxed workspace through the dispatch helper, gr
 ## Not ours
 - The lab page and the Windows/Linux menu entry — Lab window page (`src/features/lab`)
 - The contract between page and engine — `src/shared/lab-types.ts` (changed only through the lead)
-- Starting, authenticating and reporting workers — Dispatch (`integration/dispatch.cjs`)
+- Dispatch admission, provider execution and authenticated reporting — Dispatch (`integration/dispatch.cjs`); Lab owns its session-bound detach/wait/stop RPC and keeps the authenticated meter attached
 - Run records, public prices and cost estimates — Dashboard records (`electron/features/dashboard`)
 - The oss and aa task sources — Lab oss source (`electron/features/lab-oss`), Lab aa source (`electron/features/lab-aa`)

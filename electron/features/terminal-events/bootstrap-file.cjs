@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 
 // The file a terminal's shell integration and the dispatch helper read to reach main: the session's key, the event
 // pipe and the control channel, and for a terminal also its hook channel and settings (hook-channel.cjs) and the paths
@@ -9,6 +10,7 @@ const path = require('node:path');
 const claudeEnvFile = file => file.replace(/\.json$/i, '') + '-claude-env.sh';
 
 function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, ...terminal }) {
+  fs.rmSync(file + '.background.json', { force: true });
   const pipeName = process.platform === 'win32' ? eventServer.name : eventServer.address;
   const packaged = process.resourcesPath && path.join(process.resourcesPath, 'integration');
   const integration = terminal.claudeHookPath ? path.dirname(terminal.claudeHookPath)
@@ -22,17 +24,31 @@ function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey,
 
 // Removes a session's bootstrap file and the files written with it.
 function removeBootstrap(file) {
-  for (const name of [file, claudeEnvFile(file)]) fs.rmSync(name, { force: true });
+  for (const name of [file, claudeEnvFile(file), file + '.background.json']) fs.rmSync(name, { force: true });
 }
 
 // Refresh only launch policy: keys, hook settings and the private startup hook remain unchanged.
-function updateBootstrapBackground(file, allow) {
+async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
+  delay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  // Hooks can hold the bootstrap open on Windows. Launchers always re-read this independent policy, including after
+  // the bounded bootstrap refresh fails. It contains no key and stays authoritative until the session is removed.
+  fs.writeFileSync(file + '.background.json', JSON.stringify({ claudeBackgroundTasks: allow === true }), { mode: 0o600 });
   const data = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
   data.claudeBackgroundTasks = allow === true;
-  const temporary = file + '.background.tmp';
+  const temporary = file + '.' + randomUUID() + '.background.tmp';
   try {
     fs.writeFileSync(temporary, JSON.stringify(data), { mode: 0o600 });
-    fs.renameSync(temporary, file);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const current = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+        if (current.sessionKey !== data.sessionKey) throw Object.assign(new Error('The bootstrap session changed.'), { code: 'ESTALE' });
+        rename(temporary, file); break;
+      }
+      catch (error) {
+        if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt === 4) throw error;
+        await delay(25 * 2 ** attempt);
+      }
+    }
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
