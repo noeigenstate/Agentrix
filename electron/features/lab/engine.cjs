@@ -309,7 +309,7 @@ class LabEngine {
   runnerOptions(lane, signal) {
     return { provider: lane.provider, scope: lane.scope, guard: lane.guard, context: { ...lane.ctx, signal },
       project: lane.scope?.project, socketDirectory: this.store.directory, signal, helper: this.helper, prices: this.prices,
-      nodePath: this.nodePath, env: this.env, timeoutMs: this.timeoutMs, testTimeoutMs: this.testTimeoutMs,
+      nodePath: this.nodePath, env: typeof this.env === 'function' ? this.env() : this.env, timeoutMs: this.timeoutMs, testTimeoutMs: this.testTimeoutMs,
       reviewTimeoutMs: this.reviewTimeoutMs, sessionFactory: this.sessionFactory,
       cacheInUse: this.active?.cacheInUse || [lane.ctx.cacheDirectory], t: this.t };
   }

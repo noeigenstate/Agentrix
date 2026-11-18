@@ -11,7 +11,6 @@ const path = require('node:path');
 const IDENTITY_CONTEXT = "You are Claude Code, Anthropic's official CLI for Claude.";
 const NATIVE_CONTEXT = IDENTITY_CONTEXT + '\n'
   + 'If you need the user to run a shell command themselves, suggest they type `! <command>` in the prompt; its output becomes context in this conversation.\n'
-  + 'The fork subagent runs in the background, so you can keep chatting with the user while it works.\n'
   + `Delegate simple grep, file listings and short log lookups to the ${LOOKUP_AGENT_NAME} Haiku 5.5 subagent. Batch related lookups into one call and read its concise conclusions. Run CI judgments, diffs you must review and release steps yourself.`;
 
 function privateSettings(value, signal) {
@@ -61,7 +60,10 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
     abortController: abort, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, includePartialMessages: true,
     settingSources: ['user', 'project', 'local'],
     ...(spec.owner === 'gui' ? { agents: { [LOOKUP_AGENT_NAME]: LOOKUP_AGENT } } : {}),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT, spec.context].filter(Boolean).join('\n\n') },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT,
+      spec.owner === 'gui' && !Object.entries(spec.env || process.env).some(([name, value]) => name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS' && value === '1')
+        ? 'The fork subagent runs in the background, so you can keep chatting with the user while it works.' : null,
+      spec.context].filter(Boolean).join('\n\n') },
     ...(providerSessionId ? { resume: providerSessionId } : {}),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
       const lookup = spec.owner === 'gui' && lookupDecision(input);

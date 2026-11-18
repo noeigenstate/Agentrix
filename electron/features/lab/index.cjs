@@ -2,6 +2,7 @@ const path = require('node:path');
 const { createLabWindow } = require('./window.cjs');
 const { registerLabIpc } = require('./ipc.cjs');
 const { translate } = require('../../i18n.cjs');
+const { claudeBackgroundEnvironment } = require('../../shared/claude-background.cjs');
 
 function createLab({ app, userData = app.getPath('userData'), root = path.resolve(__dirname, '../../..'), getProjects, getSettings,
   getMainWindow, BrowserWindow, ipcMain, devUrl = null, getUiZoom, backgroundColor, records, helper = path.join(root, 'integration/dispatch.cjs'),
@@ -34,7 +35,8 @@ function createLab({ app, userData = app.getPath('userData'), root = path.resolv
   const initialize = async () => {
     if (disposed) return Promise.reject(new Error(t('实验室已关闭。')));
     if (!initializing) initializing = instance ? Promise.resolve(connect(instance)) : Promise.resolve().then(() =>
-      engineFactory({ userData, getProjects, helper, records, t, safeStorage, platform })).then(connect);
+      engineFactory({ userData, getProjects, helper, records, t, safeStorage, platform,
+        env: () => claudeBackgroundEnvironment(process.env, getSettings()?.claudeBackgroundTasks) })).then(connect);
     return initializing;
   };
   const schedule = () => {

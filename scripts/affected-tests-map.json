@@ -344,7 +344,7 @@
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "1d6c70e30dc638a26f1d1def661ae2eac28e8705b2a7450cdea7d0fba1d80a95",
+      "digest": "a2fd11bd31579bbc9cc24505cdbc55df885f40f8bb0c32f418c39d19378155b9",
       "targets": [
         "integration/dispatch.cjs"
       ],
@@ -414,14 +414,14 @@
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "778d1c79da995edd937d599277804521c09517aa934f5c52add31a7508c44e0e",
+      "digest": "e728100c9ec6cbaa150998ef1af914e66f5a1f493684308e1fc6ef8008893c7c",
       "targets": [
         "integration/dispatch.cjs"
       ],
       "reason": "The intercept entrypoint invokes the existing dispatch helper beside the source, packaged or SSH runtime."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "4977de9e92760a89669940082597ce6d7c9b03b9affd035350e0d6f552b40581",
+      "digest": "ff6acfc45d2f402cb570804c1febdd631a1eff8802460b68f7fe2f18fbc6745b",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
