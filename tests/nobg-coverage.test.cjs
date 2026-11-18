@@ -95,15 +95,17 @@ test('Settings changes refresh existing local and SSH terminal launch policy', (
   assert.deepEqual(refreshed, [['fixture', true], ['ssh', true], ['fixture', false], ['ssh', false]]);
 });
 
-test('a failed bootstrap refresh is reported and keeps the terminal marked for a launch re-read', async () => {
+test('a failed bootstrap refresh is reported without unused session flags', async () => {
   const settings = { theme: 'dark', uiZoom: 100, language: 'en', shortcuts: [], claudeBackgroundTasks: false };
   const session = { bootstrapFile: 'fixture' }, reports = [], failure = new Error('synthetic lock');
+  let update;
   const context = { store: { settings, updateSettings: patch => Object.assign(settings, patch) }, sessions: new Map([['fixture', session]]),
-    updateBootstrapBackground: async () => { throw failure; }, RemoteConnection: Object, process: { platform: 'win32' }, report: error => reports.push(error) };
+    updateBootstrapBackground: () => { update = Promise.reject(failure); return update; }, RemoteConnection: Object, process: { platform: 'win32' }, report: error => reports.push(error) };
   vm.runInNewContext(main.slice(main.indexOf('function updateStoreSettings('), main.indexOf('\nconst sessions =')), context);
   context.updateStoreSettings({ claudeBackgroundTasks: true });
-  await assert.rejects(session.backgroundPolicyUpdate, /synthetic lock/);
-  assert.equal(session.backgroundPolicyPending, true);
+  await assert.rejects(update, /synthetic lock/);
+  assert.equal(Object.hasOwn(session, 'backgroundPolicyPending'), false);
+  assert.equal(Object.hasOwn(session, 'backgroundPolicyUpdate'), false);
   assert.deepEqual(reports, [failure]);
 });
 

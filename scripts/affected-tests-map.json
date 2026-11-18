@@ -407,7 +407,7 @@
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "electron/features/lab/session.cjs": {
-      "digest": "b423d7f78fa0b1b19795d37281ca43751a253223303b5621e299317523e3f626",
+      "digest": "9f8d0a9780d4e702eb417ab3850305296ad934afa4e87bcf266efa2b37dc802d",
       "targets": [
         "integration/shims/intercept.cjs",
         "integration/dispatch.cjs"

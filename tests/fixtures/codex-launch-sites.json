@@ -160,8 +160,8 @@
     "id": "electron/features/lab/session.cjs:017142ed0cfb5a29cc2426ff"
   },
   {
-    "text": "this.launch(args.filter(arg => arg !== '--detach'), { ...options, dispatchId: id,\n      signal: AbortSignal.any([control.signal, this.controller.signal]), onLine: line => {\n        entry.activityAt = now();\n        if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line;\n      } })",
-    "id": "electron/features/lab/session.cjs:4d14f1728516d5b24afb5adb"
+    "text": "this.launch(args.filter(arg => arg !== '--detach'), { ...options, dispatchId: id,\n      signal: AbortSignal.any([control.signal, this.controller.signal]), onLine: line => {\n        entry.activityAt = now();\n        if (line.startsWith(`[dispatch] started ${id} `)) entry.startedLine ||= line.slice(0, 8192);\n        else if (line.startsWith(`[dispatch] ended ${id} `)) entry.endedLine = line.slice(0, 8192);\n        else if (line.startsWith(`[dispatch] failed to start ${id}:`) || line.startsWith('[dispatch] failed:')\n          || line.startsWith(`[dispatch] request ${id} `) || line.startsWith('[dispatch] request:')) {\n          entry.messages.push(line.slice(0, 4096));\n          if (entry.messages.length > 16) entry.messages.shift();\n          if (line.startsWith('[dispatch] failed')) entry.error ||= line.slice(0, 1000);\n        }\n        for (const listener of entry.listeners) listener();\n      } })",
+    "id": "electron/features/lab/session.cjs:333200476cf3da601781c3e3"
   },
   {
     "text": "backend.resolveExecutable(executable.file, env)",

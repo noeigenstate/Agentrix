@@ -158,12 +158,7 @@ function updateStoreSettings(patch) {
   store.updateSettings(patch);
   if (claudeBackgroundTasks !== store.settings?.claudeBackgroundTasks) for (const session of sessions.values()) {
     if (session.bootstrapFile) {
-      session.backgroundPolicyPending = true;
-      const update = updateBootstrapBackground(session.bootstrapFile, store.settings?.claudeBackgroundTasks);
-      session.backgroundPolicyUpdate = update;
-      void Promise.resolve(update).then(() => {
-        if (session.backgroundPolicyUpdate === update) session.backgroundPolicyPending = false;
-      }, error => report(error));
+      void Promise.resolve(updateBootstrapBackground(session.bootstrapFile, store.settings?.claudeBackgroundTasks)).catch(error => report(error));
     }
     const remote = session.remoteConnection || (session.terminal instanceof RemoteConnection ? session.terminal : null);
     remote?.setBackgroundTasks?.(store.settings?.claudeBackgroundTasks).catch(error => report(error));
