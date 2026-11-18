@@ -371,3 +371,35 @@ test('the dialog’s motion stops under prefers-reduced-motion, its colours are 
   const missing = [...source.matchAll(/\bt\(\s*'((?:[^'\\]|\\.)*)'/g)].map(match => match[1]).filter(key => /[一-鿿]/.test(key) && !(key in en));
   assert.deepEqual(missing, []);
 });
+
+test('switching the scope keeps only the slots edited in this dialog: untouched project overrides never reach global', async t => {
+  const info = seatsInfo({ project: { core: { model: 'opus', effort: 'max' }, execution: { model: 'haiku', effort: 'low' } } });
+  const h = dialogHarness(t, info);
+  let tree = h.render();
+  assert.equal(find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting').props.value, 'project');
+  byAttr(tree, 'data-pick', 'lookup').props.onClick(pickButton('lookup'));
+  byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'sonnet').props.onClick();
+  tree = h.render();
+  find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting').props.onChange({ target: { value: 'global' } });
+  tree = h.render();
+  assert.match(textOf(tree), /Unsaved draft · 1 seats changed/, 'the count is against the global baseline: the project overrides are not counted');
+  byAttr(tree, 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls, [['global', null, { lookup: { model: 'sonnet', effort: 'high' } }]], 'the project’s core and execution overrides stay in the project');
+});
+
+test('closing with an unsaved draft asks once, inline, before discarding', t => {
+  const h = dialogHarness(t, seatsInfo());
+  let tree = h.render();
+  byAttr(tree, 'data-pick', 'lookup').props.onClick(pickButton('lookup'));
+  byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'sonnet').props.onClick();
+  byAttr(h.render(), 'aria-label', 'Close').props.onClick();
+  assert.deepEqual(h.closed, [], 'the first close only asks');
+  tree = h.render();
+  assert.ok(find(tree, node => node.props.role === 'alertdialog'));
+  byAttr(tree, 'data-keep').props.onClick();
+  assert.equal(find(h.render(), node => node.props.role === 'alertdialog'), undefined);
+  byAttr(h.render(), 'aria-label', 'Close').props.onClick();
+  byAttr(h.render(), 'data-discard').props.onClick();
+  assert.equal(h.closed.length, 1);
+});
