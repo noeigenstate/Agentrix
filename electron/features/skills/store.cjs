@@ -8,6 +8,8 @@ const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
+const { ModelCatalog, trackModelRuntime } = require('./model-catalog.cjs');
+const { probeCodex, probeClaude } = require('./model-probe.cjs');
 const { projectSkillTargets, replaceProjectSkills, projectSkillSignature, linkedSkillParent, extensionBase } = require('./project-skills.cjs');
 const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
 // Closing a library watcher does not end its CLI sessions. Keep their references across store recreation in this process.
@@ -23,7 +25,7 @@ const canonical = file => {
 
 class SkillsStore {
   constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {},
-    getModels = () => [], seatSession = () => null, helperPath = '{AGENTRIX_DISPATCH}' }) {
+    getModels = () => [], modelProbes = {}, now = Date.now, seatSession = () => null, helperPath = '{AGENTRIX_DISPATCH}' }) {
     Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report, getModels, seatSession, helperPath });
     this.globalFolder = path.join(dataDir, 'skills');
     this.optionsFile = path.join(dataDir, 'skills.json');
@@ -38,6 +40,7 @@ class SkillsStore {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
     }
     this.refresh(true);
+    this.modelCatalog = new ModelCatalog({ dataDir, probes: modelProbes, now, report, changed: () => this.publish(false) });
   }
 
   roots() {
@@ -306,6 +309,37 @@ class SkillsStore {
     return modelSeats.leadOptions(info ? modelSeats.effective({}, info.global, info.project || {}) : {}, agent, explicit);
   }
 
+  fastSettingsFile() {
+    const file = path.join(this.dataDir, 'claude-fast-on.json');
+    writeFile(file, JSON.stringify({ fastMode: true }));
+    return file;
+  }
+
+  observeModels(family, rows) { this.modelCatalog.accept(family, rows); }
+
+  trackModelRuntime(runtime, { family, local, runtimes }) {
+    return trackModelRuntime(runtime, { local, runtimes, observe: rows => this.observeModels(family, rows) });
+  }
+
+  async refreshSeats(projectId = null, terminalId = null, reason = 'manual') {
+    await this.modelCatalog.refresh(reason);
+    const info = this.seatsInfo(projectId, terminalId);
+    if (!info) return null;
+    const options = this.options[info.skill] || {}, prior = options.seatDefaultModels || {};
+    const next = {}, moved = [];
+    for (const [id, value] of Object.entries(info.defaults)) {
+      for (const [slot, seat] of id === 'lead' ? Object.entries(value).map(([agent, seat]) => [`lead.${agent}`, seat]) : [[id, value]]) {
+        next[slot] = seat.model;
+        const from = prior[slot] || (seat.model.match(/^gpt-\d+\.\d+-sol$/) ? 'gpt-6.1-sol' : seat.model);
+        if (from !== seat.model) moved.push({ seat: slot, from, to: seat.model });
+      }
+    }
+    if (JSON.stringify(prior) !== JSON.stringify(next)) {
+      this.options[info.skill] = { ...options, seatDefaultModels: next }; this.persistOptions();
+    }
+    return { ...info, ...(moved.length ? { defaultsMoved: moved } : {}) };
+  }
+
   seatsInfo(projectId = null, terminalId = null) {
     const entry = [...this.entries.values()].find(entry => entry.source === 'builtin' && entry.seats?.length && this.info(entry).enabled);
     if (!entry) return null;
@@ -313,12 +347,14 @@ class SkillsStore {
     const stored = this.options[entry.id]?.seats || {};
     const clean = raw => modelSeats.cleanStoredSeats(raw, entry.seats);
     const global = clean(stored.global), project = projectId && Object.hasOwn(stored.projects || {}, projectId) ? clean(stored.projects[projectId]) : null;
-    const defaults = Object.fromEntries(Object.entries(modelSeats.defaultsFor(installed)).filter(([id]) => entry.seats.includes(id)));
+    const catalog = modelSeats.catalog(installed, [...(this.modelCatalog?.rows() || []), ...this.getModels()]);
+    const defaults = Object.fromEntries(Object.entries(modelSeats.defaultsFor(installed, catalog)).filter(([id]) => entry.seats.includes(id)));
     const binding = terminalId ? this.seatSession(terminalId) : null;
     const current = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId)?.seatsMap : null;
     return { skill: entry.id, seats: [...entry.seats], fresh: [...entry.fresh || []], defaults, global, project,
       effective: modelSeats.effective(defaults, global, project || {}), current: current ? structuredClone(current) : null,
-      catalog: modelSeats.catalog(installed, this.getModels()), installed };
+      catalog, installed, issues: modelSeats.seatIssues(modelSeats.effective(defaults, global, project || {}), catalog),
+      catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
   }
 
   setSeats(scope, projectId, raw) {
@@ -329,7 +365,7 @@ class SkillsStore {
       || raw.lead && typeof raw.lead === 'object' && Object.keys(raw.lead).find(id => !['claude', 'codex'].includes(id)));
     if (unknown) return { ok: false, code: 'unknown-seat', seat: unknown, message: 'Unknown seat or lead slot.' };
     let map;
-    try { map = modelSeats.cleanSeats(raw, info.seats); }
+    try { map = modelSeats.cleanSeats(raw, info.seats, info.catalog); }
     catch (error) { return { ok: false, code: error.code, ...(error.seat ? { seat: error.seat } : {}), message: error.message }; }
     const old = this.options[info.skill] || {}, stored = old.seats || {}, liveProjects = new Set(this.getProjects().map(project => project.id));
     const projects = Object.fromEntries(Object.entries(stored.projects || {}).filter(([id]) => liveProjects.has(id)));
@@ -426,7 +462,7 @@ class SkillsStore {
     const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats?.effective || null;
     const seatsBlock = frozen && Object.hasOwn(frozen, 'seatsBlock') ? frozen.seatsBlock
       : seats && (Object.keys(seats.global).length || Object.keys(seats.project || {}).length)
-        ? modelSeats.renderSeats(seatsMap, agent, remote ? '{AGENTRIX_DISPATCH}' : this.helperPath, seats.installed) : '';
+        ? modelSeats.renderSeats(seatsMap, agent, remote ? '{AGENTRIX_DISPATCH}' : this.helperPath, seats.installed, seats.catalog) : '';
     const names = this.builtinNames();
     const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
       && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
@@ -565,4 +601,4 @@ class SkillsStore {
   close() { this.closed = true; clearTimeout(this.scanTimer); for (const watcher of this.watchers.values()) watcher.stop(); this.watchers.clear(); }
 }
 
-module.exports = { SkillsStore, MAX_SSH_BUNDLE_BYTES };
+module.exports = { SkillsStore, MAX_SSH_BUNDLE_BYTES, probeCodex, probeClaude };

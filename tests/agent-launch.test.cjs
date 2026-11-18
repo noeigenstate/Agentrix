@@ -105,14 +105,21 @@ test('a Claude resume resolved from folder history does not acquire the new lead
 
 test('the seat catalog reuses models already read by the Codex model menu without making a request', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const start = source.indexOf('    const models = runtime.models;'), end = source.indexOf('    let accountBinding', start);
+  assert.doesNotMatch(source, /require\(['"]\.\/features\/skills\/model-(?:catalog|probe)\.cjs['"]\)/);
+  const codex = source.indexOf('  const codex = { create(spec, emit) {');
+  const start = source.indexOf('    return typeof skills', codex), end = source.indexOf('\n  } };', start);
   assert.ok(start >= 0 && end > start);
   let reads = 0;
   const rows = [{ value: 'gpt-menu-model', efforts: ['low', 'high'] }], cache = new Map();
-  const runtime = { models: async () => { reads++; return rows; } }, context = vm.createContext({ runtime, seatModelCatalog: cache });
-  vm.runInContext(source.slice(start, end), context);
+  const { SkillsStore } = require('../electron/features/skills/store.cjs');
+  const runtime = { models: async () => { reads++; return rows; }, close: async () => {} };
+  const skills = { trackModelRuntime: SkillsStore.prototype.trackModelRuntime,
+    observeModels: (family, values) => { assert.equal(family, 'codex'); for (const row of values) cache.set(row.value, row); } };
+  const context = vm.createContext({ runtime, skills, spec: { kind: 'local' }, seatModelRuntimes: { codex: new Set() } });
+  assert.equal(vm.runInContext(`(function () {${source.slice(start, end)} })()`, context), runtime);
   assert.equal(reads, 0); assert.equal(cache.size, 0);
   assert.equal(await runtime.models(), rows); assert.equal(reads, 1); assert.equal(cache.get('gpt-menu-model'), rows[0]);
+  await runtime.close();
 });
 
 test("the latest Codex conversation is this folder's own, never another project's newer one", async () => {

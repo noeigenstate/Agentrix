@@ -119,10 +119,10 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 | Visual and verification, small tasks | A fresh Sonnet subagent that reads screenshots |
 
 - Sonnet: an Agent call with `model: "sonnet"`, `effort: "high"`, working in worktree B (`isolation: "worktree"` or its path in the brief). The Agent call is the lead's own subagent, so its run mode and billing follow the lead (see Run mode and billing).
-- Sol, started with `--detach`, brief in a file; then use `wait` for its run id:
+- Sol, started with `--detach`, brief in a file; then use `wait` for its run id. Take model, effort and fast from the session's core seat; use configured defaults when no seats block was delivered:
 
   ```
-  node "<helper>" codex --detach --role <role> --title "<one line>" --model gpt-6.1-sol --effort high --fast --cwd <worktree-a> --brief <prompt.md> --out <out.md>
+  node "<helper>" codex --detach --role <role> --title "<one line>" --model <core-seat-model> --effort <core-seat-effort> [--fast] --cwd <worktree-a> --brief <prompt.md> --out <out.md>
   ```
 
 - Visual checks, small tasks and UI acceptance go to a Sonnet subagent the same way; UI acceptance by one that did not build the change, given the screenshot paths.

@@ -11,10 +11,12 @@ test('seat validation rejects unsafe and oversized model ids and keeps dispatch 
   for (const model of ['gpt-6.1-sol', 'provider/model:v1@[q]+test', 'a'.repeat(160)]) assert.equal(cleanSeats({ core: seat(model) }, ids).core.model, model);
 });
 
-test('efforts follow the model family, Claude seats cannot be fast and lead slots keep their family', () => {
+test('efforts follow the catalog, fast follows capabilities and lead slots keep their family', () => {
   rejected({ core: seat('gpt-6.1-sol', 'max') }, 'invalid-effort');
   rejected({ execution: seat('sonnet', 'ultra') }, 'invalid-effort');
-  rejected({ visual: seat('claude-sonnet-5-5', 'high', true) }, 'fast-not-allowed');
+  assert.throws(() => cleanSeats({ visual: seat('claude-sonnet-5-5', 'high', true) }, ids,
+    [{ model: 'claude-sonnet-5-5', efforts: ['high'], fast: false }]), error => error.code === 'fast-not-allowed');
+  assert.equal(cleanSeats({ visual: seat('claude-next', 'high', true) }, ids).visual.fast, true);
   rejected({ core: seat('gpt-next', 'high', 'true') }, 'fast-not-allowed');
   rejected({ lead: { claude: seat('gpt-6.1-sol') } }, 'lead-family');
   rejected({ lead: { codex: seat('opus') } }, 'lead-family');
@@ -38,16 +40,16 @@ test('reviewer independence is refused only when a distinct available model is a
   assert.equal(checkReviewer(map, catalog({ codex: true }, [{ value: 'gpt-other', efforts: ['high'] }])).code, 'reviewer-same-model');
   assert.equal(checkReviewer({ ...map, reviewer: seat('opus') }, catalog(both)), null);
   assert.equal(checkReviewer({ ...map, reviewer: seat('sonnet') }, catalog(both)).code, 'reviewer-same-model', 'execution is an author too');
-  assert.equal(checkReviewer({ core: seat('gpt-sonnet'), reviewer: seat('gpt-sonnet') }, [{ model: 'sonnet', rank: 2, available: true }]), null, 'every other GPT id still ranks 3');
+  assert.equal(checkReviewer({ core: seat('gpt-sonnet'), reviewer: seat('gpt-sonnet') }, [{ model: 'sonnet', rank: 2, available: true }]).code, 'reviewer-same-model');
 });
 
-test('defaults and catalog describe installed-agent substitutions, cached Codex ids, ranks and no Fable', () => {
+test('defaults and catalog describe installed-agent substitutions and provider efforts without enumerating models', () => {
   const models = catalog({ claude: false, codex: true }, [{ value: 'gpt-next', displayName: 'Next', efforts: ['low', 'max', 'high'] }, { value: 'fable-secret' }]);
   assert.equal(models.find(row => row.model === 'opus').available, false);
   assert.match(models.find(row => row.model === 'opus').reason, /not installed/);
-  assert.deepEqual(models.find(row => row.model === 'gpt-next').efforts, ['low', 'high']);
+  assert.deepEqual(models.find(row => row.model === 'gpt-next').efforts, ['low', 'max', 'high']);
   assert.equal(models.find(row => row.model === 'gpt-next').rank, 3);
-  assert.equal(models.some(row => /fable/.test(row.model)), false);
+  assert.equal(models.some(row => /fable/.test(row.model)), true);
   assert.deepEqual(defaultsFor({ claude: true }).core, seat('opus'));
   assert.deepEqual(defaultsFor({ codex: true }).visual, seat('gpt-6.1-sol', 'high', true));
   assert.deepEqual(defaultsFor({}), {});

@@ -1,8 +1,8 @@
 const path = require('node:path');
-const { createCredentials } = require('./credentials.cjs');
+const { createCredentials, apiEnvironment } = require('./credentials.cjs');
 const { createSdkLoader } = require('./runtime.cjs');
 const { resolveClaudeExecutable, inspectClaudeExecutable } = require('./executable.cjs');
-const { createConnectionTest, probeBillingIdentity, netRequest } = require('./connection.cjs');
+const { createConnectionTest, probeBillingIdentity, netRequest, listModels } = require('./connection.cjs');
 const { createUsage } = require('./usage.cjs');
 const { CREDITS_LOW } = require('./identity.cjs');
 const { createClaudeSession } = require('./session.cjs');
@@ -107,4 +107,4 @@ function createClaudeRuntime({ directory, safeStorage, loadSdk = createSdkLoader
   };
   return runtimeApi;
 }
-module.exports = { createClaudeRuntime, netRequest };
+module.exports = { createClaudeRuntime, netRequest, apiEnvironment, listModels };

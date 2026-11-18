@@ -26,7 +26,7 @@ const { createProjectAccounts } = require('./features/native-session/project-acc
 const { inspectClaudeExecutable, resolveClaudeExecutable } = require('./features/claude-sdk/executable.cjs');
 const { createLocator } = require('./features/claude-runtime/locator.cjs');
 const { recoveryWarnings, readJson: readNativeJson, writeJson: writeNativeJson } = require('./features/native-session/storage.cjs');
-const { createClaudeRuntime, netRequest } = require('./features/claude-sdk/index.cjs');
+const { createClaudeRuntime, netRequest, apiEnvironment, listModels } = require('./features/claude-sdk/index.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
 const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
 const { createWorkerTerminals } = require('./features/worker-terminals/worker-terminals.cjs');
@@ -44,7 +44,7 @@ const { registerUpdatesIpc } = require('./features/updates/ipc.cjs');
 const { registerAgentsIpc } = require('./features/agents/ipc.cjs');
 const { createInterventions } = require('./features/agents/interventions.cjs');
 const { registerSkillsIpc } = require('./features/skills/ipc.cjs');
-const { SkillsStore } = require('./features/skills/store.cjs');
+const { SkillsStore, probeCodex, probeClaude } = require('./features/skills/store.cjs');
 const { writeFileAtomic } = require('./atomic-write.cjs');
 const { folderHistory, launchCommand } = require('./features/agents/launch.cjs');
 const { READING_NOTE } = require('./features/agents/reading-note.cjs');
@@ -214,7 +214,7 @@ let stateTimer;
 let runtimeDir;
 let nativeSessions, claudeRuntime, dispatchControl, controlAddress, terminalInput;
 const nativeSpecs = new Map();
-const seatModelCatalog = new Map();
+const seatModelRuntimes = { codex: new Set(), claude: new Set() };
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
 let shellPathReady = Promise.resolve();
@@ -1245,12 +1245,6 @@ async function initializeNativeSessions() {
         current: () => evidence.current() && nativeSessions?.getSettings().codexAutoReset === true }) });
   const codex = { create(spec, emit) {
     const runtime = codexFactory.create(spec, emit), start = runtime.start, resume = runtime.resume, close = runtime.close;
-    const models = runtime.models;
-    runtime.models = async () => {
-      const rows = await models();
-      for (const row of rows) seatModelCatalog.set(row.value, row);
-      return rows;
-    };
     let accountBinding, accountWatch;
     const attach = async (open, value) => {
       const result = await open(value);
@@ -1268,8 +1262,15 @@ async function initializeNativeSessions() {
     };
     runtime.start = value => attach(start, value); runtime.resume = value => attach(resume, value);
     runtime.close = async () => { accountWatch?.dispose(); accountBinding?.dispose(); await close(); };
-    return runtime;
+    return typeof skills === 'undefined' || !skills ? runtime : skills.trackModelRuntime(runtime,
+      { family: 'codex', local: spec.kind !== 'ssh', runtimes: seatModelRuntimes.codex });
   } };
+  const createClaude = claudeRuntime.create.bind(claudeRuntime);
+  claudeRuntime.create = (...args) => {
+    const runtime = createClaude(...args);
+    return typeof skills === 'undefined' || !skills ? runtime : skills.trackModelRuntime(runtime,
+      { family: 'claude', local: args[0]?.kind !== 'ssh', runtimes: seatModelRuntimes.claude });
+  };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
     readHistory: async (id, { signal } = {}) => {
       const project = findProject(id);
@@ -1304,7 +1305,7 @@ async function initializeNativeSessions() {
       nativeSpecs.delete(spec.terminalId);
       if (spec.bootstrapFile) removeBootstrap(spec.bootstrapFile);
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
-      launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history, history ? null : skills.leadOptions?.(spec.projectId, spec.agent, spec)), threadId: history?.id || null });
+      launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history, history ? null : skills.leadOptions?.(spec.projectId, spec.agent, spec), { fastSettingsFile: skills.fastSettingsFile?.() }), threadId: history?.id || null });
       store.setRestore(spec.terminalId, { nativeTransport: null });
       startTerminal(spec.terminalId, null, true);
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
@@ -1593,7 +1594,7 @@ function registerUnavailableNative(handle) {
     if (options.agent === 'codex') throw new Error('Codex 原生模式连接失败，请重试。');
     if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
-    launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history, history ? null : skills.leadOptions?.(project.id, options.agent)), threadId: history?.id || null });
+    launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history, history ? null : skills.leadOptions?.(project.id, options.agent), { fastSettingsFile: skills.fastSettingsFile?.() }), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast();
     return { runtimeSessionId: randomUUID() };
   }
@@ -1710,7 +1711,7 @@ function registerIpc() {
       await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;
     }
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
-    launchPlans.set(id, { agent, command: launchCommand(agent, history, history ? null : skills.leadOptions?.(project.id, agent)), threadId: history?.id || null });
+    launchPlans.set(id, { agent, command: launchCommand(agent, history, history ? null : skills.leadOptions?.(project.id, agent), { fastSettingsFile: skills.fastSettingsFile?.() }), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });
@@ -1750,8 +1751,35 @@ if (!app.requestSingleInstanceLock()) {
         if (record.restore?.codex === true) void prepareReading(record.id, { ...record.restore, agent: record.restore.agent || 'codex' });
       }
     }
+    const liveModels = async family => {
+      for (const runtime of seatModelRuntimes[family]) {
+        try { return await runtime.models(); } catch { /* A closing runtime is not a catalog source. */ }
+      }
+      return null;
+    };
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
-      getModels: () => [...seatModelCatalog.values()], helperPath: path.join(integrationDir, 'dispatch.cjs'),
+      modelProbes: {
+        codex: async () => {
+          const live = await liveModels('codex');
+          if (live || !agents.getState().codex?.installed) return live;
+          const { createRpc } = await import('./features/codex-app-server/index.cjs');
+          return probeCodex({ rpcFactory: createRpc, spawn: require('node:child_process').spawn,
+            executable: codexExecutable, cwd: root, env: process.env });
+        },
+        claude: async () => {
+          const live = await liveModels('claude'); if (live) return live;
+          if (!agents.getState().claude?.installed) return null;
+          const key = claudeRuntime?.credentials.read();
+          const rows = await probeClaude({ loadSdk: createSdkLoader({ packaged: app.isPackaged }), options: {
+            cwd: root, pathToClaudeCodeExecutable: await resolveClaudeExecutable({ locator: claudeLocator }),
+            ...(key ? { env: apiEnvironment(process.env, key) } : {}) } });
+          if (key) {
+            const listed = await listModels(key, { request: netRequest(electronNet) });
+            if (Array.isArray(listed.models)) for (const model of listed.models) if (!rows.some(row => (row.resolvedModel || row.value) === model)) rows.push({ model });
+          }
+          return rows;
+        },
+      }, helperPath: path.join(integrationDir, 'dispatch.cjs'),
       seatSession: id => {
         const session = sessions.get(id), spec = nativeSpecs.get(id);
         return session && session.status !== 'exited' && session.codexActive
@@ -1761,6 +1789,7 @@ if (!app.requestSingleInstanceLock()) {
       changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report,
       routingNote: () => routingNote(app.getPath('userData')) });
     skills.syncWatchers();
+    codexFirst.then(() => skills.modelCatalog.refresh('startup')).catch(report);
     projectImageAuto = createProjectImageAuto({
       getProject: id => quitting ? null : store.projects.find(project => project.id === id),
       listCandidates: folder => projectImageCandidates(folder, 1),

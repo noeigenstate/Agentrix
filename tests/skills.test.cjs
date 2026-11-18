@@ -117,7 +117,7 @@ test('global seat saves validate live projects but ignore removed overrides befo
 test('one corrupt stored seat or lead slot preserves the other choices when reading and saving', t => {
   const { store } = fixture(t), choice = (model, effort = 'high') => ({ model, effort });
   const stored = { global: { lookup: choice('sonnet'), visual: choice('bad;model'),
-    lead: { claude: choice('opus', 'max'), codex: choice('gpt-6.1-sol', 'max') } },
+    lead: { claude: choice('opus', 'max'), codex: choice('gpt-6.1-sol', 'bad effort') } },
     projects: { p1: { architect: choice('sonnet'), lookup: choice('bad model') } } };
   store.options['builtin:model-routing'] = { ...store.options['builtin:model-routing'], seats: structuredClone(stored) }; store.persistOptions();
   const info = store.seatsInfo('p1'), good = { lookup: choice('sonnet'), lead: { claude: choice('opus', 'max') } };
@@ -163,6 +163,65 @@ test('seat preload saves preserve validation refusals and reject real adapter er
   const refused = await bridge.setSkillSeats('global', null, { lookup: { model: 'bad;model', effort: 'high' } });
   assert.equal(refused.ok, false); assert.equal(refused.code, 'invalid-model');
   await assert.rejects(() => bridge.setSkillSeats('project', 'removed', {}), /Invalid seat scope or project/);
+});
+
+test('seat catalog refresh unwraps the real IPC adapter and reports moved defaults once without changing saved seats', async t => {
+  const { store, options } = fixture(t);
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  store.setSeats('global', null, { core: { model: 'gpt-6.1-sol', effort: 'high', fast: true } });
+  const before = structuredClone(store.seatsInfo().global);
+  store.modelCatalog.probes.codex = async () => [{ model: 'gpt-6.2-sol', efforts: ['medium'], defaultEffort: 'medium', fast: false }];
+  const bridge = seatPreload(store), info = await bridge.skillSeatsRefresh('p1', null);
+  assert.equal(info.defaults.core.model, 'gpt-6.2-sol');
+  assert.ok(info.defaultsMoved.some(move => move.seat === 'core' && move.from === 'gpt-6.1-sol'));
+  assert.deepEqual(info.global, before); assert.equal(typeof info.catalogAt.codex, 'number');
+  assert.equal((await bridge.skillSeats('p1', null)).defaultsMoved, undefined);
+  const restored = new SkillsStore({ ...options, getAgents: store.getAgents }); t.after(() => restored.close());
+  assert.equal((await seatPreload(restored).skillSeats('p1', null)).defaultsMoved, undefined);
+  assert.deepEqual(JSON.parse(fs.readFileSync(store.fastSettingsFile(), 'utf8')), { fastMode: true });
+});
+
+for (const selected of [false, true]) test(`seat delivery stays frozen through catalog refresh, default movement and compact/clear (${selected ? 'selected' : 'empty'} block)`, async t => {
+  const { store, projects } = fixture(t), project = projects[0];
+  const { sessionContext } = require('../electron/features/skills/session.cjs');
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  if (selected) assert.deepEqual(store.setSeats('global', null, { lookup: { model: 'sonnet', effort: 'high' } }), { ok: true });
+  const choices = structuredClone(store.seatsInfo(project.id).global);
+  const launch = store.delivery(project, false, 'frozen-catalog-session', { agent: 'claude', started: true });
+  const note = startupNote('Read.', null, null, launch), originalBlock = launch.seatsBlock;
+  const bytes = fs.readFileSync(launch.sessionManifest, 'utf8');
+  const current = JSON.parse(fs.readFileSync(`${launch.sessionManifest}.json`, 'utf8')).current;
+  store.modelCatalog.probes.codex = async () => [{ value: 'gpt-6.2-sol', efforts: ['adaptive'], defaultEffort: 'adaptive', fast: false }];
+  const fresh = await store.refreshSeats(project.id);
+  assert.equal(fresh.defaults.core.model, 'gpt-6.2-sol'); assert.ok(fresh.defaultsMoved.length);
+  assert.deepEqual(store.seatsInfo(project.id).global, choices);
+  assert.equal(store.sessionSnapshot(project.id, 'frozen-catalog-session').seatsBlock, originalBlock);
+  // A later save rewrites the current delivery too; it must retain the observed launch's seats.
+  assert.deepEqual(store.setSeats('global', null, choices), { ok: true });
+  assert.equal(fs.readFileSync(launch.sessionManifest, 'utf8'), bytes);
+  const currentBytes = fs.readFileSync(current, 'utf8');
+  assert.doesNotMatch(currentBytes, /gpt-6\.2-sol/);
+  for (const source of ['compact', 'clear']) {
+    const instructions = sessionContext({ session_id: `catalog-cli-${selected}`, source }, note).hookSpecificOutput.additionalContext;
+    assert.doesNotMatch(instructions, /gpt-6\.2-sol/);
+    assert.equal(instructions.includes('Agentrix model seats'), selected);
+    if (selected) assert.match(instructions, /core: model gpt-6\.1-sol/);
+  }
+  const next = store.delivery(project, false, 'new-catalog-session', { agent: 'claude', started: true });
+  assert.equal(next.seatsMap.core.model, 'gpt-6.2-sol');
+  if (selected) assert.match(next.seatsBlock, /core: model gpt-6\.2-sol, effort adaptive/);
+});
+
+test('a catalog-validated Claude fast lead reaches the merged terminal launcher through the stored settings file', t => {
+  const { store } = fixture(t), { launchCommand } = require('../electron/features/agents/launch.cjs');
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  store.observeModels('claude', [{ value: 'claude-opus-6-0', alias: 'opus', displayName: 'Opus', efforts: ['adaptive'], fast: true }]);
+  assert.deepEqual(store.setSeats('global', null, { lead: { claude: { model: 'claude-opus-6-0', effort: 'adaptive', fast: true } } }), { ok: true });
+  const seat = store.leadOptions('p1', 'claude'), file = store.fastSettingsFile();
+  const command = launchCommand('claude', null, seat, { fastSettingsFile: file });
+  assert.match(command, /--model "claude-opus-6-0" --effort adaptive --settings/);
+  assert.ok(command.includes(`"${file}"`)); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { fastMode: true });
+  assert.equal(launchCommand('claude', { id: 'previous' }, seat, { fastSettingsFile: file }), 'claude --resume previous\r');
 });
 
 test('shipped code standard stays always and marks only the first agent session locally and over SSH', t => {

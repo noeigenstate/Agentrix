@@ -208,6 +208,10 @@
     "id": "electron/features/native-session/router.cjs:5117c4e0d6425a550c8cc649"
   },
   {
+    "text": "spawn(file, ['app-server', '--listen', 'stdio://'], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })",
+    "id": "electron/features/skills/model-probe.cjs:b42165c08eabbb25733d2812"
+  },
+  {
     "text": "execFileSync('git', ['rev-parse', '--git-common-dir'],\n      { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true })",
     "id": "electron/features/skills/worker-proposals.cjs:79438176dda822c97079af8e"
   },

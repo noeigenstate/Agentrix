@@ -564,7 +564,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         effort: spec.effort ?? threadResponse?.reasoningEffort ?? null, fast: spec.fast === true });
       async function models() {
         assertOpen(); if (!rpc) throw new Error('session_unavailable');
-        if (!catalog) {
+        {
           const rows = [], cursors = new Set(); let cursor = null, pages = 0;
           do {
             const page = await rpc.request('model/list', { cursor, limit: 100, includeHidden: false }); assertOpen();
@@ -577,7 +577,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           catalog = rows;
         }
         return catalog.map(row => ({ value: row.model, displayName: String(row.displayName || row.model), description: String(row.description || ''),
-          efforts: (row.supportedReasoningEfforts || []).map(value => value.reasoningEffort).filter(value => typeof value === 'string') }));
+          efforts: (row.supportedReasoningEfforts || []).map(value => value.reasoningEffort).filter(value => typeof value === 'string'),
+          defaultEffort: row.defaultReasoningEffort, isDefault: row.isDefault,
+          fast: !!(row.additionalSpeedTiers?.includes('fast') || row.serviceTiers?.some(tier => ['priority', 'fast'].includes(tier.id))),
+          additionalSpeedTiers: row.additionalSpeedTiers, serviceTiers: row.serviceTiers }));
       }
       // The owner's session also reports the permissions it runs with now; the router keeps them for its next conversation.
       const permissionsField = () => ownPermissions() ? { permissions: spec.permissions } : {};
@@ -812,4 +815,4 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
   };
 }
 
-module.exports = { createCodexRuntime, workerEnvironment };
+module.exports = { createCodexRuntime, workerEnvironment, createRpc };
