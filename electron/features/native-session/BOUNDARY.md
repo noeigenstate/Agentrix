@@ -10,7 +10,7 @@ Owns provider-neutral session routing, validated renderer IPC, settings and work
 - `choosePath` (`electron/features/native-session/routing.cjs`) — the path choice in the shape the dispatcher's worker reads, a wrapper of claude-runtime's `decide()` until R4; Codex always selects app-server, and legacy codexView preferences are ignored on read. Router start accepts host-mapped shell launch settings through resolveSpec; renderer start IPC still accepts only agent/resume.
 - `readJson` (`electron/features/native-session/storage.cjs`) — local metadata reads and atomic writeJson persistence
 - `createEventStream` (`electron/features/native-session/events.cjs`) — versioned event publication and replay snapshots
-- `registerClaudeWorker` (`electron/features/native-session/worker.cjs`) — authenticated helper run registration
+- `registerClaudeWorker` (`electron/features/native-session/worker.cjs`) — authenticated helper run registration; bounded Claude effort syntax and fast are forwarded to its selected runtime
 - `validEvent` (`electron/features/native-session/validate.cjs`) — bounded public event validation
 - `subscriptionLimits` (`electron/features/native-session/usage.cjs`) — the subscription limits main already holds as a limits payload, with nextPath for what a new session takes
 - `createProjectAccounts` (`electron/features/native-session/project-accounts.cjs`) — focused pane account reads, cached by the existing account service; no session or background project launch

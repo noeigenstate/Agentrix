@@ -12,7 +12,7 @@ const SIGNALS = { working: 'start', complete: 'stop', attention: 'attention', pr
 // Prompts the CLI holds back while it works, as the prompt queue and the transcript's queue records show them.
 const queuedOf = s => s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
 // Background work the round waits for, as CompletionWork reports it.
-const backgroundOf = s => !!(s.completionWork?.tasks?.size || s.completionWork?.notifications?.size);
+const backgroundOf = s => !!(s.completionWork?.tasks?.size || s.completionWork?.notifications?.size || s.dispatchHold?.count);
 
 // A terminal's Claude Code and Codex activity: hook events, the transcript Claude writes and the turn snapshots
 // readers produce become the CLI state, the lights and the completion alert. `deps` is the app shell (main.cjs),
@@ -20,6 +20,11 @@ const backgroundOf = s => !!(s.completionWork?.tasks?.size || s.completionWork?.
 // through it too, so a later round can replace one of them without editing the rest. A closure a call leaves behind
 // (the transcript tail's and monitor's callbacks) keeps the members that call read.
 function createClaudeActivity(deps) {
+  function replayCompletion(project, s) {
+    if (s && deps.sessions.get(s.terminalId) === s && s.codexActive && (s.activityRawSnapshot || s.activitySnapshot)) {
+      deps.applyActivity(project, s, s.activityRawSnapshot || s.activitySnapshot);
+    }
+  }
   // Claude Code writes each tool call to its transcript; follow it while the session lasts.
   function followClaude(project, s, event) {
     const { sessions, store, claudeConfigDir, prepareReading, callsOf, TranscriptTail, monitorActivity, readEvery, usageHistory,
@@ -165,6 +170,7 @@ function createClaudeActivity(deps) {
     const { sessions, broadcast } = deps;
     if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at) || !Number.isFinite(observedAt)) return false;
     const meta = metaOf(s), before = s.cliState;
+    s.dispatchHold = deps.callsOf?.(s, deps.store.projects?.find(project => project.id === s.projectId))?.openDispatch?.() || null;
     if (expectedRevision != null && expectedRevision !== before?.revision) return false;
     const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId : s.reportedThreadId || s.rootThreadId);
     if (!bind && threadId && bound && threadId !== bound && !(s.agent === 'codex' && bound.length >= 8 && threadId.toLowerCase().startsWith(bound.toLowerCase()))) return false;
@@ -221,9 +227,11 @@ function createClaudeActivity(deps) {
       s.promptQueue.finish?.(snapshot.updatedAt);
     }
     s.activitySnapshot = snapshot;
-    const queued = queuedOf(s);
-    const state = s.completionWork?.state(snapshot, { queued })
-      || (queued && snapshot.state === 'complete' ? 'working' : snapshot.state);
+    const queued = queuedOf(s), held = deps.callsOf?.(s, project)?.openDispatch?.() || null;
+    s.dispatchHold = held;
+    if (s.cliState && s.agent === 'claude' && !s.nativeStructured) s.cliState = { ...s.cliState, background: backgroundOf(s) };
+    const state = s.completionWork?.state(snapshot, { queued, held })
+      || ((queued || held?.count) && snapshot.state === 'complete' ? 'working' : snapshot.state);
     // A Claude terminal's Stop completes its round only on the session machine's completion effect: the newest prompt's
     // Stop, once the final gate agrees it is complete. Asked with the queue as it stands after this round's finish,
     // and asked again whenever this snapshot is replayed (a typed submission expiring, background work ending), as
@@ -396,7 +404,7 @@ function createClaudeActivity(deps) {
       ...(hookEvent.toolUseId ? { requestId: hookEvent.toolUseId } : {}) });
   }
 
-  return { followClaude, followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook };
+  return { followClaude, followClaudeSession, publishCliState, applyActivity, replayCompletion, claudeActivity, claudeHook };
 }
 
 module.exports = { createClaudeActivity };

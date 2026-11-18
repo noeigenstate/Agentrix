@@ -156,7 +156,7 @@ function argumentsOf(argv) {
   // Each of these reaches a CLI as an option's value: none may start with a dash and become an option of its own.
   if (!/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(options.model)) throw new Error('Expected a model name for --model');
   if (!/^[A-Za-z][\w-]*$/.test(options.effort)) throw new Error('Expected an effort level for --effort');
-  if (agent === 'claude' && (options.fast || options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
+  if (agent === 'claude' && (options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
   if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
   if (options.resume && !/^[A-Za-z0-9][\w-]{0,159}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
@@ -174,14 +174,18 @@ function argumentsOf(argv) {
 }
 
 function routingVerdict(actual, declared) {
-  const aliases = { sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5', haiku: 'claude-haiku-5-5' };
-  const full = aliases[declared?.model];
-  const model = actual.model?.replace(/\[(?:1m|fast)\]$/i, '').replace(/-\d{8}$/, '');
-  return strictRoutingVerdict(actual, full && model === full ? { ...declared, model: actual.model } : declared);
+  // Aliases may move forward with releases, but an older resolved model is still a mismatch.
+  const versions = { opus: [5, 5], sonnet: [5, 5], haiku: [5, 5] };
+  const current = versions[declared?.model];
+  const model = actual.model?.replace(/(?:\[(?:1m|fast)\]|-\d{8})+$/gi, '');
+  const resolved = /^claude-(opus|sonnet|haiku)-(\d+)(?:[.-](\d+))?(?:[.-]\d+)*$/.exec(model || '');
+  const follows = current && resolved?.[1] === declared.model && (Number(resolved[2]) > current[0]
+    || Number(resolved[2]) === current[0] && Number(resolved[3] || 0) >= current[1]);
+  return strictRoutingVerdict(actual, follows ? { ...declared, model: actual.model } : declared);
 }
 function commandOf(options) {
   if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
-    '--effort', options.effort, '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
+    '--effort', options.effort, ...(options.fast ? ['--settings', '{"fastMode":true}'] : []), '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
   return ['app-server', '--listen', 'stdio://'];
 }
 

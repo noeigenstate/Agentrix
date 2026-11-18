@@ -204,7 +204,8 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     fs.writeFileSync(brief, prompt, { mode: 0o600 });
     w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() });
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
-    fs.writeFileSync(settings, w.hooks.channel === 'http' ? w.hooks.settings.http : w.hooks.settings.fallback, { mode: 0o600 });
+    const hookSettings = w.hooks.channel === 'http' ? w.hooks.settings.http : w.hooks.settings.fallback;
+    fs.writeFileSync(settings, w.spec.fast === true ? JSON.stringify({ ...JSON.parse(hookSettings), fastMode: true }) : hookSettings, { mode: 0o600 });
     const args = [...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs, '--permission-mode', w.spec.permission,
       ...(w.spec.model ? ['--model', w.spec.model] : []), ...(w.spec.effort ? ['--effort', w.spec.effort] : []),
       sentence(`Read the task brief in ${brief} and carry it out.`)];

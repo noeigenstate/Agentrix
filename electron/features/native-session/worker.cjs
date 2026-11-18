@@ -10,7 +10,8 @@ const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env }) {
   return control.onRequest('claude-sdk.run', async (run, payload, stream) => {
     assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out', 'permission']) && text(payload.prompt) &&
-      (payload.model === undefined || text(payload.model, 160) && CLI_VALUE.test(payload.model)) && (payload.effort === undefined || ['low', 'medium', 'high', 'max', 'xhigh'].includes(payload.effort))
+      (payload.model === undefined || text(payload.model, 160) && CLI_VALUE.test(payload.model)) && (payload.effort === undefined || typeof payload.effort === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(payload.effort))
+      && (payload.fast === undefined || typeof payload.fast === 'boolean')
       && (payload.permission == null || ['plan', 'acceptEdits'].includes(payload.permission)) && (payload.resume == null || SESSION_ID.test(payload.resume)));
     const runtimeSessionId = randomUUID();
     const runtimeEnv = { ...env(run) };

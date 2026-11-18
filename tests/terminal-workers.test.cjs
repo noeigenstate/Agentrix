@@ -231,7 +231,7 @@ test('an intervention is written once when idle and never resent', async t => {
 // One worker terminal behind main's worker handler, without the helper. The clock is the test's: the 15 s notice and the
 // one-second poll run when the test says, every other wait at once.
 const SESSION = '11111111-1111-4111-8111-111111111111';
-async function unit(t, { calls = null, send, register, remove, kill, clock } = {}) {
+async function unit(t, { calls = null, send, register, remove, kill, clock, payload = {} } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-unit-')));
   t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const parent = parentTerminal(root); parent.write({ sessionKey: 'synthetic-owner' });
@@ -250,7 +250,7 @@ async function unit(t, { calls = null, send, register, remove, kill, clock } = {
   const binding = { runId: 'run-1', projectId: 'terminal', agent: 'claude', cwd: path.join(root, 'project'), worktree: path.join(root, 'project'),
     allow: [], readOnly: false, roundtable: false, local: true, leadMode: 'terminal' };
   const events = [], stream = { supportsFinish: true, emit: event => events.push(event), onControl: fn => { control = fn; return () => {}; } };
-  const result = handler(binding, { prompt: 'Synthetic brief', permission: 'acceptEdits' }, stream);
+  const result = handler(binding, { prompt: 'Synthetic brief', permission: 'acceptEdits', ...payload }, stream);
   await until(() => spawned.length === 1, 'the worker terminal to start');
   const f = { root, terminals, spawned, pty: spawned[0], notices, polls, sent, channels, killed, awaited, events, result, parent, handler, binding, stream,
     log: transcript(parent.claudeHome, binding.cwd, SESSION), control: message => control(message),
@@ -268,6 +268,15 @@ function keyOfWorker(f) {
 const toolReply = (uuid, parentUuid, id, text, at) => ({ type: 'assistant', uuid, parentUuid, timestamp: iso(at),
   message: { id, role: 'assistant', model: 'synthetic-model', stop_reason: 'tool_use', content: [{ type: 'text', text }, { type: 'tool_use', id: `tool-${uuid}`, name: 'Bash', input: {} }], usage: { output_tokens: 10 } } });
 const finalReply = (log, uuid, parentUuid, id, text, at) => { const record = log.reply(uuid, parentUuid, id, text, at); record.message.stop_reason = 'end_turn'; return record; };
+
+test('a Claude fast worker keeps its hook settings and accepts a provider effort name', async t => {
+  const f = await unit(t, { payload: { model: 'opus', effort: 'adaptive', fast: true } });
+  const settings = JSON.parse(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'));
+  assert.equal(settings.fastMode, true);
+  assert.ok(settings.hooks.SessionStart);
+  assert.equal(f.pty.args[f.pty.args.indexOf('--effort') + 1], 'adaptive');
+  await f.control({ type: 'stop' }); await f.result;
+});
 
 test('parallel questions close only for their own result and late notices cannot reopen them', async t => {
   const f = await unit(t), call = 'dispatch:run-1', at = Date.now();

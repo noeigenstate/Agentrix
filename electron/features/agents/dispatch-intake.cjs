@@ -30,7 +30,10 @@ function createDispatchIntake(deps) {
     }
     entry.session = s; entry.project = project;
     const calls = deps.callsOf?.(s, project);
-    if (calls) calls.dispatchReplay = () => entry.inbox.sweep();
+    if (calls) {
+      calls.dispatchReplay = () => entry.inbox.sweep();
+      calls.dispatchEnded = () => deps.replayCompletion?.(entry.project, deps.sessions.get(s.terminalId));
+    }
     return entry.inbox;
   }
   function disposeDispatchInbox(terminalId) {

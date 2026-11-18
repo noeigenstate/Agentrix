@@ -21,7 +21,6 @@ async function waitWithin(task, milliseconds) {
   finally { clearTimeout(timer); }
 }
 function createClaudeSession(spec, emit, dependencies) {
-  spec.fast = false;
   const { loadSdk, resolveExecutable, credentials, usage, now = Date.now, audit,
     onCost = () => {}, observe = () => {}, onSession = () => {} } = dependencies;
   // What this session saw of its route, told to the resolver with the generation its query began in.
@@ -518,14 +517,14 @@ function createClaudeSession(spec, emit, dependencies) {
   async function models() {
     const run = await optionsQuery();
     try {
-      const rows = (await run.query.supportedModels()).map(row => ({ value: clean(String(row.resolvedModel || row.value)), displayName: clean(String(row.displayName)),
-        description: clean(String(row.description || '')), efforts: row.supportedEffortLevels || [] }));
-      if (observedModel && !rows.some(row => row.value === observedModel)) rows.push({ value: observedModel, displayName: observedModel, description: '', efforts: [] });
+      const rows = (await run.query.supportedModels()).map(row => ({ value: clean(String(row.resolvedModel || row.value)),
+        ...(row.resolvedModel && row.value !== row.resolvedModel ? { alias: clean(String(row.value)) } : {}), displayName: clean(String(row.displayName)),
+        description: clean(String(row.description || '')), efforts: row.supportedEffortLevels || [], fast: row.supportsFastMode === true }));
+      if (observedModel && !rows.some(row => row.value === observedModel)) rows.push({ value: observedModel, displayName: observedModel, description: '', efforts: [], fast: false });
       return [...new Map(rows.map(row => [row.value, row])).values()];
     } catch (error) { error.message = clean(error.message); throw error; }
   }
   async function runOptions(patch) {
-    if (patch.fast === true) throw new Error('Claude Agent SDK 目前不支持快速模式');
     if (!Object.keys(patch).length) {
       if (changingOptions) { try { await changingOptions; } catch {} }
       return optionsSnapshot();

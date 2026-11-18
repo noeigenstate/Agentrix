@@ -7,6 +7,7 @@ const { taskKind } = require('../dashboard/records-routing.cjs');
 const { containedFile } = require('../../session-files.cjs');
 const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subagent-feed.cjs');
 const { BackgroundTasks, attach } = require('./background-tasks.cjs');
+const { LOST_WORK_TIMEOUT } = require('../../completion-work.cjs');
 // Host processes can restart while their terminal's dispatched workers keep running.
 const terminalCalls = new WeakMap();
 
@@ -58,6 +59,7 @@ class AgentCalls {
     this.stopSubagents();
     if (!preserveDispatch) this.background.reset();
     clearTimeout(this.timer);
+    clearTimeout(this.dispatchTimer); this.dispatchTimer = null;
     const retained = [...(this.calls || [])].filter(([, call]) => preserveDispatch && call.dispatch || preserveSignals && call.signalRunning);
     const keep = new Set(retained.map(([, call]) => call));
     for (const call of this.calls?.values() || []) if (!keep.has(call)) { clearTimeout(call.expiry); clearTimeout(call.startNotice); }
@@ -66,6 +68,22 @@ class AgentCalls {
     this.aliases = new Map([...(this.aliases || [])].filter(([, id]) => ids.has(id)));
     this.timer = null; this.calls = new Map(retained); this.polls = new Map(); this.meta = new Map(); this.pending = new Set(); this.work = null;
     this.schedule();
+    this.watchDispatch();
+  }
+  // Only this process's live run board holds completion; display retirement and retained done rows do not.
+  openDispatch(now = this.now()) {
+    const open = [...this.calls.values()].filter(call => call.dispatch && !call.done && !call.reviewed);
+    return { count: open.length, deadline: open.length ? Math.min(...open.map(call => call.startedAt ?? now)) + LOST_WORK_TIMEOUT : null };
+  }
+  watchDispatch() {
+    clearTimeout(this.dispatchTimer); this.dispatchTimer = null;
+    const { count, deadline } = this.openDispatch(), remaining = deadline - this.now();
+    if (!count || remaining <= 0) return;
+    this.dispatchTimer = setTimeout(() => {
+      this.dispatchTimer = null;
+      this.dispatchEnded?.();
+    }, remaining);
+    this.dispatchTimer.unref?.();
   }
   setFolder(folder) { if (folder !== this.folder) { this.reset(true, false); this.folder = folder; } }
   history(reading) { this.replaying = reading; }
@@ -280,7 +298,7 @@ class AgentCalls {
         if (this.calls.get(event.id) !== next || !next.starting || next.done) return;
         next.notice = 'unconfirmed'; this.changed();
       }, Math.max(0, 15000 - (this.now() - event.at)));
-      next.startNotice.unref?.(); this.schedule(); return true;
+      next.startNotice.unref?.(); this.schedule(); this.watchDispatch(); return true;
     }
     if (event.type === 'dispatch-start') {
       if (call && (!call.starting || call.done) || !call && this.calls.size >= 1024) return false;
@@ -298,7 +316,7 @@ class AgentCalls {
         Object.assign(call, next, { starting: false }); delete call.notice;
         this.feeds.update(call);
       } else { this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next); }
-      this.schedule();
+      this.schedule(); this.watchDispatch();
       return true;
     }
     if (!call?.dispatch) return false;
@@ -340,6 +358,8 @@ class AgentCalls {
     this.feeds.update(call); this.refresh(event.id);
     if (!this.local) this.feeds.finish(call);
     this.hideAfterEnd(call);
+    this.watchDispatch();
+    this.dispatchEnded?.();
     return true;
   }
   // A worker terminal's dispatched worker waits for the owner's answer ('owner') or went on (null): presentation only,

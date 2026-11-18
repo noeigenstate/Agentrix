@@ -1,6 +1,6 @@
 # Boundary: Dispatch
 
-The dispatch helper that every command-line Codex or Claude worker is started through — it builds the real command, confirms the worker started, and reports its routing, rate and end — and the main-process gate that accepts its events for the activity pane.
+The dispatch helper that every command-line Codex or Claude worker is started through — it builds the real command, confirms the worker started, and reports its routing, rate and end — and the main-process gate that accepts its events for the activity pane. Claude --fast reaches its CLI as a JSON settings argv element, and Claude alias checks follow released numeric versions.
 
 ## Owns
 - `integration/dispatch.cjs`

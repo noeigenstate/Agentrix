@@ -273,8 +273,9 @@ class CompletionWork {
     this.version++;
     if (pending !== this.tasks.size || reviewAt !== this.reviewAt) this.changed();
   }
-  state(snapshot, { queued = false } = {}) {
-    const pending = this.tasks.size || this.notifications.size || this.reviewAt || this.reading || queued;
+  state(snapshot, { queued = false, held = null } = {}) {
+    const pending = this.tasks.size || this.notifications.size || this.reviewAt || this.reading || queued || held?.count;
+    if (held?.count && Number.isFinite(held.deadline) && held.deadline <= this.now()) this.expired = true;
     if (this.uncertain) this.expired = true;
     clearTimeout(this.timer); this.timer = null;
     if (this.tasks.size && ['complete', 'interrupted'].includes(snapshot.state) && !this.expired) {

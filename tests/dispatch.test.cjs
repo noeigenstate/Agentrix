@@ -19,6 +19,36 @@ const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
 const session = '22222222-2222-4222-8222-222222222222';
 const at = seconds => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
 
+test('Claude fast constructs one JSON settings argv element and aliases follow future releases', () => {
+  const options = argumentsOf(['claude', '--role', 'exec', '--title', 'Synthetic', '--model', 'opus', '--effort', 'adaptive', '--fast',
+    '--permission', 'plan', '--cwd', __dirname, '--brief', 'synthetic.md', '--out', 'synthetic.out']);
+  const command = commandOf(options);
+  assert.deepEqual(command.slice(command.indexOf('--settings'), command.indexOf('--settings') + 2), ['--settings', '{"fastMode":true}']);
+  const source = require('node:fs').readFileSync(require.resolve('../integration/dispatch.cjs'), 'utf8');
+  const verdict = require('node:vm').runInNewContext(`(${source.slice(source.indexOf('function routingVerdict('), source.indexOf('function commandOf('))})`, {
+    strictRoutingVerdict: require('../electron/features/dashboard/records-routing.cjs').routingVerdict,
+  });
+  for (const alias of ['opus', 'sonnet', 'haiku']) {
+    const declared = { model: alias, effort: 'high', fast: true };
+    for (const suffix of ['', '-20261117', '[1m][fast]', '-20261117[1m][fast]']) {
+      assert.equal(verdict({ ...declared, model: `claude-${alias}-6-2${suffix}` }, declared), 'ok');
+    }
+    assert.equal(verdict({ ...declared, model: 'unrelated-model' }, declared), 'mismatch');
+    assert.equal(verdict({ ...declared, model: null }, declared), 'unverified');
+    assert.equal(verdict({ ...declared, model: `claude-${alias}-6-2`, fast: false }, declared), 'mismatch');
+  }
+  for (const [alias, model, expected] of [
+    ['sonnet', 'claude-sonnet-5-5', 'ok'], ['sonnet', 'claude-sonnet-5-5-20261031', 'ok'],
+    ['sonnet', 'claude-opus-5-5', 'mismatch'], ['sonnet', 'claude-sonnet-4-6', 'mismatch'],
+    ['sonnet', 'claude-sonnet-5-6', 'ok'], ['sonnet', 'claude-sonnet-6-0', 'ok'],
+    ['opus', 'claude-opus-5-6', 'ok'], ['haiku', 'claude-haiku-4-5', 'mismatch'],
+    ['sonnet', 'claude-sonnet-5-4-9', 'mismatch'], ['sonnet', 'claude-sonnet-5-5-1', 'ok'],
+  ]) {
+    const declared = { model: alias, effort: 'high', fast: false };
+    assert.equal(verdict({ ...declared, model }, declared), expected, `${alias}: ${model}`);
+  }
+});
+
 test('helper observes Claude user identifiers by record channel, excluding tool results and sidechains', () => {
   const observed = [], output = new WorkerOutput('claude', () => {});
   output.onInput = id => observed.push(id);
@@ -177,7 +207,7 @@ test('helper constructs exact Codex/Claude argv and rejects incomplete or ambigu
     assert.equal(argumentsOf(['codex', ...base.map(value => value === '审查' ? alias : value)]).role, expected);
   }
   for (const args of [['codex'], ['other', ...base], ['codex', ...base, '--unknown'], ['codex', ...base, '--model', 'again'], ['codex', ...base, '--image'],
-    ['claude', ...base], ['claude', ...base, '--permission', 'plan', '--fast'], ['codex', ...base, '--title', 'a\nb'],
+    ['claude', ...base], ['claude', ...base, '--permission', 'plan', '--read-only'], ['codex', ...base, '--title', 'a\nb'],
     ['codex', ...base.map(value => value === '审查' ? 'unknown-role' : value)]]) assert.throws(() => argumentsOf(args));
 });
 

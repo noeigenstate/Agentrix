@@ -1,5 +1,18 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+
+test('dispatch holds keep an ended main turn working and expire without completing it', () => {
+  const { CompletionWork, LOST_WORK_TIMEOUT } = require('../electron/completion-work.cjs');
+  let now = 1000;
+  const work = new CompletionWork({ now: () => now }), snapshot = { state: 'complete', updatedAt: now };
+  const held = { count: 1, deadline: now + LOST_WORK_TIMEOUT };
+  assert.equal(work.state(snapshot, { held }), 'working');
+  assert.equal(snapshot.state, 'complete');
+  assert.equal(work.state(snapshot, { held: { count: 0, deadline: null } }), 'complete');
+  now = held.deadline;
+  assert.equal(work.state(snapshot, { held }), 'interrupted');
+  assert.equal(work.state(snapshot), 'interrupted');
+});
 const { CompletionWork, LOST_WORK_TIMEOUT, isServiceCommand } = require('../electron/completion-work.cjs');
 
 const stamp = at => new Date(at).toISOString();

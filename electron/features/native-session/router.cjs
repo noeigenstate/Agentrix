@@ -332,7 +332,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     async runOptions(id, runtimeSessionId, patch) {
       const record = current(id, runtimeSessionId);
       if (!record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
-      if (record.spec.agent === 'claude' && patch.effort != null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(patch.effort)) throw new Error('无效的运行选项。');
+      if (record.spec.agent === 'claude' && patch.effort != null && (typeof patch.effort !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(patch.effort))) throw new Error('无效的运行选项。');
       if (record.spec.agent !== 'codex' && patch.permissions !== undefined) throw new Error('此会话不支持切换权限。');
       const result = await record.runtime.runOptions(patch);
       current(id, runtimeSessionId);
