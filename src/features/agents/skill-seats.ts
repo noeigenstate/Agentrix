@@ -22,8 +22,8 @@ export const PHASES: Record<string, Phase> = { architect: 'plan', core: 'build',
 export const TILT = 55;
 export type SeatSpot = { x: number; y: number; w: number; h: number };
 const SPOTS: Partial<Record<SeatId, SeatSpot>> = {
-  lead: { x: 0, y: -330, w: 470, h: 150 }, architect: { x: 364, y: -168, w: 224, h: 120 }, reviewer: { x: -364, y: -168, w: 224, h: 120 }, core: { x: 404, y: 92, w: 224, h: 120 },
-  lookup: { x: -404, y: 92, w: 224, h: 120 }, execution: { x: 160, y: 268, w: 224, h: 120 }, visual: { x: -160, y: 268, w: 224, h: 120 },
+  lead: { x: 0, y: -330, w: 500, h: 150 }, architect: { x: 388, y: -168, w: 248, h: 120 }, reviewer: { x: -388, y: -168, w: 248, h: 120 }, core: { x: 404, y: 92, w: 248, h: 120 },
+  lookup: { x: -404, y: 92, w: 248, h: 120 }, execution: { x: 140, y: 268, w: 248, h: 120 }, visual: { x: -140, y: 268, w: 248, h: 120 },
 };
 const flat = Math.cos(TILT * Math.PI / 180);
 export const spotsTouch = (a: SeatSpot, b: SeatSpot, gap: number) => Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && a.y * flat - a.h < b.y * flat + gap && b.y * flat - b.h < a.y * flat + gap;
@@ -33,7 +33,7 @@ export function seatLayout(ids: SeatId[]): Record<string, SeatSpot> {
     const known = SPOTS[id];
     if (known) { spots[id] = known; return; }
     const angle = (-90 + index * 360 / ids.length) * Math.PI / 180;
-    let spot: SeatSpot = { x: Math.round(Math.cos(angle) * 410), y: Math.round(Math.sin(angle) * 270), w: 224, h: 120 };
+    let spot: SeatSpot = { x: Math.round(Math.cos(angle) * 410), y: Math.round(Math.sin(angle) * 270), w: 248, h: 120 };
     const lead = SPOTS.lead!;
     while (ids.includes('lead') && spotsTouch(spot, lead, 12) && Math.abs(spot.x) + spot.w / 2 < 560) spot = { ...spot, x: spot.x + (spot.x < 0 ? -4 : 4) };
     spots[id] = spot;
@@ -85,7 +85,15 @@ export function canonicalModel(catalog: SeatModel[], model: string): string {
 }
 export const sameModel = (catalog: SeatModel[], a: string, b: string) => a === b || canonicalModel(catalog, a) === canonicalModel(catalog, b);
 // The few alternatives the blocked-reviewer banner names, strongest first, and how many there are in all.
-export const topAlternatives = (alternatives: SeatModel[], max = 3) => ({ shown: [...alternatives].sort((a, b) => b.rank - a.rank).slice(0, max), total: alternatives.length });
+// The blocked banner names the alternatives in the order the one-click fix prefers them (the fix first), one per model line (the alias, else the newest version, not every old one).
+export function topAlternatives(alternatives: SeatModel[], max = 3, ctx?: { fix: SeatModel | null; map: SeatMap; catalog: SeatModel[]; defaults?: SeatMap }) {
+  const preferred = (a: SeatModel, b: SeatModel) => Number(isAliasRow(b)) - Number(isAliasRow(a)) || (versionNewer(idVersion(a.model), idVersion(b.model)) ? -1 : versionNewer(idVersion(b.model), idVersion(a.model)) ? 1 : 0);
+  const lineKey = (row: SeatModel) => row.family + lineOf(row), best = new Map<string, SeatModel>();
+  for (const row of [...alternatives].sort(preferred)) if (!best.has(lineKey(row))) best.set(lineKey(row), row);
+  const lines = [...best.values()], ordered = ctx ? orderSuggestions(lines, ctx.map, ctx.catalog, ctx.defaults) : [...lines].sort(strength);
+  const fix = ctx?.fix, shown = fix ? [fix, ...ordered.filter(row => lineKey(row) !== lineKey(fix))] : ordered;
+  return { shown: shown.slice(0, max), total: alternatives.length };
+}
 // A typed-in id the catalog does not list: its family comes from the id, its efforts from the family's base list, fast only where Codex can apply it.
 export const customRow = (model: string): SeatModel => {
   const family = familyOf(model);
@@ -158,15 +166,14 @@ export function setFast(map: SeatMap, slot: SlotId, fast: boolean, catalog: Seat
 // The reviewer rule: refused when the reviewer runs the core's or the execution seat's model while another AVAILABLE model of at least its rank exists.
 // The fix is such a model that none of the author seats runs, or null when the author seats themselves must change.
 const strength = (a: SeatModel, b: SeatModel) => b.rank - a.rank || b.model.localeCompare(a.model, 'en', { numeric: true });
-// The one-click fix, never by list order: the reviewer seat's default if it is a candidate, else the strongest candidate another seat already runs, else the strongest candidate.
-export function pickFix(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel | null {
-  if (!candidates.length) return null;
-  const preferred = defaults?.reviewer && candidates.find(row => sameModel(catalog, row.model, defaults.reviewer!.model));
-  if (preferred) return preferred;
+// The candidates in the order the one-click fix and the banner prefer them, never by list order: the reviewer seat's default first, then models another seat already runs, then the rest;
+// within each the strongest.
+export function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel[] {
   const running = [map.lead?.claude, map.lead?.codex, map.architect, map.execution, map.visual, map.lookup].filter((seat): seat is Seat => !!seat);
-  const used = candidates.filter(row => running.some(seat => sameModel(catalog, seat.model, row.model)));
-  return [...(used.length ? used : candidates)].sort(strength)[0];
+  const tier = (row: SeatModel) => defaults?.reviewer && sameModel(catalog, row.model, defaults.reviewer.model) ? 0 : running.some(seat => sameModel(catalog, seat.model, row.model)) ? 1 : 2;
+  return [...candidates].sort((a, b) => tier(a) - tier(b) || strength(a, b));
 }
+export const pickFix = (candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel | null => orderSuggestions(candidates, map, catalog, defaults)[0] ?? null;
 export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): ReviewerBlock | null {
   const reviewer = map.reviewer;
   const hit = reviewer ? AUTHORS.filter(id => map[id] && sameModel(catalog, map[id]!.model, reviewer.model)) : [];
