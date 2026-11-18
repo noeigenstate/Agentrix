@@ -76,7 +76,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   const label = (model: string) => modelRow(catalog, model)?.label ?? model;
 
   const keepButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => { dialog.current?.focus(); }, []);
+  useEffect(() => { dialog.current?.focus(); void refresh(true); }, []);
   useEffect(() => { setRefreshed(null); if (given.defaultsMoved?.length) setMoved(given.defaultsMoved); }, [given]);
   useEffect(() => { if (discarding) keepButton.current?.focus({ preventScroll: true }); }, [discarding]);
   // A refreshed record that already holds the draft makes the draft redundant (after a save), so later changes made elsewhere show.
@@ -105,12 +105,14 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     return t(REFUSALS[result.reason], { family: slotFamily(slot) === 'codex' ? 'Codex' : 'Claude' });
   };
   // 刷新: main reads the model lists again (throttled there) and answers with the seats; a failed read leaves the dialog as it was.
-  const refresh = async () => {
+  // Opening the dialog reads once too (quiet while it works; main throttles the probe), and the note about moved defaults comes with that answer.
+  const refresh = async (opening = false) => {
     if (refreshing) return;
     setRefreshing(true);
     try {
       const next = await window.agentrix.skillSeatsRefresh(projectId ?? null, terminalId ?? null);
-      if (next) { setRefreshed(next); setNotice({ kind: 'ok', text: t('模型列表已刷新') }); } else setNotice({ kind: 'error', text: t('没有刷新：没有可用的座位信息') });
+      if (next) { setRefreshed(next); if (next.defaultsMoved?.length) setMoved(next.defaultsMoved); if (!opening) setNotice({ kind: 'ok', text: t('模型列表已刷新') }); }
+      else if (!opening) setNotice({ kind: 'error', text: t('没有刷新：没有可用的座位信息') });
     } catch (error) {
       setNotice({ kind: 'error', text: t('没有刷新：{message}', { message: error instanceof Error ? error.message : String(error) }) });
     }
