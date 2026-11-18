@@ -14,6 +14,8 @@ import { resetTime } from './Metric';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import './activity-pane.css';
 
+export { SeatsHost } from './SeatsHost';
+
 // Beside an expanded project's terminal, two blocks and nothing else: the main model with what it is working on, and each agent's run mode and allowance (ApiUsage).
 // The models the agent called are in the left bar's Agent tab. The pane does not scroll as a whole; each block keeps its title and scrolls its own content.
 export function ActivityPane({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
