@@ -24,15 +24,14 @@ async function folderHistory(folder, { claude = listClaudeSessions, codex = late
 }
 
 // What is typed at the new terminal's first prompt.
-function launchCommand(agent, history, seat = null, { fastSettingsFile } = {}) {
+function launchCommand(agent, history, seat = null) {
   if (agent === 'claude') {
     if (history) return `claude --resume ${history.id}\r`;
     if (!seat?.model) return 'claude\r';
     // Skills validates capabilities; the shell boundary also rejects executable syntax.
     if (seat.model.length > 160 || !/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(seat.model)) throw new Error('invalid-model');
     if (!/^[a-z][a-z0-9-]{0,31}$/.test(seat.effort)) throw new Error('invalid-effort');
-    if (seat.fast && fastSettingsFile && /["`$\r\n\x00]/.test(fastSettingsFile)) throw new Error('invalid-fast-settings');
-    return `claude --model "${seat.model}" --effort ${seat.effort}${seat.fast && fastSettingsFile ? ` --settings "${fastSettingsFile}"` : ''}\r`;
+    return `claude --model "${seat.model}" --effort ${seat.effort}\r`;
   }
   throw new Error('Codex 必须通过 app-server 启动。');
 }

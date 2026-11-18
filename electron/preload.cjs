@@ -161,7 +161,7 @@ contextBridge.exposeInMainWorld('agentrix', {
   agentLaunch: (id, agent, mode) => ipcRenderer.invoke('agent:launch', id, agent, mode),
   listSkills: () => ipcRenderer.invoke('skills:list'),
   skillSeats: (projectId, terminalId) => ipcRenderer.invoke('skills:seats', projectId, terminalId).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
-  skillSeatsRefresh: (projectId, terminalId) => ipcRenderer.invoke('skills:seats-refresh', projectId, terminalId).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
+  skillSeatsRefresh: (projectId, terminalId, reason = 'manual') => ipcRenderer.invoke('skills:seats-refresh', projectId, terminalId, reason).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
   setSkillSeats: (scope, projectId, seats) => ipcRenderer.invoke('skills:setSeats', scope, projectId, seats).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
   readSkill: id => ipcRenderer.invoke('skills:read', id),
   saveSkill: (id, draft) => ipcRenderer.invoke('skills:save', id, draft),

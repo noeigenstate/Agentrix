@@ -9,6 +9,7 @@ const { probeCodex, probeClaude } = require('../electron/features/skills/model-p
 const { createRpc } = require('../electron/features/codex-app-server/index.cjs');
 const { EventEmitter } = require('node:events');
 const { PassThrough, Writable } = require('node:stream');
+const vm = require('node:vm');
 
 const deferred = () => {
   let resolve, reject;
@@ -52,7 +53,7 @@ test('catalog refresh throttles, persists, retains missing rows for 30 days and 
   assert.equal(restored.rows().find(row => row.model === 'gpt-6.2-sol').source, 'cached');
   now += 30 * 86400000 + 1;
   assert.equal(restored.rows().some(row => row.model === 'gpt-6.2-sol'), false);
-  assert.ok(changed >= 5);
+  assert.ok(changed >= 3);
 });
 
 test('newest numeric Sol defaults do not rewrite choices; rendering degrades unsupported settings visibly', () => {
@@ -90,7 +91,7 @@ test('one-shot Codex probe pages without creating a thread and closes its inject
     }
     done();
   } });
-  const rows = await probeCodex({ rpcFactory: createRpc, executable: async () => 'injected-only', spawn: (_file, args) => {
+  const rows = await probeCodex({ rpcFactory: createRpc, stop: child => child.kill(), workerEnvironment: env => env || {}, executable: async () => 'injected-only', spawn: (_file, args) => {
     assert.deepEqual(args, ['app-server', '--listen', 'stdio://']); return child;
   } });
   assert.equal(rows.length, 2); assert.equal(killed, true);
@@ -104,6 +105,48 @@ test('one-shot Claude probe never yields a prompt and always interrupts', async 
     return { supportedModels: async () => [{ value: 'opus' }], interrupt: () => { interrupted = true; }, close: () => { closed = true; } };
   } }) });
   assert.equal(rows.length, 1); assert.equal(interrupted, true); assert.equal(closed, true); assert.equal(options.abortController.signal.aborted, true);
+  assert.deepEqual(options.settingSources, []); assert.equal(options.persistSession, false);
+});
+
+test('unchanged catalog rows update freshness without writing or publishing again', t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-quiet-')); t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  let now = 100, published = 0;
+  const catalog = new ModelCatalog({ dataDir, now: () => now, changed: () => published++ });
+  const rows = [{ model: 'gpt-6.2-sol' }]; catalog.accept('codex', rows);
+  const bytes = fs.readFileSync(catalog.file, 'utf8'); now++;
+  catalog.accept('codex', rows); assert.equal(published, 1); assert.equal(catalog.timestamps().codex, now);
+  assert.equal(fs.readFileSync(catalog.file, 'utf8'), bytes);
+});
+
+test('main uses a neutral probe folder and still lists keyed models after SDK startup fails', async t => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'neutral-probe-')); t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+  const begin = source.indexOf('    const probeDirectory ='), end = source.indexOf('    const liveModels', begin);
+  const context = vm.createContext({ path, fs, app: { getPath: () => dataDir }, root: 'resources/app.asar' });
+  vm.runInContext(source.slice(begin, end), context);
+  const directory = vm.runInContext('probeDirectory', context);
+  assert.ok(fs.statSync(directory).isDirectory()); assert.deepEqual(fs.readdirSync(directory), []);
+  let listed = 0, cwd;
+  Object.assign(context, { liveModels: async () => null, agents: { getState: () => ({ claude: { installed: true } }) },
+    claudeRuntime: { credentials: { read: () => 'synthetic-injected' } }, createSdkLoader: () => () => {},
+    resolveClaudeExecutable: async () => 'injected', claudeLocator: {}, process: { env: {} }, apiEnvironment: env => env,
+    probeClaude: async input => { cwd = input.options.cwd; throw Error('sdk-failure'); },
+    listModels: async () => { listed++; return { models: ['claude-new'] }; }, netRequest: () => () => {}, electronNet: {} });
+  const start = source.indexOf('claude: async () => {', source.indexOf('modelProbes:'));
+  const finish = source.indexOf('\n        },', start);
+  const rows = await vm.runInContext(`(${source.slice(start + 'claude: '.length, finish)}})()`, context);
+  assert.equal(cwd, directory); assert.equal(listed, 1); assert.equal(rows[0].model, 'claude-new');
+});
+
+test('Codex probe starts a process group with a scrubbed environment and awaits the injected tree stop', async () => {
+  const { workerEnvironment } = require('../electron/features/codex-app-server/index.cjs');
+  const stopping = deferred(), stopped = deferred(); let completed = false;
+  const child = { stdin: { destroy() {} }, stdout: { destroy() {} }, stderr: { destroy() {} } };
+  const run = probeCodex({ executable: async () => 'injected', env: { PATH: 'synthetic', AGENTRIX_BOOTSTRAP: 'private' }, workerEnvironment,
+    spawn: (_file, _args, options) => { assert.equal(options.detached, process.platform !== 'win32'); assert.equal(options.env.AGENTRIX_BOOTSTRAP, undefined); return child; },
+    rpcFactory: () => ({ request: async method => method === 'model/list' ? { data: [] } : {}, notify() {}, close() {} }),
+    stop: value => { assert.equal(value, child); stopping.resolve(); return stopped.promise; } }).then(value => { completed = true; return value; });
+  await stopping.promise; assert.equal(completed, false); stopped.resolve(); await run; assert.equal(completed, true);
 });
 
 test('model refreshes run at the exact startup and dialog boundaries; manual refresh is never age-throttled', async t => {
@@ -166,12 +209,12 @@ test('Codex deadline cleans a stalled handshake and late executable resolution n
   const timers = deadline(), child = new EventEmitter(), initialized = deferred(); let killed = 0;
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => killed++;
   child.stdin = new Writable({ write(_chunk, _encoding, done) { initialized.resolve(); done(); } });
-  const run = probeCodex({ rpcFactory: createRpc, executable: async () => 'injected', spawn: () => child, timers });
+  const run = probeCodex({ rpcFactory: createRpc, stop: child => child.kill(), workerEnvironment: env => env || {}, executable: async () => 'injected', spawn: () => child, timers });
   await initialized.promise; timers.expire(); await assert.rejects(run, /model_probe_timeout/);
   assert.equal(killed, 1); assert.equal(timers.active, false);
   assert.ok([child.stdin, child.stdout, child.stderr].every(pipe => pipe.destroyed));
   const late = deferred(), lateTimers = deadline(); let spawned = false;
-  const unresolved = probeCodex({ rpcFactory: createRpc, executable: () => late.promise, spawn: () => { spawned = true; }, timers: lateTimers });
+  const unresolved = probeCodex({ rpcFactory: createRpc, stop: child => child.kill(), workerEnvironment: env => env || {}, executable: () => late.promise, spawn: () => { spawned = true; }, timers: lateTimers });
   lateTimers.expire(); await assert.rejects(unresolved, /model_probe_timeout/);
   late.resolve('too-late'); await late.promise; assert.equal(spawned, false);
 });

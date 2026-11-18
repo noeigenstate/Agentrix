@@ -10,6 +10,12 @@ const { randomUUID } = require('node:crypto');
 const claudeEnvFile = file => file.replace(/\.json$/i, '') + '-claude-env.sh';
 
 function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, ...terminal }) {
+  if (typeof terminal.claudeFast === 'boolean' && terminal.hooks?.settings) {
+    for (const channel of ['http', 'fallback']) {
+      const text = terminal.hooks.settings[channel];
+      if (text) terminal.hooks.settings[channel] = JSON.stringify({ ...JSON.parse(text), fastMode: terminal.claudeFast });
+    }
+  }
   fs.rmSync(file + '.background.json', { force: true });
   const pipeName = process.platform === 'win32' ? eventServer.name : eventServer.address;
   const packaged = process.resourcesPath && path.join(process.resourcesPath, 'integration');

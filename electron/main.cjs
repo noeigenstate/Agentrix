@@ -1305,7 +1305,8 @@ async function initializeNativeSessions() {
       nativeSpecs.delete(spec.terminalId);
       if (spec.bootstrapFile) removeBootstrap(spec.bootstrapFile);
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
-      launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history, history ? null : skills.leadOptions?.(spec.projectId, spec.agent, spec), { fastSettingsFile: skills.fastSettingsFile?.() }), threadId: history?.id || null });
+      const seat = history ? null : skills.leadOptions?.(spec.projectId, spec.agent, spec);
+      launchPlans.set(spec.terminalId, { agent: spec.agent, fast: seat?.fast, command: launchCommand(spec.agent, history, seat), threadId: history?.id || null });
       store.setRestore(spec.terminalId, { nativeTransport: null });
       startTerminal(spec.terminalId, null, true);
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
@@ -1357,7 +1358,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
       helper: path.join(integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
   if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
-    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks });
+    claudeFast: launchPlans.get(id)?.fast, nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks });
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
@@ -1594,7 +1595,8 @@ function registerUnavailableNative(handle) {
     if (options.agent === 'codex') throw new Error('Codex 原生模式连接失败，请重试。');
     if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
-    launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history, history ? null : skills.leadOptions?.(project.id, options.agent), { fastSettingsFile: skills.fastSettingsFile?.() }), threadId: history?.id || null });
+    const seat = history ? null : skills.leadOptions?.(project.id, options.agent);
+    launchPlans.set(id, { agent: options.agent, fast: seat?.fast, command: launchCommand(options.agent, history, seat), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast();
     return { runtimeSessionId: randomUUID() };
   }
@@ -1711,7 +1713,8 @@ function registerIpc() {
       await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;
     }
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
-    launchPlans.set(id, { agent, command: launchCommand(agent, history, history ? null : skills.leadOptions?.(project.id, agent), { fastSettingsFile: skills.fastSettingsFile?.() }), threadId: history?.id || null });
+    const seat = history ? null : skills.leadOptions?.(project.id, agent);
+    launchPlans.set(id, { agent, fast: seat?.fast, command: launchCommand(agent, history, seat), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });
@@ -1751,9 +1754,11 @@ if (!app.requestSingleInstanceLock()) {
         if (record.restore?.codex === true) void prepareReading(record.id, { ...record.restore, agent: record.restore.agent || 'codex' });
       }
     }
+    const probeDirectory = path.join(app.getPath('userData'), 'model-probe');
+    fs.mkdirSync(probeDirectory, { recursive: true });
     const liveModels = async family => {
       for (const runtime of seatModelRuntimes[family]) {
-        try { return await runtime.models(); } catch { /* A closing runtime is not a catalog source. */ }
+        try { await runtime.models(); return true; } catch { /* A closing runtime is not a catalog source. */ }
       }
       return null;
     };
@@ -1761,18 +1766,18 @@ if (!app.requestSingleInstanceLock()) {
       modelProbes: {
         codex: async () => {
           const live = await liveModels('codex');
-          if (live || !agents.getState().codex?.installed) return live;
-          const { createRpc } = await import('./features/codex-app-server/index.cjs');
-          return probeCodex({ rpcFactory: createRpc, spawn: require('node:child_process').spawn,
-            executable: codexExecutable, cwd: root, env: process.env });
+          if (live || !agents.getState().codex?.installed) return null;
+          const { createRpc, stopProcess, workerEnvironment } = await import('./features/codex-app-server/index.cjs');
+          return probeCodex({ rpcFactory: createRpc, stop: stopProcess, workerEnvironment, spawn: require('node:child_process').spawn,
+            executable: codexExecutable, cwd: probeDirectory, env: process.env });
         },
         claude: async () => {
-          const live = await liveModels('claude'); if (live) return live;
-          if (!agents.getState().claude?.installed) return null;
+          const live = await liveModels('claude'); if (live) return null;
           const key = claudeRuntime?.credentials.read();
-          const rows = await probeClaude({ loadSdk: createSdkLoader({ packaged: app.isPackaged }), options: {
-            cwd: root, pathToClaudeCodeExecutable: await resolveClaudeExecutable({ locator: claudeLocator }),
-            ...(key ? { env: apiEnvironment(process.env, key) } : {}) } });
+          let rows = [];
+          try { if (agents.getState().claude?.installed) rows = await probeClaude({ loadSdk: createSdkLoader({ packaged: app.isPackaged }), options: {
+            cwd: probeDirectory, pathToClaudeCodeExecutable: await resolveClaudeExecutable({ locator: claudeLocator }),
+            ...(key ? { env: apiEnvironment(process.env, key) } : {}) } }); } catch { /* The keyed model list is independent of the SDK probe. */ }
           if (key) {
             const listed = await listModels(key, { request: netRequest(electronNet) });
             if (Array.isArray(listed.models)) for (const model of listed.models) if (!rows.some(row => (row.resolvedModel || row.value) === model)) rows.push({ model });
