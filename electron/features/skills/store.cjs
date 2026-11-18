@@ -110,7 +110,9 @@ class SkillsStore {
     }
     let modified = false;
     for (const options of Object.values(this.options)) {
-      for (const id of Object.keys(options.firstOpenedProjects || {})) if (!projects.has(id)) { delete options.firstOpenedProjects[id]; modified = true; }
+      for (const scoped of [options.firstOpenedProjects, options.seats?.projects]) {
+        for (const id of Object.keys(scoped || {})) if (!projects.has(id)) { delete scoped[id]; modified = true; }
+      }
     }
     return modified;
   }
@@ -300,7 +302,8 @@ class SkillsStore {
   }
 
   leadOptions(projectId, agent, explicit = {}) {
-    return modelSeats.leadOptions(this.seatsInfo(projectId)?.effective, agent, explicit);
+    const info = this.seatsInfo(projectId);
+    return modelSeats.leadOptions(info ? modelSeats.effective({}, info.global, info.project || {}) : {}, agent, explicit);
   }
 
   seatsInfo(projectId = null, terminalId = null) {
@@ -308,7 +311,7 @@ class SkillsStore {
     if (!entry) return null;
     const agents = this.getAgents(), installed = { claude: !!agents.claude?.installed, codex: !!agents.codex?.installed };
     const stored = this.options[entry.id]?.seats || {};
-    const clean = raw => { try { return modelSeats.cleanSeats(raw || {}, entry.seats); } catch { return {}; } };
+    const clean = raw => modelSeats.cleanStoredSeats(raw, entry.seats);
     const global = clean(stored.global), project = projectId && Object.hasOwn(stored.projects || {}, projectId) ? clean(stored.projects[projectId]) : null;
     const defaults = Object.fromEntries(Object.entries(modelSeats.defaultsFor(installed)).filter(([id]) => entry.seats.includes(id)));
     const binding = terminalId ? this.seatSession(terminalId) : null;
@@ -328,7 +331,8 @@ class SkillsStore {
     let map;
     try { map = modelSeats.cleanSeats(raw, info.seats); }
     catch (error) { return { ok: false, code: error.code, ...(error.seat ? { seat: error.seat } : {}), message: error.message }; }
-    const old = this.options[info.skill] || {}, stored = old.seats || {}, projects = { ...stored.projects };
+    const old = this.options[info.skill] || {}, stored = old.seats || {}, liveProjects = new Set(this.getProjects().map(project => project.id));
+    const projects = Object.fromEntries(Object.entries(stored.projects || {}).filter(([id]) => liveProjects.has(id)));
     const global = scope === 'global' ? map : info.global;
     if (scope === 'project') {
       if (Object.keys(map).length) Object.defineProperty(projects, projectId, { value: map, enumerable: true, configurable: true, writable: true });
@@ -336,8 +340,7 @@ class SkillsStore {
     }
     // A global save also changes every inherited project; validate all resulting effective choices atomically.
     for (const override of scope === 'global' ? [{}, ...Object.values(projects)] : [map]) {
-      let clean;
-      try { clean = modelSeats.cleanSeats(override, info.seats); } catch { clean = {}; }
+      const clean = modelSeats.cleanStoredSeats(override, info.seats);
       const blocked = modelSeats.checkReviewer(modelSeats.effective(info.defaults, global, clean), info.catalog);
       if (blocked) return blocked;
     }

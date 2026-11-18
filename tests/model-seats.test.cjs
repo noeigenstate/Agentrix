@@ -72,6 +72,7 @@ test('rendered seats name Agent and helper launch forms, fresh instances and fix
   assert.match(codex, /fast off/); assert.match(codex, /fresh instances/); assert.match(codex, /agentrix-lookup stays Haiku/);
   assert.match(renderSeats(map, 'codex', helper, { codex: true }), /Substituted for opus: claude is not installed/);
   assert.match(renderSeats({ architect: seat('claude-opus-5-5', 'max') }, 'claude', helper), /Agent call with model:"opus", effort:"max"/);
+  assert.match(codex, /supplement.*full helper form.*--role.*--title.*--cwd.*--brief.*--out/i);
 });
 
 test('lead options preserve explicit launch/model-menu choices and their own defaults', () => {

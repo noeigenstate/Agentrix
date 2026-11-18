@@ -89,6 +89,82 @@ test('seat saves validate atomically, merge project choices, clear scopes and ke
   assert.deepEqual(f.errors, []);
 });
 
+test('removed projects lose their seat overrides in memory and persisted options on refresh', t => {
+  const { store, projects } = fixture(t), choice = { model: 'sonnet', effort: 'high' };
+  assert.deepEqual(store.setSeats('project', 'p1', { lookup: choice }), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p2', { visual: choice }), { ok: true });
+  projects.splice(projects.findIndex(project => project.id === 'p1'), 1);
+  store.refresh();
+  assert.equal(Object.hasOwn(store.options['builtin:model-routing'].seats.projects, 'p1'), false);
+  const stored = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
+  assert.deepEqual(stored.projects, { p2: { visual: choice } });
+});
+
+test('global seat saves validate live projects but ignore removed overrides before a refresh', t => {
+  const { store, projects } = fixture(t), choice = model => ({ model, effort: 'high' });
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  assert.deepEqual(store.setSeats('project', 'p1', { core: choice('opus'), reviewer: choice('gpt-6.1-sol') }), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p2', { lookup: choice('sonnet') }), { ok: true });
+  const global = { execution: choice('gpt-6.1-sol') };
+  assert.equal(store.setSeats('global', null, global).code, 'reviewer-same-model', 'an existing project still protects reviewer independence');
+  projects.splice(projects.findIndex(project => project.id === 'p1'), 1);
+  assert.deepEqual(store.setSeats('global', null, global), { ok: true });
+  const stored = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
+  assert.deepEqual(stored.projects, { p2: { lookup: choice('sonnet') } });
+  assert.deepEqual(stored.global, global);
+});
+
+test('one corrupt stored seat or lead slot preserves the other choices when reading and saving', t => {
+  const { store } = fixture(t), choice = (model, effort = 'high') => ({ model, effort });
+  const stored = { global: { lookup: choice('sonnet'), visual: choice('bad;model'),
+    lead: { claude: choice('opus', 'max'), codex: choice('gpt-6.1-sol', 'max') } },
+    projects: { p1: { architect: choice('sonnet'), lookup: choice('bad model') } } };
+  store.options['builtin:model-routing'] = { ...store.options['builtin:model-routing'], seats: structuredClone(stored) }; store.persistOptions();
+  const info = store.seatsInfo('p1'), good = { lookup: choice('sonnet'), lead: { claude: choice('opus', 'max') } };
+  assert.deepEqual(info.global, good);
+  assert.deepEqual(info.project, { architect: choice('sonnet') });
+  assert.equal(info.effective.lookup.model, 'sonnet');
+  assert.deepEqual(store.options['builtin:model-routing'].seats, stored, 'reading sanitizes without mutating the stored input');
+  assert.deepEqual(store.setSeats('project', 'p2', { visual: choice('opus') }), { ok: true });
+  const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
+  assert.deepEqual(persisted.global, good);
+});
+
+function seatPreload(store) {
+  const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
+  const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
+  const handlers = new Map(), webContents = { mainFrame: { url: 'agentrix://app/index.html' } };
+  const event = { sender: webContents, senderFrame: webContents.mainFrame }, getWindow = () => ({ webContents });
+  const { handle } = createIpcAdapter({ ipcMain: { handle: (channel, run) => handlers.set(channel, run) }, getWindow, t: text => text });
+  registerSkillsIpc({ handle, skills: store, getWindow });
+  let bridge;
+  require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
+    require: name => { assert.equal(name, 'electron'); return {
+      contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
+      ipcRenderer: { invoke: (channel, ...args) => handlers.get(channel)(event, ...args) },
+    }; },
+  });
+  return bridge;
+}
+
+test('seat preload reads unwrap the real IPC adapter including null and transport errors', async t => {
+  const { store } = fixture(t), bridge = seatPreload(store);
+  const info = await bridge.skillSeats('p1', null);
+  assert.equal(info.skill, 'builtin:model-routing');
+  store.setOptions(info.skill, { enabled: false });
+  assert.equal(await bridge.skillSeats('p1', null), null);
+  store.seatsInfo = () => { throw new Error('seat read failed'); };
+  await assert.rejects(() => bridge.skillSeats(), /seat read failed/);
+});
+
+test('seat preload saves preserve validation refusals and reject real adapter errors', async t => {
+  const { store } = fixture(t), bridge = seatPreload(store);
+  assert.deepEqual(await bridge.setSkillSeats('global', null, { lookup: { model: 'sonnet', effort: 'high' } }), { ok: true });
+  const refused = await bridge.setSkillSeats('global', null, { lookup: { model: 'bad;model', effort: 'high' } });
+  assert.equal(refused.ok, false); assert.equal(refused.code, 'invalid-model');
+  await assert.rejects(() => bridge.setSkillSeats('project', 'removed', {}), /Invalid seat scope or project/);
+});
+
 test('shipped code standard stays always and marks only the first agent session locally and over SSH', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-shipped-skills-'));
   const project = { id: 'p1', name: 'First', path: path.join(root, 'project') };
@@ -280,16 +356,16 @@ test('PowerShell wrappers reread the refreshed startup note before another CLI s
   assert.deepEqual(output.trim().split(/\r?\n/), ['First note.', 'Second note.']);
 });
 
-test('preload exposes the skill and seat contract endpoints and unsubscribes onSkills', () => {
+test('preload exposes the skill and seat contract endpoints and unsubscribes onSkills', async () => {
   const calls = [], listeners = new Map(); let bridge;
-  const ipcRenderer = { invoke: (...args) => { calls.push(args); }, on: (channel, fn) => listeners.set(channel, fn), removeListener: (channel, fn) => { assert.equal(listeners.get(channel), fn); listeners.delete(channel); } };
+  const ipcRenderer = { invoke: (...args) => { calls.push(args); return Promise.resolve({ ok: true, value: null }); }, on: (channel, fn) => listeners.set(channel, fn), removeListener: (channel, fn) => { assert.equal(listeners.get(channel), fn); listeners.delete(channel); } };
   require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), {
     require: name => { assert.equal(name, 'electron'); return { contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } }, ipcRenderer }; },
   });
   bridge.listSkills(); bridge.readSkill('id'); bridge.saveSkill(null, draft('preload')); bridge.deleteSkill('id'); bridge.setSkillOptions('id', { enabled: false });
   bridge.revertSkill('id', 2); bridge.resolveSkillChange('id', true); bridge.importSkill('global', null);
   const seats = { lookup: { model: 'sonnet', effort: 'high' } };
-  bridge.skillSeats('p1', 'terminal'); bridge.setSkillSeats('project', 'p1', seats);
+  await bridge.skillSeats('p1', 'terminal'); await bridge.setSkillSeats('project', 'p1', seats);
   assert.deepEqual(calls.map(call => call[0]), ['skills:list', 'skills:read', 'skills:save', 'skills:delete', 'skills:options', 'skills:revert', 'skills:resolve', 'skills:import', 'skills:seats', 'skills:setSeats']);
   assert.deepEqual(calls.slice(-2), [['skills:seats', 'p1', 'terminal'], ['skills:setSeats', 'project', 'p1', seats]]);
   let received;

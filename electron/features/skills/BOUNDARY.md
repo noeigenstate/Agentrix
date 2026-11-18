@@ -8,7 +8,7 @@ The skills library: built-in, global and project skills, their options, history 
 - `src/features/settings/skill-*.ts`
 
 ## Interface
-- `cleanSeats` (`electron/features/skills/model-seats.cjs`) — pure seat validation with checkReviewer, catalog, defaultsFor, effective, renderSeats and leadOptions; declaring built-in front matter supplies seat/fresh ids. `SkillsStore.seatsInfo` / `setSeats` serve `skills:seats` / `skills:setSeats`, persist global/project choices in skills.json, and freeze each observed session's map and rendered block, including an empty block, through compact/clear.
+- `cleanSeats` (`electron/features/skills/model-seats.cjs`) — strict validation and tolerant stored-choice recovery (cleanStoredSeats), with checkReviewer, catalog, defaultsFor, effective, renderSeats and leadOptions; declaring built-in front matter supplies seat/fresh ids. `SkillsStore.seatsInfo` / `setSeats` serve `skills:seats` / `skills:setSeats`, persist global/project choices in skills.json, and freeze each observed session's map and rendered block, including an empty block, through compact/clear.
 - `SkillsStore` (`electron/features/skills/store.cjs`) — library operations, watching, current project/agent manifests, launch snapshots and injected routingNote(); local `<sessionManifest>.json` carries fingerprint, projectRoot and managed roots, and SSH creates equivalent metadata using bundle.key after remote path expansion
 - `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including seat reads and saves
 - `nativeSkillActions` (`electron/features/skills/native-actions.cjs`) — records successful SDK and app-server skill reads

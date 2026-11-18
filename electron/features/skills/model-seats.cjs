@@ -32,6 +32,21 @@ function cleanSeats(raw, seatIds) {
   return result;
 }
 
+// Stored scopes may outlive older validation rules. Keep each valid seat and each independent lead slot.
+function cleanStoredSeats(raw, seatIds) {
+  let map = {};
+  if (!object(raw)) return map;
+  for (const id of seatIds) {
+    if (!Object.hasOwn(raw, id)) continue;
+    const choices = id === 'lead' && object(raw.lead)
+      ? ['claude', 'codex'].filter(agent => Object.hasOwn(raw.lead, agent)).map(agent => ({ lead: { [agent]: raw.lead[agent] } })) : [{ [id]: raw[id] }];
+    for (const choice of choices) {
+      try { map = effective(map, cleanSeats(choice, [id])); } catch { /* A corrupt choice cannot erase its neighbors. */ }
+    }
+  }
+  return map;
+}
+
 function catalog(installed, knownModels = []) {
   const rows = [
     ...['opus', 'sonnet', 'haiku'].map(model => ({ model, label: model[0].toUpperCase() + model.slice(1), family: 'claude', efforts: EFFORTS.claude, fast: false,
@@ -79,6 +94,7 @@ function leadOptions(map, agent, explicit = {}) {
 
 function renderSeats(map, leadAgent, helperPath, installed = { claude: true, codex: true }) {
   const parts = ['Agentrix model seats (fixed for this session; an instruction in the conversation still wins):'];
+  parts.push('These helper model settings supplement the skill\'s full helper form; --role, --title, --cwd, --brief and --out are still required.');
   const fallback = defaultsFor(installed);
   for (const [id, value] of Object.entries(map)) {
     const slots = id === 'lead' ? Object.entries(value).map(([agent, seat]) => [`lead.${agent}`, seat]) : [[id, value]];
@@ -98,4 +114,4 @@ function renderSeats(map, leadAgent, helperPath, installed = { claude: true, cod
   return parts.join('\n');
 }
 
-module.exports = { cleanSeats, checkReviewer, catalog, defaultsFor, effective, renderSeats, leadOptions };
+module.exports = { cleanSeats, cleanStoredSeats, checkReviewer, catalog, defaultsFor, effective, renderSeats, leadOptions };

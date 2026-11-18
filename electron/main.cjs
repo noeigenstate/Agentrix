@@ -1081,9 +1081,11 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
   const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
   // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
-  const lead = !providerSessionId ? skills.leadOptions?.(project.id, agent, launch || {}) || launch : launch;
+  const fresh = !providerSessionId && !resume && !launch?.resume;
+  const lead = fresh ? skills.leadOptions?.(project.id, agent, launch || {}) || launch : launch;
+  const preserveRunOptions = agent === 'codex' && (resume || launch?.resume) && !['model', 'effort', 'fast'].some(key => launch?.[key] != null);
   const runOptions = { model: lead?.model || null, effort: lead?.effort || 'high', fast: lead?.fast ?? (agent === 'codex'),
-    ...(agent === 'claude' && resume && !providerSessionId ? { seatResumeOptions: { model: launch?.model || null, effort: launch?.effort || 'high', fast: launch?.fast ?? false } } : {}),
+    ...(preserveRunOptions ? { preserveRunOptions: true } : {}),
     ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
@@ -1204,15 +1206,6 @@ async function initializeNativeSessions() {
           billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 });
     },
   });
-  const createClaude = claudeRuntime.create;
-  claudeRuntime.create = (spec, emit) => {
-    // Folder history can resolve a resume after nativeSpec. Never apply a new lead model to that resume.
-    if (spec.owner === 'gui' && spec.seatResumeOptions) {
-      if (spec.providerSessionId) Object.assign(spec, spec.seatResumeOptions);
-      delete spec.seatResumeOptions;
-    }
-    return createClaude(spec, emit);
-  };
   // The first look at the CLI (already under way since the app was ready) seeds what later looks compare with.
   checkClaude().catch(() => {});
   const codexFactory = createCodexRuntime({ resolveExecutable: codexExecutable, renderImage: generatedImages.render, settleImage: generatedImages.settle, translate: t,
