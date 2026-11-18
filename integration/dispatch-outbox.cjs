@@ -55,44 +55,95 @@ class DispatchOutbox {
 
 // Detached helpers retain their receipts independently of main's acknowledged event outbox.
 class DetachedRuns {
-  constructor(directory) { this.directory = directory; }
+  constructor(directory, { rename = fs.promises.rename, delay = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+    Object.assign(this, { directory, rename, delay });
+    this.cache = new Map(); this.writes = new Map(); this.latest = new Map();
+  }
   file(id) {
     if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(id)) throw new Error('Expected a run id');
     return path.join(this.directory, id + '.json');
   }
   read(id) {
-    const file = this.file(id), stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Unreadable detached run');
-    const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (entry.id !== id) throw new Error('Invalid detached run');
-    return entry;
+    try {
+      const file = this.file(id), stat = fs.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Unreadable detached run');
+      const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (entry.id !== id) throw new Error('Invalid detached run');
+      this.cache.set(id, entry); return entry;
+    } catch (error) {
+      if (error instanceof SyntaxError || ['ENOENT', 'EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
+        return this.cache.get(id) || (error.code === 'ENOENT' && !fs.existsSync(this.file(id) + '.log') ? null : undefined);
+      }
+      throw error;
+    }
   }
   create(entry) {
     fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     if (fs.lstatSync(this.directory).isSymbolicLink()) throw new Error('Unreadable detached directory');
     fs.writeFileSync(this.file(entry.id), JSON.stringify(entry), { flag: 'wx', mode: 0o600 });
+    this.cache.set(entry.id, entry);
   }
   update(id, changes) {
-    const file = this.file(id), temporary = file + '.' + process.pid + '.tmp';
-    try {
-      fs.writeFileSync(temporary, JSON.stringify({ ...this.read(id), ...changes }), { flag: 'wx', mode: 0o600 });
-      fs.renameSync(temporary, file);
-    } finally { fs.rmSync(temporary, { force: true }); }
+    const pending = (this.writes.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
+      const previous = this.latest.get(id) || this.read(id);
+      if (!previous) throw new Error(`unknown run ${id}`);
+      const entry = { ...previous, ...changes }, file = this.file(id), temporary = file + '.' + process.pid + '.tmp';
+      // Keep all changes after an exhausted retry; a later successful update also persists them.
+      this.latest.set(id, entry);
+      try {
+        fs.writeFileSync(temporary, JSON.stringify(entry), { flag: 'wx', mode: 0o600 });
+        for (let attempt = 0; ; attempt++) {
+          try { await this.rename(temporary, file); break; }
+          catch (error) {
+            if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt === 7) throw error;
+            await this.delay(5 * 2 ** attempt);
+          }
+        }
+        this.cache.set(id, entry);
+      } finally { fs.rmSync(temporary, { force: true }); }
+    });
+    this.writes.set(id, pending);
+    return pending;
+  }
+  claimStart(id) {
+    try { fs.closeSync(fs.openSync(this.file(id) + '.announced', 'wx', 0o600)); return true; }
+    catch (error) { if (error.code === 'EEXIST') return false; throw error; }
+  }
+  prune(now = Date.now()) {
+    for (const name of fs.readdirSync(this.directory)) {
+      if (!/^[a-f\d-]{36}\.json$/i.test(name)) continue;
+      const id = name.slice(0, -5), entry = this.read(id);
+      if (!entry?.settled || now - (entry.activityAt || entry.createdAt) < 7 * 86400000) continue;
+      for (const suffix of ['.log', '.announced', '']) {
+        try { fs.unlinkSync(this.file(id) + suffix); } catch (error) { if (error.code !== 'ENOENT') break; }
+      }
+      if (!fs.existsSync(this.file(id))) { this.cache.delete(id); this.latest.delete(id); this.writes.delete(id); }
+    }
   }
   // Watch before reading so an atomic receipt replacement cannot fall between read and subscribe.
-  observe(check, timeout, { watch = fs.watch, schedule = setTimeout, cancel = clearTimeout } = {}) {
+  observe(check, timeout, { watch = fs.watch, schedule = setTimeout, cancel = clearTimeout, signal } = {}) {
     return new Promise((resolve, reject) => {
       let watcher, timer, polling, settled = false;
       const finish = (error, value) => {
         if (settled) return;
-        settled = true; watcher?.close(); cancel(timer); clearInterval(polling);
+        settled = true; watcher?.close(); cancel(timer); clearInterval(polling); signal?.removeEventListener('abort', abort);
         if (error) reject(error); else resolve(value);
       };
-      const inspect = () => { try { const value = check(); if (value !== undefined) finish(null, value); } catch (error) { finish(error); } };
+      let inspecting;
+      const inspect = () => {
+        if (settled) return Promise.resolve();
+        if (inspecting) return inspecting;
+        inspecting = Promise.resolve().then(check).then(value => { if (value !== undefined) finish(null, value); }, error => finish(error))
+          .finally(() => { inspecting = null; });
+        return inspecting;
+      };
+      const abort = () => finish(null, null);
       try {
+        if (signal?.aborted) { finish(null, null); return; }
+        signal?.addEventListener('abort', abort, { once: true });
         watcher = watch(this.directory, inspect);
         watcher.on('error', error => finish(error));
-        timer = schedule(() => { inspect(); finish(null, null); }, timeout);
+        timer = schedule(() => { void inspect().then(() => finish(null, null)); }, timeout);
         // A killed helper may leave no final filesystem event; periodically probe its liveness too.
         polling = setInterval(inspect, 1000);
         inspect();

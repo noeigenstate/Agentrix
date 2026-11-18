@@ -10,6 +10,160 @@ const { spawn, execFileSync } = require('node:child_process');
 const { argumentsOf, startDetached, waitDetached, run } = require('../integration/dispatch.cjs');
 const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
 
+test('receipt rename retries sharing errors with bounded backoff while a reader holds the file', async t => {
+  const base = receipts(t), id = randomUUID(), delays = [], failures = ['EPERM', 'EACCES', 'EBUSY'];
+  base.create({ id, createdAt: Date.now() });
+  const reader = await fs.promises.open(base.file(id), 'r');
+  let attempts = 0;
+  const store = new DetachedRuns(base.directory, {
+    rename: async (from, to) => {
+      assert.equal(JSON.parse(await reader.readFile('utf8') || '{}').id || id, id);
+      if (attempts < failures.length) throw Object.assign(new Error('Synthetic reader sharing violation'), { code: failures[attempts++] });
+      attempts++; await reader.close(); return fs.promises.rename(from, to);
+    }, delay: async ms => { delays.push(ms); },
+  });
+  await store.update(id, { startedLine: 'started' });
+  assert.equal(attempts, 4); assert.deepEqual(delays, [5, 10, 20]); assert.equal(store.read(id).startedLine, 'started');
+});
+
+test('receipt retries stop at their bound and a later update retains failed changes', async t => {
+  const base = receipts(t), id = randomUUID(), delays = []; let blocked = true, attempts = 0;
+  base.create({ id, createdAt: Date.now() });
+  const store = new DetachedRuns(base.directory, { rename: async (from, to) => {
+    attempts++; if (blocked) throw Object.assign(new Error('Synthetic locked receipt'), { code: 'EPERM' });
+    return fs.promises.rename(from, to);
+  }, delay: async ms => { delays.push(ms); } });
+  await assert.rejects(store.update(id, { startedLine: 'started' }), { code: 'EPERM' });
+  assert.equal(attempts, 8); assert.equal(delays.reduce((sum, ms) => sum + ms, 0), 635);
+  blocked = false; await store.update(id, { endedLine: 'ended', settled: true });
+  assert.equal(store.read(id).startedLine, 'started'); assert.equal(store.read(id).endedLine, 'ended');
+});
+
+test('receipt readers retain the last complete value across missing and partial replacements', t => {
+  const store = receipts(t), id = randomUUID(); store.create({ id, createdAt: Date.now() });
+  fs.writeFileSync(store.file(id), '{'); assert.equal(store.read(id).id, id);
+  const fresh = new DetachedRuns(store.directory); assert.equal(fresh.read(id), undefined);
+  fs.unlinkSync(store.file(id)); assert.equal(store.read(id).id, id); assert.equal(fresh.read(id), null);
+});
+
+test('wait reports an unknown id and still collects a known run, printing its start once across waits', async t => {
+  const store = receipts(t), id = randomUUID(), unknown = randomUUID(); let text = '';
+  store.create({ id, createdAt: Date.now(), settled: true, exitCode: 0, startedLine: `[dispatch] started ${id} session synthetic`, endedLine: `[dispatch] ended ${id} exit 0` });
+  const output = { write: value => { text += value; } };
+  assert.equal(await waitDetached({ ids: [unknown, id], timeout: 0 }, { store, stdout: output }), 1);
+  assert.match(text, new RegExp(`unknown run ${unknown}`)); assert.match(text, new RegExp(`ended ${id}`));
+  await waitDetached({ ids: [id], timeout: 0 }, { store: new DetachedRuns(store.directory), stdout: output });
+  assert.equal(text.split(`[dispatch] started ${id}`).length, 2);
+});
+
+test('detached launcher saves absolute cwd and notices a helper load failure immediately', async t => {
+  const store = receipts(t); let saved, text = '';
+  const result = await startDetached(['claude', '--detach', '--role', 'review', '--title', 'Synthetic crash', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', path.relative(process.cwd(), store.directory), '--brief', 'brief.md', '--out', 'answer.md'], {
+    store, stdout: { write: value => { text += value; } }, launch: (_file, args, options) => {
+      const id = path.basename(args.at(-1), '.json'), child = new EventEmitter(); saved = store.read(id);
+      assert.equal(saved.argv[saved.argv.indexOf('--cwd') + 1], options.cwd); assert.ok(path.isAbsolute(options.cwd));
+      child.unref = () => {}; queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 1, null); }); return child;
+    },
+  });
+  assert.equal(result, 1); assert.match(text, /failed to start/); assert.equal(store.read(saved.id).settled, true);
+});
+
+test('unadmitted helper timeout records settlement after requesting its stop', async t => {
+  const store = receipts(t); let id, killed = false;
+  store.observe = async () => null;
+  const code = await startDetached(['claude', '--detach', '--role', 'review', '--title', 'Synthetic timeout', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', store.directory, '--brief', 'brief', '--out', 'out'], {
+    store, stdout: { write() {} }, launch: (_file, args) => {
+      id = path.basename(args.at(-1), '.json'); const child = new EventEmitter(); child.unref = () => {}; child.kill = () => { killed = true; };
+      queueMicrotask(() => child.emit('spawn')); return child;
+    },
+  });
+  assert.equal(code, 1); assert.equal(killed, true); assert.equal(store.read(id).settled, true);
+});
+
+test('wait rejects a reused PID whose socket identity differs from the run lease', async t => {
+  const store = receipts(t), id = randomUUID(), filename = path.resolve(__dirname, '../integration/dispatch.cjs');
+  const { Module, createRequire } = require('node:module'), realRequire = createRequire(filename), loaded = new Module(filename, module);
+  loaded.filename = filename; loaded.paths = module.paths;
+  loaded.require = name => name === 'node:net' ? { createConnection: () => {
+    const socket = new EventEmitter(); socket.setTimeout = () => {}; socket.destroy = () => {};
+    queueMicrotask(() => socket.emit('data', Buffer.from(randomUUID()))); return socket;
+  } } : realRequire(name);
+  loaded._compile(fs.readFileSync(filename, 'utf8'), filename);
+  store.create({ id, createdAt: Date.now(), helperPid: process.pid, lease: { port: 123, token: randomUUID() } });
+  let text = '';
+  assert.equal(await loaded.exports.waitDetached({ ids: [id], timeout: 0 }, { store, stdout: { write: value => { text += value; } } }), 0);
+  assert.match(text, /helper exited without a final receipt/); assert.doesNotMatch(text, /still running/);
+});
+
+test('an uncertain identity probe cannot declare a live helper dead', async t => {
+  const store = receipts(t), id = randomUUID(); store.create({ id, helperPid: 123, createdAt: Date.now() }); let text = '';
+  assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, alive: () => null, stdout: { write: value => { text += value; } } }), 75);
+  assert.match(text, /still running/); assert.doesNotMatch(text, /helper exited/);
+});
+
+test('receipt pruning removes only old settled receipts and their launcher logs', t => {
+  const store = receipts(t), old = randomUUID(), running = randomUUID(), now = Date.now();
+  store.create({ id: old, createdAt: now - 8 * 86400000, settled: true });
+  store.create({ id: running, createdAt: now - 8 * 86400000 });
+  fs.writeFileSync(store.file(old) + '.log', 'old'); store.prune(now);
+  assert.equal(fs.existsSync(store.file(old)), false); assert.equal(fs.existsSync(store.file(old) + '.log'), false);
+  assert.equal(fs.existsSync(store.file(running)), true);
+});
+
+test('concurrent reader process cannot break four hundred receipt replacements', async t => {
+  const store = receipts(t), id = randomUUID(); store.create({ id, createdAt: Date.now() });
+  const code = `const fs=require('node:fs'); const file=process.argv[1];
+    const watcher=fs.watch(require('node:path').dirname(file),()=>{fs.readFile(file,()=>{});});
+    process.on('message',()=>{watcher.close();process.disconnect();});process.send('ready');`;
+  const reader = spawn(process.execPath, ['-e', code, store.file(id)], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], windowsHide: true });
+  const closed = once(reader, 'close'); t.after(() => { if (reader.exitCode === null) reader.kill(); });
+  await once(reader, 'message');
+  try {
+    for (let index = 0; index < 400; index++) await store.update(id, { index });
+    assert.equal(store.read(id).index, 399);
+  } finally { reader.send('stop'); await closed; }
+});
+
+test('receipt write failures cannot prevent the signed start and end events', async t => {
+  const store = receipts(t), id = randomUUID(), filename = path.resolve(__dirname, '../integration/dispatch.cjs');
+  const { Module, createRequire } = require('node:module'), { PassThrough } = require('node:stream');
+  const realRequire = createRequire(filename), loaded = new Module(filename, module), events = [], attempts = [];
+  loaded.filename = filename; loaded.paths = module.paths;
+  const bootstrap = path.join(store.directory, 'bootstrap.json'), brief = path.join(store.directory, 'brief.md');
+  fs.writeFileSync(brief, 'Synthetic receipt failure'); fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: 'synthetic-pipe', projectId: 'synthetic', sessionKey: 'synthetic-key' }));
+  loaded.require = name => {
+    if (name.replaceAll('\\', '/').endsWith('/features/team/team.cjs')) return { ...realRequire(name), projectTeam: () => null };
+    if (name.endsWith('dispatch-outbox.cjs')) return { ...realRequire(name), DetachedRuns: class extends DetachedRuns {
+      update(runId, changes) {
+        if (changes.startedLine || changes.endedLine) { attempts.push(changes); throw Object.assign(new Error('Synthetic locked receipt'), { code: 'EPERM' }); }
+        return super.update(runId, changes);
+      }
+    } };
+    if (name === 'node:net') return {
+      createServer: () => { const server = new EventEmitter(); server.listen = (_port, _host, callback) => queueMicrotask(callback); server.address = () => ({ port: 123 }); server.close = callback => callback(); return server; },
+      connect: () => { const socket = new EventEmitter(); socket.setTimeout = () => {}; socket.destroy = () => socket.emit('close');
+        socket.end = (bytes, callback) => { events.push(JSON.parse(bytes)); callback(); socket.emit('close'); }; queueMicrotask(() => socket.emit('connect')); return socket; },
+    };
+    return realRequire(name);
+  };
+  loaded._compile(fs.readFileSync(filename, 'utf8'), filename);
+  store.create({ id, source: 'dispatch', createdAt: Date.now(), argv: ['claude', '--role', 'review', '--title', 'Synthetic failure', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', store.directory, '--brief', brief, '--out', path.join(store.directory, 'answer.md')] });
+  const code = await loaded.exports.runDetached(store.file(id), {
+    env: { PATH: '', HOME: store.directory, USERPROFILE: store.directory, CODEX_HOME: path.join(store.directory, 'codex'), CLAUDE_CONFIG_DIR: path.join(store.directory, 'claude'), AGENTRIX_BOOTSTRAP: bootstrap },
+    resolveExecutable: () => ({ file: 'synthetic-worker', args: [] }), launch: () => {
+      const child = new EventEmitter(); child.pid = 123; child.exitCode = null; child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+      child.stdin.once('finish', () => queueMicrotask(() => {
+        child.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', session_id: id, model: 'claude-sonnet-5-5', effort: 'high', fast_mode: false }) + '\n');
+        child.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', session_id: id, result: 'done' }) + '\n');
+        child.stdout.end(); child.stderr.end(); child.exitCode = 0; child.emit('exit', 0); child.emit('close', 0, null);
+      })); return child;
+    },
+  });
+  assert.equal(code, 0); assert.equal(events.filter(event => event.type === 'dispatch-start').length, 1);
+  assert.equal(events.filter(event => event.type === 'dispatch-end').length, 1); assert.equal(attempts.length, 2);
+  assert.equal(store.read(id).settled, true);
+});
+
 function receipts(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-detach-receipts-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -61,10 +215,10 @@ test('receipt replacement wakes wait and each ended line is printed only once', 
   let inspect, text = '', registered;
   const ready = new Promise(resolve => { registered = resolve; });
   const waiting = waitDetached({ ids, timeout: 10 }, { store, stdout: { write: value => { text += value; } },
-    observe: check => new Promise(resolve => { inspect = () => { if (check()) resolve(true); }; registered(); inspect(); }) });
+    observe: check => new Promise(resolve => { inspect = async () => { if (await check()) resolve(true); }; registered(); void inspect(); }) });
   await ready;
-  store.update(ids[1], { settled: true, endedLine: `[dispatch] ended ${ids[1]} · exit 0 reason exit` }); inspect(); inspect();
-  store.update(ids[0], { settled: true, endedLine: `[dispatch] ended ${ids[0]} · exit 0 reason exit` }); inspect();
+  await store.update(ids[1], { settled: true, endedLine: `[dispatch] ended ${ids[1]} · exit 0 reason exit` }); await inspect(); await inspect();
+  await store.update(ids[0], { settled: true, endedLine: `[dispatch] ended ${ids[0]} · exit 0 reason exit` }); await inspect();
   assert.equal(await waiting, 0);
   assert.equal(text.split('[dispatch] ended ').length, 3);
   assert.ok(text.indexOf(ids[1]) < text.indexOf(ids[0]));
@@ -82,7 +236,7 @@ test('detached helper uses an independent process group, file stdio and the orig
     const id = path.basename(argv.at(-1), '.json'), child = new EventEmitter();
     launched = store.read(id); assert.ok(!launched.argv.includes('--detach'));
     child.unref = () => {}; child.kill = () => assert.fail('A confirmed detached helper must survive');
-    queueMicrotask(() => { store.update(id, { admitted: true, startedLine: `[dispatch] started ${id} claude model synthetic · pid 123 session synthetic` }); child.emit('spawn'); });
+    queueMicrotask(() => { child.emit('spawn'); void store.update(id, { admitted: true, startedLine: `[dispatch] started ${id} claude model synthetic · pid 123 session synthetic` }); });
     return child;
   } });
   assert.equal(result, 0); assert.match(text, new RegExp(`started ${launched.id} .*session synthetic`));

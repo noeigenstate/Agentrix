@@ -554,42 +554,66 @@ function detachedRuns(cwd, create = false) {
   const team = projectTeam(cwd, create);
   // Standalone, non-Git helpers still need receipts that a later invocation can locate.
   const key = createHmac('sha256', 'agentrix-detached-directory').update(fs.realpathSync(cwd)).digest('hex');
-  return new DetachedRuns(path.join(team?.directory || path.join(tmpdir(), 'agentrix-dispatch', key), 'detached'));
+  if (team) return new DetachedRuns(path.join(team.directory, 'detached'));
+  const temporary = fs.realpathSync(tmpdir()), owner = typeof process.getuid === 'function' ? process.getuid() : fs.statSync(temporary).uid;
+  const parents = ['agentrix-dispatch', key, 'detached'];
+  let folder = temporary;
+  for (const name of parents) {
+    folder = path.join(folder, name);
+    if (create) { try { fs.mkdirSync(folder, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; } }
+    const stat = fs.lstatSync(folder, { throwIfNoEntry: false });
+    if (!stat) break;
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== owner
+      || process.platform !== 'win32' && (stat.mode & 0o077)) throw new Error('Unsafe standalone receipt directory');
+  }
+  return new DetachedRuns(path.join(temporary, ...parents));
 }
 
 async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch' } = {}) {
   const options = argumentsOf(argv);
   store ||= detachedRuns(options.cwd, true);
   const id = randomUUID(), file = store.file(id);
-  store.create({ id, argv: argv.filter(arg => arg !== '--detach'), source, cwd: options.cwd, out: options.out, createdAt: Date.now() });
+  const saved = argv.filter(arg => arg !== '--detach');
+  saved[saved.indexOf('--cwd') + 1] = options.cwd;
+  store.create({ id, argv: saved, source, cwd: options.cwd, out: options.out, createdAt: Date.now() });
+  try { store.prune(); } catch { /* Old receipt cleanup never prevents a new launch. */ }
   const descriptor = fs.openSync(file + '.log', 'ax', 0o600);
-  let child;
+  let child, exit;
+  const exited = new Promise(resolve => { exit = resolve; }), controller = new AbortController();
   try {
     // The child repeats the complete normal admission path; no model starts before its gates pass.
     const script = 'require(process.argv[1]).runDetached(process.argv[2]).then(code => { process.exitCode = code; }).catch(error => { console.error(error.message); process.exitCode = 1; });';
     child = launch(process.execPath, ['-e', script, __filename, file], {
       cwd: options.cwd, env, detached: true, windowsHide: true, stdio: ['ignore', descriptor, descriptor],
     });
+    child.once('exit', (code, signal) => exit({ code, signal }));
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
   } catch (error) {
-    store.update(id, { settled: true, exitCode: 1 });
+    await store.update(id, { settled: true, exitCode: 1 }).catch(() => {});
     stdout.write(`[dispatch] failed to start ${id}: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`);
     return 1;
   } finally { fs.closeSync(descriptor); }
-  const entry = await store.observe(() => {
+  const observed = store.observe(() => {
     const current = store.read(id);
-    return current.startedLine || current.settled ? current : undefined;
-  }, timeout);
+    return current?.startedLine || current?.settled ? current : undefined;
+  }, timeout, { signal: controller.signal });
+  let failure;
+  const entry = await Promise.race([observed, exited.then(result => {
+    failure = result; return null;
+  })]);
+  controller.abort();
   const current = entry || store.read(id);
-  if (current.startedLine) { stdout.write(current.startedLine + '\n'); return 0; }
-  if (current.settled) {
+  if (current?.startedLine) { if (store.claimStart(id)) stdout.write(current.startedLine + '\n'); return 0; }
+  if (failure && !current?.settled) await store.update(id, { settled: true, exitCode: failure.code || 1 }).catch(() => {});
+  if (current?.settled || failure) {
     stdout.write((current.failedLine || `[dispatch] failed to start ${id}: helper ended before confirmation`) + '\n');
     if (current.endedLine) stdout.write(current.endedLine + '\n');
     return 1;
   }
-  if (!current.admitted) {
+  if (!current?.admitted) {
     child.kill();
+    await store.update(id, { settled: true, exitCode: 1 }).catch(() => {});
     stdout.write(`[dispatch] failed to start ${id}: admission not confirmed within 60 s\n`);
     return 1;
   }
@@ -600,30 +624,60 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
 async function runDetached(file, deps = {}) {
   const store = new DetachedRuns(path.dirname(file)), id = path.basename(file, '.json'), entry = store.read(id);
   if (entry.helperPid || entry.settled || !Array.isArray(entry.argv) || entry.argv.includes('--detach')) throw new Error('Invalid detached launch');
-  store.update(id, { helperPid: process.pid });
+  // A per-run socket answers with a nonce: PID existence alone cannot distinguish a reused PID.
+  const token = randomUUID(), server = net.createServer(socket => {
+    socket.on('error', () => {}); socket.setTimeout(1000, () => socket.destroy()); socket.end(token);
+  });
+  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
+  let pending = Promise.resolve(), warned = false;
+  const receipt = changes => {
+    pending = Promise.resolve().then(() => store.update(id, changes)).catch(error => {
+      if (!warned) { warned = true; try { process.stderr.write(`[dispatch] receipt unavailable ${id}: ${error.code || 'write_error'}\n`); } catch {} }
+    });
+    return pending;
+  };
+  await receipt({ helperPid: process.pid, helperStartedAt: Date.now() - Math.floor(process.uptime() * 1000), lease: { port: server.address().port, token } });
   const stdout = { write(text) {
-    process.stdout.write(text);
+    try { process.stdout.write(text); } catch { /* Planner receipts cannot interrupt signed events or worker cleanup. */ }
     const line = String(text).trimEnd(), changes = { activityAt: Date.now() };
     if (line.startsWith(`[dispatch] started ${id} `)) changes.startedLine = line;
     if (line.startsWith(`[dispatch] failed to start ${id}:`)) changes.failedLine = line;
     if (line.startsWith(`[dispatch] ended ${id} `)) changes.endedLine = line;
-    store.update(id, changes);
+    void receipt(changes);
   } };
   let code = 1;
   try {
-    code = await run(entry.argv, { ...deps, stdout, source: entry.source, detached: { id, admitted: () => store.update(id, { admitted: true }) }, startTimeout: 60000 });
+    code = await run(entry.argv, { ...deps, stdout, source: entry.source, detached: { id, admitted: () => receipt({ admitted: true }) }, startTimeout: 60000 });
     return code;
-  } finally { store.update(id, { settled: true, exitCode: code, activityAt: Date.now() }); }
+  } finally {
+    await receipt({ settled: true, exitCode: code, activityAt: Date.now() }); await pending;
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+function helperAlive(pid, entry) {
+  if (!entry.lease) { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } }
+  if (!Number.isInteger(entry.lease.port) || entry.lease.port < 1 || entry.lease.port > 65535 || !runId(entry.lease.token)) return false;
+  return new Promise(resolve => {
+    const socket = net.createConnection({ host: '127.0.0.1', port: entry.lease.port }); let text = '';
+    const finish = alive => { socket.destroy(); resolve(alive); };
+    socket.setTimeout(750, () => finish(null));
+    socket.on('error', error => finish(error.code === 'ECONNREFUSED' || error.code === 'ENOENT' ? false : null));
+    socket.on('data', chunk => { text += chunk; if (text.length >= entry.lease.token.length) finish(text === entry.lease.token); });
+    socket.on('end', () => finish(text === entry.lease.token));
+  });
 }
 
 async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe,
-  alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } } } = {}) {
-  const pending = new Set(options.ids), announced = new Set();
-  const check = () => {
+  alive = helperAlive } = {}) {
+  const pending = new Set(options.ids); let unknown = false;
+  const check = async () => {
     for (const id of pending) {
       const entry = store.read(id);
-      if (entry.startedLine && !announced.has(id)) { stdout.write(entry.startedLine + '\n'); announced.add(id); }
-      const lost = Number.isSafeInteger(entry.helperPid) && entry.helperPid > 0 && !alive(entry.helperPid);
+      if (entry === null) { stdout.write(`[dispatch] unknown run ${id}\n`); pending.delete(id); unknown = true; continue; }
+      if (!entry) continue;
+      if (entry.startedLine && store.claimStart(id)) stdout.write(entry.startedLine + '\n');
+      const lost = !entry.settled && Number.isSafeInteger(entry.helperPid) && entry.helperPid > 0 && await alive(entry.helperPid, entry) === false;
       if (entry.settled || lost) {
         if (entry.failedLine && !entry.startedLine) stdout.write(entry.failedLine + '\n');
         stdout.write((entry.endedLine || `[dispatch] ended ${id} · exit ${entry.exitCode ?? 1} reason error${lost ? ' (helper exited without a final receipt)' : ''}`) + '\n');
@@ -632,10 +686,12 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
     }
     return pending.size ? undefined : true;
   };
+  if (await check()) return unknown ? 1 : 0;
   await (observe || store.observe.bind(store))(check, options.timeout * 1000);
-  if (!pending.size) return 0;
+  if (!pending.size) return unknown ? 1 : 0;
   for (const id of pending) {
     const entry = store.read(id);
+    if (!entry) { stdout.write(`[dispatch] still running ${id} · receipt temporarily unavailable\n`); continue; }
     let activity = entry.activityAt || entry.createdAt;
     try { activity = Math.max(activity, fs.statSync(entry.out + '.log').mtimeMs); } catch {}
     stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}\n`);
@@ -791,8 +847,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     const routing = verdict + (unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '');
     if (!started) {
       started = true;
-      signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
       sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
+      signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${teamLabel()}`);
       for (const fact of inputFacts.values()) send(fact);
       if (heldLimits !== undefined) { reportAccount(heldLimits); heldLimits = undefined; }
     }
@@ -1175,11 +1231,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
       const exitCode = Number.isInteger(result.code) ? (result.code === 0 && (unconfirmed || roundtable && reason !== 'exit') ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
       const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
-      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${scopeRestoreNote}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
+      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${scopeRestoreNote}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();
@@ -1375,10 +1431,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     if (options) {
       const reason = unconfirmed ? 'unconfirmed' : 'error';
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...usage(),
         verdict: routingVerdict(output, declared()), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${teamLabel(true)}${teamEnd(bookkeeping)}${proposalNote()}${interventionNote()} · out ${options.out}`);
     }
     log?.destroy();
     return 1;
