@@ -17,6 +17,16 @@ const AUTHORS: Exclude<SeatId, 'lead'>[] = ['core', 'execution'];
 // Which step of the flow a seat belongs to; the dialog's inner ring lights it while the seat is hovered.
 export const PHASES: Record<string, Phase> = { architect: 'plan', core: 'build', execution: 'build', reviewer: 'review', visual: 'accept' };
 
+// The disc's size (the 900 x 580 stage), and the scale that fits it in the width and in the height left by the rest of the dialog.
+export const STAGE_W = 900, STAGE_H = 580;
+export const sceneScale = (width: number, space: number) => Math.max(0.5, Math.min(1, width / STAGE_W, space / STAGE_H));
+// Where the 更换 menu goes: under its button, else above it, else on the roomier side; it never leaves the viewport, and the model list scrolls inside it (maxHeight).
+export function menuPlacement(anchor: { left: number; top: number; bottom: number }, view: { width: number; height: number }, rows: number): { left: number; top?: number; bottom?: number; maxHeight: number } {
+  const need = Math.min(rows * 32 + 200, view.height - 16), below = view.height - anchor.bottom - 12, above = anchor.top - 12;
+  const left = Math.max(8, Math.min(view.width - 288, Math.round(anchor.left)));
+  const under = { left, top: Math.round(anchor.bottom + 4), maxHeight: Math.max(below, 0) }, over = { left, bottom: Math.round(view.height - anchor.top + 4), maxHeight: Math.max(above, 0) };
+  return need <= below ? under : need <= above ? over : below >= above ? under : over;
+}
 export const familyOf = (model: string): Family => /^(opus|sonnet|haiku|claude-)/.test(model) ? 'claude' : 'codex';
 // The id syntax the dispatch helper takes for --model (integration/dispatch.cjs), at most 160 characters.
 export const MODEL_ID = /^[A-Za-z0-9][\w.:@+/[\]-]*$/;
@@ -33,6 +43,24 @@ export const sameSeat = (a?: Seat, b?: Seat) => !!a && !!b && a.model === b.mode
 export const modelRow = (catalog: SeatModel[], model: string) => catalog.find(row => row.model === model);
 // A model the catalog does not know is not judged unavailable.
 export const isAvailable = (catalog: SeatModel[], model: string) => modelRow(catalog, model)?.available !== false;
+// An agent that is not installed cannot run its models: its rows are greyed with the reason, whatever the list says.
+export const withInstalled = (catalog: SeatModel[], installed: SeatsInfo['installed'] | undefined, reasonOf: (family: Family) => string): SeatModel[] =>
+  catalog.map(row => installed && installed[row.family] === false && row.available ? { ...row, available: false, reason: reasonOf(row.family) } : row);
+// An alias (opus) and the newest listed id of its tier (claude-opus-5-5) are one model; a [1m] or date suffix does not make another.
+const TIER = /^claude-(opus|sonnet|haiku)-(\d+(?:-\d{1,2})*)(?:-\d{8})?$/;
+const bare = (model: string) => model.replace(/\[[^\]]*\]$/, '');
+const versionOf = (model: string) => (TIER.exec(bare(model))?.[2] ?? '').split('-').map(Number);
+const newer = (a: number[], b: number[]) => { for (let at = 0; at < Math.max(a.length, b.length); at++) if ((a[at] ?? 0) !== (b[at] ?? 0)) return (a[at] ?? 0) > (b[at] ?? 0); return false; };
+export function canonicalModel(catalog: SeatModel[], model: string): string {
+  const id = bare(model);
+  if (!/^(opus|sonnet|haiku)$/.test(id)) return id.replace(/-\d{8}$/, '');
+  let best: string | null = null;
+  for (const row of catalog) if (TIER.exec(bare(row.model))?.[1] === id && (!best || newer(versionOf(row.model), versionOf(best)))) best = row.model;
+  return best ? bare(best).replace(/-\d{8}$/, '') : id;
+}
+export const sameModel = (catalog: SeatModel[], a: string, b: string) => a === b || canonicalModel(catalog, a) === canonicalModel(catalog, b);
+// The few alternatives the blocked-reviewer banner names, strongest first, and how many there are in all.
+export const topAlternatives = (alternatives: SeatModel[], max = 3) => ({ shown: [...alternatives].sort((a, b) => b.rank - a.rank).slice(0, max), total: alternatives.length });
 // A typed-in id the catalog does not list: its family comes from the id, its efforts from the family's base list, fast only where Codex can apply it.
 export const customRow = (model: string): SeatModel => {
   const family = familyOf(model);
@@ -106,15 +134,22 @@ export function setFast(map: SeatMap, slot: SlotId, fast: boolean, catalog: Seat
 // The fix is such a model that none of the author seats runs, or null when the author seats themselves must change.
 export function reviewerBlock(map: SeatMap, catalog: SeatModel[]): ReviewerBlock | null {
   const reviewer = map.reviewer;
-  const hit = reviewer ? AUTHORS.filter(id => map[id]?.model === reviewer.model) : [];
+  const hit = reviewer ? AUTHORS.filter(id => map[id] && sameModel(catalog, map[id]!.model, reviewer.model)) : [];
   if (!reviewer || !hit.length) return null;
-  const alternatives = catalog.filter(row => row.available && row.model !== reviewer.model && row.rank >= rankOf(catalog, reviewer.model));
+  // An alias and the id it resolves to are one model, so neither is an alternative to the other, and they count once.
+  const seen = new Set<string>();
+  const alternatives = catalog.filter(row => {
+    const key = canonicalModel(catalog, row.model);
+    if (!row.available || sameModel(catalog, row.model, reviewer.model) || row.rank < rankOf(catalog, reviewer.model) || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   if (!alternatives.length) return null;
-  return { hit, alternatives, fix: alternatives.find(row => AUTHORS.every(id => map[id]?.model !== row.model)) ?? null };
+  return { hit, alternatives, fix: alternatives.find(row => AUTHORS.every(id => !map[id] || !sameModel(catalog, map[id]!.model, row.model))) ?? null };
 }
 // The same reviewer rule when it only warns: the author seats share the reviewer's model but nothing at least as strong is available to change it to.
 export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[]) =>
-  !!map.reviewer && !reviewerBlock(map, catalog) && AUTHORS.some(id => map[id]?.model === map.reviewer?.model);
+  !!map.reviewer && !reviewerBlock(map, catalog) && AUTHORS.some(id => !!map[id] && sameModel(catalog, map[id]!.model, map.reviewer!.model));
 
 // The first refusal main would give for this map, or null: 保存 is disabled on it.
 export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError | null {

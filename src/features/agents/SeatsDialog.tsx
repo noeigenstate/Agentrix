@@ -4,7 +4,7 @@ import { ArrowCounterClockwise, ArrowsClockwise, CheckCircle, ListBullets, Prohi
 import type { SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import {
-  PHASES, ageOf, assignCustom, assignModel, baselineFor, changedCount, changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, lowerLayer, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
+  PHASES, STAGE_W, ageOf, menuPlacement, sceneScale, topAlternatives, withInstalled, assignCustom, assignModel, baselineFor, changedCount, changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, lowerLayer, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
   sameSeat, saveSeats, scopePayload, withSlot, seatOfSlot, setEffort, setFast, slotFamily, slotsOf, startScope, swapSlots, familyOf,
   type Edit, type Phase, type Scope, type SlotId,
 } from './skill-seats';
@@ -14,7 +14,7 @@ import './seats-dialog.css';
 // A seat's 更换 button opens a keyboard menu (model, effort, fast); 座位清单 lists the same seats plainly and takes over on a narrow dialog. Nothing is saved until 保存, and it applies from the next conversation.
 const SEAT_NAMES: Record<SeatId, string> = { lead: '领队', architect: '架构师', core: '核心工程师', execution: '执行工程师', visual: '视觉与验收', lookup: '查找', reviewer: '审查' };
 const PHASE_ARCS: [Phase, string, number][] = [['plan', '规划', -135], ['build', '构建', -45], ['review', '审查', 45], ['accept', '验收', 135]];
-const NARROW = 640, STAGE = 900, TILT = 55;
+const NARROW = 640, TILT = 55;
 const seatName = (id: SeatId) => id in SEAT_NAMES ? t(SEAT_NAMES[id]) : id;
 const slotName = (slot: SlotId) => slot === 'lead.claude' ? `${seatName('lead')} · ${t('Claude 槽')}` : slot === 'lead.codex' ? `${seatName('lead')} · ${t('Codex 槽')}` : seatName(slot);
 const effortLine = (seat: { effort: string; fast?: boolean }) => `${seat.effort}${seat.fast ? ` · ${t('快速')}` : ''}`;
@@ -46,7 +46,7 @@ const ageText = (at: number | null) => {
 };
 
 type Notice = { kind: 'info' | 'ok' | 'error'; text: string };
-type Menu = { slot: SlotId; left: number; top: number };
+type Menu = { slot: SlotId; left: number; top?: number; bottom?: number; maxHeight: number };
 type Custom = { text: string; error: string };
 
 export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { info: SeatsInfo; projectId?: string; terminalId?: string; onClose: () => void }) {
@@ -54,7 +54,8 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   const [draft, setDraft] = useState<SeatMap | null>(null);
   const [discarding, setDiscarding] = useState(false);
   const [listMode, setListMode] = useState(false);
-  const [width, setWidth] = useState(STAGE);
+  const [width, setWidth] = useState(STAGE_W);
+  const [space, setSpace] = useState(10000);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [phase, setPhase] = useState<Phase | null>(null);
   const [landed, setLanded] = useState<SlotId | null>(null);
@@ -67,10 +68,10 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   const [custom, setCustom] = useState<Custom | null>(null);
   const [moved, setMoved] = useState(() => given.defaultsMoved ?? []);
   const [saving, setSaving] = useState(false);
-  const dialog = useRef<HTMLDivElement>(null), body = useRef<HTMLDivElement>(null), menuBox = useRef<HTMLDivElement>(null), opener = useRef<HTMLElement | null>(null);
+  const dialog = useRef<HTMLDivElement>(null), body = useRef<HTMLDivElement>(null), head = useRef<HTMLElement>(null), strip = useRef<HTMLElement>(null), dock = useRef<HTMLDivElement>(null), menuBox = useRef<HTMLDivElement>(null), opener = useRef<HTMLElement | null>(null);
   // A refresh answers with a newer record until the pane loads the next one.
   const info = refreshed ?? given;
-  const { catalog, seats } = info, lower = lowerLayer(info, scope), baseline = baselineFor(info, scope), working = draft ?? baseline;
+  const { seats } = info, catalog = withInstalled(info.catalog, info.installed, family => t('{agent} 未安装', { agent: family === 'codex' ? 'Codex' : 'Claude' })), lower = lowerLayer(info, scope), baseline = baselineFor(info, scope), working = draft ?? baseline;
   const count = changedCount(seats, working, baseline), dirty = count > 0, block = reviewerBlock(working, catalog), refusal = firstRefusal(working, catalog);
   const narrow = width < NARROW, list = listMode || narrow;
   const slots = seats.flatMap(slotsOf);
@@ -85,11 +86,17 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   useEffect(() => {
     const element = body.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => setWidth(element.clientWidth));
-    setWidth(element.clientWidth);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
+    // The stage scales to what is left of the window after the header, the strip and the tray (all measured), so the whole dialog fits without scrolling.
+    const measure = () => {
+      setWidth(element.clientWidth);
+      setSpace(window.innerHeight - 32 - (head.current?.offsetHeight ?? 0) - 74 - (strip.current?.offsetHeight ?? 0) - (dock.current?.offsetHeight ?? 0));
+    };
+    const observer = new ResizeObserver(measure);
+    measure();
+    for (const target of [element, strip.current, dock.current]) if (target) observer.observe(target);
+    window.addEventListener('resize', measure);
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, [list]);
   useEffect(() => {
     if (!landed) return;
     const timer = setTimeout(() => setLanded(null), 900);
@@ -178,7 +185,8 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     const box = button.getBoundingClientRect();
     opener.current = button;
     setCustom(null);
-    setMenu({ slot, left: Math.max(8, Math.min(window.innerWidth - 288, Math.round(box.left))), top: Math.max(8, Math.min(window.innerHeight - 440, Math.round(box.bottom + 4))) });
+    const family = slotFamily(slot), rows = catalog.filter(row => !family || row.family === family).length;
+    setMenu({ slot, ...menuPlacement({ left: box.left, top: box.top, bottom: box.bottom }, { width: window.innerWidth, height: window.innerHeight }, rows) });
   };
   const closeMenu = () => { setMenu(null); setCustom(null); opener.current?.focus({ preventScroll: true }); };
   const pick = (slot: SlotId, model: string) => { assign(slot, model); closeMenu(); };
@@ -219,14 +227,15 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     const issues = sameSeat(seat, getSlot(baseline, slot)) ? issuesOf(info, slot) : [];
     if (issues.length) return { kind: 'warn', short: t('已调整 · {substitute}', { substitute: issues[0].substitute }), title: issues.map(issueText).join('；') };
     if (isAvailable(catalog, seat.model)) return null;
-    const fallback = fallbackFor(info, slot, working), reason = modelRow(catalog, seat.model)?.reason ?? '';
+    const fallback = fallbackFor({ ...info, catalog }, slot, working), reason = modelRow(catalog, seat.model)?.reason ?? '';
     if (fallback) return { kind: 'warn', short: t('回退 {model}', { model: label(fallback.model) }), title: t('{model}（{reason}）；实际使用 {fallback}', { model: label(seat.model), reason, fallback: label(fallback.model) }) };
     return { kind: 'warn', short: t('暂不使用'), title: `${label(seat.model)}${reason ? `（${reason}）` : ''}` };
   };
   function blockMessage() {
     const model = label(working.reviewer?.model ?? '');
+    const { shown, total } = topAlternatives(block?.alternatives ?? []), names = shown.map(row => row.label).join('、');
     return t('审查（{model}）与{seats}使用同一模型，账户里还有不弱于它的 {others}，所以不能保存。', {
-      model, seats: block?.hit.map(seatName).join('、') ?? '', others: block?.alternatives.map(row => row.label).join('、') ?? '' });
+      model, seats: block?.hit.map(seatName).join('、') ?? '', others: total > shown.length ? t('{names} 等 {count} 个', { names, count: total }) : names });
   }
   const stateMark = (state: NonNullable<ReturnType<typeof slotState>>) => <span className={`seats-state is-${state.kind}`} title={state.title}>
     {state.kind === 'bad' ? <Prohibit size={14} aria-hidden="true" /> : <Warning size={14} aria-hidden="true" />}{state.short}</span>;
@@ -235,13 +244,13 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     const row = modelRow(catalog, model), off = !isAvailable(catalog, model);
     return <span className={`seats-gem${off ? ' is-off' : ''}${landing && landed ? ' is-landing' : ''}`} data-family={row?.family ?? familyOf(model)} aria-disabled={off || undefined}
       title={off ? t('{model}（{reason}）不能放入座位', { model: label(model), reason: row?.reason ?? '' }) : t('{model} · 拖到座位上', { model: label(model) })}
-      onPointerDown={event => startDrag(event, model, from)}><i className="seats-mk" />{label(model)}{off ? <small>{row?.reason}</small> : row?.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
+      onPointerDown={event => startDrag(event, model, from)}><i className="seats-mk" data-family={row?.family ?? familyOf(model)} />{label(model)}{off ? <small>{row?.reason}</small> : row?.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
   };
   const changeButton = (slot: SlotId) => <button type="button" className="seats-btn is-small" data-pick={slot} aria-haspopup="menu" aria-expanded={menu?.slot === slot}
     aria-label={t('{seat}：更换模型、强度、快速', { seat: slotName(slot) })} onClick={event => openMenu(slot, event.currentTarget)}>{t('更换')}</button>;
 
   const tile = (id: SeatId, index: number) => {
-    const multi = id === 'lead', [x, y] = id === 'lead' ? [0, -282] : point(-90 + index * 360 / seats.length, 270), w = multi ? 270 : 164, h = multi ? 124 : 108;
+    const multi = id === 'lead', [x, y] = id === 'lead' ? [0, -282] : point(-90 + index * 360 / seats.length, 270), w = multi ? 400 : 164, h = multi ? 124 : 108;
     const blocked = id === 'reviewer' && !!block, ripple = landed && slotsOf(id).includes(landed);
     const style = { '--w': `${w}px`, '--x': `${x}px`, '--y': `${y}px`, '--tilt': `${TILT}deg` } as CSSProperties;
     return <div key={id} className={`seats-tile${slotsOf(id).includes(over as SlotId) ? ' is-over' : ''}`} style={style} data-seat={id}
@@ -264,16 +273,16 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     </div>;
   };
 
-  const scale = Math.max(0.7, Math.min(1, width / STAGE));
-  const disc = <div className="seats-scene" style={{ zoom: scale } as CSSProperties}>
-    <div className="seats-stage" style={{ '--tilt': `${TILT}deg` } as CSSProperties}><div className="seats-float"><div className="seats-plane">
+  const scale = sceneScale(width - 48, space);
+  const disc = <div className="seats-scene">
+    <div className="seats-zoom" style={{ zoom: scale } as CSSProperties}><div className="seats-stage" style={{ '--tilt': `${TILT}deg` } as CSSProperties}><div className="seats-float"><div className="seats-plane">
       <i className="seats-gshadow" /><i className="seats-glow" />{UNDER}<i className="seats-top" /><i className="seats-track" /><i className="seats-hole" />
       <svg className="seats-flow" viewBox="0 0 284 284" aria-hidden="true">{PHASE_ARCS.map(([key, , center]) => <path key={key} className={phase === key ? 'is-lit' : ''} d={arc(center, 118)} />)}</svg>
       {PHASE_ARCS.map(([key, name, center]) => { const [x, y] = point(center, 118);
         return <span key={key} className={`seats-phase${phase === key ? ' is-lit' : ''}`} style={{ '--x': `${x}px`, '--y': `${y}px`, '--tilt': `${TILT}deg` } as CSSProperties}>{t(name)}</span>; })}
       {seats.map(tile)}
-    </div></div></div>
-    <div className="seats-dock" aria-label={t('模型盘')}><span className="seats-dock-title" title={t('拖到座位上')}>{t('模型盘')}</span>{catalog.map(row => <span key={row.model}>{token(row.model, null)}</span>)}</div>
+    </div></div></div></div>
+    <div ref={dock} className="seats-dock" aria-label={t('模型盘')}><span className="seats-dock-title" title={t('拖到座位上')}>{t('模型盘')}</span>{catalog.map(row => <span key={row.model}>{token(row.model, null)}</span>)}</div>
   </div>;
 
   const roster = <div className="seats-roster" role="list" aria-label={t('座位清单')}>{slots.map(slot => {
@@ -298,7 +307,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
 
   return createPortal(<div className="seats-overlay" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
     <div ref={dialog} className="seats-dialog" role="dialog" aria-modal="true" aria-labelledby="seats-title" tabIndex={-1} onKeyDown={keys}>
-      <header className="seats-head">
+      <header ref={head} className="seats-head">
         <div><h2 id="seats-title">{t('模型路由')}</h2><p>{t('每个座位放哪个模型由你定。把模型拖到座位上，或点座位上的「更换」。')}</p></div>
         <div className="seats-head-actions">
           <button type="button" className="seats-btn" data-refresh disabled={refreshing === 'manual'} aria-label={t('刷新模型列表')} onClick={() => { void refresh(); }}><ArrowsClockwise size={14} aria-hidden="true" />{t('刷新')}</button>
@@ -307,7 +316,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
         </div>
       </header>
       <div ref={body} className="seats-body">
-        <section className="seats-strip" aria-label={t('下一次对话生效')}>
+        <section ref={strip} className="seats-strip" aria-label={t('下一次对话生效')}>
           <div className="seats-strip-row">
             <span className="seats-effective"><i className={`seats-dot ${block ? 'is-bad' : dirty ? 'is-on' : 'is-ok'}`} />{t('下一次对话生效')}</span>
             <span>{block ? t('有座位被阻止，不能保存') : dirty ? t('草稿未保存 · 已改 {count} 个座位', { count }) : t('没有改动')}</span>
@@ -326,14 +335,15 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
           {refusal && !block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
           <div className="seats-strip-row"><span>{t('本次对话（只读）')}</span>
             {seatTags ? <div className="seats-nows">{seatTags}</div> : <span>{terminalId ? t('这个终端还没有运行中的对话') : t('没有选定终端')}</span>}</div>
-          {discarding && dirty && <div className="seats-banner" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" /><span>{t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count })}</span><span className="seats-grow" />
+          {discarding && dirty && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" /><span>{t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count })}</span><span className="seats-grow" />
             <button ref={keepButton} type="button" className="seats-btn" data-keep onClick={() => setDiscarding(false)}>{t('继续编辑')}</button><button type="button" className="seats-btn" data-discard onClick={onClose}>{t('放弃修改')}</button></div>}
           <p className="seats-notice" role="status" aria-live="polite" data-kind={notice?.kind}>{notice?.kind === 'ok' && <CheckCircle size={14} aria-hidden="true" />}{notice?.text}</p>
         </section>
         {list ? roster : disc}
       </div>
-      {menu && menuSeat && <div ref={menuBox} className="seats-menu" role="menu" aria-label={t('{seat}：选择模型', { seat: slotName(menu.slot) })} style={{ left: menu.left, top: menu.top }} onKeyDown={menuKeys}>
+      {menu && menuSeat && <div ref={menuBox} className="seats-menu" role="menu" aria-label={t('{seat}：选择模型', { seat: slotName(menu.slot) })} style={{ left: menu.left, top: menu.top, bottom: menu.bottom, maxHeight: menu.maxHeight }} onKeyDown={menuKeys}>
         <h3>{t('{seat}：选择模型', { seat: slotName(menu.slot) })}</h3>
+        <div className="seats-menu-list">
         {menuRows.map(row => <button key={row.model} type="button" role="menuitemradio" className="seats-menu-item" aria-checked={row.model === menuSeat.model} data-assign={row.model} disabled={!row.available} onClick={() => pick(menu.slot, row.model)}>
           <i className="seats-mk" data-family={row.family} />{row.label}{!row.available ? <small>{row.reason}</small> : row.listed === false ? <small data-unlisted>{t('不在最新列表')}</small> : row.model === menuSeat.model && <small>{t('当前')}</small>}</button>)}
         {custom ? <div className="seats-menu-custom">
@@ -342,6 +352,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
           <button type="button" className="seats-btn is-small" data-custom-apply onClick={() => submitCustom(menu.slot)}>{t('使用')}</button>
           {custom.error && <small className="seats-menu-error" role="alert" data-custom-error>{custom.error}</small>}
         </div> : <button type="button" role="menuitem" className="seats-menu-item" data-custom onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
+        </div>
         <div className="seats-menu-settings">
           <select data-effort={menu.slot} aria-label={t('{seat}的推理强度', { seat: slotName(menu.slot) })} value={menuSeat.effort} onChange={event => edit(setEffort(working, menu.slot, event.target.value, catalog))}>
             {(menuModel?.efforts ?? [menuSeat.effort]).map(effort => <option key={effort} value={effort}>{t('强度 {effort}', { effort })}</option>)}</select>
@@ -351,7 +362,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
             : menuModel.family === 'claude' && <small className="seats-menu-note" data-fast-note>{t(FAST_BILLING)}</small>}
         </div>
       </div>}
-      {ghost && <span className="seats-ghost" style={{ left: ghost.x, top: ghost.y }} data-family={modelRow(catalog, ghost.model)?.family}><i className="seats-mk" />{label(ghost.model)}</span>}
+      {ghost && <span className="seats-ghost" style={{ left: ghost.x, top: ghost.y }} data-family={modelRow(catalog, ghost.model)?.family}><i className="seats-mk" data-family={modelRow(catalog, ghost.model)?.family ?? familyOf(ghost.model)} />{label(ghost.model)}</span>}
     </div>
   </div>, document.body);
 }
