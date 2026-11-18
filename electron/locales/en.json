@@ -3377,5 +3377,7 @@
   "模型名": "Model name",
   "模型名，例如 gpt-6.3-sol": "Model name, for example gpt-6.3-sol",
   "使用": "Use",
-  "其他模型…": "Other model…"
+  "其他模型…": "Other model…",
+  "{agent} 未安装": "{agent} is not installed",
+  "{names} 等 {count} 个": "{names} and others ({count} in all)"
 }
