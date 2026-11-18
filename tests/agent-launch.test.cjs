@@ -13,20 +13,27 @@ test('a new project starts each agent fresh, or resumes the conversation found f
   assert.throws(() => launchCommand('codex', { id: '01a12122-af65-73b0-88ef-19fd79292360', at: 1 }), /app-server/);
 });
 
-test('fresh Claude terminal launches carry the lead seat flags while resume carries no seat flags', () => {
+test('Claude launch commands leave all seat flags to the terminal wrappers', () => {
   const seat = { model: 'sonnet', effort: 'xhigh' };
-  assert.equal(launchCommand('claude', null, seat), 'claude --model "sonnet" --effort xhigh\r');
+  assert.equal(launchCommand('claude', null, seat), 'claude\r');
   assert.equal(launchCommand('claude', { id: 'saved' }, seat), 'claude --resume saved\r');
-  assert.throws(() => launchCommand('claude', null, { model: 'opus;echo', effort: 'high' }), /model/);
 });
 
-test('validated Claude fast seats never add a second settings flag to the terminal wrapper', () => {
-  const seat = { model: 'claude-opus-6-0', effort: 'adaptive', fast: true }, options = { fastSettingsFile: 'C:\\Synthetic Data\\claude-fast-on.json' };
-  assert.equal(launchCommand('claude', null, seat, options), 'claude --agentrix-seat-fast --model "claude-opus-6-0" --effort adaptive\r');
-  assert.equal(launchCommand('claude', { id: 'saved' }, seat, options), 'claude --resume saved\r');
-  assert.equal(launchCommand('claude', null, seat), 'claude --agentrix-seat-fast --model "claude-opus-6-0" --effort adaptive\r');
-  assert.ok(!launchCommand('claude', null, { ...seat, fast: false }, options).includes('--settings'));
-  assert.throws(() => launchCommand('claude', null, { ...seat, effort: 'high; command' }, options), /invalid-effort/);
+test('bootstrap writes and refreshes the three lead values for fresh and resumed terminal launches', t => {
+  const { writeBootstrap, updateBootstrapLead, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-lead-')), file = path.join(root, 'bootstrap.json');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const lead = { model: 'claude-opus-5[1m]', effort: 'adaptive', fast: true };
+  writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead });
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-5[1m]\nadaptive\n1\n');
+  const bytes = fs.readFileSync(file, 'utf8');
+  updateBootstrapLead(file, { model: 'sonnet', effort: 'high', fast: false });
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'sonnet\nhigh\n0\n');
+  assert.throws(() => updateBootstrapLead(file, { ...lead, model: 'invalid\nline' }), /Invalid lead seat/);
+  updateBootstrapLead(file, null);
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), '');
+  assert.equal(fs.readFileSync(file, 'utf8'), bytes);
+  removeBootstrap(file); assert.equal(fs.existsSync(file + '.lead'), false);
 });
 
 function nativeSeatStart(skills) {
@@ -42,20 +49,19 @@ function nativeSeatStart(skills) {
   return (agent, resume = false, launch = null) => context.nativeSpec('terminal', agent, resume, false, launch);
 }
 
-test('native fresh launches take lead options, explicit launch choices win and resume ignores seat changes', () => {
-  const { leadOptions } = require('../electron/features/skills/model-seats.cjs');
-  const seats = { lead: { codex: { model: 'gpt-next', effort: 'medium', fast: false }, claude: { model: 'sonnet', effort: 'max' } } };
-  const start = nativeSeatStart({ leadOptions: (_project, agent, explicit) => leadOptions(seats, agent, explicit) });
+test('native starts and resumes take the selected family lead and ignore obsolete launch choices', () => {
+  const seats = { codex: { model: 'gpt-next', effort: 'medium', fast: false }, claude: { model: 'sonnet', effort: 'max' } };
+  const start = nativeSeatStart({ leadOptions: (_project, agent) => seats[agent] });
   const fresh = start('codex'); assert.equal(fresh.model, 'gpt-next'); assert.equal(fresh.effort, 'medium'); assert.equal(fresh.fast, false);
   const claude = start('claude'); assert.equal(claude.model, 'sonnet'); assert.equal(claude.effort, 'max'); assert.equal(claude.fast, false);
   const explicit = start('codex', false, { model: 'gpt-explicit', effort: 'low', fast: true });
-  assert.equal(explicit.model, 'gpt-explicit'); assert.equal(explicit.effort, 'low'); assert.equal(explicit.fast, true);
-  const resume = start('codex', true); assert.equal(resume.providerSessionId, 'saved'); assert.equal(resume.model, null);
+  assert.equal(explicit.model, 'gpt-next'); assert.equal(explicit.effort, 'medium'); assert.equal(explicit.fast, false);
+  const resume = start('codex', true); assert.equal(resume.providerSessionId, 'saved'); assert.equal(resume.model, 'gpt-next');
   const pendingHistory = start('claude', true);
-  assert.equal(pendingHistory.providerSessionId, null); assert.equal(pendingHistory.model, null);
+  assert.equal(pendingHistory.providerSessionId, null); assert.equal(pendingHistory.model, 'sonnet');
 });
 
-test('unchosen lead slots preserve terminal and native defaults even when only lookup was chosen', t => {
+test('team defaults and the other-family lead are always present until routing is disabled', t => {
   const { SkillsStore } = require('../electron/features/skills/store.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-seat-lead-'));
   const project = { id: 'p', name: 'Isolated', path: path.join(root, 'project') }; fs.mkdirSync(project.path);
@@ -63,41 +69,38 @@ test('unchosen lead slots preserve terminal and native defaults even when only l
     getProjects: () => [project], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
   t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const start = nativeSeatStart({ leadOptions: store.leadOptions.bind(store) });
-  const unchanged = () => {
-    assert.deepEqual(store.leadOptions('p', 'claude'), {}); assert.deepEqual(store.leadOptions('p', 'codex'), {});
-    assert.equal(launchCommand('claude', null, store.leadOptions('p', 'claude')), 'claude\r');
-    assert.equal(start('claude').model, null); assert.equal(start('codex').model, null);
-  };
-  unchanged();
-  assert.deepEqual(store.setSeats('global', null, { lookup: { model: 'sonnet', effort: 'high' } }), { ok: true }); unchanged();
+  assert.equal(start('claude').model, 'opus'); assert.equal(start('codex').model, 'gpt-6.1-sol');
   const claude = { model: 'sonnet', effort: 'max' };
-  assert.deepEqual(store.setSeats('global', null, { lead: { claude } }), { ok: true });
-  assert.deepEqual(store.leadOptions('p', 'claude'), claude); assert.deepEqual(store.leadOptions('p', 'codex'), {});
+  assert.deepEqual(store.setSeats('global', null, { orchestrator: claude }), { ok: true });
+  assert.deepEqual(store.leadOptions('p', 'claude'), claude);
   const codex = { model: 'gpt-6.1-sol', effort: 'low', fast: false };
-  assert.deepEqual(store.setSeats('project', 'p', { lead: { codex } }), { ok: true });
-  assert.deepEqual(store.leadOptions('p', 'claude'), claude); assert.deepEqual(store.leadOptions('p', 'codex'), codex);
+  assert.deepEqual(store.setSeats('project', 'p', { orchestrator: codex }), { ok: true });
+  assert.deepEqual(store.leadOptions('p', 'claude'), { model: 'opus', effort: 'high' });
+  assert.deepEqual(store.leadOptions('p', 'codex'), codex);
+  store.setOptions('builtin:model-routing', { enabled: false });
+  assert.equal(start('claude').model, null); assert.equal(start('codex', true).effort, null);
 });
 
-test('latest and deferred Codex resumes never inherit lead seat model effort or fast choices', () => {
+test('latest and deferred Codex resumes take the current seat', () => {
   let seatReads = 0;
   const start = nativeSeatStart({ leadOptions: () => { seatReads++; return { model: 'gpt-seat', effort: 'xhigh', fast: false }; } });
   for (const [resume, launch] of [[true, { resume: true, latest: true }], [false, { resume: true, latest: true }], [true, null]]) {
     const spec = start('codex', resume, launch);
-    assert.equal(spec.model, null); assert.equal(spec.effort, 'high'); assert.equal(spec.fast, true);
-    assert.equal(spec.preserveRunOptions, true, 'the app-server must keep the resumed thread options too');
+    assert.equal(spec.model, 'gpt-seat'); assert.equal(spec.effort, 'xhigh'); assert.equal(spec.fast, false);
+    assert.equal(Object.hasOwn(spec, 'preserveRunOptions'), false);
   }
   const explicit = start('codex', true, { resume: true, latest: true, model: 'gpt-owner', effort: 'low', fast: false });
-  assert.equal(explicit.model, 'gpt-owner'); assert.equal(explicit.effort, 'low'); assert.equal(explicit.fast, false);
-  assert.notEqual(explicit.preserveRunOptions, true); assert.equal(seatReads, 0);
+  assert.equal(explicit.model, 'gpt-seat'); assert.equal(explicit.effort, 'xhigh'); assert.equal(explicit.fast, false);
+  assert.equal(seatReads, 4);
 });
 
-test('a Claude resume resolved from folder history does not acquire the new lead seat model', () => {
+test('a Claude resume takes the lead seat even before folder history resolves its identity', () => {
   const start = nativeSeatStart({ leadOptions: () => ({ model: 'sonnet', effort: 'max' }) });
   const resumed = start('claude', true);
   assert.equal(resumed.providerSessionId, null, 'the router has not read folder history yet');
-  assert.equal(resumed.model, null); assert.equal(resumed.effort, 'high');
+  assert.equal(resumed.model, 'sonnet'); assert.equal(resumed.effort, 'max');
   const ownerChoice = start('claude', true, { model: 'owner-menu-model', effort: 'max' });
-  assert.equal(ownerChoice.model, 'owner-menu-model'); assert.equal(ownerChoice.effort, 'max');
+  assert.equal(ownerChoice.model, 'sonnet'); assert.equal(ownerChoice.effort, 'max');
   const fresh = start('claude');
   assert.equal(fresh.model, 'sonnet'); assert.equal(fresh.effort, 'max');
 });

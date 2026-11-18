@@ -159,16 +159,26 @@ __pg_hook_proxy() {
 # which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
 # carry them. A proxy set in this terminal (by the user's start-up files, say) falls back too, and main is told why.
 claude() {
-  local __pg_words
+  local __pg_words word
+  for word in "$@"; do
+    case $word in
+      --) break;;
+      --model|--model=*|--effort|--effort=*) printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2;;
+    esac
+  done
   if ! __pg_program claude; then
     printf '\e[33m%s\e[0m\n' 'Claude Code was not found in PATH. Install it, then restart this terminal.'
     return 127
   fi
   local -a program=("${__pg_words[@]}")
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  if [[ ${1-} == --agentrix-seat-fast ]]; then
-    shift
-    launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback
+  local model effort fast lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  local -a lead_args=()
+  if [[ -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
+    { IFS= read -r model && IFS= read -r effort && IFS= read -r fast; } < "$lead_file" &&
+    [[ -n $model && -n $effort && ( $fast == 0 || $fast == 1 ) ]]; then
+    lead_args=(--model "$model" --effort "$effort")
+    if [[ $fast == 1 ]]; then launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback; fi
   fi
   local settings=$launch_fallback REPLY
   if [[ $__pg_hook_channel == http ]]; then
@@ -194,11 +204,10 @@ claude() {
   fi
   # This Claude Code is a planner: the shims come first on its PATH, at depth zero (shims/BOUNDARY.md).
   local -a planner=()
-  local word
   if [[ -n $__pg_shims ]]; then
     while IFS= read -r -d '' word; do planner+=("$word"); done < <(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env 2>/dev/null)
   fi
-  command env ${planner[@]+"${planner[@]}"} AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" ${settings_args[@]+"${settings_args[@]}"} ${note[@]+"${note[@]}"} "$@"
+  command env ${planner[@]+"${planner[@]}"} AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" ${settings_args[@]+"${settings_args[@]}"} ${note[@]+"${note[@]}"} ${lead_args[@]+"${lead_args[@]}"} "$@"
   local code=$?
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
   __pg_send codex-exited $code claude

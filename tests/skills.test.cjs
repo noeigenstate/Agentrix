@@ -48,9 +48,11 @@ const until = async (check, label) => {
 
 test('skill defaults, exact public shape, read-only built-ins and local-only project scopes', async t => {
   const { store } = fixture(t), builtin = store.list()[0];
-  assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'extends', 'replaced', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
+  assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'extends', 'replaced', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'firstOpenRun', 'seatSummary', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
   assert.deepEqual([builtin.id, builtin.enabled, builtin.trigger, builtin.autoOptimize], ['builtin:model-routing', true, 'auto', false]);
   assert.deepEqual(builtin.requires, { claude: true, codex: false });
+  assert.equal(builtin.firstOpenRun, false);
+  assert.deepEqual(builtin.seatSummary[0], { seat: 'orchestrator', name: '总指挥', model: 'opus', effort: 'high', fast: false });
   await assert.rejects(() => store.save(builtin.id, draft('model-routing')), /只读/);
   for (const action of [() => store.delete(builtin.id), () => store.revert(builtin.id, 1), () => store.resolveChange(builtin.id, true), () => store.setOptions(builtin.id, { autoOptimize: true })]) assert.throws(action, /只读/);
   await assert.rejects(() => store.save(null, draft('remote', 'project', 'ssh')), /本地/);
@@ -66,21 +68,22 @@ test('seat saves validate atomically, merge project choices, clear scopes and ke
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
   const choice = model => ({ model, effort: 'high' });
   for (const [map, code] of [
-    [{ unknown: choice('opus') }, 'unknown-seat'], [{ core: choice('bad;id') }, 'invalid-model'],
-    [{ core: { model: 'gpt-6.1-sol', effort: 'max' } }, 'invalid-effort'],
-    [{ visual: { ...choice('sonnet'), fast: true } }, 'fast-not-allowed'],
-    [{ lead: { codex: choice('opus') } }, 'lead-family'], [{ reviewer: choice('gpt-6.1-sol') }, 'reviewer-same-model'],
+    [{ unknown: choice('opus') }, 'unknown-seat'], [{ developer: choice('bad;id') }, 'invalid-model'],
+    [{ developer: { model: 'gpt-6.1-sol', effort: 'max' } }, 'invalid-effort'],
+    [{ designer: { ...choice('sonnet'), fast: true } }, 'fast-not-allowed'],
+    [{ lead: { codex: choice('opus') } }, 'unknown-seat'], [{ reviewer: choice('gpt-6.1-sol') }, 'reviewer-same-model'],
   ]) {
     const result = store.setSeats('global', null, map);
     assert.equal(result.ok, false); assert.equal(result.code, code); assert.deepEqual(store.seatsInfo().global, {});
   }
-  assert.deepEqual(store.setSeats('global', null, { lookup: choice('sonnet') }), { ok: true });
-  assert.deepEqual(store.setSeats('project', 'p1', { visual: choice('opus') }), { ok: true });
-  assert.equal(store.seatsInfo('p1').effective.lookup.model, 'sonnet');
-  assert.equal(store.seatsInfo('p1').effective.visual.model, 'opus');
-  assert.equal(store.seatsInfo('p2').effective.visual.model, 'sonnet');
-  const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
-  assert.deepEqual(persisted.projects.p1, { visual: choice('opus') });
+  assert.deepEqual(store.setSeats('global', null, { researcher: choice('haiku') }), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p1', { designer: choice('opus') }), { ok: true });
+  assert.equal(store.seatsInfo('p1').effective.researcher.model, 'haiku');
+  assert.equal(store.seatsInfo('p1').effective.designer.model, 'opus');
+  assert.equal(store.seatsInfo('p2').effective.designer.model, 'sonnet');
+  const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].team;
+  assert.equal(persisted.version, 2);
+  assert.deepEqual(persisted.projects.p1, { designer: choice('opus') });
   assert.ok(f.changes.some(change => change.deliveryChanged));
   assert.equal(store.read('builtin:model-routing').text, before);
   await assert.rejects(() => store.save('builtin:model-routing', draft('model-routing')), /只读/);
@@ -91,43 +94,53 @@ test('seat saves validate atomically, merge project choices, clear scopes and ke
 
 test('removed projects lose their seat overrides in memory and persisted options on refresh', t => {
   const { store, projects } = fixture(t), choice = { model: 'sonnet', effort: 'high' };
-  assert.deepEqual(store.setSeats('project', 'p1', { lookup: choice }), { ok: true });
-  assert.deepEqual(store.setSeats('project', 'p2', { visual: choice }), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p1', { researcher: choice }), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p2', { designer: choice }), { ok: true });
   projects.splice(projects.findIndex(project => project.id === 'p1'), 1);
   store.refresh();
-  assert.equal(Object.hasOwn(store.options['builtin:model-routing'].seats.projects, 'p1'), false);
-  const stored = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
-  assert.deepEqual(stored.projects, { p2: { visual: choice } });
+  assert.equal(Object.hasOwn(store.options['builtin:model-routing'].team.projects, 'p1'), false);
+  const stored = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].team;
+  assert.deepEqual(stored.projects, { p2: { designer: choice } });
 });
 
 test('global seat saves validate live projects but ignore removed overrides before a refresh', t => {
   const { store, projects } = fixture(t), choice = model => ({ model, effort: 'high' });
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
-  assert.deepEqual(store.setSeats('project', 'p1', { core: choice('opus'), reviewer: choice('gpt-6.1-sol') }), { ok: true });
-  assert.deepEqual(store.setSeats('project', 'p2', { lookup: choice('sonnet') }), { ok: true });
-  const global = { execution: choice('gpt-6.1-sol') };
+  assert.deepEqual(store.setSeats('project', 'p1', { reviewer: choice('sonnet') }), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p2', { researcher: choice('haiku') }), { ok: true });
+  const global = { developer: choice('sonnet') };
   assert.equal(store.setSeats('global', null, global).code, 'reviewer-same-model', 'an existing project still protects reviewer independence');
   projects.splice(projects.findIndex(project => project.id === 'p1'), 1);
   assert.deepEqual(store.setSeats('global', null, global), { ok: true });
-  const stored = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
-  assert.deepEqual(stored.projects, { p2: { lookup: choice('sonnet') } });
+  const stored = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].team;
+  assert.deepEqual(stored.projects, { p2: { researcher: choice('haiku') } });
   assert.deepEqual(stored.global, global);
 });
 
-test('one corrupt stored seat or lead slot preserves the other choices when reading and saving', t => {
-  const { store } = fixture(t), choice = (model, effort = 'high') => ({ model, effort });
+test('v1 migration preserves stored choices for downgrades, survives corruption and reports its notice once', async t => {
+  const choice = (model, effort = 'high') => ({ model, effort });
   const stored = { global: { lookup: choice('sonnet'), visual: choice('bad;model'),
-    lead: { claude: choice('opus', 'max'), codex: choice('gpt-6.1-sol', 'bad effort') } },
+    lead: { claude: choice('opus', 'max'), codex: choice('gpt-6.1-sol') } },
     projects: { p1: { architect: choice('sonnet'), lookup: choice('bad model') } } };
-  store.options['builtin:model-routing'] = { ...store.options['builtin:model-routing'], seats: structuredClone(stored) }; store.persistOptions();
-  const info = store.seatsInfo('p1'), good = { lookup: choice('sonnet'), lead: { claude: choice('opus', 'max') } };
+  const id = 'builtin:model-routing';
+  const { store, options } = fixture(t, ({ dataDir }) => put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: {
+    seats: stored, seatDefaultModels: { 'lead.claude': 'opus', 'lead.codex': 'gpt-6.1-sol', visual: 'sonnet' },
+  } })));
+  const info = store.seatsInfo('p1'), good = { researcher: choice('sonnet'), orchestrator: choice('opus', 'max') };
   assert.deepEqual(info.global, good);
   assert.deepEqual(info.project, { architect: choice('sonnet') });
-  assert.equal(info.effective.lookup.model, 'sonnet');
-  assert.deepEqual(store.options['builtin:model-routing'].seats, stored, 'reading sanitizes without mutating the stored input');
-  assert.deepEqual(store.setSeats('project', 'p2', { visual: choice('opus') }), { ok: true });
-  const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))['builtin:model-routing'].seats;
-  assert.deepEqual(persisted.global, good);
+  assert.equal(info.lead, 'orchestrator'); assert.equal(info.leadAgent, 'claude');
+  assert.deepEqual(info.leads, { claude: choice('opus', 'max'), codex: null });
+  assert.deepEqual(info.authors, ['developer']); assert.equal(info.roles[0].name, '总指挥');
+  assert.deepEqual(store.options[id].seatDefaultModels, { orchestrator: 'opus', designer: 'sonnet', qa: 'sonnet' });
+  assert.equal(info.migrated, undefined);
+  assert.match((await store.refreshSeats('p1', null, 'dialog')).migrated, /Claude.*opus.*Codex.*gpt-6\.1-sol/);
+  assert.deepEqual(store.setSeats('project', 'p2', { designer: choice('opus') }), { ok: true });
+  const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))[id];
+  assert.deepEqual(persisted.seats, stored);
+  assert.deepEqual(persisted.team.global, good);
+  const restored = new SkillsStore(options); t.after(() => restored.close());
+  assert.equal((await restored.refreshSeats('p1', null, 'dialog')).migrated, undefined);
 });
 
 function seatPreload(store) {
@@ -159,8 +172,8 @@ test('seat preload reads unwrap the real IPC adapter including null and transpor
 
 test('seat preload saves preserve validation refusals and reject real adapter errors', async t => {
   const { store } = fixture(t), bridge = seatPreload(store);
-  assert.deepEqual(await bridge.setSkillSeats('global', null, { lookup: { model: 'sonnet', effort: 'high' } }), { ok: true });
-  const refused = await bridge.setSkillSeats('global', null, { lookup: { model: 'bad;model', effort: 'high' } });
+  assert.deepEqual(await bridge.setSkillSeats('global', null, { researcher: { model: 'sonnet', effort: 'high' } }), { ok: true });
+  const refused = await bridge.setSkillSeats('global', null, { researcher: { model: 'bad;model', effort: 'high' } });
   assert.equal(refused.ok, false); assert.equal(refused.code, 'invalid-model');
   await assert.rejects(() => bridge.setSkillSeats('project', 'removed', {}), /Invalid seat scope or project/);
 });
@@ -168,17 +181,16 @@ test('seat preload saves preserve validation refusals and reject real adapter er
 test('seat catalog refresh unwraps the real IPC adapter and reports moved defaults once without changing saved seats', async t => {
   const { store, options } = fixture(t);
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
-  store.setSeats('global', null, { core: { model: 'gpt-6.1-sol', effort: 'high', fast: true } });
+  store.setSeats('global', null, { developer: { model: 'gpt-6.1-sol', effort: 'high', fast: true } });
   const before = structuredClone(store.seatsInfo().global);
   store.modelCatalog.probes.codex = async () => [{ model: 'gpt-6.2-sol', efforts: ['medium'], defaultEffort: 'medium', fast: false }];
   const bridge = seatPreload(store), info = await bridge.skillSeatsRefresh('p1', null);
-  assert.equal(info.defaults.core.model, 'gpt-6.2-sol');
-  assert.ok(info.defaultsMoved.some(move => move.seat === 'core' && move.from === 'gpt-6.1-sol'));
+  assert.equal(info.defaults.developer.model, 'gpt-6.2-sol');
+  assert.ok(info.defaultsMoved.some(move => move.seat === 'developer' && move.from === 'gpt-6.1-sol'));
   assert.deepEqual(info.global, before); assert.equal(typeof info.catalogAt.codex, 'number');
   assert.equal((await bridge.skillSeats('p1', null)).defaultsMoved, undefined);
   const restored = new SkillsStore({ ...options, getAgents: store.getAgents }); t.after(() => restored.close());
   assert.equal((await seatPreload(restored).skillSeats('p1', null)).defaultsMoved, undefined);
-  assert.deepEqual(JSON.parse(fs.readFileSync(store.fastSettingsFile(), 'utf8')), { fastMode: true });
 });
 
 test('background seat reads neither probe nor consume the defaults-moved notice', async t => {
@@ -194,21 +206,22 @@ test('background seat reads neither probe nor consume the defaults-moved notice'
   assert.equal((await bridge.skillSeatsRefresh('p1', null, 'dialog')).defaultsMoved, undefined);
 });
 
-for (const selected of [false, true]) test(`seat delivery stays frozen through catalog refresh, default movement and compact/clear (${selected ? 'selected' : 'empty'} block)`, async t => {
+for (const selected of [false, true]) test(`seat delivery stays frozen through catalog refresh, default movement and compact/clear (${selected ? 'saved' : 'default'} seats)`, async t => {
   const { store, projects } = fixture(t), project = projects[0];
   const { sessionContext } = require('../electron/features/skills/session.cjs');
+  const skill = 'builtin:model-routing';
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
-  if (selected) assert.deepEqual(store.setSeats('global', null, { lookup: { model: 'sonnet', effort: 'high' } }), { ok: true });
+  if (selected) assert.deepEqual(store.setSeats('global', null, { researcher: { model: 'haiku', effort: 'high' } }), { ok: true });
   const choices = structuredClone(store.seatsInfo(project.id).global);
   const launch = store.delivery(project, false, 'frozen-catalog-session', { agent: 'claude', started: true });
-  const note = startupNote('Read.', null, null, launch), originalBlock = launch.seatsBlock;
+  const note = startupNote('Read.', null, null, launch), original = launch.rendered[skill];
   const bytes = fs.readFileSync(launch.sessionManifest, 'utf8');
   const current = JSON.parse(fs.readFileSync(`${launch.sessionManifest}.json`, 'utf8')).current;
   store.modelCatalog.probes.codex = async () => [{ value: 'gpt-6.2-sol', efforts: ['adaptive'], defaultEffort: 'adaptive', fast: false }];
   const fresh = await store.refreshSeats(project.id);
-  assert.equal(fresh.defaults.core.model, 'gpt-6.2-sol'); assert.ok(fresh.defaultsMoved.length);
+  assert.equal(fresh.defaults.developer.model, 'gpt-6.2-sol'); assert.ok(fresh.defaultsMoved.length);
   assert.deepEqual(store.seatsInfo(project.id).global, choices);
-  assert.equal(store.sessionSnapshot(project.id, 'frozen-catalog-session').seatsBlock, originalBlock);
+  assert.deepEqual(store.sessionSnapshot(project.id, 'frozen-catalog-session').rendered[skill], original);
   // A later save rewrites the current delivery too; it must retain the observed launch's seats.
   assert.deepEqual(store.setSeats('global', null, choices), { ok: true });
   assert.equal(fs.readFileSync(launch.sessionManifest, 'utf8'), bytes);
@@ -216,25 +229,22 @@ for (const selected of [false, true]) test(`seat delivery stays frozen through c
   assert.doesNotMatch(currentBytes, /gpt-6\.2-sol/);
   for (const source of ['compact', 'clear']) {
     const instructions = sessionContext({ session_id: `catalog-cli-${selected}`, source }, note).hookSpecificOutput.additionalContext;
-    assert.doesNotMatch(instructions, /gpt-6\.2-sol/);
-    assert.equal(instructions.includes('Agentrix model seats'), selected);
-    if (selected) assert.match(instructions, /core: model gpt-6\.1-sol/);
+    assert.ok(instructions.includes(original.path.replace(/\\/g, '/')));
+    assert.match(fs.readFileSync(original.path, 'utf8'), /\| developer \|.*\| gpt-6\.1-sol · high · fast \|/);
   }
   const next = store.delivery(project, false, 'new-catalog-session', { agent: 'claude', started: true });
-  assert.equal(next.seatsMap.core.model, 'gpt-6.2-sol');
-  if (selected) assert.match(next.seatsBlock, /core: model gpt-6\.2-sol, effort adaptive/);
+  assert.equal(next.seatsMap.developer.model, 'gpt-6.2-sol');
+  assert.match(next.rendered[skill].text, /\| developer \|.*\| gpt-6\.2-sol · adaptive \|/);
 });
 
-test('a catalog-validated Claude fast lead reaches the merged terminal launcher through the stored settings file', t => {
-  const { store } = fixture(t), { launchCommand } = require('../electron/features/agents/launch.cjs');
+test('a catalog-validated Claude fast orchestrator supplies the same three values for a resume', t => {
+  const { store, dataDir } = fixture(t), { writeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
   store.observeModels('claude', [{ value: 'claude-opus-6-0', alias: 'opus', displayName: 'Opus', efforts: ['adaptive'], fast: true }]);
-  assert.deepEqual(store.setSeats('global', null, { lead: { claude: { model: 'claude-opus-6-0', effort: 'adaptive', fast: true } } }), { ok: true });
-  const seat = store.leadOptions('p1', 'claude'), file = store.fastSettingsFile();
-  const command = launchCommand('claude', null, seat, { fastSettingsFile: file });
-  assert.match(command, /--model "claude-opus-6-0" --effort adaptive/);
-  assert.equal(command.includes('--settings'), false); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { fastMode: true });
-  assert.equal(launchCommand('claude', { id: 'previous' }, seat, { fastSettingsFile: file }), 'claude --resume previous\r');
+  assert.deepEqual(store.setSeats('global', null, { orchestrator: { model: 'claude-opus-6-0', effort: 'adaptive', fast: true } }), { ok: true });
+  const file = path.join(dataDir, 'bootstrap.json');
+  writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead: store.leadOptions('p1', 'claude') });
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-6-0\nadaptive\n1\n');
 });
 
 test('shipped code standard stays always and marks only the first agent session locally and over SSH', t => {
@@ -386,7 +396,7 @@ test('all option combinations and large libraries keep the complete instructions
   const { store, projects } = fixture(t);
   await store.save(null, draft('matrix'));
   for (const enabled of [false, true]) for (const trigger of ['always', 'auto', 'first-open']) for (const autoOptimize of [false, true]) for (const confirmChanges of [false, true]) {
-    store.setOptions('user:matrix', { enabled, trigger, autoOptimize, confirmChanges });
+    store.setOptions('user:matrix', { enabled, trigger: trigger === 'first-open' ? 'auto' : trigger, firstOpenRun: trigger === 'first-open', autoOptimize, confirmChanges });
     const delivery = store.delivery(projects[0]), note = startupNote('Read.', null, null, delivery);
     const file = store.entry('user:matrix').path.replace(/\\/g, '/');
     assert.equal(note.includes(file), enabled);

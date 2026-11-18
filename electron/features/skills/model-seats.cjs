@@ -1,13 +1,16 @@
 // Seat choices are configuration, never evidence of which model actually ran.
 const { BASE: EFFORTS, EFFORT, familyOf: family, validModel, rankOf, modelRow } = require('./model-catalog.cjs');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+const ALIASES = ['opus', 'sonnet', 'haiku'];
+const TEAM = { orchestrator: 'opus', product: 'opus', architect: 'opus', designer: 'sonnet', developer: 'opus',
+  reviewer: 'opus', qa: 'sonnet', researcher: 'sonnet', devops: 'sonnet', security: 'opus' };
+const CODEX_ROLES = new Set(['developer', 'devops']);
 const refusal = (code, seat, message) => ({ ok: false, code, ...(seat ? { seat } : {}), message });
 const fail = (code, seat, message) => { throw Object.assign(new Error(message), refusal(code, seat, message)); };
 
-function cleanSeat(raw, seat, expectedFamily, models, stored = false) {
+function cleanSeat(raw, seat, models, stored = false) {
   if (!object(raw) || !validModel(raw.model)) fail('invalid-model', seat, 'Expected a valid model id of at most 160 characters.');
   const agent = family(raw.model);
-  if (expectedFamily && agent !== expectedFamily) fail('lead-family', seat, `The ${seat} slot requires a ${expectedFamily} model.`);
   const row = models?.find(row => row.model === raw.model);
   if (typeof raw.effort !== 'string' || !EFFORT.test(raw.effort) || !stored && !(row?.efforts || EFFORTS[agent]).includes(raw.effort)) fail('invalid-effort', seat, `Unsupported ${agent} effort.`);
   if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && (row ? !row.fast : agent === 'claude'))) fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
@@ -16,38 +19,42 @@ function cleanSeat(raw, seat, expectedFamily, models, stored = false) {
 
 function cleanSeats(raw, seatIds, models, stored = false) {
   if (!object(raw)) fail('invalid-model', null, 'Expected a seat map.');
-  const result = {};
-  for (const id of seatIds) {
-    if (!Object.hasOwn(raw, id)) continue;
-    if (id !== 'lead') result[id] = cleanSeat(raw[id], id, null, models, stored);
-    else {
-      if (!object(raw.lead)) fail('lead-family', 'lead', 'Expected Claude and Codex lead slots.');
-      const lead = {};
-      for (const agent of ['claude', 'codex']) if (Object.hasOwn(raw.lead, agent)) lead[agent] = cleanSeat(raw.lead[agent], `lead.${agent}`, agent, models, stored);
-      if (Object.keys(lead).length) result.lead = lead;
-    }
-  }
-  return result;
+  return Object.fromEntries(seatIds.filter(id => Object.hasOwn(raw, id)).map(id => [id, cleanSeat(raw[id], id, models, stored)]));
 }
 
-// Stored scopes may outlive older validation rules. Keep each valid seat and each independent lead slot.
+// A corrupt stored choice must not erase another seat.
 function cleanStoredSeats(raw, seatIds) {
-  let map = {};
-  if (!object(raw)) return map;
-  for (const id of seatIds) {
-    if (!Object.hasOwn(raw, id)) continue;
-    const choices = id === 'lead' && object(raw.lead)
-      ? ['claude', 'codex'].filter(agent => Object.hasOwn(raw.lead, agent)).map(agent => ({ lead: { [agent]: raw.lead[agent] } })) : [{ [id]: raw[id] }];
-    for (const choice of choices) {
-      try { map = effective(map, cleanSeats(choice, [id], null, true)); } catch { /* A corrupt choice cannot erase its neighbors. */ }
-    }
-  }
-  return map;
+  if (!object(raw)) return {};
+  return Object.fromEntries(seatIds.flatMap(id => {
+    if (!Object.hasOwn(raw, id)) return [];
+    try { return [[id, cleanSeat(raw[id], id, null, true)]]; } catch { return []; }
+  }));
+}
+
+function oldRoleValues(raw, claude, codex) {
+  return Object.fromEntries(Object.entries({ orchestrator: claude ?? codex, architect: raw.architect, designer: raw.visual,
+    developer: raw.core ?? raw.execution, reviewer: raw.reviewer, qa: raw.visual, researcher: raw.lookup }).filter(([, value]) => value != null));
+}
+
+function migrateSeats(raw) {
+  const source = cleanStoredSeats(raw, ['architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']);
+  const lead = cleanStoredSeats(raw?.lead, ['claude', 'codex']);
+  const claude = lead.claude && family(lead.claude.model) === 'claude' ? lead.claude : undefined;
+  const codex = lead.codex && family(lead.codex.model) === 'codex' ? lead.codex : undefined;
+  const kept = claude ?? codex;
+  const notice = kept ? `总指挥沿用原领队 ${claude ? 'Claude' : 'Codex'} 槽 ${kept.model}·${kept.effort}${kept.fast ? '·fast' : ''}${claude && codex ? `；原 Codex 槽 ${codex.model} 未保留` : ''}` : null;
+  return { map: oldRoleValues(source, claude, codex), notice };
+}
+
+function migrateDefaultModels(raw, seatIds) {
+  const old = raw || {};
+  const remapped = oldRoleValues(old, old['lead.claude'], old['lead.codex']);
+  return Object.fromEntries(seatIds.flatMap(id => typeof (old[id] ?? remapped[id]) === 'string' ? [[id, old[id] ?? remapped[id]]] : []));
 }
 
 function catalog(installed, knownModels = []) {
   const rows = [
-    ...['opus', 'sonnet', 'haiku'].map(model => ({ ...modelRow({ model, displayName: `${model[0].toUpperCase() + model.slice(1)} (follows latest)` }, 'alias') })),
+    ...ALIASES.map(model => ({ ...modelRow({ model, displayName: `${model[0].toUpperCase() + model.slice(1)} (follows latest)` }, 'alias') })),
     ...(!knownModels.some(row => family(row.model || row.value || '') === 'codex') ? [modelRow({ model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', fast: true }, 'cached')] : []),
   ];
   for (const row of knownModels) {
@@ -55,7 +62,7 @@ function catalog(installed, knownModels = []) {
     if (!normalized) continue;
     const index = rows.findIndex(item => item.model === normalized.model);
     if (index < 0) rows.push(normalized); else rows[index] = normalized;
-    if (['opus', 'sonnet', 'haiku'].includes(row.alias)) {
+    if (ALIASES.includes(row.alias)) {
       const aliasIndex = rows.findIndex(item => item.model === row.alias);
       rows[aliasIndex] = { ...normalized, model: row.alias, label: rows[aliasIndex].label, source: 'alias', listed: true };
     }
@@ -63,53 +70,93 @@ function catalog(installed, knownModels = []) {
   return rows.map(row => ({ ...row, efforts: [...row.efforts], available: !!installed[row.family], ...(!installed[row.family] ? { reason: `${row.family === 'claude' ? 'Claude Code' : 'Codex'} is not installed.` } : {}) }));
 }
 
-function defaultsFor(installed, models = []) {
+const versionOrder = (left, right) => Number(left[0]) - Number(right[0]) || Number(left[1] || 0) - Number(right[1] || 0);
+const high = model => ({ model, effort: 'high' });
+
+function codexDefault(models) {
+  const candidates = models.flatMap(row => {
+    const version = /^gpt-(\d+)(?:\.(\d+))?-sol$/.exec(row.model);
+    return version && row.available !== false && row.listed !== false ? [{ model: row.model, version: version.slice(1) }] : [];
+  });
+  const newest = candidates.sort((a, b) => versionOrder(b.version, a.version))[0];
+  return { ...high(newest?.model || 'gpt-6.1-sol'), fast: true };
+}
+
+function defaultsFor(installed, models = [], seatIds = Object.keys(TEAM)) {
   if (!installed.claude && !installed.codex) return {};
-  const newest = models.filter(row => row.available !== false && row.listed !== false && /^gpt-\d+\.\d+-sol$/.test(row.model))
-    .sort((a, b) => { const av = a.model.match(/\d+/g).map(Number), bv = b.model.match(/\d+/g).map(Number); return bv[0] - av[0] || bv[1] - av[1]; })[0];
-  const claude = model => ({ model, effort: 'high' }), gpt = () => ({ model: newest?.model || 'gpt-6.1-sol', effort: newest?.defaultEffort || 'high', fast: newest ? newest.fast : true });
-  return { lead: { ...(installed.claude ? { claude: claude('opus') } : {}), ...(installed.codex ? { codex: gpt() } : {}) },
-    architect: installed.claude ? claude('opus') : gpt(), core: installed.codex ? gpt() : claude('opus'),
-    execution: installed.claude ? claude('sonnet') : gpt(), visual: installed.claude ? claude('sonnet') : gpt(),
-    lookup: installed.claude ? claude('haiku') : gpt(), reviewer: installed.claude ? claude('opus') : gpt() };
+  const codex = codexDefault(models);
+  return Object.fromEntries(seatIds.map((id, index) => [id, !installed.claude || installed.codex && index > 0 && CODEX_ROLES.has(id)
+    ? { ...codex } : high(index === 0 || !Object.hasOwn(TEAM, id) ? 'opus' : TEAM[id])]));
 }
 
 function effective(defaults, global = {}, project = {}) {
-  const map = { ...defaults, ...global, ...project };
-  if (defaults.lead || global.lead || project.lead) map.lead = { ...defaults.lead, ...global.lead, ...project.lead };
-  return structuredClone(map);
+  return structuredClone({ ...defaults, ...global, ...project });
+}
+
+// Date and context variants have the same reviewer identity. Explicit provider aliases take precedence for launch.
+const releaseOf = model => /^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d+))?$/.exec(model.replace(/\[1m\]$/, '').replace(/-\d{8}$/, ''));
+function aliasTargets(models) {
+  const latest = new Map();
+  for (const row of models) {
+    const release = releaseOf(row.model);
+    if (!release || row.listed === false) continue;
+    const alias = release[1], version = release.slice(2), explicit = row.alias === alias;
+    const prior = latest.get(alias), order = prior ? versionOrder(version, prior.version) : 0;
+    if (!prior || explicit && !prior.explicit || explicit === prior.explicit && (order > 0 || !order && row.model === release[0])) {
+      latest.set(alias, { model: row.model, version, explicit });
+    }
+  }
+  return latest;
+}
+
+function agentAlias(model, models) {
+  if (ALIASES.includes(model)) return model;
+  const alias = releaseOf(model)?.[1];
+  return alias && aliasTargets(models).get(alias)?.model === model ? alias : null;
 }
 
 function checkReviewer(map, models) {
-  const reviewer = map.reviewer;
-  if (!reviewer) return null;
-  // Aliases follow the newest listed release; context/date variants are the same reviewer identity.
-  const release = model => /^claude-(opus|sonnet|haiku)-(\d+)-(\d+)$/.exec(model.replace(/\[1m\]/g, '').replace(/-\d{8}$/, ''));
-  const latest = new Map();
-  for (const row of models) {
-    const version = release(row.model);
-    if (!version || row.listed === false) continue;
-    const prior = latest.get(version[1]);
-    if (!prior || Number(version[2]) > Number(prior[2]) || Number(version[2]) === Number(prior[2]) && Number(version[3]) > Number(prior[3])) latest.set(version[1], version);
-  }
-  const identity = model => latest.get(model)?.[0] || release(model)?.[0] || model;
+  const { reviewer, developer } = map;
+  if (!reviewer || !developer) return null;
+  const latest = aliasTargets(models);
+  const identity = model => {
+    const release = releaseOf(latest.get(model)?.model || model);
+    return release ? `${release[1]}-${Number(release[2])}-${Number(release[3] || 0)}` : model;
+  };
   const reviewerId = identity(reviewer.model);
-  if (!['core', 'execution'].some(id => map[id] && identity(map[id].model) === reviewerId)) return null;
+  if (identity(developer.model) !== reviewerId) return null;
   const rank = models.find(row => row.model === reviewer.model)?.rank
     ?? rankOf(reviewer.model);
   return models.some(row => row.available && identity(row.model) !== reviewerId && row.rank >= rank)
-    ? refusal('reviewer-same-model', 'reviewer', 'Choose a reviewer different from core and execution when another available model is at least as strong.') : null;
+    ? refusal('reviewer-same-model', 'reviewer', 'Choose a reviewer different from developer when another available model is at least as strong.') : null;
 }
 
-// An explicit model carries its own effort/fast defaults; never attach a different model's seat settings to it.
-function leadOptions(map, agent, explicit = {}) {
-  const chosen = Object.fromEntries(Object.entries(explicit).filter(([, value]) => value !== null && value !== undefined));
-  return { ...(chosen.model ? {} : map?.lead?.[agent]), ...chosen };
+function resolveSeat(choice, fallback, installed, models) {
+  const selected = choice && installed[family(choice.model)] ? choice : fallback;
+  if (!selected) return null;
+  const row = models.find(row => row.model === selected.model);
+  const seat = { ...selected };
+  if (row && !row.efforts.includes(seat.effort)) seat.effort = row.defaultEffort || row.efforts[0];
+  if (row && seat.fast && !row.fast) seat.fast = false;
+  return seat;
+}
+
+function leadOptions(map, agent, installed, models = [], lead = 'orchestrator') {
+  if (!installed[agent]) return null;
+  const fallback = agent === 'claude' ? high('opus') : codexDefault(models);
+  const selected = Object.hasOwn(map, lead) && family(map[lead].model) === agent ? map[lead] : fallback;
+  return resolveSeat(selected, fallback, installed, models);
+}
+
+function leadConfiguration(map, lead, installed, models) {
+  const leads = { claude: leadOptions(map, 'claude', installed, models, lead), codex: leadOptions(map, 'codex', installed, models, lead) };
+  const preferred = Object.hasOwn(map, lead) ? family(map[lead].model) : null;
+  return { leads, leadAgent: preferred && leads[preferred] ? preferred : leads.claude ? 'claude' : leads.codex ? 'codex' : null };
 }
 
 function seatIssues(map, models) {
   const issues = [];
-  for (const [id, value] of Object.entries(map)) for (const [slot, seat] of id === 'lead' ? Object.entries(value).map(([agent, seat]) => [`lead.${agent}`, seat]) : [[id, value]]) {
+  for (const [slot, seat] of Object.entries(map)) {
     const row = models.find(row => row.model === seat.model);
     if (!row || row.listed === false) issues.push({ slot, code: 'model-unlisted', substitute: seat.model });
     if (row && !row.efforts.includes(seat.effort)) issues.push({ slot, code: 'effort-unsupported', substitute: row.defaultEffort || row.efforts[0] });
@@ -118,30 +165,5 @@ function seatIssues(map, models) {
   return issues;
 }
 
-function renderSeats(map, leadAgent, helperPath, installed = { claude: true, codex: true }, models = []) {
-  const parts = ['Agentrix model seats (fixed for this session; an instruction in the conversation still wins):'];
-  parts.push('These helper model settings supplement the skill\'s full helper form; --role, --title, --cwd, --brief and --out are still required.');
-  const fallback = defaultsFor(installed, models);
-  for (const [id, value] of Object.entries(map)) {
-    const slots = id === 'lead' ? Object.entries(value).map(([agent, seat]) => [`lead.${agent}`, seat]) : [[id, value]];
-    for (const [slot, chosen] of slots) {
-      const agent = family(chosen.model), original = installed[agent] ? chosen : (id === 'lead' ? fallback.lead?.[leadAgent] : fallback[id]);
-      const row = models.find(row => row.model === original?.model), notes = [];
-      const seat = original && { ...original };
-      if (row && !row.efforts.includes(seat.effort)) { notes.push(`Adjusted effort ${seat.effort} to ${row.defaultEffort}`); seat.effort = row.defaultEffort; }
-      if (row && seat.fast && !row.fast) { notes.push('Adjusted fast on to off'); seat.fast = false; }
-      if (!seat) { parts.push(`${slot}: ${chosen.model} unavailable; no installed agent can run this seat.`); continue; }
-      const model = /^[\w.-]+$/.test(seat.model) ? seat.model : `"${seat.model}"`;
-      const alias = ['opus', 'sonnet', 'haiku'].find(alias => seat.model.includes(alias)) || seat.model;
-      const target = family(seat.model), flags = `--model ${model} --effort ${seat.effort}${seat.fast ? ' --fast' : ''}`;
-      const launch = slot.startsWith('lead.') ? 'the Agentrix lead session' : target === 'claude' && leadAgent === 'claude' && !seat.fast
-        ? `Agent call with model:"${alias}", effort:"${seat.effort}"`
-        : `node "${helperPath}" ${target} ${flags}${target === 'claude' ? ' --permission acceptEdits' : ''} --detach; then node "${helperPath}" wait <run-id> --cwd <dir> (keep waiting in this turn; Bash timeout 600000)`;
-      parts.push(`${slot}: model ${seat.model}, effort ${seat.effort}, fast ${seat.fast ? 'on' : 'off'}; launch: ${launch}.${original !== chosen ? ` Substituted for ${chosen.model}: ${agent} is not installed.` : ''}${notes.map(note => ` ${note}.`).join('')}`);
-    }
-  }
-  parts.push('visual and reviewer always use fresh instances; the reviewer neither planned nor wrote the work. agentrix-lookup stays Haiku.');
-  return parts.join('\n');
-}
-
-module.exports = { cleanSeats, cleanStoredSeats, checkReviewer, catalog, defaultsFor, effective, renderSeats, leadOptions, seatIssues, rankOf };
+module.exports = { cleanSeats, cleanStoredSeats, migrateSeats, migrateDefaultModels, checkReviewer, catalog, defaultsFor, effective,
+  leadOptions, leadConfiguration, resolveSeat, agentAlias, seatIssues, rankOf };

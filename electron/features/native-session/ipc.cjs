@@ -1,5 +1,6 @@
 const { exact, id, text, assert, validImages, validSwitchAnswer, validHandoff } = require('./validate.cjs');
 const { CODEX_PERMISSIONS } = require('../../codex-permissions.cjs');
+const { routingOwned, routingPatch } = require('../agents/agent-command.cjs');
 function registerIpc({ handle, router, settings, claude }) {
   const binding = (terminalId, runtimeSessionId) => assert(id(terminalId) && id(runtimeSessionId));
   handle('native:start', (terminalId, options) => { assert(id(terminalId) && exact(options, ['agent', 'resume']) && ['claude', 'codex'].includes(options.agent) && (options.resume === undefined || typeof options.resume === 'boolean')); return router.start(terminalId, options); });
@@ -18,12 +19,14 @@ function registerIpc({ handle, router, settings, claude }) {
   handle('native:commands', (...args) => { assert(args.length === 2); binding(...args); return router.commands(...args); });
   handle('native:run-options', (terminalId, runtimeSessionId, patch) => {
     binding(terminalId, runtimeSessionId);
-    assert(exact(patch, ['model', 'effort', 'fast', 'permissions']) && (patch.model === undefined || patch.model === null || text(patch.model, 160))
-      && (patch.effort === undefined || patch.effort === null || typeof patch.effort === 'string' && /^[\w-]{1,32}$/.test(patch.effort))
-      && (patch.fast === undefined || typeof patch.fast === 'boolean') && (patch.permissions === undefined || CODEX_PERMISSIONS.includes(patch.permissions)));
+    if (patch && typeof patch === 'object' && routingPatch(patch)) {
+      const error = routingOwned();
+      // The shared IPC adapter wraps success values. Preload unwraps this typed refusal.
+      return { ok: false, code: error.code, error: error.message };
+    }
+    assert(exact(patch, ['permissions']) && (patch.permissions === undefined || CODEX_PERMISSIONS.includes(patch.permissions)));
     return router.runOptions(terminalId, runtimeSessionId, patch);
   });
-  handle('native:models', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.models(terminalId, runtimeSessionId); });
   handle('native:new-conversation', (terminalId, runtimeSessionId) => { binding(terminalId, runtimeSessionId); return router.newConversation(terminalId, runtimeSessionId); });
   handle('native:shell', (terminalId, runtimeSessionId, clientMessageId, command) => {
     binding(terminalId, runtimeSessionId); assert(id(clientMessageId) && text(command, 262144) && command === command.trim());

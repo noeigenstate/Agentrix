@@ -4,6 +4,34 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
+
+test('callFile IPC requires the app sender and unwraps the bound local call result in preload', async () => {
+  const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
+  const handlers = new Map(), files = [], sessions = new Map();
+  const webContents = { mainFrame: { url: 'agentrix://app/index.html' } }, sender = { sender: webContents, senderFrame: webContents.mainFrame };
+  const { handle } = createIpcAdapter({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, getWindow: () => ({ webContents }), t: text => text });
+  const start = source.indexOf("handle('agents:callFile'");
+  assert.ok(start >= 0);
+  vm.runInNewContext(source.slice(start, source.indexOf('registerSshIpc(', start)), {
+    handle, sessions, store: { findTerminal: id => id === 'local' || id === 'ssh' ? { project: { kind: id } } : null },
+    AgentCalls: { forTerminal: (scope, id) => {
+      assert.equal(scope, sessions); assert.equal(id, 'local');
+      return { callFile: (callId, kind) => { files.push([callId, kind]); return { ok: true, text: 'brief text', truncated: false }; } };
+    } },
+  });
+  const run = handlers.get('agents:callFile'), id = 'dispatch:11111111-1111-4111-8111-111111111111';
+  await assert.rejects(run({}, 'local', id, 'brief'), /Rejected IPC sender/);
+  let bridge;
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../electron/preload.cjs'), 'utf8'), { require: name => {
+    assert.equal(name, 'electron');
+    return { contextBridge: { exposeInMainWorld: (_name, api) => { bridge = api; } },
+      ipcRenderer: { invoke: (channel, ...args) => handlers.get(channel)(sender, ...args) } };
+  } });
+  assert.deepEqual(await bridge.callFile('local', id, 'brief'), { ok: true, text: 'brief text', truncated: false });
+  for (const terminalId of ['ssh', 'gone']) assert.equal((await bridge.callFile(terminalId, id, 'log')).code, 'unavailable');
+  assert.equal((await bridge.callFile(null, id, 'log')).code, 'refused');
+  assert.deepEqual(files, [[id, 'brief']]);
+});
 function host() {
   const queued = [];
   const terminal = { nativeStructured: true, nativeRuntimeSessionId: 'runtime', promptQueue: { enqueue: text => queued.push(text), start() {} }, completionWork: { begin() {} }, nativeMessages: new Map() };

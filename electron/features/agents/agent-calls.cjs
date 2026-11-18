@@ -1,4 +1,5 @@
 const fs = require('node:fs/promises');
+const { StringDecoder } = require('node:string_decoder');
 const path = require('node:path');
 const { claudePrompt, TranscriptTail } = require('../../agent-actions.cjs');
 const { TokenRates, emptyRate } = require('./token-rate.cjs');
@@ -7,6 +8,7 @@ const { taskKind } = require('../dashboard/records-routing.cjs');
 const { containedFile } = require('../../session-files.cjs');
 const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subagent-feed.cjs');
 const { BackgroundTasks, attach } = require('./background-tasks.cjs');
+const { agentDescription, callSeat, declaredSeat } = require('./call-seat.cjs');
 const { LOST_WORK_TIMEOUT } = require('../../completion-work.cjs');
 // Host processes can restart while their terminal's dispatched workers keep running.
 const terminalCalls = new WeakMap();
@@ -17,6 +19,8 @@ const enabled = value => value === true || value === 'true';
 const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/, REMOTE_FOLLOWS = 16;
 const RECENT_KEEP = 10, RECENT_AGE_MS = 30 * 60 * 1000;
 const TOOL_ID = /^[A-Za-z0-9_-]{1,160}$/;
+const CALL_FILE_LIMIT = 256 * 1024;
+const sameFile = (left, right) => right.isFile() && left.dev === right.dev && left.ino === right.ino;
 const accountingId = (call, id = call.id) => call.generation ? `${id}:continue:${call.generation}` : id;
 // One record of a sub-agent's own transcript, read here or compacted by the SSH host: its own effort and speed, and its
 // replies' timing once the call started. Both readers take every record through this, and name the model alike.
@@ -89,6 +93,32 @@ class AgentCalls {
   setFolder(folder) { if (folder !== this.folder) { this.reset(true, false); this.folder = folder; } }
   history(reading) { this.replaying = reading; }
   feed(id) { return this.feeds.get(this.aliases.get(id) || id); }
+  async callFile(id, kind) {
+    if (typeof id !== 'string' || !/^dispatch:[a-f\d-]{36}$/i.test(id) || !['brief', 'log'].includes(kind)) return { ok: false, code: 'refused' };
+    if (!this.local) return { ok: false, code: 'unavailable' };
+    const call = this.byId(id), filename = call?.artifacts?.[kind];
+    if (!filename) return { ok: false, code: 'unavailable' };
+    if (!path.isAbsolute(filename)) return { ok: false, code: 'refused' };
+    let file;
+    try {
+      const before = await fs.lstat(filename, { bigint: true });
+      if (!before.isFile()) return { ok: false, code: 'refused' };
+      const resolved = await fs.realpath(filename);
+      if (path.relative(filename, resolved)) return { ok: false, code: 'refused' };
+      const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
+      file = await fs.open(resolved, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+      const opened = await file.stat({ bigint: true });
+      if (!sameFile(before, opened)) return { ok: false, code: 'refused' };
+      const bytes = Buffer.alloc(CALL_FILE_LIMIT), { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+      const current = await fs.lstat(filename, { bigint: true });
+      if (this.byId(id) !== call || !sameFile(opened, current) || path.relative(resolved, await fs.realpath(filename))) return { ok: false, code: 'refused' };
+      const truncated = current.size > BigInt(bytesRead), content = bytes.subarray(0, bytesRead);
+      return { ok: true, text: truncated ? new StringDecoder('utf8').write(content) : content.toString('utf8'), truncated };
+    } catch (error) {
+      const code = error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 'missing' : error.code === 'EFBIG' ? 'too-large' : 'refused';
+      return { ok: false, code };
+    } finally { await file?.close().catch(() => {}); }
+  }
   ownerInput(id, messageId, message) {
     const call = this.byId(id);
     if (call?.dispatch) this.feeds.ownerInput(call, messageId, call.key, message);
@@ -99,10 +129,10 @@ class AgentCalls {
     const call = this.calls.get(id);
     return call && !call.dispatch ? call : [...this.calls.values()].find(call => !call.dispatch && call.toolUseId === id) || null;
   }
-  addSubagent({ key, agentId = null, toolUseId = null, startedAt, agentType, title, task, cwd, planner, background = false,
+  addSubagent({ key, agentId = null, toolUseId = null, startedAt, agentType, title, task, cwd, planner, labels, background = false,
     requested = { model: 'default', effort: null, fast: null } }) {
     const call = { id: `agent:${toolUseId || agentId}`, key, agentId, toolUseId, toolGeneration: 0, sourceAgent: 'claude', agent: 'Claude Code',
-      provider: null, ...requested, requested, startedAt, done: false, rate: null, cwd, background,
+      provider: null, ...requested, requested, startedAt, done: false, rate: null, cwd, background, agentType, ...labels,
       title: title || short(agentType) || 'Agent', task, role: agentRoles.get(agentType) || short(agentType) || agentRoles.get('none'),
       preparing: this.local && !!this.folder, planner: planner || { kind: 'planner', agent: null, model: null } };
     call.kind = taskKind(call);
@@ -122,7 +152,8 @@ class AgentCalls {
       const recorded = call.recorded || other.recorded || ids.some(id => this.finishedIds.has(accountingId(call, id)));
       const entry = this.feeds.owned(call), retired = this.feeds.owned(other);
       if (tool.title) Object.assign(call, { title: tool.title, task: tool.task, role: tool.role, planner: tool.planner, cwd: tool.cwd,
-        requested: tool.requested, background: tool.background });
+        requested: tool.requested, background: tool.background, agentType: tool.agentType,
+        seat: tool.seat, specialty: tool.specialty, seatSource: tool.seatSource });
       clearTimeout(other.expiry); clearTimeout(call.expiry);
       this.calls.delete(other.key); this.calls.delete(call.key);
       this.pending.delete(other.key); this.pending.delete(call.key);
@@ -202,7 +233,8 @@ class AgentCalls {
     const { previous, feed } = call.revival;
     delete call.revival;
     if (!failed) return false;
-    const identity = Object.fromEntries(['id', 'key', 'agentId', 'toolUseId', 'toolGeneration', 'title', 'task', 'role', 'planner', 'cwd', 'requested', 'background', 'continuations']
+    const identity = Object.fromEntries(['id', 'key', 'agentId', 'toolUseId', 'toolGeneration', 'title', 'task', 'role', 'planner', 'cwd', 'requested', 'background', 'continuations',
+      'agentType', 'seat', 'specialty', 'seatSource']
       .map(key => [key, call[key]]));
     clearTimeout(call.expiry);
     for (const key of Object.keys(call)) delete call[key];
@@ -272,6 +304,8 @@ class AgentCalls {
       if (!retired && state !== 'done') group[state] = (group[state] || 0) + 1;
       group.items.push({ id: call.id, state, role: call.role, title: call.title,
         startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: retired,
+        ...callSeat(call, route.model), ...(call.cwd ? { worktree: call.worktree || call.cwd } : {}),
+        ...(call.dispatch ? { brief: !!call.artifacts?.brief, log: !!call.artifacts?.log } : {}),
         ...(call.dispatch || call.failure ? { failure: call.failure || null } : {}),
         ...(call.dispatch && call.declared ? { declared: call.declared } : {}),
         ...(call.resumed ? { resumed: true } : {}), ...(call.notice ? { notice: call.notice } : {}), ...(call.awaiting && !retired ? { awaiting: call.awaiting } : {}),
@@ -292,6 +326,7 @@ class AgentCalls {
         model: 'unreported', effort: null, fast: null, requestedModel: event.requested.model, requested: event.requested,
         planner: event.planner || { kind: 'planner', agent: null, model: null }, kind: taskKind(event), meeting: event.meeting ?? null,
         role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,
+        ...declaredSeat(event.seat),
         helperPid: event.helperPid, starting: true, unconfirmed: true, resumed: event.resumed === true, source: event.source,
         startedAt: time(event.at), done: false, rate: null, meter: new TokenRates(event.agent) };
       this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next);
@@ -304,12 +339,15 @@ class AgentCalls {
     if (event.type === 'dispatch-start') {
       if (call && (!call.starting || call.done) || !call && this.calls.size >= 1024) return false;
       if (call && (call.sourceAgent !== event.agent || call.cwd !== event.cwd)) return false;
+      const labels = declaredSeat(event.seat);
+      if (call?.seatSource === 'declared' && labels && (labels.seat !== call.seat || labels.specialty !== call.specialty)) return false;
       const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
         planner: event.planner || { kind: 'planner', agent: null, model: null },
         kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
-        role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd,
+        role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd, ...labels,
+        artifacts: this.local ? { brief: event.brief, log: event.log ?? event.out } : null,
         startedAt: time(event.startedAt), helperPid: Number.isSafeInteger(event.helperPid) && event.helperPid > 0 ? event.helperPid : null,
         done: false, rate: null, meter: new TokenRates(event.agent) };
       if (call) {
@@ -453,14 +491,23 @@ class AgentCalls {
         continue;
       }
       if (record.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string') {
-        if (!['Agent', 'Task'].includes(block.name) || this.calls.size >= 1024) continue;
+        if (!['Agent', 'Task'].includes(block.name)) continue;
         const input = block.input || {};
-        if (this.toolCall(block.id)) continue;
+        const description = text(input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim();
+        const { title, labels } = agentDescription(description);
+        const existing = this.toolCall(block.id);
+        if (existing) {
+          if (labels && !existing.seatSource) {
+            Object.assign(existing, labels, { title: title || existing.title, task: short(title), cwd: existing.cwd || record.cwd });
+            this.feeds.update(existing); changed = true;
+          }
+          continue;
+        }
+        if (this.calls.size >= 1024) continue;
         const settings = { model: text(input.model) || 'default', effort: text(input.effort).trim() || null, fast: null };
         const next = this.addSubagent({ key: block.id, toolUseId: block.id, startedAt: time(at), cwd: record.cwd, requested: settings,
           planner: { kind: 'planner', agent: 'claude', model: typeof record.message.model === 'string' && record.message.model !== '<synthetic>' ? record.message.model : null },
-          task: short(input.description || block.description || input.subagent_type || block.name),
-          title: text(input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim(),
+          task: short(title), title, labels,
           agentType: input.subagent_type, background: enabled(input.run_in_background) });
         this.refresh(next.key);
         changed = true;

@@ -3,11 +3,49 @@ const { frontMatter } = require('./front-matter.cjs');
 
 const KEYS = ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary'];
 const SECTIONS = ['When this applies', 'What to do', 'Rules', 'Done when'];
-const TRIGGERS = ['always', 'auto', 'first-open'];
+const TRIGGERS = ['always', 'auto'];
 const REQUIRES = ['none', 'any-agent', 'codex', 'claude', 'both'];
+const SEAT_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const chinese = value => /\p{Script=Han}/u.test(value);
 const sentences = value => value.split(/[。！？!?]+/u).filter(part => part.trim()).length;
 const needsQuotes = value => /^[>|[\]{}&*!#'"%@`,]|^[-?:](?:\s|$)|:\s|\s#/.test(value);
+
+// Keep the line numbers so the renderer can replace the real table while leaving fenced examples alone.
+function outsideFences(lines) {
+  let fence = null;
+  const visible = lines.map(line => {
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (marker) {
+      if (!fence) fence = marker[1];
+      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+      return '';
+    }
+    return fence ? '' : line;
+  });
+  return { visible, fence };
+}
+
+function teamRegion(lines) {
+  const starts = [], ends = [];
+  for (const [index, line] of lines.entries()) {
+    if (line.trim() === '<!-- agentrix:team -->') starts.push(index);
+    if (line.trim() === '<!-- /agentrix:team -->') ends.push(index);
+  }
+  return starts.length === 1 && ends.length === 1 && starts[0] < ends[0] ? { start: starts[0], end: ends[0] } : null;
+}
+
+function seatRoles(value, seats, fail) {
+  const roles = new Map();
+  for (const entry of value.split(/;\s*/)) {
+    const [id, ...parts] = entry.split('='), fields = parts.join('=').split('|').map(field => field.trim());
+    const [name, duty, detail, outputs = ''] = fields;
+    if (!seats?.includes(id) || roles.has(id) || fields.length < 3 || fields.length > 4
+        || !/^\p{Script=Han}{2,6}$/u.test(name) || fields.some(field => !field || [...field].length > 40)) fail('invalid duties');
+    roles.set(id, { id, name, duty, detail, outputs });
+  }
+  if (roles.size !== seats?.length) fail('duties must describe every seat');
+  return seats.map(id => roles.get(id));
+}
 
 function builtinMetadata(text, folder) {
   const fail = reason => { throw new Error(`Invalid built-in skill ${folder}: ${reason}`); };
@@ -15,8 +53,8 @@ function builtinMetadata(text, folder) {
   try { front = frontMatter(text); if (front) skillName(front.fields.name); } catch (error) { fail(error.message); }
   if (!front) fail('expected front matter followed by a body');
   const lines = front.raw.split(/\r?\n/), fields = {};
-  const keys = [...KEYS, ...['seats', 'fresh'].filter(key => Object.hasOwn(front.fields, key))];
-  if (lines.length !== keys.length) fail('expected seven required front matter keys and optional seats/fresh');
+  const keys = [...KEYS, ...['seats', 'fresh', 'duties'].filter(key => Object.hasOwn(front.fields, key))];
+  if (lines.length !== keys.length) fail('expected seven required front matter keys and optional seats/fresh/duties');
   for (const [index, key] of keys.entries()) {
     const match = new RegExp(`^${key}: (\\S(?:.*\\S)?)$`).exec(lines[index]);
     if (!match) fail(`expected a single-line ${key} at position ${index + 1}`);
@@ -37,24 +75,20 @@ function builtinMetadata(text, folder) {
   if (!REQUIRES.includes(fields.requires)) fail('invalid requires');
   for (const key of ['seats', 'fresh']) if (Object.hasOwn(fields, key)) {
     const ids = fields[key].split(',').map(id => id.trim());
-    const allowed = key === 'seats' ? ['lead', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer'] : fields.seats || [];
-    if (ids.some(id => !allowed.includes(id)) || new Set(ids).size !== ids.length) fail(`invalid ${key}`);
+    if (ids.some(id => !SEAT_ID.test(id) || key === 'fresh' && !fields.seats?.includes(id)) || new Set(ids).size !== ids.length) fail(`invalid ${key}`);
     fields[key] = ids;
+  }
+  if (fields.duties) {
+    fields.roles = seatRoles(fields.duties, fields.seats, fail);
+    delete fields.duties;
   }
 
   // Fenced examples may contain headings; only actual document headings define the format.
-  let fence = null;
-  const body = front.body.split(/\r?\n/).filter(line => {
-    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (marker) {
-      if (!fence) fence = marker[1];
-      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
-      return false;
-    }
-    return !fence;
-  }).join('\n');
+  const { visible, fence } = outsideFences(front.body.split(/\r?\n/));
+  if (fields.seats && !teamRegion(visible)) fail('expected one agentrix:team region outside fences');
+  const body = visible.join('\n');
   const headings = [...body.matchAll(/^ {0,3}(#{1,2})(?:[ \t]+(.*)|$)/gm)];
-  if (fence || !/^# [A-Za-z][^\n]*\n/.test(body.trimStart()) || chinese(body) || headings.length !== 5
+  if (fence || !/^# [A-Za-z][^\n]*\n/.test(body.trimStart()) || chinese(front.body) || headings.length !== 5
     || !/^# [A-Za-z]/.test(headings[0][0]) || headings.slice(1).some((heading, index) => heading[0] !== `## ${SECTIONS[index]}`)) fail('expected an English title and the four required sections in order');
   for (let index = 1; index < headings.length; index++) {
     const section = body.slice(headings[index].index + headings[index][0].length, headings[index + 1]?.index).trim();
@@ -65,4 +99,4 @@ function builtinMetadata(text, folder) {
   return fields;
 }
 
-module.exports = { builtinMetadata, TRIGGERS };
+module.exports = { builtinMetadata, TRIGGERS, outsideFences, teamRegion };

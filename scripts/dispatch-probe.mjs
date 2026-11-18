@@ -87,7 +87,7 @@ async function run() {
   const packaged = process.argv.includes('--packaged');
   const helper = packaged ? path.join(root, 'release/win-unpacked/resources/integration/dispatch.cjs') : path.join(root, 'integration/dispatch.cjs');
   await fs.access(helper);
-  const command = `node ${sh(helper)} codex --role 执行 --title ${sh(title)} --model ${declared.model} --effort ${declared.effort} --fast --read-only --cwd ${sh(cwd)} --brief ${sh(brief)} --out ${sh(out)}`;
+  const command = `node ${sh(helper)} codex --role 执行 --seat developer/backend --title ${sh(title)} --model ${declared.model} --effort ${declared.effort} --fast --read-only --cwd ${sh(cwd)} --brief ${sh(brief)} --out ${sh(out)}`;
   model = standin(command, failure);
   await new Promise(resolve => model.server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${model.server.address().port}`;
@@ -122,8 +122,10 @@ async function run() {
   assert.deepEqual(await groups(), [], 'no preparing row is invented before dispatch-start');
   const expand = page.getByRole('button', { name: /进入 Dispatch probe|Full screen.*Dispatch probe/i }).first();
   if (await expand.isVisible().catch(() => false)) await expand.click();
+  await page.getByRole('button', { name: 'Agent', exact: true }).click();
+  const worker = page.locator('.activity-calls [data-role="developer"] .agent-team-row').filter({ hasText: title });
   const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
-  await write('claude --model claude-sonnet-4-5 --dangerously-skip-permissions AGENTRIX_DISPATCH_PROBE\r');
+  await write('claude --dangerously-skip-permissions AGENTRIX_DISPATCH_PROBE\r');
   const answered = new Set();
   let running, ended, liveRate = false;
   await waitFor(async () => {
@@ -138,21 +140,23 @@ async function run() {
       liveRate ||= !!group.rate?.samples;
       if (!running) {
         running = group;
-        await waitFor(async () => (await page.locator('.activity-calls').allTextContents()).join(' ').includes(title), 'pane renders the dispatched title');
-        assert.match((await page.locator('.activity-calls').allTextContents()).join(' '), /运行中/);
+        await waitFor(async () => (await worker.allTextContents()).join(' ').includes('运行中'), 'Agent tab renders the running Developer seat');
         await page.screenshot({ path: path.join(output, 'running.png') });
       }
     }
     if (item.state === (failure ? 'reviewing' : 'done')) {
       ended = group;
-      await waitFor(async () => (await page.locator('.activity-calls').allTextContents()).join(' ').includes(failure ? '模型满载' : '已完成'), 'pane renders the final state');
-      assert.match((await page.locator('.activity-calls').allTextContents()).join(' '), /\d+ token\/s/);
+      await waitFor(async () => (await worker.allTextContents()).join(' ').includes(failure ? '模型满载' : '已完成'), 'the Developer row renders the final state');
       await page.screenshot({ path: path.join(output, 'ended.png') }); return true;
     }
     return false;
   }, 'real Bash -> helper -> real Codex -> ended row', 90000);
   assert.ok(running, 'pane showed the running row');
   assert.equal(ended.items[0].title, title);
+  const finished = ended.items.find(item => item.title === title);
+  assert.deepEqual([finished.seat, finished.specialty, finished.seatSource, finished.brief, finished.log], ['developer', 'backend', 'declared', true, true]);
+  const read = await page.evaluate(({ terminalId, callId }) => window.agentrix.callFile(terminalId, callId, 'brief'), { terminalId, callId: finished.id });
+  assert.deepEqual(read, { ok: true, text: await fs.readFile(brief, 'utf8'), truncated: false });
   assert.ok(ended.rate?.samples && ended.rate.activeMs > 0, 'pane shows the final measured rate');
   if (failure) assert.equal(ended.items[0].failure?.reason, 'capacity');
   else await waitFor(async () => { const group = (await groups())[0], item = group?.items.find(item => item.title === title); return item?.state === 'done' && item.hidden === true && !group.running && !group.reviewing; }, 'successful row retired into 最近完成 after three seconds', 7000);

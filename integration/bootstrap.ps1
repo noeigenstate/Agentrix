@@ -186,15 +186,28 @@ function global:Get-AgentrixHookProxy {
 # which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
 # carry them. A proxy set in this terminal since it started falls back too, and main is told why.
 function global:claude {
+    foreach ($word in $args) {
+        if ($word -ceq '--') { break }
+        if ($word -cmatch '^--(?:model|effort)(?:=|$)') {
+            Write-Host '模型由模型路由决定，请在模型路由中更改。'
+            $global:LASTEXITCODE = 2
+            return
+        }
+    }
     if (-not $global:AgentrixClaudeCommand) {
         Write-Host 'Claude Code was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
         return
     }
     $hooks = $global:AgentrixSession.hooks
     $launchSettings = $hooks.settings
-    if ($args.Count -gt 0 -and $args[0] -eq '--agentrix-seat-fast') {
-        $args = @($args | Select-Object -Skip 1)
-        $launchSettings = $hooks.fastSettings
+    $leadArgs = @()
+    if ($env:AGENTRIX_BOOTSTRAP) {
+        $lead = $null
+        try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
+        if ($lead.Length -eq 3 -and $lead[0] -and $lead[1] -and $lead[2] -cmatch '^[01]$') {
+            $leadArgs = @('--model', $lead[0], '--effort', $lead[1])
+            if ($lead[2] -eq '1' -and $hooks.fastSettings) { $launchSettings = $hooks.fastSettings }
+        }
     }
     $settings = $launchSettings.fallback
     if ($hooks.channel -eq 'http') {
@@ -203,8 +216,10 @@ function global:claude {
     }
     Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
     $currentNote = Get-AgentrixReadingNote
-    $marker = ([string]$currentNote).IndexOf(' Agentrix skill delivery: ')
-    if ($marker -ge 0) { $currentNote = $currentNote.Substring(0, $marker) + ' Agentrix delivers skill instructions through its SessionStart hook.' }
+    if ($currentNote) {
+        $marker = ([string]$currentNote).IndexOf(' Agentrix skill delivery: ')
+        if ($marker -ge 0) { $currentNote = $currentNote.Substring(0, $marker) + ' Agentrix delivers skill instructions through its SessionStart hook.' }
+    }
     # An array even when empty: an if that yields @() gives $null, which splats as an empty argument.
     $readingNote = @(if ($currentNote) { '--append-system-prompt', $currentNote })
     # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
@@ -220,7 +235,7 @@ function global:claude {
     }
     $planner = Set-AgentrixPlanner
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        try { & $global:AgentrixClaudeCommand @settingsArgs @readingNote @args }
+        try { & $global:AgentrixClaudeCommand @settingsArgs @readingNote @leadArgs @args }
         finally {
             Restore-AgentrixEnvironment $planner
             if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
@@ -231,7 +246,7 @@ function global:claude {
     $claudeExit = 0
     try {
         # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
-        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($settingsArgs + $readingNote + @($args))
+        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($settingsArgs + $readingNote + $leadArgs + @($args))
     } catch {
         Write-Error $_
         $claudeExit = 1

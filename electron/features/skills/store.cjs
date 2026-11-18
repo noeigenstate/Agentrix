@@ -8,6 +8,7 @@ const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
+const { renderRoutingSkill } = require('./skill-render.cjs');
 const { ModelCatalog, trackModelRuntime } = require('./model-catalog.cjs');
 const { probeCodex, probeClaude } = require('./model-probe.cjs');
 const { projectSkillTargets, replaceProjectSkills, projectSkillSignature, linkedSkillParent, extensionBase } = require('./project-skills.cjs');
@@ -15,8 +16,11 @@ const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
 // Closing a library watcher does not end its CLI sessions. Keep their references across store recreation in this process.
 const liveSessionSnapshots = new Map();
 
-const defaults = entry => ({ enabled: true, trigger: entry.source === 'builtin' ? entry.trigger : 'auto', autoOptimize: entry.source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
-const triggerWhen = { always: '每个任务开始前', auto: '描述匹配时', 'first-open': '首次打开项目时' };
+const defaults = entry => ({ enabled: true, trigger: entry.source === 'builtin' ? entry.trigger : 'auto', firstOpenRun: false,
+  autoOptimize: entry.source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
+const triggerWhen = { always: '每个任务开始前', auto: '描述匹配时' };
+const migrateTrigger = options => options.trigger === 'first-open' ? { ...options, trigger: 'auto', firstOpenRun: true } : options;
+const runsOnFirstOpen = skill => skill.trigger === 'always' || skill.trigger === 'auto' && skill.firstOpenRun;
 const replacementHistory = value => Array.isArray(value) ? value.filter(item => item && ['project', 'name', 'from', 'backup'].every(key => typeof item[key] === 'string') && Number.isFinite(item.at)).slice(0, 20) : [];
 const canonical = file => {
   const resolved = path.resolve(file);
@@ -25,12 +29,13 @@ const canonical = file => {
 
 class SkillsStore {
   constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {},
-    getModels = () => [], modelProbes = {}, now = Date.now, seatSession = () => null, helperPath = '{AGENTRIX_DISPATCH}' }) {
-    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report, getModels, seatSession, helperPath });
+    getModels = () => [], modelProbes = {}, now = Date.now, seatSession = () => null }) {
+    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report, getModels, seatSession });
     this.globalFolder = path.join(dataDir, 'skills');
     this.optionsFile = path.join(dataDir, 'skills.json');
-    this.options = readJson(this.optionsFile, {}, report, value => value && !Array.isArray(value) && typeof value === 'object'
+    const stored = readJson(this.optionsFile, {}, report, value => value && !Array.isArray(value) && typeof value === 'object'
       && Object.values(value).every(item => item && typeof item === 'object' && !Array.isArray(item)));
+    this.options = Object.fromEntries(Object.entries(stored).map(([id, options]) => [id, migrateTrigger(options)]));
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.projectSkills = new Map(); this.replacementFailures = new Set();
@@ -39,8 +44,8 @@ class SkillsStore {
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
     }
+    this.modelCatalog = new ModelCatalog({ dataDir, probes: modelProbes, now, report, changed: () => { this.invalidateDelivery(); this.publish(); } });
     this.refresh(true);
-    this.modelCatalog = new ModelCatalog({ dataDir, probes: modelProbes, now, report, changed: () => this.publish(false) });
   }
 
   roots() {
@@ -88,15 +93,33 @@ class SkillsStore {
 
   writeCurrentSnapshot(file, delivery, projectId, sessionId) {
     const skills = delivery.skills.map(skill => {
-      const firstRun = this.options[skill.id]?.firstOpenedProjects?.[projectId] === sessionId;
-      return { ...skill, firstRun, trigger: skill.trigger === 'first-open' && !firstRun ? 'auto' : skill.trigger };
+      const firstRun = runsOnFirstOpen(skill) && this.options[skill.id]?.firstOpenedProjects?.[projectId] === sessionId;
+      return { ...skill, firstRun };
     });
-    const session = this.sessionSnapshot(projectId, sessionId);
-    try { writeFile(file, skillInstructions({ ...delivery, skills, ...(session && Object.hasOwn(session, 'seatsBlock') && { seatsBlock: session.seatsBlock }) })); } catch (error) { this.report(error); }
+    try { writeFile(file, skillInstructions({ ...delivery, skills })); } catch (error) { this.report(error); }
   }
 
   pruneDeliveryFiles(now = Date.now()) {
     pruneDeliveryFiles(path.join(this.dataDir, 'skill-delivery'), new Set([...liveSessionSnapshots.values()].flatMap(session => [...session.files])), this.report, now);
+  }
+
+  migrateTeams() {
+    for (const entry of this.entries.values()) {
+      const options = this.options[entry.id];
+      if (entry.source !== 'builtin' || !entry.seats?.length || options?.team?.version === 2 || !(options?.seats || options?.seatDefaultModels)) continue;
+      const legacy = options.seats || {}, global = modelSeats.migrateSeats(legacy.global);
+      const notices = global.notice ? [global.notice] : [];
+      const projects = Object.fromEntries(Object.entries(legacy.projects || {}).flatMap(([id, map]) => {
+        const project = this.getProjects().find(project => project.id === id);
+        if (!project) return [];
+        const migrated = modelSeats.migrateSeats(map);
+        if (migrated.notice) notices.push(`${project.name}: ${migrated.notice}`);
+        return [[id, migrated.map]];
+      }));
+      this.options[entry.id] = { ...options, team: { version: 2, global: global.map, projects },
+        seatDefaultModels: modelSeats.migrateDefaultModels(options.seatDefaultModels, entry.seats),
+        ...(notices.length ? { seatMigrationNotice: notices.join('\n') } : {}) };
+    }
   }
 
   pruneProjects() {
@@ -113,7 +136,7 @@ class SkillsStore {
     }
     let modified = false;
     for (const options of Object.values(this.options)) {
-      for (const scoped of [options.firstOpenedProjects, options.seats?.projects]) {
+      for (const scoped of [options.firstOpenedProjects, options.team?.projects]) {
         for (const id of Object.keys(scoped || {})) if (!projects.has(id)) { delete scoped[id]; modified = true; }
       }
     }
@@ -187,6 +210,7 @@ class SkillsStore {
     }
     this.entries = entries;
     this.knownRoots = knownRoots;
+    this.migrateTeams();
     const pruned = this.pruneProjects();
     if (pruned || modified) this.invalidateDelivery();
     this.persistOptions();
@@ -205,13 +229,20 @@ class SkillsStore {
     const latest = this.history.latest(entry.id), options = { ...defaults(entry), ...this.options[entry.id] };
     const agents = this.getAgents(), required = entry.source === 'builtin' ? entry.requires : 'none';
     const lastUsed = options.lastUsed && { at: options.lastUsed.at, project: this.projectName(options.lastUsedProjectId || options.lastUsed.project, options.lastUsed.project), agent: options.lastUsed.agent };
+    const seats = entry.source === 'builtin' && entry.seats?.length && options.enabled ? this.seatsInfo() : null;
+    const seatSummary = seats?.skill === entry.id ? seats.roles.flatMap(({ id, name }) => {
+      if (!Object.hasOwn(seats.effective, id)) return [];
+      const { model, effort, fast } = seats.effective[id];
+      return [{ seat: id, name, model, effort, fast: fast === true }];
+    }) : null;
     return { id: entry.id, name: entry.name, description: entry.description, title: entry.source === 'builtin' ? entry.title : entry.name,
       summary: entry.source === 'builtin' ? entry.summary : entry.description, source: entry.source, scope: entry.scope,
       when: entry.source === 'builtin' ? entry.when : triggerWhen[options.trigger],
       extends: entry.source === 'builtin' ? null : extensionBase(entry.name, this.builtinNames()),
       replaced: entry.source === 'builtin' ? replacementHistory(options.replaced).map(item => ({ ...item })) : [],
       projectId: entry.projectId, projectName: this.projectName(entry.projectId), path: entry.path,
-      enabled: options.enabled, trigger: options.trigger, autoOptimize: entry.source !== 'builtin' && options.autoOptimize,
+      enabled: options.enabled, trigger: options.trigger, firstOpenRun: options.firstOpenRun === true, ...(seatSummary && { seatSummary }),
+      autoOptimize: entry.source !== 'builtin' && options.autoOptimize,
       confirmChanges: entry.source !== 'builtin' && options.confirmChanges,
       version: latest?.version || 0, updatedAt: latest?.at || null, updatedBy: latest?.by || null, updatedIn: this.projectName(latest?.projectId || latest?.project, latest?.project || null),
       createdByAgent: options.createdByAgent, pending: entry.source !== 'builtin' && this.pendingText(entry) !== null,
@@ -291,10 +322,11 @@ class SkillsStore {
     const entry = this.entry(id);
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('技能选项无效。');
     for (const [key, value] of Object.entries(patch)) {
-      if (key === 'trigger' ? !TRIGGERS.includes(value) : !['enabled', 'autoOptimize', 'confirmChanges'].includes(key) || typeof value !== 'boolean') throw new Error('技能选项无效。');
+      if (key === 'trigger' ? value !== 'first-open' && !TRIGGERS.includes(value)
+        : !['enabled', 'firstOpenRun', 'autoOptimize', 'confirmChanges'].includes(key) || typeof value !== 'boolean') throw new Error('技能选项无效。');
       if (entry.source === 'builtin' && ['autoOptimize', 'confirmChanges'].includes(key) && value) throw new Error('系统自带技能为只读。');
     }
-    this.options[id] = { ...this.options[id], ...patch };
+    this.options[id] = { ...this.options[id], ...migrateTrigger(patch) };
     this.invalidateDelivery();
     this.persistOptions(); this.publish();
     return this.info(entry);
@@ -304,16 +336,11 @@ class SkillsStore {
     return sessionId ? liveSessionSnapshots.get(JSON.stringify([canonical(this.dataDir), projectId, sessionId])) : null;
   }
 
-  leadOptions(projectId, agent, explicit = {}) {
-    const info = this.seatsInfo(projectId);
-    return modelSeats.leadOptions(info ? modelSeats.effective({}, info.global, info.project || {}) : {}, agent, explicit);
+  leadOptions(projectId, agent) {
+    return this.seatsInfo(projectId)?.leads[agent] ?? null;
   }
 
-  fastSettingsFile() {
-    const file = path.join(this.dataDir, 'claude-fast-on.json');
-    writeFile(file, JSON.stringify({ fastMode: true }));
-    return file;
-  }
+  leadAgent(projectId) { return this.seatsInfo(projectId)?.leadAgent ?? null; }
 
   observeModels(family, rows) { this.modelCatalog.accept(family, rows); }
 
@@ -325,35 +352,36 @@ class SkillsStore {
     await this.modelCatalog.refresh(reason);
     const info = this.seatsInfo(projectId, terminalId);
     if (!info) return null;
-    const options = this.options[info.skill] || {}, prior = options.seatDefaultModels || {};
+    const options = this.options[info.skill] || {}, { seatMigrationNotice: migrated, seatDefaultModels: prior = {} } = options;
     const next = {}, moved = [];
-    for (const [id, value] of Object.entries(info.defaults)) {
-      for (const [slot, seat] of id === 'lead' ? Object.entries(value).map(([agent, seat]) => [`lead.${agent}`, seat]) : [[id, value]]) {
-        next[slot] = seat.model;
-        const from = prior[slot] || (seat.model.match(/^gpt-\d+\.\d+-sol$/) ? 'gpt-6.1-sol' : seat.model);
-        if (from !== seat.model) moved.push({ seat: slot, from, to: seat.model });
-      }
+    for (const [id, seat] of Object.entries(info.defaults)) {
+      next[id] = seat.model;
+      const from = prior[id] || (/^gpt-\d+(?:\.\d+)?-sol$/.test(seat.model) ? 'gpt-6.1-sol' : seat.model);
+      if (from !== seat.model) moved.push({ seat: id, from, to: seat.model });
     }
-    if (JSON.stringify(prior) !== JSON.stringify(next)) {
-      this.options[info.skill] = { ...options, seatDefaultModels: next }; this.persistOptions();
+    if (migrated || JSON.stringify(prior) !== JSON.stringify(next)) {
+      this.options[info.skill] = { ...options, seatDefaultModels: next };
+      delete this.options[info.skill].seatMigrationNotice;
+      this.persistOptions();
     }
-    return { ...info, ...(moved.length ? { defaultsMoved: moved } : {}) };
+    return { ...info, ...(moved.length ? { defaultsMoved: moved } : {}), ...(migrated ? { migrated } : {}) };
   }
 
   seatsInfo(projectId = null, terminalId = null) {
-    const entry = [...this.entries.values()].find(entry => entry.source === 'builtin' && entry.seats?.length && this.info(entry).enabled);
+    const entry = [...this.entries.values()].find(entry => entry.source === 'builtin' && entry.seats?.length && this.options[entry.id]?.enabled !== false);
     if (!entry) return null;
     const agents = this.getAgents(), installed = { claude: !!agents.claude?.installed, codex: !!agents.codex?.installed };
-    const stored = this.options[entry.id]?.seats || {};
+    const stored = this.options[entry.id]?.team || {};
     const clean = raw => modelSeats.cleanStoredSeats(raw, entry.seats);
     const global = clean(stored.global), project = projectId && Object.hasOwn(stored.projects || {}, projectId) ? clean(stored.projects[projectId]) : null;
     const catalog = modelSeats.catalog(installed, [...(this.modelCatalog?.rows() || []), ...this.getModels()]);
-    const defaults = Object.fromEntries(Object.entries(modelSeats.defaultsFor(installed, catalog)).filter(([id]) => entry.seats.includes(id)));
+    const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats), lead = entry.seats[0];
+    const effective = modelSeats.effective(defaults, global, project || {});
     const binding = terminalId ? this.seatSession(terminalId) : null;
     const current = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId)?.seatsMap : null;
-    return { skill: entry.id, seats: [...entry.seats], fresh: [...entry.fresh || []], defaults, global, project,
-      effective: modelSeats.effective(defaults, global, project || {}), current: current ? structuredClone(current) : null,
-      catalog, installed, issues: modelSeats.seatIssues(modelSeats.effective(defaults, global, project || {}), catalog),
+    return { skill: entry.id, seats: [...entry.seats], roles: structuredClone(entry.roles || []), lead, authors: ['developer'],
+      ...modelSeats.leadConfiguration(effective, lead, installed, catalog), fresh: [...entry.fresh || []], defaults, global, project,
+      effective, current: current ? structuredClone(current) : null, catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
   }
 
@@ -361,13 +389,12 @@ class SkillsStore {
     if (!['global', 'project'].includes(scope) || scope === 'project' && !this.getProjects().some(project => project.id === projectId)) throw new Error('Invalid seat scope or project.');
     const info = this.seatsInfo(projectId);
     if (!info) return { ok: false, code: 'unknown-seat', message: 'No enabled skill declares seats.' };
-    const unknown = raw && typeof raw === 'object' && (Object.keys(raw).find(id => !info.seats.includes(id))
-      || raw.lead && typeof raw.lead === 'object' && Object.keys(raw.lead).find(id => !['claude', 'codex'].includes(id)));
-    if (unknown) return { ok: false, code: 'unknown-seat', seat: unknown, message: 'Unknown seat or lead slot.' };
+    const unknown = raw && typeof raw === 'object' && Object.keys(raw).find(id => !info.seats.includes(id));
+    if (unknown !== undefined && typeof unknown === 'string') return { ok: false, code: 'unknown-seat', seat: unknown, message: 'Unknown seat.' };
     let map;
     try { map = modelSeats.cleanSeats(raw, info.seats, info.catalog); }
     catch (error) { return { ok: false, code: error.code, ...(error.seat ? { seat: error.seat } : {}), message: error.message }; }
-    const old = this.options[info.skill] || {}, stored = old.seats || {}, liveProjects = new Set(this.getProjects().map(project => project.id));
+    const old = this.options[info.skill] || {}, stored = old.team || {}, liveProjects = new Set(this.getProjects().map(project => project.id));
     const projects = Object.fromEntries(Object.entries(stored.projects || {}).filter(([id]) => liveProjects.has(id)));
     const global = scope === 'global' ? map : info.global;
     if (scope === 'project') {
@@ -380,7 +407,7 @@ class SkillsStore {
       const blocked = modelSeats.checkReviewer(modelSeats.effective(info.defaults, global, clean), info.catalog);
       if (blocked) return blocked;
     }
-    this.options[info.skill] = { ...old, seats: { global, projects } };
+    this.options[info.skill] = { ...old, team: { version: 2, global, projects } };
     this.persistOptions(); this.invalidateDelivery(); this.publish();
     return { ok: true };
   }
@@ -429,6 +456,12 @@ class SkillsStore {
       return this.entries.get(Object.keys(remotePaths).find(id => remotePaths[id] === absolute)) || null;
     }
     const absolute = canonical(path.resolve(cwd || '.', file));
+    const renderedRoot = canonical(path.join(this.dataDir, 'skill-delivery', 'rendered'));
+    if (absolute.startsWith(renderedRoot + '/')) {
+      const match = /^([a-f0-9]{32})\/([a-z][a-z0-9-]*)\/SKILL\.md$/i.exec(absolute.slice(renderedRoot.length + 1));
+      const entry = match && this.entries.get(`builtin:${match[2]}`);
+      if (entry?.seats?.length) return entry;
+    }
     return [...this.entries.values()].find(entry => canonical(entry.path) === absolute && (entry.scope !== 'project' || entry.projectId === projectId)) || null;
   }
 
@@ -456,13 +489,31 @@ class SkillsStore {
     }
   }
 
+  renderedSkill(seats, map, leadAgent, remote) {
+    const entry = this.entries.get(seats.skill);
+    const text = renderRoutingSkill(entry.text, { ...seats, map, leadAgent });
+    if (remote || text === entry.text) return { path: entry.path, text };
+    try {
+      const root = path.join(this.dataDir, 'skill-delivery', 'rendered');
+      if (fs.lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('技能目录不能使用符号链接。');
+      const file = checkedPath(path.join(root, digest(text).slice(0, 32)), entry.folder);
+      if (readText(file) !== text) writeFile(file, text);
+      try { fs.chmodSync(file, 0o444); } catch { /* A read-only mode is best effort. */ }
+      return { path: file, text };
+    } catch (error) {
+      this.report(error);
+      return { path: entry.path, text: entry.text };
+    }
+  }
+
   deliveryInfo(project, remote, sessionId, agent) {
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
     const frozen = this.sessionSnapshot(project.id, sessionId), seats = this.seatsInfo(project.id);
-    const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats?.effective || null;
-    const seatsBlock = frozen && Object.hasOwn(frozen, 'seatsBlock') ? frozen.seatsBlock
-      : seats && (Object.keys(seats.global).length || Object.keys(seats.project || {}).length)
-        ? modelSeats.renderSeats(seatsMap, agent, remote ? '{AGENTRIX_DISPATCH}' : this.helperPath, seats.installed, seats.catalog) : '';
+    const leadAgent = agent || seats?.leadAgent;
+    const leadSeat = seats?.leads[leadAgent];
+    const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats
+      ? { ...seats.effective, ...(leadSeat && { [seats.lead]: leadSeat }) } : null;
+    const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote) } : {});
     const names = this.builtinNames();
     const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
       && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
@@ -470,17 +521,16 @@ class SkillsStore {
     const infos = entries.map(entry => this.info(entry));
     const ordered = infos.flatMap(info => info.source === 'builtin' ? [info, ...infos.filter(item => item.extends === info.name)] : info.extends ? [] : [info]);
     const skills = ordered.map(info => {
-      if (info.enabled && (info.trigger === 'always' || info.trigger === 'first-open')) {
+      if (info.enabled && runsOnFirstOpen(info)) {
         const firstSession = this.options[info.id]?.firstOpenedProjects?.[project.id];
         info.firstRun = !firstSession || firstSession === sessionId;
-        if (info.trigger === 'first-open' && !info.firstRun) info.trigger = 'auto';
       }
-      return { ...info, ...(remote ? { path: remotePath(this.entries.get(info.id)) } : {}) };
+      return { ...info, path: remote ? remotePath(this.entries.get(info.id)) : rendered[info.id]?.path || info.path };
     });
     const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery',
       `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
-      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote, seatsMap, seatsBlock };
+      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote, seatsMap, rendered };
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
@@ -495,7 +545,9 @@ class SkillsStore {
       const sessionKey = JSON.stringify([canonical(this.dataDir), project.id, sessionId]);
       let snapshot = liveSessionSnapshots.get(sessionKey);
       if (!snapshot) { snapshot = { files: new Set() }; liveSessionSnapshots.set(sessionKey, snapshot); }
-      if (!Object.hasOwn(snapshot, 'seatsMap')) Object.assign(snapshot, { seatsMap: structuredClone(delivery.seatsMap), seatsBlock: delivery.seatsBlock });
+      if (!Object.hasOwn(snapshot, 'seatsMap')) snapshot.seatsMap = structuredClone(delivery.seatsMap);
+      if (!Object.hasOwn(snapshot, 'rendered')) snapshot.rendered = structuredClone(delivery.rendered);
+      for (const { path: file } of Object.values(snapshot.rendered)) snapshot.files.add(file);
     }
     let { skills } = delivery;
     let bundle = null;
@@ -505,7 +557,7 @@ class SkillsStore {
       // Measure escaped JSON, including the manifest and omission notice, with ample room for the open envelope.
       for (const skill of enabled) {
         if (skill.extends && !included.some(base => base.source === 'builtin' && base.name === skill.extends)) continue;
-        const entry = this.entries.get(skill.id), file = { id: entry.id, name: entry.folder, scope: entry.scope, text: entry.text };
+        const entry = this.entries.get(skill.id), file = { id: entry.id, name: entry.folder, scope: entry.scope, text: delivery.rendered[skill.id]?.text ?? entry.text };
         const candidate = { ...delivery, skills: [...included, skill], skippedNote: skippedNote(enabled.length) };
         if (Buffer.byteLength(JSON.stringify({ files: [...files, file], instructions: skillInstructions(candidate), key: '0'.repeat(64) })) > MAX_SSH_BUNDLE_BYTES) continue;
         files.push(file); included.push(skill);
@@ -516,7 +568,8 @@ class SkillsStore {
       bundle.key = safeId(JSON.stringify(bundle));
     } else {
       const instructions = skillInstructions(delivery);
-      delivery.fingerprint = digest(JSON.stringify([instructions, skills.filter(skill => skill.enabled).map(skill => [skill.id, this.entries.get(skill.id)?.text])]));
+      delivery.fingerprint = digest(JSON.stringify([instructions, skills.filter(skill => skill.enabled)
+        .map(skill => [skill.id, delivery.rendered[skill.id]?.text ?? this.entries.get(skill.id)?.text])]));
       // Hooks need the launch's first-run details even if another session has already rewritten the current manifest.
       // Like receipts, the launch hash keeps 128 bits so PowerShell 5.1 can read snapshots under a long profile path.
       delivery.sessionManifest = path.join(path.dirname(manifest), `${safeId(project.id).slice(0, 32)}-${safeId(JSON.stringify([sessionId, agent, delivery.fingerprint])).slice(0, 32)}.md`);
@@ -552,7 +605,7 @@ class SkillsStore {
     if (!remote && (!agent || started && sessionId || !fs.existsSync(manifest))) {
       // Resumed Codex replays its original developer note. Keep its current-project path alive, without replaying first-open claims.
       const currentSkills = skills.map(skill => this.options[skill.id]?.firstOpenedProjects?.[project.id]
-        ? { ...skill, firstRun: false, trigger: skill.trigger === 'first-open' ? 'auto' : skill.trigger } : skill);
+        ? { ...skill, firstRun: false } : skill);
       try { writeFile(manifest, skillInstructions({ ...delivery, skills: currentSkills })); } catch (error) { this.report(error); }
     }
     const result = { ...delivery, bundle };

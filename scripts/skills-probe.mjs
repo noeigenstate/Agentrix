@@ -17,6 +17,7 @@ const { createSkillsModel } = require('./skills-probe-model.cjs');
 const { claudeProbeConfig } = require('./skills-probe-config.cjs');
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
 const { onPath } = require('../electron/agents.cjs');
+const { safeId } = require('../electron/features/skills/history.cjs');
 const selected = process.argv.find(arg => arg.startsWith('--agent='))?.slice(8);
 if (selected && !['claude', 'codex'].includes(selected)) throw new Error('Use --agent=claude or --agent=codex');
 const agents = selected ? [selected] : ['claude', 'codex'];
@@ -44,6 +45,7 @@ async function run() {
   await fs.writeFile(path.join(env.CLAUDE_CONFIG_DIR, 'settings.json'), JSON.stringify({ skipDangerousModePermissionPrompt: true }));
   await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects, settings: {
     terminalRenderer: 'dom', restoreSessions: false, closeToTray: false, notifications: false, sound: false, language: 'en', startView: 'workspace', guideVersion: '9.9.9',
+    codexPermissions: 'config',
   } }));
   const packaged = process.argv.includes('--packaged');
   app = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env, timeout: 30000 });
@@ -59,9 +61,7 @@ async function run() {
   assert.ok(standard, 'The built-in code standard is available.');
   // Exercise both delivery timings in this isolated profile, independently of shipped defaults.
   await call('setSkillOptions', builtin.id, { trigger: 'always' });
-  await call('setSkillOptions', standard.id, { trigger: 'first-open' });
-  model.setSkill(builtin.path);
-  const instruction = `Before any task, read and follow ${builtin.path.replace(/\\/g, '/')}.`;
+  await call('setSkillOptions', standard.id, { trigger: 'auto', firstOpenRun: true });
   const standardPath = standard.path.replace(/\\/g, '/');
   const firstOpen = `Before the first task of this session, read and follow ${standardPath}; this is its first run in this project.`;
   await app.evaluate(({ app, BrowserWindow, dialog }, expectedProfile) => {
@@ -90,22 +90,47 @@ async function run() {
       if (await expand.isVisible().catch(() => false)) await expand.click();
       const write = data => page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: terminalId, data });
       const rows = () => page.locator(`[data-terminal-id="${terminalId}"] .xterm-rows > div`).allTextContents();
-      const command = agent === 'claude' ? 'claude --model claude-sonnet-4-5 --dangerously-skip-permissions AGENTRIX_SKILLS_PROBE'
-        : 'codex -a never --sandbox read-only --no-alt-screen AGENTRIX_SKILLS_PROBE';
-      await write(command + '\r');
       const answered = new Set();
-      await waitFor(async () => {
+      const answerSetup = async () => {
         const screen = (await rows()).join('\n');
         for (const [key, pattern, answer] of [['trust', /Yes, I trust this folder|trust the files in this folder/i, /[❯›>]\s*No, exit/i.test(screen) ? '\x1b[B\r' : '\r'],
           ['bypass', /Yes, I accept|accept.*bypass permissions/i, '\x1b[B\r'], ['theme', /Choose the text style/i, '\r']]) {
           if (!answered.has(key) && pattern.test(screen)) { answered.add(key); await write(answer); }
         }
+      };
+      let runtimeSessionId;
+      if (agent === 'claude') {
+        await write('claude --dangerously-skip-permissions\r');
+        await waitFor(async () => {
+          await answerSetup();
+          const current = (await call('getState')).projects.find(item => item.id === project.id)?.terminals.find(t => t.id === terminalId);
+          return current?.agent === 'claude' && current.cliState?.phase === 'ready';
+        }, 'Claude accepts the first owner message');
+      } else {
+        const started = await page.evaluate(id => window.agentrix.nativeSession.start(id, { agent: 'codex' }), terminalId);
+        assert.ok(started.ok, started.error);
+        runtimeSessionId = started.value.runtimeSessionId;
+      }
+      const manifest = path.join(profile, 'skill-delivery', `${safeId(project.id).slice(0, 32)}-${agent}.md`);
+      const delivered = await fs.readFile(manifest, 'utf8');
+      const skillPath = /Before any task, read and follow (.+?\/model-routing\/SKILL\.md)(?:;|\.)/.exec(delivered)?.[1];
+      assert.ok(skillPath, 'the session names its shipped or rendered routing skill');
+      model.setSkill(skillPath);
+      const instruction = `Before any task, read and follow ${skillPath}.`;
+      if (agent === 'claude') await write('AGENTRIX_SKILLS_PROBE\r');
+      else {
+        const result = await page.evaluate(({ id, runtime, messageId }) => window.agentrix.nativeSession.send(id, runtime, messageId, 'AGENTRIX_SKILLS_PROBE', []),
+          { id: terminalId, runtime: runtimeSessionId, messageId: randomUUID() });
+        assert.ok(result.ok, result.error);
+      }
+      await waitFor(async () => {
+        if (agent === 'claude') await answerSetup();
         const usage = (await call('listSkills')).find(skill => skill.id === builtin.id)?.lastUsed;
         return model.results.has(agent) && usage?.agent === agent && usage.project === project.name && usage.at > previousUse;
       }, `${agent} ${phase}: tool read and lastUsed`, 90000);
       const captured = model.requests.slice(requestStart).filter(request => request.agent === agent).map(request => request.instructions);
       assert.ok(captured.some(text => text.includes(instruction)), `${agent}: system/developer instructions contain the always skill and exact path`);
-      if (phase === 'first-open') assert.ok(captured.some(text => text.includes(firstOpen)), `${agent}: first session carries code-standard first-open`);
+      if (phase === 'first-open') assert.ok(captured.some(text => text.includes(firstOpen)), `${agent}: first session carries the auto skill's first-run instruction`);
       else assert.ok(captured.every(text => !text.includes(firstOpen)), `${agent}: ${phase} does not repeat first-open`);
       if (phase === 'later-session') assert.ok(captured.some(text => text.includes(`code-standard: ${standard.description} (${standardPath})`)), `${agent}: later session offers code-standard as auto`);
       if (phase === 'replaced') {

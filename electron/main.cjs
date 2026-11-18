@@ -15,7 +15,7 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
 const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
-const { writeBootstrap, removeBootstrap, updateBootstrapBackground } = require('./features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead } = require('./features/terminal-events/bootstrap-file.cjs');
 const { claudeBackgroundEnvironment } = require('./shared/claude-background.cjs');
 const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
 const { createHookIngest } = require('./features/terminal-events/hook-ingest.cjs');
@@ -550,10 +550,15 @@ function endSkillSession(s) {
 // Wrappers reread idle shells' notes. Running agents keep the note actually delivered at their launch.
 function refreshSkillNotes() {
   for (const s of sessions.values()) {
-    if (!s.skillNoteFile || s.codexActive || s.status === 'exited') continue;
+    if (!s.skillNoteFile || s.status === 'exited') continue;
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
-    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'), skills.delivery(project, false, s.sessionId), path.join(integrationDir, 'dispatch.cjs'));
+    if (s.bootstrapFile) {
+      try { updateBootstrapLead(s.bootstrapFile, skills.leadOptions(project.id, 'claude')); } catch (error) { report(error); }
+    }
+    if (s.codexActive) continue;
+    const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'),
+      skills.delivery(project, false, s.sessionId, { agent: 'claude' }), path.join(integrationDir, 'dispatch.cjs'));
     if (note !== s.skillNote) { writeFileAtomic(s.skillNoteFile, note); s.skillNote = note; }
   }
 }
@@ -1090,11 +1095,8 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
   const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
   // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
-  const fresh = !providerSessionId && !resume && !launch?.resume;
-  const lead = fresh ? skills.leadOptions?.(project.id, agent, launch || {}) || launch : launch;
-  const preserveRunOptions = agent === 'codex' && (resume || launch?.resume) && !['model', 'effort', 'fast'].some(key => launch?.[key] != null);
-  const runOptions = { model: lead?.model || null, effort: lead?.effort || 'high', fast: lead?.fast ?? (agent === 'codex'),
-    ...(preserveRunOptions ? { preserveRunOptions: true } : {}),
+  const lead = skills.leadOptions?.(project.id, agent);
+  const runOptions = { model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
     ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
@@ -1139,7 +1141,7 @@ function structuredEvent(id, event) {
   let s = sessions.get(id);
   if (!s || !s.nativeStructured || s.nativeRuntimeSessionId !== event.runtimeSessionId) {
     if (event.type !== 'session.state' || event.payload.state !== 'starting') return;
-    s = { nativeStructured: true, nativeSpec: spec, terminalId: id, projectId: project.id, sessionId: spec.sessionId,
+    s = { nativeStructured: true, nativeSpec: spec, terminalId: id, projectId: project.id, sessionId: spec.sessionId, skillSessionId: spec.skillSessionId,
       sessionKey: spec.sessionKey, controlCapability: spec.controlCapability, bootstrapFile: spec.bootstrapFile,
       status: 'codex', ready: false, codexActive: true, agent: spec.agent, nativeMode: event.transport,
       activitySince: Date.now(), codexActivity: 'unknown', error: null, nativeMessages: new Map(), usageEnv: spec.env,
@@ -1221,7 +1223,7 @@ async function initializeNativeSessions() {
   const codexFactory = createCodexRuntime({ resolveExecutable: codexExecutable, renderImage: generatedImages.render, settleImage: generatedImages.settle, translate: t,
     launchRemote: async (spec, { signal, readOnly = false }) => {
       const project = findProject(spec.terminalId);
-      const delivery = readOnly ? null : skills.delivery(project, true, spec.sessionId, { agent: 'codex', started: true });
+      const delivery = readOnly ? null : skills.delivery(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true });
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
         allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
@@ -1272,6 +1274,15 @@ async function initializeNativeSessions() {
       { family: 'claude', local: args[0]?.kind !== 'ssh', runtimes: seatModelRuntimes.claude });
   };
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
+    prepareConversation: spec => {
+      const project = findProject(spec.terminalId), previous = spec.skillSessionId || spec.sessionId, skillSessionId = randomUUID();
+      const lead = skills.leadOptions(project.id, spec.agent);
+      Object.assign(spec, { skillSessionId, model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null });
+      if (spec.agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
+      if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
+        skills.delivery(project, false, skillSessionId, { agent: spec.agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
+      return committed => skills.endSession(project.id, committed ? previous : skillSessionId);
+    },
     readHistory: async (id, { signal } = {}) => {
       const project = findProject(id);
       const spec = nativeSpecs.get(id);
@@ -1305,8 +1316,7 @@ async function initializeNativeSessions() {
       nativeSpecs.delete(spec.terminalId);
       if (spec.bootstrapFile) removeBootstrap(spec.bootstrapFile);
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
-      const seat = history ? null : skills.leadOptions?.(spec.projectId, spec.agent, spec);
-      launchPlans.set(spec.terminalId, { agent: spec.agent, fast: seat?.fast, command: launchCommand(spec.agent, history, seat), threadId: history?.id || null });
+      launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history), threadId: history?.id || null });
       store.setRestore(spec.terminalId, { nativeTransport: null });
       startTerminal(spec.terminalId, null, true);
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
@@ -1356,7 +1366,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const hooks = bootstrapFile && terminalHooks({ port: hookServer?.port, terminalId: id, sessionKey, eventServer, env, cwd: startPath,
     shell: { posix: ['zsh', 'bash'].includes(shellKind), powershellPath, script: claudeHookPath, node: process.execPath,
       helper: path.join(integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
-  if (hooks && launchPlans.get(id)?.fast === true) {
+  if (hooks) {
     hooks.fastSettings = Object.fromEntries(Object.entries(hooks.settings).map(([channel, text]) =>
       [channel, JSON.stringify({ ...JSON.parse(text), fastMode: true })]));
     env.AGENTRIX_FAST_HOOK_SETTINGS = hooks.fastSettings.http;
@@ -1364,7 +1374,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   }
   if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
-    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks });
+    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks, lead: skills.leadOptions?.(project.id, 'claude') ?? null });
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
@@ -1378,7 +1388,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
     env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
-      skills.delivery(project, false, sessionId), path.join(integrationDir, 'dispatch.cjs'));
+      skills.delivery(project, false, sessionId, { agent: 'claude' }), path.join(integrationDir, 'dispatch.cjs'));
     writeFileAtomic(skillNoteFile, env.AGENTRIX_READING_NOTE);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});
@@ -1601,8 +1611,7 @@ function registerUnavailableNative(handle) {
     if (options.agent === 'codex') throw new Error('Codex 原生模式连接失败，请重试。');
     if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
-    const seat = history ? null : skills.leadOptions?.(project.id, options.agent);
-    launchPlans.set(id, { agent: options.agent, fast: seat?.fast, command: launchCommand(options.agent, history, seat), threadId: history?.id || null });
+    launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast();
     return { runtimeSessionId: randomUUID() };
   }
@@ -1642,6 +1651,11 @@ function registerIpc() {
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
     // The legacy reply IPC remains inert; no planner relay requests are emitted.
     listAgentCommands, interventions, relayResult() {}, t });
+  handle('agents:callFile', (terminalId, callId, kind) => {
+    if (typeof terminalId !== 'string' || !terminalId || terminalId.length > 160) return { ok: false, code: 'refused' };
+    if (store.findTerminal(terminalId)?.project.kind !== 'local') return { ok: false, code: 'unavailable' };
+    return AgentCalls.forTerminal(sessions, terminalId)?.callFile(callId, kind) ?? { ok: false, code: 'unavailable' };
+  });
   registerSshIpc({ handle, getSSHInfo, sshAuth, addSSH: input => store.addSSH(input), hasSession: id => sessions.has(id), getSession: id => sessions.get(id),
     startTerminal, setStartupError: (id, message) => startupErrors.set(id, message), broadcast });
   updatesIpc = registerUpdatesIpc({ handle, updateManager, updateSettings: patch => { updateStoreSettings(patch); broadcast(); }, openExternal: url => shell.openExternal(url), getWindow: () => window, dialog, t,
@@ -1719,8 +1733,7 @@ function registerIpc() {
       await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;
     }
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
-    const seat = history ? null : skills.leadOptions?.(project.id, agent);
-    launchPlans.set(id, { agent, fast: seat?.fast, command: launchCommand(agent, history, seat), threadId: history?.id || null });
+    launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });
@@ -1790,7 +1803,7 @@ if (!app.requestSingleInstanceLock()) {
           }
           return rows;
         },
-      }, helperPath: path.join(integrationDir, 'dispatch.cjs'),
+      },
       seatSession: id => {
         const session = sessions.get(id), spec = nativeSpecs.get(id);
         return session && session.status !== 'exited' && session.codexActive

@@ -19,7 +19,7 @@ test('builtins have the requested views and sorted names; no project means built
   const { projectPath, home, write } = await fixture(t);
   await write(path.join(home, '.claude/commands/local.md'), '# Local');
   await write(path.join(home, '.codex/prompts/local.md'), '# Local');
-  for (const [agent, count, reading] of [['claude', 33, ['/btw', '/init', '/review', '/security-review']], ['codex', 52, ['/goal', '/init', '/plan', '/review', '/side']]]) {
+  for (const [agent, count, reading] of [['claude', 30, ['/btw', '/init', '/review', '/security-review']], ['codex', 50, ['/goal', '/init', '/plan', '/review', '/side']]]) {
     const commands = await listAgentCommands({ agent, home });
     assert.equal(commands.length, count);
     assert.deepEqual(commands.map(item => item.name), commands.map(item => item.name).sort((a, b) => a.localeCompare(b)));
@@ -30,9 +30,9 @@ test('builtins have the requested views and sorted names; no project means built
   }
 });
 
-test('Claude picker keeps its original names, views and model-command descriptions', async () => {
+test('Claude picker keeps the other commands and omits the routing controls', async () => {
   const commands = await listAgentCommands({ agent: 'claude' });
-  const terminal = ['help', 'model', 'fast', 'effort', 'resume', 'status', 'config', 'permissions', 'mcp', 'hooks',
+  const terminal = ['help', 'resume', 'status', 'config', 'permissions', 'mcp', 'hooks',
     'memory', 'context', 'cost', 'usage', 'doctor', 'clear', 'compact', 'rewind', 'export', 'add-dir',
     'login', 'logout', 'bashes', 'plugin', 'output-style', 'statusline', 'terminal-setup', 'release-notes', 'exit'];
   const reading = ['init', 'review', 'security-review', 'btw'];
@@ -50,7 +50,7 @@ test('Codex 0.161.0 lists canonical popup commands with terminal and prompt view
   const { home } = await fixture(t);
   const commands = await listAgentCommands({ agent: 'codex', home });
   const terminal = [
-    'model', 'fast', 'ide', 'permissions', 'keymap', 'vim', 'experimental', 'approve',
+    'ide', 'permissions', 'keymap', 'vim', 'experimental', 'approve',
     'memories', 'skills', 'import', 'hooks', 'rename', 'new', 'archive', 'delete', 'resume',
     'fork', 'worktree', 'app', 'compact', 'recap', 'voice', 'agents', 'subagents',
     'copy', 'export', 'raw', 'tui', 'diff', 'mention', 'status', 'daemon', 'warnings',
@@ -60,6 +60,10 @@ test('Codex 0.161.0 lists canonical popup commands with terminal and prompt view
   assert.deepEqual(commands.filter(item => item.view === 'terminal').map(item => item.name),
     terminal.map(name => '/' + name).sort((a, b) => a.localeCompare(b)));
   for (const name of terminal) assert.equal(isLocalAgentCommand('codex', '/' + name), true, name);
+  for (const name of ['model', 'effort', 'fast']) {
+    assert.ok(!commands.some(command => command.name === '/' + name));
+    assert.equal(isLocalAgentCommand('codex', '/' + name), true, name);
+  }
   for (const text of ['/review find regressions', '/init', '/plan investigate', '/goal fix tests', '/side why']) {
     assert.equal(isLocalAgentCommand('codex', text), false, text);
   }

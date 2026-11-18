@@ -292,7 +292,7 @@ type Bridge = {
     answer(terminalId: string, runtimeSessionId: string, requestId: string, answer: NativeAnswer): Promise<Result<unknown>>;
     snapshot(terminalId: string): Promise<Result<NativeSnapshot | null>>;
     commands(terminalId: string, runtimeSessionId: string): Promise<Result<AgentCommand[]>>;
-    runOptions(terminalId: string, runtimeSessionId: string, patch: Pick<NativeRunOptionsPatch, 'permissions'>): Promise<Result<NativeRunOptions>>;
+    runOptions(terminalId: string, runtimeSessionId: string, patch: Pick<NativeRunOptionsPatch, 'permissions'>): Promise<Result<NativeRunOptions> | { ok: false; code: 'routing-owned'; error: string }>;
     newConversation(terminalId: string, runtimeSessionId: string): Promise<Result<{ runtimeSessionId: string }>>;
     shell(terminalId: string, runtimeSessionId: string, clientMessageId: string, command: string): Promise<Result<{ exitCode: number | null }>>;
     onEvent(listener: (event: AgentEvent) => void): () => void;

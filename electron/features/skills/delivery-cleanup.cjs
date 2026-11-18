@@ -19,6 +19,19 @@ function pruneDeliveryFiles(folder, live, report, now = Date.now()) {
   visit(folder, (entry, file) => {
     if (entry.isFile() && SNAPSHOT.test(entry.name) && (!live.has(file.replace(/\.json$/, '')) || expired(file))) fs.unlinkSync(file);
   });
+  visit(path.join(folder, 'rendered'), (entry, hashPath) => {
+    if (!entry.isDirectory() || !/^[a-f0-9]{32}$/.test(entry.name)) return;
+    visit(hashPath, (skill, directory) => {
+      if (!skill.isDirectory() || !/^[a-z][a-z0-9-]*$/.test(skill.name)) return;
+      visit(directory, (item, file) => {
+        if (item.name !== 'SKILL.md' || !item.isFile() || live.has(file) || !expired(file)) return;
+        if (process.platform === 'win32') fs.chmodSync(file, 0o600);
+        fs.unlinkSync(file);
+      });
+      if (!fs.readdirSync(directory).length) fs.rmdirSync(directory);
+    });
+    if (!fs.readdirSync(hashPath).length) fs.rmdirSync(hashPath);
+  });
   // Only known receipt levels are traversed; never follow a symlink into another folder.
   visit(path.join(folder, 'receipts'), (provider, providerPath) => {
     if (!provider.isDirectory() || provider.name !== 'claude') return;

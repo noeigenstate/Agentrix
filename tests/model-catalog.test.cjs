@@ -61,15 +61,19 @@ test('newest numeric Sol defaults do not rewrite choices; rendering degrades uns
     { model: 'gpt-6.2-sol', efforts: ['medium'], defaultEffort: 'medium', fast: false },
     { model: 'gpt-6.10-sol', efforts: ['high'], fast: true }, { model: 'gpt-7.0-sol', listed: false },
     { model: 'claude-opus-5-5', fast: true }]);
-  assert.equal(seats.defaultsFor({ codex: true }, models).core.model, 'gpt-6.10-sol');
-  const raw = { core: { model: 'gpt-6.2-sol', effort: 'ultra', fast: true } };
-  assert.deepEqual(seats.cleanStoredSeats(raw, ['core']), raw);
+  assert.equal(seats.defaultsFor({ codex: true }, models).developer.model, 'gpt-6.10-sol');
+  const raw = { developer: { model: 'gpt-6.2-sol', effort: 'ultra', fast: true } };
+  assert.deepEqual(seats.cleanStoredSeats(raw, ['developer']), raw);
   assert.equal(seats.seatIssues(raw, models).length, 2);
-  assert.match(seats.renderSeats(raw, 'codex', 'helper', { codex: true }, models), /Adjusted effort ultra to medium.*Adjusted fast on to off/);
-  assert.equal(raw.core.fast, true);
-  const block = seats.renderSeats({ execution: { model: 'claude-opus-5-5', effort: 'high', fast: true } }, 'claude', 'helper', { claude: true }, models);
-  assert.match(block, /claude --model claude-opus-5-5 --effort high --fast.*--detach; then.*wait/);
-  assert.doesNotMatch(block, /Agent call/);
+  assert.deepEqual(seats.resolveSeat(raw.developer, null, { codex: true }, models), { model: 'gpt-6.2-sol', effort: 'medium', fast: false });
+  assert.equal(raw.developer.fast, true);
+  const { renderRoutingSkill } = require('../electron/features/skills/skill-render.cjs');
+  const text = '<!-- agentrix:team -->\n| developer | Developer | Implementation | Code | Opus | Agent |\n<!-- /agentrix:team -->';
+  const roles = [{ id: 'orchestrator' }, { id: 'developer' }], installed = { claude: true };
+  const render = (model, fast = false) => renderRoutingSkill(text, { roles, map: { developer: { model, effort: 'high', fast } }, leadAgent: 'claude', installed, catalog: models });
+  assert.match(render('claude-opus-5-5', true), /helper claude --seat developer --model claude-opus-5-5 --effort high --fast --detach, then wait/);
+  assert.match(render('claude-opus-5-5'), /Agent call, model "opus", effort "high"/);
+  assert.match(render('claude-opus-5-4'), /helper claude --seat developer --model claude-opus-5-4 /);
 });
 
 test('rank rule matches every entry in the required shared UI fixture', () => {

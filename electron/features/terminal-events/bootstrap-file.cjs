@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { writeFileAtomic } = require('../../atomic-write.cjs');
 
 // The file a terminal's shell integration and the dispatch helper read to reach main: the session's key, the event
 // pipe and the control channel, and for a terminal also its hook channel and settings (hook-channel.cjs) and the paths
@@ -9,7 +10,13 @@ const { randomUUID } = require('node:crypto');
 // Code lets SessionStart hooks append to that file, so it is never the installed one.
 const claudeEnvFile = file => file.replace(/\.json$/i, '') + '-claude-env.sh';
 
-function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, ...terminal }) {
+function updateBootstrapLead(file, lead) {
+  if (lead && (typeof lead.model !== 'string' || lead.model.length > 160 || !/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(lead.model)
+      || typeof lead.effort !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(lead.effort))) throw new Error('Invalid lead seat.');
+  writeFileAtomic(file + '.lead', lead ? `${lead.model}\n${lead.effort}\n${lead.fast === true ? '1' : '0'}\n` : '');
+}
+
+function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, ...terminal }) {
   fs.rmSync(file + '.background.json', { force: true });
   const pipeName = process.platform === 'win32' ? eventServer.name : eventServer.address;
   const packaged = process.resourcesPath && path.join(process.resourcesPath, 'integration');
@@ -20,11 +27,13 @@ function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey,
   if (copy) fs.writeFileSync(copy, fs.readFileSync(hook), { mode: 0o600 });
   fs.writeFileSync(file, JSON.stringify({ projectId, projectPath, sessionKey, controlAddress, controlCapability, pipeName,
     shims, nodePath: process.execPath, claudeEnvFile: copy, ...terminal }), { mode: 0o600 });
+  if (lead !== undefined) updateBootstrapLead(file, lead);
+  else fs.rmSync(file + '.lead', { force: true });
 }
 
 // Removes a session's bootstrap file and the files written with it.
 function removeBootstrap(file) {
-  for (const name of [file, claudeEnvFile(file), file + '.background.json']) fs.rmSync(name, { force: true });
+  for (const name of [file, claudeEnvFile(file), file + '.background.json', file + '.lead']) fs.rmSync(name, { force: true });
 }
 
 // Refresh only launch policy: keys, hook settings and the private startup hook remain unchanged.
@@ -52,4 +61,4 @@ async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground };
+module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead };

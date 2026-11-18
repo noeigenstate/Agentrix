@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { createEventStream } = require('../native-session/events.cjs');
 const { createNormalizer } = require('./normalize.cjs');
 const { TokenRates } = require('../agents/token-rate.cjs');
+const { routingOwned, routingPatch, routingText } = require('../agents/agent-command.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
 const { billingIdentityError, startupFailure, LIMIT_MESSAGES, LIMIT_SWITCHING } = require('./identity.cjs');
@@ -30,8 +31,7 @@ function createClaudeSession(spec, emit, dependencies) {
   let active, opening, preparing, closing, sdk, executable, started = false, closed = false, stopping = false;
   let providerId = spec.providerSessionId || null, state = 'starting', turnId = null;
   let apiObservedAt = null, limits = null, fallbackInput = null, resultCost = 0, observedModel = null;
-  let changingOptions = null, providerFailure = null;
-  let shellAbort = null, defaultModelReset = false;
+  let providerFailure = null, shellAbort = null;
   const shellControllers = new Set();
   async function stopShells(foregroundOnly = false) {
     const jobs = [...shellControllers].filter(job => !foregroundOnly || !job.returned);
@@ -158,7 +158,7 @@ function createClaudeSession(spec, emit, dependencies) {
           run.initialized = true; run.init = initFacts(message); providerId = message.session_id; stream.provider(providerId);
           apiObservedAt = now();
           onSession(providerId);
-          run.model = run.resetModel || message.model || null;
+          run.model = message.model || null;
           observedModel = run.model;
           publish('routing.updated', {
             declared: { model: spec.model || null, effort: spec.effort || null, fast: spec.fast ?? null },
@@ -246,13 +246,6 @@ function createClaudeSession(spec, emit, dependencies) {
           outcome.error = outcome.message = run.compactFailure || '上下文压缩失败。' + outcome.message;
           publish('error', { code: 'context_compaction_failed', message: outcome.message, retryable: false, willRetry: false, stage: 'turn' });
         }
-        // Raw SDK input can change the CLI model too. Carry only a successful,
-        // identified local /model command into the next query. Its new init may
-        // arrive on the next input; a reply's model is not a configuration choice.
-        const modelInput = run.turnInputs?.find(input => input.clientMessageId === message.user_message_uuid);
-        const modelChoice = message.local_command === 'model' && message.subtype === 'success' && message.is_error === false && outcome.status === 'completed'
-          && /^\/model\s+(\S+)\s*$/.exec(modelInput?.text?.trim() || '');
-        if (modelChoice) { defaultModelReset = modelChoice[1] === 'default'; spec.model = defaultModelReset ? null : modelChoice[1]; }
         if (run.limitMessage) outcome.error = outcome.message = run.limitMessage;
         if (!run.interrupted && !run.modelReplied && (message.is_error === true || outcome.status === 'failed')) {
           for (const id of run.shellInputs || []) shells.get(id)?.reject(null, { completedTurn: true,
@@ -366,13 +359,6 @@ function createClaudeSession(spec, emit, dependencies) {
       // The pinned SDK initializes its control channel without consuming a user prompt.
       // Check this account snapshot before allowing input; stream init remains an independent guard.
       await readBillingIdentity(run.query, { signal: run.abort.signal, timeoutMs: dependencies.initializationTimeoutMs });
-      // A resumed transcript retains its last explicit model. Reapply an
-      // acknowledged default reset before the renewed query accepts any input.
-      if (defaultModelReset && providerId && run.query.setModel) {
-        await run.query.setModel(undefined);
-        const context = await run.query.getContextUsage();
-        run.resetModel = typeof context.model === 'string' ? context.model : null;
-      }
       observe({ kind: 'identity', observed: run.generation });
       if (closed || stopping || run.closing) throw new Error('会话已停止。');
       if (!prepareOnly && !canContinue()) {
@@ -407,7 +393,6 @@ function createClaudeSession(spec, emit, dependencies) {
   async function panel(command, images, clientMessageId) {
     if (images.length) throw new Error('命令不能附带图片。');
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
-    if (changingOptions) { try { await changingOptions; } catch { } }
     const read = command === 'context' || command === 'status' ? async () => {
       const context = await (await optionsQuery(true)).query.getContextUsage();
       if (typeof context?.model === 'string') observedModel = context.model;
@@ -421,10 +406,10 @@ function createClaudeSession(spec, emit, dependencies) {
     return { clientMessageId, status: 'consumed', local: JSON.parse(clean(JSON.stringify(local))) };
   }
   async function send({ clientMessageId, text, images = [] }, shellContent) {
+    if (!shellContent && spec.owner !== 'dispatch' && routingText(text)) throw routingOwned();
     const command = !shellContent && spec.owner !== 'dispatch' && typeof text === 'string' ? panelCommand(text) : null;
     if (command) return panel(command, images, clientMessageId);
     if (shellAbort && !shellContent) throw new Error('命令仍在运行，请等待结束。');
-    if (changingOptions) await changingOptions;
     if (typeof text !== 'string' || !text.trim() && !images.length) throw new Error('无效的消息。');
     if (closed || stopping || !started || ['failed', 'stopped'].includes(state)) throw new Error('会话已停止。');
     if (sent.has(clientMessageId)) return { status: sent.get(clientMessageId) };
@@ -525,32 +510,9 @@ function createClaudeSession(spec, emit, dependencies) {
     } catch (error) { error.message = clean(error.message); throw error; }
   }
   async function runOptions(patch) {
-    if (!Object.keys(patch).length) {
-      if (changingOptions) { try { await changingOptions; } catch {} }
-      return optionsSnapshot();
-    }
-    const previous = changingOptions;
-    const update = (async () => {
-      if (previous) { try { await previous; } catch {} }
-      const run = await optionsQuery();
-      // Keep acknowledged changes on spec so a resumed query keeps the same choices.
-      if (Object.hasOwn(patch, 'model')) { await run.query.setModel(patch.model || undefined); spec.model = patch.model; defaultModelReset = patch.model === null; }
-      const flags = {};
-      if (Object.hasOwn(patch, 'effort')) flags.effortLevel = patch.effort;
-      if (Object.hasOwn(patch, 'fast')) flags.fastMode = patch.fast;
-      if (Object.keys(flags).length) {
-        await run.query.applyFlagSettings(flags);
-        if (Object.hasOwn(patch, 'effort')) spec.effort = patch.effort;
-        if (Object.hasOwn(patch, 'fast')) spec.fast = patch.fast;
-      }
-      const context = await run.query.getContextUsage();
-      if (typeof context.model === 'string') observedModel = context.model;
-      return optionsSnapshot();
-    })();
-    changingOptions = update;
-    try { return await update; }
-    catch (error) { error.message = clean(error.message); throw error; }
-    finally { if (changingOptions === update) changingOptions = null; }
+    if (routingPatch(patch)) throw routingOwned();
+    if (Object.keys(patch).length) throw new Error('此会话不支持切换权限。');
+    return optionsSnapshot();
   }
   function shell(clientMessageId, command) {
     if (shells.has(clientMessageId)) {
@@ -558,7 +520,7 @@ function createClaudeSession(spec, emit, dependencies) {
       if (previous.command !== command) throw new Error('消息标识已用于其他命令。');
       return previous.task;
     }
-    if (state !== 'idle' || shellAbort || closed || changingOptions || preparing) throw new Error('当前正在工作，请等待空闲后再运行命令。');
+    if (state !== 'idle' || shellAbort || closed || preparing) throw new Error('当前正在工作，请等待空闲后再运行命令。');
     if (shells.size >= 2000) throw new Error('会话消息过多，请启动新会话。');
     shellAbort = new AbortController();
     const job = { abort: shellAbort }; shellControllers.add(job);

@@ -1,4 +1,3 @@
-const fs = require('node:fs');
 const path = require('node:path');
 const { physicalDirectory, sameDirectory, expandShortPath } = require('../../session-files.cjs');
 const { spawn, execFile } = require('node:child_process');
@@ -14,6 +13,7 @@ const { codexExecutable } = require('../codex-runtime/locator.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
 const { startupDetail } = require('../agents/start-failure.cjs');
+const { routingCommand, routingPatch, routingOwned } = require('../agents/agent-command.cjs');
 const { ownerShell, ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
 // A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
 const RECENT_PICTURES = 6;
@@ -71,28 +71,6 @@ function permissionsFailure(error, sent) {
   return Object.assign(new Error(reason), { code: 'permissions_failed', cause: error });
 }
 
-// Host-owned choices only, separate from CLI configuration and transcript files.
-// SSH choices are host metadata, keyed by the authenticated remote scope; remote
-// CODEX_HOME paths are never opened on the local filesystem.
-function optionStore(spec, scope, hostHome) {
-  const home = spec.kind === 'ssh' ? hostHome || process.env.CODEX_HOME || path.join(homedir(), '.codex')
-    : spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
-  const key = createHash('sha256').update(JSON.stringify(scope)).digest('hex');
-  const file = path.join(home, 'agentrix-run-options', key + '.json');
-  const valid = value => value && Object.keys(value).length === 3 && (value.model === null || typeof value.model === 'string' && value.model.length <= 160)
-    && (value.effort === null || typeof value.effort === 'string' && /^[\w-]{1,32}$/.test(value.effort)) && typeof value.fast === 'boolean';
-  return {
-    read() { try { const data = fs.readFileSync(file, 'utf8'); const value = data.length <= 1024 && JSON.parse(data); return valid(value) ? value : null; } catch { return null; } },
-    write(value) {
-      if (!valid(value)) throw new Error('无效的运行选项。');
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-      const temporary = file + '.' + randomUUID();
-      try { fs.writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 }); fs.renameSync(temporary, file); }
-      finally { try { fs.unlinkSync(temporary); } catch { } }
-    },
-  };
-}
-
 const occupied = new Map();
 function stopProcess(child) {
   if (!child) return Promise.resolve();
@@ -125,7 +103,7 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, shellOf = ownerShell, optionsHome, accountKey } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, shellOf = ownerShell, accountKey } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -188,14 +166,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       let skills = null, skillsRead = null, skillsGeneration = 0, skillsExpireAt = 0;
       let wireCwd = spec.cwd, wireHome;
       let accountRead = null;
-      let catalog = null, choicesStore = null, changingOptions = Promise.resolve(), manualCommand = null, settingsSeen = null;
+      let catalog = null, changingOptions = Promise.resolve(), manualCommand = null, settingsSeen = null;
       // One target probe for this process's CLI home and request. A changed request or a provider close invalidates it.
       let permissionProbe = null, probing = null, timedOutProbes = 0;
       // Whether this thread started with a writable sandbox Codex applied: on local Windows only such a thread has a Windows sandbox to run "ask" in.
       let startedWritable = false;
       // Run options belong to a thread: a change made while the session starts waits until the thread exists (or the session closes).
       let threadKnown; const threadReady = new Promise(resolve => { threadKnown = resolve; });
-      let configuredFast = typeof initialSpec.fast === 'boolean' ? initialSpec.fast : null;
+      const configuredFast = typeof initialSpec.fast === 'boolean' ? initialSpec.fast : null;
       const connectionAbort = new AbortController();
       const assertOpen = () => { if (closed) throw Object.assign(new Error('session_closed'), { code: 'closed' }); };
       let executionSeen = false, resetting = null, resetRetry = null, lastReset = null;
@@ -395,17 +373,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (spec.kind !== 'ssh') wireHome = physicalDirectory(spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex'));
           assertOpen();
           if (resuming) bind(threadId);
-          const choiceScope = spec.kind === 'ssh' ? [child?.remoteScope || spec.projectId, wireCwd] : wireHome;
-          const saved = resuming && spec.owner === 'gui' && spec.preserveRunOptions
-            ? optionStore(spec, [spec.kind || 'local', choiceScope, threadId], optionsHome).read() : null;
-          if (saved) { Object.assign(spec, saved); configuredFast = saved.fast; }
           const context = wireCwd === spec.cwd ? spec.context : spec.context?.replaceAll(spec.cwd, wireCwd)
             .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
-            config: { model_reasoning_effort: spec.effort || 'high', ...(context ? { developer_instructions: context } : {}) }, ...threadPolicy(), approvalsReviewer: 'user' };
-          if (resuming && spec.preserveRunOptions && !saved) {
-            options.model = null; options.serviceTier = null; delete options.config.model_reasoning_effort;
-          }
+            config: { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}) }, ...threadPolicy(), approvalsReviewer: 'user' };
           let result, resumed = resuming;
           try { result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId, excludeTurns: true } : {}) }); }
           catch (error) {
@@ -434,12 +405,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           assertOpen();
           bind(result.thread.id); threadResponse = result;
           permissionEvidence = [result.sandbox, result.approvalPolicy, result.approvalsReviewer];
-          choicesStore = optionStore(spec, [spec.kind || 'local', choiceScope, result.thread.id], optionsHome);
-          if (!saved) {
-            spec.model = result.model ?? spec.model ?? null;
-            spec.effort = result.reasoningEffort ?? spec.effort ?? null;
-            spec.fast = ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : spec.preserveRunOptions ? false : spec.fast;
-          }
+          spec.model ??= result.model ?? null;
+          spec.effort ??= result.reasoningEffort ?? null;
+          if (spec.fast == null) spec.fast = ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : null;
           threadKnown();
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
             effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast: ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : null }, observed: { model: null, effort: null, fast: null }, reason: null });
@@ -503,6 +471,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         if (!input || typeof input.clientMessageId !== 'string' || !/^[\w:.-]{1,160}$/.test(input.clientMessageId) || typeof input.text !== 'string' || !input.text.trim() && !input.images?.length || input.text.length > 1024 * 1024 || input.images && (!Array.isArray(input.images) || input.images.length > 8 || input.images.some(x => !imageValid(x)))) return Promise.reject(new Error('invalid_input'));
         // Only the owner's own session reads a leading "/" or "!" as a command. A dispatched worker's text is never one: it goes to the model as written.
         const owned = spec.owner !== 'dispatch', name = owned ? commandName(input.text) : null;
+        if (routingCommand(name)) return Promise.reject(routingOwned());
         if (['status', 'usage'].includes(name)) return observe(input, name);
         const fingerprint = createHash('sha256').update(JSON.stringify([input.text, input.images || []])).digest('hex'), prior = receipts.get(input.clientMessageId);
         if (prior) return prior.fingerprint === fingerprint ? prior.promise : Promise.reject(new Error('message_id_conflict'));
@@ -512,7 +481,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           if (!rpc || closed || !['idle', 'running', 'waiting'].includes(state)) throw new Error('session_unavailable');
           const clientId = input.clientMessageId;
           if (unsupported.has(name)) throw new Error(translate('原生模式暂不支持这个命令'));
-          if (['model', 'effort', 'fast', 'permissions', 'new', 'clear'].includes(name)) throw new Error(translate('请使用原生输入框的命令菜单。'));
+          if (['permissions', 'new', 'clear'].includes(name)) throw new Error(translate('请使用原生输入框的命令菜单。'));
           if (['compact', 'review'].includes(name) || owned && input.text.trim().startsWith('!')) {
             if (input.images?.length) throw new Error(translate('命令不能附带图片。'));
             return localCommand(clientId, input.text.trim(), name);
@@ -586,26 +555,13 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       const permissionsField = () => ownPermissions() ? { permissions: spec.permissions } : {};
       async function runOptions(patch) {
         if (!Object.keys(patch).length) { await changingOptions; assertOpen(); return { ...optionsSnapshot(), ...permissionsField() }; }
-        if (Object.hasOwn(patch, 'permissions') && Object.keys(patch).length > 1) throw new Error(translate('无效的运行选项。'));
+        if (routingPatch(patch)) throw routingOwned();
+        if (!Object.hasOwn(patch, 'permissions') || Object.keys(patch).length > 1) throw new Error(translate('无效的运行选项。'));
         const previous = changingOptions;
         const task = previous.catch(() => {}).then(async () => {
           await threadReady; assertOpen();
-          if (Object.hasOwn(patch, 'permissions')) { await changePermissions(patch.permissions); return { ...optionsSnapshot(), ...permissionsField() }; }
-          await models(); assertOpen();
-          const next = { ...optionsSnapshot(), ...patch };
-          const model = catalog.find(row => row.model === (next.model || catalog.find(value => value.isDefault)?.model));
-          if (!model) throw new Error(translate('没有可用的模型。'));
-          next.model = model.model;
-          const efforts = (model.supportedReasoningEfforts || []).map(value => value.reasoningEffort);
-          if (Object.hasOwn(patch, 'effort') && next.effort !== null && !efforts.includes(next.effort)) throw new Error(translate('此模型不支持这个思考强度。'));
-          if (!next.effort || !efforts.includes(next.effort)) next.effort = model.defaultReasoningEffort || null;
-          if (next.fast && !(model.additionalSpeedTiers?.includes('fast') || model.serviceTiers?.some(value => value.id === 'priority' || value.id === 'fast'))) {
-            if (patch.fast === true) throw new Error(translate('此模型不支持快速模式。'));
-            next.fast = false;
-          }
-          choicesStore.write(next); Object.assign(spec, next); configuredFast = next.fast;
-          events.publish('routing.updated', { declared: { ...next }, effective: { model: threadResponse?.model ?? null, effort: null, fast: null }, observed: { model: null, effort: null, fast: null }, reason: null });
-          return { ...next, ...permissionsField() };
+          await changePermissions(patch.permissions);
+          return { ...optionsSnapshot(), ...permissionsField() };
         });
         changingOptions = task.then(() => {}, () => {}); return task;
       }
@@ -761,10 +717,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       async function commands() {
         if (closed || !rpc) return [];
         const list = () => {
-          const selected = catalog?.find(row => row.model === spec.model);
-          const builtins = builtinCommands().filter(row => row.name !== '/fast' || !selected
-            || selected.additionalSpeedTiers?.includes('fast') || selected.serviceTiers?.some(tier => ['fast', 'priority'].includes(tier.id)));
-          return [...builtins, ...[...(skills?.values() || [])].filter(skill => !unsupported.has(skill.name) && !builtinCommands().some(command => command.name === '/' + skill.name))
+          const builtins = builtinCommands();
+          return [...builtins, ...[...(skills?.values() || [])].filter(skill => !routingCommand(skill.name) && !unsupported.has(skill.name) && !builtins.some(command => command.name === '/' + skill.name))
             .map(skill => ({ name: '/' + skill.name, description: skill.description, source: 'skill', view: 'reading' }))];
         };
         if (skills && now() < skillsExpireAt) return list();

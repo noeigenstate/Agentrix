@@ -4,6 +4,11 @@ const COMMANDS = {
   claude: ['update', 'upgrade', 'install', 'migrate-installer', 'doctor', 'mcp', 'config', 'plugin', 'setup-token', 'login', 'logout', 'auth',
     '--version', '-v', '-V', '--help', '-h', '-p', '--print'],
 };
+const ROUTING_MESSAGE = '模型由模型路由决定，请在模型路由中更改。';
+const routingCommand = name => ['model', 'effort', 'fast'].includes(name);
+const routingText = text => typeof text === 'string' && /^\/(?:model|effort|fast)(?:\s|$)/.test(text.trim());
+const routingPatch = patch => ['model', 'effort', 'fast'].some(key => Object.hasOwn(patch, key));
+const routingOwned = () => Object.assign(new Error(ROUTING_MESSAGE), { code: 'routing-owned' });
 
 // The command when this run is one of these, else null (a conversation, new or resumed).
 function agentCommand(agent, word) {
@@ -34,19 +39,16 @@ function codexLaunch(args) {
         result.providerSessionId = identity;
       }
     } else if (['-m', '--model'].includes(option)) {
-      set('model', value());
+      throw routingOwned();
     } else if (['-C', '--cd'].includes(option)) set('cwd', value());
     else if (['-c', '--config'].includes(option)) {
-      const match = /^(model|model_reasoning_effort|service_tier)=(?:"([^"\r\n]+)"|([^"\r\n]+))$/.exec(value() || '');
-      if (!match) fail();
-      const key = { model: 'model', model_reasoning_effort: 'effort', service_tier: 'fast' }[match[1]], setting = match[2] || match[3];
-      if (key === 'effort' && !['low', 'medium', 'high', 'xhigh', 'max'].includes(setting) || key === 'fast' && setting !== 'fast') fail();
-      set(key, key === 'fast' ? true : setting);
+      if (/^\s*(model|model_reasoning_effort|service_tier)\s*=/.test(value() || '')) throw routingOwned();
+      fail();
     } else if (word === '--') { if (i !== args.length - 2) fail(); set('prompt', args[++i]); }
     else { if (word.startsWith('-') || commands.has(word)) fail(); set('prompt', word); }
   }
-  if (result.model?.length > 160 || result.cwd?.length > 4096) fail();
+  if (result.cwd?.length > 4096) fail();
   return result;
 }
 
-module.exports = { agentCommand, codexLaunch };
+module.exports = { agentCommand, codexLaunch, routingCommand, routingText, routingPatch, routingOwned };

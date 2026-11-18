@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
+const { acceptDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 
 const use = (id, name = 'Agent', input = {}) => ({ type: 'assistant', message: { model: 'claude-opus-5-5', content: [{ type: 'tool_use', id, name, input }] } });
 const result = (id, toolUseResult = {}, is_error = false) => ({ type: 'user', toolUseResult, message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'placeholder', is_error }] } });
@@ -243,7 +244,10 @@ test('Claude groups keep the latest five tasks and inherit the current provider'
     meter.apply(use(`a${i}`, 'Agent', { model: 'claude-sonnet-5-5', description: `Task ${i}` }));
     if (i < 6) meter.apply(result(`a${i}`));
   }
-  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null, preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items: Array.from({ length: 7 }, (_, i) => ({ id: `agent:a${6 - i}`, state: i ? 'reviewing' : 'running', role: '通用', title: `Task ${6 - i}`, startedAt: null, endedAt: null, viewable: false, hidden: false })), rate: null });
+  const items = Array.from({ length: 7 }, (_, i) => ({ id: `agent:a${6 - i}`, state: i ? 'reviewing' : 'running', role: '通用',
+    title: `Task ${6 - i}`, startedAt: null, endedAt: null, viewable: false, hidden: false, seat: 'developer', seatSource: 'inferred' }));
+  assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null,
+    preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items, rate: null });
   meter.provider = 'Anthropic';
   assert.equal(meter.snapshot().calls[0].provider, 'Anthropic');
   meter.apply(stop());
@@ -304,12 +308,76 @@ test('subagent items keep every role and full description newest first, includin
   const roles = [['Explore', '搜索'], ['Plan', '规划'], ['general-purpose', '通用'], ['claude', '通用'], [undefined, '通用'], ['none', '通用'], ['fork', '分身'], ['custom-worker', 'custom-worker'], ['constructor', 'constructor']];
   for (const [i, [subagent_type]] of roles.entries()) calls.apply(use(`role-${i}`, 'Agent', { subagent_type, description: 'Inspect ' + 'the parser '.repeat(30) }));
   calls.apply(result('role-0'));
-  assert.deepEqual(calls.snapshot()[0].items, roles.map(([, role], i) => ({ id: `agent:role-${i}`, state: i ? 'running' : 'reviewing', role, title: 'Inspect ' + 'the parser '.repeat(30).trim(), startedAt: null, endedAt: null, viewable: false, hidden: false })).reverse());
+  assert.deepEqual(calls.snapshot()[0].items, roles.map(([, role], i) => ({ id: `agent:role-${i}`, state: i ? 'running' : 'reviewing', role,
+    title: 'Inspect ' + 'the parser '.repeat(30).trim(), startedAt: null, endedAt: null, viewable: false, hidden: false,
+    seat: ['researcher', 'architect'][i] || 'developer', seatSource: 'inferred' })).reverse());
   assert.equal(calls.snapshot()[0].tasks.length, 1, 'hover tasks still deduplicate while rows keep each call');
   assert.equal(calls.snapshot()[0].tasks[0].length, 240, 'existing hover task length stays bounded');
   calls.apply(stop());
   assert.equal(calls.snapshot()[0].items.filter(item => !item.hidden).length, roles.length - 1);
   assert.deepEqual(retiredRows(calls), [['agent:role-0', 'done']], 'the reviewed call is kept for 最近完成');
+});
+
+test('a seat prefix survives hook-first delivery, and unlabeled calls use the evidence in priority order', t => {
+  const calls = new AgentCalls({ terminalId: 't', local: false }); t.after(() => calls.dispose());
+  calls.subagent({ kind: 'start', terminalId: 't', agentId: 'child', toolUseId: 'tool', agentType: 'Explore', at: 1000 });
+  calls.apply({ ...use('tool', 'Agent', { description: '[designer] Sketch the team view' }), cwd: '/work' });
+  calls.apply(use('haiku', 'Agent', { model: 'claude-haiku-5-5', subagent_type: 'Plan' }));
+  const expected = [
+    ['审查', 'ui-check', 'haiku', undefined, 'reviewer'],
+    ['执行', 'review', 'haiku', undefined, 'reviewer'],
+    ['调查', 'test', 'haiku', undefined, 'qa'],
+    ['执行', 'ui-check', 'sonnet', undefined, 'qa'],
+    ['执行', 'investigate', 'sonnet', undefined, 'researcher'],
+    ['调查', 'small', 'sonnet', undefined, 'researcher'],
+    ['圆桌', 'roundtable', 'sonnet', undefined, 'developer'],
+    ['圆桌', 'roundtable', 'sonnet', 'developer/frontend', 'developer'],
+  ];
+  for (const [index, [role, kind, model, seat]] of expected.entries()) {
+    assert.equal(calls.dispatch({ type: 'dispatch-start', id: String(index), agent: 'claude', role, kind, title: 'Fixture', model,
+      effort: 'high', fast: false, seat, startedAt: 1000, sessionId: 'provider', cwd: '/worktree' }), true);
+  }
+  const rows = new Map(calls.snapshot().flatMap(group => group.items.map(item => [item.id, item])));
+  const { title, seat, seatSource, worktree } = rows.get('agent:tool');
+  assert.deepEqual({ title, seat, seatSource, worktree }, { title: 'Sketch the team view', seat: 'designer', seatSource: 'declared', worktree: '/work' });
+  assert.equal(rows.get('agent:haiku').seat, 'researcher');
+  for (const [index, [,,, declared, inferred]] of expected.entries()) {
+    const row = rows.get(`dispatch:${index}`);
+    assert.equal(row.seat, inferred); assert.equal(row.seatSource, declared ? 'declared' : 'inferred'); assert.equal(row.worktree, '/worktree');
+  }
+  assert.equal(rows.get('dispatch:7').specialty, 'frontend');
+});
+
+test('brief and log reads use only the authenticated call paths and cap UTF-8 text at 256 KiB', async t => {
+  const folder = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-call-files-')));
+  const brief = path.join(folder, 'brief.md'), log = path.join(folder, 'answer.md.log'), out = path.join(folder, 'answer.md');
+  const local = new AgentCalls(), remote = new AgentCalls({ local: false }); t.after(async () => {
+    local.dispose(); remote.dispose(); await fs.rm(folder, { recursive: true, force: true });
+  });
+  await fs.writeFile(brief, 'The recorded brief');
+  const prefix = 'x'.repeat(256 * 1024 - 1);
+  await fs.writeFile(log, prefix + '中tail');
+  await fs.writeFile(out, 'A separate answer');
+  const id = '11111111-1111-4111-8111-111111111111', callId = 'dispatch:' + id;
+  const session = { terminalId: 't', sessionKey: 'fixture-key' };
+  const start = { type: 'dispatch-start', projectId: 't', sessionKey: 'fixture-key', id, agent: 'codex', role: '执行',
+    title: 'Worker', model: 'gpt-6.2-sol', effort: 'high', fast: false, sessionId: 'thread', startedAt: Date.now(),
+    cwd: folder, brief, log, out, seat: 'developer/backend' };
+  assert.equal(acceptDispatch(session, { ...start, sessionKey: 'wrong' }, local), false);
+  assert.deepEqual(await local.callFile(callId, 'brief'), { ok: false, code: 'unavailable' });
+  for (const calls of [local, remote]) assert.equal(acceptDispatch(session, start, calls), true);
+  const item = local.snapshot()[0].items[0];
+  assert.deepEqual([item.brief, item.log, item.seat, item.specialty], [true, true, 'developer', 'backend']);
+  assert.doesNotMatch(JSON.stringify(item), /brief\.md|answer\.md/);
+  assert.deepEqual(await local.callFile(callId, 'brief'), { ok: true, text: 'The recorded brief', truncated: false });
+  assert.deepEqual(await local.callFile(callId, 'log'), { ok: true, text: prefix, truncated: true });
+  assert.deepEqual(await remote.callFile(callId, 'log'), { ok: false, code: 'unavailable' });
+  assert.deepEqual(await local.callFile(callId, out), { ok: false, code: 'refused' });
+  await fs.unlink(brief);
+  assert.deepEqual(await local.callFile(callId, 'brief'), { ok: false, code: 'missing' });
+  const target = path.join(folder, 'target'); await fs.mkdir(target);
+  await fs.symlink(target, brief, 'junction');
+  assert.deepEqual(await local.callFile(callId, 'brief'), { ok: false, code: 'refused' });
 });
 
 test('background and foreground subagents start at their first assistant record and leave after review', async t => {

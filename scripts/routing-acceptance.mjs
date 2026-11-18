@@ -111,7 +111,7 @@ await withGuiLock('routing-acceptance', async () => {
       await fs.writeFile(`${stem}-brief.md`, brief);
       const flag = `${stem}.done`, signals = `${stem}-signals.txt`;
       if (fixture) await write(id, `$env:DISPATCH_FIXTURE = ${quote(fixture)}; $env:DISPATCH_CAPTURE = ${quote(stem + '-capture.json')}\r`);
-      const args = ['codex', '--role', 'exec', '--title', title, '--model', fixture ? 'gpt-6.1-sol' : MODEL, '--effort', fixture ? 'max' : EFFORT, '--fast',
+      const args = ['codex', '--role', 'exec', '--seat', 'developer/backend', '--title', title, '--model', fixture ? 'gpt-6.1-sol' : MODEL, '--effort', fixture ? 'max' : EFFORT, '--fast',
         '--cwd', repo, '--brief', `${stem}-brief.md`, '--out', `${stem}-answer.md`, ...allow.flatMap(glob => ['--allow', glob]),
         '--skip-meeting', 'Routing acceptance isolates ledger, scope and resume behavior',
         ...(ledger ? ['--ledger', path.join(repo, 'ledger.md')] : []), ...(resume ? ['--resume', resume] : [])];
@@ -122,6 +122,7 @@ await withGuiLock('routing-acceptance', async () => {
       await waitFor(async () => {
         const group = (await groupsOf(id, title))[0], item = group?.items.find(value => value.title === title);
         if (item) {
+          assert.deepEqual([item.seat, item.specialty, item.seatSource], ['developer', 'backend', 'declared']);
           seen.add(item.failure ? `failure:${item.failure.reason}` : item.state);
           if (item.state === 'running') { if (group.rate?.samples) liveRate = Math.round(1000 * group.rate.outputTokens / group.rate.activeMs); if (!running) { running = `pane-${shot}-running.png`; await page.screenshot({ path: path.join(output, running) }); } }
           if ((item.state === 'done' || item.failure) && !ended) { ended = `pane-${shot}-ended.png`; await page.screenshot({ path: path.join(output, ended) }); }

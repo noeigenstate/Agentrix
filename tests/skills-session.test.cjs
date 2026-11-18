@@ -75,35 +75,61 @@ test('routing note is optional, current on a new delivery and included in bounde
 
 test('seat changes reach the next launch while Claude launch/current snapshots stay frozen through compact and clear', async t => {
   const f = await fixture(t), file = path.join(f.store.builtinDir, 'model-routing', 'SKILL.md');
+  const shared = require('./fixtures/team-seats.json'), skill = 'builtin:model-routing';
   assert.equal(f.store.seatsInfo(f.project.id), null, 'no declaring skill means no chooser');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8'));
-  f.store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } }); f.store.refresh();
+  f.store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  f.store.getModels = () => shared.catalog; f.store.refresh();
   f.store.seatSession = id => ['terminal', 'next-terminal'].includes(id) ? { projectId: f.project.id, sessionId: id === 'terminal' ? 'running' : 'next' } : null;
   const choice = model => ({ model, effort: 'high' });
   const original = f.note('running'), launch = f.delivery('running'), launchBytes = fs.readFileSync(launch.sessionManifest, 'utf8');
-  assert.doesNotMatch(launchBytes, /Agentrix model seats/);
-  assert.deepEqual(f.store.setSeats('global', null, { lookup: choice('sonnet') }), { ok: true });
-  assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.lookup.model, 'haiku');
-  assert.equal(f.store.seatsInfo(null, 'terminal').current.lookup.model, 'haiku');
+  assert.equal(launch.rendered[skill].path, file, 'the default fixture reproduces shipped bytes and path');
+  assert.equal(launch.rendered[skill].text, fs.readFileSync(file, 'utf8'));
+  const instructions = fs.readFileSync(launch.sessionManifest, 'utf8');
+  const allText = launch.skills.filter(item => item.enabled).map(item => [item.id, f.store.entry(item.id).text]);
+  assert.equal(launch.fingerprint, digest(JSON.stringify([instructions, allText])));
+  assert.deepEqual(f.store.setSeats('global', null, { researcher: choice('haiku') }), { ok: true });
+  assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.researcher.model, 'sonnet');
+  assert.equal(f.store.seatsInfo(null, 'terminal').current.researcher.model, 'sonnet');
   assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
   assert.equal(fs.readFileSync(launch.sessionManifest, 'utf8'), launchBytes);
   for (const source of ['compact', 'clear']) {
     const context = sessionContext({ session_id: 'running-cli', source }, original).hookSpecificOutput.additionalContext;
-    assert.doesNotMatch(context, /Agentrix model seats/);
+    assert.ok(context.includes(file.replace(/\\/g, '/')));
   }
   const nextNote = f.note('next'), next = f.delivery('next');
-  assert.match(fs.readFileSync(next.sessionManifest, 'utf8'), /Agentrix model seats/);
-  assert.match(fs.readFileSync(next.sessionManifest, 'utf8'), /lookup: model sonnet/);
+  const rendered = next.rendered[skill];
+  assert.match(rendered.path.replace(/\\/g, '/'), /skill-delivery\/rendered\/[a-f0-9]{32}\/model-routing\/SKILL\.md$/);
+  assert.match(fs.readFileSync(rendered.path, 'utf8'), /\| researcher \|.*\| haiku · high \| Agent call/);
+  assert.notEqual(next.fingerprint, launch.fingerprint);
   const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
-  assert.deepEqual(f.store.setSeats('global', null, { lookup: choice('opus') }), { ok: true });
-  assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.lookup.model, 'sonnet');
+  assert.deepEqual(f.store.setSeats('global', null, { researcher: choice('opus') }), { ok: true });
+  assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'haiku');
   for (const source of ['compact', 'clear']) {
     const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
-    assert.match(context, /lookup: model sonnet/); assert.doesNotMatch(context, /lookup: model opus/);
+    assert.ok(context.includes(rendered.path.replace(/\\/g, '/')));
+    assert.match(fs.readFileSync(rendered.path, 'utf8'), /\| researcher \|.*\| haiku · high \|/);
   }
   assert.equal(fs.readFileSync(next.sessionManifest, 'utf8'), selectedBytes);
-  assert.match(fs.readFileSync(f.delivery('later').sessionManifest, 'utf8'), /lookup: model opus/);
+  assert.match(f.delivery('later').rendered[skill].text, /\| researcher \|.*\| opus · high \|/);
+  const remote = { id: 'ssh', path: '/remote/project', kind: 'ssh' };
+  const bundle = id => f.store.delivery(remote, true, id, { agent: 'claude', started: true }).bundle;
+  const remoteFirst = bundle('remote-first');
+  assert.match(remoteFirst.files.find(item => item.id === skill).text, /\| researcher \|.*\| opus · high \|/);
+  assert.match(remoteFirst.instructions, /\{AGENTRIX_SKILLS\}\/builtin\/model-routing\/SKILL\.md/);
+  f.store.setSeats('global', null, { researcher: choice('haiku') });
+  assert.notEqual(bundle('remote-next').key, remoteFirst.key);
+
+  const reopened = new SkillsStore({ dataDir: f.root, builtinDir: f.store.builtinDir, getProjects: () => [f.project], getAgents: f.store.getAgents });
+  t.after(() => reopened.close());
+  reopened.recordAction({ kind: 'skill', done: true, at: Date.now(), skillFile: rendered.path }, { cwd: f.project.path, project: f.project.id, agent: 'claude' });
+  assert.equal(reopened.info(reopened.entry(skill)).lastUsed?.agent, 'claude');
+  const expired = new Date(Date.now() - 31 * 86400000);
+  fs.utimesSync(rendered.path, expired, expired);
+  reopened.pruneDeliveryFiles(); assert.equal(fs.existsSync(rendered.path), true);
+  f.store.endSession(f.project.id, 'next');
+  reopened.pruneDeliveryFiles(); assert.equal(fs.existsSync(rendered.path), false);
 });
 
 test('Codex resume keeps the current project manifest across terminal exits and app restarts', async t => {
@@ -201,7 +227,8 @@ test('first-open launch snapshots stay correct when later sessions rewrite the c
   const second = f.delivery('second-launch'), secondNote = startupNote('Read.', null, null, second);
   assert.equal(first.manifest, second.manifest);
   assert.equal(f.store.options['user:sample'].firstOpenedProjects[f.project.id], 'first-launch');
-  assert.equal(first.skills[0].trigger, 'first-open'); assert.equal(second.skills[0].trigger, 'auto');
+  assert.equal(first.skills[0].trigger, 'auto'); assert.equal(first.skills[0].firstOpenRun, true);
+  assert.equal(first.skills[0].firstRun, true); assert.equal(second.skills[0].firstRun, false);
   assert.doesNotMatch(fs.readFileSync(first.manifest, 'utf8'), /this is its first run/);
   const firstContext = sessionContext({ session_id: 'first-cli', source: 'startup' }, firstNote);
   assert.match(firstContext.hookSpecificOutput.additionalContext, /this is its first run/);
@@ -226,7 +253,7 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} live Claude ses
   }
   assert.equal(readDelivery(first).instructions, initial, 'the original launch snapshot is immutable');
   assert.equal(f.store.options['user:sample'].firstOpenedProjects[f.project.id], 'live-first');
-  f.store.setOptions('user:sample', { trigger: 'auto' });
+  f.store.setOptions('user:sample', { trigger: 'auto', firstOpenRun: false });
   for (const [note, id] of [[first, 'first-cli'], [second, 'second-cli']]) {
     const context = sessionContext({ session_id: id, source: 'compact' }, note).hookSpecificOutput.additionalContext;
     assert.match(context, /Updated live instructions/); assert.doesNotMatch(context, /this is its first run/);

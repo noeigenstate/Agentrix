@@ -21,6 +21,12 @@ const firstInstruction = (file, trigger = 'always') => `Before ${trigger === 'al
 const alwaysInstruction = file => `Before any task, read and follow ${normalized(file)}.`;
 const note = delivery => startupNote('Read.', null, null, delivery);
 const start = (store, project, sessionId, agent = 'codex') => store.delivery(project, project.kind === 'ssh', sessionId, { agent, started: true });
+const team = '\n<!-- agentrix:team -->\n| Seat | Role | Duty | Outputs | Model | Launch |\n<!-- /agentrix:team -->\n';
+
+function firstRunSkill({ builtinDir, dataDir }, trigger, extra = '') {
+  put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger: trigger === 'always' ? 'always' : 'auto' }) + extra);
+  if (trigger === 'first-open') put(path.join(dataDir, 'skills.json'), JSON.stringify({ 'builtin:code-standard': { trigger } }));
+}
 
 function fixture(t, setup = () => {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-builtin-skills-'));
@@ -39,7 +45,7 @@ function fixture(t, setup = () => {}) {
 }
 
 test('strict built-in format accepts all allowed triggers/requires, scalar quoting, BOM, CRLF and length boundaries', () => {
-  for (const trigger of ['always', 'auto', 'first-open']) for (const requires of ['none', 'any-agent', 'codex', 'claude', 'both']) {
+  for (const trigger of ['always', 'auto']) for (const requires of ['none', 'any-agent', 'codex', 'claude', 'both']) {
     const fields = builtinMetadata(builtin('example', { trigger, requires }), 'example');
     assert.equal(fields.trigger, trigger); assert.equal(fields.requires, requires);
     assert.deepEqual(Object.keys(fields), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
@@ -118,23 +124,32 @@ test('every shipped built-in passes the strict format and has English title, sum
   assert.ok(folders.length);
   for (const folder of folders) {
     const fields = builtinMetadata(fs.readFileSync(path.join(resources, folder.name, 'SKILL.md'), 'utf8'), folder.name);
-    assert.deepEqual(Object.keys(fields).filter(key => !['seats', 'fresh'].includes(key)), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
+    assert.deepEqual(Object.keys(fields).filter(key => !['seats', 'fresh', 'roles'].includes(key)), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
     assert.match(fields.description, /^Use (when|before|on|at|whenever)\b/, `${folder.name} description trigger`);
     for (const key of ['title', 'summary', 'when']) assert.match(english[fields[key]] || '', /[A-Za-z]/, `${folder.name} ${key} translation`);
   }
 });
 
-test('seat declarations and fresh roles come from front matter without a built-in name check', t => {
-  const fields = { seats: 'lead, architect, core, execution, visual, lookup, reviewer', fresh: 'visual, reviewer' };
-  const parsed = builtinMetadata(builtin('example', fields), 'example');
-  assert.deepEqual(parsed.seats, fields.seats.split(', ')); assert.deepEqual(parsed.fresh, ['visual', 'reviewer']);
-  for (const bad of [{ seats: 'core, core' }, { seats: 'invented' }, { seats: 'core', fresh: 'reviewer' }, { fresh: 'visual' }]) {
-    assert.throws(() => builtinMetadata(builtin('example', bad), 'example'));
+test('seat ids, fresh roles, and duties come from front matter and the team region stays outside fences', t => {
+  const fields = { seats: 'captain, audit-2', fresh: 'audit-2', duties: 'audit-2=审查|独立审查|质量审查; captain=总指挥|任务调度|状态追踪|执行状态' };
+  const source = builtin('example', fields) + team;
+  const parsed = builtinMetadata(source, 'example');
+  assert.deepEqual(parsed.seats, ['captain', 'audit-2']); assert.deepEqual(parsed.fresh, ['audit-2']);
+  assert.deepEqual(parsed.roles, [{ id: 'captain', name: '总指挥', duty: '任务调度', detail: '状态追踪', outputs: '执行状态' },
+    { id: 'audit-2', name: '审查', duty: '独立审查', detail: '质量审查', outputs: '' }]);
+  for (const bad of [{ seats: 'core, core' }, { seats: 'Bad' }, { seats: 'a'.repeat(33) }, { seats: 'core', fresh: 'reviewer' },
+    { fresh: 'visual' }, { ...fields, duties: 'captain=总指挥|调度|追踪' }, { ...fields, duties: fields.duties + '; captain=总指挥|调度|追踪' }]) {
+    assert.throws(() => builtinMetadata(builtin('example', bad) + team, 'example'));
   }
-  const f = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'example', 'SKILL.md'), builtin('example', fields)));
-  assert.equal(f.store.seatsInfo().skill, 'builtin:example');
+  for (const invalid of [source.replace(team, ''), source + team, source.replace(team, '\n```markdown\n' + team + '```\n')]) {
+    assert.throws(() => builtinMetadata(invalid, 'example'), /agentrix:team/);
+  }
+  const f = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'example', 'SKILL.md'), source));
+  assert.equal(f.store.seatsInfo().skill, 'builtin:example'); assert.equal(f.store.seatsInfo().lead, 'captain');
   const shipped = builtinMetadata(fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8'), 'model-routing');
-  assert.deepEqual(shipped.seats, parsed.seats); assert.deepEqual(shipped.fresh, parsed.fresh);
+  const shared = require('./fixtures/team-seats.json');
+  assert.deepEqual(shipped.seats, shared.seats); assert.deepEqual(shipped.roles, shared.roles);
+  assert.deepEqual(shipped.fresh, ['reviewer', 'qa']);
 });
 
 test('shipped descriptions include trigger timing and system precedence without yielding', () => {
@@ -168,7 +183,7 @@ test('invalid built-ins warn and skip only the invalid file, including an invali
 
 test('defaults, timing and requirements come from front matter for any built-in name', async t => {
   const { store, options, builtinDir } = fixture(t, ({ builtinDir }) => {
-    for (const [index, requires] of ['none', 'any-agent', 'codex', 'claude', 'both'].entries()) put(path.join(builtinDir, requires, 'SKILL.md'), builtin(requires, { requires, trigger: ['auto', 'always', 'first-open'][index % 3] }));
+    for (const [index, requires] of ['none', 'any-agent', 'codex', 'claude', 'both'].entries()) put(path.join(builtinDir, requires, 'SKILL.md'), builtin(requires, { requires, trigger: ['auto', 'always'][index % 2] }));
   });
   for (const codex of [false, true]) for (const claude of [false, true]) {
     options.getAgents = store.getAgents = () => ({ codex: { installed: codex }, claude: { installed: claude } });
@@ -181,11 +196,15 @@ test('defaults, timing and requirements come from front matter for any built-in 
   }
   const saved = await store.save(null, { name: 'user-skill', description: 'A user procedure.', scope: 'global', projectId: null, text: '# Procedure' });
   const english = JSON.parse(fs.readFileSync(path.join(__dirname, '../electron/locales/en.json'), 'utf8'));
-  for (const [trigger, when] of Object.entries({ always: '每个任务开始前', auto: '描述匹配时', 'first-open': '首次打开项目时' })) {
+  for (const [trigger, when] of Object.entries({ always: '每个任务开始前', auto: '描述匹配时' })) {
     const skill = store.setOptions(saved.id, { trigger });
     assert.equal(skill.when, when); assert.equal(skill.extends, null); assert.equal(skill.requires, null);
     assert.match(english[when], /[A-Za-z]/);
   }
+  const legacy = store.setOptions(saved.id, { trigger: 'first-open' });
+  assert.equal(legacy.trigger, 'auto'); assert.equal(legacy.firstOpenRun, true);
+  assert.equal(store.setOptions(saved.id, { firstOpenRun: false }).firstOpenRun, false);
+  for (const patch of [{ trigger: 'manual' }, { firstOpenRun: 'true' }]) assert.throws(() => store.setOptions(saved.id, patch), /技能选项无效/);
   store.setOptions('builtin:none', { trigger: 'always' });
   store.close(); const reopened = new SkillsStore(options); t.after(() => reopened.close());
   assert.equal(reopened.info(reopened.entry('builtin:none')).trigger, 'always');
@@ -259,7 +278,7 @@ test('newly added and moved projects replace copies before the first watcher sca
 });
 
 for (const trigger of ['always', 'first-open']) test(`${trigger} first run is claimed by an agent, never a shell or refresh`, t => {
-  const { store, projects, dataDir, options } = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger })));
+  const { store, projects, dataDir, options } = fixture(t, dirs => firstRunSkill(dirs, trigger));
   const project = projects[0], id = 'builtin:code-standard';
   const file = store.entry(id).path, preview = store.delivery(project);
   assert.ok(note(preview).includes(firstInstruction(file, trigger)));
@@ -273,7 +292,8 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} first run is cl
   assert.ok(note(first).includes(firstInstruction(file, trigger)));
   const persisted = JSON.parse(fs.readFileSync(path.join(dataDir, 'skills.json'), 'utf8'));
   assert.equal(persisted[id].firstOpenedProjects[project.id], 'first');
-  assert.equal(store.info(store.entry(id)).trigger, trigger, 'the configured default stays visible');
+  assert.equal(store.info(store.entry(id)).trigger, trigger === 'first-open' ? 'auto' : 'always');
+  assert.equal(store.info(store.entry(id)).firstOpenRun, trigger === 'first-open');
   assert.equal('firstRun' in store.info(store.entry(id)), false, 'first-run status is delivery-only');
   assert.notEqual(store.delivery(project), preview, 'starting a session invalidates previews');
   const later = start(store, project, 'second');
@@ -302,8 +322,9 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} first run is cl
 });
 
 for (const trigger of ['always', 'first-open']) test(`disabled ${trigger} skills are not recorded as run`, t => {
-  const { store, projects } = fixture(t, ({ projects, builtinDir }) => {
-    put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger }));
+  const { store, projects } = fixture(t, dirs => {
+    const { projects } = dirs;
+    firstRunSkill(dirs, trigger);
     fs.mkdirSync(path.join(projects[0].path, 'skills/code-standard'), { recursive: true });
   });
   const id = 'builtin:code-standard', project = projects[0];
@@ -316,9 +337,10 @@ for (const trigger of ['always', 'first-open']) test(`disabled ${trigger} skills
 });
 
 for (const trigger of ['always', 'first-open']) test(`${trigger} skills omitted from an SSH bundle have not run`, t => {
-  const { store, projects } = fixture(t, ({ builtinDir }) => {
+  const { store, projects } = fixture(t, dirs => {
+    const { builtinDir } = dirs;
     put(path.join(builtinDir, 'a-large', 'SKILL.md'), builtin('a-large') + 'x'.repeat(420 * 1024));
-    put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger }) + 'x'.repeat(120 * 1024));
+    firstRunSkill(dirs, trigger, 'x'.repeat(120 * 1024));
   });
   const delivery = start(store, projects[2], 'remote');
   assert.ok(delivery.bundle.files.some(file => file.name === 'a-large'));
@@ -333,7 +355,7 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} skills omitted 
 });
 
 for (const trigger of ['always', 'first-open']) test(`simultaneous launches claim ${trigger} first run once and the production launch boundary separates agents in one shell`, async t => {
-  const { store, projects, root } = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger })));
+  const { store, projects, root } = fixture(t, dirs => firstRunSkill(dirs, trigger));
   const project = projects[0], id = 'builtin:code-standard';
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   let serial = 0;
@@ -366,8 +388,9 @@ test('auto skills never claim a first run', t => {
 });
 
 test('always skills reuse a persisted first-open claim after a default change', t => {
-  const { store, projects, options } = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger: 'first-open' })));
+  const { store, projects, options } = fixture(t, ({ builtinDir }) => put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger: 'auto' })));
   const project = projects[0], id = 'builtin:code-standard', file = store.entry(id).path;
+  store.setOptions(id, { firstOpenRun: true });
   start(store, project, 'first');
   store.close();
   put(file, builtin('code-standard', { trigger: 'always' }));

@@ -4,6 +4,7 @@ const path = require('node:path');
 const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
 const line = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);
 const number = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
+const validSeat = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,31}(?:\/[a-z][a-z0-9-]{0,23})?$/.test(value);
 const routing = value => line(value?.model, 160) && (value.effort === null || line(value.effort, 32)) && (value.fast === null || typeof value.fast === 'boolean');
 const totals = event => Number.isSafeInteger(event.outputTokens) && event.outputTokens >= 0 && number(event.activeMs);
 const optionalCount = value => value == null || Number.isSafeInteger(value) && value >= 0;
@@ -93,7 +94,7 @@ function validDispatch(event) {
     && Number.isSafeInteger(event.helperPid) && event.helperPid > 0 && ['dispatch', 'intercepted'].includes(event.source)
     && (event.parentId == null) && (event.leadMode == null || ['native', 'terminal', 'codex'].includes(event.leadMode))
     && (event.resumed == null || typeof event.resumed === 'boolean') && number(event.at)
-    && (event.kind == null || TASK_KINDS.includes(event.kind))
+    && (event.kind == null || TASK_KINDS.includes(event.kind)) && (event.seat == null || validSeat(event.seat))
     && (event.meeting == null || typeof event.meeting === 'string' && /^[\w.-]{1,64}$/.test(event.meeting));
   if (event.type === 'dispatch-notice') return number(event.at) && (event.controlFailure === null
     || line(event.controlFailure, 160) && /^[\w.-]+\/[\w.-]+$/.test(event.controlFailure));
@@ -108,6 +109,7 @@ function validDispatch(event) {
   if (event.type === 'dispatch-routing') return true;
   if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role) &&
     line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) &&
+    (event.seat == null || validSeat(event.seat)) && (event.log == null || line(event.log, 4100)) &&
     (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
     (line(event.sessionId, 160) || event.unconfirmed === true && event.sessionId === null) &&
     number(event.startedAt) && (event.declared === undefined || routing(event.declared)) && (event.requestedModel == null || line(event.requestedModel, 160)) &&
@@ -138,4 +140,4 @@ function acceptDispatch(session, event, calls, observeAccount, admissionKey = se
   return calls?.dispatch(['dispatch-declared', 'dispatch-start'].includes(event.type) ? { ...event, planner } : event) || false;
 }
 
-module.exports = { acceptDispatch, validDispatch, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame };
+module.exports = { acceptDispatch, validDispatch, validSeat, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame };

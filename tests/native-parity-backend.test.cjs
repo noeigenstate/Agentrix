@@ -4,6 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { randomUUID } = require('node:crypto');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { createNativeSessions } = require('../electron/features/native-session/index.cjs');
+const { createRouter } = require('../electron/features/native-session/router.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const { createNormalizer } = require('../electron/features/claude-sdk/normalize.cjs');
 const { createEvents } = require('../electron/features/codex-app-server/events.cjs');
@@ -13,56 +14,42 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-options-')), fake = fakeSdk({ uniqueSessions: true });
-  const flags = [];
   const query = fake.sdk.query;
   fake.sdk.query = spec => {
-    let model = spec.options.model || 'fake-model';
+    const model = spec.options.model || 'fake-model';
     return { ...query(spec), supportedModels: async () => [{ value: 'alias', resolvedModel: 'fake-model', displayName: 'Fixture', description: 'Offline', supportedEffortLevels: ['low', 'high'], supportsFastMode: true }],
-      setModel: async value => { model = value || 'fake-model'; }, applyFlagSettings: async patch => { flags.push(patch); }, getContextUsage: async () => ({ model }) };
+      getContextUsage: async () => ({ model }) };
   };
   const runtime = createClaudeRuntime({ directory: path.join(root, 'state'), loadSdk: async () => fake.sdk, resolveExecutable: async () => 'synthetic-only',
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   runtime.credentials.save('sk-ant-offline-parity-fixture-only');
   t.after(async () => { await runtime.close(); fs.rmSync(root, { recursive: true, force: true }); });
-  // An owner query stays open at idle and no spend renews it. A key saved again retires it at the next send, which
-  // resumes the conversation in a new query: that query must carry the acknowledged choices.
+  // Saving the fake key again renews the query on the next send.
   const resume = () => runtime.credentials.save('sk-ant-offline-parity-fixture-only');
-  return { root, fake, runtime, resume, flags };
+  return { root, fake, runtime, resume };
 }
 
-test('run options read is lazy; acknowledged choices survive a resumed query', async t => {
-  const f = fixture(t), session = f.runtime.create({ owner: 'gui', cwd: f.root, env: { PATH: '' }, runtimeSessionId: randomUUID() }, () => {});
-  await session.start(); assert.equal((await session.runOptions({})).model, null); assert.equal(f.fake.calls.length, 0);
-  const models = await session.models();
-  assert.deepEqual(models[0].efforts, ['low', 'high']); assert.equal(models[0].fast, true);
-  await session.send({ clientMessageId: 'one', text: 'first' }); await tick();
-  assert.equal((await session.runOptions({})).model, 'fake-model');
-  assert.equal((await session.models())[0].value, 'fake-model');
-  assert.equal((await session.runOptions({ fast: true })).fast, true);
-  assert.deepEqual(f.flags.at(-1), { fastMode: true });
+test('Claude refuses model controls without creating a query and resumes with its launch seat', async t => {
+  const f = fixture(t);
+  const session = f.runtime.create({ owner: 'gui', cwd: f.root, env: { PATH: '' }, runtimeSessionId: randomUUID(),
+    model: 'fake-next', effort: 'low', fast: true }, () => {});
+  await session.start();
   assert.equal((await session.runOptions({})).fast, true);
-  await session.runOptions({ model: 'fake-next', effort: 'low', fast: true });
+  for (const patch of [{ model: 'fake-other' }, { effort: 'high' }, { fast: false }]) {
+    await assert.rejects(session.runOptions(patch), error => error.code === 'routing-owned');
+  }
+  for (const [i, text] of ['/model fake-other', '/effort high', '/fast off'].entries()) {
+    await assert.rejects(session.send({ clientMessageId: 'refused-' + i, text }), error => error.code === 'routing-owned');
+  }
+  assert.equal(f.fake.calls.length, 0);
+  assert.equal((await session.models())[0].value, 'fake-model');
+  await session.send({ clientMessageId: 'one', text: 'first' }); await tick();
   const queries = f.fake.calls.length;
   f.resume(); await session.send({ clientMessageId: 'two', text: 'second' }); await tick();
-  assert.equal(f.fake.calls.length, queries + 1, 'the second message runs in a resumed query');
+  assert.equal(f.fake.calls.length, queries + 1);
   assert.equal(f.fake.calls.at(-1).options.model, 'fake-next'); assert.equal(f.fake.calls.at(-1).options.effort, 'low');
   assert.equal(JSON.parse(fs.readFileSync(f.fake.calls.at(-1).options.settings)).fastMode, true);
-  assert.equal(f.fake.calls.at(-1).options.resume, f.fake.inputs[0].session_id || session.snapshot().events.find(event => event.providerSessionId)?.providerSessionId);
-  assert.equal((await session.runOptions({ model: null })).model, 'fake-model');
-  f.resume(); await session.send({ clientMessageId: 'default', text: 'default model' }); await tick();
-  assert.equal(f.fake.calls.at(-1).options.model, undefined);
-});
-
-test('rapid option updates serialize and a following send sees the last acknowledged choice', async t => {
-  const f = fixture(t), session = f.runtime.create({ owner: 'gui', cwd: f.root, env: { PATH: '' }, runtimeSessionId: randomUUID() }, () => {});
-  await session.start();
-  const values = await Promise.all(['first', 'second', 'last'].map(model => session.runOptions({ model })));
-  assert.deepEqual(values.map(value => value.model), ['first', 'second', 'last']);
-  await session.send({ clientMessageId: 'after-options', text: 'go' }); await tick();
-  const queries = f.fake.calls.length;
-  f.resume(); await session.send({ clientMessageId: 'resume-options', text: 'continue' }); await tick();
-  assert.equal(f.fake.calls.length, queries + 1, 'the next message runs in a resumed query');
-  assert.equal(f.fake.calls.at(-1).options.model, 'last');
+  assert.ok(f.fake.calls.at(-1).options.resume);
 });
 
 test('new conversation migrates binding before old close and never resumes the previous provider', async t => {
@@ -98,33 +85,50 @@ test('new conversation activation failure keeps the old binding usable', async t
   assert.equal(native.snapshot('terminal').runtimeSessionId, first.runtimeSessionId);
 });
 
-test('native controls validate exact patches and cannot accept execution options', async t => {
+test('Claude terminal-to-API resume selects the current seat and preserves the terminal binding', async t => {
+  const source = { identity: {}, path: 'terminal', spec: { owner: 'gui', agent: 'claude', projectId: 'project', terminalId: 't',
+    runtimeSessionId: 'old-runtime', providerSessionId: 'provider', sessionId: 'pty', skillSessionId: 'old-snapshot', model: 'old-seat' } };
+  const resumes = [], releases = [];
+  const provider = { facts: () => [], create: spec => ({
+    resume() { resumes.push(spec); return { providerSessionId: 'provider' }; },
+    prepareResume: () => ({ providerSessionId: 'provider' }), snapshot: () => ({ state: 'idle', events: [] }), close() {},
+  }) };
+  const router = createRouter({ claude: provider, codex: {}, settings: { get: () => ({ claudePath: 'api-only' }) },
+    resolveSpec() {}, emit() {}, terminalSessions: () => [source],
+    observeTerminal: () => ({ state: 'idle', background: { known: true, count: 0 } }),
+    prepareConversation: spec => {
+      Object.assign(spec, { model: 'current-seat', effort: 'max', fast: true, skillSessionId: 'new-snapshot' });
+      return committed => releases.push(committed);
+    },
+    activateNative: spec => assert.equal(spec.sessionId, source.spec.sessionId),
+  });
+  t.after(() => router.close());
+  await router.reconcile();
+  const changeId = router.switchState('t').changeId;
+  assert.equal(router.answer('t', 'old-runtime', 'handoff', { handoff: { changeId, draft: { version: 1, text: '', images: [], undelivered: [] } } }).accepted, true);
+  await router.settled();
+  assert.equal(resumes.length, 1);
+  assert.deepEqual([resumes[0].model, resumes[0].effort, resumes[0].fast, resumes[0].providerSessionId, resumes[0].skillSessionId],
+    ['current-seat', 'max', true, 'provider', 'new-snapshot']);
+  assert.equal(source.spec.model, 'old-seat'); assert.deepEqual(releases, [true]);
+});
+
+test('native controls refuse routing patches with the shared code and forward permissions only', () => {
   const handlers = new Map(), calls = [];
-  const router = Object.fromEntries(['runOptions', 'models', 'newConversation', 'shell'].map(name => [name, (...args) => calls.push([name, ...args])]));
+  const router = Object.fromEntries(['runOptions', 'newConversation', 'shell'].map(name => [name, (...args) => calls.push([name, ...args])]));
   require('../electron/features/native-session/ipc.cjs').registerIpc({ handle: (name, fn) => handlers.set(name, fn), router, settings: {}, claude: {} });
   const options = handlers.get('native:run-options');
-  for (const patch of [{ env: {} }, { fast: true, env: {} }, { model: 1 }, { effort: 'not a level' }, { effort: 1 }, { fast: 'yes' }, { cwd: '/other' }, []]) assert.throws(() => options('t', 'r', patch));
-  assert.equal(calls.length, 0, 'execution options and malformed patches never reach the router');
-  options('t', 'r', {}); assert.deepEqual(calls.at(-1), ['runOptions', 't', 'r', {}]);
-  options('t', 'r', { model: null, effort: null, fast: false });
-  options('t', 'r', { fast: true }); assert.deepEqual(calls.at(-1), ['runOptions', 't', 'r', { fast: true }]);
+  for (const patch of [{ env: {} }, { cwd: '/other' }, { permissions: 'unsafe' }, []]) assert.throws(() => options('t', 'r', patch));
+  for (const patch of [{ model: null }, { effort: 'high' }, { fast: false }, { fast: true, permissions: 'ask' }]) {
+    assert.deepEqual(options('t', 'r', patch), { ok: false, code: 'routing-owned', error: '模型由模型路由决定，请在模型路由中更改。' });
+  }
+  assert.equal(calls.length, 0);
+  assert.equal(handlers.has('native:models'), false);
+  options('t', 'r', {}); options('t', 'r', { permissions: 'ask' });
+  assert.deepEqual(calls, [['runOptions', 't', 'r', {}], ['runOptions', 't', 'r', { permissions: 'ask' }]]);
   const shell = handlers.get('native:shell');
   assert.throws(() => shell('t', 'r', 'id', { command: 'echo', env: {} }));
   shell('t', 'r', 'id', 'echo'); assert.deepEqual(calls.at(-1), ['shell', 't', 'r', 'id', 'echo']);
-  // Effort names are the provider's. Native controls reject malformed syntax before a query;
-  // the provider decides which bounded names it supports. Fast remains a boolean run option.
-  const f = fixture(t), bound = new Map();
-  const native = createNativeSessions({ directory: path.join(f.root, 'native'), claude: f.runtime, codex: {}, emit() {},
-    resolveSpec: id => ({ owner: 'gui', cwd: f.root, env: { PATH: '' }, terminalId: id, projectId: 'project', agent: 'claude' }),
-    activateNative() {}, terminal: () => assert.fail('no terminal'), saveSession() {} });
-  t.after(() => native.close());
-  native.register((name, fn) => bound.set(name, fn));
-  const started = await native.start('terminal', { agent: 'claude' });
-  await assert.rejects(async () => bound.get('native:run-options')('terminal', started.runtimeSessionId, { effort: 'not a level' }));
-  assert.equal(f.fake.calls.length, 0, 'malformed effort syntax reaches no query');
-  assert.equal((await bound.get('native:run-options')('terminal', started.runtimeSessionId, { effort: 'low' })).effort, 'low');
-  assert.equal((await bound.get('native:run-options')('terminal', started.runtimeSessionId, { fast: true })).fast, true);
-  assert.deepEqual(f.flags.at(-1), { fastMode: true });
 });
 
 test('both compaction lifecycles publish bounded events; every notice survives snapshot replay', () => {

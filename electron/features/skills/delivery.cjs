@@ -2,12 +2,12 @@ const MAX_NOTE = 6000;
 const SSH_REFERENCE_NOTE = 'Shipped built-in and global skills are read-only reference copies containing SKILL.md text only. The current bundle survives closed terminals for resume. Other bundles and receipts older than 30 days are pruned on the next SSH terminal start.';
 const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'").replace(/[\x00-\x1f\x7f]+/g, ' ');
 
-function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false, skippedNote = '', routingNote = '', seatsBlock = '' }) {
+function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false, skippedNote = '', routingNote = '' }) {
   const enabled = skills.filter(skill => skill.enabled), parts = [];
   parts.push(remote ? '{AGENTRIX_AGENTS}' : `Installed agents: Claude Code ${agents?.claude?.installed ? 'installed' : 'missing'}; Codex ${agents?.codex?.installed ? 'installed' : 'missing'}.`);
   for (const skill of enabled) {
     if (skill.trigger === 'always') parts.push(`Before any task, read and follow ${skill.path}${skill.firstRun ? '; this is its first run in this project' : ''}.`);
-    else if (skill.trigger === 'first-open') parts.push(`Before the first task of this session, read and follow ${skill.path}; this is its first run in this project.`);
+    else if (skill.firstOpenRun && skill.firstRun) parts.push(`Before the first task of this session, read and follow ${skill.path}; this is its first run in this project.`);
     else parts.push(`Available auto skills: ${skill.name}: ${skill.description} (${skill.path}); read it when its description fits before starting.`);
     if (skill.extends) parts.push(`For ${skill.name}, follow ${skill.extends} first, then this extension's additions; where they conflict, the system skill wins.`);
   }
@@ -17,7 +17,6 @@ function skillInstructions({ skills, globalFolder, agents, pendingPath, remote =
   if (remote) parts.push(SSH_REFERENCE_NOTE);
   if (skippedNote) parts.push(skippedNote);
   if (routingNote) parts.push(routingNote);
-  if (seatsBlock) parts.push(seatsBlock);
   for (const skill of enabled.filter(skill => !remote && skill.source === 'user')) {
     parts.push(`${skill.path}: ${!skill.autoOptimize ? 'must not change it' : skill.confirmChanges
       ? `propose edits only to ${pendingPath(skill)}; do not change the active file until the user accepts`

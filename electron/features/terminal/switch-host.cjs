@@ -16,10 +16,9 @@ function createSwitchHost(deps) {
       const providerSessionId = s.claudeSessionId || s.claudeResumeId || null;
       result.push({ identity: s, path: 'terminal', spec: { owner: 'gui', agent: s.agent, kind: project.kind,
         projectId: project.id, terminalId: id, runtimeSessionId: s.nativeRuntimeSessionId, providerSessionId,
-        sessionId: s.sessionId, sessionKey: s.sessionKey, controlCapability: s.controlCapability, bootstrapFile: s.bootstrapFile,
+        sessionId: s.sessionId, skillSessionId: s.skillSessionId, sessionKey: s.sessionKey, controlCapability: s.controlCapability, bootstrapFile: s.bootstrapFile,
         cwd: store.findTerminal(id)?.record.restore?.cwd || project.path, env: s.usageEnv, context: s.skillNote || '',
-        hasHistory: s.conversation?.list.some(entry => ['user', 'assistant'].includes(entry.role)),
-        model: s.agentSettings?.model || null, effort: s.agentSettings?.effort || 'high', fast: s.agentSettings?.fast ?? true } });
+        hasHistory: s.conversation?.list.some(entry => ['user', 'assistant'].includes(entry.role)) } });
     }
     return result;
   }

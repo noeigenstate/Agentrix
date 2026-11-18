@@ -11,6 +11,7 @@ const { randomUUID } = require('node:crypto');
 const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, RATE_INTERVAL } = require('../integration/dispatch.cjs');
 const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
+const { validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 const { digest, deliveryMarker } = require('../electron/features/skills/session.cjs');
 
@@ -97,7 +98,7 @@ test('a dispatched CLI inherits shim depth and signed identity while its declara
   vm.runInThisContext(`(function(require,module,exports,__filename,__dirname){${syncFs.readFileSync(helper, 'utf8')}\n})`, { filename: helper })(load, loaded, loaded.exports, helper, path.dirname(helper));
   let reports = '';
   const code = await loaded.exports.run(['claude', '--role', 'exec', '--title', 'Synthetic intercepted worker', '--model', 'claude-sonnet-5-5',
-    '--effort', 'high', '--permission', 'plan', '--cwd', folder, '--brief', brief, '--out', out], {
+    '--effort', 'high', '--permission', 'plan', '--cwd', folder, '--brief', brief, '--out', out, '--seat', 'developer/backend'], {
     source: 'intercepted', env: { PATH: '', AGENTRIX_BOOTSTRAP: bootstrap }, stdout: { write: value => { reports += value; } },
     resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
     launch: (_file, _argv, options) => {
@@ -113,6 +114,15 @@ test('a dispatched CLI inherits shim depth and signed identity while its declara
   assert.equal(code, 0, reports);
   const declaration = events.find(event => event.type === 'dispatch-declared');
   assert.equal(declaration.source, 'intercepted');
+  const start = events.find(event => event.type === 'dispatch-start');
+  assert.equal(declaration.seat, 'developer/backend');
+  assert.equal(start.seat, declaration.seat);
+  assert.equal(start.log, out + '.log');
+  for (const event of [declaration, start]) {
+    assert.equal(validDispatch(event), true);
+    assert.equal(validDispatch({ ...event, seat: 'developer/../outside' }), false);
+    assert.equal(validDispatch({ ...event, seat: null }), true);
+  }
   assert.equal(launchedEnv.AGENTRIX_DISPATCH_DEPTH, '1'); assert.equal(launchedEnv.AGENTRIX_RUN_ID, declaration.id);
   assert.match(launchedEnv.AGENTRIX_RUN_PROOF, /^[a-f0-9]{64}$/);
   assert.equal(launchedEnv.AGENTRIX_BOOTSTRAP, undefined, 'the worker receives no reporting credential');
@@ -203,6 +213,13 @@ test('helper constructs exact Codex/Claude argv and rejects incomplete or ambigu
   assert.deepEqual(commandOf(options), ['app-server', '--listen', 'stdio://']);
   assert.deepEqual(commandOf(argumentsOf(['claude', ...base, '--permission', 'acceptEdits'])),
     ['-p', '--model', 'test-model', '--effort', 'high', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose']);
+  for (const seat of ['designer', 'developer/frontend', 'a' + '1'.repeat(31) + '/b' + '2'.repeat(23)]) {
+    assert.equal(argumentsOf(['codex', ...base, '--seat', seat]).seat, seat);
+  }
+  for (const seat of ['Developer', 'developer/', 'developer/../data', 'developer/front/end', 'x'.repeat(33), 'developer/' + 'x'.repeat(25)]) {
+    assert.throws(() => argumentsOf(['codex', ...base, '--seat', seat]), /lowercase seat id/);
+  }
+  assert.throws(() => argumentsOf(['codex', ...base, '--seat', 'designer', '--seat', 'qa']), /Repeated option --seat/);
   for (const [alias, expected] of [['exec', '执行'], ['investigate', '调查'], ['review', '审查'], ['执行', '执行'], ['调查', '调查'], ['审查', '审查']]) {
     assert.equal(argumentsOf(['codex', ...base.map(value => value === '审查' ? alias : value)]).role, expected);
   }

@@ -185,6 +185,13 @@ __pg_hook_proxy() {
 # carry them. A proxy set in this terminal (by the user's start-up files, say) falls back too, and main is told why.
 claude() {
   emulate -L zsh
+  local word
+  for word in "$@"; do
+    case $word in
+      --) break;;
+      --model|--model=*|--effort|--effort=*) printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2;;
+    esac
+  done
   local -a program
   if ! __pg_program claude; then
     print -P '%F{yellow}Claude Code was not found in PATH. Install it, then restart this terminal.%f'
@@ -192,9 +199,13 @@ claude() {
   fi
   program=("${reply[@]}")
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  if [[ ${1-} == --agentrix-seat-fast ]]; then
-    shift
-    launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback
+  local model effort fast lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  local -a lead_args=()
+  if [[ -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
+    { IFS= read -r model && IFS= read -r effort && IFS= read -r fast; } < "$lead_file" &&
+    [[ -n $model && -n $effort && ( $fast == 0 || $fast == 1 ) ]]; then
+    lead_args=(--model "$model" --effort "$effort")
+    if [[ $fast == 1 ]]; then launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback; fi
   fi
   local settings=$launch_fallback
   if [[ $__pg_hook_channel == http ]]; then
@@ -221,7 +232,7 @@ claude() {
   # This Claude Code is a planner: the shims come first on its PATH, at depth zero (shims/BOUNDARY.md).
   local -a planner=()
   [[ -n $__pg_shims ]] && planner=(${(0)"$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env 2>/dev/null)"})
-  command env "${planner[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" "${settings_args[@]}" "${note[@]}" "$@"
+  command env "${planner[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" "${settings_args[@]}" "${note[@]}" "${lead_args[@]}" "$@"
   local code=$?
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
   __pg_send codex-exited $code claude

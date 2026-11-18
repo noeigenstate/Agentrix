@@ -5,6 +5,7 @@ const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
 const { retainLimits } = require('../agents/agent-usage.cjs');
+const { routingOwned, routingPatch, routingText } = require('../agents/agent-command.cjs');
 // What the owner is told when a provider limit moved a session to the terminal, chosen by the limit's code: [moved, moved with
 // the refused message kept in the composer]. Each is one whole sentence, so the translation table holds it as it is shown.
 const LIMIT_SWITCHED = {
@@ -16,7 +17,7 @@ const LIMIT_SWITCHED = {
     'Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
 };
 const providerLimit = status => Object.hasOwn(LIMIT_SWITCHED, status);
-function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
+function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, prepareConversation = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
   const projectLimits = new Map(), historyReads = new Map();
@@ -120,7 +121,6 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     try {
       const config = settings.get(), resolved = resolveSpec(id, agent, resume, false, agent === 'codex' ? launch : null);
       const spec = { ...resolved, agent, runtimeSessionId: randomUUID() };
-      if (agent === 'codex' && resume && !launch) spec.preserveRunOptions = true;
       if (resume && !spec.providerSessionId) {
         spec.providerSessionId = (await history(id))?.[agent]?.id || null;
         resolveSpec(id, agent, false, true);
@@ -280,8 +280,14 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           return { reason };
         } };
       }
-      const record = makeRecord(spec, true, restoring?.restoreFactory);
+      const finishPreparation = restoring ? null : prepareConversation(spec);
+      let record;
+      const cancel = async () => {
+        try { await record?.runtime.close(); }
+        finally { finishPreparation?.(false); }
+      };
       try {
+        record = makeRecord(spec, true, restoring?.restoreFactory);
         const initialized = await record.runtime[spec.providerSessionId ? 'resume' : 'start'](spec);
         if (initialized?.providerSessionId) spec.providerSessionId = initialized.providerSessionId;
         if (spec.agent === 'claude') {
@@ -289,12 +295,13 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
           if (prepared && Object.hasOwn(prepared, 'providerSessionId')) spec.providerSessionId = prepared.providerSessionId;
         }
         if (record.runtime.snapshot().state !== 'idle') throw new Error('resume_not_idle');
-      } catch (error) { await record.runtime.close(); throw error; }
+      } catch (error) { await cancel(); throw error; }
       record.handoff = handoff;
-      return { session: { identity: record, record, spec, path: target }, cancel: () => record.runtime.close(), async commit() {
+      return { session: { identity: record, record, spec, path: target }, cancel, async commit() {
         await activateNative(spec, handoff, transition);
         saveSession(id, { agent: spec.agent, providerSessionId: spec.providerSessionId }); record.persisted = !!spec.providerSessionId;
         sessions.set(id, record); terminalStreams.delete(id);
+        finishPreparation?.(true);
         if (spec.providerSessionId) { record.lock = `${spec.agent}:${spec.providerSessionId}`; occupied.add(record.lock); }
         record.staged = false;
         carryHistory(previousStream, record.stream, record.inputs);
@@ -332,18 +339,12 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     async runOptions(id, runtimeSessionId, patch) {
       const record = current(id, runtimeSessionId);
       if (!record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
-      if (record.spec.agent === 'claude' && patch.effort != null && (typeof patch.effort !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(patch.effort))) throw new Error('无效的运行选项。');
+      if (routingPatch(patch)) throw routingOwned();
       if (record.spec.agent !== 'codex' && patch.permissions !== undefined) throw new Error('此会话不支持切换权限。');
       const result = await record.runtime.runOptions(patch);
       current(id, runtimeSessionId);
-      if (record.spec.agent === 'codex') Object.assign(record.spec, result);
+      if (record.spec.agent === 'codex' && result.permissions !== undefined) record.spec.permissions = result.permissions;
       return result;
-    },
-    async models(id, runtimeSessionId) {
-      const record = current(id, runtimeSessionId);
-      if (!record.runtime.models) throw new Error('此会话不支持模型菜单。');
-      const result = await record.runtime.models();
-      current(id, runtimeSessionId); return result;
     },
     async shell(id, runtimeSessionId, clientMessageId, command) {
       const record = current(id, runtimeSessionId);
@@ -357,14 +358,12 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async newConversation(id, runtimeSessionId) {
       const previous = current(id, runtimeSessionId);
-      if (!previous.runtime.runOptions) throw new Error('此会话不支持新对话。');
       if (busy.has(id) || previous.runtime.snapshot().state !== 'idle' || previous.runtime.activity?.().count > 0) throw new Error('请等待当前任务结束后再开始新对话。');
       busy.add(id);
-      let next;
+      let next, finishPreparation;
       try {
-        const options = await previous.runtime.runOptions({});
-        current(id, runtimeSessionId);
-        const spec = { ...previous.spec, ...options, model: options.model || previous.spec.model, runtimeSessionId: randomUUID(), providerSessionId: null, threadId: null };
+        const spec = { ...previous.spec, runtimeSessionId: randomUUID(), providerSessionId: null, threadId: null };
+        finishPreparation = prepareConversation(spec);
         next = makeRecord(spec, true);
         const started = await next.runtime.start();
         if (previous.spec.agent === 'codex') spec.providerSessionId = started.providerSessionId;
@@ -384,7 +383,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         try { await previous.runtime.close(); } catch { }
         return { runtimeSessionId: spec.runtimeSessionId };
       } catch (error) { if (next && sessions.get(id) !== next) await next.runtime.close(); throw error; }
-      finally { busy.delete(id); }
+      finally { finishPreparation?.(!!next && sessions.get(id) === next); busy.delete(id); }
     },
     async commands(id, runtimeSessionId) {
       const record = current(id, runtimeSessionId);
@@ -395,6 +394,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
+      if (record.spec.owner !== 'dispatch' && routingText(message.text)) throw routingOwned();
       // A read-only popup query is not the owner's message: it keeps their stop and input flags, leaves no item in the conversation and, mid-switch, says so
       // instead of leaving an unsent bubble behind.
       const observation = (record.spec.agent === 'codex' ? ['/status', '/usage'] : ['/context', '/cost', '/status', '/usage']).includes(message.text.trim()) && record.spec.owner !== 'dispatch';

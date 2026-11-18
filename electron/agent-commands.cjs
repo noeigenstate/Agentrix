@@ -1,13 +1,14 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
+const { routingCommand } = require('./features/agents/agent-command.cjs');
 
 // Built-in commands as the installed CLIs answer them (checked live with scripts/slash-live.mjs against Claude Code
-// 2.1.294, which no longer knows /agents, /todos, /vim or /pr-comments; /fast and /effort as 2.1.296 draws them).
+// 2.1.294, which no longer knows /agents, /todos, /vim or /pr-comments).
 const BUILTINS = {
   claude: {
     terminal: [
-      ['help', '帮助与快捷键'], ['model', '切换模型'], ['fast', '切换快速模式'], ['effort', '推理强度'], ['resume', '恢复之前的对话'], ['status', '版本、账号与连接状态'],
+      ['help', '帮助与快捷键'], ['resume', '恢复之前的对话'], ['status', '版本、账号与连接状态'],
       ['config', '设置'], ['permissions', '工具权限'], ['mcp', 'MCP 服务器'], ['hooks', 'Hook 设置'],
       ['memory', '编辑记忆文件'], ['context', '上下文占用'], ['cost', '用量与费用'], ['usage', '套餐用量'], ['doctor', '检查安装'],
       ['clear', '清空对话'], ['compact', '压缩对话'], ['rewind', '回退到之前的位置'], ['export', '导出对话'], ['add-dir', '添加工作目录'],
@@ -18,11 +19,10 @@ const BUILTINS = {
   },
   // Codex CLI 0.161.0: rust-v0.161.0's tui/src/slash_command.rs and bottom_pane/command_popup.rs.
   // Use canonical popup names; omit hidden/debug commands, Daybreak (under development), the recovery-only
-  // Windows sandbox setup and exit/logout actions. Stable feature/account-gated commands are included;
-  // /fast comes from the model's service tiers, and may be absent for models without that tier.
+  // Windows sandbox setup and exit/logout actions. Stable feature/account-gated commands are included.
   codex: {
     terminal: [
-      ['model', '切换模型与推理强度'], ['fast', '切换快速模式'], ['ide', '切换 IDE 上下文'], ['permissions', '工具权限'],
+      ['ide', '切换 IDE 上下文'], ['permissions', '工具权限'],
       ['keymap', '快捷键设置'], ['vim', '切换 Vim 模式'], ['experimental', '实验功能设置'], ['approve', '批准自动审查拒绝后的重试'],
       ['memories', '记忆设置'], ['skills', '选择技能'], ['import', '导入 Claude Code 配置与对话'], ['hooks', 'Hook 设置'],
       ['rename', '重命名对话'], ['new', '新对话'], ['archive', '归档对话'], ['delete', '永久删除对话'], ['resume', '恢复对话'],
@@ -127,7 +127,10 @@ async function listAgentCommands({ agent, projectPath, home = os.homedir(), clau
     }
   }
   const seen = new Set();
-  return Object.values(groups).flatMap(group => group.sort(byName)).filter(command => { if (seen.has(command.name)) return false; seen.add(command.name); return true; });
+  return Object.values(groups).flatMap(group => group.sort(byName)).filter(command => {
+    if (seen.has(command.name) || routingCommand(command.name.slice(1))) return false;
+    seen.add(command.name); return true;
+  });
 }
 
 // Commands handled without an owner model turn. The legacy picker's view is not execution metadata.
@@ -135,7 +138,7 @@ async function listAgentCommands({ agent, projectPath, home = os.homedir(), clau
 function isLocalAgentCommand(agent, text) {
   const name = agentCommand(text).slice(1);
   if (!name || agent === 'claude' && CLAUDE_MODEL_COMMANDS.has(name)) return false;
-  return (BUILTINS[agent]?.terminal || []).some(([command]) => command === name)
+  return (agent === 'claude' || agent === 'codex') && routingCommand(name) || (BUILTINS[agent]?.terminal || []).some(([command]) => command === name)
     || agent === 'claude' && CLAUDE_EXTRA_LOCAL_COMMANDS.has(name);
 }
 

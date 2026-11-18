@@ -25,13 +25,13 @@ const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'fe
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
-const { dispatchDirectory } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const { dispatchDirectory, validSeat } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
 const { withShims, runtimeFiles: shimRuntimeFiles } = require(path.join(shimDirectory, 'intercept.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
-  'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs',
+  'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs', 'features/agents/agent-command.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
   'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs', 'features/agents/dispatch-events.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
@@ -59,6 +59,7 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
 const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
+  [--seat <id>[/<specialty>]] the team role for this run
   [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
   [--ledger <file>]       the task's shared context: given to the worker, its findings appended after
   [--resume <session>]    continue that worker session (same context) instead of starting a new one
@@ -116,7 +117,7 @@ function argumentsOf(argv) {
   if (!command && !['codex', 'claude'].includes(agent)) throw new Error('Expected codex, claude, minutes or consolidate');
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
   const keys = command ? ['cwd', 'meeting', ...(agent === 'minutes' ? ['out', 'issues', 'language'] : ['summary', 'incidents', 'findings'])]
-    : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'meeting', 'kind'];
+    : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'meeting', 'kind', 'seat'];
   const names = new Map(keys.map(key => [`--${key}`, key]));
   if (!command) names.set('--skip-meeting', 'skipMeeting');
   const seen = new Set();
@@ -152,6 +153,7 @@ function argumentsOf(argv) {
   if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
   options.role = roles.get(options.role);
   if (options.kind && !TASK_KINDS.includes(options.kind)) throw new Error(`Expected --kind ${TASK_KINDS.join(', ')}`);
+  if (options.seat != null && !validSeat(options.seat)) throw new Error('Expected a lowercase seat id with an optional /specialty for --seat');
   if (options.title.length > 1024 || options.model.length > 160 || options.effort.length > 32) throw new Error('Assignment is too long');
   // Each of these reaches a CLI as an option's value: none may start with a dash and become an option of its own.
   if (!/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(options.model)) throw new Error('Expected a model name for --model');
@@ -821,7 +823,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   const assignment = () => ({ type: 'dispatch-start', id, helperPid: process.pid, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
     ...billing(),
     kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, skipMeeting: options.skipMeeting || null,
-    cwd: options.cwd, brief: options.brief, out: options.out, requestedModel: options.model, sessionId: output.sessionId, startedAt: Date.now() });
+    seat: options.seat ?? null, cwd: options.cwd, brief: options.brief, out: options.out, log: options.out + '.log',
+    requestedModel: options.model, sessionId: output.sessionId, startedAt: Date.now() });
   const failed = (reason, exitCode = null) => {
     if (unconfirmed || started) return;
     unconfirmed = true; signal(`failed to start ${id}: ${reason.replace(/[\r\n]+/g, ' ')}`);
@@ -1020,7 +1023,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     if (options.meeting && !team) throw new Error('roundtables need a git repository');
     if (team) admission = await team.admit(options, id, __filename);
     send({ type: 'dispatch-declared', id, helperPid: process.pid, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
-      cwd: options.cwd, worktree: options.cwd, requested: declared(), source, parentId: null, resumed: !!options.resume,
+      seat: options.seat ?? null, cwd: options.cwd, worktree: options.cwd, requested: declared(), source, parentId: null, resumed: !!options.resume,
       kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, at: Date.now() });
     workerEnv = withShims(workerEnv, { depth: 1 + (Number(env.AGENTRIX_DISPATCH_DEPTH) || 0), runId: id,
       proof: createHmac('sha256', send.bootstrap?.sessionKey || randomBytes(32)).update(`agentrix-run:${id}`).digest('hex') });

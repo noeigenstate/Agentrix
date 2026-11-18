@@ -16,8 +16,8 @@ contextBridge.exposeInMainWorld('agentrix', {
     answer: (terminalId, runtimeSessionId, requestId, answer) => ipcRenderer.invoke('native:answer', terminalId, runtimeSessionId, requestId, answer),
     snapshot: terminalId => ipcRenderer.invoke('native:snapshot', terminalId),
     commands: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:commands', terminalId, runtimeSessionId),
-    runOptions: (terminalId, runtimeSessionId, patch) => ipcRenderer.invoke('native:run-options', terminalId, runtimeSessionId, patch),
-    models: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:models', terminalId, runtimeSessionId),
+    runOptions: (terminalId, runtimeSessionId, patch) => ipcRenderer.invoke('native:run-options', terminalId, runtimeSessionId, patch)
+      .then(result => result.ok && result.value?.code === 'routing-owned' ? result.value : result),
     newConversation: (terminalId, runtimeSessionId) => ipcRenderer.invoke('native:new-conversation', terminalId, runtimeSessionId),
     shell: (terminalId, runtimeSessionId, clientMessageId, command) => ipcRenderer.invoke('native:shell', terminalId, runtimeSessionId, clientMessageId, command),
     onEvent: callback => listen('native:event', callback),
@@ -141,6 +141,8 @@ contextBridge.exposeInMainWorld('agentrix', {
   terminalConversation: id => ipcRenderer.invoke('terminal:conversation', id),
   terminalConversationPage: (id, request) => ipcRenderer.invoke('terminal:conversationPage', id, request),
   subagentFeed: (terminalId, callId) => ipcRenderer.invoke('terminal:subagent-feed', terminalId, callId),
+  callFile: (terminalId, callId, kind) => ipcRenderer.invoke('agents:callFile', terminalId, callId, kind)
+    .then(result => result.ok ? result.value : { ok: false, code: 'refused' }),
   onSubagentFeed: callback => listen('terminal:subagent-feed', callback),
   interveneAgent: (terminalId, callId, text) => ipcRenderer.invoke('agents:intervene', terminalId, callId, text),
   stopAgent: (terminalId, callId) => ipcRenderer.invoke('agents:stop', terminalId, callId),

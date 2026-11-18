@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createTerminalEnvironment } = require('../electron/terminal-env.cjs');
 
-for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} preserves base hooks and prepares only a one-shot override`, t => {
+for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} preserves base hooks and writes the launch choice separately`, t => {
   const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
   const { writeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fast-hooks-'));
@@ -12,18 +12,20 @@ for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} 
     fallback: JSON.stringify({ hooks: { SessionStart: ['session'], Stop: ['command'] } }) } };
   const before = JSON.stringify(hooks);
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const start = source.indexOf('  if (hooks && launchPlans.get(id)?.fast === true)'), end = source.indexOf('  if (bootstrapFile) writeBootstrap', start);
-  require('node:vm').runInNewContext(source.slice(start, end), { hooks, env: {}, id: 'terminal', launchPlans: new Map([['terminal', { fast }]]) });
+  const terminal = source.indexOf('function startTerminal(');
+  const start = source.indexOf('  if (hooks) {', terminal), end = source.indexOf('  if (bootstrapFile) writeBootstrap', start);
+  require('node:vm').runInNewContext(source.slice(start, end), { hooks, env: {} });
   assert.equal(JSON.stringify({ settings: hooks.settings }), before);
-  if (fast !== true) assert.equal(JSON.stringify(hooks), before);
-  writeBootstrap({ file, eventServer: { name: 'injected', address: 'injected' }, claudeFast: fast, hooks });
+  writeBootstrap({ file, eventServer: { name: 'injected', address: 'injected' }, hooks,
+    lead: fast === undefined ? null : { model: 'opus', effort: 'high', fast } });
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), fast === undefined ? '' : `opus\nhigh\n${fast ? 1 : 0}\n`);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   for (const channel of ['http', 'fallback']) {
     const settings = JSON.parse(saved.hooks.settings[channel]);
     assert.equal(settings.fastMode, undefined); assert.deepEqual(settings.hooks.SessionStart, ['session']);
     assert.equal(settings.hooks.Stop[0], channel === 'http' ? 'http' : 'command');
     assert.equal(hooks.settings[channel], saved.hooks.settings[channel]);
-    if (fast === true) assert.equal(JSON.parse(saved.hooks.fastSettings[channel]).fastMode, true);
+    assert.equal(JSON.parse(saved.hooks.fastSettings[channel]).fastMode, true);
   }
 });
 
