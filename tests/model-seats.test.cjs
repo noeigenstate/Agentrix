@@ -43,6 +43,42 @@ test('reviewer independence is refused only when a distinct available model is a
   assert.equal(checkReviewer({ core: seat('gpt-sonnet'), reviewer: seat('gpt-sonnet') }, [{ model: 'sonnet', rank: 2, available: true }]).code, 'reviewer-same-model');
 });
 
+test('reviewer aliases match the newest listed resolved id in either author slot', () => {
+  for (const alias of ['opus', 'sonnet', 'haiku']) {
+    const models = catalog(both, [{ model: `claude-${alias}-5-4` }, { model: `claude-${alias}-5-5` },
+      { model: `claude-${alias}-6-0`, listed: false }, { model: 'gpt-6.2-sol', rank: 3 }]);
+    for (const author of ['core', 'execution']) for (const [writer, reviewer] of [[`claude-${alias}-5-5`, alias], [alias, `claude-${alias}-5-5`]]) {
+      const map = cleanSeats({ [author]: seat(writer), reviewer: seat(reviewer) }, ids, models);
+      assert.equal(checkReviewer(map, models)?.code, 'reviewer-same-model', `${author}: ${writer}/${reviewer}`);
+      assert.equal(map.reviewer.model, reviewer, 'identity comparison does not rewrite saved ids');
+    }
+  }
+});
+
+test('an alias and its own resolved id never provide an independent alternative', () => {
+  for (const alias of ['opus', 'sonnet', 'haiku']) {
+    const models = [{ model: alias, rank: 3, available: true }, { model: `claude-${alias}-5-5`, rank: 3, available: true }];
+    for (const model of [alias, `claude-${alias}-5-5`]) {
+      assert.equal(checkReviewer({ core: seat(model), reviewer: seat(model) }, models), null);
+    }
+  }
+});
+
+test('reviewer identity ignores context/date suffixes but keeps older versions distinct', () => {
+  const models = [{ model: 'opus', rank: 3, available: true },
+    { model: 'claude-opus-5-9', rank: 3, available: true },
+    { model: 'claude-opus-5-10-20261118[1m]', rank: 3, available: true },
+    { model: 'claude-opus-6-0', rank: 3, available: true, listed: false },
+    { model: 'gpt-6.2-sol', rank: 3, available: true }];
+  for (const model of ['claude-opus-5-10', 'claude-opus-5-10[1m]', 'claude-opus-5-10-20261118']) {
+    assert.equal(checkReviewer({ core: seat(model), reviewer: seat('opus') }, models)?.code, 'reviewer-same-model');
+  }
+  for (const model of ['claude-opus-5-4', 'claude-opus-5-9', 'claude-opus-6-0']) {
+    assert.equal(checkReviewer({ core: seat(model), reviewer: seat('opus') }, models), null, model);
+  }
+  assert.equal(checkReviewer({ core: seat('claude-opus-5-10[1m]'), reviewer: seat('claude-opus-5-10-20261118') }, models)?.code, 'reviewer-same-model');
+});
+
 test('defaults and catalog describe installed-agent substitutions and provider efforts without enumerating models', () => {
   const models = catalog({ claude: false, codex: true }, [{ value: 'gpt-next', displayName: 'Next', efforts: ['low', 'max', 'high'] }, { value: 'fable-secret' }]);
   assert.equal(models.find(row => row.model === 'opus').available, false);

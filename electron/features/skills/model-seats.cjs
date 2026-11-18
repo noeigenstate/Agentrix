@@ -82,10 +82,22 @@ function effective(defaults, global = {}, project = {}) {
 
 function checkReviewer(map, models) {
   const reviewer = map.reviewer;
-  if (!reviewer || !['core', 'execution'].some(id => map[id]?.model === reviewer.model)) return null;
+  if (!reviewer) return null;
+  // Aliases follow the newest listed release; context/date variants are the same reviewer identity.
+  const release = model => /^claude-(opus|sonnet|haiku)-(\d+)-(\d+)$/.exec(model.replace(/\[1m\]/g, '').replace(/-\d{8}$/, ''));
+  const latest = new Map();
+  for (const row of models) {
+    const version = release(row.model);
+    if (!version || row.listed === false) continue;
+    const prior = latest.get(version[1]);
+    if (!prior || Number(version[2]) > Number(prior[2]) || Number(version[2]) === Number(prior[2]) && Number(version[3]) > Number(prior[3])) latest.set(version[1], version);
+  }
+  const identity = model => latest.get(model)?.[0] || release(model)?.[0] || model;
+  const reviewerId = identity(reviewer.model);
+  if (!['core', 'execution'].some(id => map[id] && identity(map[id].model) === reviewerId)) return null;
   const rank = models.find(row => row.model === reviewer.model)?.rank
     ?? rankOf(reviewer.model);
-  return models.some(row => row.available && row.model !== reviewer.model && row.rank >= rank)
+  return models.some(row => row.available && identity(row.model) !== reviewerId && row.rank >= rank)
     ? refusal('reviewer-same-model', 'reviewer', 'Choose a reviewer different from core and execution when another available model is at least as strong.') : null;
 }
 
