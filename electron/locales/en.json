@@ -3320,7 +3320,7 @@
   "回退 {model}": "Falls back to {model}",
   "{model}（{reason}）；实际使用 {fallback}": "{model} ({reason}); {fallback} is used instead",
   "暂不使用": "Not in use",
-  "审查（{model}）与{seats}同为 {model}，账户里还有不弱于它的 {others}，所以不能保存。": "Review ({model}) uses the same model as {seats} ({model}), and {others} is also available and at least as strong, so this cannot be saved.",
+  "审查（{model}）与{seats}使用同一模型，账户里还有不弱于它的 {others}，所以不能保存。": "Review ({model}) uses the same model as {seats}, and {others} is also available and at least as strong, so this cannot be saved.",
   "{model} · 拖到座位上": "{model} · drag onto a seat",
   "{seat}：更换模型、强度、快速": "{seat}: change model, effort, fast mode",
   "更换": "Change",

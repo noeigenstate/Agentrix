@@ -160,7 +160,7 @@ export function SeatsDialog({ info, projectId, terminalId, onClose }: { info: Se
   };
   function blockMessage() {
     const model = label(working.reviewer?.model ?? '');
-    return t('审查（{model}）与{seats}同为 {model}，账户里还有不弱于它的 {others}，所以不能保存。', {
+    return t('审查（{model}）与{seats}使用同一模型，账户里还有不弱于它的 {others}，所以不能保存。', {
       model, seats: block?.hit.map(seatName).join('、') ?? '', others: block?.alternatives.map(row => row.label).join('、') ?? '' });
   }
   const stateMark = (state: NonNullable<ReturnType<typeof slotState>>) => <span className={`seats-state is-${state.kind}`} title={state.title}>
