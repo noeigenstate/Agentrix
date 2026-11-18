@@ -556,7 +556,7 @@ function detachedRuns(cwd, create = false) {
   const key = createHmac('sha256', 'agentrix-detached-directory').update(fs.realpathSync(cwd)).digest('hex');
   if (team) return new DetachedRuns(path.join(team.directory, 'detached'));
   const temporary = fs.realpathSync(tmpdir()), owner = typeof process.getuid === 'function' ? process.getuid() : fs.statSync(temporary).uid;
-  const parents = ['agentrix-dispatch', key, 'detached'];
+  const parents = [process.platform === 'win32' ? 'agentrix-dispatch' : `agentrix-dispatch-${owner}`, key, 'detached'];
   let folder = temporary;
   for (const name of parents) {
     folder = path.join(folder, name);
@@ -603,9 +603,13 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
     failure = result; return null;
   })]);
   controller.abort();
-  const current = entry || store.read(id);
+  let current = entry || store.read(id);
+  if (failure && !current?.settled) {
+    // A cached read after exit can predate the child's final rename. Only fresh disk state may authorize settlement.
+    current = await store.update(id, { settled: true, exitCode: failure.code || 1 }, { unlessEnded: true }).catch(() => null)
+      || store.read(id, { fresh: true }) || current;
+  }
   if (current?.startedLine) { if (store.claimStart(id)) stdout.write(current.startedLine + '\n'); return 0; }
-  if (failure && !current?.settled) await store.update(id, { settled: true, exitCode: failure.code || 1 }).catch(() => {});
   if (current?.settled || failure) {
     stdout.write((current.failedLine || `[dispatch] failed to start ${id}: helper ended before confirmation`) + '\n');
     if (current.endedLine) stdout.write(current.endedLine + '\n');
@@ -613,7 +617,7 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
   }
   if (!current?.admitted) {
     child.kill();
-    await store.update(id, { settled: true, exitCode: 1 }).catch(() => {});
+    await store.update(id, { settled: true, exitCode: 1 }, { unlessEnded: true }).catch(() => {});
     stdout.write(`[dispatch] failed to start ${id}: admission not confirmed within 60 s\n`);
     return 1;
   }

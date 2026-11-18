@@ -170,6 +170,84 @@ function receipts(t) {
   return new DetachedRuns(root);
 }
 
+test('standalone Linux receipts use separate uid roots while Windows keeps its per-user temp root', t => {
+  const store = receipts(t), filename = path.resolve(__dirname, '../integration/dispatch.cjs');
+  const { createRequire } = require('node:module'), vm = require('node:vm'), realRequire = createRequire(filename);
+  const legacy = path.join(store.directory, 'agentrix-dispatch'); fs.mkdirSync(legacy);
+  function locate(platform, uid) {
+    const module = { exports: {} };
+    const load = name => {
+      if (name === 'node:os') return { ...realRequire(name), tmpdir: () => store.directory };
+      if (name === 'node:fs') return { ...fs, lstatSync: (...args) => {
+        if (platform === 'linux') assert.notEqual(args[0], legacy, 'Linux must never inspect the other owner\'s shared root');
+        const stat = fs.lstatSync(...args);
+        return stat && { ...stat, uid, mode: 0o40700, isDirectory: () => stat.isDirectory(), isSymbolicLink: () => stat.isSymbolicLink() };
+      } };
+      if (name.replaceAll('\\', '/').endsWith('/features/team/team.cjs')) return { ...realRequire(name), projectTeam: () => null };
+      return realRequire(name);
+    };
+    const processView = Object.create(process); Object.defineProperty(processView, 'platform', { value: platform }); processView.getuid = () => uid;
+    const wrapper = vm.runInNewContext('(function(require,module,exports,__filename,__dirname){' + fs.readFileSync(filename, 'utf8') + '\n})', { process: processView, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, Buffer });
+    wrapper(load, module, module.exports, filename, path.dirname(filename));
+    return module.exports.detachedRuns(store.directory, true).directory;
+  }
+  const first = locate('linux', 1001), second = locate('linux', 1002);
+  assert.ok(first.startsWith(path.join(store.directory, 'agentrix-dispatch-1001') + path.sep));
+  assert.ok(second.startsWith(path.join(store.directory, 'agentrix-dispatch-1002') + path.sep));
+  assert.notEqual(first, second);
+  fs.rmdirSync(legacy);
+  // Windows's temp root is already per-user; its legacy receipt path remains stable.
+  assert.ok(locate('win32', 1001).startsWith(legacy + path.sep));
+});
+
+test('prune removes old orphaned receipt temp files and preserves recent replacements', t => {
+  const store = receipts(t), now = Date.now(), old = store.file(randomUUID()) + '.123.tmp', recent = store.file(randomUUID()) + '.456.tmp';
+  fs.writeFileSync(old, 'orphan'); fs.writeFileSync(recent, 'active');
+  const past = new Date(now - 8 * 86400000); fs.utimesSync(old, past, past);
+  store.prune(now);
+  assert.equal(fs.existsSync(old), false); assert.equal(fs.existsSync(recent), true);
+});
+
+test('a fast helper exit cannot overwrite a finished receipt through the parent stale cache', async t => {
+  const store = receipts(t), disk = new DetachedRuns(store.directory), read = store.read.bind(store); let id, initial;
+  store.observe = () => new Promise(() => {});
+  store.read = (runId, options) => options?.fresh ? read(runId, options) : initial || read(runId);
+  const code = await startDetached(['claude', '--detach', '--role', 'review', '--title', 'Synthetic fast exit', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', store.directory, '--brief', 'brief', '--out', 'out'], {
+    store, stdout: { write() {} }, launch: (_file, args) => {
+      id = path.basename(args.at(-1), '.json'); initial = read(id);
+      const child = new EventEmitter(); child.unref = () => {};
+      queueMicrotask(() => {
+        child.emit('spawn');
+        void disk.update(id, { startedLine: `[dispatch] started ${id} session synthetic`, endedLine: `[dispatch] ended ${id} exit 0`, settled: true, exitCode: 0 }).then(() => child.emit('exit', 0, null));
+      }); return child;
+    },
+  });
+  assert.equal(code, 0); assert.equal(disk.read(id).exitCode, 0); assert.match(disk.read(id).endedLine, /exit 0/);
+});
+
+test('conditional parent settlement refuses a transient fresh read and preserves an ended receipt', async t => {
+  const store = receipts(t), id = randomUUID(); store.create({ id, settled: true, exitCode: 0, endedLine: 'ended' });
+  const disk = new DetachedRuns(store.directory), read = store.read.bind(store);
+  store.read = (runId, options) => options?.fresh ? undefined : read(runId);
+  assert.equal(await store.update(id, { settled: true, exitCode: 1 }, { unlessEnded: true }), undefined);
+  assert.equal(disk.read(id).exitCode, 0);
+});
+
+test('parent settlement rechecks completion after a sharing-error backoff', async t => {
+  const disk = receipts(t), id = randomUUID(); disk.create({ id, createdAt: Date.now() }); let attempts = 0;
+  const store = new DetachedRuns(disk.directory, {
+    rename: async () => { attempts++; throw Object.assign(new Error('Synthetic sharing violation'), { code: 'EPERM' }); },
+    delay: async () => {
+      // Simulate the other process's distinct temporary file without sharing this process's PID suffix.
+      const temporary = disk.file(id) + '.helper.tmp';
+      fs.writeFileSync(temporary, JSON.stringify({ ...disk.read(id), endedLine: 'ended successfully', settled: true, exitCode: 0 }));
+      fs.renameSync(temporary, disk.file(id));
+    },
+  });
+  const final = await store.update(id, { settled: true, exitCode: 1 }, { unlessEnded: true });
+  assert.equal(attempts, 1); assert.equal(final.exitCode, 0); assert.equal(disk.read(id).exitCode, 0);
+});
+
 test('detach is opt-in and wait has a bounded timeout and strict run ids', () => {
   const id = randomUUID();
   assert.equal(argumentsOf(['wait', id]).timeout, 540);

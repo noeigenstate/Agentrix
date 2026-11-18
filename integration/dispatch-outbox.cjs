@@ -63,7 +63,7 @@ class DetachedRuns {
     if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(id)) throw new Error('Expected a run id');
     return path.join(this.directory, id + '.json');
   }
-  read(id) {
+  read(id, { fresh = false } = {}) {
     try {
       const file = this.file(id), stat = fs.lstatSync(file);
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Unreadable detached run');
@@ -72,7 +72,7 @@ class DetachedRuns {
       this.cache.set(id, entry); return entry;
     } catch (error) {
       if (error instanceof SyntaxError || ['ENOENT', 'EPERM', 'EACCES', 'EBUSY'].includes(error.code)) {
-        return this.cache.get(id) || (error.code === 'ENOENT' && !fs.existsSync(this.file(id) + '.log') ? null : undefined);
+        return (!fresh && this.cache.get(id)) || (error.code === 'ENOENT' && !fs.existsSync(this.file(id) + '.log') ? null : undefined);
       }
       throw error;
     }
@@ -83,9 +83,10 @@ class DetachedRuns {
     fs.writeFileSync(this.file(entry.id), JSON.stringify(entry), { flag: 'wx', mode: 0o600 });
     this.cache.set(entry.id, entry);
   }
-  update(id, changes) {
+  update(id, changes, { unlessEnded = false } = {}) {
     const pending = (this.writes.get(id) || Promise.resolve()).catch(() => {}).then(async () => {
-      const previous = this.latest.get(id) || this.read(id);
+      const previous = unlessEnded ? this.read(id, { fresh: true }) : this.latest.get(id) || this.read(id);
+      if (unlessEnded && (!previous || previous.endedLine || previous.settled)) return previous;
       if (!previous) throw new Error(`unknown run ${id}`);
       const entry = { ...previous, ...changes }, file = this.file(id), temporary = file + '.' + process.pid + '.tmp';
       // Keep all changes after an exhausted retry; a later successful update also persists them.
@@ -93,6 +94,13 @@ class DetachedRuns {
       try {
         fs.writeFileSync(temporary, JSON.stringify(entry), { flag: 'wx', mode: 0o600 });
         for (let attempt = 0; ; attempt++) {
+          if (unlessEnded) {
+            const current = this.read(id, { fresh: true });
+            if (!current || current.endedLine || current.settled) {
+              if (current) this.latest.set(id, current);
+              return current;
+            }
+          }
           try { await this.rename(temporary, file); break; }
           catch (error) {
             if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt === 7) throw error;
@@ -100,6 +108,7 @@ class DetachedRuns {
           }
         }
         this.cache.set(id, entry);
+        return entry;
       } finally { fs.rmSync(temporary, { force: true }); }
     });
     this.writes.set(id, pending);
@@ -111,6 +120,13 @@ class DetachedRuns {
   }
   prune(now = Date.now()) {
     for (const name of fs.readdirSync(this.directory)) {
+      if (/^[a-f\d-]{36}\.json\.[1-9]\d*\.tmp$/i.test(name)) {
+        const file = path.join(this.directory, name), stat = fs.lstatSync(file, { throwIfNoEntry: false });
+        if (stat?.isFile() && !stat.isSymbolicLink() && now - stat.mtimeMs >= 7 * 86400000) {
+          try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+        }
+        continue;
+      }
       if (!/^[a-f\d-]{36}\.json$/i.test(name)) continue;
       const id = name.slice(0, -5), entry = this.read(id);
       if (!entry?.settled || now - (entry.activityAt || entry.createdAt) < 7 * 86400000) continue;

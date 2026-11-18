@@ -363,7 +363,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "7b61bbcd942cb7a9a86a6cbf47c6f45c941e8ccbdcbc89e1f1269196f32cb41e",
+      "digest": "20aae9da97351f5fa2c4c892eef2ef8bdff85a266899159e2bde81a7af968af3",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -400,7 +400,7 @@
       "reason": "App-shell composition root: edits force full coverage, while provider changes do not fan out through the host inputs. The bootstrap dynamically loads the installed intercept module."
     },
     "integration/dispatch-outbox.cjs": {
-      "digest": "a80e85ff3e5fdfb6addb5586ce534baebb79b40db46201ceb6ce5857ed2358e5",
+      "digest": "ffb94e25593947baf8f80268440163c8387f09654285abfcdae0c6660dd91650",
       "targets": [
         "electron/features/agents/dispatch-events.cjs"
       ],
