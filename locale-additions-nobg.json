@@ -1,4 +1,0 @@
-{
-  "允许 Claude Code 后台任务": "Allow Claude Code background tasks",
-  "关闭时，Claude Code 不能把命令或子代理放到后台；并行工作通过子代理进行。下一次启动的会话生效。": "When off, Claude Code cannot move commands or sub-agents to the background; parallel work goes through sub-agents. Takes effect for sessions started afterwards."
-}
