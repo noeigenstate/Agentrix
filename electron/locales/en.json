@@ -3379,5 +3379,15 @@
   "使用": "Use",
   "其他模型…": "Other model…",
   "{agent} 未安装": "{agent} is not installed",
-  "{names} 等 {count} 个": "{names} and others ({count} in all)"
+  "{names} 等 {count} 个": "{names} and others ({count} in all)",
+  "模型路由座位": "Model routing seats",
+  "右侧活动栏的「模型路由」按钮会打开一张 3D 圆桌，固定座位有领队、架构师、核心工程师、执行工程师、视觉与验收、查找、审查。把模型拖到座位上，或点「更换」；每个座位可设思考深度和快速模式，可选全局或本项目，从下一次对话起生效；审查者与作者是同一个模型时，只要有别的模型可用就会被拦下。": "The Model routing button in the right-hand activity pane opens a 3D round table with fixed seats: lead, architect, core engineer, execution engineer, visual and acceptance, lookup and review. Drag a model onto a seat or click Change; set thinking depth and fast mode per seat, globally or for this project. It takes effect from the next conversation, and a reviewer using the same model as the author is blocked when a different model is available.",
+  "模型列表跟随新版本": "Model list follows new releases",
+  "座位选择器会读取当前 Codex 和 Claude 的模型列表，新模型（例如 GPT-6.2-Sol）会自己出现，并带着各自的思考深度档位和快速选项。默认值会移到同一系列里最新的模型；你已保存的座位不会被改动，也可以直接输入别的模型 ID。": "The seat chooser reads the current Codex and Claude model lists, so new models (for example GPT-6.2-Sol) appear on their own, each with its own thinking-depth levels and fast option. Defaults move to the newest model of the same line; your saved seats are never changed, and you can type another model ID.",
+  "后台任务默认关闭": "Background tasks off by default",
+  "Agentrix 启动的 Claude Code 会话（终端、原生模式、worker、SSH 和实验室）默认不带后台任务，并行的工作通过看得见的子代理进行。在设置里打开「允许 Claude Code 后台任务」，之后新启动的会话就会重新允许。": "Claude Code sessions Agentrix starts (terminal, native mode, workers, SSH and Lab) now run without background tasks, so parallel work goes through visible sub-agents. Turn on \"Allow Claude Code background tasks\" in Settings and sessions started afterwards allow them again.",
+  "worker 分离启动": "Workers start detached",
+  "调度器现在把 worker 分离启动，主控负责等待它们，所以耗时长的 worker 不会被中途切断，也可以几个并排运行；主控的这一轮会一直显示「工作中」，直到它的 worker 全部结束。": "The dispatcher now starts workers detached and the lead waits for them, so long workers are not cut off and several can run side by side. A lead's round stays \"working\" until its workers finish.",
+  "确认弹窗更可靠": "More reliable confirmation popup",
+  "阅读视图的终端弹窗，即使项目当时不在屏幕上，每个提示也只会打开一次；你主动关闭后，这个提示不会再弹出。提示期间暂存的消息会在提示结束后发送一次（你在看别的项目时也一样）；迟到的权限信号不再让你回答之后还亮着等待灯。": "The reading view's terminal popup opens once per prompt even if the project was not on screen, and a popup you close stays closed for that prompt. A message held during a prompt is sent once when the prompt ends, also while you look at another project, and a late permission signal no longer keeps the waiting light on after you answered."
 }
