@@ -403,3 +403,32 @@ test('closing with an unsaved draft asks once, inline, before discarding', t => 
   byAttr(h.render(), 'data-discard').props.onClick();
   assert.equal(h.closed.length, 1);
 });
+
+test('a scope switch never carries the old scope’s saved seats over the new scope’s own override', async t => {
+  const info = seatsInfo({ global: { core: { model: 'opus', effort: 'low' } }, project: { core: { model: 'haiku', effort: 'low' } } });
+  info.effective = mergeSeats(info.defaults, info.global, info.project);
+  const h = dialogHarness(t, info);
+  const scopeSelect = tree => find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting');
+  scopeSelect(h.render()).props.onChange({ target: { value: 'global' } });
+  byAttr(h.render(), 'data-pick', 'architect').props.onClick(pickButton('architect'));
+  byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'sonnet').props.onClick();
+  scopeSelect(h.render()).props.onChange({ target: { value: 'project' } });
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls, [['project', 'p1', { core: { model: 'haiku', effort: 'low' }, architect: { model: 'sonnet', effort: 'high' } }]], 'the project keeps its own core override');
+});
+
+test('Escape on the discard banner means keep editing and moves focus to it; it never discards', t => {
+  const h = dialogHarness(t, seatsInfo());
+  byAttr(h.render(), 'data-pick', 'lookup').props.onClick(pickButton('lookup'));
+  byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'sonnet').props.onClick();
+  byAttr(h.render(), 'aria-label', 'Close').props.onClick();
+  h.render();
+  const tree = h.render();
+  assert.ok(find(tree, node => node.props.role === 'alertdialog'));
+  find(tree, node => node.props.role === 'dialog').props.onKeyDown(keyEvent('Escape'));
+  assert.deepEqual(h.closed, []);
+  const after = h.render();
+  assert.equal(find(after, node => node.props.role === 'alertdialog'), undefined, 'the banner is dismissed');
+  assert.match(textOf(after), /Unsaved draft · 1 seats changed/, 'the draft is kept');
+});
