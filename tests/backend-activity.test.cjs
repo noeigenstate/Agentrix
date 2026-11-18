@@ -154,7 +154,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     createTerminalEnvironment: () => ({}), withoutAppImage: value => value, eventServer: { name: 'fixture-pipe' }, controlAddress: 'fixture-control',
     startupNote: () => '', READING_NOTE: '', handoffFile: () => '', integrationDir: 'integration' });
   vm.runInContext(main.slice(main.indexOf('function callsOf('), main.indexOf('function resolveIntervention(')), context);
-  defineMain(context, 'bindDispatchInbox', 'disposeDispatchInbox');
+  defineMain(context, 'bindDispatchInbox', 'disposeDispatchInbox', 'replayCompletion');
   const calls = context.callsOf(s, project), runId = context.randomUUID();
   t.after(() => { context.disposeDispatchInbox(); calls.dispose(); });
   calls.dispatch({ type: 'dispatch-start', id: runId, agent: 'codex', model: 'synthetic-model', cwd: project.path,
@@ -180,7 +180,8 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   defineMain(context, 'acceptDispatchEvent');
   const event = (type, sequence) => context.onEvent({ projectId: s.terminalId, sessionKey: 'old-cap', type, sequence, agent: 'codex', args: [], cwd: project.path, sentAt: 2300 });
   h.write('First task\r'); h.user('First task', 2000); h.apply('complete', 'first', 2100);
-  assert.equal(h.alerts(), 1); h.store.acknowledge(project.id);
+  // The retained worker holds the old round open; switching hosts must preserve that hold too.
+  assert.equal(s.codexActivity, 'working'); assert.equal(h.alerts(), 0); h.store.acknowledge(project.id);
   const previous = s.rootThreadId;
   // The wrapper returns to a shell prompt before a manually typed codex can
   // request a native session. It no longer launches another Codex TUI in this PTY.
@@ -199,7 +200,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   publish('turn.started', { origin: 'user' }, 2400, { turnId: 'second' });
   assert.equal(next.rootThreadId, 'new-provider', 'new input cannot revive the old root binding');
   assert.equal(next.nativeMessages.get('second-input'), 'Second task'); assert.equal(s.promptQueue.list().length, 0);
-  assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 1);
+  assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 0);
   const snapshot = next.activitySnapshot;
   h.user('Late old PTY input', 2450);
   event('codex-started', 4); // The old shell capability cannot open another native host.
@@ -208,9 +209,16 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   publish('item.upsert', { kind: 'user-message', content: { clientMessageId: 'stale', text: 'Wrong session' } }, 2600, { runtimeSessionId: 'old-runtime', providerSessionId: previous });
   publish('turn.completed', { status: 'completed' }, 2600, { runtimeSessionId: 'old-runtime', providerSessionId: previous, turnId: 'first' });
   assert.equal(launches.length, 1); assert.equal(next.activitySnapshot, snapshot); assert.equal(next.nativeMessages.has('stale'), false);
-  assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 1); assert.equal(project.unread, 0);
+  assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 0); assert.equal(project.unread, 0);
   publish('turn.completed', { status: 'completed' }, 2700, { turnId: 'second' });
-  assert.equal(next.codexActivity, 'complete'); assert.equal(h.alerts(), 2); assert.equal(project.unread, 1);
+  assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 0); assert.equal(project.unread, 0);
+  const end = { type: 'dispatch-end', id: runId, reason: 'exit', exitCode: 0, model: 'synthetic-model', effort: null, fast: null,
+    endedAt: 2800, outputTokens: null, activeMs: null };
+  assert.equal(calls.dispatch(end), true);
+  assert.equal(next.codexActivity, 'complete'); assert.equal(h.alerts(), 1); assert.equal(project.unread, 1);
+  assert.equal(next.rootThreadId, 'new-provider');
+  assert.equal(calls.dispatch(end), false); context.replayCompletion(project, next);
+  assert.equal(h.alerts(), 1, 'only the new provider completes once after the retained dispatch ends');
 });
 
 // The desktop stand-in reports a user message once, when it is complete; Codex 0.167 also sends item/started first.
