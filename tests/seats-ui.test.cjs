@@ -6,7 +6,7 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const seatsLib = require('../src/features/agents/skill-seats.ts');
-const { sceneScale, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
+const { seatLayout, spotsTouch, shortLabel, pickFix, sceneScale, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
 
 const en = require('../electron/locales/en.json');
 const additions = path.join(__dirname, '../locale-additions-cat.json');
@@ -688,4 +688,56 @@ test('the moved-defaults note is a neutral banner and the discard question a war
   assert.match(css, /\.seats-banner\.is-bad \{ border-color: var\(--danger\)/);
   const mk = css.split('\n').filter(line => line.startsWith('.seats-mk'));
   assert.ok(mk.some(line => line.includes('--agent-claude')) && mk.some(line => line.includes('data-family="codex"') && line.includes('--agent-codex')), 'the family dots use the existing agent tokens');
+});
+
+// ---- second acceptance round: no tile overlaps another, small-tile chips shorten and ellipsize, the one-click fix is chosen by rule ----
+test('no seat tile touches the wide lead tile, or another seat, at 1600×1000 and 1100×900', () => {
+  // The layout is in stage coordinates and the stage scales as a whole, so the check holds at every size; the scale is computed to show that.
+  for (const [width, height] of [[1600, 1000], [1100, 900]]) {
+    const scale = sceneScale(width - 96, height - 32 - 100 - 74 - 210 - 130);
+    assert.ok(scale >= 0.5 && scale <= 1);
+    for (const count of [5, 7, 8, 9]) {
+      const ids = ['lead', ...['architect', 'core', 'execution', 'visual', 'lookup', 'reviewer', 'extra1', 'extra2'].slice(0, count - 1)];
+      const spots = seatLayout(ids);
+      for (const id of ids.slice(1)) {
+        assert.equal(spotsTouch(spots[id], spots.lead, 12), false, `${id} clears the lead tile with 12px to spare (${count} seats, ${width}×${height})`);
+        assert.ok(Math.abs(spots[id].x) + spots[id].w / 2 <= 450, `${id} stays on the 900px stage`);
+      }
+    }
+    // The seven real seats: their screen rectangles do not overlap each other either (the perspective gives the ring neighbours about 12px more room than this flat model).
+    const spots = seatLayout(['lead', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']), list = Object.entries(spots);
+    for (const [index, [first, a]] of list.entries()) for (const [second, b] of list.slice(index + 1)) assert.equal(spotsTouch(a, b, -12), false, `${first} and ${second} do not overlap`);
+  }
+  const spots = seatLayout(['lead', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer']);
+  assert.equal(spots.lead.w, 400);
+  assert.ok(spots.reviewer.x + 82 <= -200 - 12 && spots.architect.x - 82 >= 200 + 12, 'the two seats beside the lead slid out from under its corners');
+});
+
+test('a small tile shows a shorter alias name and ends a long one in an ellipsis; the full text stays in the title, the tray and the menu', t => {
+  assert.equal(shortLabel('Opus (follows latest)'), 'Opus (latest)');
+  assert.equal(shortLabel('GPT-6.2-Sol'), 'GPT-6.2-Sol');
+  const rows = catalog({ opus: { label: 'Opus (follows latest)' } });
+  const h = dialogHarness(t, seatsInfo({ catalog: rows }));
+  const tree = h.render();
+  const slot = byAttr(tree, 'data-slot', 'architect');
+  const gem = find(slot, node => node.props.className?.startsWith('seats-gem'));
+  assert.equal(textOf(find(gem, node => node.props.className === 'seats-gem-name')), 'Opus (latest)');
+  assert.match(gem.props.title, /Opus \(follows latest\)/, 'the tooltip has the full name');
+  const dock = find(tree, node => node.props.className === 'seats-dock');
+  assert.match(textOf(dock), /Opus \(follows latest\)/, 'the tray keeps the full name');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  assert.match(css, /\.seats-gem-name \{[^}]*text-overflow: ellipsis/);
+});
+
+test('the one-click fix is the reviewer’s default if it is a candidate, else the strongest model another seat runs, else the strongest; never list order', () => {
+  const rows = [row('fable', 'Fable', 'claude', 3), row('opus', 'Opus', 'claude', 3), row('sonnet', 'Sonnet', 'claude', 2), row('gpt-6.1-sol', 'GPT-6.1-Sol', 'codex', 3), row('gpt-6.2-sol', 'GPT-6.2-Sol', 'codex', 3)];
+  const map = { ...clone(DEFAULTS), core: { model: 'opus', effort: 'high' } };
+  assert.equal(reviewerBlock(map, rows, DEFAULTS).fix.model, 'gpt-6.1-sol', 'the reviewer’s default is not "opus" here (it is blocked), so the default rule picks nothing and the running one wins');
+  const reviewerDefault = { ...clone(DEFAULTS), reviewer: { model: 'gpt-6.2-sol', effort: 'high' } };
+  assert.equal(reviewerBlock(map, rows, reviewerDefault).fix.model, 'gpt-6.2-sol', 'the reviewer seat’s default, when it is a valid alternative, comes first');
+  const none = { ...clone(DEFAULTS), architect: { model: 'sonnet', effort: 'high' }, lead: { claude: { model: 'sonnet', effort: 'high' }, codex: { model: 'sonnet', effort: 'high' } }, visual: { model: 'sonnet', effort: 'high' }, lookup: { model: 'sonnet', effort: 'high' }, execution: { model: 'sonnet', effort: 'high' } };
+  const strongest = reviewerBlock({ ...none, core: { model: 'opus', effort: 'high' }, reviewer: { model: 'opus', effort: 'high' } }, rows, undefined);
+  assert.equal(strongest.fix.model, 'gpt-6.2-sol', 'no other seat runs a candidate: the strongest, newest id (not Fable, which is only first in the list)');
+  assert.equal(reviewerBlock({ ...none, core: { model: 'opus', effort: 'high' }, reviewer: { model: 'opus', effort: 'high' } }, [...rows].reverse(), undefined).fix.model, 'gpt-6.2-sol', 'the same pick in any list order');
+  assert.equal(pickFix([], map, rows), null);
 });

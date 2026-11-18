@@ -17,6 +17,27 @@ const AUTHORS: Exclude<SeatId, 'lead'>[] = ['core', 'execution'];
 // Which step of the flow a seat belongs to; the dialog's inner ring lights it while the seat is hovered.
 export const PHASES: Record<string, Phase> = { architect: 'plan', core: 'build', execution: 'build', reviewer: 'review', visual: 'accept' };
 
+// Where each seat's tile stands on the disc (plane coordinates). A tile stands upright above its plane point, whose y the tilt flattens by cos(tilt), so overlap is judged on the screen
+// rectangles. The ring starts evenly spaced and any tile that would touch the lead tile slides outward until it clears it, whatever the tile widths are.
+export const TILT = 55;
+export type SeatSpot = { x: number; y: number; w: number; h: number };
+const sizeOf = (id: SeatId) => id === 'lead' ? { w: 400, h: 124 } : { w: 164, h: 108 };
+const flat = Math.cos(TILT * Math.PI / 180);
+export const spotsTouch = (a: SeatSpot, b: SeatSpot, gap: number) => Math.abs(a.x - b.x) < (a.w + b.w) / 2 + gap && a.y * flat - a.h < b.y * flat + gap && b.y * flat - b.h < a.y * flat + gap;
+export function seatLayout(ids: SeatId[]): Record<string, SeatSpot> {
+  const spots: Record<string, SeatSpot> = {};
+  if (ids.includes('lead')) spots.lead = { x: 0, y: -282, ...sizeOf('lead') };
+  ids.forEach((id, index) => {
+    if (id === 'lead') return;
+    const angle = (-90 + index * 360 / ids.length) * Math.PI / 180;
+    let spot: SeatSpot = { x: Math.round(Math.cos(angle) * 270), y: Math.round(Math.sin(angle) * 270), ...sizeOf(id) };
+    while (spots.lead && spotsTouch(spot, spots.lead, 12) && Math.abs(spot.x) + spot.w / 2 < 440) spot = { ...spot, x: spot.x + (spot.x < 0 ? -4 : 4) };
+    spots[id] = spot;
+  });
+  return spots;
+}
+// A shorter name for a small tile: "Opus (follows latest)" is "Opus (latest)"; the menu and the list keep the full text.
+export const shortLabel = (label: string) => label.replace(/\s*\(follows latest\)$/i, ' (latest)');
 // The disc's size (the 900 x 580 stage), and the scale that fits it in the width and in the height left by the rest of the dialog.
 export const STAGE_W = 900, STAGE_H = 580;
 export const sceneScale = (width: number, space: number) => Math.max(0.5, Math.min(1, width / STAGE_W, space / STAGE_H));
@@ -132,7 +153,17 @@ export function setFast(map: SeatMap, slot: SlotId, fast: boolean, catalog: Seat
 
 // The reviewer rule: refused when the reviewer runs the core's or the execution seat's model while another AVAILABLE model of at least its rank exists.
 // The fix is such a model that none of the author seats runs, or null when the author seats themselves must change.
-export function reviewerBlock(map: SeatMap, catalog: SeatModel[]): ReviewerBlock | null {
+const strength = (a: SeatModel, b: SeatModel) => b.rank - a.rank || b.model.localeCompare(a.model, 'en', { numeric: true });
+// The one-click fix, never by list order: the reviewer seat's default if it is a candidate, else the strongest candidate another seat already runs, else the strongest candidate.
+export function pickFix(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel | null {
+  if (!candidates.length) return null;
+  const preferred = defaults?.reviewer && candidates.find(row => sameModel(catalog, row.model, defaults.reviewer!.model));
+  if (preferred) return preferred;
+  const running = [map.lead?.claude, map.lead?.codex, map.architect, map.execution, map.visual, map.lookup].filter((seat): seat is Seat => !!seat);
+  const used = candidates.filter(row => running.some(seat => sameModel(catalog, seat.model, row.model)));
+  return [...(used.length ? used : candidates)].sort(strength)[0];
+}
+export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): ReviewerBlock | null {
   const reviewer = map.reviewer;
   const hit = reviewer ? AUTHORS.filter(id => map[id] && sameModel(catalog, map[id]!.model, reviewer.model)) : [];
   if (!reviewer || !hit.length) return null;
@@ -145,7 +176,7 @@ export function reviewerBlock(map: SeatMap, catalog: SeatModel[]): ReviewerBlock
     return true;
   });
   if (!alternatives.length) return null;
-  return { hit, alternatives, fix: alternatives.find(row => AUTHORS.every(id => !map[id] || !sameModel(catalog, map[id]!.model, row.model))) ?? null };
+  return { hit, alternatives, fix: pickFix(alternatives.filter(row => AUTHORS.every(id => !map[id] || !sameModel(catalog, map[id]!.model, row.model))), map, catalog, defaults) };
 }
 // The same reviewer rule when it only warns: the author seats share the reviewer's model but nothing at least as strong is available to change it to.
 export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[]) =>

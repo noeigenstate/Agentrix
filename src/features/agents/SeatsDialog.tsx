@@ -4,7 +4,7 @@ import { ArrowCounterClockwise, ArrowsClockwise, CheckCircle, ListBullets, Prohi
 import type { SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import {
-  PHASES, STAGE_W, ageOf, menuPlacement, sceneScale, topAlternatives, withInstalled, assignCustom, assignModel, baselineFor, changedCount, changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, lowerLayer, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
+  PHASES, STAGE_W, TILT, seatLayout, shortLabel, ageOf, menuPlacement, sceneScale, topAlternatives, withInstalled, assignCustom, assignModel, baselineFor, changedCount, changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, lowerLayer, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
   sameSeat, saveSeats, scopePayload, withSlot, seatOfSlot, setEffort, setFast, slotFamily, slotsOf, startScope, swapSlots, familyOf,
   type Edit, type Phase, type Scope, type SlotId,
 } from './skill-seats';
@@ -14,7 +14,7 @@ import './seats-dialog.css';
 // A seat's 更换 button opens a keyboard menu (model, effort, fast); 座位清单 lists the same seats plainly and takes over on a narrow dialog. Nothing is saved until 保存, and it applies from the next conversation.
 const SEAT_NAMES: Record<SeatId, string> = { lead: '领队', architect: '架构师', core: '核心工程师', execution: '执行工程师', visual: '视觉与验收', lookup: '查找', reviewer: '审查' };
 const PHASE_ARCS: [Phase, string, number][] = [['plan', '规划', -135], ['build', '构建', -45], ['review', '审查', 45], ['accept', '验收', 135]];
-const NARROW = 640, TILT = 55;
+const NARROW = 640;
 const seatName = (id: SeatId) => id in SEAT_NAMES ? t(SEAT_NAMES[id]) : id;
 const slotName = (slot: SlotId) => slot === 'lead.claude' ? `${seatName('lead')} · ${t('Claude 槽')}` : slot === 'lead.codex' ? `${seatName('lead')} · ${t('Codex 槽')}` : seatName(slot);
 const effortLine = (seat: { effort: string; fast?: boolean }) => `${seat.effort}${seat.fast ? ` · ${t('快速')}` : ''}`;
@@ -72,7 +72,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   // A refresh answers with a newer record until the pane loads the next one.
   const info = refreshed ?? given;
   const { seats } = info, catalog = withInstalled(info.catalog, info.installed, family => t('{agent} 未安装', { agent: family === 'codex' ? 'Codex' : 'Claude' })), lower = lowerLayer(info, scope), baseline = baselineFor(info, scope), working = draft ?? baseline;
-  const count = changedCount(seats, working, baseline), dirty = count > 0, block = reviewerBlock(working, catalog), refusal = firstRefusal(working, catalog);
+  const count = changedCount(seats, working, baseline), dirty = count > 0, block = reviewerBlock(working, catalog, info.defaults), refusal = firstRefusal(working, catalog);
   const narrow = width < NARROW, list = listMode || narrow;
   const slots = seats.flatMap(slotsOf);
   const label = (model: string) => modelRow(catalog, model)?.label ?? model;
@@ -240,17 +240,18 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   const stateMark = (state: NonNullable<ReturnType<typeof slotState>>) => <span className={`seats-state is-${state.kind}`} title={state.title}>
     {state.kind === 'bad' ? <Prohibit size={14} aria-hidden="true" /> : <Warning size={14} aria-hidden="true" />}{state.short}</span>;
 
-  const token = (model: string, from: SlotId | null, landing = false) => {
+  const token = (model: string, from: SlotId | null, landing = false, compact = false) => {
     const row = modelRow(catalog, model), off = !isAvailable(catalog, model);
     return <span className={`seats-gem${off ? ' is-off' : ''}${landing && landed ? ' is-landing' : ''}`} data-family={row?.family ?? familyOf(model)} aria-disabled={off || undefined}
       title={off ? t('{model}（{reason}）不能放入座位', { model: label(model), reason: row?.reason ?? '' }) : t('{model} · 拖到座位上', { model: label(model) })}
-      onPointerDown={event => startDrag(event, model, from)}><i className="seats-mk" data-family={row?.family ?? familyOf(model)} />{label(model)}{off ? <small>{row?.reason}</small> : row?.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
+      onPointerDown={event => startDrag(event, model, from)}><i className="seats-mk" data-family={row?.family ?? familyOf(model)} /><span className="seats-gem-name">{compact ? shortLabel(label(model)) : label(model)}</span>{off ? <small>{row?.reason}</small> : row?.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
   };
   const changeButton = (slot: SlotId) => <button type="button" className="seats-btn is-small" data-pick={slot} aria-haspopup="menu" aria-expanded={menu?.slot === slot}
     aria-label={t('{seat}：更换模型、强度、快速', { seat: slotName(slot) })} onClick={event => openMenu(slot, event.currentTarget)}>{t('更换')}</button>;
 
-  const tile = (id: SeatId, index: number) => {
-    const multi = id === 'lead', [x, y] = id === 'lead' ? [0, -282] : point(-90 + index * 360 / seats.length, 270), w = multi ? 400 : 164, h = multi ? 124 : 108;
+  const layout = seatLayout(seats);
+  const tile = (id: SeatId) => {
+    const multi = id === 'lead', { x, y, w, h } = layout[id];
     const blocked = id === 'reviewer' && !!block, ripple = landed && slotsOf(id).includes(landed);
     const style = { '--w': `${w}px`, '--x': `${x}px`, '--y': `${y}px`, '--tilt': `${TILT}deg` } as CSSProperties;
     return <div key={id} className={`seats-tile${slotsOf(id).includes(over as SlotId) ? ' is-over' : ''}`} style={style} data-seat={id}
@@ -264,7 +265,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
             const seat = getSlot(working, slot), state = slotState(slot);
             return <div key={slot} className={`seats-slot${over === slot ? ' is-over' : ''}`} data-slot={slot}>
               {multi && <span className="seats-slot-label">{slot === 'lead.claude' ? t('Claude 槽') : t('Codex 槽')}</span>}
-              <div className="seats-slot-token">{seat ? token(seat.model, slot, landed === slot) : <span className="seats-empty">{t('未设置')}</span>}</div>
+              <div className="seats-slot-token">{seat ? token(seat.model, slot, landed === slot, true) : <span className="seats-empty">{t('未设置')}</span>}</div>
               <div className="seats-slot-foot"><span className="seats-slot-info"><span>{seat ? effortLine(seat) : ''}</span>{state && stateMark(state)}</span>{changeButton(slot)}</div>
             </div>;
           })}</div>
@@ -331,11 +332,11 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
             <span>{t('默认已更新为 {changes}', { changes: moved.map(item => `${item.seat.includes('.') ? slotName(item.seat as SlotId) : seatName(item.seat as SeatId)}：${label(item.from)} → ${label(item.to)}`).join('；') })}</span></div>}
           {block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" />
             <span><b>{t('审查座位被阻止。')}</b>{blockMessage()}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join('、') })}`}</span>
-            <span className="seats-grow" />{block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: block.fix.label })}</button>}</div>}
+            {block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: block.fix.label })}</button>}</div>}
           {refusal && !block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
           <div className="seats-strip-row"><span>{t('本次对话（只读）')}</span>
             {seatTags ? <div className="seats-nows">{seatTags}</div> : <span>{terminalId ? t('这个终端还没有运行中的对话') : t('没有选定终端')}</span>}</div>
-          {discarding && dirty && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" /><span>{t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count })}</span><span className="seats-grow" />
+          {discarding && dirty && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" /><span>{t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count })}</span>
             <button ref={keepButton} type="button" className="seats-btn" data-keep onClick={() => setDiscarding(false)}>{t('继续编辑')}</button><button type="button" className="seats-btn" data-discard onClick={onClose}>{t('放弃修改')}</button></div>}
           <p className="seats-notice" role="status" aria-live="polite" data-kind={notice?.kind}>{notice?.kind === 'ok' && <CheckCircle size={14} aria-hidden="true" />}{notice?.text}</p>
         </section>
