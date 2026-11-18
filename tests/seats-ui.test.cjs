@@ -532,7 +532,7 @@ test('the refresh button asks main for the seats, shows the new catalog and when
   assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude 3 h ago · Codex not refreshed');
   byAttr(tree, 'data-refresh').props.onClick();
   await settle();
-  assert.deepEqual(h.refreshes, [['p1', 't1']]);
+  assert.deepEqual(h.refreshes, [['p1', 't1'], ['p1', 't1']], 'once when the dialog opens, once for the button');
   tree = h.render();
   assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude just now · Codex 2 min ago');
   assert.match(textOf(find(tree, node => node.props.role === 'status')), /Model lists refreshed/);
@@ -567,4 +567,19 @@ test('issues show on their seat until it is edited, a moved default is said, and
   assert.equal(findAll(h.render(), node => node.props.className?.startsWith('seats-state')).length, 2);
   // A record without the new fields still renders (an older main).
   assert.match(textOf(byAttr(dialogHarness(t, seatsInfo()).render(), 'data-catalog-at')), /Claude not refreshed · Codex not refreshed/);
+});
+
+test('the dialog reads once when it opens, keeps the opened info until the answer, and shows a moved default from any answer', async t => {
+  const moved = [{ seat: 'core', from: 'gpt-6.1-sol', to: 'gpt-6.2-sol' }];
+  const h = dialogHarness(t, seatsInfo(), { refreshed: seatsInfo({ defaultsMoved: moved }) });
+  let tree = h.render();
+  assert.deepEqual(h.refreshes, [['p1', 't1']], 'one read on open');
+  assert.equal(byAttr(tree, 'data-moved'), undefined, 'the note waits for the answer');
+  assert.equal(findAll(tree, node => node.props.role === 'status' && textOf(node)).length, 0, 'an opening read says nothing while it works');
+  await settle();
+  assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Core engineer：GPT-6\.1-Sol → gpt-6\.2-sol/);
+  const quiet = dialogHarness(t, seatsInfo(), { refreshError: 'offline' });
+  quiet.render(); await settle();
+  assert.match(textOf(find(quiet.render(), node => node.props.role === 'status')), /Not refreshed: offline/, 'a failed opening read keeps the info and says so');
+  assert.ok(byAttr(quiet.render(), 'data-save'), 'the dialog still shows the info it opened with');
 });
