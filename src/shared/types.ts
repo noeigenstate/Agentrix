@@ -385,7 +385,7 @@ type Bridge = {
   // The seats of the skill that declares them (null when none does); a null terminal id reads no running session's seats. A save is announced on onSkills.
   skillSeats(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;
   // Reads the model lists again (throttled in main) and returns the seats with the fresh catalog.
-  skillSeatsRefresh(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;
+  skillSeatsRefresh(projectId?: string | null, terminalId?: string | null, reason?: 'dialog' | 'manual'): Promise<SeatsInfo | null>;
   setSkillSeats(scope: 'global' | 'project', projectId: string | null, seats: SeatMap): Promise<{ ok: true } | SeatsSaveError>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
