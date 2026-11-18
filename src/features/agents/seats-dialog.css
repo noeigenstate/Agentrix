@@ -45,8 +45,14 @@
 .seats-dot.is-ok { background: var(--success); border-color: var(--success); }
 .seats-dot.is-bad { background: var(--danger); border-color: var(--danger); }
 .seats-scope { display: inline-flex; align-items: center; gap: 8px; }
-.seats-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 8px; background: var(--bg-card); color: var(--text-1); font-size: 13px; line-height: 20px; }
-.seats-banner > svg { flex: none; color: var(--danger); }
+.seats-banner { display: flex; align-items: center; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--text-1); font-size: 13px; line-height: 20px; }
+.seats-banner > svg { flex: none; color: var(--text-2); }
+.seats-banner > span:not(.seats-grow) { flex: 1 1 0; min-width: 0; }
+.seats-banner > button { flex: none; }
+.seats-banner.is-bad { border-color: var(--danger); }
+.seats-banner.is-bad > svg { color: var(--danger); }
+.seats-banner.is-warn { border-color: var(--warning); }
+.seats-banner.is-warn > svg { color: var(--warning); }
 .seats-banner b { font-weight: 600; }
 .seats-nows { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .seats-now { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--divider); border-radius: 8px; background: var(--bg-card); font-size: 12px; color: var(--text-2); white-space: nowrap; }
@@ -81,8 +87,9 @@
 .seats-empty { color: var(--text-3); font-size: 12px; }
 
 /* The disc, scaled to the dialog's width (zoom): a 900px stage whose plane is tilted back, floating a few pixels. */
-.seats-scene { position: relative; width: 900px; margin: 0 auto; border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+.seats-scene { position: relative; width: min(900px, 100%); margin: 0 auto; border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
   background: radial-gradient(ellipse 55% 45% at 50% 42%, var(--hi), transparent 72%), radial-gradient(ellipse 90% 90% at 50% 40%, var(--floor-a), var(--floor-b)); }
+.seats-zoom { width: 900px; margin: 0 auto; }
 .seats-stage { position: relative; width: 900px; height: 580px; perspective: 1900px; perspective-origin: 50% 24%; }
 .seats-float { position: absolute; inset: 0; transform-style: preserve-3d; animation: seats-bob 7s ease-in-out infinite alternate; }
 @keyframes seats-bob { from { translate: 0 6px; } to { translate: 0 -6px; } }
@@ -126,7 +133,8 @@
 .seats-slot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; border-radius: 8px; }
 .seats-slot.is-over { background: var(--bg-selected); outline: 2px solid var(--text-2); outline-offset: 1px; }
 .seats-slot-label { font-size: 12px; line-height: 16px; color: var(--text-3); }
-.seats-slot-token { display: flex; align-items: center; min-height: 32px; }
+.seats-slot-token { display: flex; align-items: center; min-width: 0; min-height: 32px; }
+.seats-slot-token .seats-gem { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .seats-slot-foot { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 32px; }
 .seats-slot-info { display: flex; flex-direction: column; min-width: 0; font-size: 12px; line-height: 16px; color: var(--text-2); }
 .seats-slot-info > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -148,7 +156,9 @@
 @media (max-width: 640px) { .seats-row { grid-template-columns: 1fr auto; } .seats-head, .seats-body { padding-left: 16px; padding-right: 16px; } }
 
 /* The 更换 menu: model, effort, fast. */
-.seats-menu { position: fixed; z-index: 460; display: flex; flex-direction: column; gap: 4px; width: 280px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-menu); box-shadow: 0 4px 12px rgb(0 0 0 / .05), 0 16px 40px var(--lo2); }
+.seats-menu { position: fixed; z-index: 460; display: flex; flex-direction: column; gap: 4px; width: 280px; box-sizing: border-box; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-menu); box-shadow: 0 4px 12px rgb(0 0 0 / .05), 0 16px 40px var(--lo2); }
+.seats-menu-list { display: flex; flex: 0 1 auto; flex-direction: column; gap: 4px; min-height: 96px; overflow-y: auto; overscroll-behavior: contain; }
+.seats-menu h3, .seats-menu-settings { flex: none; }
 .seats-menu h3 { padding: 4px 8px; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-3); }
 .seats-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
 .seats-menu-item:hover:not(:disabled) { background: var(--bg-hover); }

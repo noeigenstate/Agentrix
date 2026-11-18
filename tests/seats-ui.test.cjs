@@ -6,7 +6,7 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const seatsLib = require('../src/features/agents/skill-seats.ts');
-const { assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
+const { sceneScale, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
 
 const en = require('../electron/locales/en.json');
 const additions = path.join(__dirname, '../locale-additions-cat.json');
@@ -160,7 +160,7 @@ const findAll = (tree, test) => { const found = []; walk(tree, node => { if (tes
 const find = (tree, test) => findAll(tree, test)[0];
 const byAttr = (tree, attr, value) => find(tree, node => value === undefined ? node.props[attr] !== undefined : node.props[attr] === value);
 const textOf = node => { let text = ''; const add = child => { if (typeof child === 'string' || typeof child === 'number') text += child; else if (Array.isArray(child)) child.forEach(add); else if (child?.props) add(child.props.children); }; add(node); return text; };
-const pickButton = (slot) => ({ currentTarget: { getBoundingClientRect: () => ({ left: 100, bottom: 200 }), focus() {} }, slot });
+const pickButton = (slot) => ({ currentTarget: { getBoundingClientRect: () => ({ left: 100, top: 168, bottom: 200 }), focus() {} }, slot });
 const settle = async () => { for (let turn = 0; turn < 6; turn++) await null; };
 
 function dialogHarness(t, info, props = {}) {
@@ -596,4 +596,96 @@ test('a 刷新 click during the opening read runs right after it, and an answer 
   closing.unmount();
   await settle();
   assert.equal(byAttr(closing.render(), 'data-moved'), undefined, 'no state is set after the dialog closed');
+});
+
+// ---- UI acceptance fixes (round cat-r1): alias = resolved id, short banner, menu and stage inside the viewport, family colours, agents not installed ----
+const withAliases = (extra = {}) => catalog(extra).concat([row('claude-opus-5-5', 'Opus', 'claude', 3), row('claude-opus-5-4', 'Opus 5.4', 'claude', 3), row('claude-sonnet-5-5', 'Sonnet', 'claude', 2)]);
+
+test('an alias and the id it resolves to are one model for the reviewer rule, and count once among the alternatives', () => {
+  const rows = withAliases();
+  assert.equal(canonicalModel(rows, 'opus'), 'claude-opus-5-5', 'the alias follows the newest listed id of its tier (5.5 over 5.4)');
+  assert.equal(canonicalModel(rows, 'claude-opus-5-5[1m]'), 'claude-opus-5-5');
+  assert.equal(canonicalModel(rows, 'claude-opus-5-5-20260101'), 'claude-opus-5-5');
+  assert.equal(canonicalModel(catalog(), 'opus'), 'opus', 'an alias with no listed id stays itself');
+  assert.ok(sameModel(rows, 'opus', 'claude-opus-5-5') && !sameModel(rows, 'opus', 'claude-opus-5-4') && !sameModel(rows, 'opus', 'sonnet'));
+  const map = { ...clone(DEFAULTS), core: { model: 'claude-opus-5-5', effort: 'high' } };
+  const block = reviewerBlock(map, rows);
+  assert.deepEqual(block.hit, ['core'], 'the reviewer "opus" runs the core seat’s model "claude-opus-5-5"');
+  const names = block.alternatives.map(entry => entry.model);
+  assert.ok(!names.includes('opus') && !names.includes('claude-opus-5-5'), 'neither spelling of the reviewer’s model is offered as an alternative');
+  assert.ok(names.includes('claude-opus-5-4'), 'an older version is another model');
+  assert.equal(new Set(names.map(name => canonicalModel(rows, name))).size, names.length, 'an alias and its id are listed once');
+  assert.equal(reviewerBlock({ ...clone(DEFAULTS), core: { model: 'claude-opus-5-4', effort: 'high' } }, rows), null, 'a different version does not block');
+  assert.equal(reviewerSameButAllowed({ ...map }, catalog({ 'gpt-6.1-sol': { available: false }, sonnet: { available: false }, haiku: { available: false } }).concat([row('claude-opus-5-5', 'Opus', 'claude', 3)])), true, 'the warning form follows the same rule');
+});
+
+function reviewerSameButAllowed(map, rows) { return seatsLib.reviewerSameButAllowed(map, rows); }
+
+test('the blocked banner names the three strongest alternatives and counts the rest; the icon sits inline with the message', t => {
+  const many = catalog().concat(Array.from({ length: 10 }, (_, index) => row(`gpt-6.${index}-luna`, `GPT-6.${index}-Luna`, 'codex', index < 4 ? 3 : 2)));
+  const alternatives = many.filter(entry => entry.model !== 'opus');
+  const { shown, total } = topAlternatives(alternatives);
+  assert.equal(shown.length, 3);
+  assert.equal(total, alternatives.length);
+  assert.ok(shown.every(entry => entry.rank === 3), 'the strongest come first');
+  const info = seatsInfo({ catalog: many, defaults: { ...clone(DEFAULTS), core: { model: 'opus', effort: 'high' } } });
+  const h = dialogHarness(t, info);
+  const banner = find(h.render(), node => node.props.className === 'seats-banner is-bad' && node.props.role === 'alert');
+  const text = textOf(banner);
+  assert.match(text, /and others \(\d+ in all\)/);
+  assert.ok((text.match(/GPT-|Sonnet|Haiku/g) ?? []).length <= 4, 'not a list of every model');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  assert.doesNotMatch(css.match(/\.seats-banner \{[^}]*\}/)[0], /flex-wrap/, 'the icon and the message share one row: the banner does not wrap its items');
+});
+
+test('the 更换 menu and the stage stay inside the viewport: the menu flips or takes the roomier side, the stage scales to the height left', () => {
+  const view = { width: 1600, height: 1000 };
+  const inside = (place, rows) => {
+    assert.ok(place.left >= 8 && place.left + 280 <= view.width, 'inside horizontally');
+    const top = place.top ?? view.height - place.bottom - place.maxHeight;
+    assert.ok(place.maxHeight > 0 && top >= 0, 'starts inside');
+    if (place.top !== undefined) assert.ok(place.top + place.maxHeight <= view.height, 'a menu under its button ends inside');
+  };
+  const roomy = menuPlacement({ left: 400, top: 100, bottom: 132 }, view, 4);
+  assert.equal(roomy.top, 136, 'a short menu opens under its button');
+  const flipped = menuPlacement({ left: 400, top: 860, bottom: 892 }, view, 18);
+  assert.ok(flipped.bottom !== undefined && flipped.top === undefined, 'a long menu near the bottom opens above');
+  assert.equal(flipped.maxHeight, 848);
+  const tall = menuPlacement({ left: 400, top: 500, bottom: 532 }, view, 18);
+  assert.ok(tall.maxHeight <= 500, '18 rows with 468 px each side: the roomier side, the list scrolls inside');
+  for (const place of [roomy, flipped, tall, menuPlacement({ left: 1590, top: 20, bottom: 52 }, view, 18), menuPlacement({ left: -5, top: 990, bottom: 999 }, view, 18)]) inside(place);
+  assert.equal(sceneScale(1400, 4000), 1, 'a roomy window keeps the stage whole');
+  assert.equal(sceneScale(1400, 456), 456 / 580, 'a short window scales the stage to the height left');
+  assert.equal(sceneScale(600, 4000), 600 / 900, 'a narrow dialog scales to its width');
+  assert.equal(sceneScale(100, 50), 0.5, 'never below half');
+});
+
+test('the lead tile is wide enough for two slots, every model dot carries its family, and the tray greys the models of an agent that is not installed', t => {
+  const info = seatsInfo({ installed: { claude: true, codex: false } });
+  const h = dialogHarness(t, info);
+  const tree = h.render();
+  const lead = byAttr(tree, 'data-seat', 'lead');
+  assert.equal(lead.props.style['--w'], '400px', 'two slots side by side with room for "Opus (follows latest)"');
+  assert.equal(byAttr(tree, 'data-seat', 'core').props.style['--w'], '164px');
+  const dots = findAll(tree, node => node.props.className === 'seats-mk');
+  assert.ok(dots.length > 0 && dots.every(node => node.props['data-family'] === 'claude' || node.props['data-family'] === 'codex'), 'no dot is left without a family');
+  assert.ok(dots.some(node => node.props['data-family'] === 'codex') && dots.some(node => node.props['data-family'] === 'claude'));
+  const off = findAll(tree, node => node.props.className?.includes('seats-gem is-off'));
+  assert.ok(off.length >= 1 && off.every(gem => /Codex is not installed/.test(textOf(gem))), 'a Codex model is greyed with its reason');
+  assert.deepEqual(assignModel(clone(DEFAULTS), 'execution', 'gpt-6.1-sol', withInstalled(catalog(), { claude: true, codex: false }, () => 'x')), { ok: false, reason: 'unavailable' });
+  assert.equal(withInstalled(catalog(), undefined, () => 'x').every(entry => entry.available), true, 'a record without the field changes nothing');
+  byAttr(tree, 'data-pick', 'core').props.onClick(pickButton('core'));
+  const item = byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'gpt-6.1-sol');
+  assert.equal(item.props.disabled, true);
+});
+
+test('the moved-defaults note is a neutral banner and the discard question a warning one; only blocks are red', t => {
+  const h = dialogHarness(t, seatsInfo({ defaultsMoved: [{ seat: 'core', from: 'gpt-6.1-sol', to: 'gpt-6.2-sol' }] }));
+  const tree = h.render();
+  assert.equal(byAttr(tree, 'data-moved').props.className, 'seats-banner', 'no is-bad on the note');
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  assert.match(css, /\.seats-banner \{[^}]*border: 1px solid var\(--border\)/, 'the base banner border is neutral');
+  assert.match(css, /\.seats-banner\.is-bad \{ border-color: var\(--danger\)/);
+  const mk = css.split('\n').filter(line => line.startsWith('.seats-mk'));
+  assert.ok(mk.some(line => line.includes('--agent-claude')) && mk.some(line => line.includes('data-family="codex"') && line.includes('--agent-codex')), 'the family dots use the existing agent tokens');
 });
