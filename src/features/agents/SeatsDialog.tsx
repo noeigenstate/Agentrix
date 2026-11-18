@@ -62,7 +62,8 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   const [ghost, setGhost] = useState<{ model: string; x: number; y: number } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [refreshed, setRefreshed] = useState<SeatsInfo | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState<'dialog' | 'manual' | null>(null);
+  const reading = useRef<'dialog' | 'manual' | null>(null), queued = useRef(false), alive = useRef(true);
   const [custom, setCustom] = useState<Custom | null>(null);
   const [moved, setMoved] = useState(() => given.defaultsMoved ?? []);
   const [saving, setSaving] = useState(false);
@@ -76,7 +77,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   const label = (model: string) => modelRow(catalog, model)?.label ?? model;
 
   const keepButton = useRef<HTMLButtonElement>(null);
-  useEffect(() => { dialog.current?.focus(); void refresh(true); }, []);
+  useEffect(() => { dialog.current?.focus(); void refresh(true); return () => { alive.current = false; }; }, []);
   useEffect(() => { setRefreshed(null); if (given.defaultsMoved?.length) setMoved(given.defaultsMoved); }, [given]);
   useEffect(() => { if (discarding) keepButton.current?.focus({ preventScroll: true }); }, [discarding]);
   // A refreshed record that already holds the draft makes the draft redundant (after a save), so later changes made elsewhere show.
@@ -104,19 +105,24 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     if (result.reason === 'unavailable') return t('{model}（{reason}）不能放入座位', { model: label(model), reason: modelRow(catalog, model)?.reason ?? t(REFUSALS.unavailable) });
     return t(REFUSALS[result.reason], { family: slotFamily(slot) === 'codex' ? 'Codex' : 'Claude' });
   };
-  // 刷新: main reads the model lists again (throttled there) and answers with the seats; a failed read leaves the dialog as it was.
-  // Opening the dialog reads once too (quiet while it works; main throttles the probe), and the note about moved defaults comes with that answer.
+  // 刷新: main reads the model lists again and answers with the seats; a failed read leaves the dialog as it was. Opening the dialog reads once too, as
+  // reason 'dialog' (main probes only a list older than its open throttle) and quietly; the 刷新 button is 'manual' (always probes). A click during the opening read
+  // runs right after it, and an answer that arrives after the dialog closed is dropped. The note about moved defaults comes with an answer.
   const refresh = async (opening = false) => {
-    if (refreshing) return;
-    setRefreshing(true);
+    if (reading.current) { if (!opening) queued.current = true; return; }
+    reading.current = opening ? 'dialog' : 'manual';
+    setRefreshing(reading.current);
     try {
-      const next = await window.agentrix.skillSeatsRefresh(projectId ?? null, terminalId ?? null);
+      const next = await window.agentrix.skillSeatsRefresh(projectId ?? null, terminalId ?? null, opening ? 'dialog' : 'manual');
+      if (!alive.current) return;
       if (next) { setRefreshed(next); if (next.defaultsMoved?.length) setMoved(next.defaultsMoved); if (!opening) setNotice({ kind: 'ok', text: t('模型列表已刷新') }); }
       else if (!opening) setNotice({ kind: 'error', text: t('没有刷新：没有可用的座位信息') });
     } catch (error) {
-      setNotice({ kind: 'error', text: t('没有刷新：{message}', { message: error instanceof Error ? error.message : String(error) }) });
+      if (alive.current) setNotice({ kind: 'error', text: t('没有刷新：{message}', { message: error instanceof Error ? error.message : String(error) }) });
+    } finally {
+      reading.current = null;
+      if (alive.current) { setRefreshing(null); if (queued.current) { queued.current = false; void refresh(); } }
     }
-    setRefreshing(false);
   };
   const apply = (result: Edit, slot: SlotId, success: string, failedFor = slot, model = '') => {
     if (result.ok) { setDraft(result.map); setDiscarding(false); setLanded(slot); setNotice({ kind: 'info', text: success }); return; }
@@ -295,7 +301,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
       <header className="seats-head">
         <div><h2 id="seats-title">{t('模型路由')}</h2><p>{t('每个座位放哪个模型由你定。把模型拖到座位上，或点座位上的「更换」。')}</p></div>
         <div className="seats-head-actions">
-          <button type="button" className="seats-btn" data-refresh disabled={refreshing} aria-label={t('刷新模型列表')} onClick={() => { void refresh(); }}><ArrowsClockwise size={14} aria-hidden="true" />{t('刷新')}</button>
+          <button type="button" className="seats-btn" data-refresh disabled={refreshing === 'manual'} aria-label={t('刷新模型列表')} onClick={() => { void refresh(); }}><ArrowsClockwise size={14} aria-hidden="true" />{t('刷新')}</button>
           {!narrow && <button type="button" className="seats-btn" aria-pressed={listMode} onClick={() => setListMode(!listMode)}><ListBullets size={14} aria-hidden="true" />{t('座位清单')}</button>}
           <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} onClick={close}><X size={14} aria-hidden="true" /></button>
         </div>

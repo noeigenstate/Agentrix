@@ -532,7 +532,7 @@ test('the refresh button asks main for the seats, shows the new catalog and when
   assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude 3 h ago · Codex not refreshed');
   byAttr(tree, 'data-refresh').props.onClick();
   await settle();
-  assert.deepEqual(h.refreshes, [['p1', 't1'], ['p1', 't1']], 'once when the dialog opens, once for the button');
+  assert.deepEqual(h.refreshes, [['p1', 't1', 'dialog'], ['p1', 't1', 'manual']], 'once when the dialog opens (throttled in main), once for the button (always)');
   tree = h.render();
   assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude just now · Codex 2 min ago');
   assert.match(textOf(find(tree, node => node.props.role === 'status')), /Model lists refreshed/);
@@ -573,7 +573,7 @@ test('the dialog reads once when it opens, keeps the opened info until the answe
   const moved = [{ seat: 'core', from: 'gpt-6.1-sol', to: 'gpt-6.2-sol' }];
   const h = dialogHarness(t, seatsInfo(), { refreshed: seatsInfo({ defaultsMoved: moved }) });
   let tree = h.render();
-  assert.deepEqual(h.refreshes, [['p1', 't1']], 'one read on open');
+  assert.deepEqual(h.refreshes, [['p1', 't1', 'dialog']], 'one read on open');
   assert.equal(byAttr(tree, 'data-moved'), undefined, 'the note waits for the answer');
   assert.equal(findAll(tree, node => node.props.role === 'status' && textOf(node)).length, 0, 'an opening read says nothing while it works');
   await settle();
@@ -582,4 +582,18 @@ test('the dialog reads once when it opens, keeps the opened info until the answe
   quiet.render(); await settle();
   assert.match(textOf(find(quiet.render(), node => node.props.role === 'status')), /Not refreshed: offline/, 'a failed opening read keeps the info and says so');
   assert.ok(byAttr(quiet.render(), 'data-save'), 'the dialog still shows the info it opened with');
+});
+
+test('a 刷新 click during the opening read runs right after it, and an answer after the dialog closed is dropped', async t => {
+  const h = dialogHarness(t, seatsInfo(), { refreshed: seatsInfo({ defaultsMoved: [{ seat: 'core', from: 'gpt-6.1-sol', to: 'gpt-6.2-sol' }] }) });
+  const first = h.render();
+  assert.equal(byAttr(first, 'data-refresh').props.disabled, false, 'the button is usable during the opening read');
+  byAttr(first, 'data-refresh').props.onClick();
+  await settle();
+  assert.deepEqual(h.refreshes.map(args => args[2]), ['dialog', 'manual'], 'the click waited for the opening read, then ran');
+  const closing = dialogHarness(t, seatsInfo(), { refreshed: seatsInfo({ defaultsMoved: [{ seat: 'core', from: 'a', to: 'b' }] }) });
+  closing.render();
+  closing.unmount();
+  await settle();
+  assert.equal(byAttr(closing.render(), 'data-moved'), undefined, 'no state is set after the dialog closed');
 });
