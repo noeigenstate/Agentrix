@@ -1,0 +1,168 @@
+/* The model-routing dialog (模型路由): the C2 floating ring. Chrome (header, strip, buttons, menu) uses the app's tokens and spacing scale; the disc is the one place with extra depth: its lighting is only greys derived
+   from the same neutrals (no new hue), and its extra shadow, radius and motion stay inside this dialog. Motion stops under prefers-reduced-motion. */
+.seats-dialog {
+  --seats-ease: cubic-bezier(.2, .75, .25, 1);
+  --hi: rgb(255 255 255 / .16); --hi2: rgb(255 255 255 / .07); --lo: rgb(0 0 0 / .25); --lo2: rgb(0 0 0 / .45); --lo3: rgb(0 0 0 / .65);
+  --tbl-a: #3b3b3b; --tbl-b: #2b2b2b; --edge-a: #1c1c1c; --edge-b: #101010; --floor-a: #272727; --floor-b: #131313;
+}
+:root[data-theme="light"] .seats-dialog {
+  --hi: rgb(255 255 255 / .95); --hi2: rgb(255 255 255 / .55); --lo: rgb(30 36 46 / .07); --lo2: rgb(30 36 46 / .17); --lo3: rgb(30 36 46 / .30);
+  --tbl-a: #ffffff; --tbl-b: #e3e7ed; --edge-a: #c9cfd8; --edge-b: #a3acb9; --floor-a: #f6f7fa; --floor-b: #cfd5de;
+}
+.seats-overlay { position: fixed; inset: 0; z-index: 400; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--bg-app) 72%, transparent); -webkit-app-region: no-drag; }
+.seats-dialog { position: relative; display: flex; flex-direction: column; width: min(960px, 100%); max-height: 100%; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-menu); color: var(--text-1);
+  box-shadow: 0 16px 40px var(--lo2); outline: none; font-size: 13px; line-height: 20px; }
+.seats-dialog :is(h2, h3, p) { margin: 0; }
+.seats-dialog :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.seats-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--divider); }
+.seats-head h2 { font-size: 20px; line-height: 28px; font-weight: 600; }
+.seats-head p { margin-top: 4px; color: var(--text-2); }
+.seats-head-actions { display: flex; flex: none; gap: 8px; }
+.seats-body { display: flex; flex-direction: column; gap: 16px; min-height: 0; padding: 16px 24px 24px; overflow: auto; overscroll-behavior: contain; }
+
+.seats-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text-2);
+  font: inherit; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+.seats-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-1); border-color: var(--border-hover); }
+.seats-btn:disabled { color: var(--text-disabled); cursor: not-allowed; }
+.seats-btn[aria-pressed="true"] { background: var(--bg-selected); color: var(--text-1); }
+.seats-btn.is-icon { width: 32px; padding: 0; }
+.seats-btn.is-small { padding: 0 8px; }
+.seats-btn.is-primary { background: var(--button-primary); border-color: var(--button-primary); color: var(--button-primary-text); }
+.seats-btn.is-primary:hover:not(:disabled) { background: var(--button-primary); border-color: var(--button-primary); color: var(--button-primary-text); opacity: .88; }
+.seats-btn.is-primary:disabled { background: transparent; border-color: var(--border); color: var(--text-disabled); }
+.seats-dialog select { height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; font-size: 12px; }
+.seats-tag, .seats-chg { display: inline-flex; align-items: center; flex: none; height: 16px; padding: 0 8px; border-radius: 999px; font-size: 12px; line-height: 16px; white-space: nowrap; }
+.seats-tag { background: var(--bg-selected); color: var(--text-2); }
+.seats-chg { border: 1px solid var(--border-hover); color: var(--text-1); }
+
+/* The strip: whether a change is waiting, the scope, the actions, the blocked reviewer's banner and this conversation's seats (read-only). */
+.seats-strip { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-app); }
+.seats-strip-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.seats-grow { flex: 1; }
+.seats-effective { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; line-height: 20px; font-weight: 600; color: var(--text-1); }
+.seats-dot { width: 8px; height: 8px; border: 1px solid var(--text-3); border-radius: 50%; flex: none; }
+.seats-dot.is-on { background: var(--warning); border-color: var(--warning); }
+.seats-dot.is-ok { background: var(--success); border-color: var(--success); }
+.seats-dot.is-bad { background: var(--danger); border-color: var(--danger); }
+.seats-scope { display: inline-flex; align-items: center; gap: 8px; }
+.seats-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--danger); border-radius: 8px; background: var(--bg-card); color: var(--text-1); font-size: 13px; line-height: 20px; }
+.seats-banner > svg { flex: none; color: var(--danger); }
+.seats-banner b { font-weight: 600; }
+.seats-nows { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.seats-now { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--divider); border-radius: 8px; background: var(--bg-card); font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.seats-now b { font-weight: 600; color: var(--text-1); }
+.seats-now.is-diff { border-color: var(--border-hover); }
+.seats-notice { display: flex; align-items: center; gap: 8px; min-height: 16px; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.seats-notice:empty { display: none; }
+.seats-notice[data-kind="error"] { color: var(--danger); }
+.seats-notice > svg { color: var(--success); }
+
+.seats-state { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: var(--text-1); }
+.seats-state.is-bad { color: var(--danger); }
+.seats-state > svg { flex: none; color: var(--warning); }
+.seats-state.is-bad > svg { color: var(--danger); }
+.seats-mk { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; background: radial-gradient(circle at 32% 28%, rgb(255 255 255 / .6), transparent 55%), var(--agent-claude); }
+.seats-mk[data-family="codex"] { background: radial-gradient(circle at 32% 28%, rgb(255 255 255 / .6), transparent 55%), var(--agent-codex); }
+
+/* The model token (a gem): draggable from the tray or from a seat; an unavailable one is greyed, dashed, and says why. */
+.seats-gem { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 8px; border: 1px solid var(--border); border-radius: 16px; font-size: 13px; font-weight: 600; color: var(--text-1);
+  white-space: nowrap; user-select: none; touch-action: none; cursor: grab;
+  background: linear-gradient(180deg, var(--hi) 0, transparent 52%), var(--bg-card); box-shadow: inset 0 1px 0 var(--hi), inset 0 -6px 10px var(--lo), 0 1px 0 var(--edge-a), 0 8px 14px var(--lo2);
+  transition: transform .25s var(--seats-ease), box-shadow .25s var(--seats-ease); }
+.seats-gem:hover { transform: translateY(-4px); box-shadow: inset 0 1px 0 var(--hi), inset 0 -6px 10px var(--lo), 0 1px 0 var(--edge-a), 0 18px 22px var(--lo3); }
+.seats-gem small { font-size: 12px; font-weight: 400; color: var(--text-3); }
+.seats-gem.is-off { border-style: dashed; background: transparent; box-shadow: none; color: var(--text-disabled); filter: grayscale(1); cursor: not-allowed; }
+.seats-gem.is-off:hover { transform: none; }
+.seats-gem.is-off .seats-mk { opacity: .45; }
+.seats-gem.is-landing { animation: seats-land .55s var(--seats-ease); }
+@keyframes seats-land { 0% { transform: translateY(-56px) scale(1.2); opacity: 0; } 55% { transform: translateY(3px) scale(.97); opacity: 1; } 100% { transform: none; } }
+.seats-ghost { position: fixed; z-index: 450; display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 8px; border: 1px solid var(--border-hover); border-radius: 16px; background: var(--bg-card);
+  color: var(--text-1); font-size: 13px; font-weight: 600; white-space: nowrap; pointer-events: none; transform: translate(-50%, -62%) scale(1.1); box-shadow: 0 28px 36px var(--lo3); }
+.seats-empty { color: var(--text-3); font-size: 12px; }
+
+/* The disc, scaled to the dialog's width (zoom): a 900px stage whose plane is tilted back, floating a few pixels. */
+.seats-scene { position: relative; width: 900px; margin: 0 auto; border: 1px solid var(--border); border-radius: 16px; overflow: hidden;
+  background: radial-gradient(ellipse 55% 45% at 50% 42%, var(--hi), transparent 72%), radial-gradient(ellipse 90% 90% at 50% 40%, var(--floor-a), var(--floor-b)); }
+.seats-stage { position: relative; width: 900px; height: 580px; perspective: 1900px; perspective-origin: 50% 24%; }
+.seats-float { position: absolute; inset: 0; transform-style: preserve-3d; animation: seats-bob 7s ease-in-out infinite alternate; }
+@keyframes seats-bob { from { translate: 0 6px; } to { translate: 0 -6px; } }
+.seats-plane { position: absolute; left: 50%; top: 318px; width: 700px; height: 700px; margin: -350px 0 0 -350px; transform: rotateX(var(--tilt)); transform-style: preserve-3d; }
+.seats-gshadow { position: absolute; inset: 40px; border-radius: 50%; background: var(--lo3); filter: blur(30px); transform: translateZ(-170px); }
+.seats-glow { position: absolute; inset: -40px; border-radius: 50%; background: radial-gradient(circle, transparent 54%, var(--hi2) 62%, transparent 72%); transform: translateZ(-22px); }
+.seats-under { position: absolute; inset: 0; border-radius: 50%; background: conic-gradient(from 90deg, var(--edge-b), var(--edge-a), var(--edge-b)); }
+.seats-top { position: absolute; inset: 0; border-radius: 50%; background: radial-gradient(circle at 30% 22%, var(--hi) 0, transparent 42%), radial-gradient(circle at 50% 50%, var(--tbl-a) 0 45%, var(--tbl-b) 100%);
+  box-shadow: inset 0 0 0 1px var(--border), inset 0 0 0 18px var(--hi2), inset 0 0 0 19px var(--lo), inset 0 -10px 30px var(--lo); }
+.seats-track { position: absolute; inset: 40px; border-radius: 50%; border: 1px solid var(--lo2); box-shadow: inset 0 2px 4px var(--lo), 0 1px 0 var(--hi); }
+.seats-hole { position: absolute; inset: 232px; border-radius: 50%; background: radial-gradient(circle at 40% 30%, var(--tbl-a), var(--tbl-b)); box-shadow: inset 0 3px 8px var(--lo2), 0 1px 0 var(--hi); border: 1px solid var(--lo); }
+.seats-flow { position: absolute; inset: 208px; width: 284px; height: 284px; overflow: visible; }
+.seats-flow path { fill: none; stroke: var(--border); stroke-width: 14; stroke-linecap: round; transition: stroke .25s ease; }
+.seats-flow path.is-lit { stroke: var(--text-3); }
+.seats-phase { position: absolute; left: 50%; top: 50%; display: grid; place-items: center; width: 72px; height: 28px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-card); font-size: 12px; font-weight: 600; color: var(--text-2);
+  transform-origin: 0 0; transform-style: preserve-3d; transform: translate3d(var(--x), var(--y), 6px) rotateX(calc(var(--tilt) * -1)) translate(-50%, -100%);
+  box-shadow: inset 0 1px 0 var(--hi), 0 2px 0 var(--edge-a), 0 8px 10px var(--lo2); transition: box-shadow .3s var(--seats-ease), color .25s ease, border-color .25s ease; }
+.seats-phase.is-lit { color: var(--text-1); border-color: var(--text-2); box-shadow: inset 0 1px 0 var(--hi), 0 2px 0 var(--edge-a), 0 12px 14px var(--lo3); }
+
+/* A seat tile on the rim: a pedestal under a flat plate that stands up out of the tilted plane. Hover or a drag over it lifts it. */
+.seats-tile { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-style: preserve-3d; transform: translate3d(var(--x), var(--y), var(--z, 0px)); transition: transform .3s var(--seats-ease); }
+.seats-tile:is(:hover, :focus-within, .is-over) { --z: 24px; }
+.seats-ped { position: absolute; left: calc(var(--w) * -.5 - 10px); top: -34px; width: calc(var(--w) + 20px); height: 72px; border-radius: 18px; transform-style: preserve-3d;
+  background: linear-gradient(135deg, var(--hi), transparent 50%), var(--tbl-a); box-shadow: inset 0 0 0 1px var(--border), inset 0 -2px 0 var(--lo); transition: box-shadow .3s var(--seats-ease); }
+.seats-ped i { position: absolute; inset: 0; border-radius: 18px; background: var(--edge-a); }
+.seats-tile.is-over .seats-ped { box-shadow: inset 0 0 0 1px var(--text-2), 0 0 0 4px var(--hi2); }
+.seats-tsh { position: absolute; left: calc(var(--w) * -.5); top: -28px; width: var(--w); height: 66px; border-radius: 22px; background: var(--lo3); filter: blur(12px);
+  transform: translateZ(calc(var(--z, 0px) * -1 - 2px)); opacity: .5; transition: opacity .3s ease, transform .3s var(--seats-ease); }
+.seats-tile:is(:hover, :focus-within, .is-over) .seats-tsh { opacity: .9; }
+.seats-bb { position: absolute; left: 0; top: 0; width: var(--w); height: var(--h); transform-origin: 0 0; transform-style: preserve-3d; transform: translate3d(0, 6px, 10px) rotateX(calc(var(--tilt) * -1)) translate(-50%, -100%); }
+.seats-plate { position: relative; display: flex; flex-direction: column; gap: 4px; height: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 12px; background: linear-gradient(180deg, var(--hi) 0, transparent 38%), var(--bg-card);
+  box-shadow: inset 0 1px 0 var(--hi), inset 0 -3px 6px var(--lo), 0 2px 0 var(--edge-a), 0 6px 10px var(--lo), 0 16px 26px var(--lo2); transition: box-shadow .3s var(--seats-ease); }
+.seats-plate::after { content: ''; position: absolute; left: 6px; right: 6px; top: 3px; height: 22px; border-radius: 10px 10px 40px 40px / 10px 10px 14px 14px; background: linear-gradient(180deg, var(--hi), transparent); pointer-events: none; opacity: .7; }
+.seats-tile:is(:hover, :focus-within, .is-over) .seats-plate { box-shadow: inset 0 1px 0 var(--hi), inset 0 -3px 6px var(--lo), 0 2px 0 var(--edge-a), 0 12px 16px var(--lo2), 0 28px 40px var(--lo3); }
+.seats-plate.is-blocked { border-color: var(--danger); }
+.seats-plate.is-ripple { animation: seats-ripple .8s ease-out; }
+@keyframes seats-ripple { 0% { box-shadow: inset 0 0 0 1px var(--text-2), 0 0 0 0 var(--hi); } 100% { box-shadow: inset 0 0 0 1px var(--border), 0 0 0 26px transparent; } }
+.seats-plate-head { position: relative; z-index: 1; display: flex; align-items: center; gap: 8px; height: 20px; }
+.seats-plate-head b { font-size: 14px; line-height: 20px; font-weight: 600; white-space: nowrap; }
+.seats-plate-body { position: relative; z-index: 1; display: flex; flex: 1; min-height: 0; gap: 8px; }
+.seats-slot { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; border-radius: 8px; }
+.seats-slot.is-over { background: var(--bg-selected); outline: 2px solid var(--text-2); outline-offset: 1px; }
+.seats-slot-label { font-size: 12px; line-height: 16px; color: var(--text-3); }
+.seats-slot-token { display: flex; align-items: center; min-height: 32px; }
+.seats-slot-foot { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 32px; }
+.seats-slot-info { display: flex; flex-direction: column; min-width: 0; font-size: 12px; line-height: 16px; color: var(--text-2); }
+.seats-slot-info > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seats-dock { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px 12px; width: max-content; max-width: calc(100% - 48px); margin: 0 auto 16px; padding: 8px 20px; border: 1px solid var(--border); border-radius: 999px;
+  background: linear-gradient(180deg, var(--hi), transparent 55%), var(--bg-card); box-shadow: inset 0 1px 0 var(--hi), 0 2px 0 var(--edge-a), 0 18px 30px var(--lo2); }
+.seats-dock-title { font-size: 13px; line-height: 20px; font-weight: 600; }
+
+/* 座位清单: the same seats as rows, for the keyboard and for a dialog too narrow for the disc. */
+.seats-roster { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
+.seats-row { display: grid; grid-template-columns: minmax(120px, 1.2fr) minmax(120px, 1.2fr) minmax(64px, .6fr) minmax(112px, 1fr) auto; align-items: center; gap: 8px 16px; padding: 8px 16px; border-top: 1px solid var(--divider); font-size: 13px; }
+.seats-row:first-child { border-top: 0; }
+.seats-row.is-blocked { box-shadow: inset 0 0 0 1px var(--danger); border-radius: 8px; }
+.seats-row b { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-weight: 600; }
+.seats-row-model { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.seats-row-model small { font-size: 12px; color: var(--text-3); }
+.seats-row-effort, .seats-row-state { font-size: 12px; color: var(--text-2); }
+@container (max-width: 520px) { .seats-row { grid-template-columns: 1fr auto; } }
+.seats-body { container-type: inline-size; }
+@media (max-width: 640px) { .seats-row { grid-template-columns: 1fr auto; } .seats-head, .seats-body { padding-left: 16px; padding-right: 16px; } }
+
+/* The 更换 menu: model, effort, fast. */
+.seats-menu { position: fixed; z-index: 460; display: flex; flex-direction: column; gap: 4px; width: 280px; padding: 8px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-menu); box-shadow: 0 4px 12px rgb(0 0 0 / .05), 0 16px 40px var(--lo2); }
+.seats-menu h3 { padding: 4px 8px; font-size: 12px; line-height: 16px; font-weight: 400; color: var(--text-3); }
+.seats-menu-item { display: flex; align-items: center; gap: 8px; width: 100%; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--text-1); font: inherit; text-align: left; cursor: pointer; }
+.seats-menu-item:hover:not(:disabled) { background: var(--bg-hover); }
+.seats-menu-item[aria-checked="true"] { background: var(--bg-selected); font-weight: 600; }
+.seats-menu-item:disabled { color: var(--text-disabled); cursor: not-allowed; }
+.seats-menu-item small { margin-left: auto; font-size: 12px; color: var(--text-3); white-space: nowrap; }
+.seats-menu-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; padding: 8px 8px 0; border-top: 1px solid var(--divider); }
+.seats-switch { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 4px; border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: 12px; cursor: pointer; }
+.seats-switch i { position: relative; width: 38px; height: 22px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-input); }
+.seats-switch i::before { content: ''; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-3); }
+.seats-switch[aria-checked="true"] i { background: var(--bg-selected); border-color: var(--border-hover); }
+.seats-switch[aria-checked="true"] i::before { left: 18px; background: var(--text-1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .seats-float, .seats-gem.is-landing, .seats-plate.is-ripple { animation: none; }
+  .seats-dialog *, .seats-dialog *::before, .seats-dialog *::after { transition: none !important; }
+}

@@ -152,6 +152,24 @@ export type SkillVersion = { version: number; at: number; by: 'agent' | 'user' |
 export type SkillDetail = { text: string; versions: SkillVersion[]; pending: string | null };
 export type SkillDraft = { name: string; description: string; scope: 'global' | 'project'; projectId: string | null; text: string };
 export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'autoOptimize' | 'confirmChanges'>>;
+// The model-routing skill's seats: which model each fixed role runs (electron/features/skills/model-seats.cjs); a change takes effect from the next session Agentrix starts.
+export type SeatId = 'lead' | 'architect' | 'core' | 'execution' | 'visual' | 'lookup' | 'reviewer';
+export type Seat = { model: string; effort: string; fast?: boolean };
+export type SeatMap = { lead?: { claude?: Seat; codex?: Seat } } & Partial<Record<Exclude<SeatId, 'lead'>, Seat>>;
+export type SeatModel = { model: string; label: string; family: 'claude' | 'codex'; efforts: string[]; fast: boolean; rank: number; available: boolean; reason?: string };
+export type SeatsInfo = {
+  skill: string;
+  seats: SeatId[];
+  fresh: SeatId[];
+  defaults: SeatMap;
+  global: SeatMap;
+  project: SeatMap | null;
+  effective: SeatMap;
+  current: SeatMap | null;
+  catalog: SeatModel[];
+  installed: { claude: boolean; codex: boolean };
+};
+export type SeatsSaveError = { ok: false; code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'lead-family' | 'reviewer-same-model'; seat?: string; message: string };
 // Where the Claude Code a session runs was found (claude-runtime/BOUNDARY.md); `fileShown` writes home as ~.
 export type ClaudeVia = 'path' | 'npm' | 'platform-package' | 'local-bin' | 'claude-local' | 'winget' | 'registry-path' | 'system';
 export type ClaudeFound = { version: string | null; via: ClaudeVia; fileShown: string };
@@ -353,6 +371,9 @@ type Bridge = {
   // Copies a folder holding a SKILL.md (chosen in a dialog) into the user's skills; null when cancelled.
   importSkill(scope: 'global' | 'project', projectId: string | null): Promise<Result<SkillInfo | null>>;
   onSkills(callback: (skills: SkillInfo[]) => void): () => void;
+  // The seats of the skill that declares them (null when none does); a null terminal id reads no running session's seats. A save is announced on onSkills.
+  skillSeats(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;
+  setSkillSeats(scope: 'global' | 'project', projectId: string | null, seats: SeatMap): Promise<{ ok: true } | SeatsSaveError>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
   onSubagentFeed(listener: (event: SubagentFeedEvent) => void): () => void;
