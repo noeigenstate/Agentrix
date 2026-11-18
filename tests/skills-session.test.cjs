@@ -73,6 +73,39 @@ test('routing note is optional, current on a new delivery and included in bounde
   assert.equal(instructions, `remote. ${remote.bundle.instructions}`);
 });
 
+test('seat changes reach the next launch while Claude launch/current snapshots stay frozen through compact and clear', async t => {
+  const f = await fixture(t), file = path.join(f.store.builtinDir, 'model-routing', 'SKILL.md');
+  assert.equal(f.store.seatsInfo(f.project.id), null, 'no declaring skill means no chooser');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8'));
+  f.store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } }); f.store.refresh();
+  f.store.seatSession = id => ['terminal', 'next-terminal'].includes(id) ? { projectId: f.project.id, sessionId: id === 'terminal' ? 'running' : 'next' } : null;
+  const choice = model => ({ model, effort: 'high' });
+  const original = f.note('running'), launch = f.delivery('running'), launchBytes = fs.readFileSync(launch.sessionManifest, 'utf8');
+  assert.doesNotMatch(launchBytes, /Agentrix model seats/);
+  assert.deepEqual(f.store.setSeats('global', null, { lookup: choice('sonnet') }), { ok: true });
+  assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.lookup.model, 'haiku');
+  assert.equal(f.store.seatsInfo(null, 'terminal').current.lookup.model, 'haiku');
+  assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
+  assert.equal(fs.readFileSync(launch.sessionManifest, 'utf8'), launchBytes);
+  for (const source of ['compact', 'clear']) {
+    const context = sessionContext({ session_id: 'running-cli', source }, original).hookSpecificOutput.additionalContext;
+    assert.doesNotMatch(context, /Agentrix model seats/);
+  }
+  const nextNote = f.note('next'), next = f.delivery('next');
+  assert.match(fs.readFileSync(next.sessionManifest, 'utf8'), /Agentrix model seats/);
+  assert.match(fs.readFileSync(next.sessionManifest, 'utf8'), /lookup: model sonnet/);
+  const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
+  assert.deepEqual(f.store.setSeats('global', null, { lookup: choice('opus') }), { ok: true });
+  assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.lookup.model, 'sonnet');
+  for (const source of ['compact', 'clear']) {
+    const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
+    assert.match(context, /lookup: model sonnet/); assert.doesNotMatch(context, /lookup: model opus/);
+  }
+  assert.equal(fs.readFileSync(next.sessionManifest, 'utf8'), selectedBytes);
+  assert.match(fs.readFileSync(f.delivery('later').sessionManifest, 'utf8'), /lookup: model opus/);
+});
+
 test('Codex resume keeps the current project manifest across terminal exits and app restarts', async t => {
   const f = await fixture(t), launch = id => f.store.delivery(f.project, false, id, { agent: 'codex', started: true });
   const first = launch('terminal-one'), originalNote = startupNote('Read.', null, null, first);

@@ -7,6 +7,7 @@ const { skillInstructions } = require('./delivery.cjs');
 const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
+const modelSeats = require('./model-seats.cjs');
 const { projectSkillTargets, replaceProjectSkills, projectSkillSignature, linkedSkillParent, extensionBase } = require('./project-skills.cjs');
 const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
 // Closing a library watcher does not end its CLI sessions. Keep their references across store recreation in this process.
@@ -21,8 +22,9 @@ const canonical = file => {
 };
 
 class SkillsStore {
-  constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {} }) {
-    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report });
+  constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {},
+    getModels = () => [], seatSession = () => null, helperPath = '{AGENTRIX_DISPATCH}' }) {
+    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report, getModels, seatSession, helperPath });
     this.globalFolder = path.join(dataDir, 'skills');
     this.optionsFile = path.join(dataDir, 'skills.json');
     this.options = readJson(this.optionsFile, {}, report, value => value && !Array.isArray(value) && typeof value === 'object'
@@ -86,7 +88,8 @@ class SkillsStore {
       const firstRun = this.options[skill.id]?.firstOpenedProjects?.[projectId] === sessionId;
       return { ...skill, firstRun, trigger: skill.trigger === 'first-open' && !firstRun ? 'auto' : skill.trigger };
     });
-    try { writeFile(file, skillInstructions({ ...delivery, skills })); } catch (error) { this.report(error); }
+    const session = this.sessionSnapshot(projectId, sessionId);
+    try { writeFile(file, skillInstructions({ ...delivery, skills, ...(session && Object.hasOwn(session, 'seatsBlock') && { seatsBlock: session.seatsBlock }) })); } catch (error) { this.report(error); }
   }
 
   pruneDeliveryFiles(now = Date.now()) {
@@ -292,6 +295,57 @@ class SkillsStore {
     return this.info(entry);
   }
 
+  sessionSnapshot(projectId, sessionId) {
+    return sessionId ? liveSessionSnapshots.get(JSON.stringify([canonical(this.dataDir), projectId, sessionId])) : null;
+  }
+
+  leadOptions(projectId, agent, explicit = {}) {
+    return modelSeats.leadOptions(this.seatsInfo(projectId)?.effective, agent, explicit);
+  }
+
+  seatsInfo(projectId = null, terminalId = null) {
+    const entry = [...this.entries.values()].find(entry => entry.source === 'builtin' && entry.seats?.length && this.info(entry).enabled);
+    if (!entry) return null;
+    const agents = this.getAgents(), installed = { claude: !!agents.claude?.installed, codex: !!agents.codex?.installed };
+    const stored = this.options[entry.id]?.seats || {};
+    const clean = raw => { try { return modelSeats.cleanSeats(raw || {}, entry.seats); } catch { return {}; } };
+    const global = clean(stored.global), project = projectId && Object.hasOwn(stored.projects || {}, projectId) ? clean(stored.projects[projectId]) : null;
+    const defaults = Object.fromEntries(Object.entries(modelSeats.defaultsFor(installed)).filter(([id]) => entry.seats.includes(id)));
+    const binding = terminalId ? this.seatSession(terminalId) : null;
+    const current = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId)?.seatsMap : null;
+    return { skill: entry.id, seats: [...entry.seats], fresh: [...entry.fresh || []], defaults, global, project,
+      effective: modelSeats.effective(defaults, global, project || {}), current: current ? structuredClone(current) : null,
+      catalog: modelSeats.catalog(installed, this.getModels()), installed };
+  }
+
+  setSeats(scope, projectId, raw) {
+    if (!['global', 'project'].includes(scope) || scope === 'project' && !this.getProjects().some(project => project.id === projectId)) throw new Error('Invalid seat scope or project.');
+    const info = this.seatsInfo(projectId);
+    if (!info) return { ok: false, code: 'unknown-seat', message: 'No enabled skill declares seats.' };
+    const unknown = raw && typeof raw === 'object' && (Object.keys(raw).find(id => !info.seats.includes(id))
+      || raw.lead && typeof raw.lead === 'object' && Object.keys(raw.lead).find(id => !['claude', 'codex'].includes(id)));
+    if (unknown) return { ok: false, code: 'unknown-seat', seat: unknown, message: 'Unknown seat or lead slot.' };
+    let map;
+    try { map = modelSeats.cleanSeats(raw, info.seats); }
+    catch (error) { return { ok: false, code: error.code, ...(error.seat ? { seat: error.seat } : {}), message: error.message }; }
+    const old = this.options[info.skill] || {}, stored = old.seats || {}, projects = { ...stored.projects };
+    const global = scope === 'global' ? map : info.global;
+    if (scope === 'project') {
+      if (Object.keys(map).length) Object.defineProperty(projects, projectId, { value: map, enumerable: true, configurable: true, writable: true });
+      else delete projects[projectId];
+    }
+    // A global save also changes every inherited project; validate all resulting effective choices atomically.
+    for (const override of scope === 'global' ? [{}, ...Object.values(projects)] : [map]) {
+      let clean;
+      try { clean = modelSeats.cleanSeats(override, info.seats); } catch { clean = {}; }
+      const blocked = modelSeats.checkReviewer(modelSeats.effective(info.defaults, global, clean), info.catalog);
+      if (blocked) return blocked;
+    }
+    this.options[info.skill] = { ...old, seats: { global, projects } };
+    this.persistOptions(); this.invalidateDelivery(); this.publish();
+    return { ok: true };
+  }
+
   replace(entry, text, by, project) {
     assertUserSkillName(metadata(text).name, this.builtinNames());
     writeFile(entry.path, text);
@@ -365,6 +419,11 @@ class SkillsStore {
 
   deliveryInfo(project, remote, sessionId, agent) {
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
+    const frozen = this.sessionSnapshot(project.id, sessionId), seats = this.seatsInfo(project.id);
+    const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats?.effective || null;
+    const seatsBlock = frozen && Object.hasOwn(frozen, 'seatsBlock') ? frozen.seatsBlock
+      : seats && (Object.keys(seats.global).length || Object.keys(seats.project || {}).length)
+        ? modelSeats.renderSeats(seatsMap, agent, remote ? '{AGENTRIX_DISPATCH}' : this.helperPath, seats.installed) : '';
     const names = this.builtinNames();
     const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
       && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
@@ -382,7 +441,7 @@ class SkillsStore {
     const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery',
       `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
-      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote };
+      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote, seatsMap, seatsBlock };
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
@@ -393,6 +452,12 @@ class SkillsStore {
     const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote]);
     if (this.deliveries.has(key)) return this.deliveries.get(key);
     const delivery = this.deliveryInfo(project, remote, sessionId, agent), { manifest } = delivery;
+    if (started && sessionId) {
+      const sessionKey = JSON.stringify([canonical(this.dataDir), project.id, sessionId]);
+      let snapshot = liveSessionSnapshots.get(sessionKey);
+      if (!snapshot) { snapshot = { files: new Set() }; liveSessionSnapshots.set(sessionKey, snapshot); }
+      if (!Object.hasOwn(snapshot, 'seatsMap')) Object.assign(snapshot, { seatsMap: structuredClone(delivery.seatsMap), seatsBlock: delivery.seatsBlock });
+    }
     let { skills } = delivery;
     let bundle = null;
     if (remote) {

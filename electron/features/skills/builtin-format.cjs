@@ -15,8 +15,9 @@ function builtinMetadata(text, folder) {
   try { front = frontMatter(text); if (front) skillName(front.fields.name); } catch (error) { fail(error.message); }
   if (!front) fail('expected front matter followed by a body');
   const lines = front.raw.split(/\r?\n/), fields = {};
-  if (lines.length !== KEYS.length) fail('expected exactly seven front matter keys');
-  for (const [index, key] of KEYS.entries()) {
+  const keys = [...KEYS, ...['seats', 'fresh'].filter(key => Object.hasOwn(front.fields, key))];
+  if (lines.length !== keys.length) fail('expected seven required front matter keys and optional seats/fresh');
+  for (const [index, key] of keys.entries()) {
     const match = new RegExp(`^${key}: (\\S(?:.*\\S)?)$`).exec(lines[index]);
     if (!match) fail(`expected a single-line ${key} at position ${index + 1}`);
     const raw = match[1], value = front.fields[key];
@@ -34,6 +35,12 @@ function builtinMetadata(text, folder) {
   if (!TRIGGERS.includes(fields.trigger)) fail('invalid trigger');
   if (!chinese(fields.when) || sentences(fields.when) !== 1) fail('when must be one Chinese sentence');
   if (!REQUIRES.includes(fields.requires)) fail('invalid requires');
+  for (const key of ['seats', 'fresh']) if (Object.hasOwn(fields, key)) {
+    const ids = fields[key].split(',').map(id => id.trim());
+    const allowed = key === 'seats' ? ['lead', 'architect', 'core', 'execution', 'visual', 'lookup', 'reviewer'] : fields.seats || [];
+    if (ids.some(id => !allowed.includes(id)) || new Set(ids).size !== ids.length) fail(`invalid ${key}`);
+    fields[key] = ids;
+  }
 
   // Fenced examples may contain headings; only actual document headings define the format.
   let fence = null;

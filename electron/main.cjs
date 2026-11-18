@@ -206,6 +206,7 @@ let stateTimer;
 let runtimeDir;
 let nativeSessions, claudeRuntime, dispatchControl, controlAddress, terminalInput;
 const nativeSpecs = new Map();
+const seatModelCatalog = new Map();
 const { prepareAskpass, cleanupAskpass } = createSshRuntime({ fs, execFileSync, tempDirectory: () => app.getPath('temp'), integrationDir });
 let zshStartup;
 let shellPathReady = Promise.resolve();
@@ -1080,7 +1081,9 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
   const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
   // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
-  const runOptions = { model: launch?.model || null, effort: launch?.effort || 'high', fast: launch?.fast ?? true,
+  const lead = !providerSessionId ? skills.leadOptions?.(project.id, agent, launch || {}) || launch : launch;
+  const runOptions = { model: lead?.model || null, effort: lead?.effort || 'high', fast: lead?.fast ?? (agent === 'codex'),
+    ...(agent === 'claude' && resume && !providerSessionId ? { seatResumeOptions: { model: launch?.model || null, effort: launch?.effort || 'high', fast: launch?.fast ?? false } } : {}),
     ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
@@ -1201,6 +1204,15 @@ async function initializeNativeSessions() {
           billingPath: 'api', usageRecordId: entry.usageRecordId, costCompleteness: 'estimated', reason: 'exit', exitCode: 0 });
     },
   });
+  const createClaude = claudeRuntime.create;
+  claudeRuntime.create = (spec, emit) => {
+    // Folder history can resolve a resume after nativeSpec. Never apply a new lead model to that resume.
+    if (spec.owner === 'gui' && spec.seatResumeOptions) {
+      if (spec.providerSessionId) Object.assign(spec, spec.seatResumeOptions);
+      delete spec.seatResumeOptions;
+    }
+    return createClaude(spec, emit);
+  };
   // The first look at the CLI (already under way since the app was ready) seeds what later looks compare with.
   checkClaude().catch(() => {});
   const codexFactory = createCodexRuntime({ resolveExecutable: codexExecutable, renderImage: generatedImages.render, settleImage: generatedImages.settle, translate: t,
@@ -1229,6 +1241,12 @@ async function initializeNativeSessions() {
         current: () => evidence.current() && nativeSessions?.getSettings().codexAutoReset === true }) });
   const codex = { create(spec, emit) {
     const runtime = codexFactory.create(spec, emit), start = runtime.start, resume = runtime.resume, close = runtime.close;
+    const models = runtime.models;
+    runtime.models = async () => {
+      const rows = await models();
+      for (const row of rows) seatModelCatalog.set(row.value, row);
+      return rows;
+    };
     let accountBinding, accountWatch;
     const attach = async (open, value) => {
       const result = await open(value);
@@ -1282,7 +1300,7 @@ async function initializeNativeSessions() {
       nativeSpecs.delete(spec.terminalId);
       if (spec.bootstrapFile) removeBootstrap(spec.bootstrapFile);
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
-      launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history), threadId: history?.id || null });
+      launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history, history ? null : skills.leadOptions?.(spec.projectId, spec.agent, spec)), threadId: history?.id || null });
       store.setRestore(spec.terminalId, { nativeTransport: null });
       startTerminal(spec.terminalId, null, true);
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
@@ -1569,7 +1587,7 @@ function registerUnavailableNative(handle) {
     if (options.agent === 'codex') throw new Error('Codex 原生模式连接失败，请重试。');
     if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
-    launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
+    launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history, history ? null : skills.leadOptions?.(project.id, options.agent)), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast();
     return { runtimeSessionId: randomUUID() };
   }
@@ -1686,7 +1704,7 @@ function registerIpc() {
       await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;
     }
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
-    launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });
+    launchPlans.set(id, { agent, command: launchCommand(agent, history, history ? null : skills.leadOptions?.(project.id, agent)), threadId: history?.id || null });
     startTerminal(id, null, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });
@@ -1727,6 +1745,12 @@ if (!app.requestSingleInstanceLock()) {
       }
     }
     skills = new SkillsStore({ dataDir: app.getPath('userData'), builtinDir: app.isPackaged ? path.join(process.resourcesPath, 'skills') : path.join(root, 'resources', 'skills'),
+      getModels: () => [...seatModelCatalog.values()], helperPath: path.join(integrationDir, 'dispatch.cjs'),
+      seatSession: id => {
+        const session = sessions.get(id), spec = nativeSpecs.get(id);
+        return session && session.status !== 'exited' && session.codexActive
+          ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId } : null;
+      },
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
       changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report,
       routingNote: () => routingNote(app.getPath('userData')) });

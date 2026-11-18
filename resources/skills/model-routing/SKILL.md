@@ -6,6 +6,8 @@ when: 新增或修改功能、调试和修复缺陷、改界面、规划、审�
 requires: any-agent
 title: 模型路由
 summary: Opus 规划审架构，Sol 做核心代码，Sonnet 做常规功能并验证界面。Claude 子代理跟随领队的运行方式，Codex 一律原生。
+seats: lead, architect, core, execution, visual, lookup, reviewer
+fresh: visual, reviewer
 ---
 
 # Routing work between models
@@ -83,6 +85,8 @@ and a one-line fix, skips it with a recorded reason).
   fix and the result, with the evidence (tests, CI, review verdicts). A problem still open says so and says what comes next.
 
 ### Model settings
+
+When the startup note carries Agentrix model seats, they replace the Model column of the setup tables for those roles; the rest of this skill still applies, and an instruction in the conversation still wins.
 
 - **GPT models** (Sol and any other `gpt-*`): default `model_reasoning_effort=high` and `service_tier="fast"`.
 - **Claude models** (Opus, Sonnet, Haiku): default effort `high` (`effort: "high"` on an Agent call, `--effort high` for a command-line Claude worker).
