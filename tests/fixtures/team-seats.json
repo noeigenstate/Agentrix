@@ -1,0 +1,387 @@
+{
+  "seats": [
+    "orchestrator",
+    "product",
+    "architect",
+    "designer",
+    "developer",
+    "reviewer",
+    "qa",
+    "researcher",
+    "devops",
+    "security"
+  ],
+  "roles": [
+    {
+      "id": "orchestrator",
+      "name": "总指挥",
+      "duty": "任务调度",
+      "detail": "任务调度、依赖管理、状态追踪、冲突协调",
+      "outputs": "任务图、执行状态"
+    },
+    {
+      "id": "product",
+      "name": "产品",
+      "duty": "需求与规划",
+      "detail": "需求分析、功能定义、优先级",
+      "outputs": "PRD、验收标准"
+    },
+    {
+      "id": "architect",
+      "name": "架构师",
+      "duty": "系统架构",
+      "detail": "架构设计、技术选型、模块拆分",
+      "outputs": "设计文档、接口规范"
+    },
+    {
+      "id": "designer",
+      "name": "设计师",
+      "duty": "交互与视觉",
+      "detail": "用户体验、交互、视觉",
+      "outputs": "界面规范、页面原型"
+    },
+    {
+      "id": "developer",
+      "name": "开发",
+      "duty": "编码与实现",
+      "detail": "编码、功能、缺陷修复",
+      "outputs": "提交、模块"
+    },
+    {
+      "id": "reviewer",
+      "name": "审查",
+      "duty": "独立审查",
+      "detail": "代码与质量审查",
+      "outputs": "审查意见、风险报告"
+    },
+    {
+      "id": "qa",
+      "name": "测试",
+      "duty": "测试验证",
+      "detail": "测试用例、自动化、回归、截图验收",
+      "outputs": "测试报告"
+    },
+    {
+      "id": "researcher",
+      "name": "研究",
+      "duty": "技术研究",
+      "detail": "调研、方案比较、检索",
+      "outputs": "研究报告"
+    },
+    {
+      "id": "devops",
+      "name": "运维",
+      "duty": "构建与交付",
+      "detail": "构建、环境、部署、回滚",
+      "outputs": "构建产物、部署报告"
+    },
+    {
+      "id": "security",
+      "name": "安全",
+      "duty": "安全与权限",
+      "detail": "权限、依赖漏洞、安全审计",
+      "outputs": "安全报告"
+    }
+  ],
+  "defaults": {
+    "orchestrator": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "product": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "architect": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "designer": {
+      "model": "sonnet",
+      "effort": "high"
+    },
+    "developer": {
+      "model": "gpt-6.2-sol",
+      "effort": "high",
+      "fast": true
+    },
+    "reviewer": {
+      "model": "opus",
+      "effort": "high"
+    },
+    "qa": {
+      "model": "sonnet",
+      "effort": "high"
+    },
+    "researcher": {
+      "model": "sonnet",
+      "effort": "high"
+    },
+    "devops": {
+      "model": "gpt-6.2-sol",
+      "effort": "high",
+      "fast": true
+    },
+    "security": {
+      "model": "opus",
+      "effort": "high"
+    }
+  },
+  "catalog": [
+    {
+      "model": "opus",
+      "label": "Opus (follows latest)",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": true,
+      "rank": 3,
+      "available": true,
+      "source": "alias"
+    },
+    {
+      "model": "sonnet",
+      "label": "Sonnet (follows latest)",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 2,
+      "available": true,
+      "source": "alias"
+    },
+    {
+      "model": "haiku",
+      "label": "Haiku (follows latest)",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 1,
+      "available": true,
+      "source": "alias"
+    },
+    {
+      "model": "claude-opus-5[1m]",
+      "label": "Opus",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-fable-5-1[1m]",
+      "label": "Fable",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-sonnet-5[1m]",
+      "label": "Sonnet",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 2,
+      "available": true
+    },
+    {
+      "model": "claude-haiku-4-5[1m]",
+      "label": "Haiku",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 1,
+      "available": true
+    },
+    {
+      "model": "claude-fable-5-1",
+      "label": "claude-fable-5-1",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-opus-5",
+      "label": "claude-opus-5",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-sonnet-5",
+      "label": "claude-sonnet-5",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 2,
+      "available": true
+    },
+    {
+      "model": "claude-fable-5",
+      "label": "claude-fable-5",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-opus-4-8",
+      "label": "claude-opus-4-8",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-opus-4-7",
+      "label": "claude-opus-4-7",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-sonnet-4-6",
+      "label": "claude-sonnet-4-6",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 2,
+      "available": true
+    },
+    {
+      "model": "claude-opus-4-6",
+      "label": "claude-opus-4-6",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-opus-4-5-20251101",
+      "label": "claude-opus-4-5-20251101",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "claude-haiku-4-5-20251001",
+      "label": "claude-haiku-4-5-20251001",
+      "family": "claude",
+      "efforts": ["low", "medium", "high", "xhigh", "max"],
+      "fast": false,
+      "rank": 1,
+      "available": true
+    },
+    {
+      "model": "gpt-6.2-sol",
+      "label": "GPT-6.2-Sol",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-6.2-astra",
+      "label": "GPT-6.2-Astra",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-6.1-terra",
+      "label": "GPT-6.1 Terra",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-6.1-sol",
+      "label": "GPT-6.1-Sol",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-6-astra",
+      "label": "GPT-6-Astra",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-6-sol",
+      "label": "GPT-6-Sol",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-6-luna",
+      "label": "GPT-6-Luna",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-5.6-sol",
+      "label": "GPT-5.6-Sol",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-5.6-terra",
+      "label": "GPT-5.6-Terra",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-5.6-luna",
+      "label": "GPT-5.6-Luna",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    },
+    {
+      "model": "gpt-5.5",
+      "label": "GPT-5.5",
+      "family": "codex",
+      "efforts": ["low", "medium", "high", "xhigh"],
+      "fast": true,
+      "rank": 3,
+      "available": true
+    }
+  ]
+}

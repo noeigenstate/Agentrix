@@ -37,11 +37,17 @@ export type TokenRate = { outputTokens: number; activeMs: number; samples: numbe
 // modelUnconfirmed: the worker has not reported its model yet; model is then the one the lead asked for, or null.
 export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null; preparing: number; starting?: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'starting' | 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
   notice?: 'unconfirmed'; resumed?: boolean; controlFailure?: string;
+  seat?: SeatId; specialty?: string; seatSource?: 'declared' | 'inferred'; worktree?: string;
+  // Availability of the call's artifacts. Main owns their paths.
+  brief?: boolean; log?: boolean;
   // A dispatched worker that ended badly or never confirmed (skills/agent-dispatch): shown in words instead of a plain state.
   failure?: { reason: 'unconfirmed' | 'capacity' | 'killed' | 'error' | 'scope'; exitCode: number | null;
     // scope: files the worker changed outside the paths it was allowed (skills/agent-dispatch, --allow).
     files?: string[] } | null;
   declared?: { model: string; effort: string | null; fast: boolean | null }; }[] };
+export type CallFileResult =
+  | { ok: true; text: string; truncated: boolean }
+  | { ok: false; code: 'unavailable' | 'missing' | 'too-large' | 'refused' };
 // What the owner typed into a sub-agent's split, accepted for delivery (not yet read by the worker).
 export type AgentIntervention = { id: string; callId: string; text: string; at: number; route: 'dispatch' | 'parent'; status: 'queued' | 'delivered' | 'consumed' | 'rejected' | 'unknown'; reason?: string };
 export type AgentUsage = { provider: string | null; context: { used: number; window: number } | null; round: AgentTokens | null; total: AgentTokens | null; limits: { minutes: number | null; percent: number; resetsAt: number | null }[]; limitsAt?: number | null; limitsFrom?: string | null; resets?: { left: number | null; total: number | null } | null; resetQuery?: { state: 'loading' | 'ready' | 'unavailable' | 'error'; reason?: string; at?: number }; calls?: AgentCall[]; model?: string | null; rate?: TokenRate | null };
@@ -125,7 +131,7 @@ export type AppUpdateState = { supported: boolean; currentVersion: string; distr
 // Skills (Settings › 技能). Built-in ones ship with the app and are read-only; the user's own live in Agentrix's data folder
 // (all projects) or in a project's skills/ folder (that project), and agents may refine them as work goes on.
 // id: "builtin:<name>", "user:<name>" or "project:<projectId>:<name>". trigger: always = read before every task; auto = when its description fits;
-// first-open = read and run before the first task of the first session Agentrix starts in a project, then as auto.
+// firstOpenRun also runs an auto skill before the first task of the first session Agentrix starts in a project.
 export type SkillInfo = {
   id: string; name: string; description: string; source: 'builtin' | 'user'; scope: 'builtin' | 'global' | 'project';
   // What the settings page shows: a built-in skill's `title` / `summary` front matter (Chinese, translated through en.json);
@@ -137,7 +143,8 @@ export type SkillInfo = {
   extends: string | null;
   replaced: { project: string; name: string; from: string; backup: string; at: number }[];
   projectId: string | null; projectName: string | null; path: string;
-  enabled: boolean; trigger: 'always' | 'auto' | 'first-open'; autoOptimize: boolean; confirmChanges: boolean;
+  enabled: boolean; trigger: 'always' | 'auto'; firstOpenRun: boolean; autoOptimize: boolean; confirmChanges: boolean;
+  seatSummary?: { seat: SeatId; name: string; model: string; effort: string; fast: boolean }[];
   // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
   // updatedIn and lastUsed.project are project NAMES (for display), never ids.
   version: number; updatedAt: number | null; updatedBy: 'agent' | 'user' | 'app' | null; updatedIn: string | null; createdByAgent: boolean;
@@ -151,11 +158,18 @@ export type SkillInfo = {
 export type SkillVersion = { version: number; at: number; by: 'agent' | 'user' | 'app'; project: string | null; text: string };
 export type SkillDetail = { text: string; versions: SkillVersion[]; pending: string | null };
 export type SkillDraft = { name: string; description: string; scope: 'global' | 'project'; projectId: string | null; text: string };
-export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'autoOptimize' | 'confirmChanges'>>;
-// The model-routing skill's seats: which model each fixed role runs (electron/features/skills/model-seats.cjs); a change takes effect from the next session Agentrix starts.
-export type SeatId = 'lead' | 'architect' | 'core' | 'execution' | 'visual' | 'lookup' | 'reviewer';
-export type Seat = { model: string; effort: string; fast?: boolean };
-export type SeatMap = { lead?: { claude?: Seat; codex?: Seat } } & Partial<Record<Exclude<SeatId, 'lead'>, Seat>>;
+export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'firstOpenRun' | 'autoOptimize' | 'confirmChanges'>>;
+// The model-routing skill declares its roles. Seat changes take effect from the next session Agentrix starts.
+export type SeatId = string;
+export type Seat = {
+  model: string; effort: string; fast?: boolean;
+  /** @deprecated The old dialog uses this on its lead entry. Family lead choices now come from SeatsInfo.leads. */
+  claude?: Seat;
+  /** @deprecated The old dialog uses this on its lead entry. Family lead choices now come from SeatsInfo.leads. */
+  codex?: Seat;
+};
+export type SeatMap = Record<string, Seat>;
+export type SeatRole = { id: SeatId; name: string; duty: string; detail: string; outputs: string };
 export type SeatModel = {
   model: string; label: string; family: 'claude' | 'codex'; efforts: string[]; defaultEffort?: string;
   fast: boolean; fastReason?: 'unsupported' | 'unknown' | 'agent-tool'; rank: 1 | 2 | 3; available: boolean; reason?: string;
@@ -166,6 +180,11 @@ export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsuppo
 export type SeatsInfo = {
   skill: string;
   seats: SeatId[];
+  roles: SeatRole[];
+  lead: SeatId;
+  leadAgent: 'claude' | 'codex' | null;
+  leads: { claude: Seat | null; codex: Seat | null };
+  authors: ['developer'];
   fresh: SeatId[];
   defaults: SeatMap;
   global: SeatMap;
@@ -179,8 +198,11 @@ export type SeatsInfo = {
   catalogAt: { claude: number | null; codex: number | null };
   // Seats whose default moved to a newer model, reported once.
   defaultsMoved?: { seat: string; from: string; to: string }[];
+  migrated?: string;
 };
-export type SeatsSaveError = { ok: false; code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'lead-family' | 'reviewer-same-model'; seat?: string; message: string };
+/** @deprecated The old dialog still validates its two lead slots. */
+type LegacyLeadFamilyCode = 'lead-family';
+export type SeatsSaveError = { ok: false; code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model' | LegacyLeadFamilyCode; seat?: string; message: string };
 // Where the Claude Code a session runs was found (claude-runtime/BOUNDARY.md); `fileShown` writes home as ~.
 export type ClaudeVia = 'path' | 'npm' | 'platform-package' | 'local-bin' | 'claude-local' | 'winget' | 'registry-path' | 'system';
 export type ClaudeFound = { version: string | null; via: ClaudeVia; fileShown: string };
@@ -244,10 +266,18 @@ export type ConnectionTest = {
     reported?: { apiKeySource: string | null; tokenSource: string | null }; detail?: { text: string; values: Record<string, string | number> } };
   path: 'api' | 'terminal' | null; reason: string | null;
 };
-// What the native composer's /model, /effort, /fast and Codex's /permissions read and change. An empty patch changes nothing and answers the
-// current values; a Codex owner session also answers the permissions it runs with, and /permissions is sent alone.
-export type NativeRunOptionsPatch = { model?: string | null; effort?: string | null; fast?: boolean; permissions?: Settings['codexPermissions'] };
+// The native composer can read the current options with an empty patch and change Codex permissions.
+export type NativeRunOptionsPatch = {
+  permissions?: Settings['codexPermissions'];
+  /** @deprecated The old composer still builds model patches. Model follows the routing seats. */
+  model?: string | null;
+  /** @deprecated The old composer still builds effort patches. Effort follows the routing seats. */
+  effort?: string | null;
+  /** @deprecated The old composer still builds fast patches. Fast mode follows the routing seats. */
+  fast?: boolean;
+};
 export type NativeRunOptions = { model: string | null; effort: string | null; fast: boolean; permissions?: Settings['codexPermissions'] };
+/** @deprecated The old composer still uses model menus. Use the routing seats catalog. */
 export type NativeModelOption = { value: string; displayName: string; description: string; efforts: string[] };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; active?: boolean; source: string | null; observedAt: number | null };
 type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & {
@@ -262,8 +292,7 @@ type Bridge = {
     answer(terminalId: string, runtimeSessionId: string, requestId: string, answer: NativeAnswer): Promise<Result<unknown>>;
     snapshot(terminalId: string): Promise<Result<NativeSnapshot | null>>;
     commands(terminalId: string, runtimeSessionId: string): Promise<Result<AgentCommand[]>>;
-    runOptions(terminalId: string, runtimeSessionId: string, patch: NativeRunOptionsPatch): Promise<Result<NativeRunOptions>>;
-    models(terminalId: string, runtimeSessionId: string): Promise<Result<NativeModelOption[]>>;
+    runOptions(terminalId: string, runtimeSessionId: string, patch: Pick<NativeRunOptionsPatch, 'permissions'>): Promise<Result<NativeRunOptions>>;
     newConversation(terminalId: string, runtimeSessionId: string): Promise<Result<{ runtimeSessionId: string }>>;
     shell(terminalId: string, runtimeSessionId: string, clientMessageId: string, command: string): Promise<Result<{ exitCode: number | null }>>;
     onEvent(listener: (event: AgentEvent) => void): () => void;
@@ -389,6 +418,7 @@ type Bridge = {
   setSkillSeats(scope: 'global' | 'project', projectId: string | null, seats: SeatMap): Promise<{ ok: true } | SeatsSaveError>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
+  callFile(terminalId: string, callId: string, kind: 'brief' | 'log'): Promise<CallFileResult>;
   onSubagentFeed(listener: (event: SubagentFeedEvent) => void): () => void;
   interveneAgent(terminalId: string, callId: string, text: string): Promise<Result<AgentIntervention>>;
   stopAgent(terminalId: string, callId: string): Promise<Result<AgentIntervention>>;
