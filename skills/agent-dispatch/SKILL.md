@@ -13,19 +13,21 @@ worker.
 ## Launching
 
 ```
-node "<helper>" codex --role 执行 --title "Fix the cmd prompt reflow" --model gpt-6.1-sol --effort high --fast \
+node "<helper>" codex --detach --role 执行 --title "Fix the cmd prompt reflow" --model gpt-6.1-sol --effort high --fast \
   --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only]   [--allow <glob> …] [--ledger <ledger.md>] [--resume <session id>] \
   [--meeting <id>] [--skip-meeting <reason>]
-node "<helper>" claude --role 审查 --title "Architecture review" --model opus --effort high \
+node "<helper>" claude --detach --role 审查 --title "Architecture review" --model opus --effort high \
   --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md>
 node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
 node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <file.md>
 ```
 
 A Codex worker runs only on `codex app-server`, which the helper starts itself with the declared model, effort, speed, folder and sandbox. If app-server cannot start, the helper fails with the reason on its end line and does not fall back to another way of running Codex. A Claude worker runs through the app's Claude runtime where it is available, else as `claude -p --model … --effort … --permission-mode … --output-format stream-json --verbose`, whose stream the helper reads itself. The helper gives the
-brief to the worker itself, so what is declared is what runs. It exits with the worker's exit code and writes a log next to `--out`
+brief to the worker itself, so what is declared is what runs. Without `--detach`, it exits with the worker's exit code; either mode writes a log next to `--out`
 (`<out>.log`). `--role`: 执行 / exec, 调查 / investigate or 审查 / review (English aliases become the corresponding Chinese
 role in events). `--help` lists all six values. `--title`: one line, what the worker does.
+
+Detached starts return after the start receipt (up to about 60 seconds); if the session is still unknown, the receipt says it follows in `wait`. Start parallel workers with several detached calls, then one `node "<helper>" wait <id-a> <id-b> --cwd <dir>`. `wait` defaults to 540 seconds and refuses timeouts above 570 seconds. Exit 75 means runs remain active: read their last-activity lines and call `wait` again. Exit 0 means all named runs ended; inspect each end line for its worker exit code. `stop <id>` also works for detached runs.
 
 ## Scope, shared context and follow-ups
 
@@ -172,7 +174,7 @@ The handing-back section is always there: findings go to `memory.md`, and to `--
 
 ## Signals to the lead
 
-The lead starts the helper as a background command and learns from its output that the task is really running. The
+The lead starts the helper with `--detach` and reads its start receipt, then calls `node "<helper>" wait <run id> --cwd <dir>` to collect its result. The
 helper prints exactly one start line, then exactly one end line, on its stdout:
 
 ```
@@ -192,14 +194,14 @@ reported, the verdict is `routing unverified`; otherwise matching reported value
 `unreported` in the values and is listed after the verdict, including when another reported value mismatches. It is never
 assumed from the declaration, so verify an unreported setting before relying on it.
 "Started" is printed only from the worker's own records — its session reported (and
-Codex's turn context read from its session file) — within 30 seconds, else "failed to start". While the worker runs, its
+Codex's turn context read from its session file) — within 30 seconds (60 for a detached helper), else "failed to start". While the worker runs, its
 session file is read every 250 ms (today's and yesterday's `sessions/<y>/<m>/<d>` folders directly, so a new file is
 found at once), and a start is reported well within a second of the record. A worker that finishes in a few seconds is
 judged on everything it left: once its output is read (at most 0.5 s after it exits), records that confirm it give
 "started" and then "ended"; an exit without them is "failed to start". The lead reads the start line right after launching (the
-one line it may read from a running background task): on "failed to start" it fixes the brief or relaunches; on a
+receipt printed by the detached start): on "failed to start" it fixes the brief or relaunches; on a
 mismatch it stops the worker and relaunches with the intended settings, or tells the owner why the actual model is
-acceptable. It gets the end line when the background task finishes.
+acceptable. It gets the end line from `wait`.
 
 Both lines carry the model name, effort and mode (`fast on` / `fast off`, Claude's `fast`/`standard` speed when recorded).
 The end line adds the worker's average output rate: output tokens divided by the time its model responses took, from
@@ -253,7 +255,7 @@ and its failed-start/end pair remain separate from the 15-second visibility noti
 
 ## Rules
 
-- Start every command-line Codex or Claude worker through the helper, as a background command; never `codex` or
+- Start every command-line Codex or Claude worker through the helper with `--detach`, followed by `wait`; never `codex` or
   `claude -p` directly.
 - Give every worker that changes files `--allow` for its module, and every task with owner decisions a `--ledger`.
 - In a git repository, hold the roundtable (`--meeting`) before the build, resume the confirmed session with the same

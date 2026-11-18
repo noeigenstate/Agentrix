@@ -53,4 +53,52 @@ class DispatchOutbox {
   }
 }
 
-module.exports = { DispatchOutbox };
+// Detached helpers retain their receipts independently of main's acknowledged event outbox.
+class DetachedRuns {
+  constructor(directory) { this.directory = directory; }
+  file(id) {
+    if (!/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(id)) throw new Error('Expected a run id');
+    return path.join(this.directory, id + '.json');
+  }
+  read(id) {
+    const file = this.file(id), stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error('Unreadable detached run');
+    const entry = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (entry.id !== id) throw new Error('Invalid detached run');
+    return entry;
+  }
+  create(entry) {
+    fs.mkdirSync(this.directory, { recursive: true, mode: 0o700 });
+    if (fs.lstatSync(this.directory).isSymbolicLink()) throw new Error('Unreadable detached directory');
+    fs.writeFileSync(this.file(entry.id), JSON.stringify(entry), { flag: 'wx', mode: 0o600 });
+  }
+  update(id, changes) {
+    const file = this.file(id), temporary = file + '.' + process.pid + '.tmp';
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ ...this.read(id), ...changes }), { flag: 'wx', mode: 0o600 });
+      fs.renameSync(temporary, file);
+    } finally { fs.rmSync(temporary, { force: true }); }
+  }
+  // Watch before reading so an atomic receipt replacement cannot fall between read and subscribe.
+  observe(check, timeout, { watch = fs.watch, schedule = setTimeout, cancel = clearTimeout } = {}) {
+    return new Promise((resolve, reject) => {
+      let watcher, timer, polling, settled = false;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true; watcher?.close(); cancel(timer); clearInterval(polling);
+        if (error) reject(error); else resolve(value);
+      };
+      const inspect = () => { try { const value = check(); if (value !== undefined) finish(null, value); } catch (error) { finish(error); } };
+      try {
+        watcher = watch(this.directory, inspect);
+        watcher.on('error', error => finish(error));
+        timer = schedule(() => { inspect(); finish(null, null); }, timeout);
+        // A killed helper may leave no final filesystem event; periodically probe its liveness too.
+        polling = setInterval(inspect, 1000);
+        inspect();
+      } catch (error) { finish(error); }
+    });
+  }
+}
+
+module.exports = { DispatchOutbox, DetachedRuns };

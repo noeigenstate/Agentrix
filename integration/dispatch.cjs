@@ -5,7 +5,7 @@ const net = require('node:net');
 const { spawn, execFileSync } = require('node:child_process');
 const { randomUUID, createHmac, randomBytes } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
-const { homedir, constants: { signals } } = require('node:os');
+const { homedir, tmpdir, constants: { signals } } = require('node:os');
 const { setImmediate } = require('node:timers');
 
 // Plain Node cannot read app.asar. Packaged and SSH helpers carry these same pure modules beside them.
@@ -27,7 +27,7 @@ const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtim
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { dispatchDirectory } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
-const { DispatchOutbox } = require(outboxFile);
+const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
 const { withShims, runtimeFiles: shimRuntimeFiles } = require(path.join(shimDirectory, 'intercept.cjs'));
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
@@ -65,16 +65,37 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--meeting <id>]        roundtable before work; no file changes and no --read-only
   [--skip-meeting <reason>] execution with --allow may bypass confirmation; the reason is recorded
   [--kind <${TASK_KINDS.join('|')}>] task category for long-term evaluation
+  [--detach]             survive the launching shell; collect results with wait
   Codex: [--fast] [--image <file> ...] [--read-only]
   Claude: --permission <plan|acceptEdits>
 
   node dispatch.cjs minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
   node dispatch.cjs consolidate --cwd <dir> --meeting <id> --summary <file.md> [--incidents <file.json>] [--findings <file.json>]
   node dispatch.cjs stop <run id> [--reason <text>] [--no-resume] [--cwd <dir>]
+  node dispatch.cjs wait <run id> [<run id> ...] [--timeout <seconds>] [--cwd <dir>]
 `;
 
 function argumentsOf(argv) {
   const [agent, ...flags] = argv;
+  if (agent === 'wait') {
+    const options = { agent, ids: [], timeout: 540, cwd: process.cwd() }, seen = new Set();
+    for (let i = 0; i < flags.length; i++) {
+      const flag = flags[i];
+      if (runId(flag)) { if (options.ids.includes(flag)) throw new Error('Repeated run id'); options.ids.push(flag); continue; }
+      if (!['--timeout', '--cwd'].includes(flag) || seen.has(flag)) throw new Error(`Unknown or repeated option ${flag}`);
+      seen.add(flag);
+      const value = flags[++i];
+      if (!value || value.startsWith('--') || !validText(value)) throw new Error(`Expected a value for ${flag}`);
+      if (flag === '--cwd') options.cwd = value;
+      else {
+        if (!/^\d+(?:\.\d+)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > 570) throw new Error('--timeout must be between 0 and 570 seconds');
+        options.timeout = Number(value);
+      }
+    }
+    if (!options.ids.length) throw new Error('Expected at least one run id for wait');
+    options.cwd = path.resolve(options.cwd);
+    return options;
+  }
   if (agent === 'stop') {
     const [id, ...rest] = flags, options = { agent, id, cwd: process.cwd(), noResume: false };
     if (!runId(id)) throw new Error('Expected a run id for stop');
@@ -101,9 +122,9 @@ function argumentsOf(argv) {
   const seen = new Set();
   for (let i = 0; i < flags.length; i++) {
     const flag = flags[i];
-    if (!command && (flag === '--fast' || flag === '--read-only')) {
+    if (!command && (flag === '--fast' || flag === '--read-only' || flag === '--detach')) {
       if (seen.has(flag)) throw new Error(`Repeated option ${flag}`);
-      seen.add(flag); options[flag === '--fast' ? 'fast' : 'readOnly'] = true; continue;
+      seen.add(flag); options[flag === '--fast' ? 'fast' : flag === '--detach' ? 'detach' : 'readOnly'] = true; continue;
     }
     if (!names.has(flag) && (command || flag !== '--image' && flag !== '--allow')) throw new Error(`Unknown option ${flag}`);
     const value = flags[++i];
@@ -529,14 +550,113 @@ function workerInput(event, controls, resumeIds, resumeInputId) {
   return { entryId: `u:${event.itemId}`, inputId, origin: direct ? 'owner' : 'planner', ownerMessageIds };
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable, locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT } = {}) {
+function detachedRuns(cwd, create = false) {
+  const team = projectTeam(cwd, create);
+  // Standalone, non-Git helpers still need receipts that a later invocation can locate.
+  const key = createHmac('sha256', 'agentrix-detached-directory').update(fs.realpathSync(cwd)).digest('hex');
+  return new DetachedRuns(path.join(team?.directory || path.join(tmpdir(), 'agentrix-dispatch', key), 'detached'));
+}
+
+async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch' } = {}) {
+  const options = argumentsOf(argv);
+  store ||= detachedRuns(options.cwd, true);
+  const id = randomUUID(), file = store.file(id);
+  store.create({ id, argv: argv.filter(arg => arg !== '--detach'), source, cwd: options.cwd, out: options.out, createdAt: Date.now() });
+  const descriptor = fs.openSync(file + '.log', 'ax', 0o600);
+  let child;
+  try {
+    // The child repeats the complete normal admission path; no model starts before its gates pass.
+    const script = 'require(process.argv[1]).runDetached(process.argv[2]).then(code => { process.exitCode = code; }).catch(error => { console.error(error.message); process.exitCode = 1; });';
+    child = launch(process.execPath, ['-e', script, __filename, file], {
+      cwd: options.cwd, env, detached: true, windowsHide: true, stdio: ['ignore', descriptor, descriptor],
+    });
+    await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+    child.unref();
+  } catch (error) {
+    store.update(id, { settled: true, exitCode: 1 });
+    stdout.write(`[dispatch] failed to start ${id}: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`);
+    return 1;
+  } finally { fs.closeSync(descriptor); }
+  const entry = await store.observe(() => {
+    const current = store.read(id);
+    return current.startedLine || current.settled ? current : undefined;
+  }, timeout);
+  const current = entry || store.read(id);
+  if (current.startedLine) { stdout.write(current.startedLine + '\n'); return 0; }
+  if (current.settled) {
+    stdout.write((current.failedLine || `[dispatch] failed to start ${id}: helper ended before confirmation`) + '\n');
+    if (current.endedLine) stdout.write(current.endedLine + '\n');
+    return 1;
+  }
+  if (!current.admitted) {
+    child.kill();
+    stdout.write(`[dispatch] failed to start ${id}: admission not confirmed within 60 s\n`);
+    return 1;
+  }
+  stdout.write(`[dispatch] detached ${id} · session follows in wait\n`);
+  return 0;
+}
+
+async function runDetached(file, deps = {}) {
+  const store = new DetachedRuns(path.dirname(file)), id = path.basename(file, '.json'), entry = store.read(id);
+  if (entry.helperPid || entry.settled || !Array.isArray(entry.argv) || entry.argv.includes('--detach')) throw new Error('Invalid detached launch');
+  store.update(id, { helperPid: process.pid });
+  const stdout = { write(text) {
+    process.stdout.write(text);
+    const line = String(text).trimEnd(), changes = { activityAt: Date.now() };
+    if (line.startsWith(`[dispatch] started ${id} `)) changes.startedLine = line;
+    if (line.startsWith(`[dispatch] failed to start ${id}:`)) changes.failedLine = line;
+    if (line.startsWith(`[dispatch] ended ${id} `)) changes.endedLine = line;
+    store.update(id, changes);
+  } };
+  let code = 1;
+  try {
+    code = await run(entry.argv, { ...deps, stdout, source: entry.source, detached: { id, admitted: () => store.update(id, { admitted: true }) }, startTimeout: 60000 });
+    return code;
+  } finally { store.update(id, { settled: true, exitCode: code, activityAt: Date.now() }); }
+}
+
+async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe,
+  alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code !== 'ESRCH'; } } } = {}) {
+  const pending = new Set(options.ids), announced = new Set();
+  const check = () => {
+    for (const id of pending) {
+      const entry = store.read(id);
+      if (entry.startedLine && !announced.has(id)) { stdout.write(entry.startedLine + '\n'); announced.add(id); }
+      const lost = Number.isSafeInteger(entry.helperPid) && entry.helperPid > 0 && !alive(entry.helperPid);
+      if (entry.settled || lost) {
+        if (entry.failedLine && !entry.startedLine) stdout.write(entry.failedLine + '\n');
+        stdout.write((entry.endedLine || `[dispatch] ended ${id} · exit ${entry.exitCode ?? 1} reason error${lost ? ' (helper exited without a final receipt)' : ''}`) + '\n');
+        pending.delete(id);
+      }
+    }
+    return pending.size ? undefined : true;
+  };
+  await (observe || store.observe.bind(store))(check, options.timeout * 1000);
+  if (!pending.size) return 0;
+  for (const id of pending) {
+    const entry = store.read(id);
+    let activity = entry.activityAt || entry.createdAt;
+    try { activity = Math.max(activity, fs.statSync(entry.out + '.log').mtimeMs); } catch {}
+    stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}\n`);
+  }
+  return 75;
+}
+
+async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable, locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT, detached = null } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env, stdout, dispatch: (args, deps) => run(args, { ...deps, launch, resolveExecutable, locate, locateClaude: findClaude, startTimeout, rateInterval, requestTimeout }) });
-  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop'].includes(argv[0]))) {
+  if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'minutes', 'consolidate', 'stop', 'wait'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;
   }
   if (['minutes', 'consolidate', 'stop'].includes(argv[0])) return teamCommand(argv, stdout);
+  if (argv[0] === 'wait' || argv.includes('--detach')) {
+    try {
+      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout });
+      return await startDetached(argv, { env, stdout, launch, source });
+    } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
+  }
   plannerOutput = stdout;
-  const id = randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
+  const id = detached?.id || randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   let workerEnv = workerEnvironment(env);
   let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
@@ -921,6 +1041,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, phase: admission?.phase, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
     await new Promise((resolve, reject) => { log.once('open', resolve); log.once('error', reject); });
+    detached?.admitted();
     async function openControl() {
       if (controlOpening || ending) return;
       controlOpening = true; controlAttemptAt = Date.now();
@@ -1278,4 +1399,4 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 }
 
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
-module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, locateCodex, locateClaude, executable, RATE_INTERVAL };
+module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, RATE_INTERVAL };

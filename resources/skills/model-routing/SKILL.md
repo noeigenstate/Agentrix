@@ -119,10 +119,10 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 | Visual and verification, small tasks | A fresh Sonnet subagent that reads screenshots |
 
 - Sonnet: an Agent call with `model: "sonnet"`, `effort: "high"`, working in worktree B (`isolation: "worktree"` or its path in the brief). The Agent call is the lead's own subagent, so its run mode and billing follow the lead (see Run mode and billing).
-- Sol, as a background command, brief in a file:
+- Sol, started with `--detach`, brief in a file; then use `wait` for its run id:
 
   ```
-  node "<helper>" codex --role <role> --title "<one line>" --model gpt-6.1-sol --effort high --fast --cwd <worktree-a> --brief <prompt.md> --out <out.md>
+  node "<helper>" codex --detach --role <role> --title "<one line>" --model gpt-6.1-sol --effort high --fast --cwd <worktree-a> --brief <prompt.md> --out <out.md>
   ```
 
 - Visual checks, small tasks and UI acceptance go to a Sonnet subagent the same way; UI acceptance by one that did not build the change, given the screenshot paths.
@@ -139,14 +139,14 @@ Check first: `claude --version` and `codex --version` (a startup note may alread
 - Opus, read-only, brief in a file and the answer in a file:
 
   ```
-  node "<helper>" claude --role <role> --title "<one line>" --model opus --effort high --permission plan --cwd <dir> --brief <brief.md> --out <answer.md>
+  node "<helper>" claude --detach --role <role> --title "<one line>" --model opus --effort high --permission plan --cwd <dir> --brief <brief.md> --out <answer.md>
   ```
 
 - A Claude worker started this way follows Claude's run mode in Settings (see Run mode and billing).
 - Sonnet edits files, so point it at worktree B:
 
   ```
-  node "<helper>" claude --role <role> --title "<one line>" --model sonnet --effort high --permission acceptEdits --cwd <worktree-b> --brief <brief.md> --out <report.md>
+  node "<helper>" claude --detach --role <role> --title "<one line>" --model sonnet --effort high --permission acceptEdits --cwd <worktree-b> --brief <brief.md> --out <report.md>
   ```
 
 - Visual checks and UI acceptance: the same Sonnet command, `--permission plan` and the screenshot paths in the brief.
@@ -167,7 +167,7 @@ Every worker is an Agent call with `model` set and `effort: "high"`; worktrees t
 
 #### 4. Codex only
 
-Every worker is a background Codex worker (`node "<helper>" codex --model <model> --effort high --fast --cwd <worktree> …`).
+Every worker is a detached Codex worker (`node "<helper>" codex --detach --model <model> --effort high --fast --cwd <worktree> …`).
 
 | Role | Model |
 | --- | --- |
@@ -239,14 +239,16 @@ worker directly with Claude's non-interactive call, passing the same model, effo
 standard input.
 
 ```
-node "<helper>" codex --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
-node "<helper>" claude --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md> [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
+node "<helper>" codex --detach --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
+node "<helper>" claude --detach --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md> [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
 node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
 node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <summary.md>
 ```
 
+Detached starts return after the start receipt (up to about 60 seconds); if the session is still unknown, the receipt says it follows in `wait`. Start parallel workers with several detached calls, then one `node "<helper>" wait <id-a> <id-b> --cwd <dir>`. `wait` defaults to 540 seconds and refuses timeouts above 570 seconds. Exit 75 means runs remain active: read their last-activity lines and call `wait` again. Exit 0 means all named runs ended; inspect each end line for its worker exit code. `stop <id>` also works for detached runs.
+
 - `--role` says what the worker does (execution, investigation or review; the helper's usage text lists the exact words).
-- Run the helper as a background command. It feeds the brief on stdin, exits with the worker's exit code and writes a log
+- Start the helper with `--detach`, then call `node "<helper>" wait <run id> --cwd <dir>`. It feeds the brief on stdin and writes a log
   next to `--out` (`<out>.log`).
 - Right after launching, read its `[dispatch] started …` line: it confirms the start and names the settings the worker
   reports. `routing ok` means reported values match, not that unverified settings are proven; `routing unverified` means
@@ -300,7 +302,7 @@ no longer open builds.
    impossible as written; write `none` if there are none. For a Claude worker use `--permission plan`:
 
    ```
-   node "<helper>" codex --role <role> --meeting <id> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <plan.md> --out <meeting.md> --allow '<module glob>'
+   node "<helper>" codex --detach --role <role> --meeting <id> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <plan.md> --out <meeting.md> --allow '<module glob>'
    ```
 
 2. **The planner's check.** Check each restatement against what the plan meant. Correct misreadings and answer real ambiguities,
@@ -322,7 +324,7 @@ no longer open builds.
    hold the roundtable with `--meeting <new id>` and the build's `--allow`, then resume that session for the build.
 
    ```
-   node "<helper>" codex --role <role> --meeting <id> --resume <session> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <minutes.md> --out <confirm.md> --allow '<same globs>'
+   node "<helper>" codex --detach --role <role> --meeting <id> --resume <session> --title "<one line>" --model <model> --effort <effort> --fast --cwd <worktree> --brief <minutes.md> --out <confirm.md> --allow '<same globs>'
    ```
 
 4. **The user.** Run `minutes` again after the confirmations and show both tables in your reply and the path of the HTML
@@ -403,7 +405,7 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
 - GPT models default to high effort with fast mode; Claude models default to high effort. Honor the user's chosen settings.
-- Start command-line workers only through the dispatch helper as background commands, read the start line to confirm the launch and routing, and act on `failed to start` or `routing MISMATCH`.
+- Start command-line workers only through the dispatch helper with `--detach`, then collect results with `wait`; read the start line to confirm the launch and routing, and act on `failed to start` or `routing MISMATCH`.
 - Give a worker that changes files `--allow` for its scope and reject any `OUT OF SCOPE` result.
 - Hold the roundtable before the build and consolidate the round after the review; show the user the minutes as tables.
 - Use the one-agent fallback when needed and state unavailable-model substitutions in the plan.

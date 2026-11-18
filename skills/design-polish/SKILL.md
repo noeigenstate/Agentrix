@@ -22,13 +22,15 @@ Write the prompt to a scratch file:
 - Output: `.test-output/<topic>/<n>-<slug>.png`, copied from where the image tool saves them. No other file changes,
   no commit, no app or test run.
 
-Run it in the background through Agentrix's dispatch helper (`skills/agent-dispatch`), with the prompt as the brief and each reference given with `--image`:
+Start it with `--detach` through Agentrix's dispatch helper (`skills/agent-dispatch`), with the prompt as the brief and each reference given with `--image`:
 
 ```
-node "<helper>" codex --role 执行 --title "<element> concepts" --model gpt-6.1-sol --effort high --fast --cwd <repo> --allow ".test-output/**" --image <reference.png> --brief <scratch>/prompt.md --out <scratch>/out.md
+node "<helper>" codex --detach --role 执行 --title "<element> concepts" --model gpt-6.1-sol --effort high --fast --cwd <repo> --allow ".test-output/**" --image <reference.png> --brief <scratch>/prompt.md --out <scratch>/out.md
 ```
 
-It takes about two minutes per image. Keep working on other things meanwhile.
+Collect the result with `node "<helper>" wait <run id> --cwd <repo>`. It takes about two minutes per image. Keep working on other things meanwhile.
+
+Detached starts return after the start receipt (up to about 60 seconds); if the session is still unknown, the receipt says it follows in `wait`. Start parallel workers with several detached calls, then one `node "<helper>" wait <id-a> <id-b> --cwd <dir>`. `wait` defaults to 540 seconds and refuses timeouts above 570 seconds. Exit 75 means runs remain active: read their last-activity lines and call `wait` again. Exit 0 means all named runs ended; inspect each end line for its worker exit code. `stop <id>` also works for detached runs.
 
 ## 3. Let the user choose
 
