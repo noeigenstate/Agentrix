@@ -1343,7 +1343,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const shell = project.kind === 'ssh' ? { kind: 'bash', file: null } : localShell(true), shellKind = shell.kind;
   const bootstrapFile = project.kind !== 'ssh' ? path.join(runtimeDir, `${id}.json`) : null;
   const skillNoteFile = project.kind === 'ssh' ? null : path.join(runtimeDir, `${sessionId}-skills.txt`);
-  let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '');
+  let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '', { allowBackgroundTasks: store.settings.claudeBackgroundTasks });
   // How this terminal's Claude Code reports to main (hook-channel.cjs): HTTP hooks, or command hooks behind a proxy.
   const claudeHookPath = path.join(integrationDir, 'claude-hook.ps1');
   const hooks = bootstrapFile && terminalHooks({ port: hookServer?.port, terminalId: id, sessionKey, eventServer, env, cwd: startPath,

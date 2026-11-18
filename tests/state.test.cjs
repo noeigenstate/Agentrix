@@ -233,7 +233,7 @@ test('legacy theme values fall back to the first theme on load and on settings u
 });
 
 test('settings reject invalid layout and font values', () => {
-  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', uiZoom: null, language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice', updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full' });
+  assert.deepEqual(cleanSettings({ columns: 999, fontSize: -2, notifications: 'yes', sound: false }), { startView: 'decisions', fontSize: 12, terminalFontWeight: 400, terminalFontFamily: '', terminalCjkFontFamily: '', userAvatar: '', focusAnimation: 'smooth', uiZoom: null, language: 'en', theme: 'mono', surface: 'glass', glassBackground: 'theme', glassTransparency: null, terminalRenderer: 'gpu', shortcuts: {}, guideVersion: '', shell: 'powershell', notifications: true, sound: false, closeToTray: true, explorerCollapsed: false, hideTreeNoise: false, restoreSessions: true, autoSave: true, activityPane: true, voiceModel: 'sensevoice', updateChannel: 'stable', betaAgreement: null, codexPermissions: 'full', claudeBackgroundTasks: false });
   // The spoken notice is gone: its old settings are dropped.
   const old = cleanSettings({ announce: true, announcePhrase: '{项目}', summary: { mode: 'local' } });
   assert.equal('announce' in old || 'announcePhrase' in old || 'summary' in old, false);
@@ -457,4 +457,16 @@ test('isolated test profiles default to 100 % zoom, keep an explicit 自动, and
   const run = extra => JSON.parse(execFileSync(process.execPath, ['-e', probe], { env: { ...process.env, AGENTRIX_DATA_DIR: os.tmpdir(), AGENTRIX_TEST_ZOOM: '', ...extra }, encoding: 'utf8' }));
   assert.deepEqual(run({}), [100, null, 100]);
   assert.deepEqual(run({ AGENTRIX_TEST_ZOOM: 'auto' }), [null, null, null]);
+});
+
+test('the Claude Code background-tasks switch is off by default, saved when on and read back, and only true turns it on', () => {
+  for (const value of [undefined, null, '', 'true', 1, {}, false]) assert.equal(cleanSettings({ claudeBackgroundTasks: value }).claudeBackgroundTasks, false, String(value));
+  assert.equal(cleanSettings({ claudeBackgroundTasks: true }).claudeBackgroundTasks, true);
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-nobg-')), 'workspace.json');
+  try {
+    const store = new WorkspaceStore(file);
+    assert.equal(store.settings.claudeBackgroundTasks, false);
+    store.updateSettings({ claudeBackgroundTasks: true });
+    assert.equal(new WorkspaceStore(file).settings.claudeBackgroundTasks, true);
+  } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
 });

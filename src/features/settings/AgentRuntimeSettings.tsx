@@ -2,7 +2,7 @@
 // quota is used up; Codex always on app-server, with nothing to choose. The key is write-only here: it is sent to the main process, the field is
 // emptied, and only "saved or not" ever comes back.
 import { useEffect, useRef, useState } from 'react';
-import { ArrowCounterClockwise, CheckCircle, CircleNotch, Key, PlugsConnected, Robot, Info, ShieldCheck, WarningCircle, XCircle } from '@phosphor-icons/react';
+import { ArrowCounterClockwise, CheckCircle, CircleNotch, Key, PlugsConnected, Robot, Info, ShieldCheck, TreeStructure, WarningCircle, XCircle } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { Select } from '../../shared/Select';
 import type { Settings } from '../../shared/types';
@@ -32,8 +32,9 @@ const waitingOf = (usage: NativeUsage) => (typeof usage.switches?.waiting === 'n
 
 // projectId: the project the owner is working in, whose scope the connection test and the usage numbers are read for.
 // focusOnOpen: the page was opened to deal with the connection (the launcher's incomplete Claude Code): the test button takes the focus, or the key field when no key is saved.
+// claudeBackgroundTasks / onClaudeBackgroundTasks: likewise, the switch that lets Claude Code sessions started afterwards use background tasks.
 // codexPermissions / onCodexPermissions: the window's own setting (not the native session store's), written through the usual settings update.
-export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPermissions, onCodexPermissions }: { projectId?: string; focusOnOpen?: boolean; codexPermissions?: unknown; onCodexPermissions?: (value: CodexPermissions) => void }) {
+export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPermissions, onCodexPermissions, claudeBackgroundTasks, onClaudeBackgroundTasks }: { projectId?: string; focusOnOpen?: boolean; codexPermissions?: unknown; onCodexPermissions?: (value: CodexPermissions) => void; claudeBackgroundTasks?: boolean; onClaudeBackgroundTasks?: (value: boolean) => void }) {
   const bridge = nativeBridge(), revision = useUsageRevision();
   const [settings, setSettings] = useState<NativeSettings | null>(null), [saved, setSaved] = useState<boolean | null>(null);
   const [key, setKey] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null);
@@ -122,6 +123,8 @@ export function AgentRuntimeSettings({ projectId, focusOnOpen = false, codexPerm
       <Select label={t('Codex 权限')} className="runtime-select" value={permission} disabled={!onCodexPermissions} options={permissionOptions.map(({ value, label, hint }) => ({ value, label, description: hint }))} onChange={value => onCodexPermissions?.(codexPermissionOf(value))} /></label>
     <label className="setting-row"><span><ArrowCounterClockwise size={19} /><span><b>{t('额度用完时自动使用重置次数')}</b><small>{t('到达上限时自动用掉 1 次重置，用掉不能撤销')}</small></span></span>
       <input type="checkbox" aria-label={t('额度用完时自动使用重置次数')} checked={settings?.codexAutoReset ?? false} disabled={!settings || busy} onChange={event => void setAutoReset(event.target.checked)} /></label>
+    <label className="setting-row"><span><TreeStructure size={19} /><span><b>{t('允许 Claude Code 后台任务')}</b><small>{t('关闭时，Claude Code 不能把命令或子代理放到后台；并行工作通过子代理进行。下一次启动的会话生效。')}</small></span></span>
+      <input type="checkbox" aria-label={t('允许 Claude Code 后台任务')} checked={claudeBackgroundTasks === true} disabled={!onClaudeBackgroundTasks} onChange={event => onClaudeBackgroundTasks?.(event.target.checked)} /></label>
     {error && <p className="form-error runtime-error" role="alert">{error}</p>}
   </>;
 }

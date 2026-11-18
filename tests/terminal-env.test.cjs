@@ -29,7 +29,7 @@ test('PTYs advertise color support even when launched by a monochrome host', () 
 
 test('Windows environment casing cannot leave duplicate color-disabling variables', () => {
   const env = createTerminalEnvironment({ No_Color: '1', Node_Disable_Colors: '1', Term: 'dumb', ColorTerm: '', CliColor: '0', Force_Color: 'false', AGENTRIX_DATA_DIR: 'test-data', ELECTRON_RUN_AS_NODE: '1' }, 'bootstrap.json');
-  assert.deepEqual(Object.keys(env).sort(), ['CLICOLOR', 'COLORTERM', 'AGENTRIX_BOOTSTRAP', 'TERM', 'TERM_PROGRAM'].sort());
+  assert.deepEqual(Object.keys(env).sort(), ['CLICOLOR', 'COLORTERM', 'AGENTRIX_BOOTSTRAP', 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', 'TERM', 'TERM_PROGRAM'].sort());
 });
 
 test('unrelated environment values and positive color preferences are preserved', () => {
@@ -38,4 +38,30 @@ test('unrelated environment values and positive color preferences are preserved'
   assert.equal(env.LANG, 'zh_CN.UTF-8');
   assert.equal(env.SSH_AUTH_SOCK, 'socket');
   assert.equal(env.AGENTRIX_BOOTSTRAP, 'bootstrap.json');
+});
+
+test('a terminal starts Claude Code without background tasks by default; the Settings switch removes the variable, even an inherited one, and process.env is never changed', () => {
+  const { claudeBackgroundEnvironment } = require('../electron/shared/claude-background.cjs');
+  const name = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', before = process.env[name], source = Object.freeze({ PATH: 'p' });
+  assert.equal(createTerminalEnvironment(source, 'b.json')[name], '1', 'default: off');
+  assert.equal(createTerminalEnvironment(source, 'b.json', { allowBackgroundTasks: false })[name], '1');
+  for (const inherited of [{ [name]: '1' }, { claude_code_disable_background_tasks: '1' }, { [name]: '0' }]) {
+    const on = createTerminalEnvironment({ PATH: 'p', ...inherited }, 'b.json', { allowBackgroundTasks: true });
+    assert.equal(Object.keys(on).some(key => key.toUpperCase() === name), false, JSON.stringify(inherited));
+    assert.equal(on.PATH, 'p');
+    const off = createTerminalEnvironment({ PATH: 'p', ...inherited }, 'b.json');
+    assert.equal(Object.keys(off).filter(key => key.toUpperCase() === name).length, 1, 'one spelling only');
+    assert.equal(off[name], '1');
+  }
+  const input = Object.freeze({ A: '1', [name]: 'keep' });
+  assert.deepEqual(claudeBackgroundEnvironment(input, true), { A: '1' });
+  assert.deepEqual(claudeBackgroundEnvironment(input), { A: '1', [name]: '1' });
+  assert.equal(process.env[name], before, 'process.env untouched');
+});
+
+test('the variable reaches Claude Code workers and native sessions: the dispatch and SDK environments keep it', () => {
+  const name = 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS', terminal = createTerminalEnvironment({ PATH: 'p' }, 'b.json');
+  assert.equal(require('../electron/features/codex-app-server/environment.cjs').workerEnvironment({ ...terminal, AGENTRIX_SDK_PARENT: '1' })[name], '1');
+  assert.equal(require('../electron/features/claude-sdk/credentials.cjs').apiEnvironment(terminal, 'sk-ant-fixture-key-0000', 'dispatch')[name], '1');
+  assert.equal(require('../electron/features/claude-sdk/credentials.cjs').apiEnvironment(terminal, 'sk-ant-fixture-key-0000', 'gui')[name], '1');
 });
