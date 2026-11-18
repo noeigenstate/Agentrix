@@ -162,6 +162,15 @@
 .seats-switch[aria-checked="true"] i { background: var(--bg-selected); border-color: var(--border-hover); }
 .seats-switch[aria-checked="true"] i::before { left: 18px; background: var(--text-1); }
 
+/* 其他模型…, the fast switch's reason, and a model that left the provider's list. */
+.seats-menu-custom { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 4px 0 0; }
+.seats-menu-custom input { flex: 1; min-width: 0; height: 32px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-input); color: var(--text-1); font: inherit; font-size: 13px; }
+.seats-menu-custom input:focus-visible { outline: 2px solid var(--border-hover); outline-offset: 1px; }
+.seats-menu-error { flex-basis: 100%; font-size: 12px; line-height: 16px; color: var(--danger); }
+.seats-menu-note { flex-basis: 100%; font-size: 12px; line-height: 16px; color: var(--text-3); }
+.seats-switch:disabled { color: var(--text-disabled); cursor: not-allowed; }
+.seats-gem small[data-unlisted], .seats-row-model small[data-unlisted], .seats-menu-item small[data-unlisted] { font-style: italic; }
+
 @media (prefers-reduced-motion: reduce) {
   .seats-float, .seats-gem.is-landing, .seats-plate.is-ripple { animation: none; }
   .seats-dialog *, .seats-dialog *::before, .seats-dialog *::after { transition: none !important; }

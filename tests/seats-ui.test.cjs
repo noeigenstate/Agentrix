@@ -6,10 +6,10 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const seatsLib = require('../src/features/agents/skill-seats.ts');
-const { assignModel, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
+const { assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, mergeSeats, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
 
 const en = require('../electron/locales/en.json');
-const additions = path.join(__dirname, '../locale-additions-seats.json');
+const additions = path.join(__dirname, '../locale-additions-cat.json');
 if (fs.existsSync(additions)) Object.assign(en, JSON.parse(fs.readFileSync(additions, 'utf8')));
 
 // ---- fixtures: the catalog and defaults main sends (model-seats.cjs: opus = sol = 3, sonnet 2, haiku 1) ----
@@ -49,10 +49,10 @@ test('the mirror holds a reviewer to the rank rule: refused only while another a
 
 test('the mirror keeps fast to GPT seats, a lead slot to its own family and an effort inside its family', () => {
   const map = clone(DEFAULTS);
-  assert.deepEqual(setFast(map, 'execution', true), { ok: false, reason: 'fast' }, 'fast on a Claude seat is refused');
-  assert.equal(setFast(map, 'core', false).map.core.fast, false);
-  assert.deepEqual(setEffort(map, 'core', 'max'), { ok: false, reason: 'effort' }, 'GPT has no max');
-  assert.equal(setEffort(map, 'architect', 'max').map.architect.effort, 'max');
+  assert.deepEqual(setFast(map, 'execution', true, catalog()), { ok: false, reason: 'fast' }, 'fast on a Claude seat is refused');
+  assert.equal(setFast(map, 'core', false, catalog()).map.core.fast, false);
+  assert.deepEqual(setEffort(map, 'core', 'max', catalog()), { ok: false, reason: 'effort' }, 'GPT has no max');
+  assert.equal(setEffort(map, 'architect', 'max', catalog()).map.architect.effort, 'max');
   assert.deepEqual(assignModel(map, 'lead.codex', 'opus', catalog()), { ok: false, reason: 'family' });
   assert.deepEqual(assignModel(map, 'lead.claude', 'gpt-6.1-sol', catalog()), { ok: false, reason: 'family' });
   assert.deepEqual(swapSlots(map, 'lead.claude', 'lead.codex', catalog()), { ok: false, reason: 'family' }, 'the two lead slots cannot trade');
@@ -164,12 +164,13 @@ const pickButton = (slot) => ({ currentTarget: { getBoundingClientRect: () => ({
 const settle = async () => { for (let turn = 0; turn < 6; turn++) await null; };
 
 function dialogHarness(t, info, props = {}) {
-  const calls = [], closed = [];
-  const api = { setSkillSeats: async (...args) => { calls.push(args); return props.reply ?? { ok: true }; } };
+  const calls = [], closed = [], refreshes = [];
+  const api = { setSkillSeats: async (...args) => { calls.push(args); return props.reply ?? { ok: true }; },
+    skillSeatsRefresh: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; } };
   globalThis.window = { agentrix: api, innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
   globalThis.document = { activeElement: null, elementFromPoint: () => null };
   const h = mount(t, 'SeatsDialog.tsx', 'SeatsDialog', { info, projectId: 'p1', terminalId: 't1', onClose: () => closed.push(true), ...props.dialog });
-  return Object.assign(h, { calls, closed });
+  return Object.assign(h, { calls, closed, refreshes });
 }
 const keyEvent = key => ({ key, stopPropagation() {}, preventDefault() {} });
 
@@ -431,4 +432,139 @@ test('Escape on the discard banner means keep editing and moves focus to it; it 
   const after = h.render();
   assert.equal(find(after, node => node.props.role === 'alertdialog'), undefined, 'the banner is dismissed');
   assert.match(textOf(after), /Unsaved draft · 1 seats changed/, 'the draft is kept');
+});
+
+// ---- catalog-driven dialog (round cat-r1): the menu follows each row, a typed-in id is accepted by the helper's syntax, the lists can be refreshed ----
+const openMenu = (h, slot) => { byAttr(h.render(), 'data-pick', slot).props.onClick(pickButton(slot)); return find(h.render(), node => node.props.role === 'menu'); };
+const optionValues = select => findAll(select, node => node.type === 'option').map(node => node.props.value);
+const assignable = menu => findAll(menu, node => node.props.role === 'menuitemradio').map(node => node.props['data-assign']);
+const liveMenu = h => find(h.render(), node => node.props.role === 'menu');
+const typeCustom = (h, text) => byAttr(liveMenu(h), 'data-custom-input').props.onChange({ target: { value: text } });
+const applyCustom = h => byAttr(liveMenu(h), 'data-custom-apply').props.onClick();
+
+test('the rank rule in the dialog mirrors the shared fixture list that the catalog builder is tested against', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/seat-ranks.json'), 'utf8'));
+  for (const name of ['opus', 'sonnet', 'haiku', 'claude-opus-5-5', 'claude-haiku-5-5', 'gpt-6.1-sol', 'gpt-6.2-sol', 'gpt-6.2-sol-mini', 'gpt-6.1-nano']) assert.ok(fixture.some(entry => entry.model === name), `${name} is in the fixture`);
+  assert.ok(fixture.some(entry => !/opus|sonnet|haiku|sol|nano|mini|lite/.test(entry.model)), 'the fixture holds an unknown id');
+  for (const { model, rank } of fixture) assert.equal(rankByName(model), rank, `${model} ranks ${rank}`);
+  assert.equal(rowFor(catalog(), 'gpt-6.2-sol-mini').rank, 1, 'an id the catalog does not list ranks by the same rule');
+});
+
+test('effort and fast follow the model’s own row: listed efforts, fast only where the row says so, turning fast off always allowed', () => {
+  const rows = catalog({ opus: { fast: true, efforts: ['low', 'high', 'ultra'] }, 'gpt-6.1-sol': { efforts: ['medium', 'high'] } });
+  const map = clone(DEFAULTS);
+  assert.equal(setEffort(map, 'architect', 'ultra', rows).map.architect.effort, 'ultra', 'a level only this row lists is accepted');
+  assert.deepEqual(setEffort(map, 'architect', 'max', rows), { ok: false, reason: 'effort' }, 'a base level the row does not list is refused');
+  assert.deepEqual(setEffort(map, 'core', 'low', rows), { ok: false, reason: 'effort' });
+  assert.equal(setFast(map, 'architect', true, rows).map.architect.fast, true, 'a Claude row that lists fast takes it');
+  assert.deepEqual(setFast(map, 'execution', true, rows), { ok: false, reason: 'fast' });
+  assert.equal(setFast({ ...map, execution: { model: 'sonnet', effort: 'high', fast: true } }, 'execution', false, rows).ok, true, 'a stale fast flag can still be turned off');
+  assert.equal(firstRefusal({ ...map, architect: { model: 'opus', effort: 'ultra', fast: true } }, rows), null);
+  assert.equal(firstRefusal({ ...map, architect: { model: 'opus', effort: 'max' } }, rows).code, 'invalid-effort');
+  assert.equal(firstRefusal({ ...map, core: { model: 'gpt-6.1-sol', effort: 'high', fast: true } }, catalog({ 'gpt-6.1-sol': { fast: false } })).code, 'fast-not-allowed', 'a GPT row without fast refuses it too');
+  assert.equal(assignModel({ ...map, execution: { model: 'sonnet', effort: 'high', fast: true } }, 'execution', 'opus', rows).map.execution.fast, true, 'a Claude seat with fast keeps it into a fast-capable Claude row');
+  assert.equal(assignModel(map, 'execution', 'opus', rows).map.execution.fast, false, 'fast does not start on for Claude');
+  assert.deepEqual(assignModel({ ...map, execution: { model: 'sonnet', effort: 'max' } }, 'execution', 'opus', rows).map.execution, { model: 'opus', effort: 'high', fast: false }, 'an effort the row lacks falls to high');
+});
+
+test('a typed-in model id follows the helper’s syntax, takes its family from the id and keeps lead slots to their family', () => {
+  const map = clone(DEFAULTS), rows = catalog();
+  const taken = assignCustom(map, 'core', 'gpt-6.3-sol', rows);
+  assert.deepEqual(taken.map.core, { model: 'gpt-6.3-sol', effort: 'high', fast: true }, 'an unlisted GPT id gets the Codex base efforts and fast');
+  assert.equal(firstRefusal(taken.map, rows), null, 'and it saves');
+  assert.deepEqual(assignCustom(map, 'execution', 'claude-sonnet-9-9', rows).map.execution, { model: 'claude-sonnet-9-9', effort: 'high' }, 'an unlisted Claude id has no fast');
+  for (const bad of ['-x', '', '--model', 'a b', 'gpt/;x y', 'x'.repeat(161)]) assert.deepEqual(assignCustom(map, 'core', bad, rows), { ok: false, reason: 'invalid-id' }, `${bad.slice(0, 12)} is refused`);
+  assert.equal(assignCustom(map, 'core', 'x'.repeat(160), rows).ok, true, '160 characters is the limit');
+  assert.deepEqual(assignCustom(map, 'lead.codex', 'claude-opus-9', rows), { ok: false, reason: 'family' });
+  assert.deepEqual(assignCustom(map, 'lead.claude', 'gpt-6.3-sol', rows), { ok: false, reason: 'family' });
+  assert.equal(assignCustom(map, 'lead.codex', 'gpt-6.3-sol', rows).map.lead.codex.model, 'gpt-6.3-sol');
+  assert.deepEqual(assignCustom(map, 'core', 'gpt-6.1-sol', rows), { ok: false, reason: 'same' });
+  assert.deepEqual(assignCustom(map, 'execution', 'gpt-6.1-sol', catalog({ 'gpt-6.1-sol': { available: false } })), { ok: false, reason: 'unavailable' }, 'a listed id keeps its row’s availability');
+  assert.equal(setEffort(taken.map, 'core', 'xhigh', rows).ok, true);
+  assert.deepEqual(setEffort(taken.map, 'core', 'max', rows), { ok: false, reason: 'effort' }, 'the base list bounds a typed-in id');
+});
+
+test('the 更换 menu lists the row’s own efforts, switches fast only where the row has it, says why not, and notes Opus fast billing', t => {
+  const rows = catalog({ 'gpt-6.1-sol': { efforts: ['low', 'high', 'ultra'] }, opus: { fast: true }, sonnet: { fastReason: 'unsupported' }, haiku: { fastReason: 'agent-tool' } });
+  const h = dialogHarness(t, seatsInfo({ catalog: rows }));
+  let menu = openMenu(h, 'core');
+  assert.deepEqual(optionValues(byAttr(menu, 'data-effort', 'core')), ['low', 'high', 'ultra'], 'the effort menu is the row’s list');
+  assert.equal(byAttr(menu, 'data-fast', 'core').props.disabled, false);
+  assert.equal(findAll(menu, node => node.props['data-fast-note'] !== undefined).length, 0, 'a GPT fast row has no billing note');
+  menu = openMenu(h, 'architect');
+  assert.equal(byAttr(menu, 'data-fast', 'architect').props.disabled, false, 'Opus lists fast');
+  assert.match(textOf(byAttr(menu, 'data-fast-note')), /billed at a different price \(for example Opus fast\)/);
+  byAttr(menu, 'data-fast', 'architect').props.onClick();
+  assert.equal(byAttr(liveMenu(h), 'data-fast', 'architect').props['aria-checked'], true);
+  menu = openMenu(h, 'execution');
+  assert.equal(byAttr(menu, 'data-fast', 'execution').props.disabled, true, 'Sonnet has no fast');
+  assert.match(textOf(byAttr(menu, 'data-fast-note')), /does not support fast mode/);
+  assert.match(textOf(byAttr(openMenu(h, 'lookup'), 'data-fast-note')), /through the Agent tool/);
+  const unknown = dialogHarness(t, seatsInfo({ catalog: catalog({ sonnet: { fastReason: 'unknown' } }) }));
+  assert.match(textOf(byAttr(openMenu(unknown, 'execution'), 'data-fast-note')), /not known yet/);
+});
+
+test('其他模型… takes an id in the menu: a good id is assigned and saved, a refused one stays in the box with its reason', async t => {
+  const h = dialogHarness(t, seatsInfo());
+  byAttr(openMenu(h, 'core'), 'data-custom').props.onClick();
+  typeCustom(h, '-x'); applyCustom(h);
+  assert.match(textOf(byAttr(liveMenu(h), 'data-custom-error')), /starts with a letter or digit/);
+  assert.equal(h.calls.length, 0);
+  typeCustom(h, 'gpt-6.3-sol'); applyCustom(h);
+  assert.equal(liveMenu(h), undefined, 'the menu closes after an accepted id');
+  const tree = h.render();
+  assert.match(textOf(find(tree, node => node.props.role === 'status')), /gpt-6\.3-sol/);
+  byAttr(tree, 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls, [['global', null, { core: { model: 'gpt-6.3-sol', effort: 'high', fast: true } }]]);
+  // A lead slot refuses the other family and says so.
+  const lead = dialogHarness(t, seatsInfo());
+  byAttr(openMenu(lead, 'lead.codex'), 'data-custom').props.onClick();
+  typeCustom(lead, 'claude-opus-9'); applyCustom(lead);
+  assert.match(textOf(byAttr(liveMenu(lead), 'data-custom-error')), /only takes Codex models/);
+});
+
+test('the refresh button asks main for the seats, shows the new catalog and when each list was read, and says when it fails', async t => {
+  const now = Date.now(), at = { claude: now - 3 * 3600000 - 1000, codex: null };
+  const refreshed = seatsInfo({ catalog: [...catalog(), row('gpt-6.2-sol', 'GPT-6.2-Sol', 'codex', 3)], catalogAt: { claude: now, codex: now - 120000 } });
+  const h = dialogHarness(t, seatsInfo({ catalogAt: at }), { refreshed });
+  let tree = h.render();
+  assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude 3 h ago · Codex not refreshed');
+  byAttr(tree, 'data-refresh').props.onClick();
+  await settle();
+  assert.deepEqual(h.refreshes, [['p1', 't1']]);
+  tree = h.render();
+  assert.equal(textOf(byAttr(tree, 'data-catalog-at')), 'Claude just now · Codex 2 min ago');
+  assert.match(textOf(find(tree, node => node.props.role === 'status')), /Model lists refreshed/);
+  assert.ok(assignable(openMenu(h, 'architect')).includes('gpt-6.2-sol'), 'the new model is offered');
+  const failing = dialogHarness(t, seatsInfo(), { refreshError: 'probe timed out' });
+  byAttr(failing.render(), 'data-refresh').props.onClick();
+  await settle();
+  const after = failing.render();
+  assert.match(textOf(find(after, node => node.props.role === 'status')), /Not refreshed: probe timed out/);
+  assert.equal(byAttr(after, 'data-refresh').props.disabled, false, 'the button is usable again');
+  const none = dialogHarness(t, seatsInfo());
+  byAttr(none.render(), 'data-refresh').props.onClick();
+  await settle();
+  assert.match(textOf(find(none.render(), node => node.props.role === 'status')), /Not refreshed: no seats information/);
+  assert.deepEqual([ageOf(null, now), ageOf(now - 30000, now), ageOf(now - 90 * 60000, now), ageOf(now - 3 * 86400000, now)].map(age => `${age.unit}:${age.count}`), ['never:0', 'now:0', 'hour:1', 'day:3']);
+});
+
+test('issues show on their seat until it is edited, a moved default is said, and a row that left the list is marked', t => {
+  const rows = catalog({ sonnet: { listed: false } });
+  const issues = [{ slot: 'execution', code: 'effort-unsupported', substitute: 'high' }, { slot: 'core', code: 'fast-unsupported', substitute: 'fast off' }, { slot: 'lead.claude', code: 'model-unlisted', substitute: 'opus' }];
+  const h = dialogHarness(t, seatsInfo({ catalog: rows, issues, defaultsMoved: [{ seat: 'core', from: 'gpt-6.1-sol', to: 'gpt-6.2-sol' }] }));
+  let tree = h.render();
+  const marks = findAll(tree, node => node.props.className?.startsWith('seats-state'));
+  assert.deepEqual(marks.map(node => node.props.title), [
+    'Adjusted: this model is not in the current list; it runs as opus', 'Adjusted: this model does not support fast mode; it runs fast off', 'Adjusted: this model does not support the saved effort; it runs high']);
+  assert.equal(issuesOf(seatsInfo({ issues }), 'core').length, 1);
+  assert.match(textOf(byAttr(tree, 'data-moved')), /Defaults moved to Core engineer：GPT-6\.1-Sol → gpt-6\.2-sol/);
+  assert.ok(findAll(tree, node => node.props['data-unlisted'] !== undefined).length >= 1, 'Sonnet is marked as no longer listed');
+  assert.match(textOf(byAttr(openMenu(h, 'execution'), 'data-assign', 'sonnet')), /Not in the latest list/);
+  // Editing the seat makes its saved issue stale: the mark goes.
+  byAttr(liveMenu(h), 'data-effort', 'execution').props.onChange({ target: { value: 'low' } });
+  assert.equal(findAll(h.render(), node => node.props.className?.startsWith('seats-state')).length, 2);
+  // A record without the new fields still renders (an older main).
+  assert.match(textOf(byAttr(dialogHarness(t, seatsInfo()).render(), 'data-catalog-at')), /Claude not refreshed · Codex not refreshed/);
 });
