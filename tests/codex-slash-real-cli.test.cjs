@@ -7,7 +7,7 @@ const { once } = require('node:events');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { createRouter } = require('../electron/features/native-session/router.cjs');
 
-test('real Codex 0.166 native slash controls affect requests, survive resume, and use provider command turns', {
+test('real Codex 0.166 resumes with the launch seat and uses provider command turns', {
   skip: !process.env.AGENTRIX_REAL_CODEX && 'set AGENTRIX_REAL_CODEX to locked 0.166', timeout: 45000,
 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-codex-slash-')), cwd = path.join(root, 'project'), home = path.join(root, 'home');
@@ -39,17 +39,19 @@ test('real Codex 0.166 native slash controls affect requests, survive resume, an
     return child;
   } });
   const create = codex.create;
+  let activeRuntime;
   codex.create = (...args) => {
-    const runtime = create(...args);
+    const runtime = activeRuntime = create(...args);
     for (const name of ['start', 'resume']) {
       const action = runtime[name]; runtime[name] = async (...input) => { try { return await action(...input); } catch (error) { t.diagnostic(JSON.stringify({ stage: error.stage, code: error.code, message: error.message, wire: wire.map(row => row.method) })); throw error; } };
     }
     return runtime;
   };
   const saved = {};
+  let seat = { model: 'gpt-6.1-sol', effort: 'high', fast: false };
   const make = () => {
     const router = createRouter({ codex, claude: { facts: () => [] }, settings: { get: () => ({}) },
-      resolveSpec: () => ({ owner: 'gui', cwd, env, projectId: 'p', terminalId: 't', readOnly: true, policy: { approvalPolicy: 'never' }, providerSessionId: saved.providerSessionId }),
+      resolveSpec: () => ({ owner: 'gui', cwd, env, projectId: 'p', terminalId: 't', readOnly: true, policy: { approvalPolicy: 'never' }, providerSessionId: saved.providerSessionId, ...seat }),
       saveSession: (_id, value) => Object.assign(saved, value), emit: event => events.push(event), terminal() { assert.fail('no terminal fallback'); } });
     routers.push(router); return router;
   };
@@ -63,17 +65,22 @@ test('real Codex 0.166 native slash controls affect requests, survive resume, an
     if (!text.startsWith('/status')) await wait(() => events.filter(row => row.type === 'turn.completed').length > before && router.snapshot('t').state === 'idle');
     return result;
   };
-  const models = await router.models('t', binding.runtimeSessionId); assert.ok(models.some(row => row.value === 'gpt-6-sol'));
+  const models = await activeRuntime.models(); assert.ok(models.some(row => row.value === 'gpt-6-sol'));
   const commands = await router.commands('t', binding.runtimeSessionId);
   for (const name of ['/model', '/effort', '/fast', '/new', '/clear', '/compact', '/review', '/status']) assert.ok(commands.some(row => row.name === name), name);
   const original = saved.providerSessionId;
   await send('Offline warmup establishes durable thread history');
-  const beforeOptions = bodies.length;
-  // The choice is durable even when the app closes before the next model request.
-  await router.runOptions('t', binding.runtimeSessionId, { model: 'gpt-6-sol', effort: 'medium', fast: true });
-  assert.equal(bodies.length, beforeOptions); await router.close(); router = make(); binding = await router.start('t', { agent: 'codex', resume: true });
+  const beforeOptions = [bodies.length, wire.length, events.length];
+  for (const [i, text] of ['/model gpt-6-sol', '/effort medium', '/fast on'].entries()) {
+    await assert.rejects(router.send('t', binding.runtimeSessionId, { clientMessageId: 'route-' + i, text }), { code: 'routing-owned' });
+  }
+  const nextSeat = { model: 'gpt-6-sol', effort: 'medium', fast: true };
+  await assert.rejects(router.runOptions('t', binding.runtimeSessionId, nextSeat), { code: 'routing-owned' });
+  assert.deepEqual([bodies.length, wire.length, events.length], beforeOptions);
+  seat = nextSeat;
+  await router.close(); router = make(); binding = await router.start('t', { agent: 'codex', resume: true });
   assert.equal(saved.providerSessionId, original);
-  assert.deepEqual(await router.runOptions('t', binding.runtimeSessionId, {}), { model: 'gpt-6-sol', effort: 'medium', fast: true });
+  assert.deepEqual(await router.runOptions('t', binding.runtimeSessionId, {}), seat);
   await send('Offline chosen settings');
   assert.equal(bodies.at(-1).model, 'gpt-6-sol'); assert.equal(bodies.at(-1).reasoning.effort, 'medium'); assert.equal(bodies.at(-1).service_tier, 'priority');
   const beforeShell = bodies.length;
@@ -82,8 +89,11 @@ test('real Codex 0.166 native slash controls affect requests, survive resume, an
   await send('Observe previous shell output'); assert.match(JSON.stringify(bodies.at(-1).input), /CODEX_NATIVE_SHELL_PROOF/);
   await send('/compact'); assert.ok(events.some(row => row.type === 'context.compacted' && row.payload.trigger === 'manual'));
   await send('/review'); assert.ok(wire.some(row => row.method === 'review/start' && row.params.target.type === 'uncommittedChanges'));
-  const beforeStatus = bodies.length; await send('/status'); assert.equal(bodies.length, beforeStatus);
-  assert.ok(events.some(row => row.type === 'item.upsert' && row.payload.content?.text?.startsWith('Codex 状态：')));
+  const beforeStatus = bodies.length, beforeStatusEvents = events.length;
+  const status = await send('/status'); assert.equal(bodies.length, beforeStatus);
+  assert.equal(status.local.command, 'status');
+  assert.deepEqual([status.local.session.model, status.local.session.effort, status.local.session.fast], [seat.model, seat.effort, seat.fast]);
+  assert.ok(!events.slice(beforeStatusEvents).some(row => ['item.upsert', 'input.receipt', 'turn.started', 'turn.completed'].includes(row.type)));
   await assert.rejects(router.send('t', binding.runtimeSessionId, { clientMessageId: 'unsupported', text: '/fork' }), /原生模式暂不支持/);
   assert.equal(bodies.length, beforeStatus);
   const fresh = await router.newConversation('t', binding.runtimeSessionId); binding = fresh;

@@ -319,9 +319,11 @@ test('subagent items keep every role and full description newest first, includin
 });
 
 test('a seat prefix survives hook-first delivery, and unlabeled calls use the evidence in priority order', t => {
-  const calls = new AgentCalls({ terminalId: 't', local: false }); t.after(() => calls.dispose());
+  const { seats } = require('./fixtures/team-seats.json');
+  const calls = new AgentCalls({ terminalId: 't', local: false, seatIds: () => seats }); t.after(() => calls.dispose());
   calls.subagent({ kind: 'start', terminalId: 't', agentId: 'child', toolUseId: 'tool', agentType: 'Explore', at: 1000 });
   calls.apply({ ...use('tool', 'Agent', { description: '[designer] Sketch the team view' }), cwd: '/work' });
+  calls.apply(use('unknown', 'Agent', { description: '[new-role/api] Look up the CLI', subagent_type: 'Explore' }));
   calls.apply(use('haiku', 'Agent', { model: 'claude-haiku-5-5', subagent_type: 'Plan' }));
   const expected = [
     ['审查', 'ui-check', 'haiku', undefined, 'reviewer'],
@@ -341,6 +343,9 @@ test('a seat prefix survives hook-first delivery, and unlabeled calls use the ev
   const { title, seat, seatSource, worktree } = rows.get('agent:tool');
   assert.deepEqual({ title, seat, seatSource, worktree }, { title: 'Sketch the team view', seat: 'designer', seatSource: 'declared', worktree: '/work' });
   assert.equal(rows.get('agent:haiku').seat, 'researcher');
+  const unknown = rows.get('agent:unknown');
+  assert.equal(unknown.title, '[new-role/api] Look up the CLI');
+  assert.equal(unknown.seat, 'researcher'); assert.equal(unknown.seatSource, 'inferred'); assert.equal(unknown.specialty, undefined);
   for (const [index, [,,, declared, inferred]] of expected.entries()) {
     const row = rows.get(`dispatch:${index}`);
     assert.equal(row.seat, inferred); assert.equal(row.seatSource, declared ? 'declared' : 'inferred'); assert.equal(row.worktree, '/worktree');
@@ -349,14 +354,16 @@ test('a seat prefix survives hook-first delivery, and unlabeled calls use the ev
 });
 
 test('brief and log reads use only the authenticated call paths and cap UTF-8 text at 256 KiB', async t => {
-  const folder = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-call-files-')));
-  const brief = path.join(folder, 'brief.md'), log = path.join(folder, 'answer.md.log'), out = path.join(folder, 'answer.md');
-  const local = new AgentCalls(), remote = new AgentCalls({ local: false }); t.after(async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-call-files-'));
+  const target = path.join(folder, 'target'), alias = path.join(folder, 'alias');
+  await fs.mkdir(target); await fs.symlink(target, alias, 'junction');
+  const brief = path.join(alias, 'brief.md'), out = path.join(alias, 'answer.md'), log = out + '.log';
+  const { seats } = require('./fixtures/team-seats.json');
+  const local = new AgentCalls({ seatIds: () => seats }), remote = new AgentCalls({ local: false }); t.after(async () => {
     local.dispose(); remote.dispose(); await fs.rm(folder, { recursive: true, force: true });
   });
   await fs.writeFile(brief, 'The recorded brief');
   const prefix = 'x'.repeat(256 * 1024 - 1);
-  await fs.writeFile(log, prefix + '中tail');
   await fs.writeFile(out, 'A separate answer');
   const id = '11111111-1111-4111-8111-111111111111', callId = 'dispatch:' + id;
   const session = { terminalId: 't', sessionKey: 'fixture-key' };
@@ -366,6 +373,7 @@ test('brief and log reads use only the authenticated call paths and cap UTF-8 te
   assert.equal(acceptDispatch(session, { ...start, sessionKey: 'wrong' }, local), false);
   assert.deepEqual(await local.callFile(callId, 'brief'), { ok: false, code: 'unavailable' });
   for (const calls of [local, remote]) assert.equal(acceptDispatch(session, start, calls), true);
+  await fs.writeFile(log, prefix + '中tail');
   const item = local.snapshot()[0].items[0];
   assert.deepEqual([item.brief, item.log, item.seat, item.specialty], [true, true, 'developer', 'backend']);
   assert.doesNotMatch(JSON.stringify(item), /brief\.md|answer\.md/);
@@ -375,9 +383,36 @@ test('brief and log reads use only the authenticated call paths and cap UTF-8 te
   assert.deepEqual(await local.callFile(callId, out), { ok: false, code: 'refused' });
   await fs.unlink(brief);
   assert.deepEqual(await local.callFile(callId, 'brief'), { ok: false, code: 'missing' });
-  const target = path.join(folder, 'target'); await fs.mkdir(target);
-  await fs.symlink(target, brief, 'junction');
+  await fs.symlink(folder, brief, 'junction');
   assert.deepEqual(await local.callFile(callId, 'brief'), { ok: false, code: 'refused' });
+});
+
+test('brief identity and artifact link counts are checked on every read', async t => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-call-identity-'));
+  const calls = new AgentCalls(); t.after(async () => { calls.dispose(); await fs.rm(folder, { recursive: true, force: true }); });
+  const brief = path.join(folder, 'brief.md'), out = path.join(folder, 'answer.md'), log = out + '.log';
+  await fs.writeFile(brief, 'Original'); await fs.writeFile(log, 'Log');
+  const id = '22222222-2222-4222-8222-222222222222', callId = 'dispatch:' + id;
+  const start = { type: 'dispatch-start', id, agent: 'codex', model: 'gpt-6.2-sol', cwd: folder, brief, out, log };
+  assert.equal(calls.dispatch(start), true);
+  const link = path.join(folder, 'other-link');
+  for (const [kind, file] of [['brief', brief], ['log', log]]) {
+    await fs.link(file, link);
+    assert.deepEqual(await calls.callFile(callId, kind), { ok: false, code: 'refused' });
+    await fs.unlink(link);
+  }
+  await fs.rename(brief, path.join(folder, 'original-brief.md'));
+  await fs.writeFile(brief, 'Replacement');
+  assert.deepEqual(await calls.callFile(callId, 'brief'), { ok: false, code: 'refused' });
+});
+
+test('Windows call artifacts reject UNC or namespace paths and alternate data streams', { skip: process.platform !== 'win32' }, async t => {
+  const calls = new AgentCalls(); t.after(() => calls.dispose());
+  const cwd = os.tmpdir(), file = path.join(cwd, 'agentrix-unsupported-artifact'), id = '33333333-3333-4333-8333-333333333333';
+  const out = file + ':fixture';
+  assert.equal(calls.dispatch({ type: 'dispatch-start', id, agent: 'codex', model: 'gpt-6.2-sol', cwd,
+    brief: path.toNamespacedPath(file), out, log: out + '.log' }), true);
+  for (const kind of ['brief', 'log']) assert.deepEqual(await calls.callFile('dispatch:' + id, kind), { ok: false, code: 'refused' });
 });
 
 test('background and foreground subagents start at their first assistant record and leave after review', async t => {

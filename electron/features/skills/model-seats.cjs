@@ -49,6 +49,8 @@ function migrateSeats(raw) {
 function migrateDefaultModels(raw, seatIds) {
   const old = raw || {};
   const remapped = oldRoleValues(old, old['lead.claude'], old['lead.codex']);
+  // Lookup choices migrate, but the Haiku lookup default never belonged to the researcher seat.
+  delete remapped.researcher;
   return Object.fromEntries(seatIds.flatMap(id => typeof (old[id] ?? remapped[id]) === 'string' ? [[id, old[id] ?? remapped[id]]] : []));
 }
 

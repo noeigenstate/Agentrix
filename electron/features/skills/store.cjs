@@ -336,8 +336,11 @@ class SkillsStore {
     return sessionId ? liveSessionSnapshots.get(JSON.stringify([canonical(this.dataDir), projectId, sessionId])) : null;
   }
 
-  leadOptions(projectId, agent) {
-    return this.seatsInfo(projectId)?.leads[agent] ?? null;
+  leadOptions(projectId, agent, { remote = false } = {}) {
+    const info = this.seatsInfo(projectId);
+    if (!info || !remote) return info?.leads[agent] ?? null;
+    // The SSH shell resolves the CLI on its own host.
+    return modelSeats.leadOptions(info.effective, agent, { ...info.installed, [agent]: true }, info.catalog, info.lead);
   }
 
   leadAgent(projectId) { return this.seatsInfo(projectId)?.leadAgent ?? null; }
@@ -356,7 +359,8 @@ class SkillsStore {
     const next = {}, moved = [];
     for (const [id, seat] of Object.entries(info.defaults)) {
       next[id] = seat.model;
-      const from = prior[id] || (/^gpt-\d+(?:\.\d+)?-sol$/.test(seat.model) ? 'gpt-6.1-sol' : seat.model);
+      const oldSolDefault = options.seatDefaultModels === undefined && /^gpt-\d+(?:\.\d+)?-sol$/.test(seat.model);
+      const from = prior[id] || (oldSolDefault ? 'gpt-6.1-sol' : seat.model);
       if (from !== seat.model) moved.push({ seat: id, from, to: seat.model });
     }
     if (migrated || JSON.stringify(prior) !== JSON.stringify(next)) {
@@ -498,6 +502,10 @@ class SkillsStore {
       if (fs.lstatSync(root, { throwIfNoEntry: false })?.isSymbolicLink()) throw new Error('技能目录不能使用符号链接。');
       const file = checkedPath(path.join(root, digest(text).slice(0, 32)), entry.folder);
       if (readText(file) !== text) writeFile(file, text);
+      else {
+        const now = new Date();
+        try { fs.utimesSync(file, now, now); } catch (error) { this.report(error); }
+      }
       try { fs.chmodSync(file, 0o444); } catch { /* A read-only mode is best effort. */ }
       return { path: file, text };
     } catch (error) {

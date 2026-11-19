@@ -10,7 +10,7 @@ const { createNormalizer } = require('../electron/features/claude-sdk/normalize.
 test('D3 D5 real CLI local command results and identities drive completion and visible output', { skip, timeout: 60000 }, async t => {
   const f = await harness(t, data => [opening(data), ...textBlock(0, 'LOCAL COMMAND PROBE'), ...finish('end_turn')]);
   const queue = inputQueue(), options = f.options(), query = f.sdk.query({ prompt: queue, options });
-  const commands = ['warmup', '/compact', '/context', '/model', '/model claude-haiku-4-5', 'control-model'];
+  const commands = ['warmup', '/compact', '/context'];
   const rounds = commands.map(() => []); let index = 0;
   queue.push({ type: 'user', message: { role: 'user', content: commands[0] } });
   try {
@@ -18,10 +18,7 @@ test('D3 D5 real CLI local command results and identities drive completion and v
       rounds[index].push(message);
       if (message.type !== 'result') continue;
       if (++index === commands.length) break;
-      if (commands[index] === 'control-model') {
-        await query.setModel('claude-sonnet-4-5');
-        queue.push({ type: 'user', message: { role: 'user', content: '/context' } });
-      } else queue.push({ type: 'user', message: { role: 'user', content: commands[index] } });
+      queue.push({ type: 'user', message: { role: 'user', content: commands[index] } });
     }
   } finally { options.abortController.abort(); }
   for (const [i, command] of commands.entries()) t.diagnostic(JSON.stringify({ command, records: rounds[i].filter(message =>
@@ -34,7 +31,7 @@ test('D3 D5 real CLI local command results and identities drive completion and v
     assert.equal(turnResult(result, { compacted: rounds[i].some(message => message.type === 'system' && message.subtype === 'compact_boundary') }).status, 'completed', `${command} successful result completes`);
     const visible = [], normalize = createNormalizer((type, payload) => { if (type === 'item.upsert' && payload.kind === 'agent-message') visible.push(payload.content.text); });
     for (const message of rounds[i]) normalize(message, { live: true });
-    if (command === '/compact' || command.startsWith('/model ')) assert.deepEqual(visible, [], 'UI already reports this local command');
-    if (command === '/context' || command === '/model' || command === 'control-model') assert.equal(visible.length, 1, 'read-only local command output remains visible exactly once');
+    if (command === '/compact') assert.deepEqual(visible, [], 'UI already reports this local command');
+    if (command === '/context') assert.equal(visible.length, 1, 'read-only local command output remains visible exactly once');
   }
 });

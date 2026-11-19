@@ -124,7 +124,7 @@ test('v1 migration preserves stored choices for downgrades, survives corruption 
     projects: { p1: { architect: choice('sonnet'), lookup: choice('bad model') } } };
   const id = 'builtin:model-routing';
   const { store, options } = fixture(t, ({ dataDir }) => put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: {
-    seats: stored, seatDefaultModels: { 'lead.claude': 'opus', 'lead.codex': 'gpt-6.1-sol', visual: 'sonnet' },
+    seats: stored, seatDefaultModels: { 'lead.claude': 'opus', 'lead.codex': 'gpt-6.1-sol', visual: 'sonnet', lookup: 'haiku' },
   } })));
   const info = store.seatsInfo('p1'), good = { researcher: choice('sonnet'), orchestrator: choice('opus', 'max') };
   assert.deepEqual(info.global, good);
@@ -134,7 +134,13 @@ test('v1 migration preserves stored choices for downgrades, survives corruption 
   assert.deepEqual(info.authors, ['developer']); assert.equal(info.roles[0].name, '总指挥');
   assert.deepEqual(store.options[id].seatDefaultModels, { orchestrator: 'opus', designer: 'sonnet', qa: 'sonnet' });
   assert.equal(info.migrated, undefined);
-  assert.match((await store.refreshSeats('p1', null, 'dialog')).migrated, /Claude.*opus.*Codex.*gpt-6\.1-sol/);
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  store.modelCatalog.probes.codex = async () => [{ model: 'gpt-6.2-sol' }];
+  const refreshed = await store.refreshSeats('p1', null, 'dialog');
+  assert.match(refreshed.migrated, /Claude.*opus.*Codex.*gpt-6\.1-sol/);
+  assert.equal(refreshed.defaults.researcher.model, 'sonnet');
+  assert.equal(refreshed.defaults.devops.model, 'gpt-6.2-sol');
+  assert.equal(refreshed.defaultsMoved, undefined);
   assert.deepEqual(store.setSeats('project', 'p2', { designer: choice('opus') }), { ok: true });
   const persisted = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))[id];
   assert.deepEqual(persisted.seats, stored);
@@ -245,6 +251,9 @@ test('a catalog-validated Claude fast orchestrator supplies the same three value
   const file = path.join(dataDir, 'bootstrap.json');
   writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead: store.leadOptions('p1', 'claude') });
   assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-6-0\nadaptive\n1\n');
+  store.getAgents = () => ({ claude: { installed: false }, codex: { installed: true } });
+  assert.equal(store.leadOptions('p1', 'claude'), null);
+  assert.deepEqual(store.leadOptions('ssh', 'claude', { remote: true }), { model: 'claude-opus-6-0', effort: 'adaptive', fast: true });
 });
 
 test('shipped code standard stays always and marks only the first agent session locally and over SSH', t => {

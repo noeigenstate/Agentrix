@@ -61,14 +61,22 @@ test('real worker context differs from GUI only by the admitted owner capability
   require('./fixtures/claude-parity.cjs').compareSystem(requests[0].system, requests[1].system, { sdkOwner: 'dispatch', tuiOwner: 'gui' });
 });
 
-test('real CLI refuses SDK fast mode and the native setter cannot claim it enabled', { skip, timeout: 60000 }, async t => {
-  const messages = [];
+test('real Claude SDK receives fast mode from the launch seat and refuses live changes', { skip, timeout: 60000 }, async t => {
+  const launches = [];
   const f = await harness(t, data => [opening(data), ...textBlock(0, 'ACK'), ...finish('end_turn')]);
-  await f.run({}, message => messages.push(message), {}, '/fast on');
-  assert.match(JSON.stringify(messages), /Fast mode is not available in the Agent SDK/);
-  const session = product(t, f, () => {}); await session.start();
-  await assert.rejects(session.runOptions({ fast: true }), /Claude Agent SDK 目前不支持快速模式/);
-  assert.equal((await session.runOptions({})).fast, false);
+  const sdk = { ...f.sdk, query(input) {
+    const { model, effort, settings } = input.options;
+    launches.push({ model, effort, fast: JSON.parse(fs.readFileSync(settings, 'utf8')).fastMode });
+    return f.sdk.query(input);
+  } };
+  const seat = { model: 'claude-opus-4-6', effort: 'high', fast: true };
+  const session = product(t, { ...f, sdk }, () => {}, seat); await session.start();
+  await assert.rejects(session.runOptions({ fast: false }), { code: 'routing-owned' });
+  await assert.rejects(session.send({ clientMessageId: 'change-fast', text: '/fast off' }), { code: 'routing-owned' });
+  assert.deepEqual(launches, []);
+  assert.equal((await session.runOptions({})).fast, true);
+  await session.models();
+  assert.deepEqual(launches, [seat]);
 });
 
 test('worker policy deny dominates loaded project allow hooks and permissions', { skip, timeout: 60000 }, async t => {
@@ -91,15 +99,14 @@ test('worker policy deny dominates loaded project allow hooks and permissions', 
   assert.doesNotMatch(system, /suggest they type `! <command>`|The fork subagent runs in the background, so you can keep chatting/);
 });
 
-test('real host shell keeps keys out, preserves CLI context wrappers and renews acknowledged options', { skip, timeout: 60000 }, async t => {
+test('real host shell keeps keys out and preserves CLI context wrappers and the launch seat', { skip, timeout: 60000 }, async t => {
   const requests = [], events = [];
   const f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'ACK'), ...finish('end_turn')]; });
   configureBash(f);
-  const session = product(t, f, event => events.push(event)); await session.start();
+  const seat = { model: 'claude-opus-4-6', effort: 'low', fast: false };
+  const session = product(t, f, event => events.push(event), seat); await session.start();
   assert.equal((await session.runOptions({})).model, null);
   assert.equal(requests.length, 0);
-  await assert.rejects(session.runOptions({ fast: true }), /Claude Agent SDK 目前不支持快速模式/);
-  assert.equal((await session.runOptions({})).fast, false);
   const command = 'printf "SHELL_SAFE:%s:%s:%s" "${ANTHROPIC_API_KEY-unset}" "${ANTHROPIC_AUTH_TOKEN-unset}" "${OPENAI_API_KEY-unset}"';
   assert.deepEqual(await session.shell('shell-proof', command), { exitCode: 0 });
   assert.deepEqual(await session.shell('shell-proof', command), { exitCode: 0 });
@@ -126,20 +133,18 @@ test('real host shell keeps keys out, preserves CLI context wrappers and renews 
   const record = records.find(row => row.type === 'user' && JSON.stringify(row.message?.content).includes('AFTER_SHELL'));
   assert.ok(record); rememberClaudeSource(record.sessionId, 'gui');
   assert.equal(promptText(record.message.content, record).trim(), 'AFTER_SHELL');
-  const options = await session.runOptions({ model: 'claude-opus-4-6', effort: 'low', fast: false });
-  assert.match(options.model, /opus/); assert.equal(options.effort, 'low');
-  await session.send({ clientMessageId: 'renewed-owner', text: 'RENEWED' });
-  await until(() => session.snapshot().state === 'idle' && requests.length > 2);
-  assert.match(requests.at(-1).model, /opus/);
-  assert.equal(requests.at(-1).output_config?.effort, 'low');
+  const beforeRefusals = requests.length;
+  await assert.rejects(session.runOptions({ model: 'claude-sonnet-4-5', effort: 'high', fast: true }), { code: 'routing-owned' });
+  await assert.rejects(session.send({ clientMessageId: 'change-effort', text: '/effort high' }), { code: 'routing-owned' });
+  assert.equal(requests.length, beforeRefusals);
+  await session.send({ clientMessageId: 'continue-owner', text: 'CONTINUE' });
+  await until(() => session.snapshot().state === 'idle' && requests.length > beforeRefusals);
+  assert.equal(requests.at(-1).model, seat.model);
+  assert.equal(requests.at(-1).output_config?.effort, seat.effort);
   assert.doesNotMatch(JSON.stringify(requests.at(-1).messages.at(-1)), /SHELL_SAFE/);
+  assert.deepEqual(await session.runOptions({}), seat);
   const models = await session.models();
-  assert.ok(models.some(model => model.value === options.model), 'catalog values use the same resolved id as the observed model');
-  const defaults = await session.runOptions({ model: null });
-  assert.notEqual(defaults.model, options.model);
-  await session.send({ clientMessageId: 'default-owner', text: 'DEFAULT_AGAIN' });
-  await until(() => session.snapshot().state === 'idle' && requests.length > 3);
-  assert.equal(requests.at(-1).model, defaults.model);
+  assert.ok(models.some(model => model.value === seat.model), 'catalog values use the same resolved id as the observed model');
 });
 
 test('automatic compaction records real CLI thresholds and decision evidence offline', { skip, timeout: 60000 }, async t => {

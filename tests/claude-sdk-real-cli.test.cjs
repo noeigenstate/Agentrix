@@ -96,8 +96,9 @@ for (const [command, expected, marker] of [
   ['/compact', null, null], ['/context', null, null],
   ['/offline-command ARG', /NATIVE SLASH ANSWER/, 'CUSTOM_COMMAND_MARKER ARG'],
   ['/offline-skill', /NATIVE SLASH ANSWER/, 'SKILL_COMMAND_MARKER'],
-  ['/model', /Current model/, null], ['/model claude-haiku-4-5', null, null],
-]) test(`native slash ${command} has real CLI feedback and a lazy command list`, { skip, timeout: 60000 }, async t => {
+  ['/model', null, null], ['/model claude-haiku-4-5', null, null],
+]) test(command.startsWith('/model') ? `native slash ${command} is refused and the launch seat survives renewal`
+  : `native slash ${command} has real CLI feedback and a lazy command list`, { skip, timeout: 60000 }, async t => {
   const bodies = [];
   const f = await harness(t, data => { bodies.push(data); return [opening(data), ...textBlock(0, 'NATIVE SLASH ANSWER'), ...finish('end_turn')]; });
   fs.mkdirSync(path.join(f.cwd, '.claude/commands'), { recursive: true });
@@ -120,13 +121,13 @@ for (const [command, expected, marker] of [
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() },
   });
   f.cleanup(() => runtime.close()); runtime.credentials.save('sk-ant-offline-native-slash-fixture');
-  const spec = { owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: randomUUID(), model: 'claude-sonnet-4-5',
-    ...(command.startsWith('/model ') ? { monthlyBudgetUsd: 10 } : {}) };
+  const spec = { owner: 'gui', cwd: f.cwd, env: f.env, runtimeSessionId: randomUUID(), model: 'claude-sonnet-4-5' };
   const events = [], session = runtime.create(spec, event => events.push(event));
   await session.start();
   const fallback = await require('../electron/agent-commands.cjs').listAgentCommands({ agent: 'claude', projectPath: f.cwd, home: f.env.HOME, claudeHome: f.env.CLAUDE_CONFIG_DIR });
   const lazy = await session.commands(fallback);
   assert.ok(lazy.some(row => row.name === '/offline-command'));
+  if (command.startsWith('/model')) await assert.rejects(session.send({ clientMessageId: 'before-init', text: command }), { code: 'routing-owned' });
   assert.equal(queries, 0); assert.equal(bodies.length, 0);
   const wait = async count => {
     for (let n = 0; n < 500; n++) {
@@ -140,6 +141,18 @@ for (const [command, expected, marker] of [
   assert.equal(listed.some(row => row.name === command.split(' ')[0]), true);
   assert.ok(!listed.some(row => ['/doctor', '/color', '/focus', '/reload-plugins'].includes(row.name)));
   const start = events.length, previousRequests = bodies.length;
+  if (command.startsWith('/model')) {
+    await assert.rejects(session.send({ clientMessageId: 'after-init', text: command }), { code: 'routing-owned' });
+    await assert.rejects(session.runOptions({ model: 'claude-haiku-4-5' }), { code: 'routing-owned' });
+    assert.deepEqual([events.length, bodies.length, queries], [start, previousRequests, 1]);
+    assert.equal(bodies.at(-1).model, spec.model);
+    runtime.credentials.save(f.env.ANTHROPIC_API_KEY);
+    await session.send({ clientMessageId: 'renewed-seat', text: 'Check after credential renewal' }); await wait(2);
+    assert.equal(queries, 2);
+    assert.equal(bodies.at(-1).model, spec.model);
+    assert.equal((await session.runOptions({})).model, spec.model);
+    return;
+  }
   if (command === '/context') {
     // /context and /status are read-only questions: the session answers them in the send receipt from the real CLI's own getContextUsage() and the first
     // message of its stream. They are no turn, no item and no request to the model. What the answer is read from is checked here against what the real CLI
@@ -172,20 +185,6 @@ for (const [command, expected, marker] of [
   else assert.equal(visible, '', 'GUI mutations use their native acknowledgements instead of CLI local stdout');
   assert.doesNotMatch(visible, /local-command-stdout|system-reminder/);
   if (marker) assert.ok(JSON.stringify(bodies.slice(previousRequests)).includes(marker));
-  if (command === '/model') assert.equal(bodies.length, previousRequests);
-  if (command.startsWith('/model ')) {
-    await session.send({ clientMessageId: 'check-model', text: 'Check the chosen model' }); await wait(3);
-    assert.equal(queries, 1, 'normal consumption keeps the same CLI query alive');
-    assert.equal(bodies.at(-1).model, 'claude-haiku-4-5', 'raw slash input retains the model the CLI selected');
-    assert.equal((await session.runOptions({})).model, 'claude-haiku-4-5', 'host observations follow the CLI model');
-    runtime.credentials.save(f.env.ANTHROPIC_API_KEY); // A key refresh renews at the next explicit input boundary.
-    await session.send({ clientMessageId: 'check-renewed-model', text: 'Check after credential renewal' }); await wait(4);
-    assert.equal(queries, 2); assert.equal(bodies.at(-1).model, 'claude-haiku-4-5', 'credential renewal cannot undo the CLI model choice');
-    await session.runOptions({ model: 'claude-sonnet-4-5' });
-    runtime.credentials.save(f.env.ANTHROPIC_API_KEY);
-    await session.send({ clientMessageId: 'check-gui-model', text: 'Check the native model control' }); await wait(5);
-    assert.equal(queries, 3); assert.equal(bodies.at(-1).model, 'claude-sonnet-4-5', 'the GUI control can still change and retain the model');
-  }
   if (command === '/compact') {
     const notices = events.slice(start);
     assert.ok(notices.some(event => event.type === 'context.compacting' && event.payload.active));

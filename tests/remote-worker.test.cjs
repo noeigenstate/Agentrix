@@ -6,6 +6,14 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
 
+function pythonProbe(t, script) {
+  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
+    path.join(__dirname, '../integration/remote-worker.py')], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+  if (result.error?.code === 'ENOENT') { t.skip('Python missing'); return null; }
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  return result.stdout;
+}
+
 test('remote policy write failure replies without closing the channel; Bash launches a stand-in in both switch directions', t => {
   const script = String.raw`
 import ast, os, pathlib, shutil, subprocess, sys, tempfile, types
@@ -51,15 +59,38 @@ with tempfile.TemporaryDirectory(prefix='remote-nobg-') as directory:
     assert result.stdout.splitlines() == ['1','unset','1'], (result.stdout, result.stderr)
 print('remote policy and stand-in Bash OK')
 `;
-  const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
-    path.join(__dirname, '../integration/remote-worker.py')], { encoding: 'utf8', timeout: 20000, windowsHide: true });
-  if (result.error?.code === 'ENOENT') { t.skip('Python missing'); return; }
-  assert.equal(result.status, 0, result.stderr || result.error?.message);
-  if (result.stdout.includes('SKIP Bash Windows')) t.diagnostic('Bash stand-in skipped on Windows: the remote worker runs only on POSIX hosts; policy error and recovery assertions passed');
-  if (result.stdout.includes('SKIP Bash missing')) t.diagnostic('Bash missing: policy operation tested; shell check skipped');
+  const output = pythonProbe(t, script);
+  if (output?.includes('SKIP Bash Windows')) t.diagnostic('Bash stand-in skipped on Windows: the remote worker runs only on POSIX hosts; policy error and recovery assertions passed');
+  if (output?.includes('SKIP Bash missing')) t.diagnostic('Bash missing: policy operation tested; shell check skipped');
 });
 
-test('SSH open carries the switch and later changes use the remote control message', async t => {
+test('the SSH worker replaces a complete Claude lead seat and retains it after invalid updates', t => {
+  pythonProbe(t, String.raw`
+import pathlib, runpy, sys, tempfile
+module = runpy.run_path(sys.argv[1])
+messages = []
+connection = module['Channel'](1, messages.append)
+with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
+    connection.worker.temp = directory
+    file = pathlib.Path(directory) / 'claude-lead'
+    first = {'model':'claude-opus-5-5[1m]', 'effort':'high', 'fast':True}
+    current = {'model':'sonnet', 'effort':'medium'}
+    connection.worker.write_claude_lead(first)
+    assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\n'
+    def update(lead, ok):
+        connection.receive({'op':'claude-lead', 'id':len(messages)+1, 'claudeLead':lead})
+        assert messages[-1]['type'] == 'response' and messages[-1]['ok'] is ok, messages
+    update(current, True)
+    for bad in [dict(current, model='bad&model'), dict(current, model='x'*161), dict(current, effort='High'),
+                dict(current, effort='x'*33), dict(current, fast='true')]:
+        update(bad, False)
+        assert file.read_bytes() == b'sonnet\nmedium\n0\n'
+    update(None, True)
+    assert file.read_bytes() == b''
+`);
+});
+
+test('SSH open carries the background switch and Claude seat, and changes use separate control messages', async t => {
   const filename = path.join(__dirname, '../electron/remote-connection.cjs'), native = createRequire(filename);
   for (const allow of [false, true]) {
     const module = { exports: {} }, sent = [];
@@ -71,13 +102,19 @@ test('SSH open carries the switch and later changes use the remote control messa
       module, testLink: link, require: name => name.endsWith('dispatch.cjs') ? { runtimeFiles: () => ({}) } : native(name),
       process, Buffer, setInterval, clearInterval, setTimeout, clearTimeout,
     });
+    const claudeLead = allow ? { model: 'opus', effort: 'high', fast: true } : null;
     remote = new module.exports.RemoteConnection({ path: '/fixture', id: 'fixture', ssh: {} }, {
-      auth: {}, integrationDir: path.join(__dirname, '../integration'), allowBackgroundTasks: allow });
+      auth: {}, integrationDir: path.join(__dirname, '../integration'), allowBackgroundTasks: allow, claudeLead });
     t.after(() => remote.close());
     assert.equal(sent[0].allowBackgroundTasks, allow);
+    assert.deepEqual(sent[0].claudeLead, claudeLead);
     remote.receive({ type: 'ready', info: { root: '/fixture', cwd: '/fixture' } });
     await remote.setBackgroundTasks(!allow);
     assert.equal(sent[1].op, 'claude-background');
     assert.equal(sent[1].allow, !allow);
+    const nextLead = { model: 'sonnet', effort: 'low', fast: false };
+    await remote.setClaudeLead(nextLead);
+    assert.equal(sent[2].op, 'claude-lead');
+    assert.deepEqual(sent[2].claudeLead, nextLead);
   }
 });

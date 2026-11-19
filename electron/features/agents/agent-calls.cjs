@@ -1,4 +1,5 @@
 const fs = require('node:fs/promises');
+const { lstatSync, realpathSync } = require('node:fs');
 const { StringDecoder } = require('node:string_decoder');
 const path = require('node:path');
 const { claudePrompt, TranscriptTail } = require('../../agent-actions.cjs');
@@ -20,7 +21,27 @@ const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/, REMOTE_FOLLOWS = 16;
 const RECENT_KEEP = 10, RECENT_AGE_MS = 30 * 60 * 1000;
 const TOOL_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const CALL_FILE_LIMIT = 256 * 1024;
-const sameFile = (left, right) => right.isFile() && left.dev === right.dev && left.ino === right.ino;
+const regularArtifact = stat => stat.isFile() && stat.nlink === 1n;
+const sameFile = (left, right) => regularArtifact(right) && left.dev === right.dev && left.ino === right.ino;
+const artifactError = error => error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 'missing' : error.code === 'EFBIG' ? 'too-large' : 'refused';
+
+function localArtifactPath(filename) {
+  return typeof filename === 'string' && path.isAbsolute(filename) && (process.platform !== 'win32' ||
+    !/^[\\/]{2}/.test(filename) && !filename.replace(/^[a-z]:/i, '').includes(':'));
+}
+
+function bindArtifact(filename, pinIdentity) {
+  if (!localArtifactPath(filename)) return { code: 'refused' };
+  try {
+    // Resolve parent aliases once. The log can be created after dispatch-start.
+    const file = path.join(realpathSync.native(path.dirname(filename)), path.basename(filename));
+    if (!localArtifactPath(file)) return { code: 'refused' };
+    if (!pinIdentity) return { file };
+    const identity = lstatSync(file, { bigint: true });
+    return regularArtifact(identity) ? { file, identity } : { code: 'refused' };
+  } catch (error) { return { code: artifactError(error) }; }
+}
+
 const accountingId = (call, id = call.id) => call.generation ? `${id}:continue:${call.generation}` : id;
 // One record of a sub-agent's own transcript, read here or compacted by the SSH host: its own effort and speed, and its
 // replies' timing once the call started. Both readers take every record through this, and name the model alike.
@@ -48,11 +69,11 @@ class AgentCalls {
     }
     return calls?.get(id) || null;
   }
-  constructor({ terminalId = null, changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null } = {}) {
+  constructor({ terminalId = null, changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null, seatIds = () => [] } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null; this.terminalId = terminalId;
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set(); this.awaitingEarly = new Map();
     this.dispatchAlive = dispatchAlive; this.clockOffset = 0;
-    this.dispatchReplay = dispatchReplay;
+    this.dispatchReplay = dispatchReplay; this.seatIds = seatIds;
     this.background = new BackgroundTasks(terminalId, { now });
     this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
       plannerOf: id => this.calls?.get(id)?.planner || null,
@@ -96,28 +117,25 @@ class AgentCalls {
   async callFile(id, kind) {
     if (typeof id !== 'string' || !/^dispatch:[a-f\d-]{36}$/i.test(id) || !['brief', 'log'].includes(kind)) return { ok: false, code: 'refused' };
     if (!this.local) return { ok: false, code: 'unavailable' };
-    const call = this.byId(id), filename = call?.artifacts?.[kind];
-    if (!filename) return { ok: false, code: 'unavailable' };
-    if (!path.isAbsolute(filename)) return { ok: false, code: 'refused' };
+    const call = this.byId(id), artifact = call?.artifacts?.[kind];
+    if (!artifact) return { ok: false, code: 'unavailable' };
+    if (artifact.code) return { ok: false, code: artifact.code };
+    const { file: filename, identity } = artifact;
     let file;
     try {
       const before = await fs.lstat(filename, { bigint: true });
-      if (!before.isFile()) return { ok: false, code: 'refused' };
-      const resolved = await fs.realpath(filename);
-      if (path.relative(filename, resolved)) return { ok: false, code: 'refused' };
+      if (!regularArtifact(before) || (identity && !sameFile(identity, before)) || await fs.realpath(filename) !== filename) return { ok: false, code: 'refused' };
       const { O_RDONLY, O_NOFOLLOW = 0, O_NONBLOCK = 0 } = fs.constants;
-      file = await fs.open(resolved, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+      file = await fs.open(filename, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
       const opened = await file.stat({ bigint: true });
       if (!sameFile(before, opened)) return { ok: false, code: 'refused' };
       const bytes = Buffer.alloc(CALL_FILE_LIMIT), { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
       const current = await fs.lstat(filename, { bigint: true });
-      if (this.byId(id) !== call || !sameFile(opened, current) || path.relative(resolved, await fs.realpath(filename))) return { ok: false, code: 'refused' };
+      if (this.byId(id) !== call || !sameFile(opened, current) || await fs.realpath(filename) !== filename) return { ok: false, code: 'refused' };
       const truncated = current.size > BigInt(bytesRead), content = bytes.subarray(0, bytesRead);
       return { ok: true, text: truncated ? new StringDecoder('utf8').write(content) : content.toString('utf8'), truncated };
-    } catch (error) {
-      const code = error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 'missing' : error.code === 'EFBIG' ? 'too-large' : 'refused';
-      return { ok: false, code };
-    } finally { await file?.close().catch(() => {}); }
+    } catch (error) { return { ok: false, code: artifactError(error) }; }
+    finally { await file?.close().catch(() => {}); }
   }
   ownerInput(id, messageId, message) {
     const call = this.byId(id);
@@ -326,7 +344,7 @@ class AgentCalls {
         model: 'unreported', effort: null, fast: null, requestedModel: event.requested.model, requested: event.requested,
         planner: event.planner || { kind: 'planner', agent: null, model: null }, kind: taskKind(event), meeting: event.meeting ?? null,
         role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,
-        ...declaredSeat(event.seat),
+        ...declaredSeat(event.seat, this.seatIds),
         helperPid: event.helperPid, starting: true, unconfirmed: true, resumed: event.resumed === true, source: event.source,
         startedAt: time(event.at), done: false, rate: null, meter: new TokenRates(event.agent) };
       this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next);
@@ -339,15 +357,16 @@ class AgentCalls {
     if (event.type === 'dispatch-start') {
       if (call && (!call.starting || call.done) || !call && this.calls.size >= 1024) return false;
       if (call && (call.sourceAgent !== event.agent || call.cwd !== event.cwd)) return false;
-      const labels = declaredSeat(event.seat);
-      if (call?.seatSource === 'declared' && labels && (labels.seat !== call.seat || labels.specialty !== call.specialty)) return false;
+      const labels = declaredSeat(event.seat, this.seatIds);
+      if (call?.seatSource === 'declared' && event.seat != null && (labels?.seat !== call.seat || labels?.specialty !== call.specialty)) return false;
       const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
         planner: event.planner || { kind: 'planner', agent: null, model: null },
         kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
         role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd, ...labels,
-        artifacts: this.local ? { brief: event.brief, log: event.log ?? event.out } : null,
+        artifacts: this.local ? { brief: event.brief && bindArtifact(event.brief, true),
+          log: event.log && event.log === `${event.out}.log` ? bindArtifact(event.log, false) : null } : null,
         startedAt: time(event.startedAt), helperPid: Number.isSafeInteger(event.helperPid) && event.helperPid > 0 ? event.helperPid : null,
         done: false, rate: null, meter: new TokenRates(event.agent) };
       if (call) {
@@ -494,7 +513,7 @@ class AgentCalls {
         if (!['Agent', 'Task'].includes(block.name)) continue;
         const input = block.input || {};
         const description = text(input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim();
-        const { title, labels } = agentDescription(description);
+        const { title, labels } = agentDescription(description, this.seatIds);
         const existing = this.toolCall(block.id);
         if (existing) {
           if (labels && !existing.seatSource) {

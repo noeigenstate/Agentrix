@@ -60,7 +60,7 @@ async function offlineCodex(t) {
   const listening = once(server, 'listening', { signal: t.signal }); server.listen(0, '127.0.0.1'); await listening;
   // No [windows] sandbox setting: a writable request on Windows comes back read-only unless it is retried unelevated.
   fs.writeFileSync(path.join(env.CODEX_HOME, 'config.toml'), `model = "gpt-6.1-sol"\nmodel_provider = "local"\n[model_providers.local]\nname = "Local"\nbase_url = "http://127.0.0.1:${server.address().port}/v1"\nwire_api = "responses"\nenv_key = "STANDIN_API_KEY"\n`);
-  const factory = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX, optionsHome: root,
+  const factory = createCodexRuntime({ resolveExecutable: async () => process.env.AGENTRIX_REAL_CODEX,
     spawnProcess: (file, args, options) => {
       const child = lifetime.child(spawn(file, args, options)); childCloses.push(new Promise(resolve => child.once('close', resolve))); return child;
     } });

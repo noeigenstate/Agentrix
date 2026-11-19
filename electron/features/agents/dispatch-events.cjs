@@ -109,7 +109,7 @@ function validDispatch(event) {
   if (event.type === 'dispatch-routing') return true;
   if (event.type === 'dispatch-start') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role) &&
     line(event.title, 1024) && ['cwd', 'brief', 'out'].every(key => line(event[key], 4096)) &&
-    (event.seat == null || validSeat(event.seat)) && (event.log == null || line(event.log, 4100)) &&
+    (event.seat == null || validSeat(event.seat)) && (event.log == null || line(event.log, 4100) && event.log === `${event.out}.log`) &&
     (event.unconfirmed === undefined || typeof event.unconfirmed === 'boolean') &&
     (line(event.sessionId, 160) || event.unconfirmed === true && event.sessionId === null) &&
     number(event.startedAt) && (event.declared === undefined || routing(event.declared)) && (event.requestedModel == null || line(event.requestedModel, 160)) &&

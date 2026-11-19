@@ -65,31 +65,39 @@ test('rate telemetry and a recovered CLI retry do not refuse a later input', { t
   await session.send({ clientMessageId: 'second', text: 'continue' });
 });
 
-for (const model of ['fixture-next', 'default']) test(`a CLI-confirmed raw model choice ${model} survives credential renewal`, { timeout: 15000 * timeoutScale }, async t => {
-  const f = fixture(t, { auto: false }), selected = [], original = f.fake.sdk.query;
+for (const model of ['fixture-next', 'default']) test(`the launch seat survives credential renewal after /model ${model} is refused`, { timeout: 15000 * timeoutScale }, async t => {
+  const f = fixture(t), selected = [], original = f.fake.sdk.query;
   f.fake.sdk.query = spec => ({ ...original(spec), setModel: async value => { selected.push(value); } });
-  const session = f.create(); await session.start();
-  const initialized = f.wait(event => event.type === 'routing.updated');
-  await session.send({ clientMessageId: 'model', text: '/model ' + model }); await initialized;
-  const done = f.wait(event => event.type === 'turn.completed');
-  f.fake.emit({ type: 'result', uuid: 'model-result', user_message_uuid: 'model', local_command: 'model', subtype: 'success', is_error: false, total_cost_usd: 0 });
-  await done;
+  const session = f.create('gui', { model: 'launch-model' }); await session.start();
+  await assert.rejects(session.send({ clientMessageId: 'model', text: '/model ' + model }), { code: 'routing-owned' });
+  assert.equal(f.fake.calls.length, 0);
+  await f.send(session);
+  const providerId = f.events.find(event => event.providerSessionId)?.providerSessionId;
+  assert.ok(providerId);
+  assert.equal(f.fake.calls[0].options.model, 'launch-model');
   f.runtime.credentials.save('sk-ant-offline-rotated-fixture');
-  await session.send({ clientMessageId: 'next', text: 'continue' });
-  assert.equal(f.fake.calls.at(-1).options.model, model === 'default' ? undefined : model);
-  assert.equal(f.fake.calls.at(-1).options.resume, f.events.find(event => event.providerSessionId)?.providerSessionId);
-  if (model === 'default') assert.deepEqual(selected, [undefined]);
+  await f.send(session);
+  assert.equal(f.fake.calls.length, 2);
+  assert.equal(f.fake.calls[1].options.model, 'launch-model');
+  assert.equal(f.fake.calls[1].options.resume, providerId);
+  assert.deepEqual(selected, []);
 });
 
-test('only a successful identified parent model command becomes a resumed configuration', { timeout: 15000 * timeoutScale }, async t => {
-  const f = fixture(t, { auto: false }), session = f.create('gui', { model: 'explicit-model' }); await session.start();
-  const initialized = f.wait(event => event.type === 'routing.updated');
-  await session.send({ clientMessageId: 'model', text: '/model unconfirmed' }); await initialized;
-  const done = f.wait(event => event.type === 'turn.completed');
-  f.fake.emit({ type: 'result', uuid: 'failed-model', user_message_uuid: 'model', local_command: 'model', subtype: 'error_during_execution', is_error: true, total_cost_usd: 0 });
-  await done; f.runtime.credentials.save('sk-ant-offline-new-fixture');
-  await session.send({ clientMessageId: 'next', text: 'continue' });
-  assert.equal(f.fake.calls.at(-1).options.model, 'explicit-model');
+test('resuming a Claude session keeps its launch seat after /model is refused', { timeout: 15000 * timeoutScale }, async t => {
+  const f = fixture(t), selected = [], original = f.fake.sdk.query;
+  f.fake.sdk.query = spec => ({ ...original(spec), setModel: async value => { selected.push(value); } });
+  const model = 'launch-model', session = f.create('gui', { model });
+  await session.start(); await f.send(session);
+  const providerSessionId = f.events.find(event => event.providerSessionId)?.providerSessionId;
+  assert.ok(providerSessionId);
+  await session.close();
+  const resumed = f.create('gui', { model, providerSessionId }); await resumed.resume();
+  await assert.rejects(resumed.send({ clientMessageId: 'model', text: '/model unconfirmed' }), { code: 'routing-owned' });
+  assert.equal(f.fake.calls.length, 1);
+  await f.send(resumed);
+  assert.equal(f.fake.calls[1].options.model, model);
+  assert.equal(f.fake.calls[1].options.resume, providerSessionId);
+  assert.deepEqual(selected, []);
 });
 
 test('an owner stop during provider retries does not become a provider refusal', { timeout: 15000 * timeoutScale }, async t => {

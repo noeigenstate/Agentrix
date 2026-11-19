@@ -102,6 +102,11 @@ test('seat changes reach the next launch while Claude launch/current snapshots s
   const rendered = next.rendered[skill];
   assert.match(rendered.path.replace(/\\/g, '/'), /skill-delivery\/rendered\/[a-f0-9]{32}\/model-routing\/SKILL\.md$/);
   assert.match(fs.readFileSync(rendered.path, 'utf8'), /\| researcher \|.*\| haiku · high \| Agent call/);
+  const expired = new Date(Date.now() - 31 * 86400000);
+  fs.utimesSync(rendered.path, expired, expired);
+  assert.equal(f.delivery('reuse').rendered[skill].path, rendered.path);
+  f.store.endSession(f.project.id, 'reuse');
+  assert.ok(fs.statSync(rendered.path).mtimeMs > expired.getTime(), 'reusing a rendered skill renews its retention');
   assert.notEqual(next.fingerprint, launch.fingerprint);
   const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
   assert.deepEqual(f.store.setSeats('global', null, { researcher: choice('opus') }), { ok: true });
@@ -125,7 +130,6 @@ test('seat changes reach the next launch while Claude launch/current snapshots s
   t.after(() => reopened.close());
   reopened.recordAction({ kind: 'skill', done: true, at: Date.now(), skillFile: rendered.path }, { cwd: f.project.path, project: f.project.id, agent: 'claude' });
   assert.equal(reopened.info(reopened.entry(skill)).lastUsed?.agent, 'claude');
-  const expired = new Date(Date.now() - 31 * 86400000);
   fs.utimesSync(rendered.path, expired, expired);
   reopened.pruneDeliveryFiles(); assert.equal(fs.existsSync(rendered.path), true);
   f.store.endSession(f.project.id, 'next');

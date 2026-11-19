@@ -23,6 +23,10 @@ function profile(t) {
 const win = process.platform === 'win32';
 const refusal = /模型由模型路由决定，请在模型路由中更改。/;
 const resumed = ['--model', 'claude-opus-5-5', '--effort', 'high', '--resume', 'fixture-session'];
+const utilities = [['mcp', 'list'], ['update'], ['doctor'], ['config', 'list'], ['--settings', 'owner-settings', 'mcp', 'list'],
+  ['--debug', 'api', 'mcp', 'list'], ['--version'], ['-v'], ['--help'], ['-h'], ['--resume', '--help']];
+const invalidSeats = [['claude-opus&extra', 'high'], ['m'.repeat(161), 'high'], ['opus', 'High'], ['opus', 'e'.repeat(33)]];
+const nextModel = 'claude-sonnet-5-5[1m]';
 const cases = [
   ['bash-integration.bash', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
   ['zsh-integration.zsh', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
@@ -38,14 +42,23 @@ test('the local Claude wrappers read the lead file and refuse overrides before r
   }
 });
 
+function assertLaunches(output) {
+  assert.deepEqual(output.match(/^STATUS=2$/gm), ['STATUS=2', 'STATUS=2']);
+  const calls = output.split(/^EVENT=codex-started\n/gm).slice(1);
+  assert.deepEqual(calls.map(call => [...call.matchAll(/^SETTINGS=(.*)$/gm)].map(row => row[1])),
+    [['fast'], ...utilities.concat(invalidSeats).map(() => ['ordinary']), ['ordinary']]);
+  assert.deepEqual(calls.map(call => [...call.matchAll(/^WORD=(.*)$/gm)].map(row => row[1])),
+    [resumed, ...utilities, ...invalidSeats.map(() => []), ['--model', nextModel, '--effort', 'medium', 'Explain', 'doctor']]);
+}
+
 for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-integration.zsh']]) {
   const shell = ['/bin', '/usr/bin'].map(dir => path.join(dir, name)).find(file => !win && fs.existsSync(file));
-  test(`${name} Claude takes the current seat on each launch and rejects owner flags`, { skip: !shell }, async t => {
+  test(`${name} Claude takes the validated seat only on conversation launches`, { skip: !shell }, async t => {
     const dir = profile(t), fake = path.join(dir, 'stand-in.sh'), script = path.join(dir, 'probe.sh');
-    fs.writeFileSync(fake, '#!/bin/sh\nprintf "SETTINGS=%s\\n" "$(cat "$2")"\nshift 2\nprintf "WORD=%s\\n" "$@"\n', { mode: 0o700 });
+    fs.writeFileSync(fake, '#!/bin/sh\nprintf "SETTINGS=%s\\n" "$(cat "$2")"\nshift 2\nfor word in "$@"; do printf "WORD=%s\\n" "$word"; done\n', { mode: 0o700 });
     fs.writeFileSync(script, [
       wrapper(file, 'claude() {'),
-      '__pg_program() { __pg_words=("$AGENTRIX_SEAT_STAND_IN"); }',
+      `__pg_program() { ${name === 'zsh' ? 'reply' : '__pg_words'}=("$AGENTRIX_SEAT_STAND_IN"); }`,
       '__pg_send() { printf "EVENT=%s\\n" "$1"; }',
       '__pg_command() { :; }',
       '__pg_reading_note() { :; }',
@@ -55,21 +68,20 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       'claude --model=manual; printf "STATUS=%s\\n" "$?"',
       'claude --effort low; printf "STATUS=%s\\n" "$?"',
       'claude --resume fixture-session',
-      'printf "sonnet\\nmedium\\n0\\n" > "$AGENTRIX_BOOTSTRAP.lead"',
-      'claude',
+      ...utilities.map(words => `claude ${words.join(' ')}`),
+      ...invalidSeats.flatMap(([model, effort]) => [`printf '%s\\n' '${model}' '${effort}' 1 > "$AGENTRIX_BOOTSTRAP.lead"`, 'claude']),
+      `printf '%s\\n' '${nextModel}' medium 0 > "$AGENTRIX_BOOTSTRAP.lead"`,
+      'claude Explain doctor',
     ].join('\n') + '\n');
     const { stdout, stderr } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), script], {
       env: { PATH: '/usr/bin:/bin', HOME: dir, TMPDIR: dir, AGENTRIX_SEAT_STAND_IN: fake, AGENTRIX_BOOTSTRAP: path.join(dir, 'bootstrap') },
     });
     assert.match(stderr, refusal);
-    assert.deepEqual(stdout.match(/^STATUS=2$/gm), ['STATUS=2', 'STATUS=2']);
-    assert.equal(stdout.match(/^EVENT=codex-started$/gm)?.length, 2);
-    assert.deepEqual([...stdout.matchAll(/^SETTINGS=(.*)$/gm)].map(row => row[1]), ['fast', 'ordinary']);
-    assert.deepEqual([...stdout.matchAll(/^WORD=(.*)$/gm)].map(row => row[1]), [...resumed, '--model', 'sonnet', '--effort', 'medium']);
+    assertLaunches(stdout);
   });
 }
 
-test('PowerShell Claude takes the current seat and refuses owner flags before launch', { skip: !win }, async t => {
+test('PowerShell Claude takes the validated seat only on conversation launches', { skip: !win }, async t => {
   const dir = profile(t), script = path.join(dir, 'probe.ps1');
   fs.writeFileSync(script, '\uFEFF' + [
     '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
@@ -84,7 +96,7 @@ test('PowerShell Claude takes the current seat and refuses owner flags before la
     '$global:AgentrixClaudeExecutable = $null',
     '$global:AgentrixClaudeCommand = {',
     '  "SETTINGS=" + [IO.File]::ReadAllText($args[1])',
-    '  $args[2..($args.Length - 1)] | ForEach-Object { "WORD=" + $_ }',
+    '  if ($args.Length -gt 2) { $args[2..($args.Length - 1)] | ForEach-Object { "WORD=" + $_ } }',
     '  $global:LASTEXITCODE = 0',
     '}',
     '$lead = $env:AGENTRIX_BOOTSTRAP + ".lead"',
@@ -92,8 +104,10 @@ test('PowerShell Claude takes the current seat and refuses owner flags before la
     'claude --model=manual; "STATUS=" + $LASTEXITCODE',
     'claude --effort low; "STATUS=" + $LASTEXITCODE',
     'claude --resume fixture-session',
-    '[IO.File]::WriteAllLines($lead, @("sonnet", "medium", "0"))',
-    'claude',
+    ...utilities.map(words => `claude ${words.join(' ')}`),
+    ...invalidSeats.flatMap(([model, effort]) => [`[IO.File]::WriteAllLines($lead, @('${model}', '${effort}', '1'))`, 'claude']),
+    `[IO.File]::WriteAllLines($lead, @('${nextModel}', 'medium', '0'))`,
+    'claude Explain doctor',
   ].join('\n'));
   const shell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
   const { stdout } = await exec(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
@@ -101,8 +115,5 @@ test('PowerShell Claude takes the current seat and refuses owner flags before la
   });
   const output = stdout.replaceAll('\r\n', '\n');
   assert.match(output, refusal);
-  assert.deepEqual(output.match(/^STATUS=2$/gm), ['STATUS=2', 'STATUS=2']);
-  assert.equal(output.match(/^EVENT=codex-started$/gm)?.length, 2);
-  assert.deepEqual([...output.matchAll(/^SETTINGS=(.*)$/gm)].map(row => row[1]), ['fast', 'ordinary']);
-  assert.deepEqual([...output.matchAll(/^WORD=(.*)$/gm)].map(row => row[1]), [...resumed, '--model', 'sonnet', '--effort', 'medium']);
+  assertLaunches(output);
 });

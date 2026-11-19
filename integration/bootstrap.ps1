@@ -186,12 +186,25 @@ function global:Get-AgentrixHookProxy {
 # which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
 # carry them. A proxy set in this terminal since it started falls back too, and main is told why.
 function global:claude {
+    $conversation = $true
+    $positionalSeen = $false
+    $skipValue = $false
     foreach ($word in $args) {
         if ($word -ceq '--') { break }
         if ($word -cmatch '^--(?:model|effort)(?:=|$)') {
             Write-Host '模型由模型路由决定，请在模型路由中更改。'
             $global:LASTEXITCODE = 2
             return
+        }
+        if ($skipValue) {
+            $skipValue = $false
+            if ($word -cnotmatch '^-') { continue }
+        }
+        if ($word -cmatch '^(?:--version|-v|-V|--help|-h)$') { $conversation = $false }
+        if ($word -cmatch '^(?:--add-dir|--agent|--agents|--allowed-tools|--allowedTools|--append-system-prompt|--append-system-prompt-file|--betas|--debug|-d|--debug-file|--disallowed-tools|--disallowedTools|--fallback-model|--input-format|--json-schema|--max-budget-usd|--mcp-config|--output-format|--permission-mode|--plugin-dir|--resume|-r|--session-id|--setting-sources|--settings|--system-prompt|--system-prompt-file|--tools)$') { $skipValue = $true }
+        if (-not $positionalSeen -and $word -cnotmatch '^-') {
+            $positionalSeen = $true
+            if ($word -cmatch '^(?:auth|config|doctor|install|login|logout|mcp|migrate-installer|plugin|setup-token|update|upgrade)$') { $conversation = $false }
         }
     }
     if (-not $global:AgentrixClaudeCommand) {
@@ -201,10 +214,11 @@ function global:claude {
     $hooks = $global:AgentrixSession.hooks
     $launchSettings = $hooks.settings
     $leadArgs = @()
-    if ($env:AGENTRIX_BOOTSTRAP) {
+    if ($conversation -and $env:AGENTRIX_BOOTSTRAP) {
         $lead = $null
         try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
-        if ($lead.Length -eq 3 -and $lead[0] -and $lead[1] -and $lead[2] -cmatch '^[01]$') {
+        if ($lead.Length -eq 3 -and $lead[0] -cmatch '^[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}$' -and
+            $lead[1] -cmatch '^[a-z][a-z0-9-]{0,31}$' -and $lead[2] -cmatch '^[01]$') {
             $leadArgs = @('--model', $lead[0], '--effort', $lead[1])
             if ($lead[2] -eq '1' -and $hooks.fastSettings) { $launchSettings = $hooks.fastSettings }
         }

@@ -550,9 +550,16 @@ function endSkillSession(s) {
 // Wrappers reread idle shells' notes. Running agents keep the note actually delivered at their launch.
 function refreshSkillNotes() {
   for (const s of sessions.values()) {
-    if (!s.skillNoteFile || s.status === 'exited') continue;
+    if (s.status === 'exited') continue;
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
+    if (project.kind === 'ssh') {
+      if (s.terminal?.setClaudeLead) {
+        void s.terminal.setClaudeLead(skills.leadOptions(project.id, 'claude', { remote: true })).catch(report);
+      }
+      continue;
+    }
+    if (!s.skillNoteFile) continue;
     if (s.bootstrapFile) {
       try { updateBootstrapLead(s.bootstrapFile, skills.leadOptions(project.id, 'claude')); } catch (error) { report(error); }
     }
@@ -581,6 +588,7 @@ function callsOf(s, project) {
   const calls = s.calls || AgentCalls.forTerminal(sessions, id, () => {
     const helperPids = new WeakMap(), current = () => sessions.get(id);
     return new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
+      seatIds: () => skills?.seatsInfo?.(project.id)?.seats ?? [],
       dispatchAlive: async call => {
         if (project.kind === 'ssh') return null;
         let pid = call.helperPid || helperPids.get(call);
@@ -1408,6 +1416,7 @@ function startTerminal(id, nativeMode = null, agentStarting = false, transfer = 
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
   const terminal = project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
     allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
+    claudeLead: skills.leadOptions?.(project.id, 'claude', { remote: true }) ?? null,
     readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)

@@ -313,18 +313,25 @@ test('Linux SSH Claude wrapper forwards hooks and reads compacted transcripts ov
   const stub = `#!/usr/bin/env python3
 import json,os,subprocess,sys
 args=sys.argv[1:]
-if "--version" in args: sys.exit(7)
+if "--version" in args:
+    assert "--model" not in args and "--effort" not in args
+    sys.exit(7)
 assert args[2]=="--append-system-prompt"
 assert args[3].startswith("You run inside Agentrix. SSH reading note.")
 assert args[3].endswith("Agentrix delivers skill instructions through its SessionStart hook.")
 assert "SSH skill instructions." not in args[3]
 assert "Agentrix skill delivery:" not in args[3]
-assert args[4:]==["--resume","fixture"]
 settings_file=args[args.index("--settings")+1]
 assert os.path.dirname(settings_file)==os.path.dirname(os.environ["AGENTRIX_READING_NOTE_FILE"])
 assert os.path.basename(settings_file).startswith("claude-settings.")
 with open(settings_file,encoding="utf-8") as source: settings=json.load(source)
 with open("claude-settings.json","w",encoding="utf-8") as output: json.dump({"path":settings_file,"settings":settings},output)
+if args[-2:]==["--resume","next"]:
+    assert args[4:]==["--model","sonnet","--effort","medium","--resume","next"]
+    assert "fastMode" not in settings and "hooks" in settings
+    sys.exit(8)
+assert args[4:]==["--model","claude-opus-5-5[1m]","--effort","high","--resume","fixture"]
+assert settings["fastMode"] is True
 folder=os.path.join(os.path.expanduser("~/.claude"),"projects","fixture")
 os.makedirs(folder,exist_ok=True)
 filename=os.path.join(folder,"session.jsonl")
@@ -350,7 +357,8 @@ hook("Stop")
   await fs.writeFile(path.join(fixture.home, 'bin', 'claude'), stub, { mode: 0o755 });
   const skills = { files: [], instructions: 'SSH skill instructions.', key: 'a'.repeat(64) };
   const readingNote = 'You run inside Agentrix. SSH reading note. Agentrix skill delivery: remote. SSH skill instructions.';
-  const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote, skills, onEvent: event => events.push(event) });
+  const claudeLead = { model: 'claude-opus-5-5[1m]', effort: 'high', fast: true };
+  const connection = new RemoteConnection(project, { integrationDir, auth, sshPath, sessionKey: 'test-claude-key', readingNote, skills, claudeLead, onEvent: event => events.push(event) });
   let output = '';
   connection.onData(data => { output += data; });
   t.after(async () => { connection.close(); auth.close(); await fixture.close(); }, { timeout: 12000 });
@@ -376,6 +384,14 @@ hook("Stop")
   assert.equal(status.records[2].message.content[0].is_error, true); assert.equal(status.records[2].message.content[0].content, '');
   assert.deepEqual((await connection.request('claude-status', args)).records, []);
   await assert.rejects(connection.request('claude-status', { ...args, path: path.join(fixture.project, 'outside.jsonl') }));
+  await connection.setClaudeLead({ model: 'sonnet', effort: 'medium', fast: false });
+  connection.write('claude --model=manual; printf "MODEL_STATUS=%d\\n" $?\r');
+  await waitFor(() => /\r?\nMODEL_STATUS=2\b/.test(output), 'the SSH wrapper to refuse the model override');
+  connection.write('claude --effort low; printf "EFFORT_STATUS=%d\\n" $?\r');
+  await waitFor(() => /\r?\nEFFORT_STATUS=2\b/.test(output), 'the SSH wrapper to refuse the effort override');
+  assert.equal(events.filter(event => event.type === 'codex-started').length, 1);
+  connection.write('claude --resume next\r');
+  await waitFor(() => events.some(event => event.type === 'codex-exited' && event.agent === 'claude' && event.exitCode === 8), 'the new seat and hook settings on the resumed launch');
   connection.write('claude --version\r');
   await waitFor(() => events.some(event => event.type === 'codex-exited' && event.agent === 'claude' && event.exitCode === 7));
   assert.ok(events.some(event => event.type === 'codex-started' && event.command === '--version' && event.agent === 'claude'));

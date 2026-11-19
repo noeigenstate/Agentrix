@@ -54,6 +54,21 @@ test('a declaration is unconfirmed after fifteen seconds and record-confirmed st
   assert.equal(calls.snapshot()[0].items[0].notice, undefined);
 });
 
+test('unknown worker seats stay visible under an inferred role from declaration through start', t => {
+  const f = session(t), launch = start(undefined, { seat: 'new-role/backend', kind: 'investigate' });
+  assert.equal(f.send({ type: 'dispatch-declared', id: launch.id, projectId: launch.projectId, sessionKey: launch.sessionKey,
+    agent: launch.agent, role: launch.role, title: launch.title, cwd: launch.cwd, worktree: launch.cwd, requested: routing,
+    helperPid: process.pid, source: 'dispatch', at: launch.startedAt, seat: launch.seat, kind: launch.kind }), true);
+  function check(state) {
+    const [item] = f.calls.snapshot()[0].items;
+    assert.equal(item.state, state);
+    assert.equal(item.seat, 'researcher'); assert.equal(item.seatSource, 'inferred'); assert.equal(item.specialty, undefined);
+  }
+  check('starting');
+  assert.equal(f.send(launch), true);
+  check('running');
+});
+
 test('dispatch sender identity comes from the authenticated parent, not helper declarations', t => {
   const calls = new AgentCalls(); t.after(() => calls.dispose());
   const parent = { terminalId: 'terminal', sessionKey: 'test-key', agent: 'claude', usage: { rates: { model: 'claude-opus-5-5' } } };
@@ -108,7 +123,7 @@ test('authenticated dispatch events populate groups, replace live totals, show d
   assert.equal(group.agent, 'Codex'); assert.equal(group.provider, null); assert.equal(group.running, 1);
   assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: launch.title, failure: null, id: `dispatch:${launch.id}`,
     startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false, seat: 'developer', seatSource: 'inferred',
-    worktree: launch.cwd, brief: true, log: true }]);
+    worktree: launch.cwd, brief: true, log: false }]);
   assert.equal(f.send(rate(launch.id)), true);
   assert.equal(f.send(rate(launch.id, { outputTokens: 20, activeMs: 500 })), false, 'stale totals cannot regress');
   assert.equal(f.calls.snapshot()[0].rate.outputTokens, 50);
@@ -185,6 +200,7 @@ test('bad keys, projects, unknown ids, malformed fields and oversized payloads a
   for (const event of [start(undefined, { sessionKey: 'wrong' }), start(undefined, { projectId: 'other' }), start(undefined, { id: 'not-a-uuid' }),
     start(undefined, { title: 'x'.repeat(1025) }), start(undefined, { model: 'x\ny' }), start(undefined, { fast: 'true' }), start(undefined, { declared: {} }),
     start(undefined, { cwd: 'x'.repeat(4097) }), start(undefined, { extra: 'x'.repeat(17000) }), start(undefined, { sessionId: null }),
+    start(undefined, { log: '/other.log' }), start(undefined, { log: launch.out }),
     start(undefined, { requestedModel: 'x'.repeat(161) }), end(randomUUID()), rate(randomUUID()), rate(randomUUID(), { activeMs: -1 }), rate(randomUUID(), { outputTokens: Infinity }),
     reroute(randomUUID())]) assert.equal(f.send(event), false);
   assert.deepEqual(f.calls.snapshot(), []);
@@ -248,7 +264,7 @@ test('roundtable is an authenticated role and does not change parent completion'
   assert.equal(f.send(launch), true);
   assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null, id: `dispatch:${launch.id}`,
     startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false, seat: 'developer', seatSource: 'inferred',
-    worktree: launch.cwd, brief: true, log: true });
+    worktree: launch.cwd, brief: true, log: false });
   assert.equal(f.send(start(undefined, { role: 'roundtable' })), false, 'only the explicit event role is accepted');
   f.send(end(launch.id));
   assert.equal(f.calls.snapshot()[0].items[0].state, 'done');
