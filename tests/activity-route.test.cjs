@@ -18,11 +18,12 @@ function loadFeatureFile(relative, language = 'zh') {
   return loadedFiles.get(key);
 }
 const loadAgentsFile = (basename, language = 'zh') => loadFeatureFile(`agents/${basename}`, language);
-function compileFile(filename, language) {
+function compileFile(filename, language, hooks) {
   const mod = new Module(filename, module);
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
   mod.require = name => {
+    if (name === 'react' && hooks) return { ...React, ...hooks };
     if (name.endsWith('.css')) return {};
     if (name === '../../shared/i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
     if (name === '../../shared/routing-command.ts') return compileFile(path.join(__dirname, '../src/shared/routing-command.ts'), language);
@@ -71,6 +72,23 @@ function callsMarkup(calls, language = 'zh', terminalId = 'placeholder') {
   const { CallsCard } = loadAgentsFile('AgentCalls.tsx', language);
   return renderToStaticMarkup(React.createElement(CallsCard, { calls, terminalId }));
 }
+
+test('a grouped Agent tab row keeps the specialty and model label beneath the role heading', () => {
+  const team = require('./fixtures/team-seats.json');
+  const info = { ...team, catalog: [{ model: 'opus', label: 'Opus (follows latest)' }] };
+  const { CallsCard, AgentTabScope } = compileFile(path.join(__dirname, '../src/features/agents/AgentCalls.tsx'), 'en', {
+    useState: initial => React.useState(initial && typeof initial === 'object' ? { t1: info } : initial),
+  });
+  const call = { agent: 'Claude Code', model: 'opus', effort: 'high', fast: false, items: [
+    { id: 'one', state: 'running', seat: 'developer', seatSource: 'declared', specialty: 'backend', title: 'Build parser' },
+  ] };
+  const terminal = { id: 't1', agentUsage: { calls: [call] } };
+  const html = renderToStaticMarkup(React.createElement(AgentTabScope.Provider, { value: 'p1' },
+    React.createElement(CallsCard, { calls: [call], terminalId: 't1', terminals: [terminal] })));
+  assert.match(html, /<h4>Developer<\/h4>/);
+  assert.equal((html.match(/Developer/g) ?? []).length, 1);
+  assert.match(html, /<b>Backend<\/b><span>Opus \(latest\) · high/);
+});
 // The pane's run-mode and allowance block, rendered from a main-process usage answer: both agents' sections (the terminal's agent is the current one).
 // options.claude / options.codex: each agent's connection kind; options.limits: each agent's main-process limits; options.usage overrides parts of the answer.
 function usageMarkup(language = 'zh', terminal = {}, options = {}) {

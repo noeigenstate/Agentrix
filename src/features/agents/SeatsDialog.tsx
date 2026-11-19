@@ -89,12 +89,24 @@ export function SeatsDialog({ info: given, projectId, terminalId, migration, onM
   const lead = roles.find(role => role.id === info.lead), team = seats.filter(id => id !== info.lead).flatMap(id => roles.filter(role => role.id === id));
   const seatName = (id: SeatId) => routingRoleName(roles.find(role => role.id === id)?.name ?? id, t);
   const slotName = seatName;
-  const label = (model: string) => modelRow(catalog, model)?.label ?? model;
+  const label = (model: string) => shortLabel(modelRow(catalog, model)?.label ?? model);
 
   const keepButton = useRef<HTMLButtonElement>(null);
+  const beforeDiscard = useRef<HTMLElement | null | undefined>(undefined);
+  const discardShown = discarding && dirty;
   useEffect(() => { alive.current = true; dialog.current?.focus(); void refresh(true); return () => { alive.current = false; }; }, []);
   useEffect(() => { setRefreshed(null); if (given.defaultsMoved?.length) setMoved(given.defaultsMoved); }, [given]);
-  useEffect(() => { if (discarding) keepButton.current?.focus({ preventScroll: true }); }, [discarding]);
+  useEffect(() => {
+    if (discardShown) { keepButton.current?.focus({ preventScroll: true }); return; }
+    const previous = beforeDiscard.current, panel = dialog.current;
+    beforeDiscard.current = undefined;
+    if (previous === undefined || !panel) return;
+    if (previous && panel.contains(previous)) {
+      previous.focus({ preventScroll: true });
+      if (document.activeElement === previous) return;
+    }
+    (panel.querySelector<HTMLElement>('button:not(:disabled)') ?? panel).focus({ preventScroll: true });
+  }, [discardShown]);
   // A refreshed record that already holds the draft makes the draft redundant (after a save), so later changes made elsewhere show.
   useEffect(() => { if (draft && !changedCount(seats, draft, baseline)) setDraft(null); }, [info, scope]);
   useEffect(() => {
@@ -165,7 +177,12 @@ export function SeatsDialog({ info: given, projectId, terminalId, migration, onM
     setScope(next);
   };
   // Closing with an unsaved draft asks once, inline.
-  const close = () => { if (dirty && !discarding) setDiscarding(true); else onClose(); };
+  const close = () => {
+    if (!dirty || discarding) { onClose(); return; }
+    const panel = dialog.current, active = document.activeElement;
+    beforeDiscard.current = panel && active !== panel && panel.contains(active) ? active as HTMLElement : null;
+    setDiscarding(true);
+  };
 
   const dragged = useRef(false);
   const slotAt = (x: number, y: number) => (document.elementFromPoint(x, y)?.closest('[data-slot]') as HTMLElement | null)?.dataset.slot as SlotId | undefined;
@@ -218,10 +235,10 @@ export function SeatsDialog({ info: given, projectId, terminalId, migration, onM
     setSaving(false);
     setNotice(result.ok ? { kind: 'ok', text: t('已保存，下一次对话生效；这次对话的座位不变') } : { kind: 'error', text: t('没有保存：{message}', { message: result.message }) });
   };
-  const fix = () => { if (block?.fix) apply(assignModel(working, 'reviewer', block.fix.model, catalog), t('审查改用 {model}', { model: block.fix.label })); };
+  const fix = () => { if (block?.fix) apply(assignModel(working, 'reviewer', block.fix.model, catalog), t('审查改用 {model}', { model: label(block.fix.model) })); };
 
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') { event.stopPropagation(); if (menu) closeMenu(); else if (discarding) setDiscarding(false); else if (nowOpen) setNowOpen(false); else if (paletteOpen) setPaletteOpen(false); else close(); return; }
+    if (event.key === 'Escape') { event.stopPropagation(); if (menu) closeMenu(); else if (discardShown) setDiscarding(false); else if (nowOpen) setNowOpen(false); else if (paletteOpen) setPaletteOpen(false); else close(); return; }
     if (event.key === 'Tab') {
       const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select, input, [tabindex="0"]') ?? []).filter(item => !item.closest('[hidden]'));
       const first = focusable[0], last = focusable[focusable.length - 1];
@@ -252,7 +269,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, migration, onM
   };
   function blockMessage() {
     const model = label(working.reviewer?.model ?? '');
-    const { shown, total } = topAlternatives(block?.alternatives ?? [], 3, { fix: block?.fix ?? null, map: working, catalog, defaults: info.defaults }), names = shown.map(row => row.label).join('、');
+    const { shown, total } = topAlternatives(block?.alternatives ?? [], 3, { fix: block?.fix ?? null, map: working, catalog, defaults: info.defaults }), names = shown.map(row => label(row.model)).join('、');
     return t('审查（{model}）与{seats}使用同一模型，账户里还有不弱于它的 {others}，所以不能保存。', {
       model, seats: block?.hit.map(seatName).join('、') ?? '', others: total > shown.length ? t('{names} 等 {count} 个', { names, count: total }) : names });
   }
@@ -265,7 +282,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, migration, onM
     onPointerDown={event => { if (model) startDrag(event, model, slot); }}
     onClick={event => { if (!dragged.current || event.detail === 0) openMenu(slot, event.currentTarget); }}>
     {model && <i className="seats-mk" data-family={rowFor(catalog, model)?.family} aria-hidden="true" />}
-    <span className="seats-gem-name">{model ? shortLabel(label(model)) : t('未设置')}</span><CaretDown size={14} aria-hidden="true" />
+    <span className="seats-gem-name">{model ? label(model) : t('未设置')}</span><CaretDown size={14} aria-hidden="true" />
   </button>;
   const effortButton = (slot: SlotId) => {
     const seat = getSlot(working, slot);
@@ -312,10 +329,10 @@ export function SeatsDialog({ info: given, projectId, terminalId, migration, onM
   // 模型盘: grouped by family and model line (Opus, Sonnet… / Sol, Astra…), the newest of each line first, older versions folded.
   const searching = query.trim() !== '';
   const chip = (row: SeatModel, old = false) => {
-    const off = !row.available;
+    const off = !row.available, name = shortLabel(row.label);
     return <span key={row.model} className={`seats-chip${old ? ' is-old' : ''}${off ? ' is-off' : ''}`} data-chip={row.model} data-family={row.family} aria-disabled={off || undefined}
-      title={off ? t('{model}（{reason}）不能放入座位', { model: row.label, reason: row.reason ?? '' }) : t('{model} · 拖到座位上', { model: row.label })} onPointerDown={event => startDrag(event, row.model, null)}>
-      <i className="seats-mk" data-family={row.family} /><span className="seats-chip-name">{shortLabel(row.label)}</span>{row.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
+      title={off ? t('{model}（{reason}）不能放入座位', { model: name, reason: row.reason ?? '' }) : t('{model} · 拖到座位上', { model: name })} onPointerDown={event => startDrag(event, row.model, null)}>
+      <i className="seats-mk" data-family={row.family} /><span className="seats-chip-name">{name}</span>{row.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
   };
   const palette = <aside ref={paletteBox} className={paletteOpen ? "seats-palette is-open" : "seats-palette"} aria-label={t('模型盘')}>
     <header className="seats-palette-head"><h3>{t('模型盘')}</h3>
@@ -376,9 +393,9 @@ export function SeatsDialog({ info: given, projectId, terminalId, migration, onM
           </div>}
           {block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" />
             <span><b>{t('审查座位被阻止。')}</b>{blockMessage()}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join('、') })}`}</span>
-            {block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: block.fix.label })}</button>}</div>}
+            {block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: label(block.fix.model) })}</button>}</div>}
           {refusal && !block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
-          {discarding && dirty && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" /><span>{t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count })}</span>
+          {discardShown && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" /><span>{t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count })}</span>
             <button ref={keepButton} type="button" className="seats-btn" data-keep onClick={() => setDiscarding(false)}>{t('继续编辑')}</button><button type="button" className="seats-btn" data-discard onClick={onClose}>{t('放弃修改')}</button></div>}
           <p className="seats-notice" role="status" aria-live="polite" data-kind={notice?.kind}>{notice?.kind === 'ok' && <CheckCircle size={14} aria-hidden="true" />}{notice?.text}</p>
         </section>

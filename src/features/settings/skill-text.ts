@@ -18,7 +18,13 @@ export function skillSummary(skill: SkillInfo) {
   }
   return [`${routingRoleName(lead.name, t)} ${routingModelName(lead.model)}`, ...Array.from(models, ([model, roles]) => `${roles.join('/')} ${routingModelName(model)}`)].join(' · ');
 }
-export const skillWhen = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.when) : skill.when;
+export function skillWhen(skill: SkillInfo) {
+  if (skill.trigger === 'always') return t('每个任务开始前读取。');
+  const description = t('任务符合技能描述时读取。');
+  if (!skill.when || skill.when === '描述与任务匹配时读取') return description;
+  const when = skill.source === 'builtin' ? t(skill.when) : skill.when;
+  return `${description} ${when}`;
+}
 
 // A SKILL.md without its front matter: the page shows those fields above the text.
 export const skillBody = (text: string) => text.replace(/^﻿?---\r?\n(?:[\s\S]*?\r?\n)?---[ \t]*(?:\r?\n|$)/, '');
