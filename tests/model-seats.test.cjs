@@ -125,16 +125,16 @@ test('the other-family lead uses its family default and an uninstalled family ha
   assert.equal(leadOptions(map, 'claude', { codex: true }, models), null);
 });
 
-test('seat IPC passes the shared contract arguments unchanged', () => {
+test('routing IPC forwards saves and review actions with the exact contract arguments', () => {
   const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
-  const handlers = {}, calls = [], map = { lookup: seat('sonnet') };
+  const handlers = {}, calls = [], config = { roles: { researcher: seat('sonnet') }, operations: {} };
+  const record = (...args) => { calls.push(args); return { ok: true }; };
   registerSkillsIpc({ handle: (name, fn) => handlers[name] = fn, skills: {
     seatsInfo: (...args) => { calls.push(args); return { skill: 'declaring-skill' }; },
-    setSeats: (...args) => { calls.push(args); return { ok: true }; },
+    setRouting: record, resolveRouting: record,
   } });
   assert.equal(handlers['skills:seats']('project', 'terminal').skill, 'declaring-skill');
-  assert.deepEqual(handlers['skills:setSeats']('project', 'project', map), { ok: true });
-  const operations = { lookup: { model: 'opus', effort: 'high' } };
-  assert.deepEqual(handlers['skills:setSeats']('project', 'project', map, operations), { ok: true });
-  assert.deepEqual(calls, [['project', 'terminal'], ['project', 'project', map], ['project', 'project', map, operations]]);
+  assert.deepEqual(handlers['skills:setRouting']('project', 'p', config, null), { ok: true });
+  assert.deepEqual(handlers['skills:resolveRouting']('p', 'keep', 'digest'), { ok: true });
+  assert.deepEqual(calls, [['project', 'terminal', true], ['project', 'p', config, null], ['p', 'keep', 'digest']]);
 });

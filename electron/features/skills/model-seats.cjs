@@ -1,5 +1,6 @@
 // Seat choices are configuration, never evidence of which model actually ran.
 const { modelRow } = require('./model-catalog.cjs');
+const { authorIdentityConflict } = require('./role-rules.mjs');
 const { BASE_EFFORTS, EFFORT, familyOf: family, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const ALIASES = ['opus', 'sonnet', 'haiku'];
@@ -122,20 +123,23 @@ function agentAlias(model, models) {
 
 const concreteAlias = (alias, models) => aliasTargets(models).get(alias)?.model;
 
-function checkReviewer(map, models) {
-  const { reviewer, developer } = map;
-  if (!reviewer || !developer) return null;
+function modelIdentity(models) {
   const latest = aliasTargets(models);
-  const identity = model => {
+  return model => {
     const release = releaseOf(latest.get(model)?.model || model);
     return release ? `${release[1]}-${Number(release[2])}-${Number(release[3] || 0)}` : model;
   };
-  const reviewerId = identity(reviewer.model);
-  if (identity(developer.model) !== reviewerId) return null;
-  const rank = models.find(row => row.model === reviewer.model)?.rank
-    ?? rankOf(reviewer.model);
-  return models.some(row => row.available && identity(row.model) !== reviewerId && row.rank >= rank)
-    ? refusal('reviewer-same-model', 'reviewer', 'Choose a reviewer different from developer when another available model is at least as strong.') : null;
+}
+
+function checkReviewer(map, models, reviewers = ['reviewer'], authors = ['developer']) {
+  const identity = modelIdentity(models);
+  const authorModels = Object.fromEntries(authors.filter(id => Object.hasOwn(map, id)).map(id => [id, map[id].model]));
+  for (const id of reviewers) {
+    if (Object.hasOwn(map, id) && authorIdentityConflict(map[id].model, authorModels, models, identity)) {
+      return refusal('reviewer-same-model', id, 'Choose a reviewer different from the authors when another available model is at least as strong.');
+    }
+  }
+  return null;
 }
 
 function resolveSeat(choice, fallback, installed, models) {
@@ -172,5 +176,5 @@ function seatIssues(map, models) {
   return issues;
 }
 
-module.exports = { cleanSeats, cleanStoredSeats, migrateSeats, migrateDefaultModels, checkReviewer, catalog, defaultsFor, effective,
+module.exports = { cleanSeat, cleanSeats, cleanStoredSeats, migrateSeats, migrateDefaultModels, checkReviewer, catalog, defaultsFor, effective,
   leadOptions, leadConfiguration, resolveSeat, agentAlias, concreteAlias, seatIssues, rankOf };

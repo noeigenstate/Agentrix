@@ -2,7 +2,8 @@
 
 The skills library: built-in, global and project skills, their options, history and proposals, session instruction delivery, and the settings page that edits them.
 
-Operation choices save atomically with team seats and freeze with their rendered instructions when a conversation starts.
+Routing saves roles and operation choices together. A conversation freezes role metadata, seats, operation choices and rendered instructions when it starts.
+A project file can contain short custom duty and output text. Its author can write misleading prose within those limits, so applying an external edit requires owner confirmation.
 The same snapshot carries a launch map with Claude Agent aliases resolved against the catalog at launch time.
 
 ## Owns
@@ -12,9 +13,9 @@ The same snapshot carries a launch map with Claude Agent aliases resolved agains
 
 ## Interface
 - `familyOf` (`electron/features/skills/seat-rules.mjs`) — shared model family, rank, effort lists, validation and Claude operation environment allowlist.
-- `cleanSeats` (`electron/features/skills/model-seats.cjs`) ? validates seat choices and recovers v1 choices with migrateSeats. The declaring built-in supplies ordered seats and duties. The store exposes effective seats, role metadata and both families' resolved lead seats through `skills:seats`, and saves scoped choices under `team` version 2.
-- `SkillsStore` (`electron/features/skills/store.cjs`) — library operations, watching, current project/agent manifests, launch snapshots and injected routingNote(); trackModelRuntime observes local model-menu reads without another request. This entrypoint also exports probeCodex/probeClaude so main needs no internal catalog imports. Local `<sessionManifest>.json` carries fingerprint, projectRoot and managed roots, and SSH creates equivalent metadata using bundle.key after remote path expansion
-- `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including seat reads and saves
+- `authorIdentityConflict` (`electron/features/skills/role-rules.mjs`) — shared role validation, limits, kinds and reviewer independence.
+- `SkillsStore` (`electron/features/skills/store.cjs`) — skill library, project routing, launch manifests, frozen sessionRoles, catalog observation and model probes.
+- `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including routing reads, saves and confirmation actions
 - `seatHookOutput` (`electron/features/skills/agent-seat.cjs`) — model and effort rewrite and provisional report for a declared Claude seat. `observedAgentSeat` supplies final input.
 - `probeCodex` (`electron/features/skills/model-probe.cjs`) — also exports probeClaude; injected, bounded model-only probes, without creating a thread or submitting input; Claude uses no setting sources and persists no session. Main supplies the Codex RPC factory, process-tree stop and environment scrubber, and the Claude SDK loader, so Skills imports neither provider. Cleanup runs on success, failure and deadline, and late executable/SDK resolution cannot start a process.
 - `nativeSkillActions` (`electron/features/skills/native-actions.cjs`) — records successful SDK and app-server skill reads
@@ -26,7 +27,12 @@ The same snapshot carries a launch map with Claude Agent aliases resolved agains
 
 ## May import
 - `electron/features/agents/call-seat.cjs` (parse the same description prefix the Agent tab recognises)
-- `src/shared/**`
+- `src/shared/types.ts`
+- `src/shared/i18n.ts`
+- `src/shared/IconButton.tsx`
+- `src/shared/Select.tsx`
+- `src/shared/routing-command.ts`
+- `src/shared/time.ts`
 - `src/features/reading/ReadingView.tsx`
 - `electron/agent-actions.cjs`
 - `electron/codex-activity.cjs`
@@ -34,14 +40,14 @@ The same snapshot carries a launch map with Claude Agent aliases resolved agains
 - `electron/boundaries.cjs`
 
 ## Invariants
-- Built-in skills refuse save, delete, revert, accepting proposals and optimization options — shipped files are read-only and replaced on update — test: `tests/skills.test.cjs` › "skill defaults, exact public shape, read-only built-ins and local-only project scopes"
-- Built-in ids and names are defined only here; defaults, timing and requirements come from front matter — new built-ins must work without code changes or names hard-coded by callers — test: `tests/boundary-skills.test.cjs` › "no code outside the skills backend names a built-in skill id or a shipped built-in name"; test: `tests/builtin-skills.test.cjs` › "defaults, timing and requirements come from front matter for any built-in name"
+- Built-in skill IDs and names live in Skills. — test: `tests/boundary-skills.test.cjs` › "no code outside the skills backend names a built-in skill id or a shipped built-in name"
+- Only the accepted digest applies a project file. — test: `tests/project-routing.test.cjs` › "trust states select exactly one fallback and reject unavailable invalid-file actions"
 - Skill folders never escape managed storage; invalid names and symlinks are refused on read, save, import and delete — agents and imports supply these paths — test: `tests/skills.test.cjs` › "invalid names, imports and symlinked skill folders cannot escape managed storage"
 - SSH receives only enabled built-in/global text and optional adopted routing weights, never project skills or local paths — remote copies stay private to the remote session and weights stay outside committed files — test: `tests/skills.test.cjs` › "SSH bundle contains only enabled built-in/global files, never project skills or local paths"; test: `tests/skills-session.test.cjs` › "routing note is optional, current on a new delivery and included in bounded SSH manifests"
 - User-confirmed proposals wait in skill-pending; workers need a literal allowed SKILL.md path to apply an edit, and broad globs preserve proposals then restore pre-run bytes only in an isolated worker worktree; managed and shared changes remain live with unknown authorship — the user and lead retain their respective approval controls — test: `tests/skills.test.cjs` › "pending proposals do not change the active file; accept, reject and agent-created review"; test: `tests/dispatch-skill-proposals.test.cjs` › "broad scope restores edited/new/deleted skills and preserves worker versions beside the answer"; test: `tests/dispatch-skill-proposals.test.cjs` › "concurrent owner edits to global and built-in skills are report-only, unrelated inherited deliveries are ignored"
 - An enabled skill's first run is claimed only by an observed launch, once per project, when the skill is delivered. Starts under `always` claim it as before. The separate `firstOpenRun` flag gives an `auto` skill the first-run instruction. A saved `first-open` trigger migrates to `auto` with the flag set — test: `tests/builtin-skills.test.cjs` › "first run is claimed by an agent, never a shell or refresh"
 - lastUsed records only a successful skill-file read, never a mention, failed read or unrelated path — the page shows usage as fact — test: `tests/skills.test.cjs` › "successful Claude/Codex skill reads record lastUsed, failed/settled/mentioned/unrelated paths do not"
-- Claude keeps startup instructions and the manifest fallback on its command line, delivers only the skill manifest through SessionStart, deduplicates actual CLI session plus launch fingerprint and forces delivery after compact/clear; Codex's replayed note keeps a current project/agent manifest across terminal exits and app restarts; startup prunes unused launch snapshots, snapshots older than 30 days and old receipts; seat maps and the optional rendered block freeze at observed launch, including an empty block, through compact/clear — instructions already in context are reused and owner prompts are never rewritten — test: `tests/skills-session.test.cjs` › "startup/resume deduplicate CLI session plus content fingerprint, compact/clear always deliver"; test: `tests/skills-session.test.cjs` › "Codex resume keeps the current project manifest across terminal exits and app restarts"; test: `tests/skills-session.test.cjs` › "PowerShell Claude wrapper keeps the startup note and fallback before intact resume arguments"; test: `tests/skills-session.test.cjs` › "startup prunes unused and 30-day-old snapshots and receipts while keeping current manifests and live snapshots"; test: `tests/skills-session.test.cjs` › "seat changes reach the next launch while Claude launch/current snapshots stay frozen through compact and clear"
+- Launch role metadata and choices stay frozen through edits and compact/clear. — test: `tests/skills.test.cjs` › "pending routing retains accepted settings and freezes launched roles through edits"
 
 ## Not ours
 - Scrubbing private data from skill text — Activity pane (skill-privacy.cjs)

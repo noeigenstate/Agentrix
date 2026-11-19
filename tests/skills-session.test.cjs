@@ -66,8 +66,8 @@ test('operation delivery and refusal chips belong to the conversation snapshot',
   store.refresh();
   const original = { background: { model: 'sonnet' }, subagent: { model: 'gpt-mini', effort: 'medium' } };
   const launch = id => store.delivery(project, false, id, { agent: 'codex', started: true });
-  assert.deepEqual(store.setSeats('global', null, { orchestrator: { model: 'haiku', effort: 'high' },
-    designer: { model: 'claude-sonnet-5-5', effort: 'high' }, qa: { model: 'claude-sonnet-4-5', effort: 'high' } }, original), { ok: true });
+  assert.deepEqual(store.setRouting('template', null, { roles: { orchestrator: { model: 'haiku', effort: 'high' },
+    designer: { model: 'claude-sonnet-5-5', effort: 'high' }, qa: { model: 'claude-sonnet-4-5', effort: 'high' } }, operations: original }, null), { ok: true });
   const first = launch('first');
   assert.equal(first.agentSeats.designer.agentModel, 'sonnet');
   assert.equal(first.agentSeats.qa.agentModel, null);
@@ -78,8 +78,8 @@ test('operation delivery and refusal chips belong to the conversation snapshot',
   const current = () => store.seatsInfo(project.id, 'first').operations.current;
   assert.equal(current().agents.subagent.codex.reason, 'Unsupported key');
   assert.equal(store.seatsInfo(project.id).operations.rows.find(row => row.id === 'subagent').agents.codex.state, 'not-effective');
-  assert.deepEqual(store.setSeats('project', project.id, { designer: { model: 'opus', effort: 'medium' } },
-    { subagent: { model: 'gpt-new', effort: 'high' } }), { ok: true });
+  assert.deepEqual(store.setRouting('project', project.id, { roles: { designer: { model: 'opus', effort: 'medium' } },
+    operations: { subagent: { model: 'gpt-new', effort: 'high' } } }, null), { ok: true });
   assert.deepEqual(current().values.subagent, original.subagent);
   assert.deepEqual(launch('first').agentSeats.designer, first.agentSeats.designer);
   assert.equal(store.operationLevers(project.id, 'first').codex.config[key], 'gpt-mini');
@@ -125,7 +125,7 @@ test('seat changes reach the next launch while Claude launch/current snapshots s
   const instructions = fs.readFileSync(launch.sessionManifest, 'utf8');
   const allText = launch.skills.filter(item => item.enabled).map(item => [item.id, f.store.entry(item.id).text]);
   assert.equal(launch.fingerprint, digest(JSON.stringify([instructions, allText])));
-  assert.deepEqual(f.store.setSeats('global', null, { researcher: choice('haiku') }), { ok: true });
+  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, operations: {} }, null), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.researcher.model, 'sonnet');
   assert.equal(f.store.seatsInfo(null, 'terminal').current.researcher.model, 'sonnet');
   assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
@@ -145,7 +145,7 @@ test('seat changes reach the next launch while Claude launch/current snapshots s
   assert.ok(fs.statSync(rendered.path).mtimeMs > expired.getTime(), 'reusing a rendered skill renews its retention');
   assert.notEqual(next.fingerprint, launch.fingerprint);
   const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
-  assert.deepEqual(f.store.setSeats('global', null, { researcher: choice('opus') }), { ok: true });
+  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') }, operations: {} }, null), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'haiku');
   for (const source of ['compact', 'clear']) {
     const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
@@ -159,7 +159,7 @@ test('seat changes reach the next launch while Claude launch/current snapshots s
   const remoteFirst = bundle('remote-first');
   assert.match(remoteFirst.files.find(item => item.id === skill).text, /\| researcher \|.*\| opus · high \|/);
   assert.match(remoteFirst.instructions, /\{AGENTRIX_SKILLS\}\/builtin\/model-routing\/SKILL\.md/);
-  f.store.setSeats('global', null, { researcher: choice('haiku') });
+  f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, operations: {} }, null);
   assert.notEqual(bundle('remote-next').key, remoteFirst.key);
 
   const reopened = new SkillsStore({ dataDir: f.root, builtinDir: f.store.builtinDir, getProjects: () => [f.project], getAgents: f.store.getAgents });

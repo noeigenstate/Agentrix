@@ -64,10 +64,10 @@ const difference = (values, lower) => Object.fromEntries(Object.entries(values).
   typeof value === 'string' || typeof lower[id] === 'string' ? value !== lower[id]
     : value.model !== lower[id]?.model || value.effort !== lower[id]?.effort));
 
-function checkReview(values, seats, catalog) {
+function checkReview(values, seats, catalog, authors) {
   const { review } = values;
   if (!review || review === 'follow') return null;
-  const blocked = checkReviewer({ reviewer: review, developer: seats.developer }, catalog);
+  const blocked = checkReviewer({ ...seats, review }, catalog, ['review'], authors);
   return blocked ? refusal('review-same-model', 'review', blocked.message) : null;
 }
 
@@ -80,11 +80,11 @@ function backgroundModel(model, catalog) {
   return { target, pinnedHaiku };
 }
 
-function choicesFor(values, seats, catalog) {
+function choicesFor(values, seats, catalog, reviewer) {
   const choices = {};
   for (const [id, value] of Object.entries(values)) {
     if (value === 'follow') {
-      choices[id] = id === 'review' && seats.reviewer && familyOf(seats.reviewer.model) === 'codex' ? { model: seats.reviewer.model } : null;
+      choices[id] = id === 'review' && seats[reviewer] && familyOf(seats[reviewer].model) === 'codex' ? { model: seats[reviewer].model } : null;
       continue;
     }
     const family = familyOf(value.model), row = catalog.find(row => row.model === value.model), efforts = row?.efforts || BASE_EFFORTS[family];
@@ -107,8 +107,8 @@ function agentStates(choices, installed, background) {
   }));
 }
 
-function levers(input, seats, catalog, installed) {
-  const values = resolve(input), choices = choicesFor(values, seats, catalog);
+function levers(input, seats, catalog, installed, reviewer = 'reviewer') {
+  const values = resolve(input), choices = choicesFor(values, seats, catalog, reviewer);
   const background = installed.claude ? backgroundModel(choices.background.model, catalog) : {};
   const agents = agentStates(choices, installed, background);
   const applies = (id, agent) => agents[id][agent].state === 'applies' && choices[id];

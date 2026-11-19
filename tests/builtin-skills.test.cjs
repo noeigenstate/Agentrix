@@ -54,6 +54,50 @@ test('operation skill rendering reproduces the shipped defaults and replaces loo
   }
 });
 
+test('routing renderer retains the pinned HEAD cells for template, project and SSH', () => {
+  const text = fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8');
+  const { resolveTeam } = require('../electron/features/skills/team-roles.cjs');
+  const { catalogRows, fixtures } = require('./fixtures/routing-cells.json');
+  const entry = builtinMetadata(text, 'model-routing'), installed = { claude: true, codex: true };
+  const catalog = modelSeats.catalog(installed, catalogRows), defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
+  const render = config => {
+    const { roles, effective: map } = resolveTeam(entry, config, defaults);
+    const { leadAgent } = modelSeats.leadConfiguration(map, 'orchestrator', installed, catalog);
+    return renderRoutingSkill(text, { roles, map, leadAgent, installed, catalog });
+  };
+  assert.equal(render({ roles: {}, operations: {} }), text);
+  for (const { global, project, cells } of Object.values(fixtures)) {
+    const table = render({ roles: { ...global, ...project }, operations: {} }).split('<!-- agentrix:team -->')[1].split('<!-- /agentrix:team -->')[0];
+    const rendered = Object.fromEntries(table.trim().split(/\r?\n/).slice(2).map(line => {
+      const columns = line.split('|').map(cell => cell.trim());
+      return [columns[1], columns.slice(5, 7)];
+    }));
+    assert.deepEqual(rendered, cells);
+  }
+});
+
+test('routing renderer moves enabled library roles into the team and frames custom text', () => {
+  const text = fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8');
+  const { cleanConfig, resolveTeam } = require('../electron/features/skills/team-roles.cjs');
+  const entry = builtinMetadata(text, 'model-routing'), installed = { claude: true, codex: true };
+  const catalog = modelSeats.catalog(installed), defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
+  const { config } = cleanConfig({ operations: {}, roles: {
+    qa: { enabled: false },
+    frontend: { enabled: true },
+    'x-mobile': { from: 'frontend', name: 'Mobile', duty: 'Verify builds', outputs: 'Build notes' },
+  } }, entry, catalog);
+  const team = resolveTeam(entry, config, defaults);
+  const rendered = renderRoutingSkill(text, { roles: team.roles, map: team.effective, leadAgent: 'claude', installed, catalog });
+  const table = rendered.split('<!-- agentrix:team -->')[1].split('<!-- /agentrix:team -->')[0];
+  const library = rendered.split('<!-- agentrix:library -->')[1].split('<!-- /agentrix:library -->')[0];
+  assert.match(table, /Rows marked \(project role\) were written in this project\./);
+  assert.match(table, /specialties: --seat frontend/);
+  assert.match(table, /\| frontend \| Frontend .+\r?\n\| x-mobile \| Mobile \(project role, based on Frontend\) \| Verify builds \| Build notes \|/);
+  assert.doesNotMatch(table, /\| qa \|/);
+  assert.doesNotMatch(library, /\| frontend \|/);
+  assert.match(library, /\| backend \|/);
+});
+
 function firstRunSkill({ builtinDir, dataDir }, trigger, extra = '') {
   put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger: trigger === 'always' ? 'always' : 'auto' }) + extra);
   if (trigger === 'first-open') put(path.join(dataDir, 'skills.json'), JSON.stringify({ 'builtin:code-standard': { trigger } }));
@@ -191,7 +235,7 @@ test('every shipped built-in passes the strict format and has English title, sum
   assert.ok(folders.length);
   for (const folder of folders) {
     const fields = builtinMetadata(fs.readFileSync(path.join(resources, folder.name, 'SKILL.md'), 'utf8'), folder.name);
-    assert.deepEqual(Object.keys(fields).filter(key => !['seats', 'fresh', 'roles'].includes(key)), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
+    assert.deepEqual(Object.keys(fields).filter(key => !['seats', 'fresh', 'roles', 'authors', 'library'].includes(key)), ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary']);
     assert.match(fields.description, /^Use (when|before|on|at|whenever)\b/, `${folder.name} description trigger`);
     for (const key of ['title', 'summary', 'when']) assert.match(english[fields[key]] || '', /[A-Za-z]/, `${folder.name} ${key} translation`);
   }
@@ -215,8 +259,8 @@ test('seat ids, fresh roles, and duties come from front matter and the team regi
   assert.equal(f.store.seatsInfo().skill, 'builtin:example'); assert.equal(f.store.seatsInfo().lead, 'captain');
   const shipped = builtinMetadata(fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8'), 'model-routing');
   const shared = require('./fixtures/team-seats.json');
-  assert.deepEqual(shipped.seats, shared.seats); assert.deepEqual(shipped.roles, shared.roles);
-  assert.deepEqual(shipped.fresh, ['reviewer', 'qa']);
+  assert.deepEqual(shipped.seats, shared.seats); assert.deepEqual(shipped.roles.filter(role => shipped.seats.includes(role.id)), shared.roles);
+  assert.deepEqual(shipped.fresh, ['reviewer', 'qa', 'a11y']);
 });
 
 test('shipped descriptions include trigger timing and system precedence without yielding', () => {

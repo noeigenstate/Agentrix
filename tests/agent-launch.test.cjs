@@ -71,10 +71,10 @@ test('team defaults and the other-family lead are always present until routing i
   const start = nativeSeatStart({ leadOptions: store.leadOptions.bind(store) });
   assert.equal(start('claude').model, 'opus'); assert.equal(start('codex').model, 'gpt-6.1-sol');
   const claude = { model: 'sonnet', effort: 'max' };
-  assert.deepEqual(store.setSeats('global', null, { orchestrator: claude }), { ok: true });
+  assert.deepEqual(store.setRouting('template', null, { roles: { orchestrator: claude }, operations: {} }, null), { ok: true });
   assert.deepEqual(store.leadOptions('p', 'claude'), claude);
   const codex = { model: 'gpt-6.1-sol', effort: 'low', fast: false };
-  assert.deepEqual(store.setSeats('project', 'p', { orchestrator: codex }), { ok: true });
+  assert.deepEqual(store.setRouting('project', 'p', { roles: { orchestrator: codex }, operations: {} }, null), { ok: true });
   assert.deepEqual(store.leadOptions('p', 'claude'), { model: 'opus', effort: 'high' });
   assert.deepEqual(store.leadOptions('p', 'codex'), codex);
   store.setOptions('builtin:model-routing', { enabled: false });

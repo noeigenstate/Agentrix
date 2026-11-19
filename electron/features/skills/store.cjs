@@ -9,6 +9,8 @@ const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
 const operationSlots = require('./operation-slots.cjs');
+const { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
+const { readRouting, writeRouting, routingState, reviewFile, routingWatch } = require('./project-routing.cjs');
 const { renderRoutingSkill } = require('./skill-render.cjs');
 const { ModelCatalog, trackModelRuntime } = require('./model-catalog.cjs');
 const { probeCodex, probeClaude } = require('./model-probe.cjs');
@@ -35,28 +37,14 @@ function operationScope(stored, projectId) {
   return { global, project };
 }
 
-function setProjectScope(projects, id, map) {
-  if (Object.keys(map).length) Object.defineProperty(projects, id, { value: map, enumerable: true, configurable: true, writable: true });
-  else delete projects[id];
-}
-
-function updateOperations(stored, scope, projectId, values, liveProjects) {
-  const previous = operationScope(stored, null).global;
-  const global = scope === 'global' ? operationSlots.difference(values, operationSlots.defaults) : previous;
-  const projects = Object.fromEntries(Object.entries(stored?.version === 1 ? stored.projects || {} : {})
-    .filter(([id]) => liveProjects.has(id)).map(([id, map]) => [id, operationSlots.cleanStored(map)]));
-  if (scope === 'project') setProjectScope(projects, projectId, operationSlots.difference(values, operationSlots.resolve(global)));
-  return { version: 1, global, projects };
-}
-
-function operationInfo(stored, projectId, seats, catalog, installed, frozen, recent) {
-  const { global, project } = operationScope(stored, projectId);
-  const operation = operationSlots.levers(operationSlots.resolve(global, project), seats, catalog, installed);
+function operationInfo(template, config, team, catalog, installed, frozen, recent) {
+  const operation = operationSlots.levers(config?.operations ?? template.operations, team.effective, catalog, installed, team.reviewers[0]);
   if (recent) {
     const refused = Object.fromEntries([...recent].flatMap(([key, { value, reason }]) => operation.codex.config[key] === value ? [[key, reason]] : []));
     operation.agents = operationSlots.applyRefusals(operation.agents, refused);
   }
-  return { rows: operationSlots.makeRows(operation, catalog), defaults: operationSlots.resolve(), global, project, effective: operation.values,
+  return { rows: operationSlots.makeRows(operation, catalog), defaults: operationSlots.resolve(),
+    template: template.operations, config: config?.operations ?? null, effective: operation.values,
     current: frozen ? structuredClone({ values: frozen.values, agents: frozen.agents }) : null };
 }
 
@@ -70,13 +58,19 @@ function launchSeatMap(map, catalog) {
 
 function resolveOperations(info, remoteAgent) {
   const installed = remoteAgent ? { ...info.installed, [remoteAgent]: true } : info.installed;
-  return operationSlots.levers(info.operations.effective, info.effective, info.catalog, installed);
+  const reviewer = info.roles.find(role => role.enabled && role.kind === 'reviewer')?.id;
+  return operationSlots.levers(info.operations.effective, info.effective, info.catalog, installed, reviewer);
 }
+
+const routingFailure = (code, error = {}) => ({
+  ok: false, code, message: error.message ?? code,
+  ...(error.role && { role: error.role }), ...(error.seat && { seat: error.seat }), ...(error.operation && { operation: error.operation }),
+});
 
 class SkillsStore {
   constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {},
     getModels = () => [], modelProbes = {}, now = Date.now, seatSession = () => null }) {
-    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report, getModels, seatSession });
+    Object.assign(this, { dataDir, builtinDir, getProjects, getAgents, routingNote, activeProjects, changed, report, getModels, seatSession, now });
     this.globalFolder = path.join(dataDir, 'skills');
     this.optionsFile = path.join(dataDir, 'skills.json');
     const stored = readJson(this.optionsFile, {}, report, value => value && !Array.isArray(value) && typeof value === 'object'
@@ -84,6 +78,7 @@ class SkillsStore {
     this.options = Object.fromEntries(Object.entries(stored).map(([id, options]) => [id, migrateTrigger(options)]));
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
+    this.routingWatchers = new Map(); this.routingSeen = new Set();
     this.projectSkills = new Map(); this.replacementFailures = new Set();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
     this.operationResults = new Map();
@@ -152,21 +147,37 @@ class SkillsStore {
 
   migrateTeams() {
     for (const entry of this.entries.values()) {
-      const options = this.options[entry.id];
-      if (entry.source !== 'builtin' || !entry.seats?.length || options?.team?.version === 2 || !(options?.seats || options?.seatDefaultModels)) continue;
-      const legacy = options.seats || {}, global = modelSeats.migrateSeats(legacy.global);
-      const notices = global.notice ? [global.notice] : [];
-      const projects = Object.fromEntries(Object.entries(legacy.projects || {}).flatMap(([id, map]) => {
-        const project = this.getProjects().find(project => project.id === id);
-        if (!project) return [];
-        const migrated = modelSeats.migrateSeats(map);
-        if (migrated.notice) notices.push(`${project.name}: ${migrated.notice}`);
-        return [[id, migrated.map]];
+      let options = this.options[entry.id];
+      if (entry.source !== 'builtin' || !entry.seats?.length || !options || options.routing) continue;
+      if (options.team?.version !== 2 && (options.seats || options.seatDefaultModels)) options = this.migrateLegacySeats(entry, options);
+      const { team, operations, ...rest } = options;
+      if (!team && !operations) continue;
+      const roles = modelSeats.cleanStoredSeats(team?.global, entry.seats);
+      const template = { roles, operations: operationScope(operations, null).global };
+      const local = Object.fromEntries(this.getProjects().flatMap(({ id }) => {
+        const seatOverride = Object.hasOwn(team?.projects || {}, id);
+        const operationOverride = Object.hasOwn(operations?.projects || {}, id);
+        if (!seatOverride && !operationOverride) return [];
+        const projectRoles = modelSeats.cleanStoredSeats(seatOverride ? team.projects[id] : null, entry.seats);
+        return [[id, { roles: { ...roles, ...projectRoles }, operations: { ...template.operations, ...operationScope(operations, id).project } }]];
       }));
-      this.options[entry.id] = { ...options, team: { version: 2, global: global.map, projects },
-        seatDefaultModels: modelSeats.migrateDefaultModels(options.seatDefaultModels, entry.seats),
-        ...(notices.length ? { seatMigrationNotice: notices.join('\n') } : {}) };
+      this.options[entry.id] = { ...rest, routing: { template, local, trust: {} } };
     }
+  }
+
+  migrateLegacySeats(entry, options) {
+    const legacy = options.seats || {}, global = modelSeats.migrateSeats(legacy.global);
+    const notices = global.notice ? [global.notice] : [];
+    const projects = Object.fromEntries(Object.entries(legacy.projects || {}).flatMap(([id, map]) => {
+      const project = this.getProjects().find(project => project.id === id);
+      if (!project) return [];
+      const migrated = modelSeats.migrateSeats(map);
+      if (migrated.notice) notices.push(project.name + ': ' + migrated.notice);
+      return [[id, migrated.map]];
+    }));
+    return { ...options, team: { version: 2, global: global.map, projects },
+      seatDefaultModels: modelSeats.migrateDefaultModels(options.seatDefaultModels, entry.seats),
+      ...(notices.length ? { seatMigrationNotice: notices.join('\n') } : {}) };
   }
 
   pruneProjects() {
@@ -183,8 +194,9 @@ class SkillsStore {
     }
     let modified = false;
     for (const id of this.operationResults.keys()) if (!projects.has(id)) this.operationResults.delete(id);
+    for (const id of this.routingSeen) if (!projects.has(id)) this.routingSeen.delete(id);
     for (const options of Object.values(this.options)) {
-      for (const scoped of [options.firstOpenedProjects, options.team?.projects, options.operations?.projects]) {
+      for (const scoped of [options.firstOpenedProjects, options.routing?.local, options.routing?.trust]) {
         for (const id of Object.keys(scoped || {})) if (!projects.has(id)) { delete scoped[id]; modified = true; }
       }
     }
@@ -267,8 +279,9 @@ class SkillsStore {
 
   persistOptions() {
     const text = JSON.stringify(this.options);
-    if (this.optionsText === text) return;
-    try { writeFile(this.optionsFile, text); this.optionsText = text; } catch (error) { this.report(error); }
+    if (this.optionsText === text) return true;
+    try { writeFile(this.optionsFile, text); this.optionsText = text; return true; }
+    catch (error) { this.report(error); return false; }
   }
 
   pendingText(entry) { try { return readText(this.pendingPath(entry)); } catch (error) { this.report(error); return null; } }
@@ -435,7 +448,7 @@ class SkillsStore {
 
   async refreshSeats(projectId = null, terminalId = null, reason = 'manual') {
     await this.modelCatalog.refresh(reason);
-    const info = this.seatsInfo(projectId, terminalId);
+    const info = this.seatsInfo(projectId, terminalId, true);
     if (!info) return null;
     const options = this.options[info.skill] || {}, { seatMigrationNotice: migrated, seatDefaultModels: prior = {} } = options;
     const next = {}, moved = [];
@@ -453,56 +466,134 @@ class SkillsStore {
     return { ...info, ...(moved.length ? { defaultsMoved: moved } : {}), ...(migrated ? { migrated } : {}) };
   }
 
-  seatsInfo(projectId = null, terminalId = null) {
+  routingContext() {
     const entry = [...this.entries.values()].find(entry => entry.source === 'builtin' && entry.seats?.length && this.options[entry.id]?.enabled !== false);
     if (!entry) return null;
     const agents = this.getAgents(), installed = { claude: !!agents.claude?.installed, codex: !!agents.codex?.installed };
-    const stored = this.options[entry.id]?.team || {};
-    const clean = raw => modelSeats.cleanStoredSeats(raw, entry.seats);
-    const global = clean(stored.global), project = projectId && Object.hasOwn(stored.projects || {}, projectId) ? clean(stored.projects[projectId]) : null;
     const catalog = modelSeats.catalog(installed, [...(this.modelCatalog?.rows() || []), ...this.getModels()]);
-    const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats), lead = entry.seats[0];
-    const effective = modelSeats.effective(defaults, global, project || {});
+    const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
+    const stored = this.options[entry.id]?.routing || {};
+    const restore = raw => {
+      try { return raw ? cleanConfig(raw, entry, catalog, true).config : null; } catch { return null; }
+    };
+    return { entry, installed, catalog, defaults, stored, restore, template: restore(stored.template) ?? emptyConfig() };
+  }
+
+  routingSelection(context, project, review = false) {
+    const { entry, catalog, defaults, stored, restore, template } = context;
+    const file = project && project.kind !== 'ssh' ? readRouting(project.path, entry, catalog, defaults) : { digest: null };
+    if (file.digest && project) this.routingSeen.add(project.id);
+    const { config, source, reason } = routingState(project, file, stored, this.routingSeen.has(project?.id));
+    const active = restore(config);
+    if (review && file.config && source.state !== 'trusted') {
+      const next = resolveTeam(entry, file.config, defaults), previous = resolveTeam(entry, active ?? template, defaults);
+      previous.operations = operationSlots.resolve((active ?? template).operations);
+      source.review = reviewFile(file, reason, next, previous, catalog);
+    }
+    return { config: active, source, file };
+  }
+
+  seatsInfo(projectId = null, terminalId = null, includeTemplateCount = false) {
+    const context = this.routingContext();
+    if (!context) return null;
+    const { entry, installed, catalog, defaults, template } = context, lead = entry.seats[0];
+    const projects = this.getProjects(), project = projects.find(item => item.id === projectId);
+    const { config, source } = this.routingSelection(context, project, true);
+    if (includeTemplateCount) source.templateProjects = projects.filter(item =>
+      (item === project ? source : this.routingSelection(context, item).source).layer === 'template').length;
+    const team = resolveTeam(entry, config ?? template, defaults), effective = team.effective;
     const binding = terminalId ? this.seatSession(terminalId) : null;
     const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
-    const current = snapshot?.seatsMap, storedOps = this.options[entry.id]?.operations;
-    const operations = operationInfo(storedOps, projectId, effective, catalog, installed, snapshot?.operations, this.operationResults.get(projectId));
-    return { skill: entry.id, seats: [...entry.seats], roles: structuredClone(entry.roles || []), lead, authors: ['developer'],
-      ...modelSeats.leadConfiguration(effective, lead, installed, catalog), fresh: [...entry.fresh || []], defaults, global, project,
-      effective, operations, current: current ? structuredClone(current) : null, catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
+    const operations = operationInfo(template, config, team, catalog, installed, snapshot?.operations, this.operationResults.get(projectId));
+    return { skill: entry.id, seats: team.seats, roles: team.roles, lead, authors: team.authors, fresh: team.fresh,
+      ...modelSeats.leadConfiguration(effective, lead, installed, catalog), defaults, template, config, routing: source,
+      effective, operations, current: snapshot?.seatsMap ? structuredClone(snapshot.seatsMap) : null,
+      currentRoles: snapshot?.roles ? structuredClone(snapshot.roles) : null, catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
   }
 
-  setSeats(scope, projectId, raw, rawOperations) {
-    if (!['global', 'project'].includes(scope) || scope === 'project' && !this.getProjects().some(project => project.id === projectId)) throw new Error('Invalid seat scope or project.');
-    const info = this.seatsInfo(projectId);
-    if (!info) return { ok: false, code: 'unknown-seat', message: 'No enabled skill declares seats.' };
-    const unknown = raw && typeof raw === 'object' && Object.keys(raw).find(id => !info.seats.includes(id));
-    if (unknown !== undefined && typeof unknown === 'string') return { ok: false, code: 'unknown-seat', seat: unknown, message: 'Unknown seat.' };
-    let map, operations;
-    try {
-      map = modelSeats.cleanSeats(raw, info.seats, info.catalog);
-      if (rawOperations !== undefined) operations = operationSlots.clean(rawOperations, info.catalog);
-    } catch (error) {
-      const { code, message, seat, operation } = error;
-      return { ok: false, code, ...(seat ? { seat } : {}), ...(operation ? { operation } : {}), message };
-    }
-    const old = this.options[info.skill] || {}, stored = old.team || {}, liveProjects = new Set(this.getProjects().map(project => project.id));
-    const projects = Object.fromEntries(Object.entries(stored.projects || {}).filter(([id]) => liveProjects.has(id)));
-    const global = scope === 'global' ? map : info.global;
-    if (scope === 'project') setProjectScope(projects, projectId, map);
-    const nextOperations = operations === undefined ? old.operations : updateOperations(old.operations, scope, projectId, operations, liveProjects);
-    // A global save also changes every inherited project; validate all resulting effective choices atomically.
-    for (const id of scope === 'global' ? [null, ...liveProjects] : [projectId]) {
-      const clean = modelSeats.cleanStoredSeats(id === null || !Object.hasOwn(projects, id) ? null : projects[id], info.seats);
-      const seats = modelSeats.effective(info.defaults, global, clean), scopeOps = operationScope(nextOperations, id);
-      const blocked = modelSeats.checkReviewer(seats, info.catalog)
-        || operationSlots.checkReview(operationSlots.resolve(scopeOps.global, scopeOps.project), seats, info.catalog);
-      if (blocked) return blocked;
-    }
-    this.options[info.skill] = { ...old, team: { version: 2, global, projects }, ...(nextOperations && { operations: nextOperations }) };
-    this.persistOptions(); this.invalidateDelivery(); this.publish();
+  sessionRoles(projectId, sessionId) {
+    const snapshot = this.sessionSnapshot(projectId, sessionId);
+    return snapshot && Object.hasOwn(snapshot, 'roles') ? structuredClone(snapshot.roles) : this.seatsInfo(projectId)?.roles ?? null;
+  }
+
+  applyRoutingOptions(id, routing) {
+    const old = this.options[id];
+    this.options[id] = { ...old, routing };
+    const restore = () => {
+      if (old) this.options[id] = old;
+      else delete this.options[id];
+      this.persistOptions();
+    };
+    if (!this.persistOptions()) { restore(); throw new Error('Routing options are unwritable.'); }
+    return restore;
+  }
+
+  saveRoutingOptions(context, patch) {
+    try { this.applyRoutingOptions(context.entry.id, { ...context.stored, ...patch }); }
+    catch { return routingFailure('file-unwritable'); }
+    return this.routingChanged();
+  }
+
+  routingChanged() {
+    this.invalidateDelivery(); this.publish();
     return { ok: true };
+  }
+
+  writeProjectRouting(context, project, config, base) {
+    const { entry, catalog, defaults, stored } = context, id = project.id;
+    const local = { ...stored.local }; delete local[id];
+    const result = writeRouting(project.path, config, base, [entry, catalog, defaults], digest => {
+      const trust = { ...stored.trust, [id]: { digest, config, at: this.now() } };
+      return this.applyRoutingOptions(entry.id, { ...stored, local, trust });
+    });
+    return result.ok ? this.routingChanged() : result;
+  }
+
+  setRouting(scope, projectId, raw, base) {
+    const project = this.getProjects().find(item => item.id === projectId);
+    if (scope !== 'template' && (scope !== 'project' || !project)) throw new Error('Invalid routing scope or project.');
+    const context = this.routingContext();
+    if (!context) return routingFailure('unknown-seat');
+    const { entry, catalog, defaults, stored } = context;
+    if (scope === 'project' && project.kind !== 'ssh' && readRouting(project.path, entry, catalog, defaults).digest !== base) {
+      return routingFailure('file-changed');
+    }
+    let config, team;
+    try {
+      ({ config } = cleanConfig(raw, entry, catalog));
+      team = resolveTeam(entry, config, defaults);
+      const invalid = validateTeam(team, config, catalog);
+      if (invalid) return invalid;
+      config = compactConfig(entry, config, team);
+    } catch (error) {
+      const code = ['unknown-key', 'bad-format'].includes(error.code) ? 'invalid-role' : error.code || 'invalid-role';
+      return routingFailure(code, error);
+    }
+    if (scope === 'template') return this.saveRoutingOptions(context, { template: config });
+    if (project.kind === 'ssh') return this.saveRoutingOptions(context, { local: { ...stored.local, [project.id]: config } });
+    return this.writeProjectRouting(context, project, config, base);
+  }
+
+  resolveRouting(projectId, action, digest) {
+    const project = this.getProjects().find(item => item.id === projectId), context = this.routingContext();
+    if (!project || project.kind === 'ssh' || !context) return routingFailure('action-unavailable');
+    const { entry, catalog, defaults, stored, template } = context;
+    const { config, source, file } = this.routingSelection(context, project);
+    if (file.digest !== digest) return routingFailure('file-changed');
+    if (action === 'overwrite' && ['link', 'not-file'].includes(file.error?.code)) return routingFailure('file-unwritable');
+    if (!source.actions.includes(action)) return routingFailure('action-unavailable');
+    if (action === 'overwrite') {
+      const active = config ?? template, team = resolveTeam(entry, active, defaults);
+      return this.writeProjectRouting(context, project, compactConfig(entry, active, team), digest);
+    }
+    const trust = stored.trust || {};
+    if (action === 'keep') {
+      const previous = Object.hasOwn(trust, projectId) ? trust[projectId] : {};
+      return this.saveRoutingOptions(context, { trust: { ...trust, [projectId]: { ...previous, rejected: digest, at: this.now() } } });
+    }
+    const local = { ...stored.local }; delete local[projectId];
+    return this.saveRoutingOptions(context, { trust: { ...trust, [projectId]: { digest, config: file.config, at: this.now() } }, local });
   }
 
   replace(entry, text, by, project) {
@@ -606,6 +697,7 @@ class SkillsStore {
   deliveryInfo(project, remote, sessionId, agent) {
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
     const frozen = this.sessionSnapshot(project.id, sessionId), seats = this.seatsInfo(project.id);
+    const roles = frozen && Object.hasOwn(frozen, 'roles') ? frozen.roles : seats?.roles ?? null;
     const leadAgent = agent || seats?.leadAgent;
     const leadSeat = seats?.leads[leadAgent];
     const operations = frozen && Object.hasOwn(frozen, 'operations') ? frozen.operations : seats ? resolveOperations(seats, remote ? leadAgent : null) : null;
@@ -630,7 +722,7 @@ class SkillsStore {
       `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)),
-      manifest, routingNote, seatsMap, agentSeats, operations, rendered };
+      manifest, routingNote, seatsMap, agentSeats, operations, rendered, roles };
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
@@ -638,7 +730,8 @@ class SkillsStore {
     if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
       && this.refreshProjectSkills(new Set())) { this.invalidateDelivery(); this.persistOptions(); }
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
-    const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote]);
+    const signature = remote || project.kind === 'ssh' ? '' : routingWatch(project.path).signature;
+    const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote, signature]);
     if (this.deliveries.has(key)) return this.deliveries.get(key);
     const delivery = this.deliveryInfo(project, remote, sessionId, agent), { manifest } = delivery;
     if (started && sessionId) this.freezeDelivery(project.id, sessionId, delivery);
@@ -710,7 +803,7 @@ class SkillsStore {
     const key = JSON.stringify([canonical(this.dataDir), projectId, sessionId]);
     let snapshot = liveSessionSnapshots.get(key);
     if (!snapshot) { snapshot = { files: new Set() }; liveSessionSnapshots.set(key, snapshot); }
-    for (const field of ['seatsMap', 'agentSeats', 'operations', 'rendered']) {
+    for (const field of ['seatsMap', 'agentSeats', 'operations', 'rendered', 'roles']) {
       if (!Object.hasOwn(snapshot, field)) snapshot[field] = structuredClone(delivery[field]);
     }
     for (const { path: file } of Object.values(snapshot.rendered)) snapshot.files.add(file);
@@ -737,8 +830,30 @@ class SkillsStore {
     this.scanTimer.unref?.();
   }
 
+  syncRoutingWatchers() {
+    const roots = new Set(this.getProjects().filter(project => project.kind !== 'ssh').map(project => project.path));
+    for (const [root, watcher] of this.routingWatchers) if (!roots.has(root)) {
+      watcher.stop(); this.routingWatchers.delete(root);
+    }
+    for (const root of roots) if (!this.routingWatchers.has(root)) {
+      let signature = routingWatch(root).signature, timer;
+      const watcher = monitorActivity(() => routingWatch(root), state => {
+        if (signature === state.signature) return;
+        signature = state.signature;
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          if (this.closed) return;
+          try { this.routingChanged(); } catch (error) { this.report(error); }
+        }, 300);
+        timer.unref?.();
+      }, { interval: 2000, recursive: false, watch: () => routingWatch(root).folder });
+      this.routingWatchers.set(root, { poll: watcher.poll, stop() { clearTimeout(timer); watcher.stop(); } });
+    }
+  }
+
   syncWatchers() {
     if (this.closed) return;
+    this.syncRoutingWatchers();
     if (this.pruneProjects()) { this.invalidateDelivery(); this.persistOptions(); }
     const projectTargets = new Set(this.getProjects().filter(project => project.kind !== 'ssh').flatMap(projectSkillTargets));
     const roots = new Set([...this.roots().filter(entry => entry.source === 'user').map(entry => entry.root), ...projectTargets, path.join(this.dataDir, 'skill-pending')]);
@@ -754,7 +869,13 @@ class SkillsStore {
     }
   }
 
-  close() { this.closed = true; clearTimeout(this.scanTimer); for (const watcher of this.watchers.values()) watcher.stop(); this.watchers.clear(); }
+  close() {
+    this.closed = true; clearTimeout(this.scanTimer);
+    for (const watchers of [this.watchers, this.routingWatchers]) {
+      for (const watcher of watchers.values()) watcher.stop();
+      watchers.clear();
+    }
+  }
 }
 
 module.exports = { SkillsStore, MAX_SSH_BUNDLE_BYTES, probeCodex, probeClaude };

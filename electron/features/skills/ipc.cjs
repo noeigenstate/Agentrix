@@ -1,8 +1,8 @@
 function registerSkillsIpc({ handle, skills, dialog, getWindow }) {
-  handle('skills:seats', (projectId, terminalId) => skills.seatsInfo(projectId, terminalId));
+  handle('skills:seats', (projectId, terminalId) => skills.seatsInfo(projectId, terminalId, true));
   handle('skills:seats-refresh', (projectId, terminalId, reason = 'manual') => skills.refreshSeats(projectId, terminalId, reason === 'dialog' ? 'dialog' : 'manual'));
-  handle('skills:setSeats', (scope, projectId, seats, operations) =>
-    skills.setSeats(scope, projectId, seats, ...(operations === undefined ? [] : [operations])));
+  handle('skills:setRouting', (scope, projectId, config, base) => skills.setRouting(scope, projectId, config, base));
+  handle('skills:resolveRouting', (projectId, action, digest) => skills.resolveRouting(projectId, action, digest));
   handle('skills:list', () => skills.list());
   handle('skills:read', id => skills.read(id));
   handle('skills:save', (id, draft) => skills.save(id, draft));
