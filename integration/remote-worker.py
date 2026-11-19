@@ -363,14 +363,19 @@ function claude {
     done
     executable=$(type -P claude)
     if [ -z "$executable" ]; then printf 'Claude Code CLI was not found on this SSH host.\n'; return 127; fi
-    local model effort seat_fast fast=0
+    local model effort seat_fast background_model subagent_model fast=0
     local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
-    local -a lead_args=()
+    local -a lead_args=() lead_env=()
     if [[ $conversation == 1 && -r ${AGENTRIX_CLAUDE_LEAD_FILE-} ]] &&
-        { IFS= read -r model && IFS= read -r effort && IFS= read -r seat_fast; } < "$AGENTRIX_CLAUDE_LEAD_FILE" &&
+        { IFS= read -r model && IFS= read -r effort && IFS= read -r seat_fast && {
+            IFS= read -r background_model || :
+            IFS= read -r subagent_model || :
+        }; } < "$AGENTRIX_CLAUDE_LEAD_FILE" &&
         [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $seat_fast == 0 || $seat_fast == 1 ) ]]; then
         lead_args=(--model "$model" --effort "$effort")
         fast=$seat_fast
+        [[ $background_model =~ $model_pattern ]] && lead_env+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=$background_model")
+        [[ $subagent_model =~ $model_pattern ]] && lead_env+=("CLAUDE_CODE_SUBAGENT_MODEL=$subagent_model")
     fi
     __pg_emit codex-started "$(__pg_command "$@")" claude
     # Claude runs hooks with sh, so quote each argument for that shell, including paths with spaces.
@@ -397,7 +402,8 @@ PY
     local -a background=(-u CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)
     allowed=$(cat "$AGENTRIX_CLAUDE_BACKGROUND_FILE" 2>/dev/null)
     [[ $allowed == 1 ]] || background+=(CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1)
-    command env "${background[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "$executable" --settings "$settings_file" ${note[@]+"${note[@]}"} ${lead_args[@]+"${lead_args[@]}"} "$@"
+    command env "${background[@]}" ${lead_env[@]+"${lead_env[@]}"} AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
+        "$executable" --settings "$settings_file" ${note[@]+"${note[@]}"} ${lead_args[@]+"${lead_args[@]}"} "$@"
     result=$?
     rm -f -- "$settings_file"
     __pg_emit codex-exited "$result" claude
@@ -1770,10 +1776,19 @@ class Worker:
         if lead is not None:
             if not isinstance(lead, dict): raise ValueError("Invalid Claude lead seat.")
             model, effort, fast = lead.get("model"), lead.get("effort"), lead.get("fast", False)
-            if (not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}", model)
+            model_pattern = r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}"
+            if (not isinstance(model, str) or not re.fullmatch(model_pattern, model)
                     or not isinstance(effort, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", effort) or type(fast) is not bool):
                 raise ValueError("Invalid Claude lead seat.")
-            text = "%s\n%s\n%s\n" % (model, effort, "1" if fast else "0")
+            env = lead.get("env", {})
+            if not isinstance(env, dict): raise ValueError("Invalid Claude operation environment.")
+            operation_models = []
+            for name in ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL"):
+                value = env.get(name, "")
+                if not isinstance(value, str) or (value and not re.fullmatch(model_pattern, value)):
+                    raise ValueError("Invalid Claude operation model.")
+                operation_models.append(value)
+            text = "\n".join([model, effort, "1" if fast else "0", *operation_models, ""])
         filename = os.path.join(self.temp, "claude-lead")
         descriptor, temporary = tempfile.mkstemp(prefix=".claude-lead-", dir=self.temp)
         try:

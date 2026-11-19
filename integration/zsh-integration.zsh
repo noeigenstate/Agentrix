@@ -213,14 +213,19 @@ claude() {
   fi
   program=("${reply[@]}")
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  local model effort fast lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  local model effort fast background_model subagent_model lead_file=${AGENTRIX_BOOTSTRAP-}.lead
   local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
-  local -a lead_args=()
+  local -a lead_args=() lead_env=()
   if [[ $conversation == 1 && -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
-    { IFS= read -r model && IFS= read -r effort && IFS= read -r fast; } < "$lead_file" &&
+    { IFS= read -r model && IFS= read -r effort && IFS= read -r fast && {
+        IFS= read -r background_model || :
+        IFS= read -r subagent_model || :
+      }; } < "$lead_file" &&
     [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $fast == 0 || $fast == 1 ) ]]; then
     lead_args=(--model "$model" --effort "$effort")
     if [[ $fast == 1 ]]; then launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback; fi
+    [[ $background_model =~ $model_pattern ]] && lead_env+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=$background_model")
+    [[ $subagent_model =~ $model_pattern ]] && lead_env+=("CLAUDE_CODE_SUBAGENT_MODEL=$subagent_model")
   fi
   local settings=$launch_fallback
   if [[ $__pg_hook_channel == http ]]; then
@@ -247,7 +252,8 @@ claude() {
   # This Claude Code is a planner: the shims come first on its PATH, at depth zero (shims/BOUNDARY.md).
   local -a planner=()
   [[ -n $__pg_shims ]] && planner=(${(0)"$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env 2>/dev/null)"})
-  command env "${planner[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" "${program[@]}" "${settings_args[@]}" "${note[@]}" "${lead_args[@]}" "$@"
+  command env "${planner[@]}" "${lead_env[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
+    "${program[@]}" "${settings_args[@]}" "${note[@]}" "${lead_args[@]}" "$@"
   local code=$?
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
   __pg_send codex-exited $code claude
