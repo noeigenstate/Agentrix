@@ -1,7 +1,10 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 const { allowReadingMath } = require('../src/features/reading/markdown-math-sanitize.ts');
+const { mayContainMath } = require('../src/features/reading/markdown-math.ts');
 const { menuText, selectedWithin } = require('../src/features/reading/message-menu.ts');
 const { quoteExcerpt, splitQuote, withQuote } = require('../src/features/reading/message-quote.ts');
 
@@ -105,6 +108,8 @@ test('the sanitizer admits formula layout only inside a formula and still escape
   assert.equal(style(plain, 'height:1em;'), false);
   assert.equal(style({ ...plain, closest: svg.closest }, 'height:1em;top:-0.3em;'), true);
   assert.equal(style({ ...plain, closest: svg.closest }, 'position:fixed;'), false);
+  assert.equal(style({ ...plain, closest: svg.closest }, 'top:997em;margin-left:-1000em;'), false);
+  assert.equal(style({ ...plain, closest: svg.closest }, 'top:-10em;'), true);
   assert.equal(style({ ...plain, closest: svg.closest }, 'color:url(https://example.invalid);'), false);
   assert.match(parse('<span data-reading-math-source="x" style="position:fixed">$x$</span>'), /&lt;span data-reading-math-source=/);
 });
@@ -114,7 +119,7 @@ test('message copy and quote retain the LaTeX source even when the formula is se
   assert.equal(splitQuote(withQuote(quoteExcerpt(sample), 'continue')).quote, sample);
 
   const source = String.raw`\(x^2\)`, rendered = 'Before x² after';
-  const formula = { getAttribute: () => source };
+  const formula = { getAttribute: () => encodeURIComponent(source) };
   const makeRange = (start, end) => ({
     intersectsNode: node => node === formula,
     cloneRange: () => makeRange(start, end),
@@ -128,3 +133,160 @@ test('message copy and quote retain the LaTeX source even when the formula is se
   assert.equal(menuText(sample, selected), 'Before ' + source + ' after');
   assert.equal(quoteExcerpt(selected), 'Before ' + source + ' after');
 });
+
+test('oversized, hidden, overlapping, negatively spaced and custom-painted formulas show source', () => {
+  const formulas = [
+    String.raw`\smash{\raisebox{-1000em}{\colorbox{white}{FAKE}}}`, String.raw`\raisebox{-1000em}{x}`, String.raw`\rule[-1000em]{1em}{1em}`,
+    String.raw`\kern{-1000em}x`, String.raw`\hspace{-500em}x`, String.raw`\mkern-9000mu x`, String.raw`\hspace{-.1em}x`,
+    String.raw`\text{visible}\phantom{hidden}`, String.raw`\hphantom{x}`, String.raw`\vphantom{x}`, String.raw`\smash{x}`,
+    String.raw`\llap{x}`, String.raw`\rlap{x}`, String.raw`\mathllap{x}`, String.raw`\mathrlap{x}`, String.raw`\mathclap{x}`,
+    String.raw`\color{transparent}x`, String.raw`\textcolor{rgba(0,0,0,0)}{x}`, String.raw`\colorbox{white}{x}`,
+    String.raw`\def\hide{\phantom{x}}\hide`, String.raw`\def\space{\mkern-2mu}\space x`,
+  ];
+  for (const formula of formulas) assert.ok(parse('$' + formula + '$').includes('<code>$' + formula + '$</code>'), formula);
+  assert.match(parse(String.raw`$\sqrt{x}+\frac{1}{2}$`), /class="katex"/);
+});
+
+test('limits formula source bytes and the count and HTML bytes of each reply', () => {
+  const unicode = '$' + String.raw`\text{` + '汉'.repeat(700) + '}$';
+  assert.ok(parse(unicode).includes('<code>' + unicode + '</code>'));
+  const many = '$x$ '.repeat(301);
+  assert.equal(count(parse(many), /class="katex"/g), 300);
+  assert.equal(count(parse(many), /<code>\$x\$<\/code>/g), 1);
+  assert.match(parse('$x$'), /class="katex"/);
+
+  const large = '$' + 'x+'.repeat(400) + '1$';
+  const one = parse(large).slice(3, -5);
+  const fits = Math.floor(1024 * 1024 / Buffer.byteLength(one));
+  assert.ok(fits > 0 && fits < 300);
+  const html = parse((large + '\n\n').repeat(fits + 2));
+  assert.equal(count(html, /class="katex"/g), fits);
+  assert.equal(count(html, /<code>/g), 2);
+});
+
+test('the LRU reuses streamed formulas, separates display mode and evicts old entries', async t => {
+  const { default: katex } = await import('katex');
+  const render = katex.renderToString;
+  const calls = [];
+  t.mock.method(katex, 'renderToString', (text, options) => {
+    calls.push([text, !!options.displayMode]);
+    return render(text, options);
+  });
+  const formula = 'q_{39817642}';
+  parse('prefix $' + formula + '$');
+  parse('prefix $' + formula + '$ and more');
+  parse('$$' + formula + '$$');
+  assert.deepEqual(calls, [[formula, false], [formula, true]]);
+  for (let i = 0; i < 98; i++) parse('$a_{' + i + '}$');
+  parse('$' + formula + '$');
+  assert.deepEqual(calls.at(-1), [formula, false]);
+});
+
+test('dense formulas and escaped dollar preflight scale with input size', t => {
+  const measure = work => Math.min(...Array.from({ length: 3 }, () => {
+    const start = performance.now();
+    work();
+    return performance.now() - start;
+  }));
+  parse('word $x$ '.repeat(300));
+  const small = measure(() => parse('word $x$ '.repeat(2000)));
+  const large = measure(() => parse('word $x$ '.repeat(8000)));
+  const escaped = '$' + String.raw`\$`.repeat(50000);
+  const preflight = measure(() => assert.equal(mayContainMath(escaped), false));
+  t.diagnostic('2k / 8k formulas: ' + small.toFixed(1) + ' / ' + large.toFixed(1) + ' ms. Escaped dollars: ' + preflight.toFixed(1) + ' ms.');
+  assert.ok(large < Math.max(small * 9, 200));
+  assert.ok(preflight < 250);
+});
+
+test('Vite keeps every KaTeX font as a local WOFF2 and leaves other assets on the default policy', async () => {
+  const { default: config } = await import('../vite.config.ts');
+  const { build, plugins } = config({ command: 'build', mode: 'production' });
+  const cssFile = require.resolve('katex/dist/katex.min.css');
+  const css = fs.readFileSync(cssFile, 'utf8');
+  const plugin = plugins.find(plugin => plugin.name === 'katex-woff2-only');
+  const transformed = plugin.transform(css, cssFile);
+  assert.match(transformed, /KaTeX_Size3-Regular\.woff2/);
+  assert.doesNotMatch(transformed, /\.(?:woff|ttf)\)/);
+  assert.equal(build.assetsInlineLimit(path.join(path.dirname(cssFile), 'fonts/KaTeX_Size3-Regular.woff2')), false);
+  assert.equal(build.assetsInlineLimit('/src/icons/small.svg'), undefined);
+});
+
+const browserPath = [
+  process.env['ProgramFiles(x86)'] && path.join(process.env['ProgramFiles(x86)'], 'Microsoft/Edge/Application/msedge.exe'),
+  process.env.ProgramFiles && path.join(process.env.ProgramFiles, 'Google/Chrome/Application/chrome.exe'),
+  '/usr/bin/chromium', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+].find(filename => filename && fs.existsSync(filename));
+
+test('Chromium keeps XML-like formula source through DOMPurify and clips reply paint', { skip: !browserPath, timeout: 30000 }, async t => {
+  const { chromium } = require('playwright-core');
+  const ts = require('typescript');
+  let browser;
+  try {
+    browser = await chromium.launch({ executablePath: browserPath, headless: true });
+  } catch (error) {
+    if (/spawn EPERM/.test(error.message)) return t.skip('The runner prohibits spawning Chromium.');
+    throw error;
+  }
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const root = path.resolve(__dirname, '..');
+  const files = ['Markdown.tsx', 'markdown-math-sanitize.ts', 'message-menu.ts'];
+  const modules = Object.fromEntries(files.map(file => {
+    const source = fs.readFileSync(path.join(root, 'src/features/reading', file), 'utf8');
+    const compilerOptions = { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 };
+    return [file, ts.transpileModule(source, { compilerOptions }).outputText];
+  }));
+  const sources = ['$E[X]>0$', '$a-->b$', String.raw`$\text{</style>}$`];
+  const rendered = sources.map(parse);
+  const wideMath = parse('$$' + 'x+'.repeat(45) + 'x$$');
+  await page.addScriptTag({ path: path.join(root, 'node_modules/dompurify/dist/purify.js') });
+  await page.addStyleTag({ path: require.resolve('katex/dist/katex.min.css') });
+  await page.addStyleTag({ path: path.join(root, 'src/features/reading/reading.css') });
+  const result = await browserMathFixture(page, modules, rendered, wideMath);
+  assert.deepEqual(result.copied, sources);
+  assert.equal(result.renderedMath, sources.length);
+  assert.equal(result.containment, 'paint');
+  assert.equal(result.hit, 'permission');
+  assert.deepEqual(result.scrolls, [true, true]);
+});
+
+function browserMathFixture(page, modules, rendered, wideMath) {
+  return page.evaluate(({ modules, rendered, wideMath }) => {
+    const exports = new Map();
+    const load = name => {
+      if (name === 'dompurify') return { default: window.DOMPurify };
+      const file = name.replace(/^\.\//, '');
+      if (!modules[file]) return {};
+      if (!exports.has(file)) {
+        const module = { exports: {} };
+        new Function('require', 'exports', modules[file])(load, module.exports);
+        exports.set(file, module.exports);
+      }
+      return exports.get(file);
+    };
+    const { sanitizeReadingHtml } = load('Markdown.tsx');
+    const { selectedWithin } = load('message-menu.ts');
+    const reply = document.createElement('div');
+    reply.className = 'reading-markdown';
+    reply.style.width = '160px';
+    reply.innerHTML = rendered.map(sanitizeReadingHtml).join('');
+    const renderedMath = reply.querySelectorAll('.katex-html').length;
+    document.body.append(reply);
+    const copied = [...reply.querySelectorAll('.katex-html')].map(formula => {
+      const range = document.createRange();
+      range.selectNodeContents(formula);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return selectedWithin(reply, selection);
+    });
+    reply.insertAdjacentHTML('beforeend', sanitizeReadingHtml(wideMath));
+    reply.insertAdjacentHTML('beforeend', '<div class="reading-code"><pre> ' + 'w'.repeat(300) + '</pre></div>');
+    reply.insertAdjacentHTML('beforeend', '<div style="position:absolute;top:100%;width:100px;height:50px;background:white;z-index:10"></div>');
+    reply.insertAdjacentHTML('afterend', '<button id="permission">Allow</button>');
+    const permission = document.getElementById('permission').getBoundingClientRect();
+    const hit = document.elementFromPoint(permission.left + 1, permission.top + 1).id;
+    const scrolls = [...reply.querySelectorAll('.reading-math-display, pre')].map(node => node.scrollWidth > node.clientWidth);
+    return { copied, renderedMath, containment: getComputedStyle(reply).contain, hit, scrolls };
+  }, { modules, rendered, wideMath });
+}

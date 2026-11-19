@@ -34,15 +34,9 @@
 :is(.reading-view, .conversation-feed)[data-agent="claude"] { --list-marker: var(--agent-claude); --list-number: var(--agent-claude-text); }
 
 /* The answer, as Markdown. */
-.reading-markdown { overflow-wrap: anywhere; min-width: 0; }
+.reading-markdown { overflow-wrap: anywhere; min-width: 0; contain: paint; }
 .reading-markdown .reading-math-display { display: block; max-width: 100%; overflow-x: auto; margin: 8px 0; white-space: pre-wrap; }
 .reading-math-display > .katex-display { width: max-content; min-width: 100%; margin: 0; }
-/* This is KaTeX's only WOFF2 below Vite's inline limit. Use a same-origin font under the app CSP. */
-@font-face {
-  font-family: KaTeX_Size3;
-  src: url('katex/dist/fonts/KaTeX_Size3-Regular.woff2?no-inline') format('woff2');
-  font-style: normal; font-weight: 400; font-display: block;
-}
 .reading-markdown > :first-child { margin-top: 0; }.reading-markdown > :last-child { margin-bottom: 0; }
 .reading-markdown p { margin: 6px 0; }
 .reading-markdown :is(h1, h2, h3, h4, h5, h6) { margin: 14px 0 6px; padding: 2px 0 2px 10px; border-left: 2px solid var(--border); font-size: calc(14px * var(--reading-text)); font-weight: 700; line-height: 1.5; color: var(--text-1); }

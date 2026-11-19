@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import createDOMPurify, { type Config } from 'dompurify';
 import { readingMarked } from './markdown-escape';
-import { allowReadingMath, mathSourceAttribute, readingMathAttributes } from './markdown-math-sanitize.ts';
+import { allowReadingMath, mathDisplayClass, mathSourceAttribute, readingMathAttributes } from './markdown-math-sanitize.ts';
 import { QUICK, useLongMarkdown } from './useLongMarkdown';
 import { currentLanguage, t } from '../../shared/i18n';
 import { markReadingPaths } from './reading-paths';
@@ -14,7 +14,7 @@ let mathPurifier: typeof purifier | undefined;
 const DOCUMENT = /^(?:markdown|md|mdx)$/i, DOCUMENT_LIMIT = 20000;
 // What the agent wrote, laid out as Markdown. Only plain structure survives: no raw HTML, no images (an
 // answer has no business loading anything), and links open outside through the window's link handler.
-function sanitizeReadingHtml(parsed: string) {
+export function sanitizeReadingHtml(parsed: string) {
   const options: Config = {
     ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'hr', 'br', 'em', 'strong', 's', 'del', 'input', 'kbd'],
     ALLOWED_ATTR: ['href', 'class', 'type', 'checked', 'disabled', 'start', 'align'],
@@ -22,7 +22,8 @@ function sanitizeReadingHtml(parsed: string) {
     // Preserve file/drive references as well as DOMPurify's usual safe links; scripts remain disallowed.
     ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[a-z]:(?:[\\/]|%5c|%2f)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
   };
-  if (!parsed.includes(mathSourceAttribute + '="') || !purifier.isSupported) return purifier.sanitize(parsed, options);
+  const containsMath = parsed.includes(mathSourceAttribute + '="') || parsed.includes('class="' + mathDisplayClass + '"');
+  if (!containsMath || !purifier.isSupported) return purifier.sanitize(parsed, options);
   if (!mathPurifier) {
     mathPurifier = createDOMPurify(window);
     allowReadingMath(mathPurifier);

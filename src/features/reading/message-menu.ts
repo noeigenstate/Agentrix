@@ -27,10 +27,15 @@ function selectedMathSource(range: Range, math: Element[]) {
   for (const formula of math) {
     const before = rest.cloneRange();
     before.setEndBefore(formula);
-    parts.push(before.toString(), formula.getAttribute(mathSourceAttribute) || '');
+    parts.push(before.toString(), decodeMathSource(formula));
     rest.setStartAfter(formula);
   }
   return parts.join('') + rest.toString();
+}
+
+function decodeMathSource(formula: Element) {
+  const encoded = formula.getAttribute(mathSourceAttribute) ?? '';
+  try { return decodeURIComponent(encoded); } catch { return encoded; }
 }
 
 // What 引用 and 复制 act on: the selected part when there is one, otherwise the whole message.

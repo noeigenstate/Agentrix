@@ -1,7 +1,7 @@
 import { Marked, Tokenizer, type MarkedExtension, type MarkedOptions, type Token } from 'marked';
 import { markdownEmphasis } from '../../shared/markdown-emphasis.ts';
 import { findPathCandidates } from '../terminal/terminal-links.ts';
-import { markdownMath, mayContainMath, splitBeforeMath } from './markdown-math.ts';
+import { markdownMath, mayContainMath } from './markdown-math.ts';
 
 // The reading view's own Markdown parser. What looks like HTML in an agent's answer is text: "<title>", "git clone
 // <url>", "Promise<void>". Passed through, the page would take <title> or <style> as an element that swallows the rest
@@ -27,13 +27,7 @@ const readingOptions: MarkedExtension = { async: false, gfm: true, breaks: true,
 } };
 
 const plainMarked = new Marked(markdownEmphasis, readingOptions);
-const mathMarked = new Marked(markdownEmphasis, readingOptions, markdownMath, {
-  tokenizer: {
-    inlineText(source) {
-      return splitBeforeMath(source, markdownEmphasis.tokenizer!.inlineText!.call(this, source) || undefined);
-    },
-  },
-});
+const mathMarked = new Marked(markdownEmphasis, readingOptions, markdownMath);
 
 export const readingMarked = {
   parse(text: string, options?: MarkedOptions, math = true) {
