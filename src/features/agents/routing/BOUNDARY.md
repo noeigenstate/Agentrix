@@ -1,6 +1,6 @@
 # Boundary: Model-routing dialog
 
-Shows the team's routing choices and frozen conversation seats, and saves the owner's edits to the selected scope for the next session.
+Shows team seats, operation models and the frozen conversation choices. Saves the owner's edits to the selected scope for the next session.
 The dialog uses `src/features/agents/seats-dialog.css` for its layout and controls.
 
 ## Owns
@@ -8,6 +8,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - `src/features/agents/skill-seats.ts`
 - `src/features/agents/SeatsHost.tsx`
 - `src/features/agents/RoutingKeyCard.tsx`
+- `src/features/agents/OperationRows.tsx`
 
 ## Interface
 - `SeatsHost` (`src/features/agents/SeatsHost.tsx`) — handles scoped routing requests and opens the dialog. App mounts it through ActivityPane's re-export.
@@ -24,7 +25,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 ## Invariants
 - The chart uses the team order and exposes every seat's controls — test: `tests/seats-ui.test.cjs` › "org chart uses fixture order and gives each seat its own model, effort and fast controls"
 - The edit menu uses the model's own effort levels and fast availability — test: `tests/seats-ui.test.cjs` › "the 更换 menu lists the row’s own efforts, switches fast only where the row has it"
-- Save sends only overrides for the selected scope — test: `tests/seats-ui.test.cjs` › "the saved payload contains only the seat overrides for the current scope"
+- Saves contain scoped overrides — test: `tests/seats-ui.test.cjs` › "operation changes layer with seat changes, save both diffs, reset a scope, and preserve frozen values"
 - Unavailable models stay disabled and the current conversation is read-only — test: `tests/seats-ui.test.cjs` › "unavailable models are greyed with their reason"
 - A blocked reviewer prevents saving and offers a one-click fix — test: `tests/seats-ui.test.cjs` › "a blocked reviewer is framed, named 已阻止, explained with a one-click fix and cannot be saved"
 - An alias and its resolved ID count as one model for reviewer independence — test: `tests/seats-ui.test.cjs` › "an alias and the id it resolves to are one model for the reviewer rule"

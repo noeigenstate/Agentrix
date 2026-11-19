@@ -1,5 +1,5 @@
 import type { CallRow } from './subagent-splits.ts';
-import type { Seat, SeatId, SeatIssue, SeatMap, SeatModel, SeatRole, SeatsInfo, SeatsSaveError } from '../../shared/types';
+import type { OperationId, OperationMap, OperationRow, OperationValue, Seat, SeatId, SeatIssue, SeatMap, SeatModel, SeatRole, SeatsInfo, SeatsSaveError } from '../../shared/types';
 import { BASE_EFFORTS, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
 
 export { familyOf };
@@ -79,13 +79,20 @@ const mergeSeats = (...layers: (SeatMap | null | undefined)[]): SeatMap => Objec
 // What a scope's save starts from, and the layer under it: the owner's choice is only what differs from that layer.
 export const lowerLayer = (info: SeatsInfo, scope: Scope): SeatMap => scope === 'project' ? mergeSeats(info.defaults, info.global) : info.defaults;
 export const baselineFor = (info: SeatsInfo, scope: Scope): SeatMap => scope === 'project' ? mergeSeats(info.defaults, info.global, info.project) : mergeSeats(info.defaults, info.global);
-export const startScope = (info: SeatsInfo, projectId?: string): Scope => projectId && info.project && Object.keys(info.project).length ? 'project' : 'global';
+export const startScope = (info: SeatsInfo, projectId?: string): Scope =>
+  projectId && (Object.keys(info.project ?? {}).length || Object.keys(info.operations?.project ?? {}).length) ? 'project' : 'global';
 
 // A seat's model moved into another seat keeps its effort and fast only where the new model allows them (Claude fast stays off unless the seat already had it).
 function fitSeat(seat: Seat, row: SeatModel): Seat {
-  const effort = row.efforts.includes(seat.effort) ? seat.effort : row.defaultEffort && row.efforts.includes(row.defaultEffort) ? row.defaultEffort : row.efforts.includes('high') ? 'high' : row.efforts[row.efforts.length - 1];
+  const effort = fitEffort(row, seat.effort);
   if (!row.fast) return { model: row.model, effort };
   return { model: row.model, effort, fast: row.family === 'codex' ? seat.fast ?? true : familyOf(seat.model) === 'claude' && !!seat.fast };
+}
+
+function fitEffort(row: SeatModel, effort?: string) {
+  if (effort && row.efforts.includes(effort)) return effort;
+  if (row.defaultEffort && row.efforts.includes(row.defaultEffort)) return row.defaultEffort;
+  return row.efforts.includes('high') ? 'high' : row.efforts[row.efforts.length - 1];
 }
 
 function assignRow(map: SeatMap, slot: SlotId, row: SeatModel | undefined): Edit {
@@ -184,13 +191,44 @@ export function scopePayload(working: SeatMap, lower: SeatMap): SeatMap {
 
 type SeatsApi = Pick<Window['agentrix'], 'setSkillSeats'>;
 // One save: the chosen scope and the edited map. A refusal or a failed call comes back as its message, never thrown.
-export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string | null, working: SeatMap, lower: SeatMap): Promise<{ ok: true } | { ok: false; message: string }> {
+export async function saveSeats(
+  api: SeatsApi, scope: Scope, projectId: string | null, working: SeatMap, lower: SeatMap, operations?: OperationMap,
+): Promise<{ ok: true } | { ok: false; message: string; error?: SeatsSaveError }> {
   try {
-    const result = await api.setSkillSeats(scope, scope === 'project' ? projectId : null, scopePayload(working, lower));
-    return result.ok ? { ok: true } : { ok: false, message: result.message };
+    const args = [scope, scope === 'project' ? projectId : null, scopePayload(working, lower)] as const;
+    const result = operations === undefined ? await api.setSkillSeats(...args) : await api.setSkillSeats(...args, operations);
+    return result.ok ? { ok: true } : { ok: false, message: result.message, ...(result.operation ? { error: result } : {}) };
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) };
   }
+}
+
+export const sameOperation = (a?: OperationValue, b?: OperationValue) =>
+  a === b || (!!a && !!b && a !== 'follow' && b !== 'follow' && a.model === b.model && a.effort === b.effort);
+
+export function operationLayers(operations: SeatsInfo['operations'], scope: Scope) {
+  const global = { ...operations?.defaults, ...operations?.global };
+  return scope === 'project' ? { lower: global, baseline: { ...global, ...operations?.project } } : { lower: operations?.defaults ?? {}, baseline: global };
+}
+
+export function operationDiff(values: OperationMap, base: OperationMap): OperationMap {
+  return Object.fromEntries(Object.entries(values).filter(([id, value]) => !sameOperation(value, base[id as OperationId])));
+}
+
+export const operationUsesEffort = (row: OperationRow, family: Family) => row.effort === 'always' || (row.effort === 'codex' && family === 'codex');
+
+export function operationFamilyReason(row: OperationRow, family: Family) {
+  if (row.families.includes(family)) return '';
+  return row.families.includes('claude') ? '此操作只能用 Claude 模型' : '此操作只能用 Codex 模型';
+}
+
+export function operationAssignment(row: OperationRow, model: string, catalog: SeatModel[], previous?: OperationValue) {
+  const choice = rowFor(catalog, model);
+  if (!choice) return { reason: '模型名只能含字母、数字和 . : @ + / [ ] - _，以字母或数字开头，最多 160 个字符' };
+  const family = operationFamilyReason(row, choice.family);
+  if (family || !choice.available) return { reason: family || choice.reason || '不可用' };
+  const effort = operationUsesEffort(row, choice.family) ? fitEffort(choice, previous === 'follow' ? undefined : previous?.effort) : undefined;
+  return { value: effort ? { model, effort } : { model } };
 }
 
 

@@ -162,14 +162,14 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
     </div>}
     {notice && <p className="activity-note" role="status">{[notice.text, notice.resets].filter(Boolean).join(' · ')}</p>}
     {notice && checkNotice && <BillingLink projectId={projectId} />}
-    {source && <p className="activity-note">{source}</p>}
-    {current && tokens?.context && !tokens.round && <p className="activity-note">{t('本轮从更早的记录开始，暂无法统计。')}</p>}
-    {current && tokens?.context && !tokens.total && <p className="activity-note">{t('本次对话的总量在更早的记录里。')}</p>}
+    {source && <p className="activity-note" data-usage-detail>{source}</p>}
+    {current && tokens?.context && !tokens.round && <p className="activity-note" data-usage-detail>{t('本轮从更早的记录开始，暂无法统计。')}</p>}
+    {current && tokens?.context && !tokens.total && <p className="activity-note" data-usage-detail>{t('本次对话的总量在更早的记录里。')}</p>}
     {current && agent === 'codex' && plan && <ResetQuota key={`${terminal.id}:${terminal.sessionId}:${terminal.agentStartedAt}`} terminal={terminal} />}
   </section>;
 }
 
-// Both agents' sections, one under the other; the block's content, which scrolls under its fixed title.
+// Both agents' usage sections take their natural height.
 export const AgentSections = ({ usage, terminal, projectId }: { usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) => <div className="api-agents">
   {AGENTS.map(agent => <AgentSection key={agent} agent={agent} usage={usage} terminal={terminal} projectId={projectId} />)}
 </div>;

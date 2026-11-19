@@ -65,6 +65,61 @@ async function background(turn) {
   await notify(child, turn); await hook('stop', { session_id: child }); await hook('stop');
   await hook('notify', { notification_type: 'idle_prompt', message: 'Claude is waiting for your input' });
 }
+
+async function checkPaneFit(pane) {
+  const failures = await pane.evaluate(live => {
+    const inspect = (node, prefix) => {
+      const bounds = node.getBoundingClientRect();
+      const boxes = [...node.querySelectorAll('*')].filter(item => item instanceof HTMLElement && item.clientHeight > 0);
+      const bad = boxes.filter(item => {
+        const box = item.getBoundingClientRect();
+        return item.scrollHeight > item.clientHeight || box.right > bounds.right + 1 || box.bottom > bounds.bottom + 1;
+      }).map(item => `${prefix} ${item.className || item.tagName}`);
+      if (node.scrollHeight > node.clientHeight) bad.push(`${prefix} pane scrolls`);
+      const stack = [...node.children, ...node.querySelectorAll('.api-agent')];
+      for (const item of stack) {
+        const next = item.nextElementSibling;
+        if (next && item.getBoundingClientRect().bottom > next.getBoundingClientRect().top + 1) bad.push(`${prefix} ${item.className} overlaps ${next.className}`);
+      }
+      return bad;
+    };
+
+    const problems = inspect(live, 'live');
+    const fixture = live.cloneNode(true);
+    const titleHeight = document.querySelector('.titlebar')?.getBoundingClientRect().height ?? 0;
+    Object.assign(fixture.style, { position: 'fixed', width: '340px', top: `${titleHeight}px`, bottom: 'auto', visibility: 'hidden' });
+    const tasks = fixture.querySelector('.activity-main-tasks');
+    tasks.removeAttribute('data-expanded');
+    const row = tasks.querySelector('li');
+    while (tasks.children.length < 4) tasks.append(row.cloneNode(true));
+    if (!tasks.querySelector('.activity-task-fold')) {
+      const fold = document.createElement('li');
+      fold.className = 'activity-task-fold';
+      fold.innerHTML = '<button type="button" aria-expanded="false">还有 3 条</button>';
+      tasks.append(fold);
+    }
+    const [, codex] = fixture.querySelectorAll('.api-agent');
+    const codexMetrics = document.createElement('div');
+    codexMetrics.className = 'activity-metrics';
+    for (const meter of fixture.querySelectorAll('.activity-limit')) codexMetrics.append(meter.cloneNode(true));
+    codex.append(codexMetrics);
+    const source = fixture.querySelector('[data-usage-detail]');
+    if (source) codex.append(source.cloneNode(true));
+    fixture.setAttribute('aria-hidden', 'true');
+    document.body.append(fixture);
+    try {
+      for (const height of [900, 800]) {
+        fixture.style.height = `${height - titleHeight}px`;
+        problems.push(...inspect(fixture, `340×${height - titleHeight}`));
+        const rows = getComputedStyle(fixture.querySelector('.activity-routing-rows')).gridTemplateColumns.split(' ');
+        if (rows.length !== (height === 900 ? 1 : 2)) problems.push(`${height}px window has ${rows.length} routing columns`);
+      }
+    } finally { fixture.remove(); }
+    return problems;
+  });
+  assert.deepEqual(failures, [], 'the folded pane and the full 340px fixture fit without scrolling or overlap');
+}
+
 async function launch() {
   application = await electron.launch({ executablePath: packaged ? path.join(root, 'release/win-unpacked/Agentrix.exe') : require('electron'), args: packaged ? [] : [root], cwd: root, env, timeout: 30000 });
   page = await application.firstWindow();
@@ -193,12 +248,7 @@ try {
   const seats = page.locator('.seats-dialog');
   await seats.waitFor();
   await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached' });
-  await overview.locator('li').first().scrollIntoViewIfNeeded();
-  const overflow = await pane.evaluate(node => {
-    const right = node.getBoundingClientRect().right + 1;
-    return [...node.querySelectorAll('.activity-card, .activity-metric, .activity-call-rows li, .activity-routing-key, .activity-routing-row')].filter(item => item.getBoundingClientRect().right > right).map(item => item.className);
-  });
-  assert.deepEqual(overflow, [], 'nothing in the activity pane reaches past its edge');
+  await checkPaneFit(pane);
   await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await waitFor(async () => !await pane.count(), 'activity pane can be hidden');
   await page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true }).click(); await pane.waitFor();
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));

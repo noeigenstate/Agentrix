@@ -115,6 +115,7 @@ function compile(file, hooks, stubs = {}) {
     if (name === '@phosphor-icons/react') return icon;
     if (name === '../../shared/i18n') return { currentLanguage: () => 'en', t: (text, values = {}) => (en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) };
     if (name === './skill-seats') return seatsLib;
+    if (name === './OperationRows') return compile('OperationRows.tsx', hooks, stubs);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
       routingModelName: require('../src/shared/routing-command.ts').routingModelName,
       routingRoleName: text => en['席位 · ' + text] ?? en[text] ?? text,
@@ -144,16 +145,25 @@ function mount(t, file, name, props, stubs) {
   t.after(() => { handle.unmount(); globalThis.window = previous.window; globalThis.document = previous.document; });
   return handle;
 }
+const inlineComponents = new Set([
+  'RoutingTabs', 'MenuHeader', 'OperationRows', 'OperationTitle', 'OperationCard', 'CurrentOperations', 'OperationSummary', 'Status',
+  'DialogHeader', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu',
+]);
+const childrenOf = node => inlineComponents.has(node.type?.name) ? node.type(node.props) : node.props.children;
 const walk = (node, visit) => {
   if (Array.isArray(node)) return node.forEach(child => walk(child, visit));
   if (!node || typeof node !== 'object' || !node.props) return;
   visit(node);
-  walk(node.props.children, visit);
+  walk(childrenOf(node), visit);
 };
 const findAll = (tree, test) => { const found = []; walk(tree, node => { if (test(node)) found.push(node); }); return found; };
 const find = (tree, test) => findAll(tree, test)[0];
 const byAttr = (tree, attr, value) => find(tree, node => value === undefined ? node.props[attr] !== undefined : node.props[attr] === value);
-const textOf = node => { let text = ''; const add = child => { if (typeof child === 'string' || typeof child === 'number') text += child; else if (Array.isArray(child)) child.forEach(add); else if (child?.props) add(child.props.children); }; add(node); return text; };
+function textOf(node) {
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  return node?.props ? textOf(childrenOf(node)) : '';
+}
 const pickButton = (slot) => ({ detail: 0, currentTarget: { getBoundingClientRect: () => ({ left: 100, top: 168, bottom: 200 }), focus() {} }, slot });
 const settle = async () => { for (let turn = 0; turn < 6; turn++) await null; };
 
@@ -168,6 +178,150 @@ function dialogHarness(t, info, props = {}) {
   return Object.assign(h, { calls, closed, refreshes, outsideMouseDown: target => listeners.filter(entry => entry[0] === 'mousedown').forEach(entry => entry[1]({ target })) });
 }
 const keyEvent = key => ({ key, stopPropagation() {}, preventDefault() {} });
+
+function operationInfo(overrides = {}) {
+  const defaults = { lookup: { model: 'haiku', effort: 'high' }, background: { model: 'haiku' }, subagent: 'follow', memory: 'follow', review: 'follow' };
+  const entries = [
+    ['lookup', '检索', 'Lookup', ['claude', 'codex'], 'always', null],
+    ['background', '后台小任务', 'Background helpers', ['claude'], 'never', null],
+    ['subagent', '子代理默认', 'Sub-agent default', ['claude', 'codex'], 'codex', 'follows the conversation'],
+    ['memory', '记忆整理', 'Memory', ['codex'], 'never', 'Codex default'],
+    ['review', '审查', 'Review pass', ['codex'], 'never', 'Reviewer seat'],
+    ['compaction', '压缩', 'Compaction', [], 'never', null],
+    ['titles', '标题', 'Titles', [], 'never', null],
+  ];
+  const rows = entries.map(([id, name, nameEn, families, effort, follow]) => ({
+    id, name, nameEn, covers: nameEn, families, effort, follow, editable: !!defaults[id], default: defaults[id] ?? null,
+    effective: typeof defaults[id] === 'object' ? defaults[id] : null,
+    agents: {
+      claude: { state: families.includes('claude') ? 'applies' : 'not-applicable' },
+      codex: id === 'memory' ? { state: 'not-effective', reason: 'The provider refused memories.consolidation_model.' }
+        : { state: families.includes('codex') ? 'applies' : 'not-applicable' },
+    },
+    ...(id === 'memory' ? { suggestion: 'gpt-6-mini' } : {}),
+  }));
+  return { rows, defaults, global: {}, project: null, effective: defaults, current: null, ...overrides };
+}
+
+const operationCatalog = () => [
+  ...catalog({ sonnet: { available: false, reason: 'Unavailable from this account.', listed: false } }),
+  row('gpt-6-mini', 'GPT-6 Mini', 'codex', 1),
+];
+function showOperations(h) {
+  byAttr(h.render(), 'data-routing-tab', 'operations').props.onClick();
+  return h.render();
+}
+function operationMenu(h, id, attr = 'data-op-model') {
+  byAttr(h.render(), attr, id).props.onClick(pickButton(id));
+  return find(h.render(), node => node.props.role === 'menu');
+}
+const menuRows = menu => findAll(menu, node => node.props['data-assign'] !== undefined);
+
+test('a refused operation save keeps the draft and names the operation', async t => {
+  const error = { ok: false, code: 'review-same-model', operation: 'review', message: 'Choose a different review model.' };
+  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: operationCatalog() }), { reply: error });
+  showOperations(h);
+  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6.2-sol').props.onClick();
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  const tree = h.render();
+  assert.match(textOf(find(tree, node => node.props['data-kind'] === 'error')), /Review pass: Choose a different review model/);
+  assert.equal(textOf(byAttr(tree, 'data-op-model', 'review')), 'GPT-6.2-Sol');
+  assert.equal(byAttr(tree, 'data-save').props.disabled, false);
+});
+
+test('operation cards share the team model rows and add the family restriction only where needed', t => {
+  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: operationCatalog() }));
+  const teamMenu = openMenu(h, 'qa');
+  const tree = showOperations(h);
+  assert.equal(findAll(tree, node => node.props['data-operation']).length, 7);
+  assert.equal(findAll(tree, node => node.props['data-op-slot']).length, 5);
+  assert.equal(findAll(tree, node => node.props['data-seat']).length, 0);
+  for (const id of ['compaction', 'titles']) {
+    const readOnly = byAttr(tree, 'data-operation', id);
+    assert.match(textOf(readOnly), /Built into Claude Code \/ Codex/);
+    assert.equal(findAll(readOnly, node => node.type === 'button' || node.props.tabIndex !== undefined).length, 0);
+  }
+  const lookup = operationMenu(h, 'lookup');
+  const describe = item => [item.props['data-assign'], item.props.disabled, !!byAttr(item, 'data-unlisted')];
+  assert.deepEqual(menuRows(lookup).map(describe), menuRows(teamMenu).map(describe));
+  assert.match(textOf(byAttr(lookup, 'data-assign', 'sonnet')), /Unavailable from this account.*Not in the latest list/);
+  const background = operationMenu(h, 'background');
+  assert.deepEqual(menuRows(background).map(item => item.props['data-assign']), menuRows(teamMenu).map(item => item.props['data-assign']));
+  const codex = byAttr(background, 'data-assign', 'gpt-6-mini');
+  assert.equal(codex.props.disabled, true);
+  assert.match(textOf(codex), /only supports Claude/);
+  const memory = operationMenu(h, 'memory');
+  assert.match(textOf(byAttr(memory, 'data-assign', 'sonnet')), /Unavailable from this account.*only supports Codex.*Not in the latest list/);
+});
+
+test('operation changes layer with seat changes, save both diffs, reset a scope, and preserve frozen values', async t => {
+  const operations = operationInfo({
+    global: { background: { model: 'opus' } },
+    project: { memory: { model: 'gpt-6-mini' } },
+    current: { values: { lookup: { model: 'haiku', effort: 'high' }, memory: 'follow' }, agents: {} },
+  });
+  const h = dialogHarness(t, seatsInfo({ operations, catalog: operationCatalog() }));
+  assert.equal(find(h.render(), node => node.type === 'select').props.value, 'project', 'an operations-only project override chooses project scope');
+  byAttr(openMenu(h, 'qa'), 'data-assign', 'haiku').props.onClick();
+  showOperations(h);
+  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
+  byAttr(operationMenu(h, 'lookup', 'data-op-effort'), 'data-pop-effort', 'max').props.onClick();
+  let tree = h.render();
+  assert.match(textOf(tree), /Unsaved draft · 2 changes/);
+  find(tree, node => node.props.role === 'dialog').props.onKeyDown(keyEvent('Escape'));
+  assert.match(textOf(find(h.render(), node => node.props.role === 'alertdialog')), /2 unsaved changes/);
+  byAttr(h.render(), 'data-keep').props.onClick();
+  find(h.render(), node => node.type === 'select').props.onChange({ target: { value: 'global' } });
+  tree = h.render();
+  assert.match(textOf(byAttr(tree, 'data-op-model', 'memory')), /Codex default/);
+  byAttr(tree, 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls[0], ['global', null, { qa: { model: 'haiku', effort: 'high' } }, {
+    background: { model: 'opus' }, lookup: { model: 'opus', effort: 'max' },
+  }]);
+  byAttr(h.render(), 'data-now').props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Haiku · high/);
+  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Codex default/);
+  byAttr(h.render(), 'data-reset').props.onClick();
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls[1], ['global', null, {}, {}]);
+});
+
+test('operation chips show the provider reason and model editing works through the suggestion, custom input and palette drag', t => {
+  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: operationCatalog() }));
+  const listeners = {};
+  window.addEventListener = (type, callback) => { listeners[type] = callback; };
+  window.removeEventListener = type => { delete listeners[type]; };
+  document.elementFromPoint = () => ({ closest: () => ({ dataset: { opSlot: 'subagent' } }) });
+  let tree = showOperations(h);
+  const memory = byAttr(tree, 'data-operation', 'memory');
+  assert.equal(byAttr(memory, 'data-op-state', 'not-applicable').type, 'span');
+  assert.ok(byAttr(tree, 'data-op-state', 'applies'));
+  const refused = byAttr(memory, 'data-op-state', 'not-effective');
+  refused.props.onClick(pickButton('memory'));
+  assert.match(textOf(h.render()), /provider refused memories/);
+  byAttr(h.render(), 'data-op-state', 'not-effective').props.onClick(pickButton('memory'));
+  assert.doesNotMatch(textOf(h.render()), /provider refused memories/);
+  byAttr(h.render(), 'data-op-suggestion', 'gpt-6-mini').props.onClick();
+  assert.equal(textOf(byAttr(h.render(), 'data-op-model', 'memory')), 'GPT-6 Mini');
+  byAttr(operationMenu(h, 'memory'), 'data-custom').props.onClick();
+  byAttr(h.render(), 'data-custom-input').props.onChange({ target: { value: 'claude-custom' } });
+  byAttr(h.render(), 'data-custom-apply').props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'data-custom-error')), /only supports Codex/);
+  byAttr(h.render(), 'data-custom-input').props.onChange({ target: { value: 'gpt-custom' } });
+  byAttr(h.render(), 'data-custom-apply').props.onClick();
+  assert.equal(textOf(byAttr(h.render(), 'data-op-model', 'memory')), 'gpt-custom');
+  byAttr(h.render(), 'data-chip', 'gpt-6-mini').props.onPointerDown({ button: 0, clientX: 4, clientY: 4 });
+  listeners.pointermove({ clientX: 40, clientY: 40 });
+  listeners.pointerup({ clientX: 40, clientY: 40 });
+  tree = h.render();
+  assert.equal(textOf(byAttr(tree, 'data-op-model', 'subagent')), 'GPT-6 Mini');
+  assert.ok(byAttr(tree, 'data-op-effort', 'subagent'));
+  byAttr(operationMenu(h, 'subagent'), 'data-op-follow').props.onClick();
+  assert.equal(byAttr(h.render(), 'data-op-effort', 'subagent'), undefined);
+});
 
 test('the dialog saves the chosen scope and the edited map; the keyboard 更换 menu assigns a model, effort and fast', async t => {
   const h = dialogHarness(t, seatsInfo({ project: null }));
@@ -194,7 +348,7 @@ test('the dialog saves the chosen scope and the edited map; the keyboard 更换 
   assert.equal(save.props.disabled, false);
   save.props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, { architect: { model: 'gpt-6.2-sol', effort: 'xhigh', fast: false } }]], 'the global scope carries only the changed seat');
+  assert.deepEqual(h.calls, [['global', null, { architect: { model: 'gpt-6.2-sol', effort: 'xhigh', fast: false } }, {}]], 'only the changed seat');
   tree = h.render();
   assert.match(textOf(find(tree, node => node.props.role === 'status')), /Saved\. It applies from the next conversation/);
 });
@@ -209,7 +363,7 @@ test('the scope select sends the project id, and 恢复默认 saves an empty map
   assert.equal(byAttr(tree, 'data-save').props.disabled, false, 'resetting is a change to save');
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, {}]], 'an empty map clears the global scope');
+  assert.deepEqual(h.calls, [['global', null, {}, {}]], 'an empty map clears the global scope');
   const project = dialogHarness(t, seatsInfo());
   tree = project.render();
   find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting').props.onChange({ target: { value: 'project' } });
@@ -217,7 +371,7 @@ test('the scope select sends the project id, and 恢复默认 saves an empty map
   byAttr(find(project.render(), node => node.props.role === 'menu'), 'data-assign', 'haiku').props.onClick();
   byAttr(project.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(project.calls, [['project', 'p1', { researcher: { model: 'haiku', effort: 'high' } }]]);
+  assert.deepEqual(project.calls, [['project', 'p1', { researcher: { model: 'haiku', effort: 'high' } }, {}]]);
 });
 
 test('a blocked reviewer is framed, named 已阻止, explained with a one-click fix and cannot be saved; main’s refusal is shown', async t => {
@@ -341,7 +495,7 @@ test('switching the scope keeps only the slots edited in this dialog: untouched 
   assert.match(textOf(tree), /Unsaved draft · 1 seats changed/, 'the count is against the global baseline: the project overrides are not counted');
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, { researcher: { model: 'haiku', effort: 'high' } }]], 'the project’s developer and designer overrides stay in the project');
+  assert.deepEqual(h.calls, [['global', null, { researcher: { model: 'haiku', effort: 'high' } }, {}]], 'project overrides stay in the project');
 });
 
 test('closing with an unsaved draft asks once, inline, before discarding', t => {
@@ -371,7 +525,7 @@ test('a scope switch never carries the old scope’s saved seats over the new sc
   scopeSelect(h.render()).props.onChange({ target: { value: 'project' } });
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['project', 'p1', { developer: { model: 'haiku', effort: 'low' }, architect: { model: 'sonnet', effort: 'high' } }]], 'the project keeps its own developer override');
+  assert.deepEqual(h.calls, [['project', 'p1', { developer: { model: 'haiku', effort: 'low' }, architect: { model: 'sonnet', effort: 'high' } }, {}]]);
 });
 
 for (const dismissal of ['Escape', 'Keep editing']) test(`${dismissal} preserves the draft and restores focus inside the dialog`, t => {
@@ -472,7 +626,7 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   assert.match(textOf(find(tree, node => node.props.role === 'status')), /gpt-6\.3-sol/);
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, { developer: { model: 'gpt-6.3-sol', effort: 'high', fast: true } }]]);
+  assert.deepEqual(h.calls, [['global', null, { developer: { model: 'gpt-6.3-sol', effort: 'high', fast: true } }, {}]]);
   // A custom model of the other family can be used by the orchestrator.
   const lead = dialogHarness(t, seatsInfo());
   byAttr(openMenu(lead, 'orchestrator'), 'data-custom').props.onClick();
@@ -757,7 +911,9 @@ test('the effort button on every tile opens a popover with the model’s own lev
   assert.equal(byAttr(liveMenu(h), 'data-pop-fast', 'developer').props['aria-checked'], false, 'fast turned off in the popover');
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, { architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high', fast: false } }]], 'the tile controls are saved like the menu’s');
+  assert.deepEqual(h.calls, [['global', null, {
+    architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high', fast: false },
+  }, {}]], 'the tile controls are saved like the menu’s');
   // The fast switch on the tile is the same switch: on where the row lists fast, disabled with its reason where not.
   const tile = h.render();
   assert.equal(byAttr(tile, 'data-tile-fast', 'designer').props.disabled, true);
@@ -884,7 +1040,8 @@ test('the app seats host opens only when main supplies routing info', async t =>
 
 test('the activity key is one button with a row for each role and opens the scoped dialog', async t => {
   const window = new EventTarget(), events = [];
-  window.agentrix = { skillSeats: async () => seatsInfo() };
+  const operations = operationInfo({ current: { values: { lookup: { model: 'gpt-6.2-sol', effort: 'high' } }, agents: {} } });
+  window.agentrix = { skillSeats: async () => seatsInfo({ operations }) };
   window.addEventListener('agentrix:open-seats', event => events.push(event.detail));
   globalThis.window = window;
   const props = { projectId: 'p1', terminalId: 't1', sessionId: 's1' };
@@ -894,6 +1051,10 @@ test('the activity key is one button with a row for each role and opens the scop
   const tree = h.render();
   assert.equal(findAll(tree, node => node.type === 'button').length, 1);
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
+  assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row').length, 10);
+  const summary = byAttr(tree, 'className', 'activity-routing-operations');
+  assert.match(textOf(summary), /Operation modelsLookup · GPT-6\.2-Sol/i);
+  assert.equal(summary.props['data-seat'], undefined);
   tree.props.onClick();
   assert.deepEqual(events, [{ projectId: 'p1', terminalId: 't1' }]);
 });

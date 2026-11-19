@@ -226,6 +226,23 @@ async function runtimeSmoke(output, stages) {
         await page.locator('[data-native-session="' + id + '"] .native-toast').waitFor();
         await seats.waitFor();
         assert.equal(await seats.locator('[data-seat]').count(), 10);
+        const teamTab = seats.locator('[data-routing-tab="team"]');
+        const operationsTab = seats.locator('[data-routing-tab="operations"]');
+        await teamTab.press('ArrowRight');
+        assert.equal(await operationsTab.getAttribute('aria-selected'), 'true');
+        assert.equal(await seats.locator('[data-operation]').count(), 7);
+        assert.equal(await seats.locator('[data-op-slot]').count(), 5);
+        assert.equal(await seats.locator('[data-operation][data-seat]').count(), 0);
+        const lookup = seats.locator('[data-op-model="lookup"]');
+        assert.ok(await lookup.evaluate(button => {
+          const box = button.getBoundingClientRect();
+          return parseFloat(getComputedStyle(button).fontSize) >= 14 &&
+            document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === button;
+        }), 'the operation model control is readable and owns its center hit target');
+        await lookup.click();
+        await seats.getByRole('menu').waitFor();
+        await page.keyboard.press('Escape');
+        await seats.getByRole('menu').waitFor({ state: 'detached' });
         await page.keyboard.press('Escape');
         await seats.waitFor({ state: 'detached' });
       });
