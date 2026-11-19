@@ -1,16 +1,12 @@
 # Boundary: Sub-agent view
 
 A sub-agent's split beside a terminal's conversation: who it is, its state, speed and time, its conversation followed live (read-only), and the owner's word for it —
-a message composer with Send and Stop that go through the main process, with delivery receipts from the worker. It also hands the left bar the called models of the whole project
-as a ready node and a running count (`AgentSidebar`), so the files module never imports the agents module.
-The Agent tab begins with the selected terminal's Orchestrator and its prompts.
+a message composer with Send and Stop that go through the main process, with delivery receipts from the worker.
 
 ## Owns
 - `src/features/agents/SubagentPane.tsx`
 - `src/features/agents/SubagentInput.tsx` and `subagent-input.css`
 - `src/features/agents/SubagentChip.tsx` and `subagent-chip.css`
-- `src/features/agents/AgentSidebar.tsx`
-- `src/features/agents/MainModel.tsx`
 - `src/features/agents/BackgroundBadge.tsx` (the 「后台 N 个运行中」 badge)
 - `src/features/agents/BackgroundPane.tsx` (a background task's read-only view)
 - `src/features/agents/WorkerTerminal.tsx` (a waiting worker's own terminal, in its split)
@@ -18,23 +14,18 @@ The Agent tab begins with the selected terminal's Orchestrator and its prompts.
 ## Interface
 - `SubagentPane` (`src/features/agents/SubagentPane.tsx`) — one view of one sub-agent call; the terminal grid renders one per open view; the file re-exports `BackgroundPane` (`src/features/agents/BackgroundPane.tsx`), a background task's read-only view, for the same slot
 - `SubagentChip` (`src/features/agents/SubagentChip.tsx`) — the header chip and popover that list the called models where a narrow window hides the activity pane (and the left bar is collapsed); the project header renders it
-- `AgentSidebar` (`src/features/agents/AgentSidebar.tsx`) — the selected terminal's main model above the called models from every terminal, plus worker and background counts.
-  App hands its ready node to the files module.
 - `BackgroundBadge` (`src/features/agents/BackgroundBadge.tsx`) — 「后台 N 个运行中」 for a project's terminals; the project header (the small card's too) renders it
 
 ## May import
 - `src/shared/**`
 - `src/features/agents/AgentCalls.tsx`
-- `src/features/agents/Metric.tsx` and `src/features/agents/action-text.ts`
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/agents/subagent-splits.ts`
 - `src/features/native-session/native-words.ts` (delivery receipt words)
-- `src/features/native-session/native-store.ts` (native turn outcome)
 - `src/features/reading/ConversationFeed.tsx`
 - `src/features/terminal/terminal-theme.ts` (the worker xterm's colours)
 - `src/features/terminal/terminal-font.ts` (its font)
 - `src/features/terminal/terminal-fit.ts` (its fit to the split)
-- `src/features/terminal/active-terminal.ts`, `terminal-visibility.ts` and `terminal-screen.ts` (selected terminal and its CLI state)
 
 ## Invariants
 - Keys leave this module only from `WorkerTerminal`, the open split of a dispatched worker, and go only to that worker's own terminal (`workerTerminalKeys` with its epoch), only while its feed says `awaiting: 'owner'` (the view is mounted for that time alone) and never to the planner's terminal; Escape inside it is the CLI's key (the split stays open, focus stays) and typing, selecting and copying there never expand a project. The clipboard is written only by `WorkerTerminal`, for an explicit copy of a selection (Ctrl+C with one, Ctrl+Shift+C, ⌘C); it is never read (paste is xterm's own paste event). Everything else here (SubagentPane, SubagentInput, BackgroundPane) writes no terminal input and no clipboard: the owner's word leaves only through `interveneAgent` and `stopAgent`, direct to the worker — test: `tests/boundary-activity-pane.test.cjs` › "a sub-agent view opens only on the owner’s click on a row, reads the sub-agent’s record and speaks to it through the main process only"; test: `tests/subagent-pane.test.cjs` › "a worker waiting for the owner shows its terminal in the split; keys reach only that terminal; Esc reaches the CLI and keeps the split open"
@@ -44,9 +35,9 @@ The Agent tab begins with the selected terminal's Orchestrator and its prompts.
 - A word is sent trimmed on Enter (Shift+Enter is a new line, an IME composition sends nothing) and shows under the conversation as queued only after main accepted it; a refusal shows beside the box and keeps the text — owner messages keep the owner avatar and name, including while queued; only main-confirmed owner clientMessageId retires an echo, never matching brief text. A helper resume envelope keeps its planner sender while the admitted owner controls are separate messages; the owner must not believe a word was passed on when it was not — test: `tests/subagent-pane.test.cjs` › "Enter sends the trimmed word; Shift+Enter, an empty box and an IME composition send nothing; a sent word clears the box and is handed on"
 - There is no planner relay sender or mounted renderer listener; interventions use worker controls and return receipts — test: `tests/native-session-ui.test.cjs` › "interventions have no planner relay sender or mounted renderer listener"
 - A view follows its call's feed only, re-reading when main reports a newer revision for that very call, with one read in flight — another call's change must not redraw it — test: `tests/subagent-pane.test.cjs` › "a feed is read at once and again only when the main process reports a newer revision for this very call"
-- The left bar (the files module) imports nothing from agents: its Agent tab takes the called models as a ready node and a running count that the app gets from `AgentSidebar`, and switching to Agent, like to any tab, takes the file-tree focus away while a hidden tree loads nothing — a file view that knew the call list would bind two modules, and a tab switch that left the tree focused would keep it grabbing keys — test: `tests/boundary-activity-pane.test.cjs` › "the files module imports nothing from the agents module: the Agent tab gets its list as a node and a count from the app"
 
 ## Not ours
+- Composing the left sidebar's Agent tab — Agent sidebar.
 - Which views are open and the call rows that open them — Activity pane (`subagent-splits.ts`, `AgentCalls.tsx`)
 - Where a view sits in the grid — Terminal view (`ProjectTerminals.tsx`)
 - Interventions, direct worker controls and the sub-agent feed in the main process — Activity pane (`electron/features/agents`)

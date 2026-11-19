@@ -22,6 +22,7 @@ Shows the expanded project's usage and quota in the Activity pane. The routing d
 - `src/features/native-session/native-bridge.ts`
 - `src/features/native-session/native-store.ts`
 - `src/features/native-session/native-words.ts`
+- `src/features/terminal/terminal-screen.ts`
 - `src/shared/**`
 
 ## Invariants
