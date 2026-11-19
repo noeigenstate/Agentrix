@@ -14,6 +14,7 @@ const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
 const { startupDetail, stderrTail } = require('../agents/start-failure.cjs');
 const { routingCommand, routingPatch, routingOwned } = require('../agents/agent-command.cjs');
+const { cleanCodexConfig } = require('../agents/dispatch-control.cjs');
 const { ownerShell, ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
 // A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
 const RECENT_PICTURES = 6;
@@ -49,7 +50,8 @@ const SANDBOX_REFUSALS = {
 };
 // Codex answers with the sandbox it really applied; another one than requested stops (a start, or a change), so a session never runs with less or
 // more than asked. `place` is 'windows' for a local Windows session, 'ssh' for a remote one.
-function threadOperations(config, baseConfig, hosts) {
+function threadOperations(rawConfig, baseConfig, hosts) {
+  const config = cleanCodexConfig(rawConfig);
   const entries = Object.keys(config || {});
   const result = { applied: entries, refused: [] };
   return {
@@ -66,11 +68,13 @@ function threadOperations(config, baseConfig, hosts) {
         assertOpen();
         const detail = (error.serverMessage || error.message).replace(/[\r\n]+/g, ' ');
         const reason = stderrTail(detail, { hosts, limit: 1000 }).slice(0, 200) || error.message;
-        let response;
-        try { response = await rpc.request(method, { ...params, config: configWithoutOperations }); } catch { throw error; }
         result.refused = result.applied.map(key => ({ key, reason }));
         result.applied = [];
-        return response;
+        try {
+          return await rpc.request(method, { ...params, config: configWithoutOperations });
+        } catch (retryError) {
+          throw threadId && retryError.missingThread ? retryError : error;
+        }
       }
     },
   };

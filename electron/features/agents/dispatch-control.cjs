@@ -227,4 +227,4 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
   });
 }
 
-module.exports = { createDispatchControl, connectDispatchControl };
+module.exports = { createDispatchControl, connectDispatchControl, cleanCodexConfig };

@@ -1,6 +1,5 @@
-const { commandPhrase } = require('../../command-phrase.cjs');
 const { claudeText, clean: conversationClean } = require('../../conversation-record.cjs');
-const { claudeToolInterrupted } = require('../../agent-actions.cjs');
+const { claudeToolInterrupted, commandPhrase } = require('../../agent-actions.cjs');
 const LIMIT = 2000, PREVIEW = 65536;
 function remember(map, key, value) {
   map.set(key, value);

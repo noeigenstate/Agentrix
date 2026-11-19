@@ -242,7 +242,7 @@ export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsuppo
 export type OperationId = 'lookup' | 'background' | 'subagent' | 'memory' | 'review';
 export type OperationValue = { model: string; effort?: string } | 'follow';
 export type OperationMap = Partial<Record<OperationId, OperationValue>>;
-export type OperationAgentState = { state: 'applies' | 'not-applicable' | 'not-effective'; reason?: string };
+export type OperationAgentState = { state: 'applies' | 'default' | 'not-applicable' | 'not-effective'; reason?: string };
 export type OperationRow = {
   id: OperationId | 'compaction' | 'titles';
   name: string;

@@ -11,15 +11,15 @@ const slots = {
   lookup: { name: '检索', nameEn: 'Lookup', covers: 'Searching, listing and reading files, log excerpts',
     families: ['claude', 'codex'], effort: 'always', default: { model: 'haiku', effort: 'high' } },
   background: { name: '后台小任务', nameEn: 'Background helpers', covers: "Claude Code's light background calls, including titles and web-page summaries",
-    families: ['claude'], effort: 'never', default: { model: 'haiku' }, note: "Claude Code's built-in Explore agent also follows this setting." },
+    families: ['claude'], effort: 'never', default: { model: 'haiku' }, note: 'explore-follows-background' },
   subagent: { name: '子代理默认', nameEn: 'Sub-agent default', covers: 'Sub-agents started without an explicit model',
     families: ['claude', 'codex'], effort: 'codex', follow: 'follows the conversation', default: 'follow' },
   memory: { name: '记忆整理', nameEn: 'Memory', covers: 'Extracting and consolidating memories', families: ['codex'], effort: 'never', follow: 'Codex default',
-    default: 'follow', note: 'This setting applies when Codex memories are enabled.' },
+    default: 'follow', note: 'codex-memories-enabled' },
   review: { name: '审查', nameEn: 'Review pass', covers: "Codex's built-in review (/review, review/start)", families: ['codex'], effort: 'never',
     follow: 'Reviewer seat', default: 'follow' },
-  compaction: { name: '压缩', nameEn: 'Compaction', covers: "Compacting a long conversation's context", note: 'Built into Claude Code and Codex.' },
-  titles: { name: '标题', nameEn: 'Titles', covers: 'Conversation titles', note: 'Built in. Claude titles move with the background helpers.' },
+  compaction: { name: '压缩', nameEn: 'Compaction', covers: "Compacting a long conversation's context", note: 'built-in-compaction' },
+  titles: { name: '标题', nameEn: 'Titles', covers: 'Conversation titles', note: 'titles-follow-background' },
 };
 const defaults = Object.fromEntries(Object.entries(slots).flatMap(([id, slot]) => slot.default ? [[id, slot.default]] : []));
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
@@ -101,7 +101,7 @@ function agentStates(choices, installed, background) {
       if (!slots[id].families.includes(agent) || choice && familyOf(choice.model) !== agent) return { state: 'not-applicable' };
       if (!installed[agent]) return { state: 'not-effective', reason: agent === 'claude' ? 'Claude Code is not installed.' : 'Codex is not installed.' };
       if (id === 'background' && background.reason) return { state: 'not-effective', reason: background.reason };
-      return { state: 'applies' };
+      return { state: choice ? 'applies' : 'default' };
     };
     return [id, { claude: state('claude'), codex: state('codex') }];
   }));
@@ -118,7 +118,8 @@ function levers(input, seats, catalog, installed) {
     const model = choices.subagent.model;
     claude.env[SUBAGENT] = model === 'haiku' && background.pinnedHaiku ? background.pinnedHaiku : model;
   }
-  if (applies('lookup', 'claude')) {
+  if (familyOf(choices.lookup.model) !== 'claude') claude.lookupAgent = null;
+  else if (applies('lookup', 'claude')) {
     const { model, effort } = choices.lookup;
     claude.lookupAgent = { model: model === 'haiku' && background.pinnedHaiku ? background.pinnedHaiku : model, effort };
   }

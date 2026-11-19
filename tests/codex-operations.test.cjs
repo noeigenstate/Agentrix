@@ -5,13 +5,14 @@ const { PassThrough, Writable } = require('node:stream');
 const os = require('node:os');
 const path = require('node:path');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
+const { cleanCodexConfig } = require('../electron/features/agents/dispatch-control.cjs');
 
 const threadId = '11111111-1111-4111-8111-111111111111';
 const review = { review_model: 'gpt-6.3-sol' };
 const base = { model_reasoning_effort: 'high' };
 const writable = { 'windows.sandbox': 'unelevated' };
 
-function session(t, { platform = 'linux', permissions = 'full', config = review, reject, requiresUnelevated = false, kind } = {}) {
+function session(t, { platform = 'linux', permissions = 'full', config = review, reject, requiresUnelevated = false, kind, allowFreshResume } = {}) {
   const wire = [], events = [], cwd = process.cwd();
   function spawn() {
     const child = new EventEmitter();
@@ -47,7 +48,7 @@ function session(t, { platform = 'linux', permissions = 'full', config = review,
     launchRemote: async () => ({ cwd, child: spawn(), hosts: [] }) });
   const env = { CODEX_HOME: path.join(os.tmpdir(), 'agx-operation-config-fixture'), PATH: '' };
   const run = runtime.create({ owner: 'gui', cwd, env, kind, projectId: 'p', terminalId: 't', providerSessionId: threadId,
-    operations: { config }, effort: 'high', permissions }, event => events.push(event));
+    operations: { config }, effort: 'high', permissions, allowFreshResume }, event => events.push(event));
   t.after(() => run.close());
   const receipt = () => events.find(event => event.type === 'routing.updated')?.payload.operations;
   return { run, wire, receipt };
@@ -97,4 +98,32 @@ test('failed Codex fallback preserves the original rejection, and missing thread
   const missing = session(t, { reject: () => ({ code: -32600, message: 'no rollout found for thread id ' + threadId }) });
   await assert.rejects(missing.run.resume(), { missingThread: true });
   assert.deepEqual(missing.wire.map(row => row.params.config), [{ ...review, ...base }]);
+});
+
+test('native Codex and dispatch control admit the same five validated operation keys', async t => {
+  const valid = { ...review, 'agents.default_subagent_model': 'gpt-mini', 'agents.default_subagent_reasoning_effort': 'xhigh',
+    'memories.extract_model': 'gpt-mini', 'memories.consolidation_model': 'gpt-mini' };
+  for (const [config, expected] of [
+    [{ ...review, 'windows.sandbox': 'unelevated' }, undefined], [valid, valid],
+    [{ review_model: '-invalid' }, undefined], [{ review_model: 'x'.repeat(161) }, undefined],
+    [{ 'agents.default_subagent_reasoning_effort': 'very high' }, undefined],
+    [{ 'memories.extract_model': ['gpt-mini'] }, undefined], [[review], undefined], [{}, undefined],
+  ]) {
+    const fixture = session(t, { config });
+    await fixture.run.start();
+    assert.deepEqual(fixture.wire.map(row => row.params.config), [{ ...expected, ...base }]);
+    assert.deepEqual(fixture.receipt(), expected && { applied: Object.keys(expected), refused: [] });
+    assert.deepEqual(cleanCodexConfig(config), expected);
+    await fixture.run.close();
+  }
+});
+
+test('a missing thread after Codex rejects operation keys can resume fresh without those keys', async t => {
+  const reason = 'Unsupported operation setting';
+  const fixture = session(t, { allowFreshResume: true, reject: (params, method) => method === 'thread/resume' && (params.config.review_model
+    ? { code: -32602, message: reason } : { code: -32600, message: 'no rollout found for thread id ' + threadId }) });
+  await fixture.run.resume();
+  assert.deepEqual(fixture.wire.map(({ method }) => method), ['thread/resume', 'thread/resume', 'thread/start']);
+  assert.deepEqual(fixture.wire.map(({ params }) => params.config), [{ ...review, ...base }, base, base]);
+  assert.deepEqual(fixture.receipt(), { applied: [], refused: [{ key: 'review_model', reason }] });
 });

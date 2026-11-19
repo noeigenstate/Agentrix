@@ -46,6 +46,22 @@ const until = async (check, label) => {
   while (!check()) { if (Date.now() > deadline) throw new Error(`Timed out: ${label}`); await new Promise(resolve => setTimeout(resolve, 30)); }
 };
 
+test('seat info suggests the newest listed Codex model at the lowest rank below three', t => {
+  const { store } = fixture(t);
+  let installed = true, models = [
+    { model: 'gpt-7', rank: 2 }, { model: 'gpt-6.9-mini' }, { model: 'gpt-6.10-mini' }, { model: 'gpt-6.11-mini', listed: false },
+  ];
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed } });
+  store.getModels = () => models;
+  const suggestion = () => store.seatsInfo('p1').operations.rows.find(row => row.id === 'memory').suggestion;
+  assert.equal(suggestion(), 'gpt-6.10-mini');
+  installed = false;
+  assert.equal(suggestion(), undefined);
+  installed = true;
+  models = [{ model: 'gpt-7' }];
+  assert.equal(suggestion(), undefined);
+});
+
 test('skill defaults, exact public shape, read-only built-ins and local-only project scopes', async t => {
   const { store } = fixture(t), builtin = store.list()[0];
   assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'extends', 'replaced', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'firstOpenRun', 'seatSummary', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());

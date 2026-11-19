@@ -23,8 +23,8 @@ Project hooks remain enabled for workers, matching the trusted project's CLI beh
 ## May import
 - `electron/features/skills/seat-rules.mjs` (validate the two Claude operation environment overrides)
 - `electron/features/claude-runtime/**` (its Interface: where Claude Code is, as the locator finds it; the resolver this runtime tells what its sessions and the connection test saw, and the decide() it reads the API route from)
-- `electron/*session*.cjs` (Claude transcript lookup and session-file identity checks)
-- `electron/command-phrase.cjs`
+- `electron/claude-sessions.cjs` (Claude transcript lookup)
+- `electron/session-files.cjs` (session-file identity checks)
 - `electron/conversation-record.cjs`
 - `electron/prompt-queue.cjs`
 - `electron/features/native-session/*.cjs` (the storage and event stream interfaces)

@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { BACKGROUND_MODEL_ENV, operationEnv } = require('../skills/seat-rules.mjs');
+const { operationEnv } = require('../skills/seat-rules.mjs');
 const { routeFailure } = require('./identity.cjs');
 
 // Flag settings override disk env without disabling the owner's project hooks and permissions.
@@ -61,7 +61,10 @@ function routeSettings(spec) {
     if (real && (relative.startsWith('..' + path.sep) || path.isAbsolute(relative))) user = loaded;
   }
   const trusted = new Map(Object.entries({ ...inherited, ...(user.env || {}) }).map(([name, value]) => [name.toUpperCase(), value]));
-  const names = new Set(ROUTE_ENV.filter(name => !conditionalRoute(name)));
+  const operations = operationEnv(spec.operations?.env);
+  const isOperation = name => Object.hasOwn(operations, name.toUpperCase());
+  const names = new Set([...ROUTE_ENV.filter(name => !conditionalRoute(name)), ...Object.keys(operations)]);
+  for (const name of [...Object.keys(inherited), ...Object.keys(user.env || {})]) if (isOperation(name)) names.add(name);
   // Cover mixed-case spellings and newly added transport variables from every project settings source.
   for (let folder = cwd; (folder === root || folder.startsWith(root + path.sep)); folder = path.dirname(folder)) {
     for (const filename of ['settings.json', 'settings.local.json']) {
@@ -72,18 +75,17 @@ function routeSettings(spec) {
       if (Object.keys(env || {}).some(name => name.toUpperCase() === 'ANTHROPIC_API_KEY')) {
         throw routeFailure('project_api_key_override', path.relative(cwd, file).split(path.sep).join('/'));
       }
-      for (const name of Object.keys(env || {})) if (routeName(name)) names.add(name);
+      for (const name of Object.keys(env || {})) if (routeName(name) || isOperation(name)) names.add(name);
     }
     if (folder === root) break;
   }
   const env = {};
-  const operations = operationEnv(spec.operations?.env);
   for (const name of names) {
     const canonical = name.toUpperCase();
     // The saved key remains solely in the child environment, never in a settings file or CLI arguments.
     if (canonical === 'ANTHROPIC_API_KEY') continue;
-    const value = canonical === BACKGROUND_MODEL_ENV ? operations[BACKGROUND_MODEL_ENV] ?? '' : canonical === 'ANTHROPIC_AUTH_TOKEN' ? ''
-      : /^CLAUDE_CODE_USE_/i.test(name) ? '0' : trusted.get(canonical) ?? (canonical === 'ANTHROPIC_BASE_URL' ? 'https://api.anthropic.com' : '');
+    const value = operations[canonical] ?? (canonical === 'ANTHROPIC_AUTH_TOKEN' ? ''
+      : /^CLAUDE_CODE_USE_/i.test(name) ? '0' : trusted.get(canonical) ?? (canonical === 'ANTHROPIC_BASE_URL' ? 'https://api.anthropic.com' : ''));
     for (const variant of [name, canonical, name.toLowerCase()]) env[variant] = typeof value === 'string' ? value : '';
   }
   // The owner's decision: the native API channel bills only the saved key, so a user apiKeyHelper is cleared here

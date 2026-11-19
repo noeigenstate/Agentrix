@@ -22,6 +22,11 @@ test('operation defaults leave the environment and config empty and keep the exi
   assert.deepEqual(rows.filter(row => !row.editable).map(row => row.id), ['compaction', 'titles']);
   assert.equal(rows.find(row => row.id === 'memory').suggestion, 'gpt-6.10-mini');
   assert.equal(makeRows(defaults, models.filter(row => row.rank === 3)).find(row => row.id === 'memory').suggestion, undefined);
+  for (const id of ['subagent', 'memory', 'review']) assert.equal(rows.find(row => row.id === id).agents.codex.state, 'default', id);
+  assert.equal(rows.find(row => row.id === 'subagent').agents.claude.state, 'default');
+  assert.deepEqual(Object.fromEntries(rows.filter(row => row.note).map(row => [row.id, row.note])), {
+    background: 'explore-follows-background', memory: 'codex-memories-enabled', compaction: 'built-in-compaction', titles: 'titles-follow-background',
+  });
 });
 
 test('operation validation identifies each invalid slot and preserves other stored choices', () => {
@@ -55,6 +60,7 @@ test('review follows the Codex reviewer and enforces independence for explicit o
   const seats = { developer, reviewer };
   assert.equal(checkReview(resolve(), seats, models), null);
   assert.equal(levers({}, seats, models, installed).codex.config.review_model, reviewer.model);
+  assert.equal(levers({}, seats, models, installed).agents.review.codex.state, 'applies');
   assert.deepEqual(levers({}, { ...seats, reviewer: choice('opus') }, models, installed).codex.config, {});
   const explicit = { review: developer };
   assert.deepEqual(checkReview(explicit, seats, models), {
@@ -64,7 +70,7 @@ test('review follows the Codex reviewer and enforces independence for explicit o
   assert.equal(checkReview(explicit, seats, models.filter(row => row.model === developer.model)), null);
   const values = { lookup: reviewer, subagent: { ...developer, effort: 'medium' }, memory: choice('gpt-6.10-mini'), review: reviewer };
   const active = levers(values, seats, models, installed);
-  assert.deepEqual(active.claude, { env: {} });
+  assert.deepEqual(active.claude, { env: {}, lookupAgent: null });
   assert.deepEqual(active.codex.config, {
     'agents.default_subagent_model': developer.model, 'agents.default_subagent_reasoning_effort': 'medium',
     'memories.extract_model': 'gpt-6.10-mini', 'memories.consolidation_model': 'gpt-6.10-mini', review_model: reviewer.model,
