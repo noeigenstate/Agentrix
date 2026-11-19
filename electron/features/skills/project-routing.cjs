@@ -1,7 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const { familyOf, rankByName } = require('./seat-rules.mjs');
+const { modelIdentity } = require('./model-seats.cjs');
 const { cleanConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
 const operationSlots = require('./operation-slots.cjs');
 
@@ -40,12 +42,27 @@ function canonicalJSON(document) {
   return { json: chunks.join(''), tooDeep, unsafe };
 }
 
+function hasDuplicateKeys(json) {
+  const objects = [];
+  for (const [token, colon] of json.matchAll(/"(?:\\.|[^"\\])*"(\s*:)?|[{}]/gu)) {
+    if (token === '{') objects.push(new Set());
+    else if (token === '}') objects.pop();
+    else if (colon) {
+      const key = JSON.parse(token.slice(0, -colon.length)), current = objects.at(-1);
+      if (current.has(key)) return true;
+      current.add(key);
+    }
+  }
+  return false;
+}
+
 function parseRouting(bytes, entry, catalog, defaults) {
   let raw, document;
-  try { raw = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
+  try { raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
   catch { return invalid('bad-utf8', hash('raw\0', bytes)); }
   try { document = JSON.parse(raw); }
   catch { return invalid('bad-json', hash('raw\0', bytes), raw); }
+  if (hasDuplicateKeys(raw)) return invalid('bad-json', hash('raw\0', bytes), raw);
   const { json, tooDeep, unsafe } = canonicalJSON(document), digest = hash('agentrix-routing-v1\n', json);
   if (unsafe) return invalid('unknown-key', digest, raw);
   if (tooDeep) return invalid('too-deep', digest, raw);
@@ -54,8 +71,9 @@ function parseRouting(bytes, entry, catalog, defaults) {
   if (document.version !== 1) return invalid('bad-format', digest, raw);
   const { format, version, ...body } = document;
   try {
-    const { config, ignored } = cleanConfig(body, entry, catalog, true), team = resolveTeam(entry, config, defaults);
-    const error = validateTeam(team, config, catalog);
+    if (!Object.hasOwn(body, 'operations')) body.operations = {};
+    const { config, ignored } = cleanConfig(body, entry, catalog, true, true), team = resolveTeam(entry, config, defaults);
+    const error = validateTeam(team, config, catalog, entry);
     return error ? invalid(error.code, digest, raw) : { digest, raw, config, ignored };
   } catch (error) {
     return invalid(error.code || 'bad-format', digest, raw);
@@ -67,19 +85,10 @@ const sameNode = (left, right) => left && right && left.dev === right.dev && lef
 const nodeError = (code, info) => invalid(code, hash('link\0', [code, info?.mode, info?.size, info?.mtimeMs].join(':')));
 
 function locate(root) {
-  const folder = path.resolve(root, '.agentrix'), parents = [];
-  for (let directory = folder; ; directory = path.dirname(directory)) {
-    parents.push(directory);
-    if (directory === path.dirname(directory)) break;
-  }
-  let dir;
-  for (const parent of parents.reverse()) {
-    dir = stat(parent);
-    const watch = parent === folder ? path.dirname(folder) : null;
-    if (!dir) return { folder, watch };
-    if (dir.isSymbolicLink()) return { watch, error: nodeError('link', dir) };
-    if (!dir.isDirectory()) return { watch, error: nodeError('not-file', dir) };
-  }
+  const folder = path.join(root, '.agentrix'), dir = stat(folder);
+  if (!dir) return { folder, watch: root };
+  if (dir.isSymbolicLink()) return { watch: root, error: nodeError('link', dir) };
+  if (!dir.isDirectory()) return { watch: root, error: nodeError('not-file', dir) };
   const file = path.join(folder, 'routing.json'), info = stat(file);
   if (info?.isSymbolicLink()) return { folder, dir, error: nodeError('link', info) };
   if (info && !info.isFile()) return { folder, dir, error: nodeError('not-file', info) };
@@ -88,15 +97,20 @@ function locate(root) {
 
 function routingWatch(root) {
   try {
-    const target = locate(root), info = target.info;
+    const target = locate(fs.realpathSync.native(root)), info = target.info;
     return { folder: target.dir ? target.folder : target.watch ?? null,
-      signature: target.error?.digest ?? (info ? [info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') : '') };
+      signature: target.error?.digest ?? (info ? [info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs].join(':') : '') };
   } catch {
     return { folder: null, signature: 'unreadable' };
   }
 }
 
-function readRouting(root, entry, catalog, defaults) {
+function readRouting(root, ...context) {
+  try { return readAtRoot(fs.realpathSync.native(root), ...context); }
+  catch (error) { return error.code === 'ENOENT' ? { digest: null } : nodeError('not-file'); }
+}
+
+function readAtRoot(root, entry, catalog, defaults) {
   let handle;
   try {
     const target = locate(root);
@@ -128,14 +142,24 @@ function serializeRouting(config) {
   return JSON.stringify({ format: FORMAT, version: 1, roles: config.roles, operations: config.operations }, null, 2) + '\n';
 }
 
+function removeStaleTemps(target) {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const name of fs.readdirSync(target.folder)) {
+    if (!/^\.routing-[a-z0-9-]+\.tmp$/.test(name)) continue;
+    const file = path.join(target.folder, name), info = stat(file);
+    if (info?.isFile() && info.mtimeMs < cutoff && sameNode(stat(target.folder), target.dir)) fs.rmSync(file, { force: true });
+  }
+}
+
 function writeRouting(root, config, base, context, beforeRename) {
-  const read = () => readRouting(root, ...context);
+  const read = () => readAtRoot(root, ...context);
   const text = serializeRouting(config), bytes = Buffer.from(text);
   if (bytes.length > MAX_BYTES) return refusal('file-unwritable');
-  const { digest, error } = parseRouting(bytes, ...context);
-  if (error) return refusal('file-unwritable');
+  const { digest, error, config: cleaned, ignored } = parseRouting(bytes, ...context);
+  if (error || ignored?.length) return refusal('file-unwritable');
   let target, temporary, rollback;
   try {
+    root = fs.realpathSync.native(root);
     if (read().digest !== base) return refusal('file-changed');
     target = locate(root);
     if (target.error) return refusal('file-unwritable');
@@ -144,10 +168,11 @@ function writeRouting(root, config, base, context, beforeRename) {
       target = locate(root);
       if (!target.dir || target.error) return refusal('file-unwritable');
     }
+    removeStaleTemps(target);
     temporary = path.join(target.folder, '.routing-' + randomUUID() + '.tmp');
     fs.writeFileSync(temporary, text, { flag: 'wx', mode: 0o600 });
     if (read().digest !== base) return refusal('file-changed');
-    rollback = beforeRename(digest);
+    rollback = beforeRename(digest, cleaned);
     if (read().digest !== base) { rollback(); return refusal('file-changed'); }
     const current = locate(root);
     if (current.error || !sameNode(target.dir, current.dir)) throw new Error('Routing directory changed.');
@@ -163,6 +188,24 @@ function writeRouting(root, config, base, context, beforeRename) {
   }
 }
 
+const effortOrder = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const verificationRole = role => role && (role.kind === 'reviewer' || ['qa', 'security', 'a11y'].includes(role.id));
+
+function verificationDropped(before, after, rank) {
+  if (!before) return false;
+  if (!after || rank(after.model) < rank(before.model)) return true;
+  const oldEffort = effortOrder.indexOf(before.effort), newEffort = effortOrder.indexOf(after.effort);
+  return newEffort >= 0 && newEffort < oldEffort;
+}
+
+function reviewSeat(value, team, catalog) {
+  if (!value || value === 'follow') {
+    const reviewer = team.effective[team.reviewers[0]];
+    return reviewer && familyOf(reviewer.model) === 'codex' ? reviewer : undefined;
+  }
+  return { ...value, effort: value.effort ?? catalog.find(row => row.model === value.model)?.defaultEffort ?? 'high' };
+}
+
 function reviewFile(file, reason, team, previous, catalog) {
   const { config, digest, ignored } = file, changes = [], flags = [];
   const flag = (code, key, id, text) => flags.push({ code, [key]: id, text });
@@ -173,12 +216,16 @@ function reviewFile(file, reason, team, previous, catalog) {
   };
   const oldRoles = new Map(previous.team.map(item => [item.row.id, item]));
   const nextRoles = new Map(team.team.map(item => [item.row.id, item]));
+  const identity = modelIdentity(catalog);
+  const authors = new Set(team.authors.flatMap(id => team.effective[id] ? [identity(team.effective[id].model)] : []));
   for (const id of new Set([...oldRoles.keys(), ...nextRoles.keys()])) {
     const before = oldRoles.get(id), after = nextRoles.get(id), role = after?.row, old = before?.row, seat = after?.seat;
     for (const field of ['enabled', 'name', 'duty', 'outputs', 'fresh', 'from']) diff('role', id, field, old?.[field], role?.[field]);
     for (const field of ['model', 'effort', 'fast']) diff('role', id, field, before?.seat?.[field], seat?.[field]);
     if (role?.source === 'custom') flag('custom-text', 'role', id, [role.duty, role.outputs].filter(Boolean).join(' / '));
-    if (['qa', 'security', 'a11y'].includes(id) && (old?.enabled && !role?.enabled || old?.fresh && !role?.fresh && role?.enabled)) {
+    const weakened = old?.enabled && verificationRole(old) && (!role?.enabled || old.fresh && !role.fresh || verificationDropped(before.seat, seat, rank));
+    const shared = role?.enabled && role.kind === 'reviewer' && seat && authors.has(identity(seat.model));
+    if (weakened || shared) {
       flag('verification-weakened', 'role', id, role?.name || id);
     }
     if (!role?.enabled || !seat) continue;
@@ -192,6 +239,9 @@ function reviewFile(file, reason, team, previous, catalog) {
   for (const [id, value] of Object.entries(nextOps)) {
     const old = previous.operations[id];
     diff('operation', id, 'value', old, value);
+    if (id === 'review' && verificationDropped(reviewSeat(old, previous, catalog), reviewSeat(value, team, catalog), rank)) {
+      flag('verification-weakened', 'operation', id, typeof value === 'string' ? value : value.model);
+    }
     if (typeof value === 'string' || old?.model === value.model && old?.effort === value.effort) continue;
     if (!listed(value.model)) flag('unlisted-model', 'operation', id, value.model);
     if (['lookup', 'background'].includes(id) && familyOf(value.model) === 'claude' && rank(value.model) === 3) flag('operation-cost', 'operation', id, value.model);
@@ -209,7 +259,7 @@ function routingState(project, file, stored, seen = false) {
     if (!remote && (trust || seen)) source.notice = 'file-deleted';
     return { source, config: local };
   }
-  if (file.config && trust?.digest === file.digest) {
+  if (file.config && trust?.digest === file.digest && isDeepStrictEqual(file.config, trust.config)) {
     return { source: { ...source, layer: 'file', state: 'trusted' }, config: file.config };
   }
   const rejected = trust?.rejected === file.digest;

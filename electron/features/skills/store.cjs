@@ -78,7 +78,7 @@ class SkillsStore {
     this.options = Object.fromEntries(Object.entries(stored).map(([id, options]) => [id, migrateTrigger(options)]));
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
-    this.routingWatchers = new Map(); this.routingSeen = new Set();
+    this.routingWatchers = new Map(); this.routingSeen = new Set(); this.routingReviews = new Map();
     this.projectSkills = new Map(); this.replacementFailures = new Set();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
     this.operationResults = new Map();
@@ -195,6 +195,7 @@ class SkillsStore {
     let modified = false;
     for (const id of this.operationResults.keys()) if (!projects.has(id)) this.operationResults.delete(id);
     for (const id of this.routingSeen) if (!projects.has(id)) this.routingSeen.delete(id);
+    for (const id of this.routingReviews.keys()) if (!projects.has(id)) this.routingReviews.delete(id);
     for (const options of Object.values(this.options)) {
       for (const scoped of [options.firstOpenedProjects, options.routing?.local, options.routing?.trust]) {
         for (const id of Object.keys(scoped || {})) if (!projects.has(id)) { delete scoped[id]; modified = true; }
@@ -474,9 +475,14 @@ class SkillsStore {
     const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
     const stored = this.options[entry.id]?.routing || {};
     const restore = raw => {
-      try { return raw ? cleanConfig(raw, entry, catalog, true).config : null; } catch { return null; }
+      if (raw === undefined || raw === null) return null;
+      try {
+        const { config } = cleanConfig(raw, entry, catalog, true);
+        return validateTeam(resolveTeam(entry, config, defaults), config, catalog, entry) ? null : config;
+      } catch { return null; }
     };
-    return { entry, installed, catalog, defaults, stored, restore, template: restore(stored.template) ?? emptyConfig() };
+    const template = restore(stored.template);
+    return { entry, installed, catalog, defaults, stored, restore, template: template ?? emptyConfig(), invalidTemplate: stored.template != null && !template };
   }
 
   routingSelection(context, project, review = false) {
@@ -484,13 +490,27 @@ class SkillsStore {
     const file = project && project.kind !== 'ssh' ? readRouting(project.path, entry, catalog, defaults) : { digest: null };
     if (file.digest && project) this.routingSeen.add(project.id);
     const { config, source, reason } = routingState(project, file, stored, this.routingSeen.has(project?.id));
-    const active = restore(config);
+    const active = source.layer === 'file' ? config : restore(config);
+    if (config != null && !active) {
+      source.layer = 'template';
+      source.notice = 'invalid-local';
+    }
+    if (!active && context.invalidTemplate && !source.notice) source.notice = 'invalid-template';
     if (review && file.config && source.state !== 'trusted') {
-      const next = resolveTeam(entry, file.config, defaults), previous = resolveTeam(entry, active ?? template, defaults);
-      previous.operations = operationSlots.resolve((active ?? template).operations);
-      source.review = reviewFile(file, reason, next, previous, catalog);
+      source.review = this.routingReview(project, file, reason, active ?? template, context);
     }
     return { config: active, source, file };
+  }
+
+  routingReview(project, file, reason, active, { entry, defaults, catalog }) {
+    const key = JSON.stringify([routingWatch(project.path).signature, file.digest, reason, file.config, active, catalog]);
+    const cached = this.routingReviews.get(project.id);
+    if (cached?.entry === entry && cached.key === key) return structuredClone(cached.review);
+    const next = resolveTeam(entry, file.config, defaults), previous = resolveTeam(entry, active, defaults);
+    previous.operations = operationSlots.resolve(active.operations);
+    const review = reviewFile(file, reason, next, previous, catalog);
+    this.routingReviews.set(project.id, { entry, key, review });
+    return structuredClone(review);
   }
 
   seatsInfo(projectId = null, terminalId = null, includeTemplateCount = false) {
@@ -498,14 +518,14 @@ class SkillsStore {
     if (!context) return null;
     const { entry, installed, catalog, defaults, template } = context, lead = entry.seats[0];
     const projects = this.getProjects(), project = projects.find(item => item.id === projectId);
-    const { config, source } = this.routingSelection(context, project, true);
+    const { config, source } = this.routingSelection(context, project, includeTemplateCount);
     if (includeTemplateCount) source.templateProjects = projects.filter(item =>
       (item === project ? source : this.routingSelection(context, item).source).layer === 'template').length;
     const team = resolveTeam(entry, config ?? template, defaults), effective = team.effective;
     const binding = terminalId ? this.seatSession(terminalId) : null;
     const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
     const operations = operationInfo(template, config, team, catalog, installed, snapshot?.operations, this.operationResults.get(projectId));
-    return { skill: entry.id, seats: team.seats, roles: team.roles, lead, authors: team.authors, fresh: team.fresh,
+    return { skill: entry.id, seats: team.seats, roles: team.team.map(item => item.row), lead, authors: team.authors, fresh: team.fresh,
       ...modelSeats.leadConfiguration(effective, lead, installed, catalog), defaults, template, config, routing: source,
       effective, operations, current: snapshot?.seatsMap ? structuredClone(snapshot.seatsMap) : null,
       currentRoles: snapshot?.roles ? structuredClone(snapshot.roles) : null, catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
@@ -514,7 +534,8 @@ class SkillsStore {
 
   sessionRoles(projectId, sessionId) {
     const snapshot = this.sessionSnapshot(projectId, sessionId);
-    return snapshot && Object.hasOwn(snapshot, 'roles') ? structuredClone(snapshot.roles) : this.seatsInfo(projectId)?.roles ?? null;
+    if (snapshot && Object.hasOwn(snapshot, 'roles')) return structuredClone(snapshot.roles);
+    return this.seatsInfo(projectId)?.roles.sort((a, b) => Number(b.enabled) - Number(a.enabled)) ?? null;
   }
 
   applyRoutingOptions(id, routing) {
@@ -543,11 +564,13 @@ class SkillsStore {
   writeProjectRouting(context, project, config, base) {
     const { entry, catalog, defaults, stored } = context, id = project.id;
     const local = { ...stored.local }; delete local[id];
-    const result = writeRouting(project.path, config, base, [entry, catalog, defaults], digest => {
-      const trust = { ...stored.trust, [id]: { digest, config, at: this.now() } };
+    const result = writeRouting(project.path, config, base, [entry, catalog, defaults], (digest, cleaned) => {
+      const trust = { ...stored.trust, [id]: { digest, config: cleaned, at: this.now() } };
       return this.applyRoutingOptions(entry.id, { ...stored, local, trust });
     });
-    return result.ok ? this.routingChanged() : result;
+    if (!result.ok) return result;
+    this.routingWatchers.get(project.path)?.accept(routingWatch(project.path).signature);
+    return this.routingChanged();
   }
 
   setRouting(scope, projectId, raw, base) {
@@ -563,9 +586,9 @@ class SkillsStore {
     try {
       ({ config } = cleanConfig(raw, entry, catalog));
       team = resolveTeam(entry, config, defaults);
-      const invalid = validateTeam(team, config, catalog);
+      const invalid = validateTeam(team, config, catalog, entry);
       if (invalid) return invalid;
-      config = compactConfig(entry, config, team);
+      config = compactConfig(entry, config);
     } catch (error) {
       const code = ['unknown-key', 'bad-format'].includes(error.code) ? 'invalid-role' : error.code || 'invalid-role';
       return routingFailure(code, error);
@@ -578,14 +601,13 @@ class SkillsStore {
   resolveRouting(projectId, action, digest) {
     const project = this.getProjects().find(item => item.id === projectId), context = this.routingContext();
     if (!project || project.kind === 'ssh' || !context) return routingFailure('action-unavailable');
-    const { entry, catalog, defaults, stored, template } = context;
+    const { entry, stored, template } = context;
     const { config, source, file } = this.routingSelection(context, project);
     if (file.digest !== digest) return routingFailure('file-changed');
     if (action === 'overwrite' && ['link', 'not-file'].includes(file.error?.code)) return routingFailure('file-unwritable');
     if (!source.actions.includes(action)) return routingFailure('action-unavailable');
     if (action === 'overwrite') {
-      const active = config ?? template, team = resolveTeam(entry, active, defaults);
-      return this.writeProjectRouting(context, project, compactConfig(entry, active, team), digest);
+      return this.writeProjectRouting(context, project, compactConfig(entry, config ?? template), digest);
     }
     const trust = stored.trust || {};
     if (action === 'keep') {
@@ -697,7 +719,7 @@ class SkillsStore {
   deliveryInfo(project, remote, sessionId, agent) {
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
     const frozen = this.sessionSnapshot(project.id, sessionId), seats = this.seatsInfo(project.id);
-    const roles = frozen && Object.hasOwn(frozen, 'roles') ? frozen.roles : seats?.roles ?? null;
+    const roles = frozen && Object.hasOwn(frozen, 'roles') ? frozen.roles : seats?.roles.slice().sort((a, b) => Number(b.enabled) - Number(a.enabled)) ?? null;
     const leadAgent = agent || seats?.leadAgent;
     const leadSeat = seats?.leads[leadAgent];
     const operations = frozen && Object.hasOwn(frozen, 'operations') ? frozen.operations : seats ? resolveOperations(seats, remote ? leadAgent : null) : null;
@@ -847,7 +869,11 @@ class SkillsStore {
         }, 300);
         timer.unref?.();
       }, { interval: 2000, recursive: false, watch: () => routingWatch(root).folder });
-      this.routingWatchers.set(root, { poll: watcher.poll, stop() { clearTimeout(timer); watcher.stop(); } });
+      this.routingWatchers.set(root, {
+        poll: watcher.poll,
+        accept(next) { signature = next; clearTimeout(timer); },
+        stop() { clearTimeout(timer); watcher.stop(); },
+      });
     }
   }
 

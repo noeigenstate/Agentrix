@@ -64,3 +64,15 @@ test('stored partial seats are ignored and saved overrides omit inherited values
   const tooMany = config(Object.fromEntries(Array.from({ length: 9 }, (_, index) => ['x-extra-' + index, copy('developer', 'Role ' + index, { enabled: false })])));
   assert.equal(validateTeam(resolve(tooMany), tooMany, catalog).code, 'role-limit');
 });
+
+test('Codex-only library seats expose their seed and portable files retain the explicit override', () => {
+  const codex = { codex: true }, defaults = modelSeats.defaultsFor(codex, modelSeats.catalog(codex), entry.seats);
+  const value = config({ docs: { enabled: true, ...defaults.orchestrator } });
+  const team = resolveTeam(entry, value, defaults);
+  const docs = team.roles.find(role => role.id === 'docs'), frontend = team.roles.find(role => role.id === 'frontend');
+  assert.deepEqual(docs.defaultSeat, defaults.orchestrator);
+  assert.equal(docs.defaultEnabled, false);
+  assert.equal(docs.defaultFresh, false);
+  assert.equal(frontend.inherits, 'developer');
+  assert.deepEqual(compactConfig(entry, value).roles.docs, value.roles.docs);
+});

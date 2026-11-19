@@ -39,13 +39,15 @@ export function normalizeRoleText(field, value) {
   if (typeof value !== 'string' || !TEXT.test(value) || IGNORABLE.test(value)) return null;
   const text = value.normalize('NFC').trim(), length = [...text].length;
   const [min, max] = ROLE_TEXT_LIMITS[field];
-  if (length < min || length > max || text.includes('  ') || field === 'name' && /[,.()]/.test(text)) return null;
+  const badMarks = /(?:^|[^\p{L}\p{N}\p{M}])\p{M}|\p{M}{3}/u.test(text.normalize('NFD'));
+  if (length < min || length > max || text.includes('  ') || badMarks) return null;
+  if (field === 'name' && /[,.()]/.test(text)) return null;
   return text;
 }
 
 // Fold letters separately so final sigma and ligatures compare with their equivalents.
 // Dotless i has a distinct default fold outside Turkic locales.
-const nameKey = name => [...name.normalize('NFC').toLowerCase()]
+const nameKey = name => [...name.normalize('NFKC').toLowerCase()]
   .map(char => char === '\u0131' ? char : char.toUpperCase().toLowerCase()).join('').normalize('NFC');
 
 /** @param {string} id @param {{ from?: string, name?: unknown, duty?: unknown, outputs?: unknown }} config @param {readonly string[]} sources */
@@ -58,8 +60,8 @@ export function validateCustomRole(id, config, sources) {
   return badField ? { code: /** @type {const} */ ('role-text'), role: id, field: badField } : null;
 }
 
-/** @param {readonly { id: string, name: string, enabled: boolean, kind: ReturnType<typeof roleKind>, source: string }[]} roles */
-export function checkTeamRules(roles) {
+/** @param {readonly { id: string, name: string, enabled: boolean, kind: ReturnType<typeof roleKind>, source: string }[]} roles @param {readonly string[]} reservedNames */
+export function checkTeamRules(roles, reservedNames = []) {
   const enabled = roles.filter(role => role.enabled);
   const leads = roles.filter(role => role.kind === 'lead');
   if (leads.length !== 1 || !leads[0].enabled) return { code: /** @type {const} */ ('lead-locked'), role: leads[0]?.id };
@@ -68,6 +70,9 @@ export function checkTeamRules(roles) {
     return { code: /** @type {const} */ ('role-limit') };
   }
   const names = new Set();
+  const reserved = new Set([...reservedNames, ...roles.filter(role => role.source !== 'custom').map(role => role.name)].map(nameKey));
+  const collision = roles.find(role => role.source === 'custom' && reserved.has(nameKey(role.name)));
+  if (collision) return { code: /** @type {const} */ ('role-text'), role: collision.id, field: /** @type {const} */ ('name') };
   for (const role of enabled) {
     const key = nameKey(role.name);
     if (names.has(key)) return { code: /** @type {const} */ ('role-text'), role: role.id, field: /** @type {const} */ ('name') };
@@ -88,7 +93,7 @@ export function authorIdentityConflict(reviewer, authors, catalog, identity) {
   const hit = entries.filter(([, key]) => key === reviewKey).map(([id]) => id);
   if (!hit.length) return null;
   const rank = catalog.find(row => row.model === reviewer)?.rank ?? rankByName(reviewer);
-  const used = new Set(entries.map(([, key]) => key));
+  const used = new Set(hit.includes('developer') ? [reviewKey] : entries.map(([, key]) => key));
   const alternatives = catalog.filter(row => {
     const key = identity(row.model);
     if (!row.available || row.rank < rank || used.has(key)) return false;

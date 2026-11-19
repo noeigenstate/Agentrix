@@ -21,11 +21,6 @@ function cleanSeat(raw, seat, models, stored = false) {
   return { model: raw.model, effort: raw.effort, ...(raw.fast !== undefined ? { fast: raw.fast } : {}) };
 }
 
-function cleanSeats(raw, seatIds, models, stored = false) {
-  if (!object(raw)) fail('invalid-model', null, 'Expected a seat map.');
-  return Object.fromEntries(seatIds.filter(id => Object.hasOwn(raw, id)).map(id => [id, cleanSeat(raw[id], id, models, stored)]));
-}
-
 // A corrupt stored choice must not erase another seat.
 function cleanStoredSeats(raw, seatIds) {
   if (!object(raw)) return {};
@@ -135,8 +130,11 @@ function checkReviewer(map, models, reviewers = ['reviewer'], authors = ['develo
   const identity = modelIdentity(models);
   const authorModels = Object.fromEntries(authors.filter(id => Object.hasOwn(map, id)).map(id => [id, map[id].model]));
   for (const id of reviewers) {
-    if (Object.hasOwn(map, id) && authorIdentityConflict(map[id].model, authorModels, models, identity)) {
-      return refusal('reviewer-same-model', id, 'Choose a reviewer different from the authors when another available model is at least as strong.');
+    if (!Object.hasOwn(map, id)) continue;
+    const conflict = authorIdentityConflict(map[id].model, authorModels, models, identity);
+    if (conflict) {
+      const author = conflict.hit.includes('developer') ? 'developer' : 'the authors';
+      return refusal('reviewer-same-model', id, 'Choose a reviewer different from ' + author + ' when another available model is at least as strong.');
     }
   }
   return null;
@@ -176,5 +174,5 @@ function seatIssues(map, models) {
   return issues;
 }
 
-module.exports = { cleanSeat, cleanSeats, cleanStoredSeats, migrateSeats, migrateDefaultModels, checkReviewer, catalog, defaultsFor, effective,
+module.exports = { cleanSeat, cleanStoredSeats, migrateSeats, migrateDefaultModels, checkReviewer, modelIdentity, catalog, defaultsFor, effective,
   leadOptions, leadConfiguration, resolveSeat, agentAlias, concreteAlias, seatIssues, rankOf };

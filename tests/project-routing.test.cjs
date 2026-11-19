@@ -4,10 +4,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { builtinMetadata } = require('../electron/features/skills/builtin-format.cjs');
-const { MAX_BYTES, readRouting, writeRouting, routingState } = require('../electron/features/skills/project-routing.cjs');
+const { MAX_BYTES, readRouting, writeRouting, routingState, reviewFile } = require('../electron/features/skills/project-routing.cjs');
+const { resolveTeam } = require('../electron/features/skills/team-roles.cjs');
 const modelSeats = require('../electron/features/skills/model-seats.cjs');
 
-const entry = builtinMetadata(fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8'), 'model-routing');
+const text = fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8');
+const entry = { ...builtinMetadata(text, 'model-routing'), text };
 const installed = { claude: true, codex: true }, catalog = modelSeats.catalog(installed);
 const context = [entry, catalog, modelSeats.defaultsFor(installed, catalog, entry.seats)];
 const document = (roles = {}, operations = {}) => ({ format: 'agentrix-routing', version: 1, roles, operations });
@@ -65,6 +67,74 @@ test('routing rejects junctions and non-regular targets, preserving their conten
   assert.equal(read().error.code, 'not-file');
 });
 
+test('a project beneath a junction can read and save its own routing file', t => {
+  const { root } = fixture(t), real = path.join(root, 'real'), link = path.join(root, 'linked');
+  fs.mkdirSync(path.join(real, 'project'), { recursive: true });
+  fs.symlinkSync(real, link, 'junction');
+  const project = path.join(link, 'project'), config = { roles: { qa: { enabled: false } }, operations: {} };
+  assert.equal(readRouting(project, ...context).digest, null);
+  assert.deepEqual(writeRouting(project, config, null, context, () => () => {}), { ok: true });
+  assert.deepEqual(readRouting(project, ...context).config, config);
+});
+
+test('routing accepts BOM and absent operations and rejects duplicate keys and unsafe file fields', t => {
+  const { read, write } = fixture(t);
+  write('\uFEFF{"format":"agentrix-routing","version":1,"roles":{}}');
+  assert.deepEqual(read().config, { roles: {}, operations: {} });
+  write('{"format":"agentrix-routing","version":1,"roles":{"qa":{"enabled":true,"en\\u0061bled":false}}}');
+  assert.equal(read().error.code, 'bad-json');
+  for (const roles of [
+    { 'not a seat': {} }, { qa: { model: 'evil:', effort: 'high' } }, { qa: { model: 'evil://model', effort: 'high' } },
+  ]) {
+    write(JSON.stringify(document(roles)));
+    assert.equal(read().error.code, 'bad-format');
+  }
+  for (const name of ['\uFF26rontend', '\u524D\u7AEF']) {
+    write(JSON.stringify(document({ 'x-extra': { from: 'frontend', name, duty: 'Test' } })));
+    assert.equal(read().error.code, 'role-text');
+  }
+  const unknown = Object.fromEntries(Array.from({ length: 20 }, (_, id) => ['future' + id, {}]));
+  write(JSON.stringify(document({ qa: { model: 'sonnet', effort: 'unknown' }, ...unknown }, { lookup: { model: 'opus', effort: 'unknown' } })));
+  assert.deepEqual(read().config.operations, {});
+  assert.equal(read().config.roles.qa.model, undefined);
+  assert.equal(read().ignored[0], 'roles.qa.seat');
+  assert.equal(read().ignored.length, 16);
+});
+
+test('the reviewer cannot share Developer’s model when another author occupies the alternative', t => {
+  const { read, write } = fixture(t);
+  write(JSON.stringify(document({
+    developer: { model: 'opus', effort: 'high' }, frontend: { enabled: true, model: 'gpt-6.1-sol', effort: 'high' },
+  })));
+  assert.equal(read().error.code, 'reviewer-same-model');
+});
+
+test('review flags weakened verification roles, the review operation and shared reviewer models', () => {
+  const original = { roles: { a11y: { enabled: true } }, operations: { review: { model: 'gpt-6.1-sol' } } };
+  const config = { roles: {
+    reviewer: { enabled: false }, developer: { model: 'opus', effort: 'high' },
+    'x-audit': { from: 'reviewer', name: 'Audit', duty: 'Review changes', outputs: '' },
+    qa: { effort: 'low', model: 'sonnet' }, security: { model: 'sonnet', effort: 'high' },
+    a11y: { enabled: true, model: 'haiku', effort: 'high' },
+  }, operations: { review: { model: 'gpt-mini' } } };
+  const before = { ...resolveTeam(entry, original, context[2]), operations: original.operations };
+  const after = resolveTeam(entry, config, context[2]);
+  const flags = reviewFile({ config, ignored: [] }, 'changed', after, before, catalog).flags;
+  const weakened = flags.filter(flag => flag.code === 'verification-weakened').map(flag => flag.role ?? flag.operation);
+  assert.deepEqual(new Set(weakened), new Set(['reviewer', 'x-audit', 'qa', 'security', 'a11y', 'review']));
+});
+
+test('save clears abandoned routing temporaries while keeping recent files', t => {
+  const { root, folder, write, read } = fixture(t);
+  write(JSON.stringify(document()));
+  const abandoned = path.join(folder, '.routing-abandoned.tmp'), recent = path.join(folder, '.routing-recent.tmp');
+  fs.writeFileSync(abandoned, 'old'); fs.writeFileSync(recent, 'recent');
+  fs.utimesSync(abandoned, 100, 100);
+  assert.deepEqual(writeRouting(root, { roles: {}, operations: {} }, read().digest, context, () => () => {}), { ok: true });
+  assert.equal(fs.existsSync(abandoned), false);
+  assert.equal(fs.existsSync(recent), true);
+});
+
 test('atomic writes record trust before rename and refuse to replace a stale base', t => {
   const { root, folder, read } = fixture(t), config = { roles: { qa: { enabled: false } }, operations: {} };
   let trust;
@@ -106,6 +176,8 @@ test('trust states select exactly one fallback and reject unavailable invalid-fi
   assert.equal(routingState(project, candidate, stored).config, local);
   stored.trust = { p: { digest: candidate.digest, config: candidate.config } };
   assert.equal(routingState(project, candidate, stored).source.state, 'trusted');
+  const changedCleanedConfig = { ...candidate, config: local };
+  assert.equal(routingState(project, changedCleanedConfig, stored).source.state, 'pending');
   write('{'); const invalid = read();
   assert.equal(routingState(project, invalid, stored).source.layer, 'accepted');
   assert.deepEqual(routingState(project, invalid, stored).source.actions, ['keep', 'overwrite']);

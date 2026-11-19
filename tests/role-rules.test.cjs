@@ -67,7 +67,8 @@ test('a team requires its enabled lead and at least one enabled reviewer', () =>
 
 test('enabled names compare after normalization and case folding', () => {
   for (const [left, right] of [['Caf\u00e9', 'CAFE\u0301'], ['\u039F\u03A3', '\u03BF\u03C3'], ['Stra\u00dfe', 'STRASSE']]) {
-    const roles = [lead, reviewer, role('docs', 'member', { name: left }), role('x-docs', 'member', { name: right, source: 'custom' })];
+    const roles = [lead, reviewer, role('x-guide', 'member', { name: left, source: 'custom' }),
+      role('x-docs', 'member', { name: right, source: 'custom' })];
     assert.deepEqual(checkTeamRules(roles), { code: 'role-text', role: 'x-docs', field: 'name' });
     roles[3].enabled = false;
     assert.equal(checkTeamRules(roles), null);
@@ -82,7 +83,7 @@ test('team limits count all custom roles and only enabled roles', () => {
   assert.deepEqual(checkTeamRules([...roles, { ...customs[0], enabled: true }]), { code: 'role-limit' });
 });
 
-test('reviewer identity conflicts require an available peer unused by every enabled author', () => {
+test('only non-Developer author conflicts require a peer unused by all authors', () => {
   const catalog = [
     { model: 'opus', rank: 3, available: true },
     { model: 'claude-opus-5', rank: 3, available: true },
@@ -95,8 +96,16 @@ test('reviewer identity conflicts require an available peer unused by every enab
   const identity = model => ({ opus: 'claude-opus-5', 'gpt-free-alias': 'gpt-free' })[model] ?? model;
   const authors = { developer: 'opus', frontend: 'gpt-author', 'x-author': 'claude-opus-5' };
   assert.deepEqual(authorIdentityConflict('claude-opus-5', authors, catalog, identity), {
-    hit: ['developer', 'x-author'], alternatives: [catalog[5]],
+    hit: ['developer', 'x-author'], alternatives: [catalog[2], catalog[5]],
   });
-  assert.equal(authorIdentityConflict('opus', authors, catalog.slice(0, 5), identity), null);
+  assert.ok(authorIdentityConflict('opus', authors, catalog.slice(0, 5), identity));
+  assert.equal(authorIdentityConflict('opus', { frontend: 'gpt-author', 'x-author': 'opus' }, catalog.slice(0, 5), identity), null);
   assert.equal(authorIdentityConflict('opus', { frontend: 'gpt-author' }, catalog, identity), null);
+});
+
+test('reserved names use compatibility folding and role text accepts at most two combining marks', () => {
+  assert.equal(normalizeRoleText('name', 'A\u0300\u0301\u0302'), null);
+  assert.ok(normalizeRoleText('name', 'A\u0300\u0301'));
+  const candidate = role('x-docs', 'member', { name: '\uFF24ocs', source: 'custom', enabled: false });
+  assert.equal(checkTeamRules([lead, reviewer, candidate], ['Docs']).code, 'role-text');
 });

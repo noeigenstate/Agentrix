@@ -119,6 +119,28 @@ function fixture(t, setup = () => {}) {
   return { root, dataDir, builtinDir, projects, store, options, errors, changes };
 }
 
+test('rendered routing writes safe summaries and exposes role freshness changes', () => {
+  const text = fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8');
+  const { frontMatter } = require('../electron/features/skills/front-matter.cjs');
+  const { resolveTeam } = require('../electron/features/skills/team-roles.cjs');
+  const entry = builtinMetadata(text, 'model-routing'), installed = { claude: true, codex: true };
+  const catalog = modelSeats.catalog(installed), defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
+  const { roles, effective: map } = resolveTeam(entry, { operations: {}, roles: {
+    qa: { fresh: false }, designer: { fresh: true, model: 'evil:', effort: 'high' }, performance: { enabled: true },
+    'x-mobile': { from: 'designer', name: 'Mobile Team', duty: 'Build mobile', outputs: '' },
+  } }, defaults);
+  const rendered = renderRoutingSkill(text, { roles, map, leadAgent: 'claude', installed, catalog });
+  assert.match(rendered, /^summary: "/m);
+  const summary = frontMatter(rendered).fields.summary;
+  assert.match(summary, /evil:/);
+  assert.match(summary, /x-mobile/);
+  assert.doesNotMatch(summary, /Mobile Team/);
+  assert.match(rendered, /\| designer \| Designer \(fresh instance\) \|/);
+  assert.match(rendered, /\| qa \| QA \/ Tester \(may reuse an instance\) \|/);
+  assert.match(rendered, /\| x-mobile \| Mobile Team \(project role, based on Designer\) \(fresh instance\) \|/);
+  assert.doesNotMatch(rendered, /\| developer \|[^\r\n]+specialties:[^\r\n]+--seat performance/);
+});
+
 test('strict built-in format accepts all allowed triggers/requires, scalar quoting, BOM, CRLF and length boundaries', () => {
   for (const trigger of ['always', 'auto']) for (const requires of ['none', 'any-agent', 'codex', 'claude', 'both']) {
     const fields = builtinMetadata(builtin('example', { trigger, requires }), 'example');

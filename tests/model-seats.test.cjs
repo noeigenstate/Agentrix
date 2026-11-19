@@ -1,31 +1,32 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { cleanSeats, migrateSeats, checkReviewer, catalog, defaultsFor, effective, leadOptions } = require('../electron/features/skills/model-seats.cjs');
+const { cleanSeat, cleanStoredSeats, migrateSeats, checkReviewer, catalog, defaultsFor, effective, leadOptions } = require('../electron/features/skills/model-seats.cjs');
 const fixture = require('./fixtures/team-seats.json');
 const ids = fixture.seats;
 const both = { claude: true, codex: true };
 const seat = (model, effort = 'high', fast) => ({ model, effort, ...(fast === undefined ? {} : { fast }) });
-const rejected = (raw, code) => assert.throws(() => cleanSeats(raw, ids), error => error.code === code);
+const rejected = (pick, code) => assert.throws(() => cleanSeat(pick), error => error.code === code);
 
 test('seat validation rejects unsafe and oversized model ids and keeps dispatch model syntax', () => {
-  for (const model of ['', 'bad model', '-option', 'model;echo', 'model\n', 'a'.repeat(161)]) rejected({ developer: seat(model) }, 'invalid-model');
-  for (const model of ['gpt-6.1-sol', 'provider/model:v1@[q]+test', 'a'.repeat(160)]) assert.equal(cleanSeats({ developer: seat(model) }, ids).developer.model, model);
+  for (const model of ['', 'bad model', '-option', 'model;echo', 'model\n', 'a'.repeat(161)]) rejected(seat(model), 'invalid-model');
+  for (const model of ['gpt-6.1-sol', 'provider/model:v1@[q]+test', 'a'.repeat(160)]) assert.equal(cleanSeat(seat(model)).model, model);
 });
 
 test('effort and fast follow capabilities and orchestrator takes either family', () => {
-  rejected({ developer: seat('gpt-6.1-sol', 'max') }, 'invalid-effort');
-  rejected({ designer: seat('sonnet', 'ultra') }, 'invalid-effort');
-  assert.throws(() => cleanSeats({ designer: seat('claude-sonnet-5-5', 'high', true) }, ids,
+  rejected(seat('gpt-6.1-sol', 'max'), 'invalid-effort');
+  rejected(seat('sonnet', 'ultra'), 'invalid-effort');
+  assert.throws(() => cleanSeat(seat('claude-sonnet-5-5', 'high', true), 'designer',
     [{ model: 'claude-sonnet-5-5', efforts: ['high'], fast: false }]), error => error.code === 'fast-not-allowed');
-  assert.throws(() => cleanSeats({ designer: seat('claude-next', 'high', true) }, ids), error => error.code === 'fast-not-allowed');
-  rejected({ developer: seat('gpt-next', 'high', 'true') }, 'fast-not-allowed');
-  for (const model of ['gpt-6.1-sol', 'opus']) assert.deepEqual(cleanSeats({ orchestrator: seat(model) }, ids), { orchestrator: seat(model) });
-  assert.equal(cleanSeats({ architect: seat('opus', 'max'), developer: seat('gpt-next', 'xhigh', true) }, ids).architect.effort, 'max');
+  assert.throws(() => cleanSeat(seat('claude-next', 'high', true)), error => error.code === 'fast-not-allowed');
+  rejected(seat('gpt-next', 'high', 'true'), 'fast-not-allowed');
+  for (const model of ['gpt-6.1-sol', 'opus']) assert.deepEqual(cleanSeat(seat(model), 'orchestrator'), seat(model));
+  assert.equal(cleanSeat(seat('opus', 'max')).effort, 'max');
+  assert.equal(cleanSeat(seat('gpt-next', 'xhigh', true)).fast, true);
 });
 
 test('normalization drops unknown seats and fields without mutating its input', () => {
   const raw = { invented: seat('opus'), developer: { ...seat('gpt-6.1-sol'), private: 'discard' }, orchestrator: seat('opus') };
-  const copy = structuredClone(raw), cleaned = cleanSeats(raw, ids);
+  const copy = structuredClone(raw), cleaned = cleanStoredSeats(raw, ids);
   assert.deepEqual(cleaned, { developer: seat('gpt-6.1-sol'), orchestrator: seat('opus') });
   assert.deepEqual(raw, copy);
 });
@@ -47,7 +48,7 @@ test('reviewer aliases match developer on the newest listed resolved id', () => 
     const models = catalog(both, [{ model: `claude-${alias}-5-4` }, { model: `claude-${alias}-5-5` },
       { model: `claude-${alias}-6-0`, listed: false }, { model: 'gpt-6.2-sol', rank: 3 }]);
     for (const [writer, reviewer] of [[`claude-${alias}-5-5`, alias], [alias, `claude-${alias}-5-5`]]) {
-      const map = cleanSeats({ developer: seat(writer), reviewer: seat(reviewer) }, ids, models);
+      const map = { developer: cleanSeat(seat(writer), 'developer', models), reviewer: cleanSeat(seat(reviewer), 'reviewer', models) };
       assert.equal(checkReviewer(map, models)?.code, 'reviewer-same-model', `${writer}/${reviewer}`);
       assert.equal(map.reviewer.model, reviewer, 'identity comparison does not rewrite saved ids');
     }

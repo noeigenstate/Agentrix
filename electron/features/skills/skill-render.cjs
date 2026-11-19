@@ -68,23 +68,28 @@ function teamRows(shipped, library, roles, spec, summary) {
   const known = new Map(shipped.map(line => [rowId(line), line]));
   const definitions = new Map(library.map(line => [rowId(line), line]));
   const ids = roles.map(role => role.id), defaults = defaultsFor(installed, catalog, ids);
-  const lead = roles.find(role => role.kind === 'lead')?.id ?? ids[0];
-  const specialties = roles.filter(role => role.source === 'library' && role.kind === 'author').map(role => role.id);
+  const lead = spec.lead ?? roles.find(role => role.kind === 'lead')?.id ?? spec.roles[0]?.id ?? ids[0];
+  const specialties = roles.filter(role => role.source === 'library' && role.kind === 'author' && role.id !== 'performance').map(role => role.id);
   const rows = roles.flatMap(role => {
     const { id, name } = role, old = known.get(id);
     const seat = resolveSeat(Object.hasOwn(map, id) ? map[id] : null, Object.hasOwn(defaults, id) ? defaults[id] : null, installed, catalog);
     if (!seat) return old ? [old] : [];
     const model = modelWords(seat), launch = launchWords(id, lead, seat, leadAgent, catalog, operations.pinnedHaiku, specialties);
-    summary.push(name + ' ' + model);
+    summary.push((role.source === 'custom' ? id : name) + ' ' + model);
+    const changedFresh = role.defaultFresh !== undefined && role.fresh !== role.defaultFresh;
+    const freshness = changedFresh || role.source === 'custom' && role.fresh
+      ? role.fresh ? ' (fresh instance)' : ' (may reuse an instance)' : '';
     if (old) {
       const cells = old.split('|');
-      if (cells.length !== 8 || cells[5].trim() === model && cells[6].trim() === launch) return [old];
+      if (cells.length !== 8 || !freshness && cells[5].trim() === model && cells[6].trim() === launch) return [old];
+      if (freshness) cells[2] = ' ' + cells[2].trim() + freshness + ' ';
       cells[5] = ' ' + model + ' '; cells[6] = ' ' + launch + ' ';
       return [cells.join('|')];
     }
     const sourceLabel = (known.get(role.from) ?? definitions.get(role.from))?.split('|')[2]?.trim() ?? role.from;
     const cells = role.source === 'custom' ? [name + ' (project role, based on ' + sourceLabel + ')', role.duty, role.outputs || '\u2014']
       : definitions.get(id)?.split('|').slice(2, 5).map(value => value.trim());
+    if (cells) cells[0] += freshness;
     return cells ? ['| ' + [id, ...cells, model, launch].join(' | ') + ' |'] : [];
   });
   const enabled = new Set(ids);
@@ -115,7 +120,7 @@ function renderRoutingSkill(text, spec) {
   if (teamChanged && summary.length) {
     const frontEnd = lines.findIndex((line, index) => index > 0 && line === '---');
     const summaryLine = lines.slice(1, frontEnd).findIndex(line => line.startsWith('summary: ')) + 1;
-    if (summaryLine > 0) parts[2 * summaryLine] = 'summary: ' + summary.join('\uFF1B');
+    if (summaryLine > 0) parts[2 * summaryLine] = 'summary: ' + JSON.stringify(summary.join('\uFF1B'));
   }
   return parts.join('');
 }

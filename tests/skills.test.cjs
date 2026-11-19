@@ -160,9 +160,9 @@ test('pending routing retains accepted settings and freezes launched roles throu
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/\n/g, '\r\n'));
   assert.equal(store.seatsInfo(id).routing.digest, trusted);
   store.delivery(project, false, 'one', { agent: 'claude', started: true });
-  const changed = { 'x-mobile': { from: 'frontend', name: 'Mobile Two', duty: 'Review the app' } };
+  const changed = { 'x-mobile': { from: 'frontend', name: 'Mobile Two', duty: 'Review the app', fresh: true } };
   fs.writeFileSync(file, routeDocument(changed));
-  const pending = store.seatsInfo(id);
+  const pending = store.seatsInfo(id, null, true);
   assert.equal(pending.routing.state, 'pending'); assert.equal(pending.routing.layer, 'accepted');
   assert.equal(pending.config.roles['x-mobile'].name, 'Mobile One');
   assert.equal(pending.routing.review.config.roles['x-mobile'].duty, 'Review the app');
@@ -172,8 +172,10 @@ test('pending routing retains accepted settings and freezes launched roles throu
   assert.deepEqual(store.resolveRouting(id, 'apply', pending.routing.digest), { ok: true });
   store.delivery(project, false, 'two', { agent: 'claude', started: true });
   assert.equal(store.sessionRoles(id, 'one').find(role => role.id === 'x-mobile').name, 'Mobile One');
+  assert.equal(store.sessionRoles(id, 'one').find(role => role.id === 'x-mobile').fresh, false);
   assert.equal(store.sessionRoles(id, 'one').find(role => role.id === 'qa').enabled, false);
   assert.equal(store.sessionRoles(id, 'two').find(role => role.id === 'x-mobile').name, 'Mobile Two');
+  assert.equal(store.sessionRoles(id, 'two').find(role => role.id === 'x-mobile').fresh, true);
   fs.rmSync(file);
   assert.equal(store.seatsInfo(id).routing.notice, 'file-deleted');
   assert.equal(store.seatsInfo(id).routing.layer, 'template');
@@ -195,6 +197,34 @@ test('routing file watches publish a debounced change for local projects only', 
   t.mock.timers.tick(300);
   assert.deepEqual(changes.slice(before), [{ deliveryChanged: true }]);
   assert.equal(store.seatsInfo(project.id).routing.state, 'pending');
+});
+
+test('Agentrix saves publish once and cache review details only for UI reads', async t => {
+  const { store, projects, changes } = fixture(t), [project] = projects;
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  store.syncWatchers();
+  const watcher = store.routingWatchers.get(project.path);
+  await watcher.poll();
+  const before = changes.length;
+  assert.deepEqual(store.setRouting('project', project.id, routing(), null), { ok: true });
+  await watcher.poll(); t.mock.timers.tick(300);
+  assert.equal(changes.length, before + 1);
+  fs.writeFileSync(routeFile(project), routeDocument({ qa: { enabled: false } }));
+  assert.equal(store.seatsInfo(project.id).routing.review, undefined);
+  assert.equal(store.routingReviews.size, 0);
+  assert.ok(store.seatsInfo(project.id, null, true).routing.review);
+  const cached = store.routingReviews.get(project.id);
+  assert.ok(store.seatsInfo(project.id, null, true).routing.review);
+  assert.equal(store.routingReviews.get(project.id), cached);
+});
+
+test('invalid stored templates and local routing explicitly report their fallback', t => {
+  const { store } = fixture(t);
+  const id = 'builtin:model-routing';
+  store.options[id] = { routing: { template: { roles: null }, local: { p1: routing({ orchestrator: { enabled: false } }) } } };
+  assert.equal(store.seatsInfo('p1').routing.notice, 'invalid-local');
+  assert.equal(store.seatsInfo('p2').routing.notice, 'invalid-template');
+  assert.equal(store.seatsInfo('p1').routing.layer, 'template');
 });
 
 test('keeping then overwriting a malformed file retains and restores the active config', t => {
@@ -219,7 +249,7 @@ test('a hostile fixture reports every review flag and full role text without app
   put(routeFile(project), routeDocument({ qa: { enabled: false }, 'x-worker': {
     from: 'frontend', name: 'New Worker', duty, outputs: 'Complete report', model: 'gpt-unlisted', effort: 'xhigh', fast: true,
   } }, { lookup: seat('opus') }));
-  const { routing: source, roles } = store.seatsInfo(project.id);
+  const { routing: source, roles } = store.seatsInfo(project.id, null, true);
   assert.equal(source.state, 'pending');
   assert.deepEqual(new Set(source.review.flags.map(flag => flag.code)), new Set([
     'expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text', 'operation-cost',

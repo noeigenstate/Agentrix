@@ -5,6 +5,12 @@ The skills library: built-in, global and project skills, their options, history 
 Routing saves roles and operation choices together. A conversation freezes role metadata, seats, operation choices and rendered instructions when it starts.
 A project file can contain short custom duty and output text. Its author can write misleading prose within those limits, so applying an external edit requires owner confirmation.
 The same snapshot carries a launch map with Claude Agent aliases resolved against the catalog at launch time.
+Built-in defaults, timing and requirements come from front matter. Shipped files refuse save, delete, revert, proposal acceptance and optimization options.
+Built-in IDs and names live in Skills, as checked by `tests/boundary-skills.test.cjs`.
+Claude keeps startup instructions and the manifest fallback on its command line. SessionStart gets only the skill manifest.
+Actual CLI session and launch fingerprint deduplicate delivery. Compact and clear force delivery.
+Codex keeps the current project and agent manifest across exits and restarts. Startup prunes unused snapshots, snapshots over 30 days old and old receipts.
+Delivery reuses instructions already in context and preserves owner prompts verbatim.
 
 ## Owns
 - `electron/features/skills/**`
@@ -40,14 +46,14 @@ The same snapshot carries a launch map with Claude Agent aliases resolved agains
 - `electron/boundaries.cjs`
 
 ## Invariants
-- Built-in skill IDs and names live in Skills. — test: `tests/boundary-skills.test.cjs` › "no code outside the skills backend names a built-in skill id or a shipped built-in name"
-- Only the accepted digest applies a project file. — test: `tests/project-routing.test.cjs` › "trust states select exactly one fallback and reject unavailable invalid-file actions"
+- Built-ins refuse save, delete, revert, proposals and optimization. — test: `tests/skills.test.cjs` › "skill defaults, exact public shape, read-only built-ins and local-only project scopes"
+- Routing applies only confirmed files and freezes launch choices. — test: `tests/skills.test.cjs` › "pending routing retains accepted settings and freezes launched roles through edits"
 - Skill folders never escape managed storage; invalid names and symlinks are refused on read, save, import and delete — agents and imports supply these paths — test: `tests/skills.test.cjs` › "invalid names, imports and symlinked skill folders cannot escape managed storage"
 - SSH receives only enabled built-in/global text and optional adopted routing weights, never project skills or local paths — remote copies stay private to the remote session and weights stay outside committed files — test: `tests/skills.test.cjs` › "SSH bundle contains only enabled built-in/global files, never project skills or local paths"; test: `tests/skills-session.test.cjs` › "routing note is optional, current on a new delivery and included in bounded SSH manifests"
 - User-confirmed proposals wait in skill-pending; workers need a literal allowed SKILL.md path to apply an edit, and broad globs preserve proposals then restore pre-run bytes only in an isolated worker worktree; managed and shared changes remain live with unknown authorship — the user and lead retain their respective approval controls — test: `tests/skills.test.cjs` › "pending proposals do not change the active file; accept, reject and agent-created review"; test: `tests/dispatch-skill-proposals.test.cjs` › "broad scope restores edited/new/deleted skills and preserves worker versions beside the answer"; test: `tests/dispatch-skill-proposals.test.cjs` › "concurrent owner edits to global and built-in skills are report-only, unrelated inherited deliveries are ignored"
 - An enabled skill's first run is claimed only by an observed launch, once per project, when the skill is delivered. Starts under `always` claim it as before. The separate `firstOpenRun` flag gives an `auto` skill the first-run instruction. A saved `first-open` trigger migrates to `auto` with the flag set — test: `tests/builtin-skills.test.cjs` › "first run is claimed by an agent, never a shell or refresh"
 - lastUsed records only a successful skill-file read, never a mention, failed read or unrelated path — the page shows usage as fact — test: `tests/skills.test.cjs` › "successful Claude/Codex skill reads record lastUsed, failed/settled/mentioned/unrelated paths do not"
-- Launch role metadata and choices stay frozen through edits and compact/clear. — test: `tests/skills.test.cjs` › "pending routing retains accepted settings and freezes launched roles through edits"
+- Claude SessionStart receives the manifest and deduplicates deliveries. — test: `tests/skills-session.test.cjs` › "startup/resume deduplicate CLI session plus content fingerprint"
 
 ## Not ours
 - Scrubbing private data from skill text — Activity pane (skill-privacy.cjs)

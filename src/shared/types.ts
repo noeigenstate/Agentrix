@@ -236,6 +236,7 @@ export type RoleKind = 'lead' | 'reviewer' | 'author' | 'member';
 export type TeamRole = SeatRole & {
   kind: RoleKind; source: 'builtin' | 'library' | 'custom'; from?: SeatId;
   enabled: boolean; fresh: boolean; locked: ('enabled' | 'fresh' | 'text' | 'copy')[];
+  defaultEnabled?: boolean; defaultFresh?: boolean; inherits?: SeatId; defaultSeat?: Seat;
 };
 export type RoleConfig = Partial<Seat> & { enabled?: boolean; fresh?: boolean; from?: SeatId; name?: string; duty?: string; outputs?: string };
 export type SeatModel = {
@@ -263,7 +264,7 @@ export type RoutingReview = {
 export type RoutingSource = {
   layer: 'file' | 'accepted' | 'local' | 'template'; state: 'trusted' | 'pending' | 'rejected' | 'invalid' | 'absent';
   remote: boolean; path: '.agentrix/routing.json' | null; digest: string | null;
-  raw?: string; actions: RoutingAction[]; notice?: 'file-deleted'; templateProjects?: number;
+  raw?: string; actions: RoutingAction[]; notice?: 'file-deleted' | 'invalid-template' | 'invalid-local'; templateProjects?: number;
   error?: {
     code: 'too-large' | 'too-deep' | 'bad-utf8' | 'bad-json' | 'unknown-key' | 'newer-version' | 'link' | 'not-file' | 'bad-format'
       | RoleRuleCode | 'reviewer-same-model' | 'review-same-model';
