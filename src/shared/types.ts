@@ -239,6 +239,25 @@ export type SeatModel = {
 };
 // A saved seat main ran differently: the slot, why, and what it ran instead.
 export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsupported' | 'fast-unsupported'; substitute: string };
+export type OperationId = 'lookup' | 'background' | 'subagent' | 'memory' | 'review';
+export type OperationValue = { model: string; effort?: string } | 'follow';
+export type OperationMap = Partial<Record<OperationId, OperationValue>>;
+export type OperationAgentState = { state: 'applies' | 'not-applicable' | 'not-effective'; reason?: string };
+export type OperationRow = {
+  id: OperationId | 'compaction' | 'titles';
+  name: string;
+  nameEn: string;
+  covers: string;
+  editable: boolean;
+  families: ('claude' | 'codex')[];
+  effort: 'always' | 'codex' | 'never';
+  follow: string | null;
+  default: OperationValue | null;
+  effective: { model: string; effort?: string } | null;
+  suggestion?: string;
+  agents: { claude: OperationAgentState; codex: OperationAgentState };
+  note?: string;
+};
 export type SeatsInfo = {
   skill: string;
   seats: SeatId[];
@@ -261,8 +280,26 @@ export type SeatsInfo = {
   // Seats whose default moved to a newer model, reported once.
   defaultsMoved?: { seat: string; from: string; to: string }[];
   migrated?: string;
+  operations?: {
+    rows: OperationRow[];
+    defaults: OperationMap;
+    global: OperationMap;
+    project: OperationMap | null;
+    effective: OperationMap;
+    current: {
+      values: OperationMap;
+      agents: Partial<Record<OperationId, { claude: OperationAgentState; codex: OperationAgentState }>>;
+    } | null;
+  };
 };
-export type SeatsSaveError = { ok: false; code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model'; seat?: string; message: string };
+export type SeatsSaveError = {
+  ok: false;
+  code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model'
+    | 'unknown-operation' | 'family-not-allowed' | 'follow-not-allowed' | 'review-same-model';
+  seat?: string;
+  operation?: string;
+  message: string;
+};
 // Where the Claude Code a session runs was found (claude-runtime/BOUNDARY.md); `fileShown` writes home as ~.
 export type ClaudeVia = 'path' | 'npm' | 'platform-package' | 'local-bin' | 'claude-local' | 'winget' | 'registry-path' | 'system';
 export type ClaudeFound = { version: string | null; via: ClaudeVia; fileShown: string };
@@ -467,7 +504,7 @@ type Bridge = {
   skillSeats(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;
   // Reads the model lists again (throttled in main) and returns the seats with the fresh catalog.
   skillSeatsRefresh(projectId?: string | null, terminalId?: string | null, reason?: 'dialog' | 'manual'): Promise<SeatsInfo | null>;
-  setSkillSeats(scope: 'global' | 'project', projectId: string | null, seats: SeatMap): Promise<{ ok: true } | SeatsSaveError>;
+  setSkillSeats(scope: 'global' | 'project', projectId: string | null, seats: SeatMap, operations?: OperationMap): Promise<{ ok: true } | SeatsSaveError>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
   callFile(terminalId: string, callId: string, kind: 'brief' | 'log'): Promise<CallFileResult>;

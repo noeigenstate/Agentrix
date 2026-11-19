@@ -54,7 +54,13 @@ export type AgentEventPayloads = {
   'context.compacted': { trigger: 'auto' | 'manual'; preTokens: number | null; postTokens: number | null };
   'item.dropped': { reason: 'too_large'; bytes: number };
   'limits.updated': LimitsPayload;
-  'routing.updated': { declared: RoutingValues; effective: RoutingValues; observed: RoutingValues; reason: string | null };
+  'routing.updated': {
+    declared: RoutingValues;
+    effective: RoutingValues;
+    observed: RoutingValues;
+    reason: string | null;
+    operations?: { applied: string[]; refused: { key: string; reason: string }[] };
+  };
   'path.changed': { previous: 'api' | 'terminal' | 'subscription' | null; selected: 'api' | 'terminal' | 'subscription'; reason: string | null };
   'error': { code: string; message: string; retryable: boolean; willRetry: boolean; stage: string };
 };
