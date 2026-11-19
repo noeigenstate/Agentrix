@@ -230,12 +230,27 @@ export function paletteGroups(catalog: SeatModel[], query = ''): PaletteGroup[] 
   return q ? groups.filter(group => group.lines.length) : groups;
 }
 
+const DEVELOPER_ROLE: SeatRole = { id: 'developer', name: 'Developer', duty: '', detail: '', outputs: '' };
+
+export function callSeatRole(roles: readonly SeatRole[], item: CallRow['item']) {
+  const knownRole = roles.find(role => role.id === item.seat);
+  const role = knownRole ?? roles.find(role => role.id === DEVELOPER_ROLE.id) ?? DEVELOPER_ROLE;
+  return { role, inferred: !knownRole || item.seatSource !== 'declared' };
+}
+
 export function roleGroups(roles: readonly SeatRole[], rows: CallRow[]) {
-  return roles.map(role => ({ role, rows: rows.filter(row => (row.item.seat ?? 'developer') === role.id) })).filter(group => group.rows.length > 0);
+  const groups = new Map<SeatRole, CallRow[]>(roles.map(role => [role, []]));
+  for (const row of rows) {
+    const { role } = callSeatRole(roles, row.item);
+    const group = groups.get(role);
+    if (group) group.push(row); else groups.set(role, [row]);
+  }
+  return Array.from(groups, ([role, rows]) => ({ role, rows })).filter(group => group.rows.length > 0);
 }
 
 export function routeVerdict(row: CallRow, info?: SeatsInfo | null) {
-  const { call, item } = row, expected = item.seat && info?.current?.[item.seat], declared = item.declared;
+  const { call, item } = row, declared = item.declared;
+  const expected = item.seatSource === 'declared' && item.seat ? info?.current?.[item.seat] : undefined;
   if (!call.model || call.modelUnconfirmed) return 'unknown';
   const matches = (model: string) => sameModel(info?.catalog ?? [], model, call.model!);
   if (expected && !matches(expected.model)) return 'mismatch';
