@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
 const { seatRouting } = require('../integration/agent-event.cjs');
+const { specialtyCases } = require('./seat-auto.test.cjs');
 
 function pythonProbe(t, script) {
   const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
@@ -106,10 +107,11 @@ test('the SSH command hook matches the local Agent tool routing rules and observ
     ['claude-opus-5-5', 'opus', 'max'], ['claude-other', 'opus', 'adaptive'], ['claude-other', 'opus-next', 'high'],
     ['opus-next', 'opus', 'high'], ['gpt-6.2-sol', null, 'high'],
   ];
-  const cases = pairs.flatMap(([model, agentModel, effort]) => ['PreToolUse', 'PostToolUse'].map(hook_event_name => {
-    const snapshot = JSON.stringify({ reviewer: { model, agentModel, effort } });
+  const choices = [...pairs.map(([model, agentModel, effort]) => ['reviewer', { reviewer: { model, agentModel, effort } }]), ...specialtyCases];
+  const cases = choices.flatMap(([seat, map]) => ['PreToolUse', 'PostToolUse'].map(hook_event_name => {
+    const snapshot = JSON.stringify(map);
     const hook = { hook_event_name, tool_name: 'Agent', tool_use_id: 'toolu_1', session_id: 'fixture',
-      tool_input: { description: '[reviewer] Review', prompt: 'Review', model: 'haiku', effort: 'medium' } };
+      tool_input: { description: `[${seat}] Review`, prompt: 'Review', model: 'haiku', effort: 'medium' } };
     return { snapshot, hook, expected: seatRouting(JSON.stringify(hook), snapshot) };
   }));
   pythonProbe(t, String.raw`

@@ -23,6 +23,18 @@ const hook = (tool_input = input, tool_name = 'Agent', hook_event_name = 'PreToo
   ({ tool_input, tool_name, hook_event_name, session_id: 'fixture', tool_use_id: 'toolu_1' });
 const rewritten = { ...input, model: 'sonnet', effort: 'high' };
 const expected = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: rewritten } };
+const developer = { model: 'opus', effort: 'low' };
+const frontend = { model: 'claude-sonnet-5-5', agentModel: 'sonnet', effort: 'high' };
+const specialtyCases = [
+  ['developer/frontend', { developer, frontend }, frontend],
+  ['developer/frontend', { frontend }, frontend],
+  ['developer/frontend', { developer }, developer],
+  ['developer/frontend', {}, null],
+  ['x-mobile', { 'x-mobile': frontend }, frontend],
+  ['x-mobile', { developer }, null],
+];
+module.exports = { specialtyCases };
+
 const deferred = () => ({ behavior: 'defer' });
 function sdkHooks(t, seatsMap = seats, policy = deferred, onSeat) {
   const abort = new AbortController();
@@ -40,6 +52,18 @@ test('native Agent and Task hooks overwrite model and effort from the frozen cho
     { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...rewritten, description: '[designer/web] Sketch' } } });
   const modified = { ...input, prompt: 'Owner hook changed this', run_in_background: false };
   assert.deepEqual((await pre(hook(modified))).hookSpecificOutput.updatedInput, { ...modified, model: 'sonnet', effort: 'high' });
+});
+
+test('Agent and Task launch the enabled specialty, fall back to Developer, or leave an off-team call alone', () => {
+  for (const [seat, map, choice] of specialtyCases) {
+    for (const toolName of ['Agent', 'Task']) {
+      const tool = { ...input, description: `[${seat}] Check the UI` };
+      const result = seatRouting(JSON.stringify(hook(tool, toolName)), JSON.stringify(map));
+      const update = result.output?.hookSpecificOutput?.updatedInput;
+      assert.deepEqual(update, choice ? { ...tool, model: choice.agentModel ?? choice.model, effort: choice.effort } : undefined, seat);
+      if (!choice) assert.deepEqual(result, {}, seat);
+    }
+  }
 });
 
 test('a seat rewrite failure leaves the SDK hook answer empty while policy errors still block', async t => {
@@ -76,7 +100,7 @@ test('Codex and unsupported Agent settings show a note without changing tool inp
 });
 
 test('a foreground call shows its seat before PostToolUse and reconciles final input and child records', async t => {
-  const calls = new AgentCalls({ local: false, seatIds: () => Object.keys(seats) });
+  const calls = new AgentCalls({ local: false, roles: () => Object.keys(seats) });
   t.after(() => calls.dispose());
   const hooks = sdkHooks(t, seats, deferred, (_input, result) => calls.observeSeatInput(result));
   const pre = hooks.PreToolUse[0].hooks[0], post = hooks.PostToolUse[0].hooks[0];
@@ -95,7 +119,7 @@ test('a foreground call shows its seat before PostToolUse and reconciles final i
 
 test('a PostToolUse receipt updates activity whether it arrives before or after the parent tool record', async t => {
   for (const receiptFirst of [true, false]) {
-    const calls = new AgentCalls({ local: false, seatIds: () => Object.keys(seats) });
+    const calls = new AgentCalls({ local: false, roles: () => Object.keys(seats) });
     t.after(() => calls.dispose());
     const post = sdkHooks(t, seats, deferred, (_input, result) => calls.observeSeatInput(result)).PostToolUse[0].hooks[0];
     const applied = hook(rewritten, 'Agent', 'PostToolUse');

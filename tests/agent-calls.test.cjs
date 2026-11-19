@@ -6,6 +6,7 @@ const path = require('node:path');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { acceptDispatch } = require('../electron/features/agents/dispatch-events.cjs');
+const builtinRoles = require('./fixtures/team-seats.json').seats.map(id => ({ id, enabled: true }));
 
 const use = (id, name = 'Agent', input = {}) => ({ type: 'assistant', message: { model: 'claude-opus-5-5', content: [{ type: 'tool_use', id, name, input }] } });
 const result = (id, toolUseResult = {}, is_error = false) => ({ type: 'user', toolUseResult, message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'placeholder', is_error }] } });
@@ -319,8 +320,7 @@ test('subagent items keep every role and full description newest first, includin
 });
 
 test('a seat prefix survives hook-first delivery, and unlabeled calls use the evidence in priority order', t => {
-  const { seats } = require('./fixtures/team-seats.json');
-  const calls = new AgentCalls({ terminalId: 't', local: false, seatIds: () => seats }); t.after(() => calls.dispose());
+  const calls = new AgentCalls({ terminalId: 't', local: false, roles: () => builtinRoles }); t.after(() => calls.dispose());
   calls.subagent({ kind: 'start', terminalId: 't', agentId: 'child', toolUseId: 'tool', agentType: 'Explore', at: 1000 });
   calls.apply({ ...use('tool', 'Agent', { description: '[designer] Sketch the team view' }), cwd: '/work' });
   calls.apply(use('unknown', 'Agent', { description: '[new-role/api] Look up the CLI', subagent_type: 'Explore' }));
@@ -353,13 +353,45 @@ test('a seat prefix survives hook-first delivery, and unlabeled calls use the ev
   assert.equal(rows.get('dispatch:7').specialty, 'frontend');
 });
 
+test('calls retain the declared role name and membership across routing saves and terminal reuse', t => {
+  let roles = [{ id: 'frontend', name: 'Frontend', enabled: true }, { id: 'x-mobile', name: 'Mobile', enabled: true },
+    { id: 'developer', name: 'Developer', enabled: false }, { id: 'qa', name: 'QA', enabled: false }];
+  const calls = new AgentCalls({ terminalId: 't', local: false, roles: () => roles });
+  t.after(() => calls.dispose());
+  calls.subagent({ kind: 'start', terminalId: 't', agentId: 'child', toolUseId: 'mobile', agentType: 'Explore', at: 1000 });
+  calls.apply(use('mobile', 'Task', { description: '[x-mobile] Check the client' }));
+  calls.apply(use('qa', 'Agent', { description: '[qa] Check the client' }));
+  calls.apply(use('legacy', 'Agent', { description: '[developer/backend] Check the server' }));
+
+  const event = { id: 'frontend', agent: 'claude', seat: 'developer/frontend', cwd: '/worktree', title: 'Check the UI', at: 1000,
+    role: 'exec', requested: { model: 'sonnet' } };
+  assert.equal(calls.dispatch({ ...event, type: 'dispatch-declared' }), true);
+  const start = { ...event, type: 'dispatch-start', model: 'sonnet', effort: 'high', startedAt: 1000, sessionId: 'provider' };
+  roles = [{ id: 'frontend', name: 'Web', enabled: false }, { id: 'x-mobile', name: 'Client', enabled: true }];
+  assert.equal(calls.dispatch({ ...start, seat: 'x-mobile' }), false);
+  assert.equal(calls.dispatch(start), true);
+  assert.equal(calls.dispatch({ ...start, id: 'mobile-worker', seat: 'x-mobile' }), true);
+  roles = null;
+
+  const labels = id => {
+    const { seat, seatName, seatSource, offTeam, specialty } = calls.snapshot().flatMap(group => group.items).find(row => row.id === id);
+    return [seat, seatName, seatSource, offTeam, specialty];
+  };
+  assert.deepEqual(labels('agent:mobile'), ['x-mobile', 'Mobile', 'declared', undefined, undefined]);
+  assert.deepEqual(labels('agent:qa'), ['qa', 'QA', 'declared', true, undefined]);
+  assert.deepEqual(labels('agent:legacy'), ['developer', 'Developer', 'declared', true, 'backend']);
+  assert.deepEqual(labels('dispatch:frontend'), ['frontend', 'Frontend', 'declared', undefined, undefined]);
+  assert.deepEqual(labels('dispatch:mobile-worker'), ['x-mobile', 'Client', 'declared', undefined, undefined]);
+  calls.endSession();
+  assert.deepEqual(labels('dispatch:frontend'), ['frontend', 'Frontend', 'declared', undefined, undefined]);
+});
+
 test('brief and log reads use only the authenticated call paths and cap UTF-8 text at 256 KiB', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-call-files-'));
   const target = path.join(folder, 'target'), alias = path.join(folder, 'alias');
   await fs.mkdir(target); await fs.symlink(target, alias, 'junction');
   const brief = path.join(alias, 'brief.md'), out = path.join(alias, 'answer.md'), log = out + '.log';
-  const { seats } = require('./fixtures/team-seats.json');
-  const local = new AgentCalls({ seatIds: () => seats }), remote = new AgentCalls({ local: false }); t.after(async () => {
+  const local = new AgentCalls({ roles: () => builtinRoles }), remote = new AgentCalls({ local: false }); t.after(async () => {
     local.dispose(); remote.dispose(); await fs.rm(folder, { recursive: true, force: true });
   });
   await fs.writeFile(brief, 'The recorded brief');

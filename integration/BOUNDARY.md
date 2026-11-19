@@ -6,6 +6,8 @@ Codex workers registered through local dispatch control use the lead conversatio
 Main delivers frozen Claude operation settings to its brokered workers. SSH-dispatched workers and direct Claude helper launches use agent defaults.
 Local and SSH Claude terminal wrappers read the live lead file at launch, including the optional background and subagent model lines.
 The sixth line carries the launch's seat choices. The helper uses a matching seat from that launch map for omitted model, effort and fast flags.
+Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
+Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"
 Claude's terminal Agent and Task hooks report provisional and final input by tool-use ID.
 The local Codex helper can fill omitted seat flags from the private bootstrap's seat snapshot before dispatch registration.
 
@@ -43,7 +45,7 @@ The local Codex helper can fill omitted seat flags from the private bootstrap's 
 - `electron/features/team/*.cjs` (Team's public admission, minutes and inbox interfaces)
 - `electron/features/dashboard/records-routing.cjs`
 - `electron/features/skills/session.cjs`
-- `electron/features/agents/call-seat.cjs` (Claude model family rule)
+- `electron/features/agents/call-seat.cjs` (Claude model family and launch seat resolution)
 - `electron/features/skills/worker-proposals.cjs`
 
 ## Invariants
