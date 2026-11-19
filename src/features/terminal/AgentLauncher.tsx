@@ -13,6 +13,27 @@ type Agent = 'claude' | 'codex';
 type History = Record<Agent, { id: string; at: number } | null>;
 const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'claude', name: 'Claude Code', mark: <ClaudeLogo size={22} /> }, { agent: 'codex', name: 'Codex', mark: <CodexLogo size={22} /> }];
 
+// Routing labels describe the selected project. Loading those labels is independent of starting an agent.
+function useLauncherRouting(projectId: string) {
+  const [routing, setRouting] = useState<{ projectId: string; info: SeatsInfo | null } | null>(null);
+  useEffect(() => {
+    const api = window.agentrix;
+    if (!api?.skillSeats) return;
+    let active = true, request = 0;
+    const load = () => {
+      const mine = ++request;
+      void api.skillSeats(projectId, null).then(
+        info => { if (active && request === mine) setRouting({ projectId, info }); },
+        () => { if (active && request === mine) setRouting(null); },
+      );
+    };
+    load();
+    const off = api.onSkills?.(load);
+    return () => { active = false; off?.(); };
+  }, [projectId]);
+  return routing?.projectId === projectId ? routing.info : null;
+}
+
 // A project with no agent on the card: pick the agent to work with, fresh or continuing this folder's latest conversation
 // with it. An agent not installed yet is installed by the same click (Node.js first, when even npm is missing), then
 // started. An SSH project offers Codex only (Claude there is the owner's own in its terminal), which is not installed here and starts at once: the other
@@ -22,22 +43,6 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   terminalId: string; projectId: string; kind?: 'local' | 'ssh'; onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
   onOpenTerminal: (id: string) => void; runningCount?: number; onExpand?: () => void;
 }) {
-  const [routing, setRouting] = useState<SeatsInfo | null>(null);
-  useEffect(() => {
-    const api = window.agentrix;
-    if (!api?.skillSeats) return;
-    let active = true, request = 0;
-    const load = () => {
-      const mine = ++request;
-      void api.skillSeats(projectId, null).then(
-        info => { if (active && request === mine) setRouting(info); },
-        () => { if (active && request === mine) setRouting(null); },
-      );
-    };
-    setRouting(null); load();
-    const off = api.onSkills?.(load);
-    return () => { active = false; off?.(); };
-  }, [projectId]);
   const [history, setHistory] = useState<History | null>(null);
   const [mode, setMode] = useState<'new' | 'continue' | null>(null);
   const [starting, setStarting] = useState<Agent | 'terminal' | null>(null);
@@ -45,6 +50,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   // What main decided for a new Claude session in this project (usage's `next`): the card shows it and never works the path out itself.
   const [next, setNext] = useState<NextPath | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const routing = useLauncherRouting(projectId);
   useEffect(() => {
     const bridge = nativeBridge();
     if (!bridge) return;
