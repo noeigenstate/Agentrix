@@ -41,6 +41,11 @@ export function useMainTurn(terminal: ProjectTerminal | undefined) {
   return { terminal, cli, activity, prompts, working, background, summary, ended };
 }
 
+export function MainModelGroup({ terminal }: { terminal: ProjectTerminal | undefined }) {
+  const turn = useMainTurn(terminal);
+  return turn && <MainModel turn={turn} />;
+}
+
 export function MainModel({ turn }: { turn: NonNullable<ReturnType<typeof useMainTurn>> }) {
   const { terminal, cli, activity, prompts, working, background, summary, ended } = turn;
   const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
@@ -67,7 +72,9 @@ export function MainModel({ turn }: { turn: NonNullable<ReturnType<typeof useMai
       <span className="activity-row-icon">{icon}</span><p>{word && <span className="activity-call-role">{word}</span>}{summary}</p><time>{time}</time>
     </li>;
   const rows = [
-    cli.waiting && <li key="waiting" className="is-idle" role="status"><span className="activity-row-icon"><WarningCircle size={14} /></span><p>{cli.message || t('等待你确认')}</p><span /></li>,
+    cli.waiting && <li key="waiting" className="is-idle" role="status">
+      <span className="activity-row-icon"><WarningCircle size={14} /></span><p>{cli.message || t('等待你确认')}</p><span />
+    </li>,
     background && task(CALL_STATES.running.icon, 'is-working', '', summary, background.text, elapsedClock(now - background.at)),
     activity === 'working' && !working && !background && task(CALL_STATES.running.icon, 'is-working',
       running ? t('正在') : '', running ? actionText(action) : state, running ? action.detail || action.target : state, ''),

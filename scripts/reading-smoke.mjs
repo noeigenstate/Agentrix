@@ -319,6 +319,7 @@ try {
   assert.equal(await leadTasks.locator('.is-working').count(), 0);
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await terminalsSettled(page);
   checks.push('host CLI revisions reach both views; Stop and background progress never rearm completion');
   await composer.fill('/'); await palette.waitFor(); await resetWrites(); await composer.press('Escape');
   await waitFor(async () => await composer.getAttribute('aria-expanded') === 'false', 'palette Escape closes the list');
