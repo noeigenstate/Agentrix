@@ -35,7 +35,11 @@
 
 /* The answer, as Markdown. */
 .reading-markdown { overflow-wrap: anywhere; min-width: 0; contain: paint; }
-.reading-markdown .reading-math-display { display: block; max-width: 100%; overflow-x: auto; margin: 8px 0; white-space: pre-wrap; }
+.reading-markdown .reading-math-display {
+  display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden;
+  /* KaTeX's labels and tags can extend beyond the display line box. */
+  padding-block: .5em; margin: 8px 0; white-space: pre-wrap;
+}
 .reading-math-display > .katex-display { width: max-content; min-width: 100%; margin: 0; }
 .reading-markdown > :first-child { margin-top: 0; }.reading-markdown > :last-child { margin-bottom: 0; }
 .reading-markdown p { margin: 6px 0; }

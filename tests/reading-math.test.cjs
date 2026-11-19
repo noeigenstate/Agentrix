@@ -311,21 +311,33 @@ test('Chromium keeps XML-like formula source through DOMPurify and clips reply p
   const sources = ['$E[X]>0$', '$a-->b$', String.raw`$\text{</style>}$`];
   const rendered = sources.map(parse);
   const wideMath = parse('$$' + 'x+'.repeat(45) + 'x$$');
+  const displays = [
+    sample,
+    String.raw`$$\left(\frac{1}{\frac{2}{3}}\right)\tag{7}$$`,
+    '$$' + 'x+'.repeat(100) + String.raw`\underbrace{x}_{\text{wide label}}$$`,
+  ].map(parse);
   await page.addScriptTag({ path: path.join(root, 'node_modules/dompurify/dist/purify.js') });
-  await page.addStyleTag({ path: require.resolve('katex/dist/katex.min.css') });
+  const katexCss = require.resolve('katex/dist/katex.min.css');
+  const fontCss = fs.readFileSync(katexCss, 'utf8').replace(/url\((fonts\/[^)]+\.woff2)\)[^}]+(?=})/g, (_, font) => {
+    const bytes = fs.readFileSync(path.join(path.dirname(katexCss), font));
+    return 'url(data:font/woff2;base64,' + bytes.toString('base64') + ') format("woff2")';
+  });
+  await page.addStyleTag({ content: fontCss });
+  await page.addStyleTag({ path: path.join(root, 'src/shared/styles/themes.css') });
   await page.addStyleTag({ path: path.join(root, 'src/features/reading/reading.css') });
   const paths = parse('$\\unknown{src/main.ts}$ and ' + '\x60src/main.ts\x60');
-  const result = await browserMathFixture(page, modules, rendered, wideMath, paths);
+  const result = await browserMathFixture(page, modules, rendered, wideMath, paths, displays);
   assert.deepEqual(result.copied, sources);
   assert.equal(result.renderedMath, sources.length);
   assert.equal(result.containment, 'paint');
   assert.equal(result.hit, 'permission');
   assert.deepEqual(result.scrolls, [true, true]);
   assert.deepEqual(result.linkedPaths, [false, true]);
+  await checkDisplayScroll(page, result.displays);
 });
 
-function browserMathFixture(page, modules, rendered, wideMath, paths) {
-  return page.evaluate(({ modules, rendered, wideMath, paths }) => {
+function browserMathFixture(page, modules, rendered, wideMath, paths, displays) {
+  return page.evaluate(({ modules, rendered, wideMath, paths, displays }) => {
     const exports = new Map();
     const load = name => {
       if (name === 'dompurify') return { default: window.DOMPurify };
@@ -367,6 +379,34 @@ function browserMathFixture(page, modules, rendered, wideMath, paths) {
     const permission = document.getElementById('permission').getBoundingClientRect();
     const hit = document.elementFromPoint(permission.left + 1, permission.top + 1).id;
     const scrolls = [...reply.querySelectorAll('.reading-math-display, pre')].map(node => node.scrollWidth > node.clientWidth);
-    return { copied, renderedMath, containment: getComputedStyle(reply).contain, hit, scrolls, linkedPaths };
-  }, { modules, rendered, wideMath, paths });
+    return { copied, renderedMath, containment: getComputedStyle(reply).contain, hit, scrolls, linkedPaths, displays: displays.map(sanitizeReadingHtml) };
+  }, { modules, rendered, wideMath, paths, displays });
+}
+
+async function checkDisplayScroll(page, displays) {
+  for (const viewport of [{ width: 1600, height: 1000 }, { width: 1280, height: 800 }]) {
+    await page.setViewportSize(viewport);
+    for (const theme of ['light', 'dark']) {
+      const results = await page.evaluate(async ({ displays, theme }) => {
+        document.documentElement.dataset.theme = theme;
+        const reply = document.createElement('section');
+        reply.className = 'reading-markdown';
+        reply.style.width = '40vw';
+        reply.innerHTML = displays.join('');
+        document.body.replaceChildren(reply);
+        await document.fonts.ready;
+        return [...reply.querySelectorAll('.reading-math-display')].map(box => {
+          const { overflowX, overflowY } = getComputedStyle(box);
+          box.scrollLeft = box.scrollWidth;
+          return {
+            overflowX, overflowY, verticalFit: box.scrollHeight <= box.clientHeight,
+            horizontalScroll: box.scrollLeft > 0, rendered: !!box.querySelector('.katex-display'),
+          };
+        });
+      }, { displays, theme });
+      assert.deepEqual(results, [false, false, true].map(horizontalScroll => ({
+        overflowX: 'auto', overflowY: 'hidden', verticalFit: true, horizontalScroll, rendered: true,
+      })), theme + ' ' + viewport.width);
+    }
+  }
 }
