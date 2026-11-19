@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { WorkspaceStore } = require('../electron/state.cjs');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
 const { READING_NOTE } = require('../electron/features/agents/reading-note.cjs');
@@ -240,6 +241,83 @@ test('first-open launch snapshots stay correct when later sessions rewrite the c
   assert.doesNotMatch(secondContext.hookSpecificOutput.additionalContext, /this is its first run/);
   assert.equal(sessionContext({ session_id: 'first-cli', source: 'resume' }, firstNote), null);
   assert.equal(sessionContext({ session_id: 'second-cli', source: 'resume' }, secondNote), null);
+});
+
+test('beta.4 first-run claims survive the team migration, Claude resume, new launches and restart', async t => {
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-')));
+  const project = { id: 'project', path: path.join(root, 'project'), name: 'Long-running project' };
+  const workspaceFile = path.join(root, 'workspace.json'), skillsFile = path.join(root, 'skills.json');
+  const code = 'builtin:code-standard', ui = 'builtin:ui-standard', routing = 'builtin:model-routing';
+  const claims = { [code]: { [project.id]: 'old-code-launch' }, [ui]: { [project.id]: 'old-ui-launch' },
+    [routing]: { [project.id]: 'old-routing-launch' } };
+  const seats = { global: { lookup: { model: 'haiku', effort: 'high' } }, projects: { [project.id]: { visual: { model: 'sonnet', effort: 'high' } } } };
+  fs.mkdirSync(project.path);
+  fs.writeFileSync(workspaceFile, JSON.stringify({ version: 2, projects: [project] }));
+  fs.writeFileSync(skillsFile, JSON.stringify({
+    [code]: { firstOpenedProjects: claims[code] },
+    [ui]: { trigger: 'first-open', firstOpenedProjects: claims[ui] },
+    [routing]: { trigger: 'first-open', firstOpenedProjects: claims[routing], seats },
+  }));
+
+  let store;
+  t.after(async () => { store?.close(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
+  const errors = [];
+  const open = () => {
+    const workspace = new WorkspaceStore(workspaceFile);
+    assert.equal(workspace.warning, null);
+    assert.equal(workspace.projects[0].id, project.id);
+    store = new SkillsStore({ dataDir: root, builtinDir: path.join(__dirname, '../resources/skills'), getProjects: () => workspace.projects,
+      getAgents: () => ({ claude: { installed: true } }), report: error => errors.push(error) });
+    store.syncWatchers();
+    return workspace.projects[0];
+  };
+  const saved = () => JSON.parse(fs.readFileSync(skillsFile, 'utf8'));
+  const verifyClaims = () => {
+    const persisted = saved();
+    for (const [id, claim] of Object.entries(claims)) {
+      assert.deepEqual(store.options[id].firstOpenedProjects, claim, id);
+      assert.deepEqual(persisted[id].firstOpenedProjects, claim, id);
+    }
+  };
+  for (const phase of ['upgraded', 'restarted']) {
+    const current = open();
+    verifyClaims();
+    const options = saved();
+    assert.deepEqual(options[routing].seats, seats);
+    assert.equal(options[routing].team.version, 2);
+    assert.deepEqual(options[routing].team.projects[project.id].designer, seats.projects[project.id].visual);
+    for (const id of [ui, routing]) {
+      assert.equal(options[id].trigger, 'auto');
+      assert.equal(options[id].firstOpenRun, true);
+    }
+    store.setOptions(ui, { firstOpenRun: true });
+    await store.refreshSeats(project.id);
+    for (const source of ['resume', 'startup']) {
+      const launchId = `${phase}-${source}`;
+      const cliId = source === 'resume' ? 'resumed-claude-session' : `${launchId}-cli`;
+      const preview = store.delivery(current, false, `${launchId}-shell`, { agent: 'claude' });
+      assert.doesNotMatch(startupNote('Read.', null, null, preview), /this is its first run in this project/);
+      store.endSession(current.id, `${launchId}-shell`);
+      const launch = store.delivery(current, false, launchId, { agent: 'claude', started: true });
+      for (const id of [code, ui, routing]) assert.equal(launch.skills.find(skill => skill.id === id).firstRun, false, id);
+      const note = startupNote('Read.', null, null, launch);
+      assert.doesNotMatch(note, /this is its first run in this project/);
+      const instructions = readDelivery(note).instructions;
+      assert.match(instructions, /Before any task, read and follow [^;]+\/code-standard\/SKILL\.md\./);
+      assert.doesNotMatch(instructions, /this is its first run in this project/);
+      const context = sessionContext({ session_id: cliId, source }, note);
+      if (source === 'resume' && phase === 'restarted') assert.equal(context, null, 'the unchanged delivery was already received');
+      else assert.equal(context.hookSpecificOutput.additionalContext, `Agentrix skill instructions:\n${instructions}`);
+      for (const hookSource of ['compact', 'clear']) {
+        const { additionalContext } = sessionContext({ session_id: cliId, source: hookSource }, note).hookSpecificOutput;
+        assert.doesNotMatch(additionalContext, /this is its first run in this project/);
+      }
+      store.endSession(current.id, launchId);
+      verifyClaims();
+    }
+    store.close();
+  }
+  assert.deepEqual(errors, []);
 });
 
 for (const trigger of ['always', 'first-open']) test(`${trigger} live Claude sessions keep first-run instructions only for their claimant after compact/clear`, async t => {
