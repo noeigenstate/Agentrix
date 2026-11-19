@@ -50,6 +50,28 @@ test('a worker loads normal setting sources while blocking failed policy hooks',
   assert.equal(fake.calls[0].options.hooks.PreToolUse[0].onFailure, 'block');
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'node --version' }, {})).behavior, 'allow');
 });
+test('unsupported Agent seats publish one reading notice without making a reply', async t => {
+  const { runtime, spec, fake } = setup(t, { auto: false });
+  const initialized = Promise.withResolvers(), events = [];
+  const session = runtime.create({ ...spec, seatsMap: { developer: { model: 'gpt-6.2-sol', effort: 'high' } } }, event => {
+    events.push(event);
+    if (event.type === 'routing.updated') initialized.resolve();
+  });
+  t.after(() => session.close());
+  await session.start();
+  await session.send({ clientMessageId: randomUUID(), text: 'Review' });
+  await initialized.promise;
+  const [matcher] = fake.calls[0].options.hooks.PreToolUse;
+  const input = { session_id: fake.sessionId, tool_use_id: 'toolu_seat', hook_event_name: 'PreToolUse',
+    tool_name: 'Agent', tool_input: { description: '[developer] Review', prompt: 'Review' } };
+  assert.deepEqual(await matcher.hooks[0](input), {});
+  assert.deepEqual(await matcher.hooks[0](input), {});
+  const notices = events.filter(event => event.type === 'error' && event.payload.code === 'seat_routing_notice');
+  assert.equal(notices.length, 1);
+  assert.match(notices[0].payload.message, /dispatch helper/);
+  assert.ok(!events.some(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message'));
+  assert.ok(!events.some(event => event.type === 'turn.completed'));
+});
 test('worker routing publishes effort and speed from its own live SDK replies', async t => {
   const { runtime, spec, fake } = setup(t, { auto: false });
   const observed = Promise.withResolvers(), initialized = Promise.withResolvers();

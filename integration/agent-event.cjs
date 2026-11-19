@@ -97,8 +97,9 @@ function seatRouting(input, snapshot) {
   if (typeof snapshot !== 'string' || snapshot.length > 8192) return {};
   let seats, hook;
   try { seats = JSON.parse(snapshot); hook = JSON.parse(input); } catch { return {}; }
-  const output = seatHookOutput(hook, seats);
-  const observed = observedAgentSeat(hook, seats);
+  let pre;
+  const output = seatHookOutput(hook, seats, value => { pre = value; });
+  const observed = pre || observedAgentSeat(hook, seats);
   return { ...(Object.keys(output).length && { output }),
     ...(observed && typeof hook.session_id === 'string' && { observed: { ...observed, sessionId: hook.session_id } }) };
 }

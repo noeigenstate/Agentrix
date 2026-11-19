@@ -346,7 +346,7 @@ function createClaudeSession(spec, emit, dependencies) {
     if (!key) throw new Error('请先保存 API 密钥。');
     const run = { key, resumeId: providerId, abort: new AbortController(), initialized: false, closing: null,
       generation: dependencies.generation?.(), keyVersion: dependencies.credentialVersion?.(),
-      busy: false, background: new Map(), backgroundTools: new Map(), subagents: new Map(), stderr: stderrCollector() };
+      busy: false, background: new Map(), backgroundTools: new Map(), subagents: new Map(), seatNotices: new Set(), stderr: stderrCollector() };
     secrets.add(key);
     run.queue = inputQueue(id => receipt(id, 'delivered'));
     try {
@@ -356,9 +356,11 @@ function createClaudeSession(spec, emit, dependencies) {
         onSeat: (input, observed) => {
           if (closed || stopping || active !== run || !run.initialized || input.session_id !== providerId) return;
           if (observed.note) {
-            if (typeof input.tool_use_id !== 'string' || !/^[\w-]{1,146}$/.test(input.tool_use_id)) return;
-            publish('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: observed.note } },
-              { itemId: `seat-routing:${input.tool_use_id}` });
+            const id = input.tool_use_id;
+            if (typeof id !== 'string' || !/^[\w-]{1,160}$/.test(id) || run.seatNotices.has(id)) return;
+            if (run.seatNotices.size >= 1024) run.seatNotices.delete(run.seatNotices.values().next().value);
+            run.seatNotices.add(id);
+            publish('error', { code: 'seat_routing_notice', message: observed.note, retryable: false, willRetry: false, stage: 'turn' });
           } else spec.onSeat?.(observed, { runtimeSessionId: spec.runtimeSessionId, providerSessionId: providerId });
         },
         canUseTool: async (name, input, context) => {

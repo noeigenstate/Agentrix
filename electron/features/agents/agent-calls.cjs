@@ -9,7 +9,7 @@ const { taskKind } = require('../dashboard/records-routing.cjs');
 const { containedFile } = require('../../session-files.cjs');
 const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subagent-feed.cjs');
 const { BackgroundTasks, attach } = require('./background-tasks.cjs');
-const { agentDescription, callSeat, declaredSeat } = require('./call-seat.cjs');
+const { agentDescription, callSeat, declaredSeat, CLAUDE_ALIAS, CLAUDE_EFFORT } = require('./call-seat.cjs');
 const { LOST_WORK_TIMEOUT } = require('../../completion-work.cjs');
 // Host processes can restart while their terminal's dispatched workers keep running.
 const terminalCalls = new WeakMap();
@@ -171,16 +171,17 @@ class AgentCalls {
   }
   applySeatInput(call, settings) {
     const meta = this.meta.get(call.agentId);
-    call.seatInput = settings;
+    call.seatInput = settings.model === null ? null : { model: settings.model, effort: settings.effort };
     call.model = childModel(call, meta);
-    call.effort = call.childEffort ?? (text(meta?.effort).trim() || settings.effort);
+    call.effort = call.childEffort ?? (text(meta?.effort).trim() || call.seatInput?.effort || call.requested.effort);
   }
-  observeSeatInput({ toolUseId, model, effort }) {
-    if (!TOOL_ID.test(text(toolUseId)) || !/^(sonnet|opus|haiku|fable)$/.test(text(model)) || !/^(low|medium|high|xhigh|max)$/.test(text(effort))) return false;
+  observeSeatInput({ toolUseId, model, effort, phase = 'post' }) {
+    const validSettings = CLAUDE_ALIAS.test(text(model)) && CLAUDE_EFFORT.test(text(effort));
+    if (!TOOL_ID.test(text(toolUseId)) || !['pre', 'post'].includes(phase) || !(validSettings || phase === 'post' && model === null && effort === null)) return false;
     const prior = this.seatInputs.get(toolUseId);
-    if (prior?.model === model && prior.effort === effort) return false;
+    if (prior?.phase === 'post' && phase === 'pre' || prior?.phase === phase && prior.model === model && prior.effort === effort) return false;
     if (!prior && this.seatInputs.size >= 1024) this.seatInputs.delete(this.seatInputs.keys().next().value);
-    const settings = { model, effort };
+    const settings = { phase, model, effort };
     this.seatInputs.set(toolUseId, settings);
     const call = this.toolCall(toolUseId);
     if (!call || call.generation) return false;

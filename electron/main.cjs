@@ -15,7 +15,7 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
 const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
-const { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead } = require('./features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats } = require('./features/terminal-events/bootstrap-file.cjs');
 const { claudeBackgroundEnvironment } = require('./shared/claude-background.cjs');
 const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
 const { createHookIngest } = require('./features/terminal-events/hook-ingest.cjs');
@@ -1120,11 +1120,11 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   }
   // The outbox is beside this file and outlives a host process restart.
   const bootstrapFile = path.join(runtimeDir, `${id}.json`);
+  const delivery = library?.delivery?.(project, false, sessionId, { agent, started: true });
   writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability,
-    claudeBackgroundTasks: store.settings?.claudeBackgroundTasks });
+    claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, ...(agent === 'codex' && { dispatchSeats: delivery?.agentSeats ?? null }) });
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
-  const delivery = library?.delivery?.(project, false, sessionId, { agent, started: true });
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery, path.join(integrationDir, 'dispatch.cjs'));
   if (agent === 'claude' && runOptions.model === 'haiku' && delivery?.operations?.pinnedHaiku) runOptions.model = delivery.operations.pinnedHaiku;
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
@@ -1313,7 +1313,12 @@ function wireNativeSessions(directory, codex, codexFactory) {
       if (spec.agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: spec.terminalId }, binding);
       if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
         delivery, path.join(integrationDir, 'dispatch.cjs'));
-      return committed => skills.endSession(project.id, committed ? previous : skillSessionId);
+      return committed => {
+        if (committed && spec.agent === 'codex' && spec.bootstrapFile) {
+          try { updateDispatchSeats(spec.bootstrapFile, delivery?.agentSeats); } catch (error) { report(error); }
+        }
+        skills.endSession(project.id, committed ? previous : skillSessionId);
+      };
     },
     readHistory: async (id, { signal } = {}) => {
       const project = findProject(id);
@@ -1406,7 +1411,8 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   }
   if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
-    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks, lead: skills.terminalLead?.(project.id) ?? null });
+    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks,
+    lead: skills.terminalLead?.(project.id) ?? null, dispatchSeats: skills.dispatchSeats?.(project.id) });
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;

@@ -26,6 +26,7 @@ const { connectDispatchControl } = require(path.join(runtime, 'features/agents/d
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { dispatchDirectory, validSeat } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const { familyOf } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
@@ -78,14 +79,32 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   node dispatch.cjs wait <run id> [<run id> ...] [--timeout <seconds>] [--cwd <dir>]
 `;
 
-function seatDefaults(snapshot, seat, agent) {
-  if (!validSeat(seat) || typeof snapshot !== 'string' || snapshot.length > 8192) return null;
+function bootstrapSeats(file) {
+  if (typeof file !== 'string' || !path.isAbsolute(file)) return null;
+  let descriptor;
+  try {
+    const filename = file + '.seats';
+    const named = fs.lstatSync(filename, { bigint: true });
+    if (!named.isFile()) return null;
+    descriptor = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    if (!opened.isFile() || opened.dev !== named.dev || opened.ino !== named.ino) return null;
+    const data = Buffer.alloc(8193), count = fs.readSync(descriptor, data, 0, data.length, null);
+    return count <= 8192 ? data.toString('utf8', 0, count) : null;
+  } catch { return null; }
+  finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
+}
+
+function seatDefaults(env, seat, agent) {
+  if (!validSeat(seat)) return null;
+  const snapshot = env.AGENTRIX_SEATS ?? bootstrapSeats(env.AGENTRIX_BOOTSTRAP);
+  if (typeof snapshot !== 'string' || Buffer.byteLength(snapshot) > 8192) return null;
   let seats;
   try { seats = JSON.parse(snapshot); } catch { return null; }
   const id = seat.split('/')[0];
   if (!seats || !Object.hasOwn(seats, id)) return null;
   const choice = seats[id];
-  if (typeof choice?.model !== 'string' || (/^(opus|sonnet|haiku|fable|claude-)/.test(choice.model) ? 'claude' : 'codex') !== agent) return null;
+  if (typeof choice?.model !== 'string' || familyOf(choice.model) !== agent) return null;
   return choice;
 }
 
@@ -154,7 +173,7 @@ function argumentsOf(argv, env = process.env) {
       options[names.get(flag)] = value;
     }
   }
-  const seat = command ? null : seatDefaults(env.AGENTRIX_SEATS, options.seat, agent);
+  const seat = command ? null : seatDefaults(env, options.seat, agent);
   if (seat) {
     options.model ??= seat.model;
     if (typeof seat.effort === 'string') options.effort ??= seat.effort;
@@ -603,6 +622,10 @@ function detachedRuns(cwd, create = false) {
 }
 
 async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch' } = {}) {
+  if (argv.includes('--seat') && env.AGENTRIX_SEATS == null) {
+    // Keep the parsed launch choices stable across a bootstrap update before the child starts.
+    env = { ...env, AGENTRIX_SEATS: bootstrapSeats(env.AGENTRIX_BOOTSTRAP) ?? 'null' };
+  }
   const options = argumentsOf(argv, env);
   store ||= detachedRuns(options.cwd, true);
   const id = randomUUID(), file = store.file(id);

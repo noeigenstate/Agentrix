@@ -356,7 +356,7 @@
       "reason": "Loads a downloaded external native speech engine."
     },
     "integration/agent-event.cjs": {
-      "digest": "a3dfd62187a3abf2a7d255ec4e4c992f78f4a4dc273ab4ebcd3100781bf32ae4",
+      "digest": "5fb7334ad2c8af0cb03f2e43bdeeace093f7b7471dfe554330f1873716c8bb86",
       "targets": [
         "electron/features/skills/session.cjs",
         "electron/features/skills/agent-seat.cjs"
@@ -364,7 +364,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "cc0c2cea270c680e9674289dea94530580ade46bd4c5f28f59d96c6d69612049",
+      "digest": "cb9104f9dcc08f2cc3419a3179069e4340bcfa21e5b8df4636f3cc97c337508f",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -378,6 +378,7 @@
         "electron/features/dashboard/records-routing.cjs",
         "electron/features/skills/worker-proposals.cjs",
         "electron/features/skills/agent-seat.cjs",
+        "electron/features/agents/call-seat.cjs",
         "electron/features/codex-app-server/index.cjs",
         "electron/features/agents/dispatch-control.cjs",
         "electron/features/codex-runtime/locator.cjs",

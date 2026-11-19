@@ -3,8 +3,9 @@
 Owns the host's Claude Agent SDK sessions, protected credentials, worker tool decisions and local API accounting.
 
 GUI lookup and the two operation environment overrides come from the host's launch snapshot.
-The GUI launch snapshot also supplies declared Agent and Task seats. PreToolUse only changes supported model and effort fields.
-PostToolUse reports matching final input for the activity row. Unsupported choices produce a notice.
+The GUI launch snapshot also supplies declared Agent and Task seats. PreToolUse preserves all input fields except the supported model and effort it applies.
+PreToolUse reports the provisional values by tool-use ID. PostToolUse reconciles the final input. A rewrite failure leaves worker policy in force.
+Unsupported choices use the reading view's existing alert once per tool-use ID.
 
 Owner and worker entrypoints remain the CLI default. Ownership is host-observed session identity, persisted locally for owners and read from the team journal for workers; the old agentrix-sdk transcript marker remains readable, while unclassified old sdk-ts prompts stay excluded.
 

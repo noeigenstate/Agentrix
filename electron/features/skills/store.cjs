@@ -396,8 +396,12 @@ class SkillsStore {
     if (!seat) return null;
     const { claude, pinnedHaiku } = this.operationLevers(projectId, null, remote ? 'claude' : null);
     const model = seat.model === 'haiku' && pinnedHaiku ? pinnedHaiku : seat.model;
+    return { ...seat, model, env: claude.env, seatsMap: this.dispatchSeats(projectId) };
+  }
+
+  dispatchSeats(projectId) {
     const info = this.seatsInfo(projectId);
-    return { ...seat, model, env: claude.env, seatsMap: launchSeatMap(info?.effective, info?.catalog) };
+    return launchSeatMap(info?.effective, info?.catalog);
   }
 
   operationLevers(projectId, sessionId, remoteAgent = null) {
