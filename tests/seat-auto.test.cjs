@@ -161,10 +161,23 @@ test('Codex dispatch resolves its seat before admission through the private boot
   assert.equal(argumentsOf(argv, env).model, 'gpt-6.2-astra');
   assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, launch.model);
   assert.equal(argumentsOf([...argv, '--model', 'gpt-explicit', '--effort', 'medium', '--fast'], env).model, 'gpt-explicit');
-  updateDispatchSeats(file, { developer: { model: 'gpt-6.2-sol', effort: 'high' }, padding: 'x'.repeat(8192) });
+  assert.equal(updateDispatchSeats(file, { ...seats, padding: '\u754c'.repeat(3000) }), 'null');
   assert.throws(() => argumentsOf(argv, env), /Missing --model/);
   removeBootstrap(file);
   assert.equal(fs.existsSync(file + '.seats'), false);
+});
+
+test('a failed dispatch seat snapshot write leaves the required bootstrap usable', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-seats-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'dispatch.json'), sidecar = file + '.seats';
+  fs.mkdirSync(sidecar);
+  const snapshot = writeBootstrap({ file, eventServer: { name: 'fixture', address: '/fixture' }, sessionKey: 'fixture-key', dispatchSeats: seats });
+  assert.equal(snapshot, undefined);
+  const bootstrap = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(bootstrap.sessionKey, 'fixture-key');
+  assert.equal(bootstrap.pipeName, process.platform === 'win32' ? 'fixture' : '/fixture');
+  assert.equal(Object.hasOwn(bootstrap, 'dispatchSeats'), false);
 });
 
 test('the renderer and the CJS helper agree on Claude model family and built-in effort values', () => {

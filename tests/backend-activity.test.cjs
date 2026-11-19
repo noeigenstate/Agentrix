@@ -142,6 +142,7 @@ test('D1 D3 D5 real CLI shell then compact completes and notifies once through t
 for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind} shell cannot bind native input to the previous provider`, async t => {
   const h = await harness(t, kind), { s, context, project } = h;
   const launches = [], errors = [], nativeSpecs = new Map();
+  const agentSeats = { developer: { model: 'gpt-6.2-sol', effort: 'high', fast: true } };
   if (kind === 'ssh') project.path = '/remote/project';
   Object.assign(context, { path, nativeSpecs, launchPlans: new Map(), startupErrors: new Map(), quitting: false,
     AgentCalls, os: { homedir: context.memoryDir }, claudeConfigDir: context.memoryDir, send() {},
@@ -149,7 +150,8 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     require: name => { assert.equal(name, './features/agents/agent-command.cjs'); return require('../electron/features/agents/agent-command.cjs'); },
     ActionLog: require('../electron/agent-actions.cjs').ActionLog,
     createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage,
-    clearTimeout, syncDashboardLive() {}, skills: { endSession() {}, delivery() {} }, cleanupTerminalFiles() {}, report: error => errors.push(error),
+    clearTimeout, syncDashboardLive() {}, skills: { endSession() {}, delivery: () => ({ agentSeats }) },
+    cleanupTerminalFiles() {}, report: error => errors.push(error),
     runtimeDir: project.path, fs: syncFs, process: { platform: process.platform, env: {} },
     createTerminalEnvironment: () => ({}), withoutAppImage: value => value, eventServer: { name: 'fixture-pipe' }, controlAddress: 'fixture-control',
     startupNote: () => '', READING_NOTE: '', handoffFile: () => '', integrationDir: 'integration' });
@@ -188,6 +190,11 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   h.now(2300); event('codex-exited', 1); event('shell-prompt', 2); event('codex-started', 3);
   await Promise.resolve();
   assert.equal(launches.length, 1); assert.deepEqual(errors, []);
+  if (kind === 'local') {
+    const snapshot = syncFs.readFileSync(launches[0].bootstrapFile + '.seats', 'utf8');
+    assert.deepEqual(JSON.parse(snapshot), agentSeats);
+    assert.equal(launches[0].env.AGENTRIX_SEATS, snapshot);
+  }
   assert.equal(context.startupErrors.size, 0); assert.equal(launches[0].providerSessionId, null, 'a fresh launch never inherits the old restore binding');
   const next = h.sessions.get(s.terminalId);
   t.after(() => { next?.promptQueue.reset(); next?.completionWork.reset(); });
