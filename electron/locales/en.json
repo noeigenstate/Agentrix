@@ -3474,5 +3474,15 @@
   "席位 · 审查": "Reviewer",
   "席位 · 测试": "QA / Tester",
   "总指挥沿用原领队 {family} 槽 {model}；原 Codex 槽 {dropped} 未保留": "The Orchestrator kept the previous {family} seat ({model}). The previous Codex seat ({dropped}) was dropped.",
-  "总指挥沿用原领队 {family} 槽 {model}": "The Orchestrator kept the previous {family} seat ({model})."
+  "总指挥沿用原领队 {family} 槽 {model}": "The Orchestrator kept the previous {family} seat ({model}).",
+  "团队式模型路由": "Team model routing",
+  "组织图中，你是所有者，下设总指挥，再往下是产品、架构师、设计师、开发、审查、测试、研究、运维和安全九个角色，每个角色都可单独设置模型、思考深度和快速模式。原有的座位设置会自动迁移。": "The org chart puts you at the top as Owner, with the Orchestrator below you and nine roles under the Orchestrator (Product, Architect, Designer, Developer, Reviewer, QA, Researcher, DevOps and Security), each with its own model, effort and fast mode. Your existing seat settings migrate automatically.",
+  "取消 /model": "Retired /model command",
+  "新开和恢复的对话都由模型路由决定模型、思考深度和快速模式。/model、/effort 和 /fast 已停用，在对话输入框输入这些命令会提示你并打开模型路由。": "Model routing sets the model, effort and fast mode for both new and resumed conversations. The /model, /effort and /fast commands are retired, and entering any of them in the conversation composer shows a notice and opens model routing.",
+  "技能跟随路由": "Skills follow routing",
+  "系统的模型路由技能会随你的设置自动更新，从下一次对话起生效。技能可设为「每个任务」或「相关任务」触发，也可开启「首次打开项目时先运行一次」。": "The built-in model routing skill updates automatically to match your settings, starting with the next conversation. Skills can run on every task or on relevant tasks, with an option to run once when you first open the project.",
+  "活动区路由卡": "Routing card in Activity",
+  "活动区的卡片显示当前模型路由概况，点击即可打开模型路由。主模型的任务超过四条时会折叠显示。": "The Activity card shows your current model routing and opens its settings when clicked. The main model's task list collapses when it has more than four tasks.",
+  "Agent 按角色": "Agents by role",
+  "左侧 Agent 标签页按角色分组显示子 Agent，列出名称、模型、任务、状态和用时。点开一条即可查看简报和日志。": "The Agent tab on the left groups subagents by role and shows each one's name, model, task, status and elapsed time. Open a row to see its brief and log."
 }
