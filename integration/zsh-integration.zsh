@@ -185,25 +185,15 @@ __pg_hook_proxy() {
 # carry them. A proxy set in this terminal (by the user's start-up files, say) falls back too, and main is told why.
 claude() {
   emulate -L zsh
-  local word conversation=1 positional_seen=0 skip_value=0
+  local word conversation=1
+  case ${1-} in
+    auth|config|doctor|install|login|logout|mcp|migrate-installer|plugin|setup-token|update|upgrade) conversation=0;;
+  esac
   for word in "$@"; do
     case $word in
       --) break;;
       --model|--model=*|--effort|--effort=*) printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2;;
-    esac
-    if [[ $skip_value == 1 ]]; then
-      skip_value=0
-      [[ $word != -* ]] && continue
-    fi
-    case $word in
       --version|-v|-V|--help|-h) conversation=0;;
-      --add-dir|--agent|--agents|--allowed-tools|--allowedTools|--append-system-prompt|--append-system-prompt-file|--betas|--debug|-d|--debug-file|--disallowed-tools|--disallowedTools|--fallback-model|--input-format|--json-schema|--max-budget-usd|--mcp-config|--output-format|--permission-mode|--plugin-dir|--resume|-r|--session-id|--setting-sources|--settings|--system-prompt|--system-prompt-file|--tools) skip_value=1;;
-      -*) ;;
-      *)
-        if [[ $positional_seen == 0 ]]; then
-          positional_seen=1
-          case $word in auth|config|doctor|install|login|logout|mcp|migrate-installer|plugin|setup-token|update|upgrade) conversation=0;; esac
-        fi;;
     esac
   done
   local -a program

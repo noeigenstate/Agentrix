@@ -18,8 +18,8 @@ function profile(t) {
 const win = process.platform === 'win32';
 const refusal = /模型由模型路由决定，请在模型路由中更改。/;
 const resumed = ['--model', 'claude-opus-5-5', '--effort', 'high', '--resume', 'fixture-session'];
-const utilities = [['mcp', 'list'], ['update'], ['doctor'], ['config', 'list'], ['--settings', 'owner-settings', 'mcp', 'list'],
-  ['--debug', 'api', 'mcp', 'list'], ['--version'], ['-v'], ['--help'], ['-h'], ['--resume', '--help']];
+const utilities = [['mcp', 'list'], ['update'], ['doctor'], ['config', 'list'], ['--version'], ['-v'], ['--help'], ['-h'], ['--resume', '--help']];
+const prefixedSubcommands = [['--settings', 'owner-settings', 'mcp', 'list'], ['--debug', 'api', 'mcp', 'list']];
 const invalidSeats = [['claude-opus&extra', 'high'], ['m'.repeat(161), 'high'], ['opus', 'High'], ['opus', 'e'.repeat(33)]];
 const nextModel = 'claude-sonnet-5-5[1m]';
 const background = 'claude-opus-5-5', subagent = 'claude-sonnet-5-5[1m]';
@@ -51,13 +51,15 @@ function assertLaunches(output) {
   assert.deepEqual(output.match(/^STATUS=2$/gm), ['STATUS=2', 'STATUS=2']);
   const calls = output.split(/^CALL\n/gm).slice(1);
   assert.deepEqual(calls.map(call => [...call.matchAll(/^SETTINGS=(.*)$/gm)].map(row => row[1])),
-    [['fast'], ...utilities.concat(invalidSeats).map(() => ['ordinary']), ['ordinary'], ...operationCases.map(() => ['ordinary']), ['ordinary']]);
+    [['fast'], ...utilities.map(() => ['ordinary']), ...prefixedSubcommands.map(() => ['fast']),
+      ...invalidSeats.map(() => ['ordinary']), ['ordinary'], ...operationCases.map(() => ['ordinary']), ['ordinary']]);
   assert.deepEqual(calls.map(call => [...call.matchAll(/^WORD=(.*)$/gm)].map(row => row[1])),
-    [resumed, ...utilities, ...invalidSeats.map(() => []), ['--model', nextModel, '--effort', 'medium', 'Explain', 'doctor'],
+    [resumed, ...utilities, ...prefixedSubcommands.map(words => [...resumed.slice(0, 4), ...words]),
+      ...invalidSeats.map(() => []), ['--model', nextModel, '--effort', 'medium', 'Explain', 'doctor'],
       ...operationCases.map(() => ['--model', nextModel, '--effort', 'medium']), ['--version']]);
   const env = calls.map(call => /^ENV=(.*)$/m.exec(call)?.[1]);
   assert.deepEqual(env, [
-    ...Array(2 + utilities.length + invalidSeats.length).fill('inherited|unset|unset|unset'),
+    ...Array(2 + utilities.length + prefixedSubcommands.length + invalidSeats.length).fill('inherited|unset|unset|unset'),
     ...operationCases.map(([, values]) => [...values, 'unset', 'unset'].join('|')),
     'inherited|unset|unset|unset',
   ]);
@@ -82,7 +84,7 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       'claude --model=manual; printf "STATUS=%s\\n" "$?"',
       'claude --effort low; printf "STATUS=%s\\n" "$?"',
       'claude --resume fixture-session',
-      ...utilities.map(words => `claude ${words.join(' ')}`),
+      ...[...utilities, ...prefixedSubcommands].map(words => `claude ${words.join(' ')}`),
       ...invalidSeats.flatMap(([model, effort]) => [`printf '%s\\n' '${model}' '${effort}' 1 > "$AGENTRIX_BOOTSTRAP.lead"`, 'claude']),
       `printf '%s\\n' '${nextModel}' medium 0 > "$AGENTRIX_BOOTSTRAP.lead"`,
       'claude Explain doctor',
@@ -130,7 +132,7 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
     'claude --model=manual; "STATUS=" + $LASTEXITCODE',
     'claude --effort low; "STATUS=" + $LASTEXITCODE',
     'claude --resume fixture-session',
-    ...utilities.map(words => `claude ${words.join(' ')}`),
+    ...[...utilities, ...prefixedSubcommands].map(words => `claude ${words.join(' ')}`),
     ...invalidSeats.flatMap(([model, effort]) => [`[IO.File]::WriteAllLines($lead, @('${model}', '${effort}', '1'))`, 'claude']),
     `[IO.File]::WriteAllLines($lead, @('${nextModel}', 'medium', '0'))`,
     'claude Explain doctor',

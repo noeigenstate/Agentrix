@@ -41,11 +41,38 @@ if ($global:AgentrixClaudeCommand -and [IO.Path]::GetExtension($global:AgentrixC
     if (Test-Path -LiteralPath $nativeClaude) { $global:AgentrixClaudeExecutable = $nativeClaude }
 }
 
+# The proxy variable that would carry this terminal's HTTP hooks to $Port, by hook-channel.cjs's rule over the live
+# environment, where every spelling is the one variable: HTTPS_PROXY or HTTP_PROXY, unless NO_PROXY exempts 127.0.0.1.
+function global:Get-AgentrixHookProxy {
+    param([int]$Port)
+    $proxy = @('HTTPS_PROXY', 'HTTP_PROXY') | Where-Object { [Environment]::GetEnvironmentVariable($_) } | Select-Object -First 1
+    if (-not $proxy) { return }
+    foreach ($entry in ([string][Environment]::GetEnvironmentVariable('NO_PROXY') -split '[\s,]+')) {
+        if ($entry -eq '*' -or $entry -eq '127.0.0.1' -or $entry -eq "127.0.0.1:$Port" -or ($entry.StartsWith('.') -and '127.0.0.1'.EndsWith($entry))) { return }
+    }
+    $proxy
+}
+
 function global:Get-AgentrixReadingNote {
     if ($env:AGENTRIX_READING_NOTE_FILE) {
         try { return [IO.File]::ReadAllText($env:AGENTRIX_READING_NOTE_FILE, [Text.Encoding]::UTF8) } catch { }
     }
     return $env:AGENTRIX_READING_NOTE
+}
+
+function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
+    $launch = @{ LeadArgs = @(); Env = @{}; HookSettings = $Hooks.settings }
+    if (-not $Conversation -or -not $env:AGENTRIX_BOOTSTRAP) { return $launch }
+    $lead = $null
+    try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
+    $modelPattern = '\A[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}\z'
+    if ($lead.Length -lt 3 -or $lead[0] -cnotmatch $modelPattern -or
+        $lead[1] -cnotmatch '^[a-z][a-z0-9-]{0,31}$' -or $lead[2] -cnotmatch '^[01]$') { return $launch }
+    $launch.LeadArgs = @("--model", $lead[0], "--effort", $lead[1])
+    if ($lead[2] -eq '1' -and $Hooks.fastSettings) { $launch.HookSettings = $Hooks.fastSettings }
+    if ($lead.Length -ge 4 -and $lead[3] -cmatch $modelPattern) { $launch.Env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $lead[3] }
+    if ($lead.Length -ge 5 -and $lead[4] -cmatch $modelPattern) { $launch.Env.CLAUDE_CODE_SUBAGENT_MODEL = $lead[4] }
+    return $launch
 }
 
 # Makes the Claude Code started next a planner: intercept.cjs (withShims) names what to set, with the shims first on PATH
@@ -171,61 +198,29 @@ function global:codex {
         return
     }
     Send-AgentrixEvent 'codex-started' -Arguments @($args)
-    Write-Host '已请求在原生模式打开 Codex。'
+    # Here-strings keep localized text from introducing quote tokens in legacy Windows code pages.
+    Write-Host @'
+已请求在原生模式打开 Codex。
+'@
     $global:LASTEXITCODE = 0
-}
-
-# The proxy variable that would carry this terminal's HTTP hooks to $Port, by hook-channel.cjs's rule over the live
-# environment, where every spelling is the one variable: HTTPS_PROXY or HTTP_PROXY, unless NO_PROXY exempts 127.0.0.1.
-function global:Get-AgentrixHookProxy {
-    param([int]$Port)
-    $proxy = @('HTTPS_PROXY', 'HTTP_PROXY') | Where-Object { [Environment]::GetEnvironmentVariable($_) } | Select-Object -First 1
-    if (-not $proxy) { return }
-    foreach ($entry in ([string][Environment]::GetEnvironmentVariable('NO_PROXY') -split '[\s,]+')) {
-        if ($entry -eq '*' -or $entry -eq '127.0.0.1' -or $entry -eq "127.0.0.1:$Port" -or ($entry.StartsWith('.') -and '127.0.0.1'.EndsWith($entry))) { return }
-    }
-    $proxy
-}
-
-function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
-    $launch = @{ LeadArgs = @(); Env = @{}; HookSettings = $Hooks.settings }
-    if (-not $Conversation -or -not $env:AGENTRIX_BOOTSTRAP) { return $launch }
-    $lead = $null
-    try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
-    $modelPattern = '\A[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}\z'
-    if ($lead.Length -lt 3 -or $lead[0] -cnotmatch $modelPattern -or
-        $lead[1] -cnotmatch '^[a-z][a-z0-9-]{0,31}$' -or $lead[2] -cnotmatch '^[01]$') { return $launch }
-    $launch.LeadArgs = @('--model', $lead[0], '--effort', $lead[1])
-    if ($lead[2] -eq '1' -and $Hooks.fastSettings) { $launch.HookSettings = $Hooks.fastSettings }
-    if ($lead.Length -ge 4 -and $lead[3] -cmatch $modelPattern) { $launch.Env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $lead[3] }
-    if ($lead.Length -ge 5 -and $lead[4] -cmatch $modelPattern) { $launch.Env.CLAUDE_CODE_SUBAGENT_MODEL = $lead[4] }
-    return $launch
 }
 
 # Claude Code reports each turn through the hooks main wrote for this terminal (hook-channel.cjs), passed with --settings,
 # which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
 # carry them. A proxy set in this terminal since it started falls back too, and main is told why.
 function global:claude {
-    $conversation = $true
-    $positionalSeen = $false
-    $skipValue = $false
+    $utilities = @("auth", "config", "doctor", "install", "login", "logout", "mcp", "migrate-installer", "plugin", "setup-token", "update", "upgrade")
+    $conversation = $utilities -cnotcontains $args[0]
     foreach ($word in $args) {
-        if ($word -ceq '--') { break }
-        if ($word -cmatch '^--(?:model|effort)(?:=|$)') {
-            Write-Host '模型由模型路由决定，请在模型路由中更改。'
+        if ($word -ceq "--") { break }
+        if ($word -cmatch "^--(?:model|effort)(?:=|$)") {
+            Write-Host @'
+模型由模型路由决定，请在模型路由中更改。
+'@
             $global:LASTEXITCODE = 2
             return
         }
-        if ($skipValue) {
-            $skipValue = $false
-            if ($word -cnotmatch '^-') { continue }
-        }
-        if ($word -cmatch '^(?:--version|-v|-V|--help|-h)$') { $conversation = $false }
-        if ($word -cmatch '^(?:--add-dir|--agent|--agents|--allowed-tools|--allowedTools|--append-system-prompt|--append-system-prompt-file|--betas|--debug|-d|--debug-file|--disallowed-tools|--disallowedTools|--fallback-model|--input-format|--json-schema|--max-budget-usd|--mcp-config|--output-format|--permission-mode|--plugin-dir|--resume|-r|--session-id|--setting-sources|--settings|--system-prompt|--system-prompt-file|--tools)$') { $skipValue = $true }
-        if (-not $positionalSeen -and $word -cnotmatch '^-') {
-            $positionalSeen = $true
-            if ($word -cmatch '^(?:auth|config|doctor|install|login|logout|mcp|migrate-installer|plugin|setup-token|update|upgrade)$') { $conversation = $false }
-        }
+        if ($word -cin @("--version", "-v", "-V", "--help", "-h")) { $conversation = $false }
     }
     if (-not $global:AgentrixClaudeCommand) {
         Write-Host 'Claude Code was not found in PATH. Install it, then restart this terminal.' -ForegroundColor Yellow
@@ -247,7 +242,7 @@ function global:claude {
         if ($marker -ge 0) { $currentNote = $currentNote.Substring(0, $marker) + ' Agentrix delivers skill instructions through its SessionStart hook.' }
     }
     # An array even when empty: an if that yields @() gives $null, which splats as an empty argument.
-    $readingNote = @(if ($currentNote) { '--append-system-prompt', $currentNote })
+    $readingNote = @(if ($currentNote) { "--append-system-prompt", $currentNote })
     # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
     $settingsFile = $null
     $settingsArgs = @()
@@ -257,7 +252,7 @@ function global:claude {
         $sessionName = if ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) }
         $settingsFile = Join-Path $sessionFolder ($sessionName + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')
         [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
-        $settingsArgs = @('--settings', $settingsFile)
+        $settingsArgs = @("--settings", $settingsFile)
     }
     $planner = Set-AgentrixPlanner $launch.Env
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
