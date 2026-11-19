@@ -1,13 +1,14 @@
-import { Marked, Tokenizer, type Token } from 'marked';
+import { Marked, Tokenizer, type MarkedExtension, type MarkedOptions, type Token } from 'marked';
 import { markdownEmphasis } from '../../shared/markdown-emphasis.ts';
 import { findPathCandidates } from '../terminal/terminal-links.ts';
+import { markdownMath, mayContainMath, splitBeforeMath } from './markdown-math.ts';
 
 // The reading view's own Markdown parser. What looks like HTML in an agent's answer is text: "<title>", "git clone
 // <url>", "Promise<void>". Passed through, the page would take <title> or <style> as an element that swallows the rest
 // of the answer, and drop unknown tags with the words in them. A parser of its own, so a document's HTML in the file
 // preview (a README's <img> or <details>) still renders there. Used by the reading view and by the Markdown worker.
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-export const readingMarked = new Marked(markdownEmphasis, { async: false, gfm: true, breaks: true, renderer: { html: token => escape(token.text) }, tokenizer: {
+const readingOptions: MarkedExtension = { async: false, gfm: true, breaks: true, renderer: { html: token => escape(token.text) }, tokenizer: {
   // Markdown would consume \\ in a UNC root and \_ in a Windows directory. Keep detected paths literal in both
   // the quick parser and the worker, while ordinary Markdown escapes still use marked's tokenizer.
   escape(source) {
@@ -23,7 +24,24 @@ export const readingMarked = new Marked(markdownEmphasis, { async: false, gfm: t
     if (href && /^(?:[a-z]:[\\/]|\\\\)/i.test(href)) token.href = href;
     return token;
   },
-} });
+} };
+
+const plainMarked = new Marked(markdownEmphasis, readingOptions);
+const mathMarked = new Marked(markdownEmphasis, readingOptions, markdownMath, {
+  tokenizer: {
+    inlineText(source) {
+      return splitBeforeMath(source, markdownEmphasis.tokenizer!.inlineText!.call(this, source) || undefined);
+    },
+  },
+});
+
+export const readingMarked = {
+  parse(text: string, options?: MarkedOptions, math = true) {
+    // Keep long replies without any math delimiters on the existing parser.
+    const parser = math && mayContainMath(text) ? mathMarked : plainMarked;
+    return parser.parse(text, options);
+  },
+};
 
 // A title keeps its opening sentence or line in full; the card's CSS handles the visible ellipsis.
 export function markdownTitle(text: string) {
@@ -32,6 +50,6 @@ export function markdownTitle(text: string) {
     if (token.type === 'list') return plain(token.items);
     return 'text' in token ? token.text : '';
   }).join('');
-  return plain(readingMarked.lexer(text.trim().split(/[\r\n]/, 1)[0]))
+  return plain(plainMarked.lexer(text.trim().split(/[\r\n]/, 1)[0]))
     .split(/(?<=[。！？!?])|(?<=\.)(?=\s|$)/u, 1)[0].replace(/\s+/g, ' ').trim();
 }

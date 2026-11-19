@@ -1,24 +1,38 @@
 import { useMemo } from 'react';
-import createDOMPurify from 'dompurify';
+import createDOMPurify, { type Config } from 'dompurify';
 import { readingMarked } from './markdown-escape';
+import { allowReadingMath, mathSourceAttribute, readingMathAttributes } from './markdown-math-sanitize.ts';
 import { QUICK, useLongMarkdown } from './useLongMarkdown';
 import { currentLanguage, t } from '../../shared/i18n';
 import { markReadingPaths } from './reading-paths';
 import { PathText } from './PathText';
 
 const purifier = createDOMPurify(window);
+let mathPurifier: typeof purifier | undefined;
 // A Markdown block the agent shows (a file's content, a draft) is laid out like the answer around it, its source a
 // click away; inside it, Markdown blocks stay source. A very long one stays source too: this runs on the window's thread.
 const DOCUMENT = /^(?:markdown|md|mdx)$/i, DOCUMENT_LIMIT = 20000;
 // What the agent wrote, laid out as Markdown. Only plain structure survives: no raw HTML, no images (an
 // answer has no business loading anything), and links open outside through the window's link handler.
-function finish(parsed: string, nested = false): string {
-  const html = purifier.sanitize(parsed, {
+function sanitizeReadingHtml(parsed: string) {
+  const options: Config = {
     ALLOWED_TAGS: ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'ul', 'ol', 'li', 'pre', 'code', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'a', 'hr', 'br', 'em', 'strong', 's', 'del', 'input', 'kbd'],
-    ALLOWED_ATTR: ['href', 'class', 'type', 'checked', 'disabled', 'start', 'align'], ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
+    ALLOWED_ATTR: ['href', 'class', 'type', 'checked', 'disabled', 'start', 'align'],
+    ALLOW_DATA_ATTR: false, ALLOW_ARIA_ATTR: false,
     // Preserve file/drive references as well as DOMPurify's usual safe links; scripts remain disallowed.
     ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|file|mailto|tel|callto|sms|cid|xmpp|matrix):|[a-z]:(?:[\\/]|%5c|%2f)|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i,
-  });
+  };
+  if (!parsed.includes(mathSourceAttribute + '="') || !purifier.isSupported) return purifier.sanitize(parsed, options);
+  if (!mathPurifier) {
+    mathPurifier = createDOMPurify(window);
+    allowReadingMath(mathPurifier);
+  }
+  options.ALLOWED_ATTR!.push(...readingMathAttributes);
+  return mathPurifier.sanitize(parsed, options);
+}
+
+function finish(parsed: string, nested = false): string {
+  const html = sanitizeReadingHtml(parsed);
   const root = document.createElement('div'); root.innerHTML = html;
   for (const box of root.querySelectorAll('input')) { box.type = 'checkbox'; box.disabled = true; }
   // Each code block gets a copy button over its top right corner.
@@ -32,7 +46,7 @@ function finish(parsed: string, nested = false): string {
     const source = pre.textContent || '';
     if (nested || !language || !DOCUMENT.test(language) || !source.trim() || source.length > DOCUMENT_LIMIT) continue;
     const doc = document.createElement('div'); doc.className = 'reading-code-doc';
-    doc.innerHTML = finish(readingMarked.parse(source) as string, true);
+    doc.innerHTML = finish(readingMarked.parse(source, undefined, false) as string, true);
     const toggle = document.createElement('button'); toggle.type = 'button'; toggle.dataset.codeSource = ''; toggle.textContent = t('源码');
     bar.querySelector('span')!.textContent = 'Markdown';
     bar.insertBefore(toggle, bar.querySelector('[data-copy-code]'));

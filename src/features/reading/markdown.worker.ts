@@ -1,4 +1,4 @@
-import { readingMarked } from './markdown-escape';
+import { readingMarked } from './markdown-escape.ts';
 
 // Markdown to HTML off the window's thread: a long or pathological answer (thousands of nested emphasis marks) can
 // take seconds to parse, and here it can be stopped. The HTML is sanitized by the window, which has the DOM for it.

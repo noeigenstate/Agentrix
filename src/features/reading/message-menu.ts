@@ -1,5 +1,6 @@
 // The right-click menu of a message (引用 / 复制): what it acts on and where it opens. Pure, so the rules are testable
 // without a window.
+import { mathSelector, mathSourceAttribute } from './markdown-math-sanitize.ts';
 
 // Where the browser, not the message menu, keeps the right click: links, pictures, media, code blocks and any control.
 const OWN_MENU = 'a, img, video, audio, iframe, button, input, textarea, select, pre, [contenteditable="true"], .reading-code';
@@ -8,10 +9,28 @@ export const keepsOwnMenu = (target: EventTarget | null) => !!(target as Element
 export const linkPath = (target: EventTarget | null) => (target as Element | null)?.closest?.<HTMLElement>('.reading-markdown a[data-reading-path]')?.dataset.readingPath ?? null;
 
 // The words selected inside this message, trimmed; nothing when the selection is empty or reaches outside the message.
-export function selectedWithin(element: { contains(node: Node): boolean }, selection: Pick<Selection, 'isCollapsed' | 'anchorNode' | 'focusNode' | 'toString'> | null): string {
+type MessageSelection = Pick<Selection, 'isCollapsed' | 'anchorNode' | 'focusNode' | 'toString'> & Partial<Pick<Selection, 'rangeCount' | 'getRangeAt'>>;
+export function selectedWithin(element: Pick<Element, 'contains'> & Partial<Pick<Element, 'querySelectorAll'>>, selection: MessageSelection | null): string {
   if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return '';
   if (!element.contains(selection.anchorNode) || !element.contains(selection.focusNode)) return '';
+  if (selection.rangeCount === 1 && selection.getRangeAt && element.querySelectorAll) {
+    const range = selection.getRangeAt(0);
+    const math = [...element.querySelectorAll(mathSelector)].filter(node => range.intersectsNode(node));
+    if (math.length) return selectedMathSource(range, math).trim();
+  }
   return selection.toString().trim();
+}
+
+function selectedMathSource(range: Range, math: Element[]) {
+  const rest = range.cloneRange();
+  const parts: string[] = [];
+  for (const formula of math) {
+    const before = rest.cloneRange();
+    before.setEndBefore(formula);
+    parts.push(before.toString(), formula.getAttribute(mathSourceAttribute) || '');
+    rest.setStartAfter(formula);
+  }
+  return parts.join('') + rest.toString();
 }
 
 // What 引用 and 复制 act on: the selected part when there is one, otherwise the whole message.
