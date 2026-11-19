@@ -319,8 +319,8 @@ test('beta.4 first-run claims survive the team migration, Claude resume, new lau
     verifyClaims();
     const options = saved();
     assert.deepEqual(options[routing].seats, seats);
-    assert.equal(options[routing].team.version, 2);
-    assert.deepEqual(options[routing].team.projects[project.id].designer, seats.projects[project.id].visual);
+    assert.equal(options[routing].team, undefined);
+    assert.deepEqual(options[routing].routing.local[project.id].roles.designer, seats.projects[project.id].visual);
     for (const id of [ui, routing]) {
       assert.equal(options[id].trigger, 'auto');
       assert.equal(options[id].firstOpenRun, true);
