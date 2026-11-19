@@ -13,7 +13,8 @@ function compile(basename, frame) {
   mod.filename = filename; mod.paths = Module._nodeModulePaths(path.dirname(filename));
   const original = mod.require.bind(mod);
   const stubs = {
-    '../../shared/i18n': { t: text => text }, '../../shared/model-name': require('../src/shared/model-name.ts'), '../../shared/call-model-name': { callModelName: ({ model }) => model }, '../../shared/useNow': { useNow: () => 10000 },
+    '../../shared/i18n': { t: text => text, currentLanguage: () => 'zh' },
+    '../../shared/model-name': require('../src/shared/model-name.ts'), '../../shared/call-model-name': { callModelName: ({ model }) => model }, '../../shared/useNow': { useNow: () => 10000 },
     '../terminal/terminal-screen.ts': { ...require('../src/features/terminal/terminal-screen.ts'), readScreen: () => frame, subscribeScreen: () => () => {} },
     '../home/send-to-agent': { sendToAgent: () => assert.fail('state display never sends input') },
     './AgentBrandIcon': require('../src/features/agents/AgentBrandIcon.ts'), './action-text': { actionText: () => 'step' },
@@ -58,5 +59,20 @@ test('a positively parsed current permission dialog stays waiting after newer si
   assert.match(activity(terminal, frame), /等待你确认/);
   frame.pending = true; assert.equal(cliStateFor('claude', frame, terminal).waiting, true, 'an in-flight write cannot hide the dialog still on screen');
   frame.sessionId = 'previous-pty'; assert.equal(cliStateFor('claude', frame, terminal).waiting, false);
+});
+
+test('only the active prompt waits for confirmation while later prompts stay queued', () => {
+  const terminal = { id: 'queued', sessionId: 'pty', agent: 'claude', codexActive: true,
+    cliState: { sessionId: 'pty', revision: 1, state: 'waiting', message: 'Approve current tool', updatedAt: 10000 },
+    prompts: [
+      { id: 'active', state: 'working', summary: 'Active prompt', text: 'Active prompt' },
+      { id: 'next', state: 'queued', summary: 'Next prompt', text: 'Next prompt' },
+      { id: 'later', state: 'queued', summary: 'Later prompt', text: 'Later prompt' },
+    ] };
+  const html = activity(terminal, null);
+  assert.match(html, /等待你确认<\/span>Active prompt/);
+  assert.match(html, /排队中<\/span>Next prompt/);
+  assert.match(html, /排队中<\/span>Later prompt/);
+  assert.doesNotMatch(activity({ ...terminal, prompts: terminal.prompts.slice(1) }, null), /等待你确认<\/span>/);
 });
 

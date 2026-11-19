@@ -26,6 +26,7 @@ Shows the selected terminal's Orchestrator, current step and prompt history in t
 - Screen frames update only the mounted Orchestrator group. Closing the Agent panel releases its subscription. — test: `tests/activity-route.test.cjs` › "a terminal screen frame updates the mounted Orchestrator without rendering a sidebar sibling"
 - The main model, rate and current step come from the selected terminal's own records, with the configured model used until the first reply — test: `tests/activity-route.test.cjs` › "the main model section: the model its latest reply records"
 - The working prompt and three most recent queued prompts are visible before opening the fold — test: `tests/activity-route.test.cjs` › "activity shows the working prompt and three most recent queued prompts, with an accessible fold"
+- Only the active prompt reports that it is waiting for confirmation. Later prompts stay queued. — test: `tests/reading-activity-state.test.cjs` › "only the active prompt waits for confirmation while later prompts stay queued"
 
 ## Not ours
 - Choosing the terminal and composing the sidebar — Agent sidebar.

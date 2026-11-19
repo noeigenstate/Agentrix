@@ -199,6 +199,17 @@ const paneProps = (patch = {}) => ({ terminalId: 't1', callId: 'dispatch:a', pro
 const paneMarkup = (state, patch, react) => renderToStaticMarkup(React.createElement(paneLoader(state, react), paneProps(patch)));
 const ok = (patch, status = 'ok') => ({ feed: feed(3, patch), status, error: null });
 
+test('the worker session offers the recorded brief and log as closed disclosures', () => zh(() => {
+  const terminalId = 't-artifacts', callId = 'dispatch:artifacts', store = splits();
+  store.openSplit(terminalId, callId, { brief: true, log: true });
+  try {
+    const html = paneMarkup(ok({ id: callId }), { terminalId, callId });
+    assert.match(html, /<details class="subagent-artifact"><summary>简报<\/summary><\/details>/);
+    assert.match(html, /<details class="subagent-artifact"><summary>日志<\/summary><\/details>/);
+    assert.doesNotMatch(paneMarkup(ok({ id: callId }), { terminalId: 't-unrelated', callId }), /subagent-artifacts/);
+  } finally { store.closeSplit(terminalId, callId); }
+}));
+
 test('the view names the task first, then the model, settings, state, speed and time, and renders the feed read-only with live links', () => zh(() => {
   const html = paneMarkup(ok({}));
   assert.match(html, /<section class="subagent-split" aria-label="Refactor the grid · GPT-6\.1-Sol 的输出，只读">/);
@@ -456,7 +467,7 @@ test('a call whose record can be read is one button on the same row; one that ca
   const html = paneRows([item('agent:a'), item('dispatch:b', { state: 'done', viewable: false }), item('dispatch:c', { failure: { reason: 'killed', exitCode: null } })], 't-rows');
   assert.equal(count(html, /<button type="button" class="activity-call-open activity-call-body"/g), 2);
   assert.match(html, /<li class="activity-call-item is-running" title="Task agent:a\n点击在旁边查看它在做什么"><button type="button" class="activity-call-open activity-call-body" aria-pressed="false" aria-label="执行 Task agent:a，运行中"><span class="activity-row-icon">/);
-  assert.match(html, /<li class="activity-call-item is-done" title="Task dispatch:b"><div class="activity-call-body"><span class="activity-row-icon">/, 'not viewable: the plain row it always was, with no hint');
+  assert.match(html, /<li class="activity-call-item is-done" title="Task dispatch:b"><div class="activity-call-body" title="Task dispatch:b\n没有可打开的工作会话">/);
   assert.match(html, /aria-label="执行 Task dispatch:c，已停止"/, 'a failed call can be opened too, and says why in its state');
   assert.doesNotMatch(html, /data-icon="(Play|Split|Columns|ArrowSquare)/, 'no new icon');
   assert.equal(count(html, /<small class="activity-call-sub">执行 · 运行中<\/small>/g), 1, 'the second line: the role and the state');
@@ -482,6 +493,37 @@ test('an open view makes its row pressed and the hint offers to close it; a clic
   rows()[1].props.onClick();
   assert.deepEqual(store.getSplits(), [], 'the same row again closes it');
 }));
+
+test('a grouped Agent tab card opens its worker session directly and an unavailable card stays plain', () => {
+  const terminalId = 't-team-open', callId = 'dispatch:team-open', seats = require('./fixtures/team-seats.json');
+  const loader = makeLoader({ react: {
+    ...hookApi, useState: () => [{ [terminalId]: seats }],
+    useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
+  } });
+  loader('shared/i18n.ts').applyLanguage('zh');
+  const { CallsCard } = loader('features/agents/AgentCalls.tsx'), store = loader('features/agents/subagent-splits.ts');
+  const calls = [call([
+    item(callId, { seat: 'developer', brief: true, log: true }),
+    item('dispatch:unavailable', { seat: 'developer', viewable: false }),
+  ])];
+  const scope = CallsCard({ calls, terminalId, terminals: [{ id: terminalId, agentUsage: { calls } }] });
+  const team = scope.props.children('p-team-open');
+  const rows = elements(team.type(team.props)).filter(node => node.props.row);
+  assert.equal(rows.length, 2);
+  const cards = rows.map(row => elements(row.type(row.props)).find(node => node.props.className === 'agent-team-row'));
+  const [open, unavailable] = cards;
+  assert.equal(open.type, 'button');
+  assert.equal(open.props.type, 'button');
+  assert.equal(open.props['aria-expanded'], undefined);
+  assert.equal(unavailable.type, 'div');
+  assert.equal(unavailable.props.title, '没有可打开的工作会话');
+  assert.equal(unavailable.props.onClick, undefined);
+  const html = renderToStaticMarkup(rows[0]);
+  assert.doesNotMatch(html, /agent-team-details|本次调用没有简报或日志|>打开工作会话</);
+  open.props.onClick();
+  open.props.onClick();
+  assert.deepEqual(store.getSplits(), [{ terminalId, callId, artifacts: { brief: true, log: true } }]);
+});
 
 // ---- the terminal grid ----------------------------------------------------------------------------------------------------------
 const terminal = id => ({ id, title: id, sessionId: `s-${id}`, status: 'running', codexActive: true, agent: 'claude', readingHistory: false });

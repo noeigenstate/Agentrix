@@ -1,7 +1,7 @@
 import { routingModelName, routingRoleName } from '../../shared/routing-command.ts';
 import { createContext, useEffect, useState, type ReactNode } from 'react';
 import { CaretRight, CheckCircle, Circle, CircleNotch, DotsThreeCircle, Record as RecordDot, Terminal, WarningCircle } from '@phosphor-icons/react';
-import type { AgentCall, CallFileResult, ProjectTerminal, SeatsInfo, SeatRole, TokenRate } from '../../shared/types';
+import type { AgentCall, ProjectTerminal, SeatsInfo, SeatRole, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
@@ -87,11 +87,12 @@ function callItem({ row, open, now, label }: { row: CallRow; open: ReturnType<ty
     {label && <span className="activity-call-terminal">{row.title ?? t('终端 {number}', { number })}</span>}
   </>;
   const hint = item.viewable ? t(opened ? '点击关闭旁边的分屏' : '点击在旁边查看它在做什么') : null;
+  const title = [item.title, failure, outside, declared, hint].filter(Boolean).join('\n');
   const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
-  return <li key={label ? `${terminalId}/${item.id}` : item.id} className={`activity-call-item is-${state}${failure ? ' is-failed' : ''}${awaiting ? ' is-awaiting' : ''}`} title={[item.title, failure, outside, declared, hint].filter(Boolean).join('\n')}>
+  return <li key={label ? `${terminalId}/${item.id}` : item.id} className={`activity-call-item is-${state}${failure ? ' is-failed' : ''}${awaiting ? ' is-awaiting' : ''}`} title={title}>
     {item.viewable
       ? <button type="button" className={`activity-call-open activity-call-body${label ? ' has-terminal' : ''}`} aria-pressed={opened} aria-label={t('{role} {title}，{state}', { role: t(item.role), title: item.title, state: word })} onClick={() => toggleSplit(terminalId, item.id)}>{cells}</button>
-      : <div className={`activity-call-body${label ? ' has-terminal' : ''}`}>{cells}</div>}
+      : <div className={`activity-call-body${label ? ' has-terminal' : ''}`} title={`${title}\n${t('没有可打开的工作会话')}`}>{cells}</div>}
     {late && <div className="activity-call-notice" role="status">
       <WarningCircle size={14} aria-hidden="true" /><span>{t('已等 15 秒仍未确认，可能没有启动。')}</span>
       <span className="activity-call-notice-actions">
@@ -148,30 +149,11 @@ function TeamSeats({ projectId, terminals, children }: { projectId: string; term
   return children(info);
 }
 
-const FILE_LABELS = { brief: '简报', log: '日志' } as const;
-const FILE_ERRORS = { unavailable: '文件不可用', missing: '文件尚未写入', 'too-large': '文件过大', refused: '无法读取文件' } as const;
-
-function CallArtifact({ row, kind }: { row: CallRow; kind: keyof typeof FILE_LABELS }) {
-  const [result, setResult] = useState<CallFileResult | null>(null);
-  useEffect(() => {
-    let active = true;
-    const read = window.agentrix?.callFile?.(row.terminalId, row.item.id, kind);
-    if (read) void read.then(value => { if (active) setResult(value); }, () => { if (active) setResult({ ok: false, code: 'refused' }); });
-    else setResult({ ok: false, code: 'unavailable' });
-    return () => { active = false; };
-  }, [row.terminalId, row.item.id, kind]);
-  return <section className="agent-call-artifact">
-    <h5>{t(FILE_LABELS[kind])}</h5>
-    {result?.ok ? <><pre>{result.text}</pre>{result.truncated && <small>{t('仅显示文件的前 256 KB')}</small>}</>
-      : <p role="status">{t(result ? FILE_ERRORS[result.code] : '正在读取…')}</p>}
-  </section>;
-}
-
 const VERDICTS = { mismatch: '核对不符', match: '核对一致', unknown: '核对未确认' } as const;
 const SPECIALTIES: Record<string, string> = { frontend: 'Frontend', backend: 'Backend', desktop: 'Desktop', database: 'Database', ai: 'AI' };
 
 function TeamCallRow({ row, roles, info, now, labels, grouped }: { row: CallRow; roles: readonly SeatRole[]; info?: SeatsInfo | null; now: number; labels: boolean; grouped: boolean }) {
-  const { item, call, terminalId } = row, [expanded, setExpanded] = useState(false);
+  const { item, call, terminalId } = row;
   const status = item.failure ? failureWord(item.failure) : t(item.awaiting === 'owner' && item.state !== 'done' ? AWAITING_WORD : CALL_STATES[item.state].word);
   const age = item.startedAt == null ? '—' : elapsedClock(Math.max(0, (item.endedAt ?? now) - item.startedAt));
   const catalogLabel = call.model && modelRow(info?.catalog ?? [], call.model)?.label;
@@ -180,25 +162,23 @@ function TeamCallRow({ row, roles, info, now, labels, grouped }: { row: CallRow;
   const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
   const { role, inferred } = callSeatRole(roles, item);
   const roleLabel = [!grouped && routingRoleName(role.name, t), item.specialty && (SPECIALTIES[item.specialty] ?? item.specialty), inferred && t('推断')].filter(Boolean).join(' · ');
-  return <li className="agent-team-call">
-    <button type="button" className="agent-team-row" aria-expanded={expanded} onClick={() => setExpanded(open => !open)}>
+  const cells = <>
       <span className="agent-team-subject"><strong>{item.title || model}</strong><time>{age}</time></span>
       <span className="agent-team-line">{roleLabel && <b>{roleLabel}</b>}<span>{[model, call.effort ?? '—', call.fast == null ? '—' : t(call.fast ? '快速' : '普通')].join(' · ')}</span></span>
       <span className="agent-team-line"><span>{status}</span>{labels && <span>{row.title ?? t('终端 {number}', { number: row.number })}</span>}
         {item.worktree && <span className="agent-team-worktree" title={item.worktree}>{item.worktree}</span>}
         <span data-routing-verdict={verdict}>{t(VERDICTS[verdict])}</span></span>
-    </button>
+  </>;
+  return <li className="agent-team-call">
+    {item.viewable
+      ? <button type="button" className="agent-team-row" title={t('打开工作会话')}
+          onClick={() => openSplit(terminalId, item.id, { brief: item.brief, log: item.log })}>{cells}</button>
+      : <div className="agent-team-row" title={t('没有可打开的工作会话')}>{cells}</div>}
     {late && <div className="activity-call-notice" role="status">
       <span>{t('已到 15 秒未确认，可能没有启动')}</span>
       <button type="button" className="button secondary small" disabled={stop?.pending} onClick={() => void stopWorker(terminalId, item.id)}>{t('停止')}</button>
       <button type="button" className="button secondary small" onClick={() => waitMore(terminalId, item.id, now)}>{t('再等等')}</button>
       {stop?.refusal && <span role="alert">{t('没能停止：{message}', { message: stop.refusal })}</span>}
-    </div>}
-    {expanded && <div className="agent-team-details">
-      {item.brief && <CallArtifact row={row} kind="brief" />}
-      {item.log && <CallArtifact row={row} kind="log" />}
-      {!item.brief && !item.log && <p>{t('本次调用没有简报或日志')}</p>}
-      {item.viewable && <button type="button" className="button secondary small" onClick={() => openSplit(terminalId, item.id)}>{t('打开工作会话')}</button>}
     </div>}
   </li>;
 }
