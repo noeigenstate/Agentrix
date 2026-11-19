@@ -276,6 +276,16 @@ test('helper constructs exact Codex/Claude argv and rejects incomplete or ambigu
     ['codex', ...base.map(value => value === '审查' ? 'unknown-role' : value)]]) assert.throws(() => argumentsOf(args));
 });
 
+test('worker app-server settings verify effort and speed before rollout records arrive', async t => {
+  const f = await fixture(t, [{ turnStarted: true }], {
+    thread: { model: 'gpt-6.1-sol', reasoningEffort: 'max', serviceTier: 'fast' },
+  });
+  const result = await f.finished;
+  assert.equal(result.code, 0, result.stdout);
+  assert.match(result.stdout, /started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok/);
+  assert.deepEqual([f.events[0].effort, f.events[0].fast], ['max', true]);
+});
+
 test('help prints all role aliases without launching a worker', async () => {
   const { run } = require('../integration/dispatch.cjs');
   for (const args of [['--help'], ['codex', '--help'], ['claude', '--help']]) {

@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const { createEventStream } = require('../native-session/events.cjs');
 const { createNormalizer } = require('./normalize.cjs');
 const { TokenRates } = require('../agents/token-rate.cjs');
+const { agentSettings } = require('../agents/agent-settings.cjs');
 const { routingOwned, routingPatch, routingText } = require('../agents/agent-command.cjs');
 const { createRequests } = require('./requests.cjs');
 const { createPolicy } = require('./policy.cjs');
@@ -54,6 +55,14 @@ function createClaudeSession(spec, emit, dependencies) {
   const setState = (next, reason = null) => { state = next; publish('session.state', { state, reason }); };
   const requests = createRequests({ publish, state: next => { if (!closed && !stopping) setState(next); } });
   const normalize = createNormalizer(publish, clean), policy = createPolicy(spec, audit);
+  function publishRouting(run, observed) {
+    if (observed === run.routingObserved) return;
+    run.routingObserved = observed;
+    publish('routing.updated', {
+      declared: { model: spec.model || null, effort: spec.effort || null, fast: spec.fast ?? null },
+      effective: observed, observed, reason: null,
+    });
+  }
   function receipt(id, status) {
     if (!sent.has(id) || sent.get(id) === status) return;
     sent.set(id, status); publish('input.receipt', { clientMessageId: id, status });
@@ -160,11 +169,8 @@ function createClaudeSession(spec, emit, dependencies) {
           onSession(providerId);
           run.model = message.model || null;
           observedModel = run.model;
-          publish('routing.updated', {
-            declared: { model: spec.model || null, effort: spec.effort || null, fast: spec.fast ?? null },
-            effective: { model: run.model, effort: null, fast: null },
-            observed: { model: run.model, effort: null, fast: null }, reason: null,
-          });
+          const fast = message.fast_mode_state === 'on' ? true : message.fast_mode_state === 'off' ? false : null;
+          publishRouting(run, { model: run.model, effort: null, fast });
         }
         observeBackground(run, message);
         if (!run.initialized) {
@@ -175,6 +181,9 @@ function createClaudeSession(spec, emit, dependencies) {
         if (message.isReplay === true) { normalize(message, { live: true }); continue; }
         if (stopping && (message.type !== 'result' || message.parent_tool_use_id)) continue;
         if (!message.parent_tool_use_id && !message.isSidechain) {
+          if (spec.owner === 'dispatch' && message.type === 'assistant' && message.message?.model !== '<synthetic>') {
+            publishRouting(run, agentSettings(run.routingObserved, 'claude', message));
+          }
           if (message.type === 'system' && message.subtype === 'status' && message.status === 'compacting') run.compactionStarted = true;
           // The CLI's failed automatic compact is a synthetic error reply. The
           // ordinary transcript filter omits those; retain its reason only for
@@ -344,6 +353,14 @@ function createClaudeSession(spec, emit, dependencies) {
       const options = queryOptions(spec, { key, executable, abort: run.abort,
         providerSessionId: providerId, policy,
         onSubagent: (kind, input, toolUseId) => reportSubagent(run, kind, input, toolUseId),
+        onSeat: (input, observed) => {
+          if (closed || stopping || active !== run || !run.initialized || input.session_id !== providerId) return;
+          if (observed.note) {
+            if (typeof input.tool_use_id !== 'string' || !/^[\w-]{1,146}$/.test(input.tool_use_id)) return;
+            publish('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: observed.note } },
+              { itemId: `seat-routing:${input.tool_use_id}` });
+          } else spec.onSeat?.(observed, { runtimeSessionId: spec.runtimeSessionId, providerSessionId: providerId });
+        },
         canUseTool: async (name, input, context) => {
           if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
           if (name === 'AskUserQuestion') return requests.open(name, input, context);

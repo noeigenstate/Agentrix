@@ -5,6 +5,8 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 Codex workers registered through local dispatch control use the lead conversation's frozen operation config and report refused keys on a routing line.
 Main delivers frozen Claude operation settings to its brokered workers. SSH-dispatched workers and direct Claude helper launches use agent defaults.
 Local and SSH Claude terminal wrappers read the live lead file at launch, including the optional background and subagent model lines.
+The sixth line carries the launch's seat choices. The helper uses a matching seat from that launch map for omitted model, effort and fast flags.
+Claude's terminal Agent and Task hooks use the launch map for input changes and report accepted input by tool-use ID.
 
 ## Owns
 - `integration/dispatch.cjs`

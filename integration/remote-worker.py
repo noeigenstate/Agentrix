@@ -274,6 +274,36 @@ try:
         identity=str(payload.get("thread-id",""))+":"+str(payload.get("turn-id",""))
         if identity==":": sys.exit(0)
         event.update(type="turn-complete",eventId=hashlib.sha256(identity.encode()).hexdigest(),threadId=payload.get("thread-id"),turnId=payload.get("turn-id"))
+    elif mode=="claude-seat":
+        raw=sys.stdin.read(4194305)
+        snapshot=os.environ.get("AGENTRIX_SEATS", "")
+        if len(raw)>4194304 or not snapshot or len(snapshot)>8192: sys.exit(0)
+        hook=json.loads(raw)
+        tool=hook.get("tool_input")
+        if hook.get("tool_name") not in ("Agent", "Task") or not isinstance(tool, dict): sys.exit(0)
+        prefix=re.match(r"^\[([a-z][a-z0-9-]{0,31})(?:/[a-z][a-z0-9-]{0,23})?\]", str(tool.get("description", "")))
+        seats=json.loads(snapshot)
+        if not prefix or not isinstance(seats, dict): sys.exit(0)
+        seat=prefix[1]
+        choice=seats.get(seat, {})
+        model, effort=choice.get("model", ""), choice.get("effort")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}", model): sys.exit(0)
+        alias=choice.get("agentModel", model)
+        claude=model.startswith(("claude-", "sonnet", "opus", "haiku", "fable"))
+        supported=claude and alias in ("sonnet","opus","haiku","fable") and effort in ("low","medium","high","xhigh","max") and tool.get("subagent_type")!="fork"
+        if hook.get("hook_event_name")=="PreToolUse":
+            if not claude:
+                print(json.dumps({"systemMessage":"["+seat+"] uses Codex. Launch this seat through the dispatch helper."}))
+            elif not supported:
+                print(json.dumps({"systemMessage":"["+seat+"] Claude Agent cannot apply this seat's model and effort."}))
+            elif tool.get("model")!=alias or tool.get("effort")!=effort:
+                updated=dict(tool, model=alias, effort=effort)
+                print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":updated}}))
+            sys.exit(0)
+        tool_id=hook.get("tool_use_id", "")
+        if (hook.get("hook_event_name")!="PostToolUse" or not supported or alias!=tool.get("model") or effort!=tool.get("effort")
+                or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", tool_id)): sys.exit(0)
+        event.update(type="claude-seat-input",sessionId=hook.get("session_id"),toolUseId=tool_id,model=alias,effort=effort)
     elif mode=="claude-hook":
         states={"start":"working","stop":"complete","notify":"attention","session":"session"}
         kind=sys.argv[2]
@@ -353,13 +383,14 @@ function claude {
     done
     executable=$(type -P claude)
     if [ -z "$executable" ]; then printf 'Claude Code CLI was not found on this SSH host.\n'; return 127; fi
-    local model effort seat_fast background_model subagent_model fast=0
+    local model effort seat_fast background_model subagent_model seat_map fast=0
     local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
     local -a lead_args=() lead_env=()
     if [[ $conversation == 1 && -r ${AGENTRIX_CLAUDE_LEAD_FILE-} ]] &&
         { IFS= read -r model && IFS= read -r effort && IFS= read -r seat_fast && {
             IFS= read -r background_model || :
             IFS= read -r subagent_model || :
+            IFS= read -r seat_map || :
         }; } < "$AGENTRIX_CLAUDE_LEAD_FILE" &&
         [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $seat_fast == 0 || $seat_fast == 1 ) ]]; then
         lead_args=(--model "$model" --effort "$effort")
@@ -367,6 +398,7 @@ function claude {
         [[ $background_model =~ $model_pattern ]] && lead_env+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=$background_model")
         [[ $subagent_model =~ $model_pattern ]] && lead_env+=("CLAUDE_CODE_SUBAGENT_MODEL=$subagent_model")
     fi
+    lead_env+=("AGENTRIX_SEATS=${seat_map:-null}")
     __pg_emit codex-started "$(__pg_command "$@")" claude
     # Claude runs hooks with sh, so quote each argument for that shell, including paths with spaces.
     settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" <<'PY'
@@ -374,6 +406,9 @@ import json,shlex,sys
 command=" ".join(shlex.quote(word) for word in (sys.executable,sys.argv[1],"claude-hook"))
 hooks={name:[{"hooks":[{"type":"command","command":command+" "+kind}]}] for name,kind in
        (("UserPromptSubmit","start"),("Stop","stop"),("Notification","notify"),("SessionStart","session"))}
+seat_command=" ".join(shlex.quote(word) for word in (sys.executable,sys.argv[1],"claude-seat"))
+for name in ("PreToolUse", "PostToolUse"):
+    hooks[name]=[{"matcher":"Agent|Task","hooks":[{"type":"command","command":seat_command,"timeout":5}]}]
 settings={"hooks":hooks}
 if sys.argv[2]=="1": settings["fastMode"]=True
 print(json.dumps(settings))
@@ -1739,6 +1774,9 @@ class Worker:
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root, AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path, AGENTRIX_TOKEN=self.token, AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
         env["AGENTRIX_CLAUDE_BACKGROUND_FILE"] = os.path.join(self.temp, "claude-background")
         env["AGENTRIX_CLAUDE_LEAD_FILE"] = os.path.join(self.temp, "claude-lead")
+        seat_map = self.claude_lead.get("seatsMap") if native and isinstance(self.claude_lead, dict) else None
+        encoded = json.dumps(seat_map if isinstance(seat_map, dict) else None, separators=(",", ":"))
+        env["AGENTRIX_SEATS"] = encoded if len(encoded) <= 8192 else "null"
         if os.path.isfile(os.path.join(self.temp, "dispatch.json")): env["AGENTRIX_BOOTSTRAP"] = os.path.join(self.temp, "dispatch.json")
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
@@ -1778,7 +1816,11 @@ class Worker:
                 if not isinstance(value, str) or (value and not re.fullmatch(model_pattern, value)):
                     raise ValueError("Invalid Claude operation model.")
                 operation_models.append(value)
-            text = "\n".join([model, effort, "1" if fast else "0", *operation_models, ""])
+            seat_map = lead.get("seatsMap")
+            if seat_map is not None and not isinstance(seat_map, dict): raise ValueError("Invalid routing seat snapshot.")
+            encoded = json.dumps(seat_map, separators=(",", ":")) if seat_map is not None else ""
+            if len(encoded) > 8192: raise ValueError("Routing seat snapshot is too large.")
+            text = "\n".join([model, effort, "1" if fast else "0", *operation_models, *([encoded] if encoded else []), ""])
         filename = os.path.join(self.temp, "claude-lead")
         descriptor, temporary = tempfile.mkstemp(prefix=".claude-lead-", dir=self.temp)
         try:

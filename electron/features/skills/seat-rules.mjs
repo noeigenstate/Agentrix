@@ -7,7 +7,7 @@ export const BASE_EFFORTS = {
 const MODEL_ID = /^[A-Za-z0-9][\w.:@+/[\]-]*$/;
 export const EFFORT = /^[a-z][a-z0-9-]{0,31}$/;
 export const validModel = model => typeof model === 'string' && model.length <= 160 && MODEL_ID.test(model);
-export const familyOf = model => /^(opus|sonnet|haiku|claude-)/.test(model) ? 'claude' : 'codex';
+export const familyOf = model => /^(opus|sonnet|haiku|fable|claude-)/.test(model) ? 'claude' : 'codex';
 export const rankByName = model => /(^|[-_.])(haiku|mini|nano|lite)([-_.]|$)/.test(model) ? 1 : /(^|[-_.])sonnet([-_.]|$)/.test(model) ? 2 : 3;
 export const unsupportedEffort = family => `Unsupported ${family} effort.`;
 

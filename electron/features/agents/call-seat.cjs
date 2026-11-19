@@ -8,7 +8,7 @@ function declaredSeat(value, seatIds) {
 }
 
 function agentDescription(description, seatIds) {
-  const prefix = DESCRIPTION_PREFIX.exec(description);
+  const prefix = typeof description === 'string' && DESCRIPTION_PREFIX.exec(description);
   const labels = prefix ? declaredSeat(prefix[1], seatIds) : null;
   return { title: labels ? description.slice(prefix[0].length) : description, labels };
 }

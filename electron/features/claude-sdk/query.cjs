@@ -2,6 +2,7 @@ const { apiEnvironment } = require('./credentials.cjs');
 const { billingIdentityError } = require('./identity.cjs');
 const { routeSettings } = require('./routing.cjs');
 const { LOOKUP_AGENT_NAME, LOOKUP_AGENT, lookupDecision } = require('./lookup-agent.cjs');
+const { seatHookOutput, observedAgentSeat } = require('../skills/agent-seat.cjs');
 const { EFFORT, familyOf, validModel } = require('../skills/seat-rules.mjs');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -64,7 +65,7 @@ function inputQueue(onTake = () => {}) {
   };
 }
 
-function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {} }) {
+function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {}, onSeat = () => {} }) {
   const lookupAgent = spec.owner === 'gui' ? lookupOptions(spec.operations?.lookupAgent) : null;
   const reportSubagent = kind => async (input, toolUseId) => {
     // Visibility must never block the CLI or add context to either conversation.
@@ -92,9 +93,18 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
       const decision = policy(input.tool_name, input.tool_input);
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",
       // so the owner's rules get their say by the hook answering nothing.
-      if (decision.behavior === 'defer') return {};
+      if (decision.behavior === 'defer') {
+        const output = seatHookOutput(input, spec.seatsMap);
+        if (output.systemMessage) try { onSeat(input, { note: output.systemMessage }); } catch {}
+        return output;
+      }
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
     }] }],
+    ...(spec.seatsMap && { PostToolUse: [{ matcher: 'Agent|Task', hooks: [async input => {
+      const observed = observedAgentSeat(input, spec.seatsMap);
+      if (observed) try { onSeat(input, observed); } catch {}
+      return {};
+    }] }] }),
     SubagentStart: [{ hooks: [reportSubagent('start')] }],
     SubagentStop: [{ hooks: [reportSubagent('stop')] }] },
     canUseTool,

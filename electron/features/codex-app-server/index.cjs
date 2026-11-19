@@ -267,7 +267,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             ...(settings.approvalsReviewer ? { approvalsReviewer: settings.approvalsReviewer } : {}) };
           settingsSeen?.(settings, params.threadId);
           events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
-            effective: { model: settings.model ?? null, effort: settings.effort ?? null, fast: ['fast', 'priority'].includes(settings.serviceTier) }, observed: { model: null, effort: null, fast: null }, reason: null });
+            effective: { model: settings.model ?? null, effort: settings.effort ?? null,
+              fast: ['fast', 'priority'].includes(settings.serviceTier) ? true : settings.serviceTier === 'default' ? false : null },
+            observed: { model: null, effort: null, fast: null }, reason: null });
           return;
         }
         if (active && (method.startsWith('item/') && params.item?.type !== 'userMessage'

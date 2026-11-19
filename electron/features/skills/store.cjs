@@ -60,6 +60,14 @@ function operationInfo(stored, projectId, seats, catalog, installed, frozen, rec
     current: frozen ? structuredClone({ values: frozen.values, agents: frozen.agents }) : null };
 }
 
+function launchSeatMap(map, catalog) {
+  if (!map) return null;
+  return Object.fromEntries(Object.entries(map).map(([id, choice]) => [id, {
+    ...choice, agentModel: choice.model === 'fable' ? 'fable'
+      : choice.model.includes('[') ? null : modelSeats.agentAlias(choice.model, catalog || []),
+  }]));
+}
+
 function resolveOperations(info, remoteAgent) {
   const installed = remoteAgent ? { ...info.installed, [remoteAgent]: true } : info.installed;
   return operationSlots.levers(info.operations.effective, info.effective, info.catalog, installed);
@@ -388,7 +396,8 @@ class SkillsStore {
     if (!seat) return null;
     const { claude, pinnedHaiku } = this.operationLevers(projectId, null, remote ? 'claude' : null);
     const model = seat.model === 'haiku' && pinnedHaiku ? pinnedHaiku : seat.model;
-    return { ...seat, model, env: claude.env };
+    const info = this.seatsInfo(projectId);
+    return { ...seat, model, env: claude.env, seatsMap: launchSeatMap(info?.effective, info?.catalog) };
   }
 
   operationLevers(projectId, sessionId, remoteAgent = null) {
@@ -598,6 +607,7 @@ class SkillsStore {
     const operations = frozen && Object.hasOwn(frozen, 'operations') ? frozen.operations : seats ? resolveOperations(seats, remote ? leadAgent : null) : null;
     const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats
       ? { ...seats.effective, ...(leadSeat && { [seats.lead]: leadSeat }) } : null;
+    const agentSeats = frozen && Object.hasOwn(frozen, 'agentSeats') ? frozen.agentSeats : launchSeatMap(seatsMap, seats?.catalog);
     const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote, operations) } : {});
     const names = this.builtinNames();
     const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
@@ -616,7 +626,7 @@ class SkillsStore {
       `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)),
-      manifest, routingNote, seatsMap, operations, rendered };
+      manifest, routingNote, seatsMap, agentSeats, operations, rendered };
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
@@ -696,7 +706,7 @@ class SkillsStore {
     const key = JSON.stringify([canonical(this.dataDir), projectId, sessionId]);
     let snapshot = liveSessionSnapshots.get(key);
     if (!snapshot) { snapshot = { files: new Set() }; liveSessionSnapshots.set(key, snapshot); }
-    for (const field of ['seatsMap', 'operations', 'rendered']) {
+    for (const field of ['seatsMap', 'agentSeats', 'operations', 'rendered']) {
       if (!Object.hasOwn(snapshot, field)) snapshot[field] = structuredClone(delivery[field]);
     }
     for (const { path: file } of Object.values(snapshot.rendered)) snapshot.files.add(file);

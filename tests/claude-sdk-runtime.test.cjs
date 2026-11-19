@@ -50,6 +50,25 @@ test('a worker loads normal setting sources while blocking failed policy hooks',
   assert.equal(fake.calls[0].options.hooks.PreToolUse[0].onFailure, 'block');
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'node --version' }, {})).behavior, 'allow');
 });
+test('worker routing publishes effort and speed from its own live SDK replies', async t => {
+  const { runtime, spec, fake } = setup(t, { auto: false });
+  const observed = Promise.withResolvers(), initialized = Promise.withResolvers();
+  const session = runtime.create({ ...spec, owner: 'dispatch', model: 'sonnet', effort: 'high', fast: true }, event => {
+    if (event.type !== 'routing.updated') return;
+    if (event.payload.observed.effort === null) initialized.resolve(event.payload.observed);
+    else observed.resolve(event.payload.observed);
+  });
+  t.after(() => session.close());
+  await session.start();
+  await session.send({ clientMessageId: randomUUID(), text: 'worker' });
+  assert.deepEqual(await initialized.promise, { model: 'fake-model', effort: null, fast: null });
+  const reply = { type: 'assistant', uuid: randomUUID(), perTurnEffort: 'medium',
+    message: { id: randomUUID(), model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'work' }], usage: { speed: 'standard' } } };
+  fake.emit({ ...reply, parent_tool_use_id: 'child' });
+  fake.emit({ ...reply, isReplay: true });
+  fake.emit(reply);
+  assert.deepEqual(await observed.promise, { model: 'claude-sonnet-5-5', effort: 'medium', fast: false });
+});
 test('billing identity mismatch fails without trusting a subscription init', async t => {
   const { session, events } = setup(t, { source: 'user' }); await session.start(); session.send({ clientMessageId: randomUUID(), text: 'test' });
   await until(() => session.snapshot().state === 'failed');

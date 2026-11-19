@@ -176,13 +176,14 @@ claude() {
   fi
   local -a program=("${__pg_words[@]}")
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  local model effort fast background_model subagent_model lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  local model effort fast background_model subagent_model seat_map lead_file=${AGENTRIX_BOOTSTRAP-}.lead
   local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
   local -a lead_args=() lead_env=()
   if [[ $conversation == 1 && -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
     { IFS= read -r model && IFS= read -r effort && IFS= read -r fast && {
         IFS= read -r background_model || :
         IFS= read -r subagent_model || :
+      IFS= read -r seat_map || :
       }; } < "$lead_file" &&
     [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $fast == 0 || $fast == 1 ) ]]; then
     lead_args=(--model "$model" --effort "$effort")
@@ -190,6 +191,7 @@ claude() {
     [[ $background_model =~ $model_pattern ]] && lead_env+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=$background_model")
     [[ $subagent_model =~ $model_pattern ]] && lead_env+=("CLAUDE_CODE_SUBAGENT_MODEL=$subagent_model")
   fi
+  lead_env+=("AGENTRIX_SEATS=${seat_map:-null}")
   local settings=$launch_fallback REPLY
   if [[ $__pg_hook_channel == http ]]; then
     if __pg_hook_proxy "$__pg_hook_port"; then __pg_send hook-channel 0 claude "$REPLY"; else settings=$launch_http; fi

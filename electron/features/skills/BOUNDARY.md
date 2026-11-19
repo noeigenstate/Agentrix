@@ -3,6 +3,7 @@
 The skills library: built-in, global and project skills, their options, history and proposals, session instruction delivery, and the settings page that edits them.
 
 Operation choices save atomically with team seats and freeze with their rendered instructions when a conversation starts.
+The same snapshot carries a launch map with Claude Agent aliases resolved against the catalog at launch time.
 
 ## Owns
 - `electron/features/skills/**`
@@ -14,7 +15,7 @@ Operation choices save atomically with team seats and freeze with their rendered
 - `cleanSeats` (`electron/features/skills/model-seats.cjs`) ? validates seat choices and recovers v1 choices with migrateSeats. The declaring built-in supplies ordered seats and duties. The store exposes effective seats, role metadata and both families' resolved lead seats through `skills:seats`, and saves scoped choices under `team` version 2.
 - `SkillsStore` (`electron/features/skills/store.cjs`) — library operations, watching, current project/agent manifests, launch snapshots and injected routingNote(); trackModelRuntime observes local model-menu reads without another request. This entrypoint also exports probeCodex/probeClaude so main needs no internal catalog imports. Local `<sessionManifest>.json` carries fingerprint, projectRoot and managed roots, and SSH creates equivalent metadata using bundle.key after remote path expansion
 - `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including seat reads and saves
-- `ModelCatalog` (`electron/features/skills/model-catalog.cjs`) — also exports trackModelRuntime; bounded, sanitized per-family model metadata in seat-models.json, refresh throttles and missing-row retention. Runtime tracking admits local live sources only and removes closed runtimes. Main supplies saved-key access; `refreshSeats` serves dialog/manual refresh and once-only notices for default moves and v1 migration.
+- `seatHookOutput` (`electron/features/skills/agent-seat.cjs`) — model and effort rewrite for a declared Claude seat and PostToolUse evidence through observedAgentSeat
 - `probeCodex` (`electron/features/skills/model-probe.cjs`) — also exports probeClaude; injected, bounded model-only probes, without creating a thread or submitting input; Claude uses no setting sources and persists no session. Main supplies the Codex RPC factory, process-tree stop and environment scrubber, and the Claude SDK loader, so Skills imports neither provider. Cleanup runs on success, failure and deadline, and late executable/SDK resolution cannot start a process.
 - `nativeSkillActions` (`electron/features/skills/native-actions.cjs`) — records successful SDK and app-server skill reads
 - `frontMatter` (`electron/features/skills/front-matter.cjs`) — the shared front-matter decoder
@@ -24,6 +25,7 @@ Operation choices save atomically with team seats and freeze with their rendered
 - `WorkerSkillProposals` (`electron/features/skills/worker-proposals.cjs`) — snapshots project and trusted managed skill roots, preserves proposals beside the answer, restores only an isolated worker worktree and reports shared changes with unknown authorship; snapshot limits degrade to report-only
 
 ## May import
+- `electron/features/agents/call-seat.cjs` (parse the same description prefix the Agent tab recognises)
 - `src/shared/**`
 - `src/features/reading/ReadingView.tsx`
 - `electron/agent-actions.cjs`
