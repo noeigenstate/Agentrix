@@ -3432,7 +3432,7 @@
   "文件过大": "File is too large",
   "无法读取文件": "Could not read the file",
   "仅显示文件的前 256 KB": "Showing the first 256 KB",
-  "本次调用没有简报或日志": "This call has no brief or log",
+  "没有可打开的工作会话": "No worker session is available",
   "打开工作会话": "Open worker session",
   "总指挥按席位把任务分给产品、架构、设计、开发、审查、测试、研究、运维和安全角色，能并行的尽量并行。审查和测试由全新实例独立完成。": "The Orchestrator assigns tasks to Product, Architect, Designer, Developer, Reviewer, QA, Researcher, DevOps and Security. Independent work runs in parallel where possible. Fresh instances review and test independently.",
   "总指挥": "Orchestrator Agent",

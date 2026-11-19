@@ -4,10 +4,11 @@
 .activity-call-rows > .agent-team-call { display: block; height: auto; }
 .agent-team-row {
   display: grid; gap: 4px; width: 100%; min-width: 0; padding: 8px; border: 0; border-radius: 8px;
-  text-align: start; font: inherit; background: transparent; color: var(--flow-ink); cursor: pointer;
+  text-align: start; font: inherit; background: transparent; color: var(--flow-ink);
 }
-.agent-team-row:hover, .agent-team-row[aria-expanded="true"] { background: var(--bg-hover); }
-.agent-team-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+button.agent-team-row { cursor: pointer; }
+button.agent-team-row:hover { background: var(--bg-hover); }
+button.agent-team-row:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .agent-team-subject, .agent-team-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .agent-team-subject { justify-content: space-between; }
 .agent-team-subject strong { font-weight: 600; overflow-wrap: anywhere; }
@@ -17,7 +18,11 @@
 .agent-team-worktree { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .agent-team-line [data-routing-verdict] { margin-inline-start: auto; white-space: nowrap; }
 .agent-team-line [data-routing-verdict="mismatch"] { color: var(--danger); }
-.agent-team-details { display: grid; justify-items: start; padding: 4px 8px 8px; gap: 8px; font-size: 12px; }
-.agent-call-artifact { min-width: 0; max-width: 100%; }
-.agent-call-artifact h5, .agent-call-artifact p, .agent-team-details p { margin: 0; }
-.agent-call-artifact pre { margin: 4px 0; padding: 8px; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--flow-inset); border-radius: 8px; }
+.subagent-artifacts { flex: none; padding: 4px 16px; border-bottom: 1px solid var(--divider); font-size: 12px; }
+.subagent-artifact summary { width: fit-content; padding: 2px; cursor: pointer; }
+.subagent-artifact summary:focus-visible { outline: 2px solid var(--focus-ring); }
+.subagent-artifact p { margin: 4px 0; }
+.subagent-artifact pre {
+  margin: 4px 0; padding: 8px; max-height: min(160px, 16vh); overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; background: var(--flow-inset); border-radius: 8px;
+}

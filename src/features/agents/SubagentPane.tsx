@@ -12,6 +12,7 @@ import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
 import { callModelName } from '../../shared/call-model-name';
 import { CALL_STATES, failureWord, rateValue } from './AgentCalls';
+import { CallArtifacts } from './CallArtifacts';
 import { SubagentInput } from './SubagentInput';
 import { WorkerTerminal } from './WorkerTerminal';
 import { type Receipt, receiptLine } from '../native-session/native-words';
@@ -103,6 +104,7 @@ export function SubagentPane({ terminalId, callId, projectId, onClose, onError, 
       </div>
       {meta && <div className="subagent-meta" title={feed?.model ? `${meta} · ${feed.model}` : meta}>{meta}</div>}
     </header>
+    {direct && <CallArtifacts terminalId={terminalId} callId={callId} />}
     {terminal ? <div className="subagent-main subagent-worker">
       <div className="subagent-worker-banner"><DotsThreeCircle size={14} aria-hidden="true" /><div>{t('它在等你确认。点进下面的终端回答。')}</div></div>
       <WorkerTerminal terminalId={terminalId} callId={callId} name={who} onError={onError} onUnavailable={() => setNoTerminal(true)} />

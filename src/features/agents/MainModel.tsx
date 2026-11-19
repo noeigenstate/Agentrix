@@ -83,9 +83,9 @@ export function MainModel({ turn }: { turn: NonNullable<ReturnType<typeof useMai
     ...prompts.filter(prompt => prompt.state !== 'working').sort((a, b) => (b.at ?? 0) - (a.at ?? 0)).map(promptTask),
   ].filter(Boolean);
   function promptTask(prompt: (typeof prompts)[number]) {
-    const active = prompt.state === 'working' && activity === 'working';
-    return task(active ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, active ? 'is-working' : 'is-queued',
-      t(active ? '处理中' : activity === 'waiting' ? '等待你确认' : '排队中'), prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '', prompt.id);
+    const active = prompt.state === 'working' && activity === 'working', waiting = prompt === working && activity === 'waiting';
+    return task(active ? CALL_STATES.running.icon : <Circle size={14} aria-hidden="true" />, active ? 'is-working' : waiting ? 'is-idle' : 'is-queued',
+      t(active ? '处理中' : waiting ? '等待你确认' : '排队中'), prompt.summary, prompt.text, prompt.at ? elapsedClock(now - prompt.at) : '', prompt.id);
   }
   const hidden = Math.max(0, rows.length - 4);
   return <section className="activity-card activity-main agent-team-group" aria-label={t('主模型')}>
