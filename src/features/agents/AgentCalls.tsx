@@ -10,7 +10,6 @@ import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
 import { callSeatRole, modelRow, roleGroups, routeVerdict, shortLabel } from './skill-seats.ts';
 import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, openSplit, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
-import { useActiveTerminal } from '../terminal/active-terminal.ts';
 import './activity-pane.css';
 import './agent-calls.css';
 
@@ -130,16 +129,9 @@ function backgroundItem({ row, open, now, label }: { row: BackgroundRow; open: R
 export const AgentTabScope = createContext<string | null>(null);
 
 type TeamInfo = Record<string, SeatsInfo | null>;
-type TeamSeatsProps = {
-  projectId: string; terminals: readonly ProjectTerminal[]; children: (info: TeamInfo, selected?: string) => ReactNode;
-};
-
-function SelectedTeam({ projectId, terminals, info, children }: TeamSeatsProps & { info: TeamInfo }) {
-  const selected = useActiveTerminal(projectId);
-  return children(info, terminals.find(terminal => terminal.id === selected)?.id ?? terminals[0]?.id);
-}
-
-function TeamSeats({ projectId, terminals, children }: TeamSeatsProps) {
+function TeamSeats({ projectId, terminals, children }: {
+  projectId: string; terminals: readonly ProjectTerminal[]; children: (info: TeamInfo) => ReactNode;
+}) {
   const [info, setInfo] = useState<TeamInfo>({});
   const sessions = JSON.stringify(terminals.map(terminal => [terminal.id, terminal.sessionId, terminal.nativeRuntimeSessionId]));
   useEffect(() => {
@@ -155,13 +147,10 @@ function TeamSeats({ projectId, terminals, children }: TeamSeatsProps) {
     const off = api.onSkills?.(load);
     return () => { active = false; off?.(); };
   }, [projectId, sessions]);
-  return terminals.length > 1 ?
-    <SelectedTeam projectId={projectId} terminals={terminals} info={info}>{children}</SelectedTeam> :
-    children(info, terminals[0]?.id);
+  return children(info);
 }
 
 const VERDICTS = { mismatch: '核对不符', match: '核对一致', unknown: '核对未确认' } as const;
-const SPECIALTIES: Record<string, string> = { frontend: 'Frontend', backend: 'Backend', desktop: 'Desktop', database: 'Database', ai: 'AI' };
 
 function TeamCallRow({ row, roles, info, now, labels, heading }: { row: CallRow; roles: readonly SeatRole[]; info?: SeatsInfo | null; now: number; labels: boolean; heading?: string }) {
   const { item, call, terminalId } = row;
@@ -173,9 +162,11 @@ function TeamCallRow({ row, roles, info, now, labels, heading }: { row: CallRow;
   const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
   const { role, inferred } = callSeatRole(roles, item);
   const showName = !heading || (item.seatName && item.seatName !== heading);
-  const specialty = item.specialty && (SPECIALTIES[item.specialty] ?? item.specialty);
+  const specialty = item.specialty;
+  const specialtyRole = specialty && (info?.currentRoles ?? info?.roles ?? roles).find(role => role.id === specialty);
+  const specialtyLabel = specialty && (specialtyRole ? routingRoleName(specialtyRole.name, t) : specialty[0].toUpperCase() + specialty.slice(1));
   const roleLabel = [
-    showName && (item.seatName ?? routingRoleName(role.name, t)), specialty, !heading && item.offTeam && t('未在团队中'), inferred && t('推断'),
+    showName && (item.seatName ?? routingRoleName(role.name, t)), specialtyLabel, !heading && item.offTeam && t('未在团队中'), inferred && t('推断'),
   ].filter(Boolean).join(' · ');
   const cells = <>
       <span className="agent-team-subject"><strong>{item.title || model}</strong><time>{age}</time></span>
@@ -208,8 +199,8 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
   const now = useClock(moving || hasWaitTimer(Date.now()));
   const { groups, background, recent } = projectCalls(sources, open, now, project), label = sources.length > 1;
   const empty = !groups.length && !background.length, nothing = empty && !recent.length;
-  const render = (info?: TeamInfo, selected?: string) => {
-    const selectedSeats = selected ? info?.[selected] : undefined;
+  const render = (info?: TeamInfo) => {
+    const selectedSeats = info?.[terminalId];
     const roles = selectedSeats?.currentRoles ?? selectedSeats?.roles ?? [];
     const selectedRoles = selectedSeats?.currentRoles === null ? [] : roles;
     const named = (row: CallRow) => row.item.seatName || row.item.offTeam;

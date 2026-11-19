@@ -20,7 +20,6 @@ import './seats-dialog.css';
 const ROLE_ICONS = { orchestrator: GitBranch, product: ClipboardText, architect: Stack, designer: PencilSimple, developer: Code,
   reviewer: MagnifyingGlass, qa: Flask, researcher: BookOpen, devops: InfinityIcon, security: ShieldCheck };
 const ROLE_NAMES: Record<string, string> = { orchestrator: 'Orchestrator Agent', product: 'Product', architect: 'Architect', designer: 'Designer', developer: 'Developer', reviewer: 'Reviewer', qa: 'QA / Tester', researcher: 'Researcher', devops: 'DevOps', security: 'Security' };
-const SPECIALTIES = ['Frontend', 'Backend', 'Desktop', 'Database', 'AI'];
 const effortLine = (seat: { effort: string; fast?: boolean }) => [seat.effort, seat.fast && t('快速')].filter(Boolean).join(' · ');
 const REFUSALS = {
   'unknown-model': '没有这个模型', unavailable: '不可用', same: '', effort: '这个模型不支持该强度', fast: '这个模型不能开快速',
@@ -655,6 +654,7 @@ function TeamChart({ state }: DialogPart) {
   const lead = enabled.find(role => role.id === info.lead), team = enabled.filter(role => role.id !== info.lead);
   const seats = enabled.map(role => role.id);
   const changed = changedSeats(seats, working, baseline);
+  const specialties = state.draft.roles.filter(role => role.source === 'library' && role.kind === 'author');
   const stateOuter = state;
   const card = (role: TeamRole, isLead = false) => {
     const id = role.id, seat = getSlot(working, id), state = slotState(id);
@@ -668,7 +668,9 @@ function TeamChart({ state }: DialogPart) {
           {changed.includes(id) && <span className="seats-chg">{t('已改')}</span>}</div>
         <p title={t(role.detail)}>{role.source === 'custom' ? role.duty : t(role.duty)}{role.detail && role.detail !== role.duty && <> · {t(role.detail)}</>}</p>
         {role.outputs && <p className="seats-team-output">{t('产出：{outputs}', { outputs: role.source === 'custom' ? role.outputs : t(role.outputs) })}</p>}
-        {id === 'developer' && <div className="seats-specialties">{SPECIALTIES.map(name => <span key={name}>{name}</span>)}</div>}
+        {id === 'developer' && specialties.length > 0 && <div className="seats-specialties">
+          {specialties.map(role => <span key={role.id}>{roleName(role)}</span>)}
+        </div>}
         {state && stateMark(state)}
       </div>
       <div className="seats-team-settings">{modelButton(id, seat?.model)}{effortButton(id)}{fastSwitch(id)}

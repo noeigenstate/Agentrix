@@ -1326,3 +1326,18 @@ test('the routing key uses the frozen role names and compacts sixteen roles when
   assert.match(textOf(byAttr(tree, 'data-seat', 'x-role-0')), /Frozen 0/);
   assert.match(tree.props['aria-label'], /needs review/);
 });
+
+test('the role library and Developer specialties use the supplied labels and duties', t => {
+  const roles = [...team.roles.map(role => shipped(role)),
+    { ...shipped({ id: 'ai', name: '人工智能', duty: '模型接入', detail: '主进程提供的模型职责', outputs: '' }, 'library'), kind: 'author' },
+    shipped({ id: 'a11y', name: '无障碍', duty: '无障碍验证', detail: '主进程提供的无障碍职责', outputs: '' }, 'library'),
+  ];
+  const h = dialogHarness(t, seatsInfo({ roles }), { language: 'zh' });
+  const developer = byAttr(h.render(), 'data-seat', 'developer');
+  assert.match(textOf(developer), /人工智能/);
+  assert.doesNotMatch(textOf(developer), /\bAI\b/);
+  byAttr(h.render(), 'data-routing-tab', 'library').props.onClick();
+  const library = h.render();
+  assert.match(textOf(byAttr(library, 'data-library-role', 'ai')), /人工智能.*主进程提供的模型职责/);
+  assert.match(textOf(byAttr(library, 'data-library-role', 'a11y')), /无障碍.*主进程提供的无障碍职责/);
+});
