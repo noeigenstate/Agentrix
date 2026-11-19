@@ -1161,6 +1161,8 @@ test('the activity key is one button with a row for each role and opens the scop
   await settle();
   const tree = h.render();
   assert.equal(findAll(tree, node => node.type === 'button').length, 1);
+  const heading = byAttr(tree, 'className', 'activity-card-title activity-routing-title');
+  assert.match(textOf(heading), /Model routing/i);
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
   assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row').length, 10);
   const summary = byAttr(tree, 'className', 'activity-routing-operations');

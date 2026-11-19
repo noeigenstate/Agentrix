@@ -1,16 +1,15 @@
-/* The main model, usage and routing key share the available height. An owner-expanded task list can scroll under its heading. */
-.activity-pane, .activity-calls {
+.activity-pane, .activity-calls, .activity-main {
   --flow-line: var(--divider); --flow-inset: var(--bg-aside-well);
   --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
 }
 .activity-pane { container: activity / size; gap: 8px; padding: 8px 12px; overflow: hidden; }
 .activity-card { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .activity-pane .activity-card { gap: 4px; }
+.activity-main { gap: 0; margin-bottom: 16px; }
 .activity-main:has([data-expanded]) { flex: 0 1 auto; min-height: 0; }
 /* The called models fill the left bar's Agent tab (and the narrow window's popover): the section takes what the bar gives and its list scrolls. */
 .activity-calls { flex: 0 1 auto; min-height: 0; }
 .activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
-.activity-main .activity-card-title { font-size: 13px; color: var(--flow-muted); }
 .activity-note { margin: 0; font-size: 12px; line-height: 16px; color: var(--flow-faint); overflow-wrap: anywhere; }
 .activity-empty { margin: 0; font-size: 12px; line-height: 18px; color: var(--flow-muted); }
 
@@ -28,7 +27,6 @@
   display: grid; align-content: start; margin: 0 -8px; padding: 0 8px; list-style: none;
   mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent); animation: activity-fade linear both; animation-timeline: scroll(self); }
 .activity-call-rows li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 32px; }
-.activity-pane .activity-call-rows li { height: 24px; }
 .activity-call-rows li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
 .activity-call-rows li:hover::before { background: var(--bg-hover); }
 .activity-call-rows li > * { position: relative; }
@@ -57,9 +55,12 @@
 .activity-call-rows li .activity-rate { min-width: 80px; text-align: right; }
 .activity-call-rows li .activity-rate.is-live { color: var(--flow-ink); }
 /* In the called models' list (a narrow bar) the rate takes only the width of its figure, so the model's name keeps the room, and the settings give way well before it. */
-.activity-calls .activity-call-rows li.activity-call-head { grid-template-columns: 16px minmax(0, 1fr) auto; }
-.activity-calls .activity-call-rows li .activity-rate { min-width: 0; }
-.activity-calls .activity-call-head p > .activity-call-settings { flex: 0 8 auto; }
+.activity-calls .activity-call-rows li.activity-call-head,
+.activity-main .activity-call-rows li.activity-call-head { grid-template-columns: 16px minmax(0, 1fr) auto; }
+.activity-calls .activity-call-rows li .activity-rate,
+.activity-main .activity-call-rows li .activity-rate { min-width: 0; }
+.activity-calls .activity-call-head p > .activity-call-settings,
+.activity-main .activity-call-head p > .activity-call-settings { flex: 0 8 auto; }
 /* A model that has not replied yet keeps its hint in the text column. */
 .activity-call-rows li.activity-call-note { height: 24px; }
 .activity-call-rows li.activity-call-note p { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
@@ -206,24 +207,21 @@
 .subagent-background-tail { flex: 1; min-height: 0; margin: 0; padding: 16px; overflow: auto; color: var(--text-1); font: 12px/18px var(--font-mono, monospace); white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; scrollbar-color: var(--border-hover) transparent; }
 .subagent-background-tail:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 
-/* 模型路由: a quiet 32px row under the blocks, grey like the other pane text until hovered. */
-/* Compact key rows keep the pane usable at short heights. The entire raised surface is a button. */
+/* The section lines up with the usage heading and shares the pane's row hover. */
 .activity-routing-key {
-  flex: none; display: grid; gap: 4px; padding: 8px; margin-bottom: 4px; min-width: 0; text-align: start;
-  border: 1px solid var(--divider); border-radius: 8px; background: var(--flow-inset); color: var(--flow-ink);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--flow-ink) 10%, transparent), 0 3px 0 var(--divider);
-  font: inherit; cursor: pointer;
+  flex: none; display: grid; gap: 4px; min-width: 0; min-height: 32px;
+  padding: 4px 8px; margin: -4px -8px 0; border: 0; border-radius: 8px;
+  background: none; color: var(--flow-ink); font: inherit; text-align: start; cursor: pointer;
 }
-.activity-routing-key:hover { background: var(--bg-hover); }
-.activity-routing-key:active { transform: translateY(2px); }
-.activity-routing-key:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
-.activity-routing-title { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
-.activity-routing-rows { display: grid; min-width: 0; border-top: 1px solid var(--flow-line); padding-top: 4px; }
+.activity-routing-key:is(:hover, :active) { background: var(--bg-hover); }
+.activity-routing-key:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.activity-routing-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.activity-routing-rows { display: grid; min-width: 0; }
 .activity-routing-row { display: grid; grid-template-columns: minmax(44px, 30%) minmax(0, 1fr) auto; gap: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
 .activity-routing-row > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-routing-operations {
   display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  border-top: 1px solid var(--flow-line); padding-top: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted);
+  font-size: 12px; line-height: 16px; color: var(--flow-muted);
 }
 .activity-routing-key strong { min-width: 0; color: var(--flow-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -236,6 +234,5 @@
   .activity-routing-fast { display: none; }
 }
 .activity-call-rows .activity-task-fold button { grid-column: 2 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 0; background: none; color: var(--flow-muted); font: inherit; cursor: pointer; }
-.activity-pane .activity-call-rows .activity-task-fold { height: 32px; }
 .activity-task-fold button { min-height: 32px; }
 .activity-task-fold button[aria-expanded="true"] svg { transform: rotate(180deg); }

@@ -3,12 +3,14 @@
 A sub-agent's split beside a terminal's conversation: who it is, its state, speed and time, its conversation followed live (read-only), and the owner's word for it —
 a message composer with Send and Stop that go through the main process, with delivery receipts from the worker. It also hands the left bar the called models of the whole project
 as a ready node and a running count (`AgentSidebar`), so the files module never imports the agents module.
+The Agent tab begins with the selected terminal's Orchestrator and its prompts.
 
 ## Owns
 - `src/features/agents/SubagentPane.tsx`
 - `src/features/agents/SubagentInput.tsx` and `subagent-input.css`
 - `src/features/agents/SubagentChip.tsx` and `subagent-chip.css`
 - `src/features/agents/AgentSidebar.tsx`
+- `src/features/agents/MainModel.tsx`
 - `src/features/agents/BackgroundBadge.tsx` (the 「后台 N 个运行中」 badge)
 - `src/features/agents/BackgroundPane.tsx` (a background task's read-only view)
 - `src/features/agents/WorkerTerminal.tsx` (a waiting worker's own terminal, in its split)
@@ -16,19 +18,23 @@ as a ready node and a running count (`AgentSidebar`), so the files module never 
 ## Interface
 - `SubagentPane` (`src/features/agents/SubagentPane.tsx`) — one view of one sub-agent call; the terminal grid renders one per open view; the file re-exports `BackgroundPane` (`src/features/agents/BackgroundPane.tsx`), a background task's read-only view, for the same slot
 - `SubagentChip` (`src/features/agents/SubagentChip.tsx`) — the header chip and popover that list the called models where a narrow window hides the activity pane (and the left bar is collapsed); the project header renders it
-- `AgentSidebar` (`src/features/agents/AgentSidebar.tsx`) — the called models of every terminal of the project as a ready node, how many are running and how many background commands run, for the left bar's Agent tab; the app renders it around the files module
+- `AgentSidebar` (`src/features/agents/AgentSidebar.tsx`) — the selected terminal's main model above the called models from every terminal, plus worker and background counts.
+  App hands its ready node to the files module.
 - `BackgroundBadge` (`src/features/agents/BackgroundBadge.tsx`) — 「后台 N 个运行中」 for a project's terminals; the project header (the small card's too) renders it
 
 ## May import
 - `src/shared/**`
 - `src/features/agents/AgentCalls.tsx`
+- `src/features/agents/Metric.tsx` and `src/features/agents/action-text.ts`
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/agents/subagent-splits.ts`
 - `src/features/native-session/native-words.ts` (delivery receipt words)
+- `src/features/native-session/native-store.ts` (native turn outcome)
 - `src/features/reading/ConversationFeed.tsx`
 - `src/features/terminal/terminal-theme.ts` (the worker xterm's colours)
 - `src/features/terminal/terminal-font.ts` (its font)
 - `src/features/terminal/terminal-fit.ts` (its fit to the split)
+- `src/features/terminal/active-terminal.ts`, `terminal-visibility.ts` and `terminal-screen.ts` (selected terminal and its CLI state)
 
 ## Invariants
 - Keys leave this module only from `WorkerTerminal`, the open split of a dispatched worker, and go only to that worker's own terminal (`workerTerminalKeys` with its epoch), only while its feed says `awaiting: 'owner'` (the view is mounted for that time alone) and never to the planner's terminal; Escape inside it is the CLI's key (the split stays open, focus stays) and typing, selecting and copying there never expand a project. The clipboard is written only by `WorkerTerminal`, for an explicit copy of a selection (Ctrl+C with one, Ctrl+Shift+C, ⌘C); it is never read (paste is xterm's own paste event). Everything else here (SubagentPane, SubagentInput, BackgroundPane) writes no terminal input and no clipboard: the owner's word leaves only through `interveneAgent` and `stopAgent`, direct to the worker — test: `tests/boundary-activity-pane.test.cjs` › "a sub-agent view opens only on the owner’s click on a row, reads the sub-agent’s record and speaks to it through the main process only"; test: `tests/subagent-pane.test.cjs` › "a worker waiting for the owner shows its terminal in the split; keys reach only that terminal; Esc reaches the CLI and keeps the split open"
