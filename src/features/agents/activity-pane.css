@@ -221,8 +221,10 @@
 .activity-routing-rows { display: grid; min-width: 0; border-top: 1px solid var(--flow-line); padding-top: 4px; }
 .activity-routing-row { display: grid; grid-template-columns: minmax(44px, 30%) minmax(0, 1fr) auto; gap: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
 .activity-routing-row > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-routing-operations { display: flex; gap: 8px; border-top: 1px solid var(--flow-line); padding-top: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
-.activity-routing-operations > span { flex: none; }
+.activity-routing-operations {
+  display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-top: 1px solid var(--flow-line); padding-top: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted);
+}
 .activity-routing-key strong { min-width: 0; color: var(--flow-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Keep quota values and warnings visible. Secondary usage details give up their lines before the routing rows change columns. */

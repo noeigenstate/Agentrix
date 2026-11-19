@@ -98,6 +98,40 @@ async function executable() {
   for (const candidate of candidates) try { await fs.access(path.join(root, candidate)); return path.join(root, candidate); } catch { }
   throw new Error('Packaged app was not found');
 }
+
+async function checkOperationLayout(app, page, seats) {
+  const size = await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0], previous = window.getContentSize();
+    window.setContentSize(1280, 800);
+    return previous;
+  });
+  try {
+    await page.waitForFunction(() => innerWidth === 1280 && innerHeight === 800);
+    const panel = seats.locator('.seats-operations');
+    const layout = await panel.evaluate(node => {
+      const compaction = node.querySelector('[data-operation="compaction"]').getBoundingClientRect();
+      const titles = node.querySelector('[data-operation="titles"]').getBoundingClientRect();
+      return { overflow: node.scrollHeight - node.clientHeight, sameRow: Math.abs(compaction.top - titles.top) <= 1 };
+    });
+    assert.ok(layout.overflow <= 0 && layout.sameRow, `all operation cards fit side by side at the bottom: ${JSON.stringify(layout)}`);
+    for (const id of ['memory', 'review']) {
+      await seats.locator(`[data-op-model="${id}"]`).click();
+      const menu = seats.getByRole('menu');
+      await menu.waitFor();
+      const fits = await menu.evaluate(node => {
+        const box = node.getBoundingClientRect();
+        return box.top >= 15 && box.left >= 15 && box.bottom <= innerHeight - 15 && box.right <= innerWidth - 15;
+      });
+      assert.ok(fits, `${id} menu has space on every side of the window`);
+      await page.keyboard.press('Escape');
+      await menu.waitFor({ state: 'detached' });
+    }
+  } finally {
+    await app.evaluate(({ BrowserWindow }, previous) => BrowserWindow.getAllWindows()[0].setContentSize(...previous), size);
+    await page.waitForFunction(([width, height]) => innerWidth === width && innerHeight === height, size);
+  }
+}
+
 async function runtimeSmoke(output, stages) {
   const stage = stages.run;
   const runtime = await stage('prepare isolated runtime', () => fs.mkdtemp(path.join(os.tmpdir(), 'agx-native-')));
@@ -243,6 +277,7 @@ async function runtimeSmoke(output, stages) {
         await seats.getByRole('menu').waitFor();
         await page.keyboard.press('Escape');
         await seats.getByRole('menu').waitFor({ state: 'detached' });
+        await checkOperationLayout(app, page, seats);
         await page.keyboard.press('Escape');
         await seats.waitFor({ state: 'detached' });
       });
