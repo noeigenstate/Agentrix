@@ -291,7 +291,8 @@ try:
         alias=choice.get("agentModel", model)
         claude=model.startswith(("claude-", "sonnet", "opus", "haiku", "fable"))
         supported=claude and alias in ("sonnet","opus","haiku","fable") and effort in ("low","medium","high","xhigh","max") and tool.get("subagent_type")!="fork"
-        if hook.get("hook_event_name")=="PreToolUse":
+        phase=hook.get("hook_event_name")
+        if phase=="PreToolUse":
             if not claude:
                 print(json.dumps({"systemMessage":"["+seat+"] uses Codex. Launch this seat through the dispatch helper."}))
             elif not supported:
@@ -299,11 +300,14 @@ try:
             elif tool.get("model")!=alias or tool.get("effort")!=effort:
                 updated=dict(tool, model=alias, effort=effort)
                 print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":updated}}))
-            sys.exit(0)
+        elif phase!="PostToolUse": sys.exit(0)
         tool_id=hook.get("tool_use_id", "")
-        if (hook.get("hook_event_name")!="PostToolUse" or not supported or alias!=tool.get("model") or effort!=tool.get("effort")
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", tool_id)): sys.exit(0)
-        event.update(type="claude-seat-input",sessionId=hook.get("session_id"),toolUseId=tool_id,model=alias,effort=effort)
+        if not supported or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", tool_id): sys.exit(0)
+        if phase=="PostToolUse":
+            alias, effort=tool.get("model"), tool.get("effort")
+            if alias not in ("sonnet","opus","haiku","fable") or effort not in ("low","medium","high","xhigh","max"):
+                alias, effort=None, None
+        event.update(type="claude-seat-input",sessionId=hook.get("session_id"),toolUseId=tool_id,model=alias,effort=effort,phase="pre" if phase=="PreToolUse" else "post")
     elif mode=="claude-hook":
         states={"start":"working","stop":"complete","notify":"attention","session":"session"}
         kind=sys.argv[2]
@@ -1819,7 +1823,7 @@ class Worker:
             seat_map = lead.get("seatsMap")
             if seat_map is not None and not isinstance(seat_map, dict): raise ValueError("Invalid routing seat snapshot.")
             encoded = json.dumps(seat_map, separators=(",", ":")) if seat_map is not None else ""
-            if len(encoded) > 8192: raise ValueError("Routing seat snapshot is too large.")
+            if len(encoded) > 8192: encoded = ""
             text = "\n".join([model, effort, "1" if fast else "0", *operation_models, *([encoded] if encoded else []), ""])
         filename = os.path.join(self.temp, "claude-lead")
         descriptor, temporary = tempfile.mkstemp(prefix=".claude-lead-", dir=self.temp)

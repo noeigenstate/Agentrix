@@ -19,7 +19,12 @@ function updateBootstrapLead(file, lead) {
   writeFileAtomic(file + '.lead', lines.join('\n'));
 }
 
-function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, ...terminal }) {
+function updateDispatchSeats(file, seats) {
+  const snapshot = JSON.stringify(seats ?? null);
+  writeFileAtomic(file + '.seats', Buffer.byteLength(snapshot) <= 8192 ? snapshot : 'null');
+}
+
+function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, dispatchSeats, ...terminal }) {
   fs.rmSync(file + '.background.json', { force: true });
   const pipeName = process.platform === 'win32' ? eventServer.name : eventServer.address;
   const packaged = process.resourcesPath && path.join(process.resourcesPath, 'integration');
@@ -32,11 +37,13 @@ function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey,
     shims, nodePath: process.execPath, claudeEnvFile: copy, ...terminal }), { mode: 0o600 });
   if (lead !== undefined) updateBootstrapLead(file, lead);
   else fs.rmSync(file + '.lead', { force: true });
+  if (dispatchSeats !== undefined) updateDispatchSeats(file, dispatchSeats);
+  else fs.rmSync(file + '.seats', { force: true });
 }
 
 // Removes a session's bootstrap file and the files written with it.
 function removeBootstrap(file) {
-  for (const name of [file, claudeEnvFile(file), file + '.background.json', file + '.lead']) fs.rmSync(name, { force: true });
+  for (const name of [file, claudeEnvFile(file), file + '.background.json', file + '.lead', file + '.seats']) fs.rmSync(name, { force: true });
 }
 
 // Refresh only launch policy: keys, hook settings and the private startup hook remain unchanged.
@@ -64,4 +71,4 @@ async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead };
+module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats };

@@ -65,6 +65,16 @@ function inputQueue(onTake = () => {}) {
   };
 }
 
+function routeAgentSeat(input, seats, onSeat) {
+  const report = observed => { try { onSeat(input, observed); } catch {} };
+  try {
+    const output = seatHookOutput(input, seats, report);
+    if (!output.systemMessage) return output;
+    report({ note: output.systemMessage });
+  } catch {}
+  return {};
+}
+
 function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {}, onSeat = () => {} }) {
   const lookupAgent = spec.owner === 'gui' ? lookupOptions(spec.operations?.lookupAgent) : null;
   const reportSubagent = kind => async (input, toolUseId) => {
@@ -93,16 +103,14 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
       const decision = policy(input.tool_name, input.tool_input);
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",
       // so the owner's rules get their say by the hook answering nothing.
-      if (decision.behavior === 'defer') {
-        const output = seatHookOutput(input, spec.seatsMap);
-        if (output.systemMessage) try { onSeat(input, { note: output.systemMessage }); } catch {}
-        return output;
-      }
+      if (decision.behavior === 'defer') return routeAgentSeat(input, spec.seatsMap, onSeat);
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
     }] }],
     ...(spec.seatsMap && { PostToolUse: [{ matcher: 'Agent|Task', hooks: [async input => {
-      const observed = observedAgentSeat(input, spec.seatsMap);
-      if (observed) try { onSeat(input, observed); } catch {}
+      try {
+        const observed = observedAgentSeat(input, spec.seatsMap);
+        if (observed) onSeat(input, observed);
+      } catch {}
       return {};
     }] }] }),
     SubagentStart: [{ hooks: [reportSubagent('start')] }],

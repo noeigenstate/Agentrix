@@ -1,4 +1,7 @@
 const DESCRIPTION_PREFIX = /^\[([a-z][a-z0-9-]{0,31}(?:\/[a-z][a-z0-9-]{0,23})?)\]\s*/;
+const CLAUDE_ALIAS = /^(sonnet|opus|haiku|fable)$/;
+const CLAUDE_EFFORT = /^(low|medium|high|xhigh|max)$/;
+const familyOf = model => /^(opus|sonnet|haiku|fable|claude-)/.test(model) ? 'claude' : 'codex';
 
 function declaredSeat(value, seatIds) {
   if (typeof value !== 'string' || !value) return null;
@@ -27,4 +30,4 @@ function callSeat(call, model) {
     : { seat: inferredSeat(call, model), seatSource: 'inferred' };
 }
 
-module.exports = { agentDescription, declaredSeat, callSeat };
+module.exports = { agentDescription, declaredSeat, callSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf };

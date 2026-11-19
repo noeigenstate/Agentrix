@@ -6,9 +6,11 @@ const path = require('node:path');
 const { queryOptions } = require('../electron/features/claude-sdk/query.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
-const { updateBootstrapLead } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, removeBootstrap, updateBootstrapLead, updateDispatchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 const { argumentsOf, commandOf, WorkerOutput } = require('../integration/dispatch.cjs');
 const { seatRouting } = require('../integration/agent-event.cjs');
+const { BASE_EFFORTS, familyOf: rendererFamily } = require('../electron/features/skills/seat-rules.mjs');
+const { CLAUDE_EFFORT, familyOf } = require('../electron/features/agents/call-seat.cjs');
 
 const seats = {
   designer: { model: 'claude-sonnet-5-5', agentModel: 'sonnet', effort: 'high', fast: false },
@@ -36,6 +38,17 @@ test('native Agent and Task hooks overwrite model and effort from the frozen cho
   assert.equal(input.effort, 'medium');
   assert.deepEqual(await pre(hook({ ...input, description: '[designer/web] Sketch' })),
     { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...rewritten, description: '[designer/web] Sketch' } } });
+  const modified = { ...input, prompt: 'Owner hook changed this', run_in_background: false };
+  assert.deepEqual((await pre(hook(modified))).hookSpecificOutput.updatedInput, { ...modified, model: 'sonnet', effort: 'high' });
+});
+
+test('a seat rewrite failure leaves the SDK hook answer empty while policy errors still block', async t => {
+  const broken = new Proxy(seats, { ownKeys() { throw new Error('broken seat map'); } });
+  const [matcher] = sdkHooks(t, broken).PreToolUse;
+  assert.equal(matcher.onFailure, 'block');
+  assert.deepEqual(await matcher.hooks[0](hook()), {});
+  const pre = sdkHooks(t, seats, () => { throw new Error('policy failed'); }).PreToolUse[0].hooks[0];
+  await assert.rejects(pre(hook()), /policy failed/);
 });
 
 test('unknown, untagged, disabled, and non-Agent calls leave their inputs untouched', async t => {
@@ -52,13 +65,32 @@ test('Codex and unsupported Agent settings show a note without changing tool inp
   const pre = sdkHooks(t, seats, deferred, (_input, result) => notices.push(result.note)).PreToolUse[0].hooks[0];
   for (const seat of ['developer', 'qa', 'reviewer']) {
     const result = await pre(hook({ ...input, description: `[${seat}] Review` }));
-    assert.deepEqual(Object.keys(result), ['systemMessage']);
-    assert.match(result.systemMessage, seat === 'developer' ? /dispatch helper/ : /cannot apply/);
+    assert.deepEqual(result, {});
+    assert.match(notices.at(-1), seat === 'developer' ? /dispatch helper/ : /cannot apply/);
   }
-  assert.match((await pre(hook({ ...input, subagent_type: 'fork' }))).systemMessage, /cannot apply/);
+  assert.deepEqual(await pre(hook({ ...input, subagent_type: 'fork' })), {});
+  assert.match(notices.at(-1), /cannot apply/);
   assert.equal(notices.length, 4);
   const denied = sdkHooks(t, seats, () => ({ behavior: 'deny', reason: 'limited' })).PreToolUse[0].hooks[0];
   assert.deepEqual(await denied(hook()), { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'limited' } });
+});
+
+test('a foreground call shows its seat before PostToolUse and reconciles final input and child records', async t => {
+  const calls = new AgentCalls({ local: false, seatIds: () => Object.keys(seats) });
+  t.after(() => calls.dispose());
+  const hooks = sdkHooks(t, seats, deferred, (_input, result) => calls.observeSeatInput(result));
+  const pre = hooks.PreToolUse[0].hooks[0], post = hooks.PostToolUse[0].hooks[0];
+  const foreground = { ...input, run_in_background: false };
+  await pre(hook(foreground));
+  calls.apply({ type: 'assistant', timestamp: new Date().toISOString(),
+    message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Agent', input: foreground }] } });
+  assert.deepEqual([calls.snapshot()[0].model, calls.snapshot()[0].effort], ['sonnet', 'high']);
+  await post(hook({ ...foreground, model: 'opus', effort: 'low' }, 'Agent', 'PostToolUse'));
+  await pre(hook(foreground));
+  assert.deepEqual([calls.snapshot()[0].model, calls.snapshot()[0].effort], ['opus', 'low']);
+  calls.remoteRecords({ child: { toolUseId: 'toolu_1', records: [{ type: 'assistant', timestamp: new Date().toISOString(),
+    perTurnEffort: 'max', message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Done' }] } }] } });
+  assert.deepEqual([calls.snapshot()[0].model, calls.snapshot()[0].effort], ['claude-opus-5-5', 'max']);
 });
 
 test('a PostToolUse receipt updates activity whether it arrives before or after the parent tool record', async t => {
@@ -109,10 +141,36 @@ test('terminal launch snapshots drive the command hook without reading profile s
   updateBootstrapLead(file, launch);
   const launchSeats = fs.readFileSync(file + '.lead', 'utf8').split('\n')[5];
   updateBootstrapLead(file, { ...launch, seatsMap: { designer: { model: 'haiku', effort: 'low' } } });
-  assert.deepEqual(seatRouting(JSON.stringify(hook()), launchSeats), { output: expected });
+  assert.deepEqual(seatRouting(JSON.stringify(hook()), launchSeats), {
+    output: expected, observed: { toolUseId: 'toolu_1', model: 'sonnet', effort: 'high', sessionId: 'fixture', phase: 'pre' },
+  });
   assert.deepEqual(seatRouting(JSON.stringify(hook()), 'null'), {});
   assert.deepEqual(seatRouting(JSON.stringify(hook(rewritten, 'Agent', 'PostToolUse')), launchSeats),
-    { observed: { toolUseId: 'toolu_1', model: 'sonnet', effort: 'high', sessionId: 'fixture' } });
+    { observed: { toolUseId: 'toolu_1', model: 'sonnet', effort: 'high', sessionId: 'fixture', phase: 'post' } });
+});
+
+test('Codex dispatch resolves its seat before admission through the private bootstrap snapshot', t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-seats-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'dispatch.json'), env = { AGENTRIX_BOOTSTRAP: file };
+  writeBootstrap({ file, eventServer: { name: 'fixture', address: '/fixture' }, dispatchSeats: seats });
+  const argv = ['codex', '--role', 'investigate', '--title', 'Test', '--cwd', '.', '--brief', 'brief.md', '--out', 'out.md', '--seat', 'developer/backend'];
+  const launch = argumentsOf(argv, env);
+  assert.deepEqual([launch.model, launch.effort, launch.fast], ['gpt-6.2-sol', 'xhigh', true]);
+  updateDispatchSeats(file, { developer: { model: 'gpt-6.2-astra', effort: 'high', fast: false } });
+  assert.equal(argumentsOf(argv, env).model, 'gpt-6.2-astra');
+  assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, launch.model);
+  assert.equal(argumentsOf([...argv, '--model', 'gpt-explicit', '--effort', 'medium', '--fast'], env).model, 'gpt-explicit');
+  updateDispatchSeats(file, { developer: { model: 'gpt-6.2-sol', effort: 'high' }, padding: 'x'.repeat(8192) });
+  assert.throws(() => argumentsOf(argv, env), /Missing --model/);
+  removeBootstrap(file);
+  assert.equal(fs.existsSync(file + '.seats'), false);
+});
+
+test('the renderer and the CJS helper agree on Claude model family and built-in effort values', () => {
+  const ids = ['opus', 'haiku', 'sonnet', 'fable', 'claude-internal', 'opus-next', 'gpt-6.2-sol', 'o4-mini', 'x-claude-opus'];
+  assert.deepEqual(ids.map(familyOf), ids.map(rendererFamily));
+  assert.deepEqual(['low', 'medium', 'high', 'xhigh', 'max', 'adaptive', 'HIGH'].filter(effort => CLAUDE_EFFORT.test(effort)), BASE_EFFORTS.claude);
 });
 
 test('dispatch fills omitted flags from its launch snapshot and preserves explicit values', () => {

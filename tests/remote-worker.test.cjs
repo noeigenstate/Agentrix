@@ -5,6 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
+const { seatRouting } = require('../integration/agent-event.cjs');
 
 function pythonProbe(t, script) {
   const result = spawnSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', script,
@@ -92,8 +93,42 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
         assert file.read_bytes() == b'sonnet\nmedium\n0\n\nhaiku\n'
     update(current, True)
     assert file.read_bytes() == b'sonnet\nmedium\n0\n\n\n'
+    update(dict(first, seatsMap={'padding':'x'*8192}), True)
+    assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\nclaude-sonnet-5-5\nclaude-opus-5-5[1m]\n'
     update(None, True)
     assert file.read_bytes() == b''
+`);
+});
+
+test('the SSH command hook matches the local Agent tool routing rules and observations', t => {
+  const pairs = [
+    ['opus', 'opus', 'low'], ['sonnet', 'sonnet', 'medium'], ['haiku', 'haiku', 'high'], ['fable', 'fable', 'xhigh'],
+    ['claude-opus-5-5', 'opus', 'max'], ['claude-other', 'opus', 'adaptive'], ['claude-other', 'opus-next', 'high'],
+    ['opus-next', 'opus', 'high'], ['gpt-6.2-sol', null, 'high'],
+  ];
+  const cases = pairs.flatMap(([model, agentModel, effort]) => ['PreToolUse', 'PostToolUse'].map(hook_event_name => {
+    const snapshot = JSON.stringify({ reviewer: { model, agentModel, effort } });
+    const hook = { hook_event_name, tool_name: 'Agent', tool_use_id: 'toolu_1', session_id: 'fixture',
+      tool_input: { description: '[reviewer] Review', prompt: 'Review', model: 'haiku', effort: 'medium' } };
+    return { snapshot, hook, expected: seatRouting(JSON.stringify(hook), snapshot) };
+  }));
+  pythonProbe(t, String.raw`
+import contextlib, io, json, os, runpy, socket, sys
+from unittest.mock import patch
+source = runpy.run_path(sys.argv[1])['NOTIFY_SOURCE']
+for case in json.loads(${JSON.stringify(JSON.stringify(cases))}):
+    with patch.object(socket, 'socket') as connect, patch.object(socket, 'AF_UNIX', 1, create=True), patch.object(sys, 'argv', ['notify', 'claude-seat']), \
+         patch.object(sys, 'stdin', io.StringIO(json.dumps(case['hook']))), contextlib.redirect_stdout(io.StringIO()) as out, \
+         patch.dict(os.environ, AGENTRIX_TOKEN='fixture', AGENTRIX_SOCKET='fixture', AGENTRIX_SEATS=case['snapshot']):
+        try: exec(source, {})
+        except SystemExit as e: assert e.code == 0
+    event = connect.return_value.__enter__.return_value.sendall
+    result = {}
+    if out.getvalue(): result['output'] = json.loads(out.getvalue())
+    if event.called:
+        observed = json.loads(event.call_args.args[0])
+        result['observed'] = {key: observed[key] for key in ('toolUseId','sessionId','model','effort','phase')}
+    assert result == case['expected'], (result, case)
 `);
 });
 
