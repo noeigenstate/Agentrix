@@ -7,6 +7,7 @@ const ts = require('typescript');
 const React = require('react');
 const { renderToStaticMarkup } = require('react-dom/server');
 const en = require('../electron/locales/en.json');
+const { hookHarness } = require('./helpers/hook-harness.cjs');
 
 // A component of a feature folder compiled with its imports stubbed (the language, the icons, the portal), for static rendering.
 // The terminals' native sessions as the conversation knows them: by terminal, the turn status (the pane reads it to tell a failed round from an interrupted one).
@@ -122,6 +123,66 @@ test('the Agent tab leads with the selected terminal’s Orchestrator above call
   const html = renderToStaticMarkup(React.createElement(AgentSidebar, { project: { id: 'p1', terminals } }, ({ panel }) => panel));
   assert.match(html, /aria-label="主模型"[^>]*><h4>总指挥<\/h4>[\s\S]*?GPT-6\.1-Sol[\s\S]*?First terminal’s worker/);
   assert.doesNotMatch(html, /Opus 5\.5/);
+});
+
+test('a terminal screen frame updates the mounted Orchestrator without rendering a sidebar sibling', t => {
+  const directory = 'src/features/agents/';
+  const terminal = { id: 'selected', agent: 'claude', codexActive: true, sessionId: 'pty', codexActivity: 'working' };
+  const listeners = new Set();
+  const screenFor = rerender => ({
+    ...require('../src/features/terminal/terminal-screen.ts'),
+    readScreen: () => null,
+    subscribeScreen(id, receive) {
+      assert.equal(id, terminal.id);
+      const listener = frame => { receive(frame); rerender(); };
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  let panel, siblingRenders = 0, groupRender;
+  const Sibling = () => { siblingRenders++; return null; };
+  const sidebarProps = { project: { id: 'p1', terminals: [terminal] }, children: agent => {
+    panel = agent.panel;
+    return React.createElement(Sibling);
+  } };
+  const renderSidebar = () => {
+    const { result } = sidebar.render('AgentSidebar', sidebarProps);
+    renderToStaticMarkup(result);
+  };
+  const mainImports = {
+    '@phosphor-icons/react': {},
+    './i18n': { t: text => text }, './model-name': {},
+    './routing-command.ts': {}, './useNow': {}, './native-store.ts': {},
+    './action-text': {}, './AgentCalls': { CallsCard: () => null }, './Metric': {},
+  };
+  const main = hookHarness(directory + 'MainModel.tsx', { ...mainImports, './terminal-screen.ts': screenFor(() => {
+    groupRender = main.render('MainModelGroup', panel.props.children[0].props).result;
+  }) });
+  const sidebar = hookHarness(directory + 'AgentSidebar.tsx', {
+    ...mainImports,
+    './active-terminal': { useActiveTerminal: () => terminal.id },
+    './terminal-screen.ts': screenFor(renderSidebar),
+    './MainModel': { ...main.load(directory + 'MainModel.tsx'), useMainTurn: terminal => sidebar.load(directory + 'MainModel.tsx').useMainTurn(terminal) },
+  });
+  t.after(() => { main.dispose(); sidebar.dispose(); });
+  const sendFrame = () => { for (const receive of listeners) receive({ rows: ['────', '❯ ', '────'], sessionId: 'pty', revision: 1 }); };
+
+  renderSidebar();
+  const before = siblingRenders;
+  sendFrame();
+  assert.equal(siblingRenders, before, 'a closed Agent panel leaves the sidebar sibling idle');
+  assert.equal(listeners.size, 0);
+
+  const group = panel.props.children[0];
+  assert.equal(group.type, main.load(directory + 'MainModel.tsx').MainModelGroup);
+  groupRender = main.render('MainModelGroup', group.props).result;
+  assert.equal(groupRender.props.turn.activity, 'working');
+  assert.equal(listeners.size, 1);
+  sendFrame();
+  assert.equal(groupRender.props.turn.activity, 'complete');
+  assert.equal(siblingRenders, before, 'the mounted Agent panel still leaves the sidebar sibling idle');
+  main.dispose();
+  assert.equal(listeners.size, 0);
 });
 
 test('the right Activity pane has no copy of the main model or its prompt list', () => {

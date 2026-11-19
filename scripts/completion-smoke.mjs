@@ -39,7 +39,9 @@ async function limits(fetchedAtMs, fiveHour, weekly, fiveHourReset = Date.now() 
   await fs.writeFile(usageFile + '.tmp', JSON.stringify({ cachedUsageUtilization: { fetchedAtMs, utilization: { five_hour: window(fiveHour, fiveHourReset), seven_day: window(weekly, Date.now() + 3 * 86400000) } } }));
   await fs.rename(usageFile + '.tmp', usageFile);
 }
-await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({ version: 2, projects: [project], settings: { language: 'zh', terminalRenderer: 'dom', notifications: true, restoreSessions: false, closeToTray: false } }));
+await fs.writeFile(path.join(dataDir, 'workspace.json'), JSON.stringify({
+  version: 2, projects: [project], settings: { language: 'zh', uiZoom: 100, terminalRenderer: 'dom', notifications: true, restoreSessions: false, closeToTray: false },
+}));
 const env = { ...process.env, AGENTRIX_DATA_DIR: dataDir, CODEX_HOME: home, CLAUDE_CONFIG_DIR: claudeHome }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path'); env[pathKey] = bin + path.delimiter + env[pathKey];
 const packaged = process.argv.includes('--packaged');
@@ -119,16 +121,24 @@ async function openAgentTab(page) {
 }
 
 async function checkPaneWindowSizes(pane) {
-  const initialSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize());
+  const { initialSize, canFitLarge } = await application.evaluate(({ BrowserWindow, screen }) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    const bounds = window.getBounds(), content = window.getContentBounds();
+    const { width, height } = screen.getDisplayMatching(bounds).workArea;
+    const frameWidth = bounds.width - content.width, frameHeight = bounds.height - content.height;
+    return { initialSize: window.getContentSize(), canFitLarge: width >= 1600 + frameWidth && height >= 1000 + frameHeight };
+  });
   const resize = async size => {
     await application.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setContentSize(width, height), size);
     await page.waitForFunction(([width, height]) => innerWidth === width && innerHeight === height, size);
   };
   try {
-    for (const size of [[1600, 1000], [1280, 800]]) {
-      await resize(size);
+    if (canFitLarge) {
+      await resize([1600, 1000]);
       await checkPaneFit(pane);
     }
+    await resize([1280, 800]);
+    await checkPaneFit(pane);
   } finally {
     await resize(initialSize);
   }
