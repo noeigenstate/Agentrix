@@ -1,5 +1,6 @@
 // Seat choices are configuration, never evidence of which model actually ran.
-const { BASE: EFFORTS, EFFORT, familyOf: family, validModel, rankOf, modelRow } = require('./model-catalog.cjs');
+const { modelRow } = require('./model-catalog.cjs');
+const { BASE_EFFORTS, EFFORT, familyOf: family, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const ALIASES = ['opus', 'sonnet', 'haiku'];
 const TEAM = { orchestrator: 'opus', product: 'opus', architect: 'opus', designer: 'sonnet', developer: 'opus',
@@ -12,7 +13,9 @@ function cleanSeat(raw, seat, models, stored = false) {
   if (!object(raw) || !validModel(raw.model)) fail('invalid-model', seat, 'Expected a valid model id of at most 160 characters.');
   const agent = family(raw.model);
   const row = models?.find(row => row.model === raw.model);
-  if (typeof raw.effort !== 'string' || !EFFORT.test(raw.effort) || !stored && !(row?.efforts || EFFORTS[agent]).includes(raw.effort)) fail('invalid-effort', seat, `Unsupported ${agent} effort.`);
+  if (typeof raw.effort !== 'string' || !EFFORT.test(raw.effort) || !stored && !(row?.efforts || BASE_EFFORTS[agent]).includes(raw.effort)) {
+    fail('invalid-effort', seat, unsupportedEffort(agent));
+  }
   if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && (row ? !row.fast : agent === 'claude'))) fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
   return { model: raw.model, effort: raw.effort, ...(raw.fast !== undefined ? { fast: raw.fast } : {}) };
 }

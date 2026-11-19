@@ -42,7 +42,6 @@ import { AgentMark, TimelineStep } from './Timeline';
 import { ResultActions, ResultChecks, ResultStatus, WorkingLine } from './ResultCard';
 import { latestResult } from './result-round';
 import { AgentCommandRun } from './AgentCommandRun';
-import { onComposerPrefill } from './composer-prefill';
 import { QuoteChip } from './ReadingQuote';
 import { quoteExcerpt, withQuote, type MessageQuote } from './message-quote';
 
@@ -308,8 +307,6 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (text === previous || text && (ownInput(text) || IMAGE_PLACEHOLDER.test(text))) return;
     setDraft(current => !current || current === previous ? text : current);
   }, [conversation, visibleScreen, state.canDeliver]);
-  // Text written for this terminal on the home page waits here for the reader to send it.
-  useEffect(() => onComposerPrefill(terminal.id, text => { setDraft(text); palette.dismiss(true); requestAnimationFrame(() => input.current?.focus()); }), [terminal.id]);
   const complete = (command: AgentCommand) => {
     caret.current = command.name.length + 1; edit(command.name + ' '); input.current?.focus();
   };

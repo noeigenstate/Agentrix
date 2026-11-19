@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ModelCatalog, modelRow, rankOf, trackModelRuntime } = require('../electron/features/skills/model-catalog.cjs');
+const { ModelCatalog, modelRow, trackModelRuntime } = require('../electron/features/skills/model-catalog.cjs');
+const { rankByName } = require('../electron/features/skills/seat-rules.mjs');
 const seats = require('../electron/features/skills/model-seats.cjs');
 const { probeCodex, probeClaude } = require('../electron/features/skills/model-probe.cjs');
 const { createRpc } = require('../electron/features/codex-app-server/index.cjs');
@@ -76,10 +77,10 @@ test('newest numeric Sol defaults do not rewrite choices; rendering degrades uns
   assert.match(render('claude-opus-5-4'), /helper claude --seat developer --model claude-opus-5-4 /);
 });
 
-test('rank rule matches every entry in the required shared UI fixture', () => {
+test('the shared seat rank rule matches the model rank fixture', () => {
   const cases = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/seat-ranks.json'), 'utf8'));
   assert.ok(cases.length >= 10);
-  for (const row of cases) assert.equal(rankOf(row.model), row.rank, row.model);
+  for (const { model, rank } of cases) assert.equal(rankByName(model), rank, model);
 });
 
 test('one-shot Codex probe pages without creating a thread and closes its injected process', async () => {

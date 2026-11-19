@@ -1,0 +1,36 @@
+# Boundary: Model-routing dialog
+
+Shows the team's routing choices and frozen conversation seats, and saves the owner's edits to the selected scope for the next session.
+The dialog uses `src/features/agents/seats-dialog.css` for its layout and controls.
+
+## Owns
+- `src/features/agents/SeatsDialog.tsx`
+- `src/features/agents/skill-seats.ts`
+- `src/features/agents/SeatsHost.tsx`
+- `src/features/agents/RoutingKeyCard.tsx`
+
+## Interface
+- `SeatsHost` (`src/features/agents/SeatsHost.tsx`) — handles scoped routing requests and opens the dialog. App mounts it through ActivityPane's re-export.
+- `RoutingKeyCard` (`src/features/agents/RoutingKeyCard.tsx`) — shows the current routing summary and opens the scoped dialog from ActivityPane.
+- `roleGroups` (`src/features/agents/skill-seats.ts`) — `callSeatRole`, `modelRow`, `roleGroups`, `routeVerdict` and `shortLabel` support the Agent tab's role groups and labels.
+
+## May import
+- `electron/features/skills/seat-rules.mjs` (shared seat validation and model rules)
+- `src/features/agents/subagent-splits.ts` (the `CallRow` type)
+- `src/shared/i18n.ts`
+- `src/shared/routing-command.ts`
+- `src/shared/types.ts`
+
+## Invariants
+- The chart uses the team order and exposes every seat's controls — test: `tests/seats-ui.test.cjs` › "org chart uses fixture order and gives each seat its own model, effort and fast controls"
+- The edit menu uses the model's own effort levels and fast availability — test: `tests/seats-ui.test.cjs` › "the 更换 menu lists the row’s own efforts, switches fast only where the row has it"
+- Save sends only overrides for the selected scope — test: `tests/seats-ui.test.cjs` › "the saved payload contains only the seat overrides for the current scope"
+- Unavailable models stay disabled and the current conversation is read-only — test: `tests/seats-ui.test.cjs` › "unavailable models are greyed with their reason"
+- A blocked reviewer prevents saving and offers a one-click fix — test: `tests/seats-ui.test.cjs` › "a blocked reviewer is framed, named 已阻止, explained with a one-click fix and cannot be saved"
+- An alias and its resolved ID count as one model for reviewer independence — test: `tests/seats-ui.test.cjs` › "an alias and the id it resolves to are one model for the reviewer rule"
+- Menus close on an outside click, a repeat button click, ✕ or Escape — test: `tests/seats-ui.test.cjs` › "the 更换 menu and the effort popover close on an outside click"
+- The routing card opens the dialog for the selected terminal — test: `tests/seats-ui.test.cjs` › "the activity key is one button with a row for each role and opens the scoped dialog"
+
+## Not ours
+- Persisting and validating seat choices or applying them at launch — Skills and the launch runtimes.
+- Rendering the Agent tab and tracking its calls — Activity pane.

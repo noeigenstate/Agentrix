@@ -16,7 +16,7 @@ function fixture({ wrongIdentity = false } = {}) {
   const sessions = new Map([['t', old]]);
   const context = { sessions, nativeSpecs: new Map(), launchPlans: new Map(), store: { findTerminal: () => ({ project }), setRestore: (_id, value) => saves.push(value) },
     launchCommand: (_agent, history) => { assert.equal(history.id, 'same-conversation'); return 'synthetic-resume'; }, broadcast() {},
-    startTerminal(id, _mode, _starting, previous) {
+    startTerminal(id, _starting, previous) {
       sessions.set(id, { sessionId: 'new-pty', terminalId: id, projectId: 'p', agent, codexActive: true,
         sessionKey: 'same-key', controlCapability: 'same-capability', bootstrapFile: '/synthetic/new-bootstrap', switchPreviousHost: previous,
         native: null, reportedThreadId: null,

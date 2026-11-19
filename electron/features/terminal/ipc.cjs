@@ -10,7 +10,7 @@ const validFacts = facts => !!facts && typeof facts === 'object' && !Array.isArr
 
 // nativeHost: whether a native session holds the terminal or is starting on it, its PTY already gone.
 function registerTerminalIpc({ handle, listen, findProject, getSession, hasSession, nativeHost = () => false, startTerminal, addTerminal, removeTerminal, confirmTerminalClose, forgetRestorePlan, disposeTerminal, clearStartupError, broadcast, getProjectById, acknowledgeProject, expectCompletion, scheduleState, applyActivity, pollAfterSubmission, send, getActiveTerminal, setActiveTerminal, setActiveFileTree, now = () => Date.now(), platform = process.platform }) {
-  handle('terminal:start', startTerminal);
+  handle('terminal:start', id => startTerminal(id));
   handle('terminal:add', (id, start = true) => {
     if (typeof start !== 'boolean') throw new Error('无效的终端启动选项。');
     const project = findProject(id);

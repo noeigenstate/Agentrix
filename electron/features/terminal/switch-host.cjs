@@ -69,7 +69,7 @@ function createSwitchHost(deps) {
       broadcast();
     };
     try {
-      startTerminal(id, null, true, old); staged = sessions.get(id);
+      startTerminal(id, true, old); staged = sessions.get(id);
       staged.nativeRuntimeSessionId = spec.runtimeSessionId;
       Object.assign(spec, { sessionId: staged.sessionId, bootstrapFile: staged.bootstrapFile, env: staged.usageEnv || spec.env });
       // OS/shell cold starts have no reliable wall-clock limit. Keep the source

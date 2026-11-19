@@ -1326,14 +1326,14 @@ async function initializeNativeSessions() {
       const history = spec.providerSessionId ? { id: spec.providerSessionId } : null;
       launchPlans.set(spec.terminalId, { agent: spec.agent, command: launchCommand(spec.agent, history), threadId: history?.id || null });
       store.setRestore(spec.terminalId, { nativeTransport: null });
-      startTerminal(spec.terminalId, null, true);
+      startTerminal(spec.terminalId, true);
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
     } });
   registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings, terminals: workerTerminals,
     env: () => claudeBackgroundEnvironment(withoutAppImage(process.env), store.settings?.claudeBackgroundTasks) });
 }
 
-function restoreTerminal(id, ...args) {
+function restoreTerminal(id) {
   const found = store.findTerminal(id), saved = found?.record.restore;
   const localCodex = (saved?.agent || 'codex') === 'codex' && (saved?.codex || saved?.nativeTransport);
   if (localCodex || saved?.nativeTransport && nativeSessions) {
@@ -1349,11 +1349,10 @@ function restoreTerminal(id, ...args) {
       startupErrors.set(id, error.message); broadcast();
     });
   }
-  startTerminal(id, ...args);
+  startTerminal(id);
 }
 
-function startTerminal(id, nativeMode = null, agentStarting = false, transfer = null) {
-  if (nativeMode !== null) throw new Error('Unsupported native session mode');
+function startTerminal(id, agentStarting = false, transfer = null) {
   const project = findProject(id);
   const old = sessions.get(id);
   if (old && old.status !== 'exited') return;
@@ -1621,7 +1620,7 @@ function registerUnavailableNative(handle) {
     if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
     launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
-    startTerminal(id, null, true); broadcast();
+    startTerminal(id, true); broadcast();
     return { runtimeSessionId: randomUUID() };
   }
   handle('native:start', start);
@@ -1743,7 +1742,7 @@ function registerIpc() {
     }
     const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
     launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });
-    startTerminal(id, null, true); broadcast(); return true;
+    startTerminal(id, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });
   terminalInput = registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), nativeHost: id => nativeSpecs.has(id), startTerminal,
