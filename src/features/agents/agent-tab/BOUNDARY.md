@@ -19,7 +19,6 @@ Shows the selected terminal's Orchestrator, current step and prompt history in t
 - `src/shared/elapsed-clock.ts`
 - `src/shared/i18n.ts`
 - `src/shared/model-name.ts`
-- `src/shared/routing-command.ts`
 - `src/shared/types.ts`
 - `src/shared/useNow.ts`
 
