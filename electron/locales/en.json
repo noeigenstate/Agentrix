@@ -3413,6 +3413,8 @@
   "无法读取模型路由状态": "Could not read model routing status",
   "每个任务": "Every task",
   "相关任务": "Relevant tasks",
+  "每个任务开始前读取。": "Read this skill before every task.",
+  "任务符合技能描述时读取。": "Read this skill when the task matches its description.",
   "首次打开项目时先运行一次": "Run once when a project is first opened",
   "还有 {count} 条": "{count} more",
   "总指挥 · {model}": "Orchestrator · {model}",

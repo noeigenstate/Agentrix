@@ -568,16 +568,31 @@ test('the trigger has two choices and a separate first-open switch', async t => 
   }
 });
 
-test('the trigger row shows when the skill takes effect: a built-in through translation, a user skill as given', async t => {
-  const h = mount(t, [builtinRouting({ when: '每个任务开始前读取并遵循' }), release], { details: { 'user:release': releaseV4 } });
-  await h.settle();
-  assert.equal(h.text(h.one(node => node.props['data-skill-when'])), '每个任务开始前读取并遵循');
-  assert.equal(h.one(node => node.props['data-skill-when']).props.className, 'skills-when');
-  h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
-  assert.equal(h.text(h.one(node => node.props['data-skill-when'])), '描述与任务匹配时读取');
-  const english = mount(t, [builtinRouting({ when: '始终 · 每个任务开始前' }), release], { language: 'en' });
-  await english.settle();
-  assert.equal(english.text(english.one(node => node.props['data-skill-when'])), 'Always · before every task');
+test('the trigger hint follows the selected mode and keeps the skill guidance in relevant mode', async t => {
+  const when = '新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算';
+  const englishWhen = require('../electron/locales/en.json')[when];
+  for (const [language, relevant, always, trigger] of [
+    ['zh', '任务符合技能描述时读取。', '每个任务开始前读取。', '触发'],
+    ['en', 'Read this skill when the task matches its description.', 'Read this skill before every task.', 'Trigger'],
+  ]) {
+    const h = mount(t, [builtinRouting({ when }), release], { language, details: { 'user:release': releaseV4 } });
+    const setOptions = window.agentrix.setSkillOptions;
+    window.agentrix.setSkillOptions = (id, options) => {
+      h.state.skills = h.state.skills.map(skill => skill.id === id ? { ...skill, ...options } : skill);
+      return setOptions(id, options);
+    };
+    await h.settle();
+    const hint = () => h.one(node => node.props['data-skill-when']);
+    assert.equal(hint().props.className, 'skills-when');
+    const relevantHint = `${relevant} ${language === 'en' ? englishWhen : when}`;
+    assert.equal(h.text(hint()), relevantHint);
+    h.byLabel(trigger).props.onChange('always'); await h.settle();
+    assert.equal(h.text(hint()), always);
+    h.byLabel(trigger).props.onChange('auto'); await h.settle();
+    assert.equal(h.text(hint()), relevantHint);
+    h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
+    assert.equal(h.text(hint()), relevant);
+  }
 });
 
 test('extensions follow their base in the system group, carry both attributes, and do not inflate group counts', async t => {

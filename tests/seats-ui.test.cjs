@@ -138,7 +138,7 @@ function mount(t, file, name, props, stubs) {
     },
   };
   const component = compile(file, hooks, stubs)[name];
-  const handle = { props, render() { cursor = 0; const tree = component(handle.props); while (effects.length) effects.shift()(); return tree; }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
+  const handle = { props, render(commit) { cursor = 0; const tree = component(handle.props); commit?.(tree); while (effects.length) effects.shift()(); return tree; }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
   t.after(() => { handle.unmount(); globalThis.window = previous.window; globalThis.document = previous.document; });
   return handle;
 }
@@ -314,9 +314,14 @@ test('Escape closes the open menu first and then the dialog; the X closes it too
   assert.equal(h.closed.length, 2);
 });
 
-test('the chart has three columns and uses static depth with pointer-transparent links', () => {
+test('the chart places connector drops at the columns and collapses the palette in the two-column layout', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  const compact = css.slice(css.indexOf('@media (max-width: 1280px)'), css.indexOf('@media (max-width: 700px)'));
   assert.match(css, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(3,/);
+  assert.match(compact, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(2,/);
+  assert.match(compact, /\.seats-palette \{ display: none; \}/);
+  assert.match(compact, /\.seats-palette\.is-open \{[^}]*display: flex/);
+  assert.match(css, /\.seats-chart-bus::after \{[^}]*inset: 8px var\(--bus-inset\) 0/);
   assert.match(css, /\.seats-chart-link, \.seats-chart-bus \{[^}]*pointer-events: none/);
   assert.doesNotMatch(css, /@keyframes|animation:/);
 });
@@ -367,19 +372,33 @@ test('a scope switch never carries the old scope’s saved seats over the new sc
   assert.deepEqual(h.calls, [['project', 'p1', { developer: { model: 'haiku', effort: 'low' }, architect: { model: 'sonnet', effort: 'high' } }]], 'the project keeps its own developer override');
 });
 
-test('Escape on the discard banner means keep editing and moves focus to it; it never discards', t => {
+for (const dismissal of ['Escape', 'Keep editing']) test(`${dismissal} preserves the draft and restores focus inside the dialog`, t => {
   const h = dialogHarness(t, seatsInfo());
-  byAttr(h.render(), 'data-pick', 'researcher').props.onClick(pickButton('researcher'));
-  byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'haiku').props.onClick();
-  byAttr(h.render(), 'aria-label', 'Close').props.onClick();
-  h.render();
-  const tree = h.render();
-  assert.ok(find(tree, node => node.props.role === 'alertdialog'));
-  find(tree, node => node.props.role === 'dialog').props.onKeyDown(keyEvent('Escape'));
-  assert.deepEqual(h.closed, []);
+  const panel = tree => byAttr(tree, 'role', 'dialog');
+  const control = () => ({ focus() { document.activeElement = this; } });
+  const previous = control(), first = control(), keep = control();
+  const attached = new Set([previous, first, keep]);
+  const panelNode = { contains: item => attached.has(item), querySelector: () => first };
+  openMenu(h, 'researcher');
+  byAttr(h.render(), 'data-assign', 'haiku').props.onClick();
+  const before = h.render();
+  panel(before).props.ref.current = panelNode;
+  previous.focus();
+  byAttr(before, 'aria-label', 'Close').props.onClick();
+  // Attach the prompt button before the focus effect runs, as React does on commit.
+  h.render(tree => { byAttr(tree, 'data-keep').props.ref.current = keep; });
+  assert.equal(document.activeElement, keep);
+  const prompt = h.render();
+  if (dismissal === 'Escape') panel(prompt).props.onKeyDown(keyEvent('Escape'));
+  else { attached.delete(previous); byAttr(prompt, 'data-keep').props.onClick(); }
+  document.activeElement = null;
   const after = h.render();
-  assert.equal(find(after, node => node.props.role === 'alertdialog'), undefined, 'the banner is dismissed');
-  assert.match(textOf(after), /Unsaved draft · 1 seats changed/, 'the draft is kept');
+  assert.equal(byAttr(after, 'role', 'alertdialog'), undefined);
+  assert.equal(document.activeElement, dismissal === 'Escape' ? previous : first);
+  assert.match(textOf(after), /Unsaved draft · 1 seats changed/);
+  panel(after).props.onKeyDown(keyEvent('Escape'));
+  assert.ok(byAttr(h.render(), 'role', 'alertdialog'), 'the next Escape still reaches the dialog');
+  assert.deepEqual(h.closed, []);
 });
 
 // ---- catalog-driven dialog (round cat-r1): the menu follows each row, a typed-in id is accepted by the helper's syntax, the lists can be refreshed ----
@@ -591,17 +610,19 @@ test('the moved-defaults note is a neutral banner and the discard question a war
 
 // ---- second acceptance round: no tile overlaps another, small-tile chips shorten and ellipsize, the one-click fix is chosen by rule ----
 
-test('a small tile shows a shorter alias name and ends a long one in an ellipsis; the full text stays in the title, the tray and the menu', t => {
+test('the card, banner and palette use the same short alias label and the menu keeps the full name', t => {
   assert.equal(shortLabel('Opus (follows latest)'), 'Opus (latest)');
   assert.equal(shortLabel('GPT-6.2-Sol'), 'GPT-6.2-Sol');
   const rows = catalog({ opus: { label: 'Opus (follows latest)' } });
-  const h = dialogHarness(t, seatsInfo({ catalog: rows }));
+  const h = dialogHarness(t, seatsInfo({ catalog: rows, defaultsMoved: [{ seat: 'architect', from: 'sonnet', to: 'opus' }] }));
   const tree = h.render();
   const slot = byAttr(tree, 'data-slot', 'architect');
   const gem = find(slot, node => node.props.className?.startsWith('seats-gem'));
   assert.equal(textOf(find(gem, node => node.props.className === 'seats-gem-name')), 'Opus (latest)');
-  assert.match(gem.props.title, /Opus \(follows latest\)/, 'the tooltip has the full name');
-  assert.match(byAttr(tree, 'data-chip', 'opus').props.title, /Opus \(follows latest\)/, 'the panel chip keeps the full name in its title');
+  assert.equal(gem.props.title, 'Opus (latest)');
+  assert.equal(textOf(byAttr(tree, 'data-chip', 'opus')), 'Opus (latest)');
+  assert.match(byAttr(tree, 'data-chip', 'opus').props.title, /Opus \(latest\)/);
+  assert.match(textOf(byAttr(tree, 'data-moved')), /Opus \(latest\)/);
   assert.match(textOf(openMenu(h, 'architect')), /Opus \(follows latest\)/, 'the menu keeps the full name');
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
   assert.match(css, /\.seats-gem-name \{[^}]*text-overflow: ellipsis/);
