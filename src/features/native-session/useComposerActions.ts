@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../../shared/i18n';
-import { openSeats } from '../../shared/routing-command.ts';
+import { openSeats, readRoutingCommand } from '../../shared/routing-command.ts';
 import type { Result } from '../../shared/types';
 import { nativeBridge } from './native-bridge.ts';
 import { optionPatch, optionTold, optionUsage, permissionChoices, type Choice, type ComposerAction } from './native-composer.ts';
@@ -21,6 +21,8 @@ export function useComposerActions({ projectId, terminalId, sessionId, agent, cl
 }) {
   const [menu, setMenu] = useState<Choice[] | null>(null), [told, setTold] = useState<{ text: string } | null>(null), [renewing, setRenewing] = useState(false);
   const [panel, setPanel] = useState<PanelState | null>(null), asked = useRef(0);
+  const routingRequest = useRef(0);
+  useEffect(() => () => { routingRequest.current++; }, [projectId, terminalId, sessionId]);
   // What was set is told for two seconds.
   useEffect(() => {
     if (!told) return;
@@ -64,11 +66,16 @@ export function useComposerActions({ projectId, terminalId, sessionId, agent, cl
 
   // `action` is what `composerAction` found in `words`.
   const run = async (action: ComposerAction, words: string) => {
+    routingRequest.current++;
     setTold(null); onError(null);
     if (action.kind === 'routing') {
       clear(); setMenu(null); closePanel();
-      setTold({ text: t('模型由模型路由决定') });
-      openSeats({ projectId, terminalId });
+      const request = routingRequest.current;
+      const target = { projectId, terminalId };
+      const { info, notice } = await readRoutingCommand(target);
+      if (request !== routingRequest.current) return;
+      setTold({ text: t(notice) });
+      if (info) openSeats({ ...target, info });
       return;
     }
     if (action.kind === 'new') return renew(words);
@@ -93,7 +100,7 @@ export function useComposerActions({ projectId, terminalId, sessionId, agent, cl
     setMenu(null);
     void apply(value, '');
   };
-  const forget = () => { setMenu(null); setTold(null); };
+  const forget = () => { routingRequest.current++; setMenu(null); setTold(null); };
 
   return { menu, told: told?.text ?? null, renewing, panel, closePanel, refresh, run, choose, close: () => setMenu(null), forget };
 }

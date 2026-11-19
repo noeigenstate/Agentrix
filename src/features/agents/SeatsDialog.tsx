@@ -41,7 +41,18 @@ type Menu = { kind: 'model' | 'effort'; slot: SlotId; left: number; top?: number
 type Custom = { text: string; error: string };
 const inside = (node: unknown, target: unknown) => !!node && typeof (node as Node).contains === 'function' && (node as Node).contains(target as Node);
 
-export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { info: SeatsInfo; projectId?: string; terminalId?: string; onClose: () => void }) {
+function migrationLine(line: string) {
+  const parts = /^(.*?)总指挥沿用原领队 (Claude|Codex) 槽 (\S+?)(?:；原 Codex 槽 (\S+) 未保留)?$/.exec(line);
+  if (!parts) return line;
+  const [, prefix, family, model, dropped] = parts;
+  return prefix + (dropped ? t('总指挥沿用原领队 {family} 槽 {model}；原 Codex 槽 {dropped} 未保留', { family, model, dropped })
+    : t('总指挥沿用原领队 {family} 槽 {model}', { family, model }));
+}
+
+export function SeatsDialog({ info: given, projectId, terminalId, migration, onMigration, onDismissMigration, onClose }: {
+  info: SeatsInfo; projectId?: string; terminalId?: string; migration?: string;
+  onMigration: (text: string) => void; onDismissMigration: () => void; onClose: () => void;
+}) {
   const [scope, setScope] = useState<Scope>(() => startScope(given, projectId));
   const [draft, setDraft] = useState<SeatMap | null>(null);
   const [discarding, setDiscarding] = useState(false);
@@ -67,8 +78,6 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     document.addEventListener('mousedown', outside, true);
     return () => document.removeEventListener('mousedown', outside, true);
   }, [nowOpen, paletteOpen]);
-  const [migration, setMigration] = useState(given.migrated);
-  const seenMigration = useRef(given.migrated);
   const [moved, setMoved] = useState(() => given.defaultsMoved ?? []);
   const [saving, setSaving] = useState(false);
   const dialog = useRef<HTMLDivElement>(null), menuBox = useRef<HTMLDivElement>(null), opener = useRef<HTMLElement | null>(null);
@@ -107,7 +116,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   };
   // 刷新: main reads the model lists again and answers with the seats; a failed read leaves the dialog as it was. Opening the dialog reads once too, as
   // reason 'dialog' (main probes only a list older than its open throttle) and quietly; the 刷新 button is 'manual' (always probes). A click during the opening read
-  // runs right after it, and an answer that arrives after the dialog closed is dropped. The note about moved defaults comes with an answer.
+  // runs right after it. Migration notices are kept by the host even if the dialog closes while the read is in flight.
   const refresh = async (opening = false) => {
     if (reading.current) { if (!opening) queued.current = true; return; }
     if (!window.agentrix?.skillSeatsRefresh) return;
@@ -115,10 +124,10 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
     setRefreshing(reading.current);
     try {
       const next = await window.agentrix.skillSeatsRefresh(projectId ?? null, terminalId ?? null, opening ? 'dialog' : 'manual');
+      if (next?.migrated) onMigration(next.migrated);
       if (!alive.current) return;
       if (next) {
         setRefreshed(next);
-        if (next.migrated && next.migrated !== seenMigration.current) { seenMigration.current = next.migrated; setMigration(next.migrated); }
         if (next.defaultsMoved?.length) setMoved(next.defaultsMoved);
         if (!opening) setNotice({ kind: 'ok', text: t('模型列表已刷新') });
       }
@@ -294,7 +303,7 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
   const chart = <div className="seats-chart">
     <div className="seats-owner" data-owner>
       <span className="seats-role-icon"><User size={18} aria-hidden="true" /></span>
-      <div><h3>{t('Human / Owner · 车主')}</h3><p>{t('目标、预算、重大决策、最终授权')}</p></div>
+      <div><h3>Human / Owner</h3><p>{t('目标、预算、重大决策、最终授权')}</p></div>
     </div>
     {lead && <><div className="seats-chart-link" aria-hidden="true" />{card(lead, true)}<div className="seats-chart-bus" aria-hidden="true" /></>}
     <div className="seats-team-grid">{team.map(role => card(role))}</div>
@@ -362,10 +371,8 @@ export function SeatsDialog({ info: given, projectId, terminalId, onClose }: { i
           {moved.length > 0 && <div className="seats-banner" role="status" data-moved><CheckCircle size={14} aria-hidden="true" />
             <span>{t('默认已更新为 {changes}', { changes: moved.map(item => `${seatName(item.seat)}：${label(item.from)} → ${label(item.to)}`).join('；') })}</span></div>}
           {migration && <div className="seats-banner" role="status" data-migrated>
-            <div>{migration.split('\n').map(line => {
-              const start = line.indexOf('总指挥沿用原领队');
-              return <p key={line}>{start < 0 ? line : line.slice(0, start) + t(line.slice(start))}</p>;
-            })}</div><button type="button" className="seats-btn" onClick={() => setMigration(undefined)}>{t('知道了')}</button>
+            <div>{migration.split('\n').map(line => <p key={line}>{migrationLine(line)}</p>)}</div>
+            <button type="button" className="seats-btn" onClick={onDismissMigration}>{t('知道了')}</button>
           </div>}
           {block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" />
             <span><b>{t('审查座位被阻止。')}</b>{blockMessage()}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join('、') })}`}</span>

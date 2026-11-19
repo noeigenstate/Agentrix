@@ -1314,7 +1314,8 @@ test('dictation inserts at the end and focuses the box when it had no focus', as
 });
 
 test('reading routing commands show a notice and never enter the PTY or outbox', async t => {
-  const h = workingComposerHarness(t, 'claude'), requests = [];
+  const h = workingComposerHarness(t, 'claude'), requests = [], info = { roles: [] };
+  window.agentrix.skillSeats = async () => info;
   window.dispatchEvent = event => requests.push([event.type, event.detail]);
   for (const command of ['/model opus', '/effort', '/fast off']) {
     h.edit(command); h.press('Enter'); await h.tick(0);
@@ -1322,7 +1323,12 @@ test('reading routing commands show a notice and never enter the PTY or outbox',
     assert.deepEqual([h.pasted, h.written, h.popup()], [[], [], undefined]);
     assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['模型由模型路由决定'])));
   }
-  assert.deepEqual(requests, Array(3).fill(['agentrix:open-seats', { projectId: h.props.projectId, terminalId: h.props.terminal.id }]));
+  assert.deepEqual(requests, Array(3).fill(['agentrix:open-seats', { projectId: h.props.projectId, terminalId: h.props.terminal.id, info }]));
+  window.agentrix.skillSeats = async () => null;
+  h.edit('/model'); h.press('Enter'); await h.tick(0);
+  assert.equal(h.node.value, '');
+  assert.deepEqual([h.pasted, h.written, h.popup(), requests.length], [[], [], undefined, 3]);
+  assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['模型路由已关闭，使用 CLI 自身的默认设置'])));
 });
 
 test('welcome command rows call the existing completion callback with the cached command', () => {

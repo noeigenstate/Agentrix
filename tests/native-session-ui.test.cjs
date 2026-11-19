@@ -2743,6 +2743,8 @@ test('native routing commands request the seats dialog without sending text or c
       commands: ok(['/model', '/effort', '/fast'].map(name => ({ name, source: 'builtin', view: 'reading' }))),
     };
     const view = sessionView(idle, bridge, { provider });
+    const info = { roles: [] };
+    window.agentrix.skillSeats = async () => info;
     window.addEventListener('agentrix:open-seats', event => requests.push(event.detail));
     try {
       for (const command of ['/model opus', '/effort', '/fast on']) {
@@ -2751,7 +2753,11 @@ test('native routing commands request the seats dialog without sending text or c
         assert.deepEqual(view.toasts(), ['模型由模型路由决定']);
         assert.equal(listbox(view), undefined);
       }
-      assert.deepEqual(requests, Array(3).fill({ projectId: 'p1', terminalId: 't1' }));
+      assert.deepEqual(requests, Array(3).fill({ projectId: 'p1', terminalId: 't1', info }));
+      window.agentrix.skillSeats = async () => null;
+      await typeIn(view, '/model'); keyIn(view, 'Enter'); await settle();
+      assert.deepEqual(view.toasts(), ['模型路由已关闭，使用 CLI 自身的默认设置']);
+      assert.equal(requests.length, 3);
       assert.deepEqual(runtime, []);
     } finally { view.done(); }
   }
@@ -2936,6 +2942,7 @@ test('what a setting was changed to is a note of two seconds in the place of the
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const bridge = { runOptions: async (...args) => ({ ok: true, value: { model: args[2].model ?? 'sonnet', effort: args[2].effort ?? 'high', fast: false } }), send: async () => ({ ok: true, value: { status: 'consumed', local: contextLocal } }) };
   const view = sessionView(idle, bridge);
+  window.agentrix.skillSeats = async () => ({ roles: [] });
   try {
     await typeIn(view, '/model opus'); keyIn(view, 'Enter'); await settle(); view.tree();
     assert.deepEqual([view.toasts(), statusLines(view)], [['模型由模型路由决定'], []], 'told by the note, in no <p> of the tail');

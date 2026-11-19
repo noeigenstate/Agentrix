@@ -796,7 +796,9 @@ test('the blocked banner names what the one-click fix prefers, one per model lin
 test('org chart uses fixture order and gives each seat its own model, effort and fast controls', t => {
   const h = dialogHarness(t, seatsInfo({ catalog: team.catalog }));
   const tree = h.render();
-  assert.ok(byAttr(tree, 'data-owner'));
+  const owner = byAttr(tree, 'data-owner');
+  assert.equal(textOf(find(owner, node => node.type === 'h3')), 'Human / Owner');
+  assert.equal(textOf(find(owner, node => node.type === 'p')), 'Goals, budget, major decisions, and final authorization');
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
   for (const id of SEATS) {
     const card = byAttr(tree, 'data-seat', id);
@@ -806,13 +808,40 @@ test('org chart uses fixture order and gives each seat its own model, effort and
   }
 });
 
-test('a repeated migration notice is not shown after acknowledgement in the same dialog', async t => {
-  const migration = 'The original Claude lead became the orchestrator';
-  const h = dialogHarness(t, seatsInfo({ migrated: migration }), { refreshed: seatsInfo({ migrated: migration }) });
-  assert.match(textOf(byAttr(h.render(), 'data-migrated')), /The original Claude lead/);
-  const dismiss = find(byAttr(h.render(), 'data-migrated'), node => node.type === 'button');
-  dismiss.props.onClick(); await settle();
-  assert.equal(byAttr(h.render(), 'data-migrated'), undefined);
+test('the host keeps a migration that arrives after closing and the next dialog translates it until acknowledged', async t => {
+  const migration = '总指挥沿用原领队 Claude 槽 sonnet·high·fast；原 Codex 槽 gpt-6.2-sol 未保留\nSample: 总指挥沿用原领队 Codex 槽 gpt-6.2-sol·high';
+  const info = seatsInfo(), window = new EventTarget();
+  let finishRefresh;
+  window.agentrix = { skillSeats: async () => info, skillSeatsRefresh: () => new Promise(resolve => { finishRefresh = resolve; }) };
+  const HTMLElement = globalThis.HTMLElement;
+  globalThis.HTMLElement = class {};
+  t.after(() => { globalThis.HTMLElement = HTMLElement; });
+  globalThis.window = window; globalThis.document = { activeElement: null };
+  const host = mount(t, 'SeatsHost.tsx', 'SeatsHost', {});
+  const props = () => find(host.render(), node => node.props.info)?.props;
+  const open = async () => {
+    window.dispatchEvent(new CustomEvent('agentrix:open-seats', { detail: { projectId: 'p1', terminalId: 't1', info } }));
+    await settle();
+    return mount(t, 'SeatsDialog.tsx', 'SeatsDialog', props());
+  };
+  host.render();
+  const first = await open();
+  assert.equal(byAttr(first.render(), 'data-migrated'), undefined);
+  first.props.onClose(); first.unmount();
+  const finishFirst = finishRefresh;
+  const next = await open();
+  assert.equal(byAttr(next.render(), 'data-migrated'), undefined);
+  finishFirst(seatsInfo({ migrated: migration })); await settle();
+  next.props = props();
+  const notice = byAttr(next.render(), 'data-migrated');
+  assert.deepEqual(findAll(notice, node => node.type === 'p').map(textOf), [
+    'The Orchestrator kept the previous Claude seat (sonnet·high·fast). The previous Codex seat (gpt-6.2-sol) was dropped.',
+    'Sample: The Orchestrator kept the previous Codex seat (gpt-6.2-sol·high).',
+  ]);
+  find(notice, node => node.type === 'button').props.onClick();
+  finishRefresh(seatsInfo({ migrated: migration })); await settle();
+  next.props = props();
+  assert.equal(byAttr(next.render(), 'data-migrated'), undefined);
 });
 
 test('the app seats host opens only when main supplies routing info', async t => {

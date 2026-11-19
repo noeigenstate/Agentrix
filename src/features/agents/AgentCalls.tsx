@@ -8,7 +8,7 @@ import { callModelName } from '../../shared/call-model-name';
 import { modelName } from '../../shared/model-name';
 import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
-import { roleGroups, routeVerdict } from './skill-seats.ts';
+import { callSeatRole, roleGroups, routeVerdict } from './skill-seats.ts';
 import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, openSplit, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
 import './activity-pane.css';
 import './agent-calls.css';
@@ -170,13 +170,14 @@ function CallArtifact({ row, kind }: { row: CallRow; kind: keyof typeof FILE_LAB
 const VERDICTS = { mismatch: '核对不符', match: '核对一致', unknown: '核对未确认' } as const;
 const SPECIALTIES: Record<string, string> = { frontend: 'Frontend', backend: 'Backend', desktop: 'Desktop', database: 'Database', ai: 'AI' };
 
-function TeamCallRow({ row, role, info, now, labels }: { row: CallRow; role?: SeatRole; info?: SeatsInfo | null; now: number; labels: boolean }) {
+function TeamCallRow({ row, roles, info, now, labels }: { row: CallRow; roles: readonly SeatRole[]; info?: SeatsInfo | null; now: number; labels: boolean }) {
   const { item, call, terminalId } = row, [expanded, setExpanded] = useState(false);
   const status = item.failure ? failureWord(item.failure) : t(item.awaiting === 'owner' && item.state !== 'done' ? AWAITING_WORD : CALL_STATES[item.state].word);
   const age = item.startedAt == null ? '—' : elapsedClock(Math.max(0, (item.endedAt ?? now) - item.startedAt));
   const model = callModelName(call), verdict = routeVerdict(row, info);
   const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
-  const roleLabel = [role ? routingRoleName(role.name, t) : t(item.role), item.specialty && (SPECIALTIES[item.specialty] ?? item.specialty)].filter(Boolean).join(' · ');
+  const { role, inferred } = callSeatRole(roles, item);
+  const roleLabel = [routingRoleName(role.name, t), item.specialty && (SPECIALTIES[item.specialty] ?? item.specialty), inferred && t('推断')].filter(Boolean).join(' · ');
   return <li className="agent-team-call">
     <button type="button" className="agent-team-row" aria-expanded={expanded} onClick={() => setExpanded(open => !open)}>
       <span className="agent-team-subject"><strong>{item.title || model}</strong><time>{age}</time></span>
@@ -215,7 +216,7 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
     const roles = seats ? seats.seats.flatMap(id => seats.roles.filter(role => role.id === id)) : [];
     const team = roles.length > 0;
     const renderRow = (row: CallRow) => <TeamCallRow key={JSON.stringify([row.terminalId, row.item.id])} row={row}
-      role={roles.find(role => role.id === (row.item.seat ?? 'developer'))} info={info?.[row.terminalId]} now={now} labels={label} />;
+      roles={roles} info={info?.[row.terminalId]} now={now} labels={label} />;
     return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     {nothing && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
     {!empty && <ul className="activity-call-groups">
