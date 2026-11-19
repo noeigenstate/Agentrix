@@ -15,6 +15,7 @@ import { CurrentOperations, OperationRows, editableOperation, operationLabel, op
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
 import { copyRole, roleName, RoleEditor } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
+import type { DraftRole } from './skill-seats';
 import './seats-dialog.css';
 
 const ROLE_ICONS = { orchestrator: GitBranch, product: ClipboardText, architect: Stack, designer: PencilSimple, developer: Code,
@@ -475,13 +476,30 @@ function useRoleActions(source: ReturnType<typeof useCatalog>, draft: ReturnType
   return { editor, taken, close, edit, create, change, save, remove };
 }
 
+function useReviewCooldown(visible: boolean, digest: string | null) {
+  const previous = useRef({ visible, digest });
+  const [cooling, setCooling] = useState(false);
+  const changedNow = visible && previous.current.visible && previous.current.digest !== digest;
+  useEffect(() => {
+    previous.current = { visible, digest };
+    setCooling(changedNow);
+    if (!changedNow) return;
+    const timer = setTimeout(() => setCooling(false), 1000);
+    return () => clearTimeout(timer);
+  }, [visible, digest]);
+  return visible && (changedNow || cooling);
+}
+
 function useRoutingReview(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof useDraft>, projectId?: string) {
   const [opened, setOpened] = useState(false), [raw, setRaw] = useState(false), [busy, setBusy] = useState(false);
   const routing = source.info.routing, digest = routing.digest;
-  useEffect(() => { setRaw(false); setOpened(false); }, [digest, draft.scope]);
-  const visible = draft.scope === 'project' && !routing.remote && (opened || routing.state === 'pending' || routing.state === 'invalid');
+  useEffect(() => { setRaw(false); }, [digest, draft.scope]);
+  useEffect(() => { setOpened(false); }, [draft.scope]);
+  const reviewable = routing.state === 'pending' || routing.state === 'invalid' || opened && routing.state === 'rejected';
+  const visible = draft.scope === 'project' && !routing.remote && reviewable;
+  const refreshed = useReviewCooldown(visible, digest);
   const act = async (action: RoutingAction) => {
-    if (!projectId || busy) return;
+    if (!projectId || busy || refreshed) return;
     setBusy(true);
     try {
       const result = await resolveRouting(window.agentrix, projectId, routing, action);
@@ -496,7 +514,7 @@ function useRoutingReview(source: ReturnType<typeof useCatalog>, draft: ReturnTy
     }
   };
   const close = () => { setOpened(false); setRaw(false); };
-  return { visible, open: () => setOpened(true), close, raw, toggle: () => setRaw(!raw), busy, act };
+  return { visible, open: () => setOpened(true), close, raw, toggle: () => setRaw(!raw), busy, refreshed, act };
 }
 
 function useDialogState(props: SeatsDialogProps) {
@@ -592,14 +610,14 @@ function seatControls(state: DialogState) {
   return { slotState, stateMark, modelButton, effortButton, fastSwitch };
 }
 
-function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; library?: boolean }) {
+function RoleActions({ state, role, library }: DialogPart & { role: DraftRole; library?: boolean }) {
   const { saving, enabled, roles } = state.draft, { edit, create, change, remove } = state.roles;
   const lastReviewer = role.enabled && role.kind === 'reviewer' && state.draft.reviewRoles.reviewers.length === 1;
   const lock = role.locked.includes('enabled') || lastReviewer;
   const full = enabled.length >= MAX_ENABLED_ROLES, copiesFull = roles.filter(role => role.source === 'custom').length >= MAX_CUSTOM_ROLES;
   const toggleReason = lock ? t(lastReviewer ? '至少保留一个审查角色。' : '总指挥必须保留。') : undefined;
   return <div className="seats-role-actions">
-    {!library && <label title={role.locked.includes('fresh') ? t('审查角色始终使用新实例。') : undefined}>
+    {!library && role.kind !== 'lead' && <label title={role.locked.includes('fresh') ? t('审查角色始终使用新实例。') : undefined}>
       <input type="checkbox" aria-label={t('新实例')} checked={role.fresh} disabled={saving || role.locked.includes('fresh')}
         onChange={event => change(role, { fresh: event.target.checked })} />{t('新实例')}</label>}
     <button type="button" className="seats-btn is-small" data-edit-role={role.id} disabled={saving} onClick={() => edit(role)}>{t('角色设置')}</button>
@@ -656,7 +674,7 @@ function TeamChart({ state }: DialogPart) {
   const changed = changedSeats(seats, working, baseline);
   const specialties = state.draft.roles.filter(role => role.source === 'library' && role.kind === 'author');
   const stateOuter = state;
-  const card = (role: TeamRole, isLead = false) => {
+  const card = (role: DraftRole, isLead = false) => {
     const id = role.id, seat = getSlot(working, id), state = slotState(id);
     const Icon = ROLE_ICONS[id as keyof typeof ROLE_ICONS] ?? User;
     return <article key={id} className={['seats-team-card', isLead && 'is-lead', over === id && 'is-over', id === block?.reviewer && 'is-blocked'].filter(Boolean).join(' ')}
@@ -665,6 +683,7 @@ function TeamChart({ state }: DialogPart) {
         <div className="seats-team-name"><span className="seats-role-icon"><Icon size={18} aria-hidden="true" /></span>
           <h3>{roleName(role)}</h3>{currentLanguage() === 'zh' && ROLE_NAMES[id] && <span lang="en">{ROLE_NAMES[id]}</span>}
           {role.source === 'custom' && <span className="seats-tag">{t('自定义')}</span>}
+          {role.fresh !== role.defaultFresh && <span className="seats-tag" data-fresh-override>{t(role.fresh ? '改为新实例' : '改为复用实例')}</span>}
           {changed.includes(id) && <span className="seats-chg">{t('已改')}</span>}</div>
         <p title={t(role.detail)}>{role.source === 'custom' ? role.duty : t(role.duty)}{role.detail && role.detail !== role.duty && <> · {t(role.detail)}</>}</p>
         {role.outputs && <p className="seats-team-output">{t('产出：{outputs}', { outputs: role.source === 'custom' ? role.outputs : t(role.outputs) })}</p>}
@@ -922,7 +941,7 @@ export function SeatsDialog(props: SeatsDialogProps) {
         <DialogHeader state={state} />
         <div className="seats-body">
           <DialogStrip state={state} />
-          {review.visible ? <RoutingReview source={state.source.info.routing} busy={review.busy} act={review.act}
+          {review.visible ? <RoutingReview source={state.source.info.routing} busy={review.busy} refreshed={review.refreshed} act={review.act}
             close={state.source.info.routing.state === 'rejected' ? review.close : undefined} rawOpen={review.raw} toggleRaw={review.toggle} /> : <>
           <RoutingTabs tab={tab} choose={switchTab} operations={!!operations} />
           <div className="seats-work">

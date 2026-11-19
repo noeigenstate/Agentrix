@@ -210,9 +210,9 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
     return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     {nothing && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
     {!empty && <ul className="activity-call-groups">
-      {team ? roleGroups(roles, groups.flatMap(group => group.rows), selectedRoles).map(({ role, rows, offTeam }) =>
+      {team ? roleGroups(roles, groups.flatMap(group => group.rows), selectedRoles).map(({ role, rows, offTeam, recordedName }) =>
         <li key={JSON.stringify([role.id, offTeam])} className="agent-team-group" data-role={role.id} data-off-team={offTeam || undefined}>
-          <h4>{role.id.startsWith('x-') ? role.name : routingRoleName(role.name, t)}{offTeam && <> · {t('未在团队中')}</>}</h4>
+          <h4>{role.source === 'custom' || recordedName && !role.source ? role.name : routingRoleName(role.name, t)}{offTeam && <> · {t('未在团队中')}</>}</h4>
           <ul>{rows.map(row => renderRow(row, role.name))}</ul>
         </li>) : groups.map(({ call, rate, rows }) => {
         const name = callModelName({ model: call.model }); // the head does not repeat 「未确认」: the starting row says it

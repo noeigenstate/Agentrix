@@ -310,6 +310,10 @@ button.seats-op-chip:hover { background: var(--bg-hover); }
 .seats-routing-review table { border-collapse: collapse; background: var(--bg-card); }
 .seats-routing-review :is(td, th, caption) { padding: 8px; text-align: start; border-bottom: 1px solid var(--divider); }
 .seats-routing-review pre { white-space: pre-wrap; margin: 0; padding: 12px; background: var(--bg-card); }
+.seats-routing-review table { width: 100%; table-layout: fixed; }
+.seats-routing-review :is(td, th) > span { display: block; }
+.seats-routing-review :is(td > span, th > span, pre, .seats-review-text) { contain: paint; overflow: hidden; overflow-wrap: anywhere; }
+.seats-routing-review li { contain: paint; overflow: hidden; }
 @media (max-width: 760px) {
   .seats-routing-review { grid-template-columns: minmax(0, 1fr); }
   .seats-review-control { grid-row: 1; }

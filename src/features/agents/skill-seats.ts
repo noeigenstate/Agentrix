@@ -88,22 +88,21 @@ export const configFor = (info: SeatsInfo, scope: Scope): RoutingConfig =>
   scope === 'template' ? info.template : info.config ?? info.template;
 export const startScope = (_info: SeatsInfo, projectId?: string): Scope => projectId ? 'project' : 'template';
 
-export function draftRoles(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
-  const shipped = info.roles.filter(role => role.source !== 'custom');
-  const orderOf = [...Object.keys(info.defaults), 'frontend', 'backend', 'desktop', 'database', 'ai', 'docs', 'performance', 'a11y'];
-  const position = (role: TeamRole) => orderOf.includes(role.id) ? orderOf.indexOf(role.id) : orderOf.length;
-  shipped.sort((a, b) => position(a) - position(b));
-  const builtin = shipped.filter(role => role.source === 'builtin');
-  const library = shipped.filter(role => role.source === 'library');
-  const order = builtin.flatMap(role => role.id === 'developer' ? [role, ...library] : [role]);
-  return order.flatMap(role => {
-    const seedFresh = role.kind === 'reviewer' || ['qa', 'a11y'].includes(role.id);
+// The optional fields let the frontend compile against the integration head before A1's payload is merged.
+export type DraftRole = TeamRole & { defaultEnabled?: boolean; defaultFresh?: boolean; inherits?: SeatId; defaultSeat?: Seat };
+
+export function draftRoles(info: SeatsInfo, config: RoutingConfig): DraftRole[] {
+  const shipped: DraftRole[] = info.roles.filter(role => role.source !== 'custom');
+  const overrides = Object.keys(config.roles).sort().map(id => [id, config.roles[id]] as const);
+  return shipped.flatMap(role => {
     const values = config.roles[role.id];
-    const base = { ...role, enabled: role.kind === 'lead' || (values?.enabled ?? role.source === 'builtin'),
-      fresh: role.kind === 'reviewer' || (values?.fresh ?? seedFresh) };
-    const copies = Object.entries(config.roles).filter(([, value]) => value.from === role.id).map(([id, value]): TeamRole => ({
+    const defaultEnabled = role.defaultEnabled ?? role.enabled, defaultFresh = role.defaultFresh ?? role.fresh;
+    const base = { ...role, defaultEnabled, defaultFresh, enabled: role.locked.includes('enabled') ? defaultEnabled : values?.enabled ?? defaultEnabled,
+      fresh: role.locked.includes('fresh') ? defaultFresh : values?.fresh ?? defaultFresh };
+    const copies = overrides.filter(([, value]) => value.from === role.id).map(([id, value]): DraftRole => ({
       ...base, id, source: 'custom', from: role.id, name: value.name ?? '', duty: value.duty ?? '', detail: '',
-      outputs: value.outputs ?? '', enabled: value.enabled ?? true, fresh: role.kind === 'reviewer' || (value.fresh ?? base.fresh),
+      outputs: value.outputs ?? '', defaultEnabled: true, defaultFresh: base.fresh, inherits: role.id, defaultSeat: undefined,
+      enabled: value.enabled ?? true, fresh: role.locked.includes('fresh') ? base.fresh : value.fresh ?? base.fresh,
       locked: roleLocks(role.kind, 'custom'),
     }));
     return [base, ...copies];
@@ -113,14 +112,18 @@ export function draftRoles(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
 const seatOf = (value?: RoleConfig): Seat | undefined =>
   value?.model && value.effort ? { model: value.model, effort: value.effort, ...(value.fast ? { fast: true } : {}) } : undefined;
 
-export function resolveDraftSeats(defaults: SeatMap, roles: TeamRole[], config: RoutingConfig): SeatMap {
+function seedSeat(role: DraftRole | undefined, defaults: SeatMap, resolve: (id: SeatId) => Seat | undefined) {
+  if (!role) return;
+  const parent = role.inherits ?? role.from;
+  return parent ? resolve(parent) : role.defaultSeat ?? defaults[role.id];
+}
+
+export function resolveDraftSeats(defaults: SeatMap, roles: DraftRole[], config: RoutingConfig): SeatMap {
   const byId = new Map(roles.map(role => [role.id, role]));
   const map: SeatMap = {};
   const resolve = (id: string): Seat | undefined => {
     if (Object.hasOwn(map, id)) return map[id];
-    const role = byId.get(id);
-    const inherits = role?.from ?? (role?.source === 'library' && role.kind === 'author' ? 'developer' : null);
-    const seat = seatOf(config.roles[id]) ?? (inherits ? resolve(inherits) : (role?.source === 'library' ? { model: 'sonnet', effort: 'high' } : defaults[id]));
+    const seat = seatOf(config.roles[id]) ?? seedSeat(byId.get(id), defaults, resolve);
     if (seat) map[id] = seat;
     return seat;
   };
@@ -144,13 +147,9 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
     const entry = config.roles[role.id];
     if (!entry) return [];
     const { model, effort, fast, ...rest } = entry;
-    const inheritedFrom = role.from ?? (role.source === 'library' && role.kind === 'author' ? 'developer' : null);
-    const inherited = inheritedFrom ? resolved[inheritedFrom] : role.source === 'library' ?
-      { model: 'sonnet', effort: 'high' } : info.defaults[role.id];
-    const seedEnabled = role.source !== 'library';
-    const seedFresh = role.from ? roles.find(base => base.id === role.from)?.fresh : ['qa', 'a11y'].includes(role.id);
-    if (rest.enabled === seedEnabled || role.kind === 'lead') delete rest.enabled;
-    if (rest.fresh === seedFresh || role.kind === 'reviewer') delete rest.fresh;
+    const inherited = seedSeat(role, info.defaults, id => resolved[id]);
+    if (rest.enabled === role.defaultEnabled || role.locked.includes('enabled')) delete rest.enabled;
+    if (rest.fresh === role.defaultFresh || role.locked.includes('fresh')) delete rest.fresh;
     const seat = seatOf(entry);
     const value = { ...rest, ...(seat && !sameSeat(seat, inherited) ? seat : {}) };
     return Object.keys(value).length ? [[role.id, value] as const] : [];
@@ -343,28 +342,30 @@ export function paletteGroups(catalog: SeatModel[], query = ''): PaletteGroup[] 
   return q ? groups.filter(group => group.lines.length) : groups;
 }
 
-const DEVELOPER_ROLE: SeatRole = { id: 'developer', name: 'Developer', duty: '', detail: '', outputs: '' };
+type CallRole = SeatRole & { source?: TeamRole['source'] };
+const DEVELOPER_ROLE: CallRole = { id: 'developer', name: 'Developer', duty: '', detail: '', outputs: '' };
 
-export function callSeatRole(roles: readonly SeatRole[], item: CallRow['item']) {
+export function callSeatRole(roles: readonly CallRole[], item: CallRow['item']) {
   const knownRole = roles.find(role => role.id === item.seat);
   const fallback = roles.find(role => role.id === DEVELOPER_ROLE.id) ?? DEVELOPER_ROLE;
   const named = item.seat && (item.seatName || item.offTeam);
-  const role = named ? { ...(knownRole ?? fallback), id: item.seat!, name: item.seatName ?? knownRole?.name ?? item.seat! } : knownRole ?? fallback;
+  const role = named ? { ...(knownRole ?? DEVELOPER_ROLE), id: item.seat!, name: item.seatName ?? knownRole?.name ?? item.seat! } : knownRole ?? fallback;
   return { role, inferred: item.seatSource !== 'declared' || !knownRole && !item.seatName && !item.offTeam };
 }
 
-export function roleGroups(roles: readonly SeatRole[], rows: CallRow[], selectedRoles = roles) {
-  const groups = new Map<string, { role: SeatRole; rows: CallRow[]; offTeam: boolean; newest: number }>();
+export function roleGroups(roles: readonly CallRole[], rows: CallRow[], selectedRoles = roles) {
+  const groups = new Map<string, { role: CallRole; rows: CallRow[]; offTeam: boolean; newest: number; recordedName: boolean }>();
   for (const row of rows) {
     const { role } = callSeatRole(roles, row.item);
     const offTeam = !!row.item.offTeam, key = JSON.stringify([role.id, offTeam]);
     const selected = selectedRoles.find(candidate => candidate.id === role.id);
     const name = selected?.name ?? role.name, started = row.item.startedAt ?? -1;
+    const recordedName = !selected && !!row.item.seatName;
     const group = groups.get(key);
-    if (!group) groups.set(key, { role: { ...role, name }, rows: [row], offTeam, newest: started });
+    if (!group) groups.set(key, { role: { ...(selected ?? role), name }, rows: [row], offTeam, newest: started, recordedName });
     else {
       group.rows.push(row);
-      if (!selected && started > group.newest) { group.role = role; group.newest = started; }
+      if (!selected && started > group.newest) { group.role = role; group.newest = started; group.recordedName = recordedName; }
     }
   }
   const order = new Map(selectedRoles.map((role, index) => [role.id, index]));

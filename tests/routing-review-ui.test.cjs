@@ -48,6 +48,7 @@ test('routing review shows every change, flag and custom text as plain text', ()
     assert.ok(html.includes(`data-routing-flag="${code}"`));
     assert.ok(html.includes('Reported ' + code));
   }
+  assert.match(html, /验证减弱/);
   assert.match(html, /roles\.unknown.*roles\.frontend\.seat/);
   assert.match(html, /&lt;script&gt;never execute&lt;\/script&gt;/);
   assert.match(html, /&lt;b&gt;Plain output&lt;\/b&gt;/);
@@ -57,6 +58,14 @@ test('routing review shows every change, flag and custom text as plain text', ()
   assert.match(changed, /文件在 Agentrix 之外被修改/);
   assert.match(changed, /当前使用：上次接受的配置/);
   assert.doesNotMatch(changed, /<pre/);
+});
+
+test('raw routing text shows control and bidi characters as visible escapes', () => {
+  const raw = '{\n\t"name": "left\u202Eright\u0000\u0085\u2069"\n}';
+  const html = render({ ...foreign, raw }, { rawOpen: true });
+  const pre = /<pre[^>]*>(.*?)<\/pre>/s.exec(html)[1];
+  assert.match(pre, /\\u000a\\u0009.*left\\u202eright\\u0000\\u0085\\u2069/);
+  assert.doesNotMatch(pre, /[\p{Cc}\p{Cf}]/u);
 });
 
 test('invalid and rejected routing show only main’s allowed actions and readable raw text', () => {

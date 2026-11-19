@@ -14,6 +14,7 @@ import { _electron as electron } from 'playwright-core';
 import { waitFor, timeoutScale } from './wait.mjs';
 import { withGuiLock } from './gui-lock.mjs';
 import { chooseFromAppMenu } from './app-menu-helper.mjs';
+import { roleKind, roleLocks } from '../electron/features/skills/role-rules.mjs';
 
 const require = createRequire(import.meta.url), root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { isolatedEnvironment } = require('./native-approval-probe.cjs');
@@ -455,8 +456,16 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
   const claudeStatus = { command: 'status', context: claudeContext.context, errors: [], account: { kind: 'api' }, session: { model: 'claude-opus-5-5', effort: 'high', cwd: 'C:\\work', sessionId: 'abc-123', version: '2.1.318', permission: 'default', mcp: [{ name: 'playwright', status: 'connected' }] } };
 
   const team = JSON.parse(await fs.readFile(new URL('../tests/fixtures/team-seats.json', import.meta.url), 'utf8'));
-  const routing = { ...team, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors: ['developer'], fresh: ['reviewer', 'qa'],
-    leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer }, global: {}, project: null, current: null,
+  const authors = ['developer'], fresh = ['reviewer', 'qa'];
+  const roles = team.roles.map(role => {
+    const kind = roleKind(role.id, authors), defaultFresh = fresh.includes(role.id);
+    return { ...role, kind, source: 'builtin', enabled: true, fresh: defaultFresh, locked: roleLocks(kind, 'builtin'),
+      defaultEnabled: true, defaultFresh, defaultSeat: team.defaults[role.id] };
+  });
+  const routing = { ...team, roles, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors, fresh,
+    leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer },
+    template: { roles: {}, operations: {} }, config: null, current: null, currentRoles: null,
+    routing: { layer: 'template', state: 'absent', remote: false, path: null, digest: null, actions: [] },
     effective: team.defaults, installed: { claude: true, codex: true }, issues: [], catalogAt: { claude: null, codex: null } };
   // Main side: canned answers; mode 'hold' keeps the next answer back until released so the loading state can be seen.
   await app.evaluate(({ ipcMain }, seats) => {
@@ -687,11 +696,7 @@ async function recheckApp(output, stages) {
       event(index, 'turn.completed', { status: 'completed', error: null }), event(index, 'session.state', { state: 'idle', reason: null })]);
     for (const view of views) await view.waitFor({ timeout: 15000 });
 
-    const team = JSON.parse(await fs.readFile(new URL('../tests/fixtures/team-seats.json', import.meta.url), 'utf8'));
-  const routing = { ...team, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors: ['developer'], fresh: ['reviewer', 'qa'],
-    leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer }, global: {}, project: null, current: null,
-    effective: team.defaults, installed: { claude: true, codex: true }, issues: [], catalogAt: { claude: null, codex: null } };
-  // Main side: canned answers; the interrupts that reach main are counted per terminal.
+    // Main side: canned answers; the interrupts that reach main are counted per terminal.
     await app.evaluate(({ ipcMain }) => {
       globalThis.__re = { answers: {}, interrupts: [] };
       for (const channel of ['native:send', 'native:interrupt']) ipcMain.removeHandler(channel);
