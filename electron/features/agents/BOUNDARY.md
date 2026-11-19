@@ -1,6 +1,8 @@
 # Boundary: Activity pane
 
 Reads agent records and account usage for the Activity view, and presents the agent calls and background tasks in the Agent tab and the narrow header popover.
+An observed Agent or Task input from PostToolUse may supply the model alias and effort for the same call.
+The child's own reply or metadata takes precedence over that input. See `tests/seat-auto.test.cjs`.
 
 ## Owns
 - `src/features/agents/AgentCalls.tsx` (the called models' list and its rows, with the state words and the rate column)
@@ -20,6 +22,7 @@ Reads agent records and account usage for the Activity view, and presents the ag
 - `electron/reading-history*.cjs`
 
 ## Interface
+- `agentDescription` (`electron/features/agents/call-seat.cjs`) — parse a declared seat and specialty from the start of a tool description
 - `CallsCard` (`src/features/agents/AgentCalls.tsx`) — the called models of every terminal of the project (a row marked with its terminal), a 「后台任务」 group and a folded 「最近完成 N 个」, as rows of two lines whose buttons open a sub-agent view or a background task's; the left bar's Agent tab and the narrow window's popover list it; the file also exports CALL_STATES, failureWord, and rateValue, which the sub-agent view reuses The app reaches it through `AgentSidebar.tsx` (a render prop beside it, owned by no boundary) so the files module need not know the agents module.
 - `useSplits` (`src/features/agents/subagent-splits.ts`) — the sub-agent views the owner opened beside a terminal (transient, one per terminal: opening another replaces it); the file also exports splitsOf and closeSplit
 - `actionText` (`src/features/agents/action-text.ts`) — the words for the agent's current step (with `stepVerb`), shared by the reading view and the decision inbox

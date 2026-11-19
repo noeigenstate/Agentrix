@@ -838,6 +838,10 @@ function onEvent(event) {
   if (event.version === 1 && acceptDispatchEvent(s, project, event)) return;
   if (event.sessionKey !== s.sessionKey) return;
   if (acceptDispatchEvent(s, project, event)) return;
+  if (event.type === 'claude-seat-input') {
+    if (s.codexActive && s.agent === 'claude' && !s.nativeStructured && event.sessionId === s.claudeSessionId) callsOf(s, project).observeSeatInput(event);
+    return;
+  }
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   // The claude wrapper found a proxy set since the terminal started; its command field names the variable.
   if (event.type === 'hook-channel') { reportHookChannel(s, event.command, event.sequence); return; }
@@ -1124,8 +1128,10 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery, path.join(integrationDir, 'dispatch.cjs'));
   if (agent === 'claude' && runOptions.model === 'haiku' && delivery?.operations?.pinnedHaiku) runOptions.model = delivery.operations.pinnedHaiku;
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
-    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, operations: delivery?.operations?.[agent], providerSessionId };
+    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, operations: delivery?.operations?.[agent], seatsMap: delivery?.agentSeats, providerSessionId };
+  env.AGENTRIX_SEATS = JSON.stringify(spec.seatsMap ?? null);
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
+  if (agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
   nativeSpecs.set(id, spec); return spec;
 }
@@ -1137,7 +1143,9 @@ function nativeSubagent(spec, signal, { runtimeSessionId, providerSessionId, fol
     || signal.terminalId !== spec.terminalId) return;
   const calls = callsOf(s, project);
   if (folder) calls.setFolder(folder);
-  calls.subagent(signal); scheduleState();
+  if (signal.kind === 'seat') calls.observeSeatInput(signal);
+  else calls.subagent(signal);
+  scheduleState();
 }
 
 function structuredEvent(id, event) {
@@ -1240,6 +1248,7 @@ async function initializeNativeSessions() {
       const delivery = readOnly ? null : skills.delivery(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true });
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
         allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
+        claudeLead: delivery?.agentSeats ? { seatsMap: delivery.agentSeats } : null,
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
         skills: delivery?.bundle, readingNote: readOnly ? '' : startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
           path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
@@ -1297,8 +1306,11 @@ function wireNativeSessions(directory, codex, codexFactory) {
       const lead = skills.leadOptions(project.id, spec.agent);
       const delivery = skills.delivery(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true });
       const levers = delivery?.operations, model = lead?.model === 'haiku' && levers?.pinnedHaiku ? levers.pinnedHaiku : lead?.model ?? null;
-      Object.assign(spec, { skillSessionId, model, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null, operations: levers?.[spec.agent] });
+      Object.assign(spec, { skillSessionId, model, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
+        operations: levers?.[spec.agent], seatsMap: delivery?.agentSeats,
+        env: { ...spec.env, AGENTRIX_SEATS: JSON.stringify(delivery?.agentSeats ?? null) } });
       if (spec.agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
+      if (spec.agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: spec.terminalId }, binding);
       if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
         delivery, path.join(integrationDir, 'dispatch.cjs'));
       return committed => skills.endSession(project.id, committed ? previous : skillSessionId);
@@ -1383,7 +1395,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   let env = createTerminalEnvironment(withoutAppImage(process.env), bootstrapFile || '', { allowBackgroundTasks: store.settings?.claudeBackgroundTasks });
   // How this terminal's Claude Code reports to main (hook-channel.cjs): HTTP hooks, or command hooks behind a proxy.
   const claudeHookPath = path.join(integrationDir, 'claude-hook.ps1');
-  const hooks = bootstrapFile && terminalHooks({ port: hookServer?.port, terminalId: id, sessionKey, eventServer, env, cwd: startPath,
+  const hooks = bootstrapFile && terminalHooks({ port: hookServer?.port, terminalId: id, sessionKey, eventServer, env, cwd: startPath, seatRouting: true,
     shell: { posix: ['zsh', 'bash'].includes(shellKind), powershellPath, script: claudeHookPath, node: process.execPath,
       helper: path.join(integrationDir, 'agent-event.cjs'), noteFile: skillNoteFile } });
   if (hooks) {

@@ -66,8 +66,11 @@ test('operation delivery and refusal chips belong to the conversation snapshot',
   store.refresh();
   const original = { background: { model: 'sonnet' }, subagent: { model: 'gpt-mini', effort: 'medium' } };
   const launch = id => store.delivery(project, false, id, { agent: 'codex', started: true });
-  assert.deepEqual(store.setSeats('global', null, { orchestrator: { model: 'haiku', effort: 'high' } }, original), { ok: true });
+  assert.deepEqual(store.setSeats('global', null, { orchestrator: { model: 'haiku', effort: 'high' },
+    designer: { model: 'claude-sonnet-5-5', effort: 'high' }, qa: { model: 'claude-sonnet-4-5', effort: 'high' } }, original), { ok: true });
   const first = launch('first');
+  assert.equal(first.agentSeats.designer.agentModel, 'sonnet');
+  assert.equal(first.agentSeats.qa.agentModel, null);
   assert.equal(store.terminalLead(project.id).model, 'claude-haiku-5-5');
   assert.equal(first.operations.claude.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-sonnet-5-5');
   const key = 'agents.default_subagent_model';
@@ -75,11 +78,17 @@ test('operation delivery and refusal chips belong to the conversation snapshot',
   const current = () => store.seatsInfo(project.id, 'first').operations.current;
   assert.equal(current().agents.subagent.codex.reason, 'Unsupported key');
   assert.equal(store.seatsInfo(project.id).operations.rows.find(row => row.id === 'subagent').agents.codex.state, 'not-effective');
-  assert.deepEqual(store.setSeats('project', project.id, {}, { subagent: { model: 'gpt-new', effort: 'high' } }), { ok: true });
+  assert.deepEqual(store.setSeats('project', project.id, { designer: { model: 'opus', effort: 'medium' } },
+    { subagent: { model: 'gpt-new', effort: 'high' } }), { ok: true });
   assert.deepEqual(current().values.subagent, original.subagent);
+  assert.deepEqual(launch('first').agentSeats.designer, first.agentSeats.designer);
   assert.equal(store.operationLevers(project.id, 'first').codex.config[key], 'gpt-mini');
-  assert.equal(launch('second').operations.codex.config[key], 'gpt-new');
+  const second = launch('second');
+  assert.equal(second.operations.codex.config[key], 'gpt-new');
+  assert.deepEqual(second.agentSeats.designer, { model: 'opus', effort: 'medium', agentModel: 'opus' });
   assert.equal(store.seatsInfo(project.id).operations.rows.find(row => row.id === 'subagent').agents.codex.state, 'applies');
+  store.setOptions(store.seatsInfo(project.id).skill, { enabled: false });
+  assert.equal(launch('disabled').agentSeats, null);
 });
 
 test('routing note is optional, current on a new delivery and included in bounded SSH manifests', async t => {

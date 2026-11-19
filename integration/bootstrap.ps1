@@ -63,6 +63,7 @@ function global:Get-AgentrixReadingNote {
 function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
     $launch = @{ LeadArgs = @(); Env = @{}; HookSettings = $Hooks.settings }
     if (-not $Conversation -or -not $env:AGENTRIX_BOOTSTRAP) { return $launch }
+    $launch.Env.AGENTRIX_SEATS = 'null'
     $lead = $null
     try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
     $modelPattern = '\A[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}\z'
@@ -72,6 +73,7 @@ function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
     if ($lead[2] -eq '1' -and $Hooks.fastSettings) { $launch.HookSettings = $Hooks.fastSettings }
     if ($lead.Length -ge 4 -and $lead[3] -cmatch $modelPattern) { $launch.Env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $lead[3] }
     if ($lead.Length -ge 5 -and $lead[4] -cmatch $modelPattern) { $launch.Env.CLAUDE_CODE_SUBAGENT_MODEL = $lead[4] }
+    if ($lead.Length -ge 6 -and $lead[5]) { $launch.Env.AGENTRIX_SEATS = $lead[5] }
     return $launch
 }
 

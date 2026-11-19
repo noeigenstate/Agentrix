@@ -2,6 +2,9 @@
 
 How a terminal's CLI reports to main: the Claude Code hook events (over HTTP to main's loopback hook server, or as commands through the event pipe) and transcript, and the Codex and Claude turn snapshots, turned into the terminal's CLI state, lights and completion alert; which hook channel a terminal uses and the settings its claude wrapper passes; and the bootstrap file a terminal's hooks and the dispatch helper read to reach main.
 
+Agent and Task have separate synchronous command hooks for seat routing in both local channels.
+The Claude wrapper reads the seat map once from the launch file and passes it with that CLI launch.
+
 ## Owns
 - `electron/features/terminal-events/**`
 

@@ -2,16 +2,17 @@
 // run by Agentrix's own executable as Node (ELECTRON_RUN_AS_NODE=1). It sends the same events as notify.ps1
 // and claude-hook.ps1. Bash cannot open a Unix socket, so it sends its own reports through this too.
 // Usage: agent-event.cjs codex-notify <socket> <projectId> <sessionKey> <payload>
-//        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> start|stop|stop-failed|notify|session|progress|permission   (the hook's JSON on stdin)
+//        agent-event.cjs claude-hook <socket> <projectId> <sessionKey> <kind>   (the hook's JSON on stdin)
 //        agent-event.cjs shell-event <socket> <projectId> <sessionKey> <type> <sequence> <exitCode> <agent>
 //                        <codexAvailable> <claudeAvailable> <codexHome> <cwd>
-// Only SessionStart prints instruction JSON. The other hooks stay silent, and a closed Agentrix never fails a turn.
+// SessionStart prints instructions. The separate seat-routing hook can print tool input or a notice.
 const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { sessionContext } = require(path.join(runtime, 'features/skills/session.cjs'));
+const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'features/skills/agent-seat.cjs'));
 
 function send(socket, event) {
   return new Promise(resolve => {
@@ -92,9 +93,25 @@ function shellEvent([type, sequence, exitCode, agent, codex, claude, codexHome, 
   };
 }
 
+function seatRouting(input, snapshot) {
+  if (typeof snapshot !== 'string' || snapshot.length > 8192) return {};
+  let seats, hook;
+  try { seats = JSON.parse(snapshot); hook = JSON.parse(input); } catch { return {}; }
+  const output = seatHookOutput(hook, seats);
+  const observed = observedAgentSeat(hook, seats);
+  return { ...(Object.keys(output).length && { output }),
+    ...(observed && typeof hook.session_id === 'string' && { observed: { ...observed, sessionId: hook.session_id } }) };
+}
+
 async function main([action, socket, projectId, sessionKey, argument, ...rest]) {
   if (!socket || !projectId || !sessionKey) return;
   const input = action === 'claude-hook' ? await readInput() : null;
+  if (action === 'claude-hook' && argument === 'seat-routing') {
+    const { output, observed } = seatRouting(input, process.env.AGENTRIX_SEATS);
+    if (output) process.stdout.write(JSON.stringify(output) + '\n');
+    if (observed) await send(socket, { type: 'claude-seat-input', projectId, sessionKey, ...observed });
+    return;
+  }
   if (action === 'claude-hook' && argument === 'session') {
     try {
       const noteFile = rest[0] || process.env.AGENTRIX_READING_NOTE_FILE;
@@ -114,4 +131,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).catch(() => {}).finally(() => { process.exitCode = 0; });
 }
 
-module.exports = { codexEvent, claudeEvent, shellEvent };
+module.exports = { codexEvent, claudeEvent, shellEvent, seatRouting };

@@ -15,7 +15,7 @@ function updateBootstrapLead(file, lead) {
   if (lead && (!validModel(lead.model) || typeof lead.effort !== 'string' || !EFFORT.test(lead.effort))) throw new Error('Invalid lead seat.');
   const env = operationEnv(lead?.env);
   const lines = lead ? [lead.model, lead.effort, lead.fast === true ? '1' : '0',
-    env[BACKGROUND_MODEL_ENV] || '', env[SUBAGENT_MODEL_ENV] || '', ''] : [];
+    env[BACKGROUND_MODEL_ENV] || '', env[SUBAGENT_MODEL_ENV] || '', ...(lead.seatsMap ? [JSON.stringify(lead.seatsMap)] : []), ''] : [];
   writeFileAtomic(file + '.lead', lines.join('\n'));
 }
 

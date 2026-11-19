@@ -34,6 +34,7 @@ const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs', 'features/agents/agent-command.cjs',
   'features/team/team.cjs', 'features/team/minutes-page.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
   'features/skills/session.cjs', 'features/skills/worker-proposals.cjs', 'features/agents/dispatch-control.cjs', 'features/agents/dispatch-events.cjs',
+  'features/skills/agent-seat.cjs', 'features/agents/call-seat.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
   'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs', 'features/claude-runtime/decide.cjs',
@@ -60,6 +61,7 @@ const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '�
 const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
   [--seat <id>[/<specialty>]] the team role for this run
+                             uses the launch seat for omitted --model, --effort and --fast
   [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
   [--ledger <file>]       the task's shared context: given to the worker, its findings appended after
   [--resume <session>]    continue that worker session (same context) instead of starting a new one
@@ -76,7 +78,18 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   node dispatch.cjs wait <run id> [<run id> ...] [--timeout <seconds>] [--cwd <dir>]
 `;
 
-function argumentsOf(argv) {
+function seatDefaults(snapshot, seat, agent) {
+  if (!validSeat(seat) || typeof snapshot !== 'string' || snapshot.length > 8192) return null;
+  let seats;
+  try { seats = JSON.parse(snapshot); } catch { return null; }
+  const id = seat.split('/')[0];
+  if (!seats || !Object.hasOwn(seats, id)) return null;
+  const choice = seats[id];
+  if (typeof choice?.model !== 'string' || (/^(opus|sonnet|haiku|fable|claude-)/.test(choice.model) ? 'claude' : 'codex') !== agent) return null;
+  return choice;
+}
+
+function argumentsOf(argv, env = process.env) {
   const [agent, ...flags] = argv;
   if (agent === 'wait') {
     const options = { agent, ids: [], timeout: 540, cwd: process.cwd() }, seen = new Set();
@@ -141,6 +154,15 @@ function argumentsOf(argv) {
       options[names.get(flag)] = value;
     }
   }
+  const seat = command ? null : seatDefaults(env.AGENTRIX_SEATS, options.seat, agent);
+  if (seat) {
+    options.model ??= seat.model;
+    if (typeof seat.effort === 'string') options.effort ??= seat.effort;
+    if (!seen.has('--fast') && typeof seat.fast === 'boolean') {
+      options.fast = seat.fast;
+      options.fastFromSeat = true;
+    }
+  }
   const required = command ? ['cwd', 'meeting', agent === 'minutes' ? 'out' : 'summary'] : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out'];
   for (const key of required) if (!options[key]) throw new Error(`Missing --${key}`);
   if (options.meeting && !/^[\w.-]{1,64}$/.test(options.meeting)) throw new Error('Expected --meeting id with 1–64 letters, digits, _, . or -');
@@ -186,8 +208,9 @@ function routingVerdict(actual, declared) {
   return strictRoutingVerdict(actual, follows ? { ...declared, model: actual.model } : declared);
 }
 function commandOf(options) {
+  const settings = options.fast || options.fastFromSeat ? ['--settings', JSON.stringify({ fastMode: options.fast })] : [];
   if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
-    '--effort', options.effort, ...(options.fast ? ['--settings', '{"fastMode":true}'] : []), '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
+    '--effort', options.effort, ...settings, '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
   return ['app-server', '--listen', 'stdio://'];
 }
 
@@ -321,6 +344,10 @@ class WorkerOutput {
     else if (typeof value.fast_mode === 'boolean') this.fast = value.fast_mode;
     else if (['on', 'off'].includes(value.fast_mode_state)) this.fast = value.fast_mode_state === 'on';
     else if (['fast', 'priority', 'standard', 'default', 'flex', 'auto'].includes(tier)) this.fast = ['fast', 'priority'].includes(tier);
+  }
+  nativeRouting({ observed, effective }) {
+    this.settings({ model: observed?.model ?? effective?.model,
+      effort: observed?.effort ?? effective?.effort, fast: observed?.fast ?? effective?.fast });
   }
   measure(record) {
     this.meter.apply(record);
@@ -576,7 +603,7 @@ function detachedRuns(cwd, create = false) {
 }
 
 async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch' } = {}) {
-  const options = argumentsOf(argv);
+  const options = argumentsOf(argv, env);
   store ||= detachedRuns(options.cwd, true);
   const id = randomUUID(), file = store.file(id);
   const saved = argv.filter(arg => arg !== '--detach');
@@ -725,6 +752,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   const id = detached?.id || randomUUID(), send = eventSink(env.AGENTRIX_BOOTSTRAP);
   // Keep reporting authority in the helper; preserve the owner's environment outside marked SDK parents.
   let workerEnv = workerEnvironment(env);
+  for (const name of Object.keys(workerEnv)) if (name.toUpperCase() === 'AGENTRIX_SEATS') delete workerEnv[name];
   let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
   let team = null, admission = null, teamFinished = false, roundtable = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
@@ -972,7 +1000,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   };
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
-    options = argumentsOf(argv);
+    options = argumentsOf(argv, env);
     if (!['dispatch', 'intercepted'].includes(source)) throw new Error('Unknown dispatch source');
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     team = projectTeam(options.cwd, true);
@@ -1168,9 +1196,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         const fact = workerInput(event, controlInputs, resumeControlIds, resumeInputId);
         if (fact) recordInput(fact.entryId, fact.inputId, fact.origin, fact.ownerMessageIds);
       } else if (event.type === 'routing.updated') {
-        // Codex app-server names the model it runs in effective (thread start or resume, settings, reroute); its observed stays empty.
-        const { observed, effective, operations } = event.payload;
-        output.settings({ ...observed, model: observed?.model ?? effective?.model }); reroute();
+        // Effective Codex settings come from the worker's app-server response, including when no turn record has arrived.
+        const { operations } = event.payload;
+        output.nativeRouting(event.payload); reroute();
         if (operations?.refused.length) signal(`routing ${id} operation keys refused: ${operations.refused.map(({ key }) => key).join(', ')}`);
       }
       else if (event.type === 'input.receipt' && controlReceipts.has(event.payload.clientMessageId)) void recordReceipt(event.payload.clientMessageId, event.payload.status).catch(() => {});

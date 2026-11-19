@@ -3,6 +3,8 @@
 Owns the host's Claude Agent SDK sessions, protected credentials, worker tool decisions and local API accounting.
 
 GUI lookup and the two operation environment overrides come from the host's launch snapshot.
+The GUI launch snapshot also supplies declared Agent and Task seats. PreToolUse only changes supported model and effort fields.
+PostToolUse reports matching final input for the activity row. Unsupported choices produce a notice.
 
 Owner and worker entrypoints remain the CLI default. Ownership is host-observed session identity, persisted locally for owners and read from the team journal for workers; the old agentrix-sdk transcript marker remains readable, while unclassified old sdk-ts prompts stay excluded.
 
@@ -21,7 +23,7 @@ Project hooks remain enabled for workers, matching the trusted project's CLI beh
 - `commands` (`electron/features/claude-sdk/session.cjs`) — a native-safe command catalog from the live SDK, its replacement pushes or the shared file catalog before a query exists; listing never starts a query. models() retains resolved values, aliases, advertised efforts and fast capability; query settings use the host's frozen launch seat, including fast mode
 
 ## May import
-- `electron/features/skills/seat-rules.mjs` (validate the two Claude operation environment overrides)
+- `electron/features/skills/*seat*` (validate Claude operation overrides and prepare or observe Agent tool seat input)
 - `electron/features/claude-runtime/**` (its Interface: where Claude Code is, as the locator finds it; the resolver this runtime tells what its sessions and the connection test saw, and the decide() it reads the API route from)
 - `electron/claude-sessions.cjs` (Claude transcript lookup)
 - `electron/session-files.cjs` (session-file identity checks)
@@ -32,7 +34,7 @@ Project hooks remain enabled for workers, matching the trusted project's CLI beh
 - `electron/agent-actions.cjs` (the one rule for naming a command: running tests, checking types)
 - `electron/features/agents/token-rate.cjs` (response-token and response-time meter)
 - `electron/features/agents/start-failure.cjs` (redacted startup diagnostics)
-- `electron/features/agents/agent-command.cjs` (routing commands and refusals)
+- `electron/features/agents/agent-*.cjs` (routing command refusals and model settings observed in live root replies)
 
 ## Invariants
 - SDK sub-agent callbacks answer `{}` immediately and add no context; folder discovery and C-15 reporting stay ordered on the run's report chain. Each query tracks its reported starts and sends the remaining stops once on retirement, using cached bindings before ownership is dropped; invalid tool-use IDs become null. An interrupted turn queues cleanup after already acknowledged reports and before later-turn reports, using its background snapshot and timestamp. It stops only foreground children and retains children in `run.background`, matched by agent id to the task id or by the start's tool-use ID to the task's `tool_use_id`; full query retirement stops both. Every synthetic stop carries `outcome: 'killed'`; a real SDK SubagentStop has no outcome and remains completed by default. The current native host binds the contained transcript path before delivering a row, and retired queries or hosts cannot change it. Child transcripts supply their own rates and never enter parent usage. Equivalent normalized or real folder paths retain native rows across terminal handoff. Session retirement clears native children and retains dispatched workers — test: `tests/native-subagents.test.cjs` › "a native Claude session's Agent-tool sub-agent has its row from SubagentStart, its rate from its transcript, and ends on SubagentStop"; test: `tests/native-subagents.test.cjs` › "the sub-agent callbacks answer {} and change no query option"; test: `tests/native-subagents.test.cjs` › "native sub-agent signals stay ordered and ignore invalid or retired query callbacks"; test: `tests/native-subagents.test.cjs` › "main binds the native rate folder before reporting a row and ignores stale runtimes"; test: `tests/native-subagents.test.cjs` › "native retirement clears its child rows and keeps dispatched workers"; test: `tests/native-subagents.test.cjs` › "native transcript folder discovery keeps SDK aliases before the parent file exists and rejects escapes"; test: `tests/native-subagents.test.cjs` › "an interrupted native query reports stop for every open child before returning idle"; test: `tests/native-subagents.test.cjs` › "invalid tool-use IDs keep native sub-agent signals by falling back to agent identity"; test: `tests/native-subagents.test.cjs` › "SDK sub-agent callbacks answer before transcript discovery settles"; test: `tests/native-subagents.test.cjs` › "the host tracker keeps native rows through terminal folder aliases and drive-letter case changes"; test: `tests/native-subagents.test.cjs` › "query retirement kills background children while real SDK SubagentStop stays plain"; test: `tests/native-subagents.test.cjs` › "interrupt cleanup covers queued starts before the next turn without killing its children"; test: `tests/native-subagents.test.cjs` › "an interrupt keeps a background child whose task id differs from its agent id by the shared tool-use ID"

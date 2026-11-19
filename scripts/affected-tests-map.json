@@ -356,14 +356,15 @@
       "reason": "Loads a downloaded external native speech engine."
     },
     "integration/agent-event.cjs": {
-      "digest": "2addfce9c185ea3d37b35c7d91539692d322d08be146348225f1dfd5be31a486",
+      "digest": "a3dfd62187a3abf2a7d255ec4e4c992f78f4a4dc273ab4ebcd3100781bf32ae4",
       "targets": [
-        "electron/features/skills/session.cjs"
+        "electron/features/skills/session.cjs",
+        "electron/features/skills/agent-seat.cjs"
       ],
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "ac403a7b2dd1914c3f59331f144f07031152d47d46902b27ce366e6e14418f73",
+      "digest": "cc0c2cea270c680e9674289dea94530580ade46bd4c5f28f59d96c6d69612049",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -376,6 +377,7 @@
         "electron/features/team/minutes-page.cjs",
         "electron/features/dashboard/records-routing.cjs",
         "electron/features/skills/worker-proposals.cjs",
+        "electron/features/skills/agent-seat.cjs",
         "electron/features/codex-app-server/index.cjs",
         "electron/features/agents/dispatch-control.cjs",
         "electron/features/codex-runtime/locator.cjs",
@@ -422,7 +424,7 @@
       "reason": "The intercept entrypoint invokes the existing dispatch helper beside the source, packaged or SSH runtime."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "646d9a440a0c52004a9b0c45b8cbad4245f362a876d2467a2be6ae0cb74c3931",
+      "digest": "2eebae685aaeda64ccbc20ac3d33d6cbec44e6df2b3ffe5bbaa4b1deb56e1bdf",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

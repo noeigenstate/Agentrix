@@ -2,15 +2,46 @@ param(
     [Parameter(Mandatory=$true)][string]$PipeName,
     [Parameter(Mandatory=$true)][string]$ProjectId,
     [Parameter(Mandatory=$true)][string]$SessionKey,
-    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'stop-failed', 'notify', 'session', 'progress', 'permission')][string]$Kind,
-    [string]$NoteFile = $env:AGENTRIX_READING_NOTE_FILE
+    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'stop-failed', 'notify', 'session', 'progress', 'permission', 'seat-routing')][string]$Kind,
+    [string]$NoteFile = $env:AGENTRIX_READING_NOTE_FILE,
+    [string]$NodePath
 )
 
 # Claude Code hook: UserPromptSubmit reports a working turn, Stop reports a finished one, StopFailure one that ended in an
 # API error (an interrupted round, never a completed one), SessionStart the
 # conversation Claude writes now (after /clear, /resume or a new start it is another file).
-# Only SessionStart prints instruction JSON; all other hooks remain silent.
+# SessionStart prints instructions. The separate seat-routing hook can print tool input or a notice.
 $ErrorActionPreference = 'Stop'
+
+if ($Kind -eq 'seat-routing') {
+    try {
+        if (-not $NodePath -or -not $env:AGENTRIX_SEATS -or $env:AGENTRIX_SEATS -eq 'null') { exit 0 }
+        $start = [Diagnostics.ProcessStartInfo]::new($NodePath)
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardInput = $true
+        $start.RedirectStandardOutput = $true
+        [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $start.StandardOutputEncoding = [Console]::OutputEncoding
+        $inputBuffer = [char[]]::new(4194305)
+        $length = [Console]::In.ReadBlock($inputBuffer, 0, $inputBuffer.Length)
+        if ($length -ge $inputBuffer.Length) { exit 0 }
+        $start.EnvironmentVariables['ELECTRON_RUN_AS_NODE'] = '1'
+        $helper = Join-Path $PSScriptRoot 'agent-event.cjs'
+        $start.Arguments = '"{0}" claude-hook "\\.\pipe\{1}" "{2}" "{3}" seat-routing' -f $helper, $PipeName, $ProjectId, $SessionKey
+        $child = [Diagnostics.Process]::Start($start)
+        try {
+            $output = $child.StandardOutput.ReadToEndAsync()
+            $write = $child.StandardInput.WriteAsync($inputBuffer, 0, $length)
+            if (-not $write.Wait(1500)) { $child.Kill(); exit 0 }
+            $child.StandardInput.Close()
+            if ($child.WaitForExit(2500)) { [Console]::Out.Write($output.Result) }
+            else { $child.Kill() }
+        } finally { $child.Dispose() }
+    } catch { }
+    exit 0
+}
 
 function Get-AgentrixSessionContext($hook) {
     if ($hook.session_id -notmatch '^[A-Za-z0-9_-]{1,160}$' -or $hook.source -notin @('startup', 'resume', 'compact', 'clear') -or -not $NoteFile) { return }

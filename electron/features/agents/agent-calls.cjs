@@ -48,10 +48,17 @@ const accountingId = (call, id = call.id) => call.generation ? `${id}:continue:$
 // replies' timing once the call started. Both readers take every record through this, and name the model alike.
 function childRecord(call, record, clockOffset = 0) {
   const settings = agentSettings(null, 'claude', { ...record, isSidechain: false });
-  if (settings) { call.effort = settings.effort ?? call.effort; call.fast = settings.fast ?? call.fast; }
+  if (settings) {
+    call.childEffort = settings.effort ?? call.childEffort;
+    call.effort = call.childEffort ?? call.effort;
+    call.fast = settings.fast ?? call.fast;
+  }
   if (call.startedAt === null || Date.parse(record.timestamp) + clockOffset >= call.startedAt) call.meter.apply(record);
 }
-const childModel = (call, meta) => call.meter?.model || call.resultModel || text(meta?.model) || call.requested.model;
+const childModel = (call, meta) => call.meter?.model || call.resultModel || text(meta?.model) || call.seatInput?.model || call.requested.model;
+function resetChildSettings(call) {
+  Object.assign(call, call.requested, call.seatInput, { childEffort: null });
+}
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
 function helperAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
@@ -92,6 +99,7 @@ class AgentCalls {
     this.feeds.reset(preserveDispatch ? keep : null);
     const ids = new Set(retained.map(([, call]) => call.id));
     this.aliases = new Map([...(this.aliases || [])].filter(([, id]) => ids.has(id)));
+    this.seatInputs = new Map();
     this.timer = null; this.calls = new Map(retained); this.polls = new Map(); this.meta = new Map(); this.pending = new Set(); this.work = null;
     this.schedule();
     this.watchDispatch();
@@ -155,8 +163,31 @@ class AgentCalls {
       title: title || short(agentType) || 'Agent', task, role: agentRoles.get(agentType) || short(agentType) || agentRoles.get('none'),
       preparing: this.local && !!this.folder, planner: planner || UNKNOWN_PLANNER };
     call.kind = taskKind(call);
-    this.calls.set(key, call); this.feeds.track(call);
+    this.calls.set(key, call);
+    const settings = this.seatInputs.get(toolUseId);
+    if (settings) this.applySeatInput(call, settings);
+    this.feeds.track(call);
     return call;
+  }
+  applySeatInput(call, settings) {
+    const meta = this.meta.get(call.agentId);
+    call.seatInput = settings;
+    call.model = childModel(call, meta);
+    call.effort = call.childEffort ?? (text(meta?.effort).trim() || settings.effort);
+  }
+  observeSeatInput({ toolUseId, model, effort }) {
+    if (!TOOL_ID.test(text(toolUseId)) || !/^(sonnet|opus|haiku|fable)$/.test(text(model)) || !/^(low|medium|high|xhigh|max)$/.test(text(effort))) return false;
+    const prior = this.seatInputs.get(toolUseId);
+    if (prior?.model === model && prior.effort === effort) return false;
+    if (!prior && this.seatInputs.size >= 1024) this.seatInputs.delete(this.seatInputs.keys().next().value);
+    const settings = { model, effort };
+    this.seatInputs.set(toolUseId, settings);
+    const call = this.toolCall(toolUseId);
+    if (!call || call.generation) return false;
+    this.applySeatInput(call, settings);
+    this.feeds.update(call);
+    this.changed();
+    return true;
   }
   // Keep the first row's display identity, but retain the child object: its reader callbacks and accounting belong to
   // that object. A metadata join must not discard samples just because the parent tool record arrived first.
@@ -195,7 +226,11 @@ class AgentCalls {
     }
     if (call) {
       if (agentId) call.agentId = agentId;
-      if (toolUseId && call.toolUseId !== toolUseId) { call.toolUseId = toolUseId; call.toolGeneration = call.generation || 0; }
+      if (toolUseId && call.toolUseId !== toolUseId) {
+        call.toolUseId = toolUseId; call.toolGeneration = call.generation || 0;
+        const settings = this.seatInputs.get(toolUseId);
+        if (settings && !call.generation) this.applySeatInput(call, settings);
+      }
     }
     return call || null;
   }
@@ -627,7 +662,7 @@ class AgentCalls {
       const before = this.signature(call), entry = Object.hasOwn(answer, call.agentId) ? answer[call.agentId] : null;
       if (Array.isArray(entry?.records)) {
         if (entry.reset || !call.meter) {
-          Object.assign(call, call.requested, { unfollowed: false });
+          resetChildSettings(call); call.unfollowed = false;
           call.meter = new TokenRates('claude', { sidechain: true }); call.meter.reset(entry.partial === true);
         }
         for (const record of entry.records) if (record && typeof record === 'object') childRecord(call, record, this.clockOffset);
@@ -688,13 +723,13 @@ class AgentCalls {
     if (filename && home && !await containedFile(path.join(home, 'projects'), filename, { exact: true })) filename = null;
     if (this.calls !== calls) return;
     if (call.reader?.filename !== filename) {
-      Object.assign(call, call.requested);
+      resetChildSettings(call);
       call.model = call.resultModel || call.model; call.rate = null;
       call.meter = new TokenRates('claude', { sidechain: true });
       call.reader = filename ? new TranscriptTail(filename, { onReset: async (partial, file) => {
         if (!await containedFile(this.folder, filename, { file, exact: true })) throw new Error('unavailable');
         if (home && !await containedFile(path.join(home, 'projects'), filename, { file, exact: true })) throw new Error('unavailable');
-        call.meter.reset(partial); Object.assign(call, call.requested);
+        call.meter.reset(partial); resetChildSettings(call);
         this.feeds.resetLog(call, partial);
       } }) : null;
     }
@@ -707,7 +742,7 @@ class AgentCalls {
     }).catch(() => false);
     if (this.calls !== calls) return;
     call.rate = readable ? call.meter.snapshot() : null;
-    call.effort ??= text(meta?.effort).trim() || null;
+    if (call.effort == null || call.seatInput && !call.childEffort) call.effort = text(meta?.effort).trim() || call.effort || null;
     call.model = childModel(call, meta);
     this.feeds.update(call, readable);
   }

@@ -56,9 +56,10 @@ function settingsEnvs({ env, cwd, platform, home, read }) {
 
 // The hook command of a PowerShell terminal. PowerShell or Git Bash may run it, so the executable path has no spaces and
 // stays unquoted (a quoted first word is only a string in PowerShell), the script is quoted, and paths use forward slashes.
-const powershellHook = ({ powershellPath, script, pipeName, projectId, sessionKey }) => kind => [powershellPath.replace(/\\/g, '/'),
+const powershellHook = ({ powershellPath, script, pipeName, projectId, sessionKey, node }) => kind => [powershellPath.replace(/\\/g, '/'),
   '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', `"${script.replace(/\\/g, '/')}"`,
-  '-PipeName', pipeName, '-ProjectId', projectId, '-SessionKey', sessionKey, '-Kind', kind].join(' ');
+  '-PipeName', pipeName, '-ProjectId', projectId, '-SessionKey', sessionKey, '-Kind', kind,
+  ...(kind === 'seat-routing' ? ['-NodePath', `"${node.replace(/\\/g, '/')}"`] : [])].join(' ');
 // The hook command of a zsh or Bash terminal, which Claude Code runs with sh: every word is quoted for it.
 const shQuote = value => `'${String(value).replace(/'/g, `'\\''`)}'`;
 const posixHook = ({ node, helper, socket, projectId, sessionKey, noteFile }) => kind => ['ELECTRON_RUN_AS_NODE=1',
@@ -66,7 +67,7 @@ const posixHook = ({ node, helper, socket, projectId, sessionKey, noteFile }) =>
 
 // The --settings a terminal's wrapper passes Claude Code, which merge with the user's own: HTTP hooks for every event but
 // SessionStart, or command hooks for all of them. Status hooks never answer with text (G1, hook-response.cjs).
-function claudeSettings({ url, key, command, async = () => false }) {
+function claudeSettings({ url, key, command, async = () => false, seatRouting }) {
   const entry = hook => [{ hooks: [hook] }];
   const commandHook = event => ({ type: 'command', command: command(COMMAND_KINDS[event]), timeout: 10,
     ...(async(COMMAND_KINDS[event]) ? { async: true } : {}) });
@@ -74,6 +75,9 @@ function claudeSettings({ url, key, command, async = () => false }) {
     ? Object.fromEntries([...HTTP_EVENTS.map(event => [event, entry({ type: 'http', url: `${url}/${event}`, headers: { 'X-Agentrix-Key': key },
       timeout: DIALOGS.includes(event) ? 600 : 10 })]), ['SessionStart', entry(commandHook('SessionStart'))]])
     : Object.fromEntries(Object.keys(COMMAND_KINDS).map(event => [event, entry(commandHook(event))]));
+  if (seatRouting) for (const event of ['PreToolUse', 'PostToolUse']) {
+    hooks[event].push({ matcher: 'Agent|Task', hooks: [{ type: 'command', command: command('seat-routing'), timeout: 5 }] });
+  }
   return JSON.stringify({ hooks });
 }
 
@@ -82,7 +86,7 @@ function claudeSettings({ url, key, command, async = () => false }) {
 // command hooks: the status ones async on Windows (ASYNC_KINDS), synchronous elsewhere until a capture covers bash and
 // zsh. The wrapper re-checks its live environment and may only fall back (downgradeHooks).
 function terminalHooks({ port, terminalId, sessionKey, eventServer, env, cwd, shell, platform = process.platform, home = os.homedir(),
-  read = file => fs.readFileSync(file, 'utf8') }) {
+  read = file => fs.readFileSync(file, 'utf8'), seatRouting = false }) {
   const fallback = platform === 'win32' ? 'command-async' : 'command';
   const url = port ? `http://127.0.0.1:${port}/h/${encodeURIComponent(terminalId)}` : null;
   const key = createHmac('sha256', sessionKey).update(`hook:${terminalId}`).digest('hex');
@@ -94,8 +98,8 @@ function terminalHooks({ port, terminalId, sessionKey, eventServer, env, cwd, sh
   const command = shell.posix ? posixHook({ ...shell, socket: eventServer.address, projectId: terminalId, sessionKey })
     : powershellHook({ ...shell, pipeName: eventServer.name, projectId: terminalId, sessionKey });
   return { url, port: port || null, key, channel: channelReason ? fallback : 'http', fallback, channelReason, settings: {
-    http: url && claudeSettings({ url, key, command }),
-    fallback: claudeSettings({ command, async: kind => kind === 'progress' || fallback === 'command-async' && ASYNC_KINDS.includes(kind) }),
+    http: url && claudeSettings({ url, key, command, seatRouting }),
+    fallback: claudeSettings({ command, seatRouting, async: kind => kind === 'progress' || fallback === 'command-async' && ASYNC_KINDS.includes(kind) }),
   } };
 }
 
