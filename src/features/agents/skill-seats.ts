@@ -1,17 +1,17 @@
 import type { CallRow } from './subagent-splits.ts';
 import type { Seat, SeatId, SeatIssue, SeatMap, SeatModel, SeatRole, SeatsInfo, SeatsSaveError } from '../../shared/types';
+import { BASE_EFFORTS, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
 
-// The seats dialog's rules, as pure functions: they mirror electron/features/skills/model-seats.cjs so 保存 can be disabled before main refuses
-// (main still validates and its refusal is shown). The catalog carries each model's family, rank and efforts, so nothing here names a model.
+export { familyOf };
+
+// The dialog checks seat edits before saving. Main still validates saves and the dialog shows its refusal.
 export type SlotId = SeatId;
 export type Scope = 'global' | 'project';
-export type Family = 'claude' | 'codex';
-export type EditRefusal = 'unknown-model' | 'unavailable' | 'same' | 'effort' | 'fast' | 'invalid-id';
+type Family = 'claude' | 'codex';
+type EditRefusal = 'unknown-model' | 'unavailable' | 'same' | 'effort' | 'fast' | 'invalid-id';
 export type Edit = { ok: true; map: SeatMap } | { ok: false; reason: EditRefusal };
-export type ReviewerBlock = { hit: SeatId[]; alternatives: SeatModel[]; fix: SeatModel | null };
+type ReviewerBlock = { hit: SeatId[]; alternatives: SeatModel[]; fix: SeatModel | null };
 
-// The base lists apply to a model the catalog does not know (an id typed in by the owner).
-const EFFORTS: Record<Family, string[]> = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['low', 'medium', 'high', 'xhigh'] };
 const AUTHORS: SeatId[] = ['developer'];
 
 // A shorter name for a small tile: "Opus (follows latest)" is "Opus (latest)"; the menu and the list keep the full text.
@@ -23,12 +23,6 @@ export function menuPlacement(anchor: { left: number; top: number; bottom: numbe
   const under = { left, top: Math.round(anchor.bottom + 4), maxHeight: Math.max(below, 0) }, over = { left, bottom: Math.round(view.height - anchor.top + 4), maxHeight: Math.max(above, 0) };
   return need <= below ? under : need <= above ? over : below >= above ? under : over;
 }
-export const familyOf = (model: string): Family => /^(opus|sonnet|haiku|claude-)/.test(model) ? 'claude' : 'codex';
-// The id syntax the dispatch helper takes for --model (integration/dispatch.cjs), at most 160 characters.
-export const MODEL_ID = /^[A-Za-z0-9][\w.:@+/[\]-]*$/;
-export const isModelId = (model: string) => model.length <= 160 && MODEL_ID.test(model);
-// The rank rule for a model without a provider tier (parity fixture: tests/fixtures/seat-ranks.json).
-export const rankByName = (model: string): 1 | 2 | 3 => /(^|[-_.])(haiku|mini|nano|lite)([-_.]|$)/.test(model) ? 1 : /(^|[-_.])sonnet([-_.]|$)/.test(model) ? 2 : 3;
 export const getSlot = (map: SeatMap, slot: SlotId): Seat | undefined => map[slot];
 export const withSlot = (map: SeatMap, slot: SlotId, seat: Seat): SeatMap => ({ ...map, [slot]: seat });
 export const sameSeat = (a?: Seat, b?: Seat) => !!a && !!b && a.model === b.model && a.effort === b.effort && !!a.fast === !!b.fast;
@@ -62,12 +56,13 @@ export function topAlternatives(alternatives: SeatModel[], max = 3, ctx?: { fix:
   return { shown: shown.slice(0, max), total: alternatives.length };
 }
 // A typed-in id the catalog does not list: its family comes from the id, its efforts from the family's base list, fast only where Codex can apply it.
-export const customRow = (model: string): SeatModel => {
+const customRow = (model: string): SeatModel => {
   const family = familyOf(model);
-  return { model, label: model, family, efforts: EFFORTS[family], fast: family === 'codex', ...(family === 'codex' ? {} : { fastReason: 'unknown' as const }), rank: rankByName(model), available: true, source: 'custom' };
+  return { model, label: model, family, efforts: BASE_EFFORTS[family], fast: family === 'codex',
+    ...(family === 'codex' ? {} : { fastReason: 'unknown' as const }), rank: rankByName(model), available: true, source: 'custom' };
 };
 // The catalog's row, or the row a valid typed-in id would get.
-export const rowFor = (catalog: SeatModel[], model: string) => modelRow(catalog, model) ?? (isModelId(model) ? customRow(model) : undefined);
+export const rowFor = (catalog: SeatModel[], model: string) => modelRow(catalog, model) ?? (validModel(model) ? customRow(model) : undefined);
 const rankOf = (catalog: SeatModel[], model: string) => rowFor(catalog, model)?.rank ?? rankByName(model);
 // The issues main reported for a slot.
 export const issuesOf = (info: SeatsInfo, slot: SlotId): SeatIssue[] => (info.issues ?? []).filter(issue => issue.slot === slot);
@@ -102,7 +97,8 @@ function assignRow(map: SeatMap, slot: SlotId, row: SeatModel | undefined): Edit
 }
 export const assignModel = (map: SeatMap, slot: SlotId, model: string, catalog: SeatModel[]): Edit => assignRow(map, slot, modelRow(catalog, model));
 // 其他模型…: an id typed in by the owner. A listed id is its row; any other valid id takes its family from the id.
-export const assignCustom = (map: SeatMap, slot: SlotId, model: string, catalog: SeatModel[]): Edit => isModelId(model) ? assignRow(map, slot, rowFor(catalog, model)) : { ok: false, reason: 'invalid-id' };
+export const assignCustom = (map: SeatMap, slot: SlotId, model: string, catalog: SeatModel[]): Edit =>
+  validModel(model) ? assignRow(map, slot, rowFor(catalog, model)) : { ok: false, reason: 'invalid-id' };
 
 export function swapSlots(map: SeatMap, a: SlotId, b: SlotId, catalog: SeatModel[]): Edit {
   const first = getSlot(map, a), second = getSlot(map, b), rows = [first, second].map(seat => seat && modelRow(catalog, seat.model));
@@ -114,7 +110,8 @@ export function swapSlots(map: SeatMap, a: SlotId, b: SlotId, catalog: SeatModel
 export function setEffort(map: SeatMap, slot: SlotId, effort: string, catalog: SeatModel[]): Edit {
   const seat = getSlot(map, slot);
   if (!seat) return { ok: false, reason: 'unknown-model' };
-  return (rowFor(catalog, seat.model)?.efforts ?? EFFORTS[familyOf(seat.model)]).includes(effort) ? { ok: true, map: withSlot(map, slot, { ...seat, effort }) } : { ok: false, reason: 'effort' };
+  const efforts = rowFor(catalog, seat.model)?.efforts ?? BASE_EFFORTS[familyOf(seat.model)];
+  return efforts.includes(effort) ? { ok: true, map: withSlot(map, slot, { ...seat, effort }) } : { ok: false, reason: 'effort' };
 }
 
 // Fast turns on only where the model's row says so; turning it off is always allowed.
@@ -129,7 +126,7 @@ export function setFast(map: SeatMap, slot: SlotId, fast: boolean, catalog: Seat
 const strength = (a: SeatModel, b: SeatModel) => b.rank - a.rank || b.model.localeCompare(a.model, 'en', { numeric: true });
 // The candidates in the order the one-click fix and the banner prefer them, never by list order: the reviewer seat's default first, then models another seat already runs, then the rest;
 // within each the strongest.
-export function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel[] {
+function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel[] {
   const running = Object.entries(map).filter(([id]) => id !== 'reviewer' && !AUTHORS.includes(id)).map(([, seat]) => seat);
   const tier = (row: SeatModel) => defaults?.reviewer && sameModel(catalog, row.model, defaults.reviewer.model) ? 0 : running.some(seat => sameModel(catalog, seat.model, row.model)) ? 1 : 2;
   return [...candidates].sort((a, b) => tier(a) - tier(b) || strength(a, b));
@@ -162,7 +159,7 @@ export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError
     if (!value) continue;
     const family = familyOf(value.model);
     const row = rowFor(catalog, value.model);
-    if (!(row?.efforts ?? EFFORTS[family]).includes(value.effort)) return refuse('invalid-effort', seat, `Unsupported ${family} effort.`);
+    if (!(row?.efforts ?? BASE_EFFORTS[family]).includes(value.effort)) return refuse('invalid-effort', seat, unsupportedEffort(family));
     if (value.fast && !row?.fast) return refuse('fast-not-allowed', seat, 'This model has no fast mode.');
   }
   return reviewerBlock(map, catalog) && refuse('reviewer-same-model', 'reviewer', 'Choose a reviewer different from developer when another available model is at least as strong.');
@@ -172,7 +169,6 @@ export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError
 export const changedSeats = (seats: SeatId[], working: SeatMap, baseline: SeatMap) =>
   seats.filter(id => !sameSeat(getSlot(working, id), getSlot(baseline, id)));
 export const changedCount = (seats: SeatId[], working: SeatMap, baseline: SeatMap) => changedSeats(seats, working, baseline).length;
-export const isEmptyMap = (map: SeatMap) => !Object.keys(map).length;
 // An unavailable seat can use its default instead.
 export function fallbackFor(info: SeatsInfo, slot: SlotId, working: SeatMap): Seat | null {
   const seat = getSlot(working, slot);
@@ -200,8 +196,8 @@ export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string |
 
 // 模型盘: the catalog grouped by family and then by model line, the line read from the id (never from a list of names, so a new line shows up by itself). Each line shows its aliases
 // and its newest version first; older versions fold away. A search keeps only the matching rows.
-export type PaletteLine = { name: string; shown: SeatModel[]; older: SeatModel[] };
-export type PaletteGroup = { family: Family; total: number; lines: PaletteLine[] };
+type PaletteLine = { name: string; shown: SeatModel[]; older: SeatModel[] };
+type PaletteGroup = { family: Family; total: number; lines: PaletteLine[] };
 const idVersion = (model: string): number[] => (model.replace(/\[[^\]]*\]$/, '').replace(/-\d{8}$/, '').match(/\d+(?:\.\d+)*/g) ?? []).flatMap(part => part.split('.').map(Number));
 const versionNewer = (a: number[], b: number[]) => { for (let at = 0; at < Math.max(a.length, b.length); at++) if ((a[at] ?? 0) !== (b[at] ?? 0)) return (a[at] ?? 0) > (b[at] ?? 0); return false; };
 const isAliasRow = (row: SeatModel) => row.source === 'alias' || /^[a-z]+$/i.test(row.model);

@@ -6,7 +6,9 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const seatsLib = require('../src/features/agents/skill-seats.ts');
-const { paletteGroups, lineOf, shortLabel, pickFix, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom, rankByName, rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, baselineFor, lowerLayer, startScope, fallbackFor, saveSeats } = seatsLib;
+const { paletteGroups, lineOf, shortLabel, pickFix, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom,
+  rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, baselineFor, lowerLayer,
+  startScope, fallbackFor, saveSeats } = seatsLib;
 
 const en = require('../electron/locales/en.json');
 const additions = path.join(__dirname, '../locale-additions-seats2.json');
@@ -409,11 +411,7 @@ const liveMenu = h => find(h.render(), node => node.props.role === 'menu');
 const typeCustom = (h, text) => byAttr(liveMenu(h), 'data-custom-input').props.onChange({ target: { value: text } });
 const applyCustom = h => byAttr(liveMenu(h), 'data-custom-apply').props.onClick();
 
-test('the rank rule in the dialog mirrors the shared fixture list that the catalog builder is tested against', () => {
-  const fixture = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures/seat-ranks.json'), 'utf8'));
-  for (const name of ['opus', 'sonnet', 'haiku', 'claude-opus-5-5', 'claude-haiku-5-5', 'gpt-6.2-sol', 'gpt-6.2-sol', 'gpt-6.2-sol-mini', 'gpt-6.1-nano']) assert.ok(fixture.some(entry => entry.model === name), `${name} is in the fixture`);
-  assert.ok(fixture.some(entry => !/opus|sonnet|haiku|sol|nano|mini|lite/.test(entry.model)), 'the fixture holds an unknown id');
-  for (const { model, rank } of fixture) assert.equal(rankByName(model), rank, `${model} ranks ${rank}`);
+test('the dialog gives an unlisted model the shared fallback rank', () => {
   assert.equal(rowFor(catalog(), 'gpt-6.2-sol-mini').rank, 1, 'an id the catalog does not list ranks by the same rule');
 });
 

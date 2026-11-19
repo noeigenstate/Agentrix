@@ -74,7 +74,6 @@ function loadUI(name, overrides = {}) {
     if (key === './ResultCard') return loadUI('features/reading/ResultCard.tsx');
     if (key === './result-round') return require('../src/features/reading/result-round.ts');
     if (key === './typing') return require('../src/features/reading/typing.ts');
-    if (key === './composer-prefill') return require('../src/features/reading/composer-prefill.ts');
     if (key === './image-thumbnail') return require('../src/shared/image-thumbnail.ts');
     if (key === './image-input') return require('../src/features/reading/image-input.ts');
     // Width fitting needs a real box; here the composer shows its longest hint.

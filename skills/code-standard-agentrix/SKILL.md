@@ -19,3 +19,7 @@ read and follow it first. This extension adds only what is particular to this re
 4. **Keep behaviour.** Refactors keep existing behaviour and external interfaces, and the tests that pin them still pass.
 5. **No personal data.** Committed files hold no names, emails, user names, home paths, hosts or keys; write `<home>`,
    `<user>`, `<host>`, `<secret>`.
+6. **Import the code under test.** New tests import the module. They never slice source text to run it in a `vm`.
+7. **Share seat and other cross-process rules.** Keep each rule used by main and renderer in one shared `.mjs` module.
+8. **Remove compatibility members.** Remove a deprecated or compatibility member within one release of the change that replaced it.
+9. **Keep changes short.** Changed lines stay under 200 characters. New or changed functions stay under 80 lines.

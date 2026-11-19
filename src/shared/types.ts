@@ -58,8 +58,74 @@ export type CliState = { sessionId: string; revision: number; updatedAt: number;
   phase?: 'starting' | 'ready' | 'working' | 'stopping' | 'exited'; turn?: number; queue?: number; background?: boolean; open?: { permission?: true; question?: true; menu?: true } };
 // What the renderer reads off a Claude terminal's screen, as booleans only; main drops a sessionId that is not the live PTY's.
 export type ScreenFacts = { sessionId: string; revision: number; inputPresent: boolean; busy: boolean; dialog: boolean; menu: boolean; queueShown: boolean; draft: boolean };
-export type ProjectTerminal = { switchState?: SwitchState | null; cliState?: CliState | null; readingHistory?: ReadingHistoryScope | null; mainTurn?: MainAgentTurn | null; agentStarting?: boolean; nativeMode?: 'codex-native' | 'claude-sdk' | 'codex-app-server' | null; nativeRuntimeSessionId?: string | null; nativePathReason?: string | null; agentStartedAt?: number | null; agentSettings?: AgentSettings | null; agentUsage?: AgentUsage | null; agentCommand?: string | null; action: AgentActionBrief | null; task: string; taskTitle?: string; prompts: PendingPrompt[]; id: string; title: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; sessionId: string | null; status: Project['status']; codexActive: boolean; agent: Project['agent']; codexActivity: Project['codexActivity']; needsInput: string | null; shellReady: boolean; codexAvailable: boolean | null; lastActivityAt: number | null; lastCompletedAt: number | null; error: string | null };
-export type Settings = { startView: 'decisions' | 'workspace'; surface: 'glass' | 'solid'; glassBackground: 'theme' | 'desktop'; glassTransparency: number | null; terminalRenderer: 'gpu' | 'dom'; autoSave: boolean; activityPane: boolean; notifications: boolean; sound: boolean; closeToTray: boolean; explorerCollapsed: boolean; hideTreeNoise: boolean; fontSize: number; terminalFontWeight: 400 | 500 | 600; terminalFontFamily: string; terminalCjkFontFamily: string; userAvatar: string; restoreSessions: boolean; focusAnimation: 'smooth' | 'system' | 'off'; uiZoom: number | null; language: 'zh' | 'en'; theme: ThemeId; shortcuts: Partial<Record<'search' | 'addProject' | 'voice' | 'overview' | 'decisions' | 'explorer' | 'settings' | 'nextProject' | 'previousProject' | 'projectAbove' | 'projectBelow' | 'maximize' | 'fullscreen' | 'newTerminal' | 'removeProject', string>>; guideVersion: string; shell: 'powershell' | 'cmd' | 'bash' | 'zsh'; voiceModel: string; updateChannel: 'stable' | 'beta'; betaAgreement: string | null; codexPermissions: CodexPermissions; claudeBackgroundTasks: boolean };
+export type ProjectTerminal = {
+  switchState?: SwitchState | null;
+  cliState?: CliState | null;
+  readingHistory?: ReadingHistoryScope | null;
+  mainTurn?: MainAgentTurn | null;
+  agentStarting?: boolean;
+  nativeMode?: 'codex-native' | 'claude-sdk' | 'codex-app-server' | null;
+  nativeRuntimeSessionId?: string | null;
+  nativePathReason?: string | null;
+  agentStartedAt?: number | null;
+  agentSettings?: AgentSettings | null;
+  agentUsage?: AgentUsage | null;
+  agentCommand?: string | null;
+  action: AgentActionBrief | null;
+  task: string;
+  taskTitle?: string;
+  prompts: PendingPrompt[];
+  id: string;
+  title: string;
+  shell: 'powershell' | 'cmd' | 'bash' | 'zsh';
+  sessionId: string | null;
+  status: Project['status'];
+  codexActive: boolean;
+  agent: Project['agent'];
+  codexActivity: Project['codexActivity'];
+  needsInput: string | null;
+  shellReady: boolean;
+  codexAvailable: boolean | null;
+  lastActivityAt: number | null;
+  lastCompletedAt: number | null;
+  error: string | null;
+};
+export type Settings = {
+  startView: 'decisions' | 'workspace';
+  surface: 'glass' | 'solid';
+  glassBackground: 'theme' | 'desktop';
+  glassTransparency: number | null;
+  terminalRenderer: 'gpu' | 'dom';
+  autoSave: boolean;
+  activityPane: boolean;
+  notifications: boolean;
+  sound: boolean;
+  closeToTray: boolean;
+  explorerCollapsed: boolean;
+  hideTreeNoise: boolean;
+  fontSize: number;
+  terminalFontWeight: 400 | 500 | 600;
+  terminalFontFamily: string;
+  terminalCjkFontFamily: string;
+  userAvatar: string;
+  restoreSessions: boolean;
+  focusAnimation: 'smooth' | 'system' | 'off';
+  uiZoom: number | null;
+  language: 'zh' | 'en';
+  theme: ThemeId;
+  shortcuts: Partial<Record<
+    'search' | 'addProject' | 'voice' | 'overview' | 'decisions' | 'explorer' | 'settings'
+    | 'nextProject' | 'previousProject' | 'projectAbove' | 'projectBelow' | 'maximize' | 'fullscreen' | 'newTerminal' | 'removeProject',
+    string
+  >>;
+  guideVersion: string;
+  shell: 'powershell' | 'cmd' | 'bash' | 'zsh';
+  voiceModel: string;
+  updateChannel: 'stable' | 'beta';
+  betaAgreement: string | null;
+  codexPermissions: CodexPermissions;
+  claudeBackgroundTasks: boolean;
+};
 export type RecentProject = { path: string; name: string; lastOpenedAt: number; exists: boolean };
 export type RecentSSH = { host: string; path: string; name: string; lastOpenedAt: number };
 export type SSHInfo = { hosts: string[]; configFile: string; configExists: boolean; sshPath: string; source: string };
@@ -163,10 +229,6 @@ export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'firs
 export type SeatId = string;
 export type Seat = {
   model: string; effort: string; fast?: boolean;
-  /** @deprecated The old dialog uses this on its lead entry. Family lead choices now come from SeatsInfo.leads. */
-  claude?: Seat;
-  /** @deprecated The old dialog uses this on its lead entry. Family lead choices now come from SeatsInfo.leads. */
-  codex?: Seat;
 };
 export type SeatMap = Record<string, Seat>;
 export type SeatRole = { id: SeatId; name: string; duty: string; detail: string; outputs: string };
@@ -200,9 +262,7 @@ export type SeatsInfo = {
   defaultsMoved?: { seat: string; from: string; to: string }[];
   migrated?: string;
 };
-/** @deprecated The old dialog still validates its two lead slots. */
-type LegacyLeadFamilyCode = 'lead-family';
-export type SeatsSaveError = { ok: false; code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model' | LegacyLeadFamilyCode; seat?: string; message: string };
+export type SeatsSaveError = { ok: false; code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model'; seat?: string; message: string };
 // Where the Claude Code a session runs was found (claude-runtime/BOUNDARY.md); `fileShown` writes home as ~.
 export type ClaudeVia = 'path' | 'npm' | 'platform-package' | 'local-bin' | 'claude-local' | 'winget' | 'registry-path' | 'system';
 export type ClaudeFound = { version: string | null; via: ClaudeVia; fileShown: string };
@@ -269,16 +329,8 @@ export type ConnectionTest = {
 // The native composer can read the current options with an empty patch and change Codex permissions.
 export type NativeRunOptionsPatch = {
   permissions?: Settings['codexPermissions'];
-  /** @deprecated The old composer still builds model patches. Model follows the routing seats. */
-  model?: string | null;
-  /** @deprecated The old composer still builds effort patches. Effort follows the routing seats. */
-  effort?: string | null;
-  /** @deprecated The old composer still builds fast patches. Fast mode follows the routing seats. */
-  fast?: boolean;
 };
 export type NativeRunOptions = { model: string | null; effort: string | null; fast: boolean; permissions?: Settings['codexPermissions'] };
-/** @deprecated The old composer still uses model menus. Use the routing seats catalog. */
-export type NativeModelOption = { value: string; displayName: string; description: string; efforts: string[] };
 export type BillingConnection = { kind: 'api' | 'subscription' | 'none' | 'unknown'; active?: boolean; source: string | null; observedAt: number | null };
 type ConnectedUsage = Omit<NativeUsage, 'agents'> & { apiRecords: boolean; agents: Record<'claude' | 'codex', NativeUsage['agents']['claude'] & {
   connection: BillingConnection; next: { path: 'api' | 'native' | 'terminal' | null; reason: string | null };

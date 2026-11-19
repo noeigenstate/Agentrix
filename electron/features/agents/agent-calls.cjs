@@ -21,6 +21,7 @@ const REMOTE_ID = /^[A-Za-z0-9_-]{1,100}$/, REMOTE_FOLLOWS = 16;
 const RECENT_KEEP = 10, RECENT_AGE_MS = 30 * 60 * 1000;
 const TOOL_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const CALL_FILE_LIMIT = 256 * 1024;
+const UNKNOWN_PLANNER = Object.freeze({ kind: 'planner', agent: null, model: null });
 const regularArtifact = stat => stat.isFile() && stat.nlink === 1n;
 const sameFile = (left, right) => regularArtifact(right) && left.dev === right.dev && left.ino === right.ino;
 const artifactError = error => error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 'missing' : error.code === 'EFBIG' ? 'too-large' : 'refused';
@@ -152,7 +153,7 @@ class AgentCalls {
     const call = { id: `agent:${toolUseId || agentId}`, key, agentId, toolUseId, toolGeneration: 0, sourceAgent: 'claude', agent: 'Claude Code',
       provider: null, ...requested, requested, startedAt, done: false, rate: null, cwd, background, agentType, ...labels,
       title: title || short(agentType) || 'Agent', task, role: agentRoles.get(agentType) || short(agentType) || agentRoles.get('none'),
-      preparing: this.local && !!this.folder, planner: planner || { kind: 'planner', agent: null, model: null } };
+      preparing: this.local && !!this.folder, planner: planner || UNKNOWN_PLANNER };
     call.kind = taskKind(call);
     this.calls.set(key, call); this.feeds.track(call);
     return call;
@@ -342,7 +343,7 @@ class AgentCalls {
       if (call || this.finishedIds.has(event.id)) return false;
       const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: 'unreported', effort: null, fast: null, requestedModel: event.requested.model, requested: event.requested,
-        planner: event.planner || { kind: 'planner', agent: null, model: null }, kind: taskKind(event), meeting: event.meeting ?? null,
+        planner: event.planner || UNKNOWN_PLANNER, kind: taskKind(event), meeting: event.meeting ?? null,
         role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,
         ...declaredSeat(event.seat, this.seatIds),
         helperPid: event.helperPid, starting: true, unconfirmed: true, resumed: event.resumed === true, source: event.source,
@@ -361,7 +362,7 @@ class AgentCalls {
       if (call?.seatSource === 'declared' && event.seat != null && (labels?.seat !== call.seat || labels?.specialty !== call.specialty)) return false;
       const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
         model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
-        planner: event.planner || { kind: 'planner', agent: null, model: null },
+        planner: event.planner || UNKNOWN_PLANNER,
         kind: taskKind(event),
         meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
         role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd, ...labels,

@@ -1,13 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
+const { BASE_EFFORTS: BASE, EFFORT, familyOf, validModel, rankByName: rankOf } = require('./seat-rules.mjs');
 
-const MODEL = /^[A-Za-z0-9][\w.:@+/[\]-]*$/;
-const EFFORT = /^[a-z][a-z0-9-]{0,31}$/;
-const BASE = { claude: ['low', 'medium', 'high', 'xhigh', 'max'], codex: ['low', 'medium', 'high', 'xhigh'] };
-const familyOf = model => /^(opus|sonnet|haiku|claude-)/.test(model) ? 'claude' : 'codex';
-const validModel = model => typeof model === 'string' && model.length <= 160 && MODEL.test(model);
-const rankOf = model => /(^|[-_.])(haiku|mini|nano|lite)([-_.]|$)/.test(model) ? 1 : /(^|[-_.])sonnet([-_.]|$)/.test(model) ? 2 : 3;
 const RETAIN = 30 * 24 * 60 * 60 * 1000;
 
 function trackModelRuntime(runtime, { local = true, runtimes, observe }) {
