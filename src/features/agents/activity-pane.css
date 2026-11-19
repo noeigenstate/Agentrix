@@ -237,6 +237,6 @@
 .activity-task-fold button { min-height: 32px; }
 .activity-task-fold button[aria-expanded="true"] svg { transform: rotate(180deg); }
 
-.activity-routing-title [data-routing-pending] { margin-inline-start: auto; color: var(--flow-muted); font-size: 12px; }
+.activity-routing-title [data-routing-pending] { margin-inline-start: auto; color: var(--warning); font-size: 12px; }
 .activity-routing-rows[data-compact] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
 .activity-routing-rows[data-compact] .activity-routing-fast { display: none; }

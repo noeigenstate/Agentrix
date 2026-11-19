@@ -139,7 +139,7 @@ function compile(file, hooks, stubs = {}) {
     if (name.endsWith('/role-rules.mjs')) return original(name);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
       routingModelName: require('../src/shared/routing-command.ts').routingModelName,
-      routingRoleName: text => en['席位 · ' + text] ?? en[text] ?? text,
+      routingRoleName: text => stubs.language === 'zh' ? text : en['席位 · ' + text] ?? en[text] ?? text,
       openSeats: detail => window.dispatchEvent(new CustomEvent('agentrix:open-seats', { detail })) };
     if (name === '../../shared/model-name') return require('../src/shared/model-name.ts');
     if (name.endsWith('.css')) return {};
@@ -195,6 +195,7 @@ function dialogHarness(t, info, props = {}) {
   const api = {
     onSkills: listener => { changed = listener; return () => { changed = undefined; }; },
     skillSeats: async () => current,
+    resolveSkillRouting: props.resolveSkillRouting,
     setSkillRouting: async (...args) => {
       calls.push(args);
       if (props.reply && !props.reply.ok) return props.reply;
@@ -1209,7 +1210,7 @@ test('the activity key is one button with a row for each role and opens the scop
 test('role drafts follow their sources and reviewer conflicts use enabled author roles', () => {
   const info = seatsInfo({ roles: [
     ...team.roles.map(role => shipped(role)),
-    shipped({ id: 'frontend', name: 'Frontend', detail: 'Frontend implementation', duty: 'UI', outputs: 'Code' }, 'library'),
+    { ...shipped({ id: 'frontend', name: 'Frontend', detail: 'Frontend implementation', duty: 'UI', outputs: 'Code' }, 'library'), inherits: 'developer' },
   ] });
   const project = { roles: {
     frontend: { enabled: true },
@@ -1296,6 +1297,7 @@ test('the role editor validates text, regenerates a new ID and clears the seat w
   assert.equal(byAttr(tree, 'data-save-role').props.disabled, false);
   change(byAttr(tree, 'data-role-text', 'duty'), 'bad | text');
   assert.equal(byAttr(handle.render(), 'data-save-role').props.disabled, true);
+  assert.match(textOf(handle.render()), /Character \| is not allowed/);
   change(find(tree, node => node.type === 'select' && node.props.required), 'reviewer');
   tree = handle.render();
   assert.ok(find(tree, node => node.type === 'input' && node.props.value === 'x-reviewer-2'));
@@ -1340,4 +1342,62 @@ test('the role library and Developer specialties use the supplied labels and dut
   const library = h.render();
   assert.match(textOf(byAttr(library, 'data-library-role', 'ai')), /人工智能.*主进程提供的模型职责/);
   assert.match(textOf(byAttr(library, 'data-library-role', 'a11y')), /无障碍.*主进程提供的无障碍职责/);
+});
+
+test('English localizes every shipped role library field and the copy suffix', () => {
+  const { builtinMetadata } = require('../electron/features/skills/builtin-format.cjs');
+  const shippedSkill = fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8');
+  const { library, roles } = builtinMetadata(shippedSkill, 'model-routing');
+  for (const { name, duty, detail, outputs } of roles.filter(role => library.includes(role.id))) {
+    for (const key of ['席位 · ' + name, name, duty, detail, outputs]) {
+      assert.ok(en[key], 'missing translation for ' + key);
+    }
+  }
+  assert.equal(en['副本'], ' copy');
+});
+
+test('drafts use the main process role defaults and preserve its library order', t => {
+  const mainRoles = team.roles.map(role => shipped(role));
+  const developer = mainRoles.find(role => role.id === 'developer');
+  const a11y = { ...shipped({ ...developer, id: 'a11y', name: '无障碍' }, 'library'),
+    enabled: false, fresh: false, defaultEnabled: true, defaultFresh: true, defaultSeat: { model: 'gpt-6.2-sol', effort: 'low' } };
+  const frontend = { ...shipped({ ...developer, id: 'frontend', name: '前端' }, 'library'), inherits: 'architect' };
+  const info = seatsInfo({ roles: [...mainRoles, a11y, frontend] });
+  const config = { roles: { a11y: { fresh: false }, frontend: { enabled: true } }, operations: {} };
+  const roles = seatsLib.draftRoles(info, config);
+  const seats = seatsLib.resolveDraftSeats(info.defaults, roles, config);
+  assert.deepEqual(roles.slice(-2).map(role => role.id), ['a11y', 'frontend']);
+  assert.deepEqual(roles.find(role => role.id === 'a11y'), { ...a11y, enabled: true });
+  assert.deepEqual(seats.a11y, a11y.defaultSeat);
+  assert.deepEqual(seats.frontend, seats.architect);
+  assert.deepEqual(seatsLib.cleanDraft(info, { ...config, roles: { ...config.roles, a11y: { enabled: true, fresh: false, ...seats.a11y } } }), config);
+
+  const h = dialogHarness(t, { ...info, config });
+  const chart = h.render();
+  assert.equal(find(byAttr(chart, 'data-seat', 'orchestrator'), node => node.props.type === 'checkbox'), undefined);
+  assert.match(textOf(byAttr(byAttr(chart, 'data-seat', 'a11y'), 'data-fresh-override')), /Changed to reuse an instance/);
+});
+
+test('a changed review digest temporarily disables every action and sends only the latest digest', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = digest => source({ state: 'pending', digest, actions: ['apply', 'keep', 'overwrite'] });
+  const info = seatsInfo({ routing: pending('old') }), calls = [];
+  const h = dialogHarness(t, info, { resolveSkillRouting: async (...args) => { calls.push(args); return { ok: true }; } });
+  const action = (tree, id = 'apply') => byAttr(tree, 'data-routing-action', id);
+  assert.equal(action(h.render()).props.disabled, false);
+  h.deliver({ ...info, routing: pending('new') });
+  await settle();
+  const changed = h.render();
+  assert.match(textOf(byAttr(changed, 'data-review-refreshed')), /Review refreshed/);
+  for (const id of ['apply', 'keep', 'overwrite']) {
+    assert.equal(action(changed, id).props.disabled, true);
+    action(changed, id).props.onClick();
+  }
+  assert.deepEqual(calls, []);
+  t.mock.timers.tick(1000);
+  const ready = h.render();
+  assert.equal(action(ready).props.disabled, false);
+  action(ready).props.onClick();
+  await settle();
+  assert.deepEqual(calls, [['p1', 'apply', 'new']]);
 });

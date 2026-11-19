@@ -6,16 +6,17 @@ import {
   checkTeamRules, nextRoleId, normalizeRoleText, ROLE_TEXT_LIMITS, validateCustomRole,
 } from '../../../electron/features/skills/role-rules.mjs';
 import { assignModel, rowFor } from './skill-seats';
-import { routingError } from './RoutingReview';
+import { escapeRoutingText, routingError } from './RoutingReview';
 
 export const roleName = (role: TeamRole) => role.source === 'custom' ? role.name : routingRoleName(role.name, t);
 const labels = { name: '名称', duty: '职责', outputs: '产出' };
 
 export function copyRole(id: string, draft: { from: TeamRole; roles: TeamRole[]; replace?: string }): RoleConfig {
   const base = draft.from.name.replace(/[,.()]/g, '');
+  const copy = t('副本');
   for (let number = 1; ; number++) {
-    const suffix = number === 1 ? '副本' : '副本' + number;
-    const name = [...base].slice(0, ROLE_TEXT_LIMITS.name[1] - [...suffix].length).join('') + suffix;
+    const suffix = number === 1 ? copy : copy + number;
+    const name = [...base].slice(0, ROLE_TEXT_LIMITS.name[1] - [...suffix].length).join('').trimEnd() + suffix;
     const roles = draft.roles.filter(role => role.id !== draft.replace);
     const duplicate = checkTeamRules([...roles, { ...draft.from, id, source: 'custom', name, enabled: true }]);
     if (duplicate?.code !== 'role-text') return { from: draft.from.id, name, duty: draft.from.detail, outputs: draft.from.outputs, enabled: true };
@@ -26,11 +27,12 @@ function RoleTextFields({ value, locked, update }: { value: RoleConfig; locked: 
   return <>{(Object.keys(labels) as (keyof typeof labels)[]).map(field => {
     const text = value[field] ?? '', length = [...text.normalize('NFC').trim()].length, max = ROLE_TEXT_LIMITS[field][1];
     const invalid = !locked && normalizeRoleText(field, text) === null;
+    const refused = invalid && [...text].find(char => normalizeRoleText(field, 'A' + char + 'A') === null);
     const props = { value: text, readOnly: locked, onChange: (event: { target: { value: string } }) => update({ ...value, [field]: event.target.value }),
       'aria-invalid': invalid || undefined, name: field, 'data-role-text': field };
     return <label key={field}>{t(labels[field])} <small>{length}/{max}</small>
       {field === 'name' ? <input {...props} /> : <textarea {...props} rows={field === 'duty' ? 3 : 2} />}
-      {invalid && <small>{t('检查文字长度与允许的字符。')}</small>}
+      {invalid && <small>{refused ? t('不允许字符 {character}。', { character: escapeRoutingText(refused) }) : t('检查文字长度与允许的字符。')}</small>}
     </label>;
   })}</>;
 }
