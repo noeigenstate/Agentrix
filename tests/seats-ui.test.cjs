@@ -6,9 +6,14 @@ const Module = require('node:module');
 const ts = require('typescript');
 const React = require('react');
 const seatsLib = require('../src/features/agents/skill-seats.ts');
-const { paletteGroups, lineOf, shortLabel, pickFix, menuPlacement, topAlternatives, withInstalled, canonicalModel, sameModel, assignModel, assignCustom,
-  rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, reviewerBlock, firstRefusal, scopePayload, changedCount, baselineFor, lowerLayer,
+const { paletteGroups, lineOf, shortLabel, menuPlacement, withInstalled, canonicalModel, sameModel, assignModel, assignCustom,
+  rowFor, issuesOf, ageOf, swapSlots, setEffort, setFast, baselineFor,
   startScope, fallbackFor, saveSeats } = seatsLib;
+const reviewerRoles = { authors: ['developer'], reviewers: ['reviewer'] };
+const reviewerBlock = (map, catalog, defaults, roles = reviewerRoles) => seatsLib.reviewerBlock(map, catalog, defaults, roles);
+const firstRefusal = (map, catalog) => seatsLib.firstRefusal(map, catalog, reviewerRoles);
+const topAlternatives = (rows, max, context) => seatsLib.topAlternatives(rows, max,
+  context && { ...context, authors: reviewerRoles.authors, reviewer: 'reviewer' });
 
 const en = require('../electron/locales/en.json');
 const additions = path.join(__dirname, '../locale-additions-seats2.json');
@@ -21,12 +26,25 @@ const catalog = (overrides = {}) => [row('opus', 'Opus', 'claude', 3), row('sonn
   .map(entry => ({ ...entry, ...overrides[entry.model] }));
 const team = require('./fixtures/team-seats.json');
 const DEFAULTS = team.defaults;
+const { roleKind, roleLocks } = require('../electron/features/skills/role-rules.mjs');
+const shipped = (role, source = 'builtin') => {
+  const kind = roleKind(role.id, ['developer', 'frontend']);
+  return { ...role, source, kind, enabled: source === 'builtin', fresh: ['qa', 'reviewer'].includes(role.id), locked: roleLocks(kind, source) };
+};
+const source = (patch = {}) => ({ layer: 'file', state: 'trusted', remote: false, path: '.agentrix/routing.json', digest: 'at-open', actions: [], ...patch });
 const SEATS = team.seats;
 const clone = value => JSON.parse(JSON.stringify(value));
-function seatsInfo(overrides = {}) {
-  const info = { skill: 'model-routing', seats: SEATS, roles: team.roles, lead: 'orchestrator', authors: ['developer'], leadAgent: 'claude', leads: { claude: DEFAULTS.orchestrator, codex: DEFAULTS.developer }, fresh: ['qa', 'reviewer'], defaults: clone(DEFAULTS), global: {}, project: null, effective: clone(DEFAULTS), current: null,
-    catalog: catalog(), installed: { claude: true, codex: true }, ...overrides };
-  return info;
+function seatsInfo({ global = {}, project = null, operations, ...overrides } = {}) {
+  const config = (roles, operations) => ({ roles, operations: operations ?? {} });
+  const template = config(global, operations?.template);
+  const applied = project || operations?.config ? config(project ?? {}, operations?.config) : null;
+  return {
+    skill: 'model-routing', seats: SEATS, roles: team.roles.map(role => shipped(role)), lead: 'orchestrator',
+    authors: ['developer'], leadAgent: 'claude', leads: { claude: DEFAULTS.orchestrator, codex: DEFAULTS.developer },
+    fresh: ['qa', 'reviewer'], defaults: clone(DEFAULTS), template, config: applied,
+    effective: { ...clone(DEFAULTS), ...(applied ?? template).roles }, current: null, currentRoles: null, routing: source(), operations,
+    catalog: catalog(), installed: { claude: true, codex: true }, ...overrides,
+  };
 }
 
 test('the mirror holds a reviewer to the rank rule: refused only while another available model at least as strong exists', () => {
@@ -79,28 +97,27 @@ test('an unavailable model cannot be placed and its seat shows the default it fa
   assert.equal(fallbackFor(info, 'designer', working), null, 'an available model needs none');
 });
 
-test('the saved payload contains only the seat overrides for the current scope', () => {
-  const orchestration = { model: 'gpt-6.2-sol', effort: 'high', fast: true };
-  const global = { reviewer: { model: 'sonnet', effort: 'low' } }, project = { architect: { model: 'opus', effort: 'max' } };
-  const info = seatsInfo({ global, project });
+test('the applied project layer starts at built-in defaults and excludes template roles', () => {
+  const project = { architect: { model: 'opus', effort: 'max' } };
+  const info = seatsInfo({ global: { reviewer: { model: 'sonnet', effort: 'low' } }, project });
   const baseline = baselineFor(info, 'project');
-  const working = { ...baseline, orchestrator: orchestration };
   assert.equal(startScope(info, 'p1'), 'project');
   assert.deepEqual(baseline.architect, project.architect);
-  assert.deepEqual(baseline.reviewer, global.reviewer);
-  assert.deepEqual(scopePayload(working, lowerLayer(info, 'project')), { orchestrator: orchestration, ...project });
-  assert.equal(changedCount(SEATS, working, baseline), 1);
+  assert.deepEqual(baseline.reviewer, DEFAULTS.reviewer);
+  assert.deepEqual(seatsLib.cleanDraft(info, info.config), { roles: project, operations: {} });
 });
 
-test('saving sends the chosen scope with the edited map, a project id only for the project scope, and returns main’s refusal as text', async () => {
-  const calls = [], working = { ...clone(DEFAULTS), architect: { model: 'sonnet', effort: 'low' } };
-  const api = { setSkillSeats: async (...args) => { calls.push(args); return { ok: true }; } };
-  assert.deepEqual(await saveSeats(api, 'project', 'p1', working, DEFAULTS), { ok: true });
-  assert.deepEqual(await saveSeats(api, 'global', 'p1', working, DEFAULTS), { ok: true });
-  assert.deepEqual(calls, [['project', 'p1', { architect: { model: 'sonnet', effort: 'low' } }], ['global', null, { architect: { model: 'sonnet', effort: 'low' } }]]);
-  const refused = await saveSeats({ setSkillSeats: async () => ({ ok: false, code: 'reviewer-same-model', seat: 'reviewer', message: 'Choose a different reviewer.' }) }, 'global', null, working, DEFAULTS);
-  assert.deepEqual(refused, { ok: false, message: 'Choose a different reviewer.' });
-  assert.deepEqual(await saveSeats({ setSkillSeats: async () => { throw new Error('ipc closed'); } }, 'global', null, working, DEFAULTS), { ok: false, message: 'ipc closed' });
+test('routing saves send one scoped config and the on-disk base, and preserve structured refusals', async () => {
+  const calls = [], config = { roles: { architect: { model: 'sonnet', effort: 'low' } }, operations: {} };
+  const api = { setSkillRouting: async (...args) => { calls.push(args); return { ok: true }; } };
+  assert.deepEqual(await saveSeats(api, 'project', 'p1', config, 'original'), { ok: true });
+  assert.deepEqual(await saveSeats(api, 'template', 'p1', config, 'original'), { ok: true });
+  assert.deepEqual(calls, [['project', 'p1', config, 'original'], ['template', null, config, null]]);
+  const error = { ok: false, code: 'file-changed', message: 'Changed' };
+  const refused = await saveSeats({ setSkillRouting: async () => error }, 'project', 'p1', config, 'original');
+  assert.deepEqual(refused, { ok: false, message: error.message, error });
+  assert.deepEqual(await saveSeats({ setSkillRouting: async () => { throw new Error('ipc closed'); } },
+    'template', null, config, null), { ok: false, message: 'ipc closed' });
 });
 
 // ---- a component harness: the hooks the components use, run without a DOM; a test re-renders after each handler ----
@@ -118,7 +135,8 @@ function compile(file, hooks, stubs = {}) {
       t: (text, values = {}) => (stubs.language === 'zh' ? text : en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match),
     };
     if (name === './skill-seats') return seatsLib;
-    if (name === './OperationRows') return compile('OperationRows.tsx', hooks, stubs);
+    if (['./OperationRows', './RoleEditor', './RoutingReview'].includes(name)) return compile(name.slice(2) + '.tsx', hooks, stubs);
+    if (name.endsWith('/role-rules.mjs')) return original(name);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
       routingModelName: require('../src/shared/routing-command.ts').routingModelName,
       routingRoleName: text => en['席位 · ' + text] ?? en[text] ?? text,
@@ -151,6 +169,7 @@ function mount(t, file, name, props, stubs) {
 const inlineComponents = new Set([
   'RoutingTabs', 'MenuHeader', 'OperationRows', 'OperationTitle', 'OperationCard', 'CurrentOperations', 'OperationSummary', 'Status',
   'DialogHeader', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu', 'ReviewOperationBanner',
+  'RoleLibrary', 'RoleActions', 'RoutingReview', 'RoleTextFields', 'RoleModel',
 ]);
 const childrenOf = node => inlineComponents.has(node.type?.name) ? node.type(node.props) : node.props.children;
 const walk = (node, visit) => {
@@ -172,18 +191,30 @@ const settle = async () => { for (let turn = 0; turn < 6; turn++) await null; };
 
 function dialogHarness(t, info, props = {}) {
   const calls = [], closed = [], refreshes = [];
-  const api = { setSkillSeats: async (...args) => { calls.push(args); return props.reply ?? { ok: true }; },
+  let current = info, changed;
+  const api = {
+    onSkills: listener => { changed = listener; return () => { changed = undefined; }; },
+    skillSeats: async () => current,
+    setSkillRouting: async (...args) => {
+      calls.push(args);
+      if (props.reply && !props.reply.ok) return props.reply;
+      const [scope, , config] = args, key = scope === 'project' ? 'config' : 'template';
+      current = { ...current, [key]: config, routing: source() };
+      if (current.operations) current.operations = { ...current.operations, [key]: config.operations };
+      return { ok: true };
+    },
     skillSeatsRefresh: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; } };
   globalThis.window = { agentrix: api, innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
   const listeners = [];
   globalThis.document = { activeElement: null, elementFromPoint: () => null, addEventListener: (type, fn) => listeners.push([type, fn]), removeEventListener: (type, fn) => { const at = listeners.findIndex(entry => entry[0] === type && entry[1] === fn); if (at >= 0) listeners.splice(at, 1); } };
   const h = mount(t, 'SeatsDialog.tsx', 'SeatsDialog',
     { info, projectId: 'p1', terminalId: 't1', onClose: () => closed.push(true), ...props.dialog }, { language: props.language });
-  return Object.assign(h, { calls, closed, refreshes, outsideMouseDown: target => listeners.filter(entry => entry[0] === 'mousedown').forEach(entry => entry[1]({ target })) });
+  const outsideMouseDown = target => listeners.filter(entry => entry[0] === 'mousedown').forEach(entry => entry[1]({ target }));
+  return Object.assign(h, { calls, closed, refreshes, deliver: next => { current = next; changed?.(); }, outsideMouseDown });
 }
 const keyEvent = key => ({ key, stopPropagation() {}, preventDefault() {} });
 
-function operationInfo(overrides = {}) {
+function operationInfo({ global = {}, project = null, ...overrides } = {}) {
   const defaults = { lookup: { model: 'haiku', effort: 'high' }, background: { model: 'haiku' }, subagent: 'follow', memory: 'follow', review: 'follow' };
   const entries = [
     ['lookup', '检索', 'Lookup', ['claude', 'codex'], 'always', null],
@@ -204,7 +235,7 @@ function operationInfo(overrides = {}) {
     },
     ...(id === 'memory' ? { suggestion: 'gpt-6-mini' } : {}),
   }));
-  return { rows, defaults, global: {}, project: null, effective: defaults, current: null, ...overrides };
+  return { rows, defaults, template: global, config: project, effective: { ...defaults, ...(project ?? global) }, current: null, ...overrides };
 }
 
 const operationCatalog = () => [
@@ -253,7 +284,7 @@ test('review operations block a Developer collision before IPC and offer a valid
   assert.equal(byAttr(tree, 'data-save').props.disabled, false);
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls[0][3], { review: { model: 'gpt-6.2-astra' } });
+  assert.deepEqual(h.calls[0][2].operations, { review: { model: 'gpt-6.2-astra' } });
 });
 
 test('review follows the live Reviewer seat and a single-family collision can fall back to it', t => {
@@ -276,9 +307,9 @@ test('review follows the live Reviewer seat and a single-family collision can fa
 test('review operations keep distinct Codex IDs and allow a collision when no equally strong alternative is available', () => {
   const version = 'gpt-6.2-sol-20261119';
   const rows = [...operationCatalog(), row(version, version, 'codex', 3)];
-  assert.equal(seatsLib.operationReviewerBlock({ model: version }, DEFAULTS, rows), null);
+  assert.equal(seatsLib.operationReviewerBlock({ model: version }, DEFAULTS, rows, undefined, reviewerRoles), null);
   const weaker = operationCatalog().filter(row => row.family === 'codex');
-  assert.equal(seatsLib.operationReviewerBlock({ model: 'gpt-6.2-sol' }, DEFAULTS, weaker), null);
+  assert.equal(seatsLib.operationReviewerBlock({ model: 'gpt-6.2-sol' }, DEFAULTS, weaker, undefined, reviewerRoles), null);
 });
 
 test('operation notes are localized by ID and the memory suggestion is a one-click draft on provider default', t => {
@@ -352,7 +383,7 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
     current: { values: { lookup: { model: 'haiku', effort: 'high' }, memory: 'follow' }, agents: {} },
   });
   const h = dialogHarness(t, seatsInfo({ operations, catalog: operationCatalog() }));
-  assert.equal(find(h.render(), node => node.type === 'select').props.value, 'project', 'an operations-only project override chooses project scope');
+  assert.equal(byAttr(h.render(), 'data-scope', 'project').props['aria-pressed'], true, 'an operations-only project override chooses project scope');
   byAttr(openMenu(h, 'qa'), 'data-assign', 'haiku').props.onClick();
   showOperations(h);
   byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
@@ -362,21 +393,20 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
   find(tree, node => node.props.role === 'dialog').props.onKeyDown(keyEvent('Escape'));
   assert.match(textOf(find(h.render(), node => node.props.role === 'alertdialog')), /2 unsaved changes/);
   byAttr(h.render(), 'data-keep').props.onClick();
-  find(h.render(), node => node.type === 'select').props.onChange({ target: { value: 'global' } });
   tree = h.render();
-  assert.match(textOf(byAttr(tree, 'data-op-model', 'memory')), /Codex default/);
+  assert.match(textOf(byAttr(tree, 'data-op-model', 'memory')), /GPT-6 Mini/);
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls[0], ['global', null, { qa: { model: 'haiku', effort: 'high' } }, {
-    background: { model: 'opus' }, lookup: { model: 'opus', effort: 'max' },
-  }]);
+  assert.deepEqual(h.calls[0], ['project', 'p1', { roles: { qa: { model: 'haiku', effort: 'high' } }, operations: {
+    memory: { model: 'gpt-6-mini' }, lookup: { model: 'opus', effort: 'max' },
+  } }, 'at-open']);
   byAttr(h.render(), 'data-now').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Haiku · high/);
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Codex default/);
   byAttr(h.render(), 'data-reset').props.onClick();
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls[1], ['global', null, {}, {}]);
+  assert.deepEqual(h.calls[1], ['project', 'p1', { roles: {}, operations: {} }, 'at-open']);
 });
 
 test('operation chips show the provider reason and model editing works through the suggestion, custom input and palette drag', t => {
@@ -417,7 +447,7 @@ test('the dialog saves the chosen scope and the edited map; the keyboard 更换 
   const h = dialogHarness(t, seatsInfo({ project: null }));
   let tree = h.render();
   assert.ok(byAttr(tree, 'data-save').props.disabled, '保存 waits for a change');
-  assert.equal(textOf(byAttr(tree, 'data-save')), 'Save');
+  assert.equal(textOf(byAttr(tree, 'data-save')), 'Save routing');
   // 更换 on the architect seat opens a menu holding every model; picking one assigns it.
   byAttr(tree, 'data-pick', 'architect').props.onClick(pickButton('architect'));
   tree = h.render();
@@ -438,7 +468,7 @@ test('the dialog saves the chosen scope and the edited map; the keyboard 更换 
   assert.equal(save.props.disabled, false);
   save.props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, { architect: { model: 'gpt-6.2-sol', effort: 'xhigh', fast: false } }, {}]], 'only the changed seat');
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: { architect: { model: 'gpt-6.2-sol', effort: 'xhigh' } }, operations: {} }, 'at-open']], 'only the changed seat');
   tree = h.render();
   assert.match(textOf(find(tree, node => node.props.role === 'status')), /Saved\. It applies from the next conversation/);
 });
@@ -453,15 +483,15 @@ test('the scope select sends the project id, and 恢复默认 saves an empty map
   assert.equal(byAttr(tree, 'data-save').props.disabled, false, 'resetting is a change to save');
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, {}, {}]], 'an empty map clears the global scope');
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: {}, operations: {} }, 'at-open']], 'an empty map clears the global scope');
   const project = dialogHarness(t, seatsInfo());
   tree = project.render();
-  find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting').props.onChange({ target: { value: 'project' } });
+  byAttr(tree, 'data-scope', 'project').props.onClick();
   byAttr(project.render(), 'data-pick', 'researcher').props.onClick(pickButton('researcher'));
   byAttr(find(project.render(), node => node.props.role === 'menu'), 'data-assign', 'haiku').props.onClick();
   byAttr(project.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(project.calls, [['project', 'p1', { researcher: { model: 'haiku', effort: 'high' } }, {}]]);
+  assert.deepEqual(project.calls, [['project', 'p1', { roles: { researcher: { model: 'haiku', effort: 'high' } }, operations: {} }, 'at-open']]);
 });
 
 test('a blocked reviewer is framed, named 已阻止, explained with a one-click fix and cannot be saved; main’s refusal is shown', async t => {
@@ -572,20 +602,18 @@ test('the chart places connector drops at the columns and collapses the palette 
   assert.doesNotMatch(css, /@keyframes|animation:/);
 });
 
-test('switching the scope keeps only the slots edited in this dialog: untouched project overrides never reach global', async t => {
-  const info = seatsInfo({ project: { developer: { model: 'opus', effort: 'max' }, designer: { model: 'haiku', effort: 'low' } } });
-  const h = dialogHarness(t, info);
-  let tree = h.render();
-  assert.equal(find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting').props.value, 'project');
-  byAttr(tree, 'data-pick', 'researcher').props.onClick(pickButton('researcher'));
-  byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'haiku').props.onClick();
-  tree = h.render();
-  find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting').props.onChange({ target: { value: 'global' } });
-  tree = h.render();
-  assert.match(textOf(tree), /Unsaved draft · 1 seats changed/, 'the count is against the global baseline: the project overrides are not counted');
-  byAttr(tree, 'data-save').props.onClick();
+test('the project and template retain independent unsaved drafts', async t => {
+  const h = dialogHarness(t, seatsInfo({ project: { designer: { model: 'haiku', effort: 'low' } } }));
+  assert.equal(byAttr(h.render(), 'data-scope', 'project').props['aria-pressed'], true);
+  byAttr(openMenu(h, 'researcher'), 'data-assign', 'haiku').props.onClick();
+  byAttr(h.render(), 'data-scope', 'template').props.onClick();
+  assert.equal(byAttr(h.render(), 'data-save').props.disabled, true);
+  byAttr(openMenu(h, 'researcher'), 'data-assign', 'opus').props.onClick();
+  byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, { researcher: { model: 'haiku', effort: 'high' } }, {}]], 'project overrides stay in the project');
+  assert.deepEqual(h.calls, [['template', null, { roles: { researcher: { model: 'opus', effort: 'high' } }, operations: {} }, null]]);
+  byAttr(h.render(), 'data-scope', 'project').props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'data-pick', 'researcher')), /Haiku/);
 });
 
 test('closing with an unsaved draft asks once, inline, before discarding', t => {
@@ -604,18 +632,18 @@ test('closing with an unsaved draft asks once, inline, before discarding', t => 
   assert.equal(h.closed.length, 1);
 });
 
-test('a scope switch never carries the old scope’s saved seats over the new scope’s own override', async t => {
-  const info = seatsInfo({ global: { developer: { model: 'opus', effort: 'low' } }, project: { developer: { model: 'haiku', effort: 'low' } } });
-  info.effective = { ...info.defaults, ...info.global, ...info.project };
-  const h = dialogHarness(t, info);
-  const scopeSelect = tree => find(tree, node => node.type === 'select' && node.props['aria-label'] === 'Scope of the setting');
-  scopeSelect(h.render()).props.onChange({ target: { value: 'global' } });
-  byAttr(h.render(), 'data-pick', 'architect').props.onClick(pickButton('architect'));
-  byAttr(find(h.render(), node => node.props.role === 'menu'), 'data-assign', 'sonnet').props.onClick();
-  scopeSelect(h.render()).props.onChange({ target: { value: 'project' } });
+test('a file-watch refresh does not replace a draft’s compare-and-swap digest', async t => {
+  const info = seatsInfo({ project: { developer: { model: 'haiku', effort: 'low' } } });
+  const h = dialogHarness(t, info, { reply: { ok: false, code: 'file-changed', message: 'Changed' } });
+  byAttr(openMenu(h, 'architect'), 'data-assign', 'sonnet').props.onClick();
+  h.deliver({ ...info, routing: source({ digest: 'fresh' }) });
+  await settle();
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['project', 'p1', { developer: { model: 'haiku', effort: 'low' }, architect: { model: 'sonnet', effort: 'high' } }, {}]]);
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: {
+    developer: { model: 'haiku', effort: 'low' }, architect: { model: 'sonnet', effort: 'high' },
+  }, operations: {} }, 'at-open']]);
+  assert.match(textOf(h.render()), /changed on disk/i);
 });
 
 for (const dismissal of ['Escape', 'Keep editing']) test(`${dismissal} preserves the draft and restores focus inside the dialog`, t => {
@@ -716,7 +744,7 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   assert.match(textOf(find(tree, node => node.props.role === 'status')), /gpt-6\.3-sol/);
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, { developer: { model: 'gpt-6.3-sol', effort: 'high', fast: true } }, {}]]);
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: { developer: { model: 'gpt-6.3-sol', effort: 'high', fast: true } }, operations: {} }, 'at-open']]);
   // A custom model of the other family can be used by the orchestrator.
   const lead = dialogHarness(t, seatsInfo());
   byAttr(openMenu(lead, 'orchestrator'), 'data-custom').props.onClick();
@@ -819,7 +847,7 @@ test('an alias and the id it resolves to are one model for the reviewer rule, an
   assert.equal(reviewerSameButAllowed({ ...map }, catalog({ 'gpt-6.2-sol': { available: false }, sonnet: { available: false }, haiku: { available: false } }).concat([row('claude-opus-5-5', 'Opus', 'claude', 3)])), true, 'the warning form follows the same rule');
 });
 
-function reviewerSameButAllowed(map, rows) { return seatsLib.reviewerSameButAllowed(map, rows); }
+function reviewerSameButAllowed(map, rows) { return seatsLib.reviewerSameButAllowed(map, rows, 'reviewer', reviewerRoles.authors); }
 
 test('the blocked banner names the three strongest alternatives and counts the rest; the icon sits inline with the message', t => {
   const many = catalog().concat(Array.from({ length: 10 }, (_, index) => row(`gpt-6.${index}-luna`, `GPT-6.${index}-Luna`, 'codex', index < 4 ? 3 : 2)));
@@ -899,7 +927,6 @@ test('the one-click fix is the reviewer’s default if it is a candidate, else t
   const strongest = reviewerBlock({ ...none, developer: { model: 'opus', effort: 'high' }, reviewer: { model: 'opus', effort: 'high' } }, rows, undefined);
   assert.equal(strongest.fix.model, 'gpt-6.2-sol', 'no other seat runs a candidate: the strongest, newest id (not Fable, which is only first in the list)');
   assert.equal(reviewerBlock({ ...none, developer: { model: 'opus', effort: 'high' }, reviewer: { model: 'opus', effort: 'high' } }, [...rows].reverse(), undefined).fix.model, 'gpt-6.2-sol', 'the same pick in any list order');
-  assert.equal(pickFix([], map, rows), null);
 });
 
 // ---- layout A (round cat-r2): effort on the tile, menus that close, the grouped 模型盘 ----
@@ -1020,9 +1047,9 @@ test('the effort button on every tile opens a popover with the model’s own lev
   assert.equal(byAttr(liveMenu(h), 'data-pop-fast', 'developer').props['aria-checked'], false, 'fast turned off in the popover');
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['global', null, {
-    architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high', fast: false },
-  }, {}]], 'the tile controls are saved like the menu’s');
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: {
+    architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high' },
+  }, operations: {} }, 'at-open']], 'the tile controls are saved like the menu’s');
   // The fast switch on the tile is the same switch: on where the row lists fast, disabled with its reason where not.
   const tile = h.render();
   assert.equal(byAttr(tile, 'data-tile-fast', 'designer').props.disabled, true);
@@ -1177,4 +1204,125 @@ test('the activity key is one button with a row for each role and opens the scop
   h.render();
   await settle();
   assert.match(textOf(byAttr(h.render(), 'className', 'activity-routing-operations')), /Operation models · default/i);
+});
+
+test('role drafts follow their sources and reviewer conflicts use enabled author roles', () => {
+  const info = seatsInfo({ roles: [
+    ...team.roles.map(role => shipped(role)),
+    shipped({ id: 'frontend', name: 'Frontend', detail: 'Frontend implementation', duty: 'UI', outputs: 'Code' }, 'library'),
+  ] });
+  const project = { roles: {
+    frontend: { enabled: true },
+    'x-ui': { from: 'frontend', name: 'UI specialist', duty: 'UI design' },
+    'x-review': { from: 'reviewer', name: 'Review copy', duty: 'Review code' },
+    reviewer: { enabled: false },
+    developer: { model: 'opus', effort: 'max' },
+  }, operations: {} };
+  const roles = seatsLib.draftRoles(info, project);
+  const models = seatsLib.resolveDraftSeats(info.defaults, roles, project);
+  assert.equal(roles.find(role => role.id === 'x-review').kind, 'reviewer');
+  assert.equal(roles.find(role => role.id === 'x-review').fresh, true);
+  assert.deepEqual(models['x-ui'], { model: 'opus', effort: 'max' });
+  const result = reviewerBlock(models, catalog(), info.defaults, { authors: ['x-ui', 'frontend'], reviewers: ['x-review'] });
+  assert.deepEqual([result.reviewer, result.hit], ['x-review', ['x-ui', 'frontend']]);
+  assert.equal(reviewerBlock(models, catalog(), info.defaults, { authors: [], reviewers: ['x-review'] }), null);
+});
+
+test('the role library locks the last reviewer and the editor supports copy and replace', t => {
+  const h = dialogHarness(t, seatsInfo());
+  byAttr(h.render(), 'data-routing-tab', 'library').props.onClick();
+  const tree = h.render();
+  assert.equal(byAttr(tree, 'data-toggle-role', 'reviewer').props.disabled, true);
+  assert.equal(byAttr(tree, 'data-toggle-role', 'orchestrator').props.disabled, true);
+  byAttr(tree, 'data-replace-role', 'reviewer').props.onClick();
+  const editor = find(h.render(), node => node.type?.name === 'RoleEditor');
+  assert.equal(editor.props.initial.from, 'reviewer');
+  assert.equal(editor.props.id, 'x-reviewer-1');
+  assert.equal(editor.props.replace, 'reviewer');
+  editor.props.save(editor.props.id, { ...editor.props.initial, name: 'Review copy' });
+  const next = h.render();
+  assert.equal(byAttr(next, 'data-toggle-role', 'reviewer').props.disabled, false);
+  assert.equal(byAttr(next, 'data-toggle-role', 'x-reviewer-1').props.disabled, true);
+});
+
+test('frozen role groups retain a row name and put off-team calls last after terminal reuse', () => {
+  const dev = { ...team.roles.find(role => role.id === 'developer'), name: 'Developer' };
+  const selected = [{ ...dev, id: 'x-ui', name: 'Selected name' }, dev];
+  const row = (id, seat, seatName, startedAt, offTeam) => ({
+    item: { id, seat, seatName, startedAt, offTeam, seatSource: 'declared' },
+    call: { model: 'opus' },
+  });
+  const rows = [
+    row('off', 'x-ui', 'Old name', 5, true),
+    row('dev', 'developer', 'Developer', 4),
+    row('old', 'x-other', 'Previous name', 1),
+    row('new', 'x-other', 'Newest name', 9),
+    row('ui', 'x-ui', 'Original name', 2),
+  ];
+  const groups = seatsLib.roleGroups(selected, rows);
+  assert.deepEqual(groups.map(({ role, offTeam }) => [role.id, role.name, offTeam]), [
+    ['x-ui', 'Selected name', false], ['developer', 'Developer', false], ['x-other', 'Newest name', false], ['x-ui', 'Selected name', true],
+  ]);
+  assert.equal(seatsLib.callSeatRole(selected, groups[0].rows[0].item).role.name, 'Original name');
+  assert.equal(seatsLib.routeVerdict(rows[0], { current: { 'x-ui': { model: 'opus' } } }), 'unknown');
+});
+
+test('the first project file is an explicit save with a null base and frozen choices survive a watch event', async t => {
+  const info = seatsInfo({
+    routing: source({ layer: 'template', state: 'absent', digest: null }),
+    current: DEFAULTS, currentRoles: team.roles.map(role => shipped(role)),
+  });
+  const h = dialogHarness(t, info);
+  assert.match(textOf(h.render()), /Creates \.agentrix\/routing\.json/);
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: {}, operations: {} }, null]]);
+  h.deliver({ ...info, routing: source({ digest: 'other', state: 'pending', actions: ['keep'] }) });
+  await settle();
+  assert.ok(byAttr(h.render(), 'data-routing-review', 'pending'));
+  byAttr(h.render(), 'data-now').props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'aria-label', 'This conversation (read-only)')), /Orchestrator/);
+});
+
+test('the role editor validates text, regenerates a new ID and clears the seat when the source changes', t => {
+  const roles = team.roles.map(role => shipped(role)), saves = [];
+  const initial = { from: 'developer', name: 'Role', duty: 'Implement feature', model: 'opus', effort: 'max' };
+  const handle = mount(t, 'RoleEditor.tsx', 'RoleEditor', {
+    id: 'x-developer-1', initial, roles, catalog: catalog(), models: DEFAULTS, taken: ['x-reviewer-1'],
+    save: (...args) => saves.push(args), close: () => {}, copy: () => {},
+  }, {});
+  const change = (node, value) => node.props.onChange({ target: { value } });
+  let tree = handle.render();
+  assert.equal(byAttr(tree, 'data-save-role').props.disabled, false);
+  change(byAttr(tree, 'data-role-text', 'duty'), 'bad | text');
+  assert.equal(byAttr(handle.render(), 'data-save-role').props.disabled, true);
+  change(find(tree, node => node.type === 'select' && node.props.required), 'reviewer');
+  tree = handle.render();
+  assert.ok(find(tree, node => node.type === 'input' && node.props.value === 'x-reviewer-2'));
+  assert.equal(find(tree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked && node.props.disabled)?.props.checked, true);
+  change(byAttr(tree, 'data-role-text', 'duty'), 'Review code');
+  tree = handle.render();
+  assert.equal(byAttr(tree, 'data-save-role').props.disabled, false);
+  byAttr(tree, 'data-save-role').props.onClick();
+  assert.equal(saves[0][0], 'x-reviewer-2');
+  assert.equal(saves[0][1].from, 'reviewer');
+  assert.equal(saves[0][1].model, undefined);
+});
+
+test('the routing key uses the frozen role names and compacts sixteen roles when a file needs review', async t => {
+  const frozen = Array.from({ length: 16 }, (_, index) => ({
+    id: 'x-role-' + index, name: 'Frozen ' + index, enabled: true, source: 'custom',
+  }));
+  const current = Object.fromEntries(frozen.map(role => [role.id, { model: 'opus', effort: 'high' }]));
+  const info = seatsInfo({ current, currentRoles: [...frozen, { id: 'x-off', enabled: false }], routing: source({ state: 'pending' }) });
+  globalThis.window = { agentrix: { skillSeats: async () => info } };
+  const handle = mount(t, 'RoutingKeyCard.tsx', 'RoutingKeyCard', { projectId: 'p1', terminalId: 't1' }, {});
+  handle.render();
+  await settle();
+  const tree = handle.render();
+  assert.equal(findAll(tree, node => node.props['data-seat']).length, 16);
+  assert.equal(byAttr(tree, 'data-seat', 'x-off'), undefined);
+  assert.ok(byAttr(tree, 'data-compact'));
+  assert.match(textOf(byAttr(tree, 'data-seat', 'x-role-0')), /Frozen 0/);
+  assert.match(tree.props['aria-label'], /needs review/);
 });

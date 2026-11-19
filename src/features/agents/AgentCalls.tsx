@@ -10,6 +10,7 @@ import { ClaudeLogo, CodexLogo } from './AgentBrandIcon';
 import { exactCount } from './Metric';
 import { callSeatRole, modelRow, roleGroups, routeVerdict, shortLabel } from './skill-seats.ts';
 import { type BackgroundRow, type CallRow, type CallSource, type RowState, backgroundCallId, backgroundEnd, callSources, isSplitOpen, noticeShown, openSplit, projectCalls, hasWaitTimer, isFinishedOpen, setStopState, stopState, toggleFinished, toggleSplit, useClock, useSplits, useUiVersion, waitMore } from './subagent-splits.ts';
+import { useActiveTerminal } from '../terminal/active-terminal.ts';
 import './activity-pane.css';
 import './agent-calls.css';
 
@@ -129,8 +130,16 @@ function backgroundItem({ row, open, now, label }: { row: BackgroundRow; open: R
 export const AgentTabScope = createContext<string | null>(null);
 
 type TeamInfo = Record<string, SeatsInfo | null>;
+type TeamSeatsProps = {
+  projectId: string; terminals: readonly ProjectTerminal[]; children: (info: TeamInfo, selected?: string) => ReactNode;
+};
 
-function TeamSeats({ projectId, terminals, children }: { projectId: string; terminals: readonly ProjectTerminal[]; children: (info: TeamInfo) => ReactNode }) {
+function SelectedTeam({ projectId, terminals, info, children }: TeamSeatsProps & { info: TeamInfo }) {
+  const selected = useActiveTerminal(projectId);
+  return children(info, terminals.find(terminal => terminal.id === selected)?.id ?? terminals[0]?.id);
+}
+
+function TeamSeats({ projectId, terminals, children }: TeamSeatsProps) {
   const [info, setInfo] = useState<TeamInfo>({});
   const sessions = JSON.stringify(terminals.map(terminal => [terminal.id, terminal.sessionId, terminal.nativeRuntimeSessionId]));
   useEffect(() => {
@@ -146,13 +155,15 @@ function TeamSeats({ projectId, terminals, children }: { projectId: string; term
     const off = api.onSkills?.(load);
     return () => { active = false; off?.(); };
   }, [projectId, sessions]);
-  return children(info);
+  return terminals.length > 1 ?
+    <SelectedTeam projectId={projectId} terminals={terminals} info={info}>{children}</SelectedTeam> :
+    children(info, terminals[0]?.id);
 }
 
 const VERDICTS = { mismatch: '核对不符', match: '核对一致', unknown: '核对未确认' } as const;
 const SPECIALTIES: Record<string, string> = { frontend: 'Frontend', backend: 'Backend', desktop: 'Desktop', database: 'Database', ai: 'AI' };
 
-function TeamCallRow({ row, roles, info, now, labels, grouped }: { row: CallRow; roles: readonly SeatRole[]; info?: SeatsInfo | null; now: number; labels: boolean; grouped: boolean }) {
+function TeamCallRow({ row, roles, info, now, labels, heading }: { row: CallRow; roles: readonly SeatRole[]; info?: SeatsInfo | null; now: number; labels: boolean; heading?: string }) {
   const { item, call, terminalId } = row;
   const status = item.failure ? failureWord(item.failure) : t(item.awaiting === 'owner' && item.state !== 'done' ? AWAITING_WORD : CALL_STATES[item.state].word);
   const age = item.startedAt == null ? '—' : elapsedClock(Math.max(0, (item.endedAt ?? now) - item.startedAt));
@@ -161,7 +172,11 @@ function TeamCallRow({ row, roles, info, now, labels, grouped }: { row: CallRow;
   const verdict = routeVerdict(row, info);
   const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
   const { role, inferred } = callSeatRole(roles, item);
-  const roleLabel = [!grouped && routingRoleName(role.name, t), item.specialty && (SPECIALTIES[item.specialty] ?? item.specialty), inferred && t('推断')].filter(Boolean).join(' · ');
+  const showName = !heading || (item.seatName && item.seatName !== heading);
+  const specialty = item.specialty && (SPECIALTIES[item.specialty] ?? item.specialty);
+  const roleLabel = [
+    showName && (item.seatName ?? routingRoleName(role.name, t)), specialty, !heading && item.offTeam && t('未在团队中'), inferred && t('推断'),
+  ].filter(Boolean).join(' · ');
   const cells = <>
       <span className="agent-team-subject"><strong>{item.title || model}</strong><time>{age}</time></span>
       <span className="agent-team-line">{roleLabel && <b>{roleLabel}</b>}<span>{[model, call.effort ?? '—', call.fast == null ? '—' : t(call.fast ? '快速' : '普通')].join(' · ')}</span></span>
@@ -193,18 +208,21 @@ export function CallsCard({ calls, terminalId, terminals }: { calls: AgentCall[]
   const now = useClock(moving || hasWaitTimer(Date.now()));
   const { groups, background, recent } = projectCalls(sources, open, now, project), label = sources.length > 1;
   const empty = !groups.length && !background.length, nothing = empty && !recent.length;
-  const render = (info?: TeamInfo) => {
-    const seats = Object.values(info ?? {}).find(entry => entry?.roles?.length);
-    const roles = seats ? seats.seats.flatMap(id => seats.roles.filter(role => role.id === id)) : [];
-    const team = roles.length > 0;
-    const renderRow = (row: CallRow, grouped = false) => <TeamCallRow key={JSON.stringify([row.terminalId, row.item.id])} row={row}
-      roles={roles} info={info?.[row.terminalId]} now={now} labels={label} grouped={grouped} />;
+  const render = (info?: TeamInfo, selected?: string) => {
+    const selectedSeats = selected ? info?.[selected] : undefined;
+    const roles = selectedSeats?.currentRoles ?? selectedSeats?.roles ?? [];
+    const selectedRoles = selectedSeats?.currentRoles === null ? [] : roles;
+    const named = (row: CallRow) => row.item.seatName || row.item.offTeam;
+    const team = !!info && (roles.length > 0 || groups.some(group => group.rows.some(named)) || recent.some(entry => entry.call && named(entry.call)));
+    const renderRow = (row: CallRow, heading?: string) => <TeamCallRow key={JSON.stringify([row.terminalId, row.item.id])} row={row}
+      roles={roles} info={info?.[row.terminalId]} now={now} labels={label} heading={heading} />;
     return <section className="activity-card activity-calls" aria-label={t('调用的模型')}>
     {nothing && <p className="activity-empty">{t('还没有调用其他模型。规划员分派任务后，会显示在这里。')}</p>}
     {!empty && <ul className="activity-call-groups">
-      {team ? roleGroups(roles, groups.flatMap(group => group.rows)).map(({ role, rows }) =>
-        <li key={role.id} className="agent-team-group" data-role={role.id}>
-          <h4>{routingRoleName(role.name, t)}</h4><ul>{rows.map(row => renderRow(row, true))}</ul>
+      {team ? roleGroups(roles, groups.flatMap(group => group.rows), selectedRoles).map(({ role, rows, offTeam }) =>
+        <li key={JSON.stringify([role.id, offTeam])} className="agent-team-group" data-role={role.id} data-off-team={offTeam || undefined}>
+          <h4>{role.id.startsWith('x-') ? role.name : routingRoleName(role.name, t)}{offTeam && <> · {t('未在团队中')}</>}</h4>
+          <ul>{rows.map(row => renderRow(row, role.name))}</ul>
         </li>) : groups.map(({ call, rate, rows }) => {
         const name = callModelName({ model: call.model }); // the head does not repeat 「未确认」: the starting row says it
         return <li key={JSON.stringify([call.agent, call.provider, call.model, call.modelUnconfirmed, call.effort, call.fast])}>
