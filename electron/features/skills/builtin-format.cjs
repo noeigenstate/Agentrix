@@ -1,11 +1,12 @@
 const { skillName } = require('./files.cjs');
 const { frontMatter } = require('./front-matter.cjs');
+const { validRoleId } = require('./role-rules.mjs');
 
 const KEYS = ['name', 'description', 'trigger', 'when', 'requires', 'title', 'summary'];
+const ROLE_KEYS = ['seats', 'library', 'authors', 'fresh', 'duties'];
 const SECTIONS = ['When this applies', 'What to do', 'Rules', 'Done when'];
 const TRIGGERS = ['always', 'auto'];
 const REQUIRES = ['none', 'any-agent', 'codex', 'claude', 'both'];
-const SEAT_ID = /^[a-z][a-z0-9-]{0,31}$/;
 const chinese = value => /\p{Script=Han}/u.test(value);
 const sentences = value => value.split(/[。！？!?]+/u).filter(part => part.trim()).length;
 const needsQuotes = value => /^[>|[\]{}&*!#'"%@`,]|^[-?:](?:\s|$)|:\s|\s#/.test(value);
@@ -47,14 +48,46 @@ function seatRoles(value, seats, fail) {
   return seats.map(id => roles.get(id));
 }
 
+function readRoleMetadata(fields, fail) {
+  for (const key of ['seats', 'library', 'authors', 'fresh']) {
+    if (!Object.hasOwn(fields, key)) continue;
+    const ids = fields[key].split(',').map(id => id.trim());
+    if (ids.some(id => !validRoleId(id) || id.startsWith('x-')) || new Set(ids).size !== ids.length) fail('invalid ' + key);
+    fields[key] = ids;
+  }
+  const seats = fields.seats ?? [], library = fields.library ?? [];
+  if (fields.library && (!seats.length || !fields.duties || library.some(id => seats.includes(id)))) fail('invalid library');
+  const known = [...seats, ...library];
+  for (const key of ['authors', 'fresh']) if (fields[key]?.some(id => !known.includes(id))) fail('invalid ' + key);
+  if (fields.duties) {
+    fields.roles = seatRoles(fields.duties, known, fail);
+    delete fields.duties;
+  }
+}
+
+const tableCells = line => /^\s*\|(.*)\|\s*$/.exec(line)?.[1].split('|').map(cell => cell.trim());
+
+function checkLibraryRegion(visible, library, fail) {
+  const bounds = region(visible, 'library');
+  if (!bounds) fail('expected one agentrix:library region outside fences');
+  const rows = visible.slice(bounds.start + 1, bounds.end).filter(line => line.trim()).map(tableCells);
+  const [header, separator, ...entries] = rows;
+  if (header?.join('|') !== 'Seat|Role|Duty|Outputs' || separator?.length !== 4 || !separator.every(cell => /^:?-{3,}:?$/.test(cell))) {
+    fail('invalid library table header');
+  }
+  if (entries.length !== library.length || entries.some((row, index) => row?.length !== 4 || row[0] !== library[index] || row.some(cell => !cell))) {
+    fail('library table must describe every library role in order');
+  }
+}
+
 function builtinMetadata(text, folder) {
   const fail = reason => { throw new Error(`Invalid built-in skill ${folder}: ${reason}`); };
   let front;
   try { front = frontMatter(text); if (front) skillName(front.fields.name); } catch (error) { fail(error.message); }
   if (!front) fail('expected front matter followed by a body');
   const lines = front.raw.split(/\r?\n/), fields = {};
-  const keys = [...KEYS, ...['seats', 'fresh', 'duties'].filter(key => Object.hasOwn(front.fields, key))];
-  if (lines.length !== keys.length) fail('expected seven required front matter keys and optional seats/fresh/duties');
+  const keys = [...KEYS, ...ROLE_KEYS.filter(key => Object.hasOwn(front.fields, key))];
+  if (lines.length !== keys.length) fail('expected seven required front matter keys and optional seats/library/authors/fresh/duties');
   for (const [index, key] of keys.entries()) {
     const match = new RegExp(`^${key}: (\\S(?:.*\\S)?)$`).exec(lines[index]);
     if (!match) fail(`expected a single-line ${key} at position ${index + 1}`);
@@ -73,19 +106,12 @@ function builtinMetadata(text, folder) {
   if (!TRIGGERS.includes(fields.trigger)) fail('invalid trigger');
   if (!chinese(fields.when) || sentences(fields.when) !== 1) fail('when must be one Chinese sentence');
   if (!REQUIRES.includes(fields.requires)) fail('invalid requires');
-  for (const key of ['seats', 'fresh']) if (Object.hasOwn(fields, key)) {
-    const ids = fields[key].split(',').map(id => id.trim());
-    if (ids.some(id => !SEAT_ID.test(id) || key === 'fresh' && !fields.seats?.includes(id)) || new Set(ids).size !== ids.length) fail(`invalid ${key}`);
-    fields[key] = ids;
-  }
-  if (fields.duties) {
-    fields.roles = seatRoles(fields.duties, fields.seats, fail);
-    delete fields.duties;
-  }
+  readRoleMetadata(fields, fail);
 
   // Fenced examples may contain headings; only actual document headings define the format.
   const { visible, fence } = outsideFences(front.body.split(/\r?\n/));
   if (fields.seats && !region(visible, 'team')) fail('expected one agentrix:team region outside fences');
+  if (fields.library) checkLibraryRegion(visible, fields.library, fail);
   if (visible.some(line => /^\s*<!-- \/?agentrix:operations -->\s*$/.test(line)) && !region(visible, 'operations')) {
     fail('expected one agentrix:operations region outside fences');
   }

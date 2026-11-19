@@ -136,6 +136,19 @@
     "tests/agent-question.test.cjs": [
       "electron/features/agents/BOUNDARY.md"
     ],
+    "tests/role-rules.test.cjs": [
+      "electron/features/skills/BOUNDARY.md"
+    ],
+    "tests/project-routing.test.cjs": [
+      "electron/features/skills/BOUNDARY.md"
+    ],
+    "tests/team-roles.test.cjs": [
+      "electron/features/skills/BOUNDARY.md"
+    ],
+    "tests/routing-review-ui.test.cjs": [
+      "src/features/agents/routing/BOUNDARY.md",
+      "electron/features/skills/BOUNDARY.md"
+    ],
     "tests/skill-privacy.test.cjs": [
       "electron/features/agents/BOUNDARY.md"
     ]

@@ -164,8 +164,11 @@ contextBridge.exposeInMainWorld('agentrix', {
   listSkills: () => ipcRenderer.invoke('skills:list'),
   skillSeats: (projectId, terminalId) => ipcRenderer.invoke('skills:seats', projectId, terminalId).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
   skillSeatsRefresh: (projectId, terminalId, reason = 'manual') => ipcRenderer.invoke('skills:seats-refresh', projectId, terminalId, reason).then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
-  setSkillSeats: (scope, projectId, seats, operations) =>
-    ipcRenderer.invoke('skills:setSeats', scope, projectId, seats, ...(operations === undefined ? [] : [operations]))
+  setSkillRouting: (scope, projectId, config, base) =>
+    ipcRenderer.invoke('skills:setRouting', scope, projectId, config, base)
+      .then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
+  resolveSkillRouting: (projectId, action, digest) =>
+    ipcRenderer.invoke('skills:resolveRouting', projectId, action, digest)
       .then(r => r.ok ? r.value : Promise.reject(new Error(r.error))),
   readSkill: id => ipcRenderer.invoke('skills:read', id),
   saveSkill: (id, draft) => ipcRenderer.invoke('skills:save', id, draft),

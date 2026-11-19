@@ -94,6 +94,42 @@ test('strict built-in format accepts all allowed triggers/requires, scalar quoti
   assert.doesNotThrow(() => builtinMetadata(fenced, 'example'));
 });
 
+test('built-in routing metadata validates library authors, freshness, duties and table order', () => {
+  const text = builtin('example', {
+    seats: 'orchestrator, developer, reviewer',
+    library: 'frontend, a11y',
+    authors: 'developer, frontend',
+    fresh: 'reviewer, a11y',
+    duties: ['orchestrator', 'developer', 'reviewer', 'frontend', 'a11y'].map(id => id + '=\u89D2\u8272|\u804C\u8D23|\u8BF4\u660E|\u4EA7\u51FA').join('; '),
+  }) + team + [
+    '<!-- agentrix:library -->',
+    '| Seat | Role | Duty | Outputs |',
+    '| --- | --- | --- | --- |',
+    '| frontend | Frontend | Build UI | UI changes |',
+    '| a11y | Accessibility | Verify UI | Findings |',
+    '<!-- /agentrix:library -->',
+  ].join('\n');
+  const { seats, library, authors, fresh, roles } = builtinMetadata(text, 'example');
+  assert.deepEqual(seats, ['orchestrator', 'developer', 'reviewer']);
+  assert.deepEqual(library, ['frontend', 'a11y']);
+  assert.deepEqual(authors, ['developer', 'frontend']);
+  assert.deepEqual(fresh, ['reviewer', 'a11y']);
+  assert.deepEqual(roles.map(role => role.id), [...seats, ...library]);
+  for (const malformed of [
+    text.replace('library: frontend, a11y', 'library: developer, a11y'),
+    text.replace('library: frontend, a11y', 'library: a11y, frontend'),
+    text.replace('library: frontend, a11y', 'library: x-frontend, a11y'),
+    text.replace('authors: developer, frontend', 'authors: developer, missing'),
+    text.replace('fresh: reviewer, a11y', 'fresh: reviewer, missing'),
+    text.replace(/^duties: .+\n/m, ''),
+    text.replace(/; a11y=.+\n/, '\n'),
+    text.replace('<!-- /agentrix:library -->', ''),
+    text.replace('<!-- agentrix:library -->', '<!-- agentrix:library -->\n<!-- agentrix:library -->'),
+    text.replace('| Seat | Role | Duty | Outputs |\n', '| Seat | Role | Duty | Model |\n'),
+    text.replace(/^\| a11y \|.+\n/m, ''),
+  ]) assert.throws(() => builtinMetadata(malformed, 'example'));
+});
+
 test('strict built-in format rejects bad fields, limits, scalars and body sections', () => {
   const good = builtin();
   const bad = {

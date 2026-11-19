@@ -37,7 +37,7 @@ export type TokenRate = { outputTokens: number; activeMs: number; samples: numbe
 // modelUnconfirmed: the worker has not reported its model yet; model is then the one the lead asked for, or null.
 export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null; preparing: number; starting?: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'starting' | 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
   notice?: 'unconfirmed'; resumed?: boolean; controlFailure?: string;
-  seat?: SeatId; specialty?: string; seatSource?: 'declared' | 'inferred'; worktree?: string;
+  seat?: SeatId; specialty?: string; seatSource?: 'declared' | 'inferred'; seatName?: string; offTeam?: true; worktree?: string;
   // Availability of the call's artifacts. Main owns their paths.
   brief?: boolean; log?: boolean;
   // A dispatched worker that ended badly or never confirmed (skills/agent-dispatch): shown in words instead of a plain state.
@@ -232,6 +232,12 @@ export type Seat = {
 };
 export type SeatMap = Record<string, Seat>;
 export type SeatRole = { id: SeatId; name: string; duty: string; detail: string; outputs: string };
+export type RoleKind = 'lead' | 'reviewer' | 'author' | 'member';
+export type TeamRole = SeatRole & {
+  kind: RoleKind; source: 'builtin' | 'library' | 'custom'; from?: SeatId;
+  enabled: boolean; fresh: boolean; locked: ('enabled' | 'fresh' | 'text' | 'copy')[];
+};
+export type RoleConfig = Partial<Seat> & { enabled?: boolean; fresh?: boolean; from?: SeatId; name?: string; duty?: string; outputs?: string };
 export type SeatModel = {
   model: string; label: string; family: 'claude' | 'codex'; efforts: string[]; defaultEffort?: string;
   fast: boolean; fastReason?: 'unsupported' | 'unknown' | 'agent-tool'; rank: 1 | 2 | 3; available: boolean; reason?: string;
@@ -242,6 +248,29 @@ export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsuppo
 export type OperationId = 'lookup' | 'background' | 'subagent' | 'memory' | 'review';
 export type OperationValue = { model: string; effort?: string } | 'follow';
 export type OperationMap = Partial<Record<OperationId, OperationValue>>;
+export type RoutingConfig = { roles: Record<SeatId, RoleConfig>; operations: OperationMap };
+export type RoutingAction = 'apply' | 'keep' | 'overwrite';
+export type RoleRuleCode = 'invalid-role' | 'role-text' | 'role-limit' | 'reviewer-required' | 'lead-locked';
+export type RoutingFlag = {
+  code: 'expensive-model' | 'fast-on' | 'high-effort' | 'unlisted-model' | 'verification-weakened' | 'custom-text' | 'operation-cost';
+  role?: SeatId; operation?: OperationId; text: string;
+};
+export type RoutingReview = {
+  digest: string; reason: 'new-on-machine' | 'changed'; config: RoutingConfig;
+  changes: { role?: SeatId; operation?: OperationId; field: string; from: unknown; to: unknown }[];
+  flags: RoutingFlag[]; ignored: string[];
+};
+export type RoutingSource = {
+  layer: 'file' | 'accepted' | 'local' | 'template'; state: 'trusted' | 'pending' | 'rejected' | 'invalid' | 'absent';
+  remote: boolean; path: '.agentrix/routing.json' | null; digest: string | null;
+  raw?: string; actions: RoutingAction[]; notice?: 'file-deleted'; templateProjects?: number;
+  error?: {
+    code: 'too-large' | 'too-deep' | 'bad-utf8' | 'bad-json' | 'unknown-key' | 'newer-version' | 'link' | 'not-file' | 'bad-format'
+      | RoleRuleCode | 'reviewer-same-model' | 'review-same-model';
+    message: string;
+  };
+  review?: RoutingReview;
+};
 export type OperationAgentState = { state: 'applies' | 'default' | 'not-applicable' | 'not-effective'; reason?: string };
 export type OperationRow = {
   id: OperationId | 'compaction' | 'titles';
@@ -261,17 +290,19 @@ export type OperationRow = {
 export type SeatsInfo = {
   skill: string;
   seats: SeatId[];
-  roles: SeatRole[];
+  roles: TeamRole[];
   lead: SeatId;
   leadAgent: 'claude' | 'codex' | null;
   leads: { claude: Seat | null; codex: Seat | null };
-  authors: ['developer'];
+  authors: SeatId[];
   fresh: SeatId[];
   defaults: SeatMap;
-  global: SeatMap;
-  project: SeatMap | null;
+  template: RoutingConfig;
+  config: RoutingConfig | null;
   effective: SeatMap;
   current: SeatMap | null;
+  currentRoles: TeamRole[] | null;
+  routing: RoutingSource;
   catalog: SeatModel[];
   installed: { claude: boolean; codex: boolean };
   issues: SeatIssue[];
@@ -283,8 +314,8 @@ export type SeatsInfo = {
   operations?: {
     rows: OperationRow[];
     defaults: OperationMap;
-    global: OperationMap;
-    project: OperationMap | null;
+    template: OperationMap;
+    config: OperationMap | null;
     effective: OperationMap;
     current: {
       values: OperationMap;
@@ -295,8 +326,10 @@ export type SeatsInfo = {
 export type SeatsSaveError = {
   ok: false;
   code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model'
-    | 'unknown-operation' | 'family-not-allowed' | 'follow-not-allowed' | 'review-same-model';
+    | 'unknown-operation' | 'family-not-allowed' | 'follow-not-allowed' | 'review-same-model'
+    | RoleRuleCode | 'file-changed' | 'file-unwritable' | 'action-unavailable';
   seat?: string;
+  role?: SeatId;
   operation?: string;
   message: string;
 };
@@ -504,7 +537,8 @@ type Bridge = {
   skillSeats(projectId?: string | null, terminalId?: string | null): Promise<SeatsInfo | null>;
   // Reads the model lists again (throttled in main) and returns the seats with the fresh catalog.
   skillSeatsRefresh(projectId?: string | null, terminalId?: string | null, reason?: 'dialog' | 'manual'): Promise<SeatsInfo | null>;
-  setSkillSeats(scope: 'global' | 'project', projectId: string | null, seats: SeatMap, operations?: OperationMap): Promise<{ ok: true } | SeatsSaveError>;
+  setSkillRouting(scope: 'template' | 'project', projectId: string | null, config: RoutingConfig, base: string | null): Promise<{ ok: true } | SeatsSaveError>;
+  resolveSkillRouting(projectId: string, action: RoutingAction, digest: string): Promise<{ ok: true } | SeatsSaveError>;
   terminalConversationPage(id: string, request: { key: string; cursor?: string | null }): Promise<Result<ConversationPage>>;
   subagentFeed(terminalId: string, callId: string): Promise<Result<SubagentFeed>>;
   callFile(terminalId: string, callId: string, kind: 'brief' | 'log'): Promise<CallFileResult>;
