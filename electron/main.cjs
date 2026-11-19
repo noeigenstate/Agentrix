@@ -1103,12 +1103,13 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
   const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
   // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
-  const lead = skills.leadOptions?.(project.id, agent);
+  const library = typeof skills === 'undefined' ? null : skills;
+  const lead = library?.leadOptions?.(project.id, agent);
   const runOptions = { model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
     ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
-    const delivery = skills.delivery(project, true, sessionId, { agent, started: true });
+    const delivery = library?.delivery?.(project, true, sessionId, { agent, started: true });
     const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
       sessionId, sessionKey, cwd, env: {}, ...runOptions, operations: delivery?.operations?.codex, providerSessionId };
     nativeSpecs.set(id, spec); return spec;
@@ -1119,7 +1120,7 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks });
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
-  const delivery = skills.delivery(project, false, sessionId, { agent, started: true });
+  const delivery = library?.delivery?.(project, false, sessionId, { agent, started: true });
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery, path.join(integrationDir, 'dispatch.cjs'));
   if (agent === 'claude' && runOptions.model === 'haiku' && delivery?.operations?.pinnedHaiku) runOptions.model = delivery.operations.pinnedHaiku;
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
@@ -1176,7 +1177,8 @@ function structuredEvent(id, event) {
     const { observed, effective, operations } = event.payload;
     if (typeof observed?.model === 'string') s.nativeObservedModel = observed.model;
     s.agentSettings = Object.fromEntries(['model', 'effort', 'fast'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
-    if (operations && skills.noteOperationResult(project.id, s.skillSessionId || spec.sessionId, spec.agent, operations)) skills.publish(false);
+    if (operations && typeof skills !== 'undefined'
+      && skills?.noteOperationResult?.(project.id, s.skillSessionId || spec.sessionId, spec.agent, operations)) skills.publish(false);
   }
   if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
     const clientId = event.payload.content.clientMessageId || event.itemId;
@@ -1214,7 +1216,7 @@ async function initializeNativeSessions() {
   const { createDispatchControl } = await import('./features/agents/dispatch-control.cjs');
   const { locateTeam } = require('./features/team/team-locate.cjs');
   const { resolveRegistration } = require('./features/agents/dispatch-registration.cjs');
-  const operations = (projectId, sessionId) => skills.operationLevers(projectId, sessionId);
+  const operations = (projectId, sessionId) => typeof skills === 'undefined' ? null : skills?.operationLevers?.(projectId, sessionId);
   dispatchControl = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions, store, locateTeam, operations }, registration) });
   ({ address: controlAddress } = await dispatchControl.listen());
   const directory = path.join(app.getPath('userData'), 'native-session');
@@ -1435,6 +1437,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions);
   const s = createTerminalSession({ id, project, terminal, env, transfer, sessionId, sessionKey, controlCapability,
     bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind });
+  registerTerminalSession(s, project);
   bindTerminalEvents(s, project, env);
 }
 
@@ -1456,6 +1459,11 @@ function createTerminalSession({ id, project, terminal, env, transfer, sessionId
     observeNativeSwitch: () => nativeSessions?.observe?.(id),
   };
   s.actions = new ActionLog(change => publishAction(s, change));
+  return s;
+}
+
+function registerTerminalSession(s, project) {
+  const { terminal, terminalId: id } = s;
   s.gate = new InputGate(data => {
     if (sessions.get(id) !== s || s.status === 'exited') return;
     if (!isTerminalResponse(data)) s.approval.invalidate();
@@ -1487,47 +1495,44 @@ function createTerminalSession({ id, project, terminal, env, transfer, sessionId
   });
   // A prompt the agent's own record shows it received is being worked on. History read when a session is
   // resumed is older than the agent's start and is left out.
-  s.conversation = new ConversationLog(change => recordTerminalConversation(s, project, change));
-  return s;
-}
-
-function recordTerminalConversation(s, project, change) {
-  publishConversation(s, change);
-  const entry = change.entry;
-  // Local transcripts already use the main clock; the hook offset includes delivery latency.
-  const at = (entry?.receivedAt ?? entry?.at) + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
-  if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at, entry.id);
-  else if (entry?.role === 'user' && entry.queued && s.codexActive && at >= (s.activitySince || 0) - 1000) s.promptQueue.enqueue(entry.original ?? entry.text, at, entry.id);
-  if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
-  // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
-  if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {
-    const localCommand = isLocalAgentCommand(s.agent, entry.text);
-    if (at >= (s.activitySince || 0) - 1000) {
-      const inputAt = s.promptQueue.start(entry.original ?? entry.text, at, entry.id, localCommand);
-      if (inputAt !== undefined) {
-        s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, inputAt);
-        s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
+  s.conversation = new ConversationLog(change => {
+    publishConversation(s, change);
+    const entry = change.entry;
+    // Local transcripts already use the main clock; the hook offset includes delivery latency.
+    const at = (entry?.receivedAt ?? entry?.at) + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
+    if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at, entry.id);
+    else if (entry?.role === 'user' && entry.queued && s.codexActive && at >= (s.activitySince || 0) - 1000) s.promptQueue.enqueue(entry.original ?? entry.text, at, entry.id);
+    if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
+    // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
+    if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {
+      const localCommand = isLocalAgentCommand(s.agent, entry.text);
+      if (at >= (s.activitySince || 0) - 1000) {
+        const inputAt = s.promptQueue.start(entry.original ?? entry.text, at, entry.id, localCommand);
+        if (inputAt !== undefined) {
+          s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, inputAt);
+          s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
+        }
+      }
+      // Recalled prompts, custom slash commands and command-line prompts are not always visible to the key
+      // tracker. Codex's received user message confirms them. A time watermark excludes history and replays;
+      // working/completion snapshots alone can never grant another alert. Claude has UserPromptSubmit hooks.
+      if (s.agent === 'codex' && !localCommand && at >= Math.max(s.activitySince || 0, s.activityInputAt || 0) && at > Math.max(s.activityPromptAt || 0, s.lastCompletedAt || 0)) {
+        // task_started may already have published this turn before its user item arrives.
+        // Retire the previous turn only when no newer start is awaiting its prompt receipt.
+        const started = s.activitySnapshot?.state === 'working' && s.activitySnapshot.turnId
+          && s.activitySnapshot.updatedAt > (s.activityPromptAt || 0);
+        publishCliState(s, 'working', { at, threadId: s.reportedThreadId || s.rootThreadId, eventId: `input:${entry.id}`, newTurn: !started });
+        s.activityPromptAt = at;
+        s.completionWork?.begin(at);
+        store.expectCompletion(project.id);
       }
     }
-    // Recalled prompts, custom slash commands and command-line prompts are not always visible to the key
-    // tracker. Codex's received user message confirms them. A time watermark excludes history and replays;
-    // working/completion snapshots alone can never grant another alert. Claude has UserPromptSubmit hooks.
-    if (s.agent === 'codex' && !localCommand && at >= Math.max(s.activitySince || 0, s.activityInputAt || 0) && at > Math.max(s.activityPromptAt || 0, s.lastCompletedAt || 0)) {
-      // task_started may already have published this turn before its user item arrives.
-      // Retire the previous turn only when no newer start is awaiting its prompt receipt.
-      const started = s.activitySnapshot?.state === 'working' && s.activitySnapshot.turnId
-        && s.activitySnapshot.updatedAt > (s.activityPromptAt || 0);
-      publishCliState(s, 'working', { at, threadId: s.reportedThreadId || s.rootThreadId, eventId: `input:${entry.id}`, newTurn: !started });
-      s.activityPromptAt = at;
-      s.completionWork?.begin(at);
-      store.expectCompletion(project.id);
-    }
-  }
+  });
+  sessions.set(id, s);
 }
 
 function bindTerminalEvents(s, project, env) {
   const { terminal, terminalId: id, sessionId, sessionKey, bootstrapFile, skillNoteFile } = s;
-  sessions.set(id, s);
   bindDispatchInbox(s, project);
   store.setRestore(id, { terminal: true, ...(restorePlans.has(id) ? {} : { codex: false }) });
   startupErrors.delete(id);
