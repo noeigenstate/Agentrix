@@ -2,6 +2,7 @@
 
 A sub-agent's split beside a terminal's conversation: who it is, its state, speed and time, its conversation followed live (read-only), and the owner's word for it —
 a message composer with Send and Stop that go through the main process, with delivery receipts from the worker.
+The Agent tab uses the selected terminal’s frozen role order and each call’s own recorded role name and membership.
 
 ## Owns
 - `src/features/agents/SubagentPane.tsx`

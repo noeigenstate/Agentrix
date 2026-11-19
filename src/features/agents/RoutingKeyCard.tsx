@@ -43,13 +43,17 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
   }, [projectId, terminalId, sessionId]);
   if (!info?.roles?.length) return null;
   const map = info.current ?? info.effective;
-  return <button type="button" className="activity-routing-key" aria-label={t('模型路由')} aria-haspopup="dialog"
+  const roles = (info.current && info.currentRoles ? info.currentRoles : info.roles).filter(role => role.enabled !== false);
+  const pending = info.routing?.state === 'pending' || info.routing?.state === 'invalid';
+  const titleOf = (role: typeof roles[number]) => role.source === 'custom' ? role.name : routingRoleName(role.name, t);
+  const title = t('模型路由'), badge = pending ? t('路由文件待确认') : '';
+  return <button type="button" className="activity-routing-key" aria-label={badge ? `${title} · ${badge}` : title} aria-haspopup="dialog"
     onClick={() => openSeats({ projectId, terminalId })}>
-    <span className="activity-card-title activity-routing-title">{t('模型路由')}<CaretRight size={14} aria-hidden="true" /></span>
-    <span className="activity-routing-rows">{info.roles.map(role => {
+    <span className="activity-card-title activity-routing-title">{title}{badge && <span data-routing-pending>{badge}</span>}<CaretRight size={14} aria-hidden="true" /></span>
+    <span className="activity-routing-rows" data-compact={roles.length > 10 || undefined}>{roles.map(role => {
       const seat = map[role.id];
       return <span key={role.id} className="activity-routing-row" data-seat={role.id}>
-        <span title={routingRoleName(role.name, t)}>{routingRoleName(role.name, t)}</span><strong title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>
+        <span title={titleOf(role)}>{titleOf(role)}</span><strong title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>
         <span className="activity-routing-setting" title={seat?.fast ? `${seat.effort} · ${t('快速')}` : seat?.effort}>
           {seat?.effort ?? '—'}{seat?.fast && <span className="activity-routing-fast"> · {t('快速')}</span>}
         </span>

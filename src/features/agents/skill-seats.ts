@@ -1,18 +1,23 @@
 import type { CallRow } from './subagent-splits.ts';
-import type { OperationId, OperationMap, OperationRow, OperationValue, Seat, SeatId, SeatIssue, SeatMap, SeatModel, SeatRole, SeatsInfo, SeatsSaveError } from '../../shared/types';
+import type {
+  OperationId, OperationMap, OperationRow, OperationValue, RoleConfig, RoutingConfig, Seat, SeatId, SeatIssue, SeatMap, SeatModel,
+  SeatRole, SeatsInfo, SeatsSaveError, TeamRole,
+} from '../../shared/types';
 import { BASE_EFFORTS, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
+
+import { authorIdentityConflict, roleLocks } from '../../../electron/features/skills/role-rules.mjs';
 
 export { familyOf };
 
 // The dialog checks seat edits before saving. Main still validates saves and the dialog shows its refusal.
 export type SlotId = SeatId;
-export type Scope = 'global' | 'project';
+export type Scope = 'template' | 'project';
 type Family = 'claude' | 'codex';
 type EditRefusal = 'unknown-model' | 'unavailable' | 'same' | 'effort' | 'fast' | 'invalid-id';
 export type Edit = { ok: true; map: SeatMap } | { ok: false; reason: EditRefusal };
-type ReviewerBlock = { hit: SeatId[]; alternatives: SeatModel[]; fix: SeatModel | null };
+type ReviewerBlock = { reviewer: SeatId; hit: SeatId[]; alternatives: SeatModel[]; fix: SeatModel | null };
 
-const AUTHORS: SeatId[] = ['developer'];
+type ReviewRoles = { authors: SeatId[]; reviewers: SeatId[] };
 
 // A shorter name for a small tile: "Opus (follows latest)" is "Opus (latest)"; the menu and the list keep the full text.
 export const shortLabel = (label: string) => label.replace(/\s*\(follows latest\)$/i, ' (latest)');
@@ -52,11 +57,13 @@ export function canonicalModel(catalog: SeatModel[], model: string): string {
 export const sameModel = (catalog: SeatModel[], a: string, b: string) => a === b || canonicalModel(catalog, a) === canonicalModel(catalog, b);
 // The few alternatives the blocked-reviewer banner names, strongest first, and how many there are in all.
 // The blocked banner names the alternatives in the order the one-click fix prefers them (the fix first), one per model line (the alias, else the newest version, not every old one).
-export function topAlternatives(alternatives: SeatModel[], max = 3, ctx?: { fix: SeatModel | null; map: SeatMap; catalog: SeatModel[]; defaults?: SeatMap }) {
+export function topAlternatives(alternatives: SeatModel[], max = 3, ctx?: {
+  fix: SeatModel | null; map: SeatMap; catalog: SeatModel[]; defaults: SeatMap | undefined; authors: SeatId[]; reviewer: SeatId;
+}) {
   const preferred = (a: SeatModel, b: SeatModel) => Number(isAliasRow(b)) - Number(isAliasRow(a)) || (versionNewer(idVersion(a.model), idVersion(b.model)) ? -1 : versionNewer(idVersion(b.model), idVersion(a.model)) ? 1 : 0);
   const lineKey = (row: SeatModel) => row.family + lineOf(row), best = new Map<string, SeatModel>();
   for (const row of [...alternatives].sort(preferred)) if (!best.has(lineKey(row))) best.set(lineKey(row), row);
-  const lines = [...best.values()], ordered = ctx ? orderSuggestions(lines, ctx.map, ctx.catalog, ctx.defaults) : [...lines].sort(strength);
+  const lines = [...best.values()], ordered = ctx ? orderSuggestions(lines, ctx.map, ctx.catalog, ctx.authors, ctx.reviewer, ctx.defaults) : [...lines].sort(strength);
   const fix = ctx?.fix, shown = fix ? [fix, ...ordered.filter(row => lineKey(row) !== lineKey(fix))] : ordered;
   return { shown: shown.slice(0, max), total: alternatives.length };
 }
@@ -68,7 +75,6 @@ const customRow = (model: string): SeatModel => {
 };
 // The catalog's row, or the row a valid typed-in id would get.
 export const rowFor = (catalog: SeatModel[], model: string) => modelRow(catalog, model) ?? (validModel(model) ? customRow(model) : undefined);
-const rankOf = (catalog: SeatModel[], model: string) => rowFor(catalog, model)?.rank ?? rankByName(model);
 // The issues main reported for a slot.
 export const issuesOf = (info: SeatsInfo, slot: SlotId): SeatIssue[] => (info.issues ?? []).filter(issue => issue.slot === slot);
 // How long ago a model list was read, as a unit and a count for the dialog to word.
@@ -78,14 +84,79 @@ export function ageOf(at: number | null, now: number): { unit: 'never' | 'now' |
   return minutes < 1 ? { unit: 'now', count: 0 } : minutes < 60 ? { unit: 'min', count: minutes } : minutes < 2880 ? { unit: 'hour', count: Math.floor(minutes / 60) } : { unit: 'day', count: Math.floor(minutes / 1440) };
 }
 
-// defaults ? global ? project, seat by seat.
-const mergeSeats = (...layers: (SeatMap | null | undefined)[]): SeatMap => Object.assign({}, ...layers);
+export const configFor = (info: SeatsInfo, scope: Scope): RoutingConfig =>
+  scope === 'template' ? info.template : info.config ?? info.template;
+export const startScope = (_info: SeatsInfo, projectId?: string): Scope => projectId ? 'project' : 'template';
 
-// What a scope's save starts from, and the layer under it: the owner's choice is only what differs from that layer.
-export const lowerLayer = (info: SeatsInfo, scope: Scope): SeatMap => scope === 'project' ? mergeSeats(info.defaults, info.global) : info.defaults;
-export const baselineFor = (info: SeatsInfo, scope: Scope): SeatMap => scope === 'project' ? mergeSeats(info.defaults, info.global, info.project) : mergeSeats(info.defaults, info.global);
-export const startScope = (info: SeatsInfo, projectId?: string): Scope =>
-  projectId && (Object.keys(info.project ?? {}).length || Object.keys(info.operations?.project ?? {}).length) ? 'project' : 'global';
+export function draftRoles(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
+  const shipped = info.roles.filter(role => role.source !== 'custom');
+  const orderOf = [...Object.keys(info.defaults), 'frontend', 'backend', 'desktop', 'database', 'ai', 'docs', 'performance', 'a11y'];
+  const position = (role: TeamRole) => orderOf.includes(role.id) ? orderOf.indexOf(role.id) : orderOf.length;
+  shipped.sort((a, b) => position(a) - position(b));
+  const builtin = shipped.filter(role => role.source === 'builtin');
+  const library = shipped.filter(role => role.source === 'library');
+  const order = builtin.flatMap(role => role.id === 'developer' ? [role, ...library] : [role]);
+  return order.flatMap(role => {
+    const seedFresh = role.kind === 'reviewer' || ['qa', 'a11y'].includes(role.id);
+    const values = config.roles[role.id];
+    const base = { ...role, enabled: role.kind === 'lead' || (values?.enabled ?? role.source === 'builtin'),
+      fresh: role.kind === 'reviewer' || (values?.fresh ?? seedFresh) };
+    const copies = Object.entries(config.roles).filter(([, value]) => value.from === role.id).map(([id, value]): TeamRole => ({
+      ...base, id, source: 'custom', from: role.id, name: value.name ?? '', duty: value.duty ?? '', detail: '',
+      outputs: value.outputs ?? '', enabled: value.enabled ?? true, fresh: role.kind === 'reviewer' || (value.fresh ?? base.fresh),
+      locked: roleLocks(role.kind, 'custom'),
+    }));
+    return [base, ...copies];
+  });
+}
+
+const seatOf = (value?: RoleConfig): Seat | undefined =>
+  value?.model && value.effort ? { model: value.model, effort: value.effort, ...(value.fast ? { fast: true } : {}) } : undefined;
+
+export function resolveDraftSeats(defaults: SeatMap, roles: TeamRole[], config: RoutingConfig): SeatMap {
+  const byId = new Map(roles.map(role => [role.id, role]));
+  const map: SeatMap = {};
+  const resolve = (id: string): Seat | undefined => {
+    if (Object.hasOwn(map, id)) return map[id];
+    const role = byId.get(id);
+    const inherits = role?.from ?? (role?.source === 'library' && role.kind === 'author' ? 'developer' : null);
+    const seat = seatOf(config.roles[id]) ?? (inherits ? resolve(inherits) : (role?.source === 'library' ? { model: 'sonnet', effort: 'high' } : defaults[id]));
+    if (seat) map[id] = seat;
+    return seat;
+  };
+  roles.forEach(role => resolve(role.id));
+  return map;
+}
+
+export const baselineFor = (info: SeatsInfo, scope: Scope) => resolveDraftSeats(info.defaults, draftRoles(info, configFor(info, scope)), configFor(info, scope));
+
+export function updateDraftSeats(config: RoutingConfig, previous: SeatMap, next: SeatMap): RoutingConfig {
+  const roles = { ...config.roles };
+  for (const [id, seat] of Object.entries(next)) {
+    if (!sameSeat(previous[id], seat)) roles[id] = { ...roles[id], ...seat, fast: !!seat.fast };
+  }
+  return { ...config, roles };
+}
+
+export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfig {
+  const roles = draftRoles(info, config), resolved = resolveDraftSeats(info.defaults, roles, config);
+  const entries = roles.flatMap(role => {
+    const entry = config.roles[role.id];
+    if (!entry) return [];
+    const { model, effort, fast, ...rest } = entry;
+    const inheritedFrom = role.from ?? (role.source === 'library' && role.kind === 'author' ? 'developer' : null);
+    const inherited = inheritedFrom ? resolved[inheritedFrom] : role.source === 'library' ?
+      { model: 'sonnet', effort: 'high' } : info.defaults[role.id];
+    const seedEnabled = role.source !== 'library';
+    const seedFresh = role.from ? roles.find(base => base.id === role.from)?.fresh : ['qa', 'a11y'].includes(role.id);
+    if (rest.enabled === seedEnabled || role.kind === 'lead') delete rest.enabled;
+    if (rest.fresh === seedFresh || role.kind === 'reviewer') delete rest.fresh;
+    const seat = seatOf(entry);
+    const value = { ...rest, ...(seat && !sameSeat(seat, inherited) ? seat : {}) };
+    return Object.keys(value).length ? [[role.id, value] as const] : [];
+  });
+  return { roles: Object.fromEntries(entries), operations: operationDiff(config.operations, info.operations?.defaults ?? {}) };
+}
 
 // A seat's model moved into another seat keeps its effort and fast only where the new model allows them (Claude fast stays off unless the seat already had it).
 function fitSeat(seat: Seat, row: SeatModel): Seat {
@@ -133,55 +204,48 @@ export function setFast(map: SeatMap, slot: SlotId, fast: boolean, catalog: Seat
   return !fast || rowFor(catalog, seat.model)?.fast ? { ok: true, map: withSlot(map, slot, { ...seat, fast }) } : { ok: false, reason: 'fast' };
 }
 
-// The reviewer rule: refused when the reviewer runs the developer seat's model while another AVAILABLE model of at least its rank exists.
+// The shared reviewer rule compares each enabled reviewer to the enabled authors.
 // The fix is such a model that none of the author seats runs, or null when the author seats themselves must change.
 const strength = (a: SeatModel, b: SeatModel) => b.rank - a.rank || b.model.localeCompare(a.model, 'en', { numeric: true });
 // The candidates in the order the one-click fix and the banner prefer them, never by list order: the reviewer seat's default first, then models another seat already runs, then the rest;
 // within each the strongest.
-function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel[] {
-  const running = Object.entries(map).filter(([id]) => id !== 'reviewer' && !AUTHORS.includes(id)).map(([, seat]) => seat);
-  const tier = (row: SeatModel) => defaults?.reviewer && sameModel(catalog, row.model, defaults.reviewer.model) ? 0 : running.some(seat => sameModel(catalog, seat.model, row.model)) ? 1 : 2;
+function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], authors: SeatId[], reviewer: SeatId, defaults?: SeatMap): SeatModel[] {
+  const running = Object.entries(map).filter(([id]) => id !== reviewer && !authors.includes(id)).map(([, seat]) => seat);
+  const tier = (row: SeatModel) => defaults?.[reviewer] && sameModel(catalog, row.model, defaults[reviewer].model) ? 0 : running.some(seat => sameModel(catalog, seat.model, row.model)) ? 1 : 2;
   return [...candidates].sort((a, b) => tier(a) - tier(b) || strength(a, b));
 }
-export const pickFix = (candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel | null => orderSuggestions(candidates, map, catalog, defaults)[0] ?? null;
-export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults?: SeatMap, identity = canonicalModel): ReviewerBlock | null {
-  const reviewer = map.reviewer;
-  const keyOf = (model: string) => identity(catalog, model);
-  const hit = reviewer ? AUTHORS.filter(id => map[id] && keyOf(map[id]!.model) === keyOf(reviewer.model)) : [];
-  if (!reviewer || !hit.length) return null;
-  const reviewKey = keyOf(reviewer.model);
-  // An alias and the id it resolves to are one model, so neither is an alternative to the other, and they count once.
-  const seen = new Set<string>();
-  const alternatives = catalog.filter(row => {
-    const key = keyOf(row.model);
-    if (!row.available || key === reviewKey || row.rank < rankOf(catalog, reviewer.model) || seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-  if (!alternatives.length) return null;
-  const fixes = alternatives.filter(row => AUTHORS.every(id => !map[id] || keyOf(map[id]!.model) !== keyOf(row.model)));
-  return { hit, alternatives, fix: pickFix(fixes, map, catalog, defaults) };
+export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults: SeatMap | undefined, roles: ReviewRoles): ReviewerBlock | null {
+  for (const reviewer of roles.reviewers) {
+    const seat = map[reviewer];
+    if (!seat) continue;
+    const block = authorConflict(seat.model, map, roles.authors, catalog);
+    if (block) return { reviewer, ...block, fix: orderSuggestions(block.alternatives, map, catalog, roles.authors, reviewer, defaults)[0] ?? null };
+  }
+  return null;
 }
 
-const operationModelIdentity = (catalog: SeatModel[], model: string) => familyOf(model) === 'codex' ? model : canonicalModel(catalog, model);
+function authorConflict(model: string, seats: SeatMap, authors: SeatId[], catalog: SeatModel[], operation = false) {
+  const models = Object.fromEntries(authors.flatMap(id => seats[id] ? [[id, seats[id].model]] : []));
+  return authorIdentityConflict(model, models, catalog, id => operation && familyOf(id) === 'codex' ? id : canonicalModel(catalog, id));
+}
 
-export function operationReviewerBlock(value: OperationValue | undefined, seats: SeatMap, catalog: SeatModel[], defaults?: SeatMap) {
+export function operationReviewerBlock(value: OperationValue | undefined, seats: SeatMap, catalog: SeatModel[], defaults: SeatMap | undefined, roles: ReviewRoles) {
   if (!value) return null;
-  const follow = value === 'follow';
-  const reviewer = follow ? seats.reviewer : { model: value.model, effort: 'high' };
-  if (!reviewer || familyOf(reviewer.model) !== 'codex') return null;
-  const map = { ...seats, reviewer };
-  const block = reviewerBlock(map, catalog, defaults, operationModelIdentity);
+  const follow = value === 'follow', reviewer = roles.reviewers[0];
+  const model = follow ? seats[reviewer]?.model : value.model;
+  if (!model || familyOf(model) !== 'codex') return null;
+  const block = authorConflict(model, seats, roles.authors, catalog, true);
   if (!block) return null;
   const codex = block.alternatives.filter(row => row.family === 'codex' && familyOf(row.model) === 'codex');
-  return { model: reviewer.model, follow, fix: pickFix(codex, map, catalog, defaults) };
+  return { model, follow, hit: block.hit, fix: orderSuggestions(codex, seats, catalog, roles.authors, reviewer, defaults)[0] ?? null };
 }
-// The same reviewer rule when it only warns: the author seats share the reviewer's model but nothing at least as strong is available to change it to.
-export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[]) =>
-  !!map.reviewer && !reviewerBlock(map, catalog) && AUTHORS.some(id => !!map[id] && sameModel(catalog, map[id]!.model, map.reviewer!.model));
+
+export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[], role: SeatId, authors: SeatId[]) =>
+  !!map[role] && !authorConflict(map[role].model, map, authors, catalog) &&
+  authors.some(id => !!map[id] && sameModel(catalog, map[id].model, map[role].model));
 
 // The first refusal main would give for this map, or null: 保存 is disabled on it.
-export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError | null {
+export function firstRefusal(map: SeatMap, catalog: SeatModel[], roles: ReviewRoles): SeatsSaveError | null {
   const refuse = (code: SeatsSaveError['code'], seat: string, message: string): SeatsSaveError => ({ ok: false, code, seat, message });
   for (const seat of Object.keys(map)) {
     const value = getSlot(map, seat);
@@ -191,13 +255,13 @@ export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError
     if (!(row?.efforts ?? BASE_EFFORTS[family]).includes(value.effort)) return refuse('invalid-effort', seat, unsupportedEffort(family));
     if (value.fast && !row?.fast) return refuse('fast-not-allowed', seat, 'This model has no fast mode.');
   }
-  return reviewerBlock(map, catalog) && refuse('reviewer-same-model', 'reviewer', 'Choose a reviewer different from developer when another available model is at least as strong.');
+  const block = reviewerBlock(map, catalog, undefined, roles);
+  return block && refuse('reviewer-same-model', block.reviewer, 'Choose a different reviewer model when another available model is at least as strong.');
 }
 
 // The seats whose slots differ between two maps, in the skill's own order.
 export const changedSeats = (seats: SeatId[], working: SeatMap, baseline: SeatMap) =>
   seats.filter(id => !sameSeat(getSlot(working, id), getSlot(baseline, id)));
-export const changedCount = (seats: SeatId[], working: SeatMap, baseline: SeatMap) => changedSeats(seats, working, baseline).length;
 // An unavailable seat can use its default instead.
 export function fallbackFor(info: SeatsInfo, slot: SlotId, working: SeatMap): Seat | null {
   const seat = getSlot(working, slot);
@@ -206,22 +270,14 @@ export function fallbackFor(info: SeatsInfo, slot: SlotId, working: SeatMap): Se
   return fallback && isAvailable(info.catalog, fallback.model) ? fallback : null;
 }
 
-// Only the seats that differ from the layer under the scope are saved; no difference is an empty map, which clears the scope (恢复默认).
-export function scopePayload(working: SeatMap, lower: SeatMap): SeatMap {
-  return Object.fromEntries(Object.entries(working).filter(([id, seat]) => !sameSeat(seat, getSlot(lower, id))));
-}
+type SeatsApi = Pick<Window['agentrix'], 'setSkillRouting'>;
 
-type SeatsApi = Pick<Window['agentrix'], 'setSkillSeats'>;
-// One save: the chosen scope and the edited map. A refusal or a failed call comes back as its message, never thrown.
-export async function saveSeats(
-  api: SeatsApi, scope: Scope, projectId: string | null, working: SeatMap, lower: SeatMap, operations?: OperationMap,
-): Promise<{ ok: true } | { ok: false; message: string; error?: SeatsSaveError }> {
+export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string | null, config: RoutingConfig, base: string | null) {
   try {
-    const args = [scope, scope === 'project' ? projectId : null, scopePayload(working, lower)] as const;
-    const result = operations === undefined ? await api.setSkillSeats(...args) : await api.setSkillSeats(...args, operations);
-    return result.ok ? { ok: true } : { ok: false, message: result.message, ...(result.operation ? { error: result } : {}) };
+    const result = await api.setSkillRouting(scope, scope === 'project' ? projectId : null, config, scope === 'project' ? base : null);
+    return result.ok ? { ok: true as const } : { ok: false as const, message: result.message, error: result };
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    return { ok: false as const, message: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -229,8 +285,9 @@ export const sameOperation = (a?: OperationValue, b?: OperationValue) =>
   a === b || (!!a && !!b && a !== 'follow' && b !== 'follow' && a.model === b.model && a.effort === b.effort);
 
 export function operationLayers(operations: SeatsInfo['operations'], scope: Scope) {
-  const global = { ...operations?.defaults, ...operations?.global };
-  return scope === 'project' ? { lower: global, baseline: { ...global, ...operations?.project } } : { lower: operations?.defaults ?? {}, baseline: global };
+  const lower = operations?.defaults ?? {};
+  const saved = scope === 'project' ? operations?.config ?? operations?.template : operations?.template;
+  return { lower, baseline: { ...lower, ...saved } };
 }
 
 export function operationDiff(values: OperationMap, base: OperationMap): OperationMap {
@@ -290,24 +347,35 @@ const DEVELOPER_ROLE: SeatRole = { id: 'developer', name: 'Developer', duty: '',
 
 export function callSeatRole(roles: readonly SeatRole[], item: CallRow['item']) {
   const knownRole = roles.find(role => role.id === item.seat);
-  const role = knownRole ?? roles.find(role => role.id === DEVELOPER_ROLE.id) ?? DEVELOPER_ROLE;
-  return { role, inferred: !knownRole || item.seatSource !== 'declared' };
+  const fallback = roles.find(role => role.id === DEVELOPER_ROLE.id) ?? DEVELOPER_ROLE;
+  const named = item.seat && (item.seatName || item.offTeam);
+  const role = named ? { ...(knownRole ?? fallback), id: item.seat!, name: item.seatName ?? knownRole?.name ?? item.seat! } : knownRole ?? fallback;
+  return { role, inferred: item.seatSource !== 'declared' || !knownRole && !item.seatName && !item.offTeam };
 }
 
-export function roleGroups(roles: readonly SeatRole[], rows: CallRow[]) {
-  const groups = new Map<SeatRole, CallRow[]>(roles.map(role => [role, []]));
+export function roleGroups(roles: readonly SeatRole[], rows: CallRow[], selectedRoles = roles) {
+  const groups = new Map<string, { role: SeatRole; rows: CallRow[]; offTeam: boolean; newest: number }>();
   for (const row of rows) {
     const { role } = callSeatRole(roles, row.item);
-    const group = groups.get(role);
-    if (group) group.push(row); else groups.set(role, [row]);
+    const offTeam = !!row.item.offTeam, key = JSON.stringify([role.id, offTeam]);
+    const selected = selectedRoles.find(candidate => candidate.id === role.id);
+    const name = selected?.name ?? role.name, started = row.item.startedAt ?? -1;
+    const group = groups.get(key);
+    if (!group) groups.set(key, { role: { ...role, name }, rows: [row], offTeam, newest: started });
+    else {
+      group.rows.push(row);
+      if (!selected && started > group.newest) { group.role = role; group.newest = started; }
+    }
   }
-  return Array.from(groups, ([role, rows]) => ({ role, rows })).filter(group => group.rows.length > 0);
+  const order = new Map(selectedRoles.map((role, index) => [role.id, index]));
+  const rank = (id: string) => order.get(id) ?? selectedRoles.length;
+  return [...groups.values()].sort((a, b) => Number(a.offTeam) - Number(b.offTeam) || rank(a.role.id) - rank(b.role.id));
 }
 
 export function routeVerdict(row: CallRow, info?: SeatsInfo | null) {
   const { call, item } = row, declared = item.declared;
   const expected = item.seatSource === 'declared' && item.seat ? info?.current?.[item.seat] : undefined;
-  if (!call.model || call.modelUnconfirmed) return 'unknown';
+  if (item.offTeam || !call.model || call.modelUnconfirmed) return 'unknown';
   const matches = (model: string) => sameModel(info?.catalog ?? [], model, call.model!);
   if (expected && !matches(expected.model)) return 'mismatch';
   if (declared) {
