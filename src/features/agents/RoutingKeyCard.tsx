@@ -3,6 +3,20 @@ import { CaretRight, Path } from '@phosphor-icons/react';
 import type { SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { openSeats, routingRoleName, routingModelName } from '../../shared/routing-command.ts';
+import { editableOperation, operationLabel, operationName } from './OperationRows';
+
+function OperationSummary({ operations }: { operations: NonNullable<SeatsInfo['operations']> }) {
+  const values = operations.current?.values ?? operations.effective;
+  const summary = operations.rows.filter(editableOperation).map(row => ({
+    id: row.id, name: operationName(row), model: operationLabel(row, values[row.id], routingModelName),
+  }));
+  if (!summary.length) return null;
+  const details = summary.map(row => `${row.name} · ${row.model}`).join('\n');
+  const primary = summary.find(row => row.id === 'lookup') ?? summary[0];
+  return <span className="activity-routing-operations" title={details}>
+    <span>{t('操作模型')}</span><strong>{primary.name} · {primary.model}</strong>
+  </span>;
+}
 
 export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId?: string; terminalId: string; sessionId: string | null }) {
   const [info, setInfo] = useState<SeatsInfo | null>(null);
@@ -30,8 +44,11 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
       const seat = map[role.id];
       return <span key={role.id} className="activity-routing-row" data-seat={role.id}>
         <span title={routingRoleName(role.name, t)}>{routingRoleName(role.name, t)}</span><strong title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>
-        <span>{seat?.effort ?? '—'}{seat?.fast && <span title={t('快速')}> · {t('快速')}</span>}</span>
+        <span className="activity-routing-setting" title={seat?.fast ? `${seat.effort} · ${t('快速')}` : seat?.effort}>
+          {seat?.effort ?? '—'}{seat?.fast && <span className="activity-routing-fast"> · {t('快速')}</span>}
+        </span>
       </span>;
     })}</span>
+    {info.operations && <OperationSummary operations={info.operations} />}
   </button>;
 }

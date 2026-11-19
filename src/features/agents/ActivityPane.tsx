@@ -16,8 +16,7 @@ import './activity-pane.css';
 
 export { SeatsHost } from './SeatsHost';
 
-// Beside an expanded project's terminal, two blocks and nothing else: the main model with what it is working on, and each agent's run mode and allowance (ApiUsage).
-// The models the agent called are in the left bar's Agent tab. The pane does not scroll as a whole; each block keeps its title and scrolls its own content.
+// The main model, both agents' usage and the routing key share the pane. Only an explicitly expanded task list can scroll.
 export function ActivityPane({ terminal, projectId }: { terminal: ProjectTerminal; projectId?: string }) {
   return <aside className="activity-pane" aria-label={t('活动')}>
     {terminal.codexActive ? <MainCard terminal={terminal} /> : <section className="activity-card">
@@ -94,7 +93,7 @@ function MainCard({ terminal }: { terminal: ProjectTerminal }) {
       <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
     </ul>
-    <ul className="activity-call-rows activity-main-tasks" aria-label={t('提示')}>
+    <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={t('提示')}>
       {expanded ? rows : rows.slice(0, 4)}
       {hidden > 0 && <li className="activity-task-fold"><button type="button" aria-expanded={expanded} onClick={() => setFold(expanded ? null : foldSession)}>
         <CaretDown size={14} aria-hidden="true" />{expanded ? t('收起') : t('还有 {count} 条', { count: hidden })}

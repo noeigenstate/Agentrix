@@ -27,8 +27,9 @@ function compileFile(filename, language, hooks) {
     if (name.endsWith('.css')) return {};
     if (name === '../../shared/i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
     if (name === '../../shared/routing-command.ts') return compileFile(path.join(__dirname, '../src/shared/routing-command.ts'), language);
-    if (name === './skill-seats.ts') return require('../src/features/agents/skill-seats.ts');
+    if (name === './skill-seats.ts' || name === './skill-seats') return require('../src/features/agents/skill-seats.ts');
     if (name === './RoutingKeyCard') return loadAgentsFile('RoutingKeyCard.tsx', language);
+    if (name === './OperationRows') return loadAgentsFile('OperationRows.tsx', language);
     if (name === './SeatsHost') return loadAgentsFile('SeatsHost.tsx', language);
     if (name === '../../shared/call-model-name') return compileFile(path.join(__dirname, '../src/shared/call-model-name.ts'), language);
     if (name === './i18n') return { currentLanguage: () => language, t: (key, values = {}) => (language === 'en' ? en[key] ?? key : key).replace(/\{(\w+)\}/g, (_, key) => values[key] ?? '') };
@@ -433,15 +434,15 @@ test('without an agent the pane shows only its hint, no main model and no tasks;
   assert.ok(html.includes('class="activity-empty"') && html.includes('main model, task, context length and usage'));
   assert.doesNotMatch(html, /activity-main|activity-calls|activity-tasks|No task yet/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
-  // The pane does not scroll as a whole (no scrollbar, no wheel): its two blocks share the height by content, each keeps a floor, and the main card's prompts and the agents' sections scroll under their own fixed titles.
+  // The folded pane is fixed. Only expanded tasks and the separate Agent tab keep their scrollable lists.
   const pane = /\.activity-pane \{[^}]*\}/.exec(css)[0];
   assert.match(pane, /overflow: hidden/); assert.doesNotMatch(pane, /overflow-y: auto|scrollbar-width/);
-  assert.match(css, /\.activity-main \{ flex: 0 1 auto; min-height: 132px; \}/, 'the model block keeps its title, model rows and one full task row');
-  assert.match(css, /\.activity-main-tasks:has\(li\) \{ min-height: 32px; \}/, 'and its task keeps one full row');
-  assert.match(css, /\.activity-api \{ flex: 0 1 auto; min-height: 76px; \}/, 'the allowance block gives way and scrolls inside');
+  assert.match(css, /\.activity-main:has\(\[data-expanded\]\) \{ flex: 0 1 auto; min-height: 0; \}/);
+  assert.doesNotMatch(/\.api-agents \{[^}]+\}/.exec(css)[0], /overflow|max-height/);
+  assert.doesNotMatch(/\.activity-routing-rows \{[^}]+\}/.exec(css)[0], /overflow|max-height/);
   assert.match(css, /\.activity-calls \{ flex: 0 1 auto; min-height: 0; \}/, 'the called models take what the left bar gives and their list scrolls');
-  assert.doesNotMatch(css, /max-height/);
-  const list = /\.activity-main-tasks, \.activity-call-groups, \.api-agents \{([^}]+)\}/.exec(css)[1];
+  assert.doesNotMatch(css.replace(/@container activity \(max-height:/g, ''), /max-height:/);
+  const list = /\.activity-main-tasks\[data-expanded\], \.activity-call-groups \{([^}]+)\}/.exec(css)[1];
   for (const part of ['flex: 0 1 auto', 'min-height: 0', 'overflow-y: auto', 'scrollbar-gutter: stable', 'mask-image', 'animation-timeline: scroll(self)']) assert.ok(list.includes(part), part);
   assert.match(css, /@keyframes activity-fade/);
   assert.match(css, /\.activity-call-rows li p \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis; white-space: nowrap/);
@@ -568,8 +569,8 @@ test('metrics are label | meter | figure blocks: one number format, a warning co
   assert.ok(css.includes('.activity-metric.activity-tokens > small { grid-area: 1 / 2 / auto / -1;'), 'the breakdown starts in the meters column, on the label line');
   assert.match(css, /\.activity-metric\.is-warn > b \{ color: var\(--warning\); \}/);
   assert.match(css, /\.activity-metric\.is-warn \.activity-meter i \{ background: var\(--warning\); \}/);
-  // Inside an agent's section the bars are 28px high and 4px apart, the context first and the round's tokens last, with no heading of their own.
-  assert.match(css, /\.api-agent \.activity-metrics \{ gap: 4px; \}/); assert.match(css, /\.api-agent \.activity-metric \{ grid-template-rows: 28px; \}/);
+  // Compact bar rows leave room for the routing key below both accounts.
+  assert.match(css, /\.api-agent \.activity-metrics \{ gap: 2px; \}/); assert.match(css, /\.api-agent \.activity-metric \{ grid-template-rows: 20px; \}/);
   assert.doesNotMatch(full, /<h4[^>]*>用量<\/h4>/);
   assert.ok(full.indexOf('上下文长度') < full.indexOf('>本轮<') && full.indexOf('>本轮<') < full.indexOf('>本次对话<'), 'context first, then this round, then this conversation');
 });

@@ -1,20 +1,12 @@
-/* The activity pane, a quiet status inspector on the pane colour, docked to the main area's right edge. Two blocks and nothing else: the main model (its task list) and 运行方式与额度
-   (per agent: connection, then its bars). Each block is a title over its content, 20px apart, 8px between a title and its content. The pane does not scroll as a whole: each block keeps its
-   title fixed and its content scrolls inside it, the blocks sharing the height in proportion to their content and each keeping a floor (the head and one row; the model block's is its task row), so a short window never
-   squeezes one away. One left edge and one right-hand number column run through both. The model block's title is 13px in the secondary ink, the allowance block's 14px in the primary ink; rows are 32px on a 16 | text | end grid, metrics an 88 | meter | 48 grid
-   (28px inside an agent's section); text is 13px for a row's subject, 12px for the rest. The models the agent called are not here: they are the left bar's Agent tab and use the same rows, in two lines.
-   The meters' tracks take the pane's own well fill and their fill is neutral grey; the warning colour appears only from 90%, and the spinner is the one other colour. */
+/* The main model, usage and routing key share the available height. An owner-expanded task list can scroll under its heading. */
 .activity-pane, .activity-calls {
   --flow-line: var(--divider); --flow-inset: var(--bg-aside-well);
   --flow-ink: var(--text-1); --flow-muted: var(--text-2); --flow-faint: var(--text-3);
 }
-.activity-pane { gap: 20px; padding: 16px; overscroll-behavior: contain; overflow: hidden; }
+.activity-pane { container: activity / size; gap: 8px; padding: 8px 12px; overflow: hidden; }
 .activity-card { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-/* The two blocks share the pane's height by their content and shrink alike, each keeping a floor; their own lists scroll under the fixed title. */
-/* The model block never gives up its task: its floor is its title, its model rows (up to 64px: two rows when no model is named yet) and one full 32px task row, so a short window
-   squeezes the allowance block instead, whose list scrolls inside. */
-.activity-main { flex: 0 1 auto; min-height: 132px; }
-.activity-api { flex: 0 1 auto; min-height: 76px; }
+.activity-pane .activity-card { gap: 4px; }
+.activity-main:has([data-expanded]) { flex: 0 1 auto; min-height: 0; }
 /* The called models fill the left bar's Agent tab (and the narrow window's popover): the section takes what the bar gives and its list scrolls. */
 .activity-calls { flex: 0 1 auto; min-height: 0; }
 .activity-card-title { margin: 0; font-size: 14px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
@@ -31,10 +23,12 @@
 @property --fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @keyframes activity-fade { 0% { --fade-top: 0px; --fade-bottom: 16px; } 4% { --fade-top: 16px; } 96% { --fade-bottom: 16px; } 100% { --fade-top: 16px; --fade-bottom: 0px; } }
-.activity-main-tasks, .activity-call-groups, .api-agents { flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; display: grid; align-content: start; margin: 0 -14px 0 -8px; padding: 0 8px; list-style: none;
+.activity-main-tasks[data-expanded], .activity-call-groups {
+  flex: 0 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable;
+  display: grid; align-content: start; margin: 0 -8px; padding: 0 8px; list-style: none;
   mask-image: linear-gradient(to bottom, transparent, #000 var(--fade-top), #000 calc(100% - var(--fade-bottom)), transparent); animation: activity-fade linear both; animation-timeline: scroll(self); }
-.activity-main-tasks:has(li) { min-height: 32px; }
 .activity-call-rows li { position: relative; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: 8px; align-items: center; height: 32px; }
+.activity-pane .activity-call-rows li { height: 24px; }
 .activity-call-rows li::before { content: ''; position: absolute; inset: 0 -8px; border-radius: 8px; }
 .activity-call-rows li:hover::before { background: var(--bg-hover); }
 .activity-call-rows li > * { position: relative; }
@@ -114,19 +108,18 @@
 .activity-metric.activity-tokens > small { grid-area: 1 / 2 / auto / -1; line-height: 20px; }
 .activity-metric.is-warn > b { color: var(--warning); }
 .activity-metric.is-warn .activity-meter i { background: var(--warning); }
-/* 运行方式与额度 (ApiUsage): one section per agent, 20px apart: its name, then 连接 (and 额度 未知 when there is nothing to measure) as rows on the metrics' 88px label column, then the bars:
-   the same Metric for the context, the quota windows, 28px high and 4px apart; a value with no bar (spend, tokens) is a label and one quiet line. */
-.api-agents { gap: 20px; }
-.api-agent { display: grid; gap: 8px; min-width: 0; }
+/* Each agent's connection rows and meters share the same label column. */
+.api-agents { display: grid; gap: 8px; }
+.api-agent { display: grid; gap: 4px; min-width: 0; }
 .api-agent-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 20px; color: var(--flow-ink); }
-.api-usage { display: grid; gap: 4px; margin: 0; }
+.api-usage { display: grid; gap: 2px; margin: 0; }
 .api-row { display: grid; grid-template-columns: 88px minmax(0, 1fr); column-gap: 8px; align-items: baseline; }
 .api-row:lang(en) { grid-template-columns: 112px minmax(0, 1fr); }
 .api-row dt { overflow: hidden; font-size: 13px; line-height: 20px; color: var(--flow-muted); text-overflow: ellipsis; white-space: nowrap; }
 .api-row dd { display: flex; flex-direction: column; gap: 2px; min-width: 0; margin: 0; font-size: 13px; line-height: 20px; color: var(--flow-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .api-row dd small { font-size: 12px; line-height: 16px; color: var(--flow-faint); }
-.api-agent .activity-metrics { gap: 4px; }
-.api-agent .activity-metric { grid-template-rows: 28px; }
+.api-agent .activity-metrics { gap: 2px; }
+.api-agent .activity-metric { grid-template-rows: 20px; }
 /* The link to the console's billing page under the API spend: a quiet text button on the label column's left edge. */
 .api-agent .api-billing { justify-self: start; min-height: 32px; padding: 0; }
 
@@ -215,9 +208,8 @@
 
 /* 模型路由: a quiet 32px row under the blocks, grey like the other pane text until hovered. */
 /* Compact key rows keep the pane usable at short heights. The entire raised surface is a button. */
-.activity-pane:has(.activity-routing-key) { gap: 12px; }
 .activity-routing-key {
-  flex: 0 1 auto; display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 60px; gap: 4px; padding: 8px; margin: 0 1px 4px; text-align: start;
+  flex: none; display: grid; gap: 4px; padding: 8px; margin-bottom: 4px; min-width: 0; text-align: start;
   border: 1px solid var(--divider); border-radius: 8px; background: var(--flow-inset); color: var(--flow-ink);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--flow-ink) 10%, transparent), 0 3px 0 var(--divider);
   font: inherit; cursor: pointer;
@@ -226,9 +218,22 @@
 .activity-routing-key:active { transform: translateY(2px); }
 .activity-routing-key:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .activity-routing-title { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
-.activity-routing-rows { min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--flow-line); padding-top: 4px; }
-.activity-routing-row { display: grid; grid-template-columns: minmax(44px, 30%) minmax(0, 1fr) auto; gap: 8px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
+.activity-routing-rows { display: grid; min-width: 0; border-top: 1px solid var(--flow-line); padding-top: 4px; }
+.activity-routing-row { display: grid; grid-template-columns: minmax(44px, 30%) minmax(0, 1fr) auto; gap: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
 .activity-routing-row > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-routing-row strong { color: var(--flow-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-routing-operations { display: flex; gap: 8px; border-top: 1px solid var(--flow-line); padding-top: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
+.activity-routing-operations > span { flex: none; }
+.activity-routing-key strong { min-width: 0; color: var(--flow-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Keep quota values and warnings visible. Secondary usage details give up their lines before the routing rows change columns. */
+@container activity (max-height: 820px) {
+  .api-agent [data-usage-detail] { display: none; }
+}
+@container activity (max-height: 752px) {
+  .activity-routing-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
+  .activity-routing-fast { display: none; }
+}
 .activity-call-rows .activity-task-fold button { grid-column: 2 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 0; background: none; color: var(--flow-muted); font: inherit; cursor: pointer; }
+.activity-pane .activity-call-rows .activity-task-fold { height: 32px; }
+.activity-task-fold button { min-height: 32px; }
 .activity-task-fold button[aria-expanded="true"] svg { transform: rotate(180deg); }

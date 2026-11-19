@@ -34,6 +34,7 @@ Shows the expanded project's active model, steps, usage and quota in the Activit
 - Claude's queue placeholder counts as empty input only while the CLI draws its queue row — test: `tests/cli-panel.test.cjs` › "the queue placeholder is empty only with Claude Code"
 - A quota update refreshes only that project's card — test: `tests/native-session-ui.test.cjs` › "a quota change reported for one project makes only that project’s usage card read again"
 - Unknown reset counts stay unknown — test: `tests/reset-count.test.cjs` › "unknown is never zero"
+- Only expanded tasks scroll — test: `scripts/completion-smoke.mjs` › "the folded pane and the full 340px fixture fit without scrolling or overlap"
 
 ## Not ours
 - Reading agent records and account data — Activity pane.
