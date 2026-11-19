@@ -58,10 +58,12 @@ test('Claude workers from every project terminal remain visible across terminal 
   setup();
   const splits = files('features/agents/subagent-splits.ts'), { setActiveTerminal } = files('features/terminal/active-terminal.ts');
   const terminals = [terminal('t1', [call('claude-sonnet-5-5', [item('dispatch:a', { title: '补写测试' })])]), terminal('t2', [call('claude-sonnet-5-5', [item('dispatch:b', { title: '评审事件重放' })]), call('claude-opus-5-5', [item('dispatch:c', { title: '核对边界' })])])];
-  // Whichever terminal the grid has picked, the tab is the project's: the sidebar reads no terminal selection.
+  // Selection supplies the role order while the sidebar retains all project workers.
   for (const picked of ['t1', 't2']) {
     setActiveTerminal('p', picked);
     const handed = sidebar(terminals), html = renderToStaticMarkup(handed.panel);
+    const calls = handed.panel.props.children.find(node => node.type === setup().CallsCard);
+    assert.equal(calls.props.terminalId, picked);
     for (const title of ['补写测试', '评审事件重放', '核对边界']) assert.ok(html.includes(title), `${title} is listed with terminal ${picked} picked`);
     assert.ok(html.includes('终端 1') && html.includes('终端 2'), 'each row says which terminal it belongs to');
     assert.equal(handed.running, 3, 'the running count is the project\'s');
