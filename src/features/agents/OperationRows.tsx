@@ -1,11 +1,12 @@
-import { BookOpen, CaretDown, Clock, LockSimple, MagnifyingGlass, Robot, ShieldCheck } from '@phosphor-icons/react';
+import { BookOpen, CaretDown, Clock, LockSimple, MagnifyingGlass, Prohibit, Robot, ShieldCheck } from '@phosphor-icons/react';
 import type { OperationAgentState, OperationId, OperationMap, OperationRow, OperationValue, SeatModel, SeatsInfo } from '../../shared/types';
 import { currentLanguage, t } from '../../shared/i18n';
-import { familyOf, operationUsesEffort, rowFor, sameOperation } from './skill-seats';
+import { familyOf, isAvailable, operationUsesEffort, rowFor, sameOperation } from './skill-seats';
 
 const ICONS = { lookup: MagnifyingGlass, background: Clock, subagent: Robot, memory: BookOpen, review: ShieldCheck };
 const AGENTS = { claude: 'Claude', codex: 'Codex' } as const;
-const STATES = { applies: '有效', 'not-applicable': '不适用', 'not-effective': '未生效' };
+const STATES = { applies: '有效', default: '默认', 'not-applicable': '不适用', 'not-effective': '未生效' };
+type OperationStatus = { state: OperationAgentState['state'] | 'default'; reason?: string };
 type Editable = OperationRow & { id: OperationId };
 type Control = 'model' | 'effort' | keyof typeof AGENTS;
 
@@ -18,9 +19,6 @@ const OPERATION_WORDS: Record<string, string> = {
   'Sub-agents started without an explicit model': '启动时没有明确指定模型的子代理',
   'Extracting and consolidating memories': '提取和整理记忆',
   "Codex's built-in review (/review, review/start)": 'Codex 内置审查（/review、review/start）',
-  'This setting applies when Codex memories are enabled.': '开启 Codex 记忆功能时生效。',
-  'Built into Claude Code and Codex.': '由 Claude Code 和 Codex 内置决定。',
-  'Built in. Claude titles move with the background helpers.': '由程序内置决定。Claude 标题随后台小任务一起变化。',
   'follows the conversation': '跟随对话',
   'Reviewer seat': '跟随审查席位',
   'Claude Code is not installed.': '未安装 Claude Code。',
@@ -35,6 +33,17 @@ const OPERATION_WORDS: Record<string, string> = {
   'Expected a valid model id of at most 160 characters and an optional effort.': '请输入不超过 160 个字符的有效模型名，可选填强度。',
   'Choose a reviewer different from developer when another available model is at least as strong.': '有不弱于开发模型的可用模型时，请为审查选择不同的模型。',
 };
+const OPERATION_NOTES: Record<string, string> = {
+  'explore-follows-background': 'Claude Code 内置的 Explore 代理也使用此设置。',
+  'codex-memories-enabled': '开启 Codex 记忆功能时生效。',
+  'built-in-compaction': '不可控，由 Claude Code / Codex 内置决定',
+  'titles-follow-background': 'Claude 标题随后台小任务一起变化。',
+};
+
+function operationNote(id: string | undefined) {
+  return id && Object.hasOwn(OPERATION_NOTES, id) ? t(OPERATION_NOTES[id]) : null;
+}
+
 export function operationWords(text: string) {
   if (currentLanguage() === 'en') return t(text);
   return Object.hasOwn(OPERATION_WORDS, text) ? OPERATION_WORDS[text] : text;
@@ -46,7 +55,7 @@ export function operationLabel(row: OperationRow, value: OperationValue | undefi
 }
 
 function Status({ family, value, expanded, onOpen }: {
-  family: keyof typeof AGENTS; value: OperationAgentState; expanded?: boolean; onOpen?: (button: HTMLButtonElement) => void;
+  family: keyof typeof AGENTS; value: OperationStatus; expanded?: boolean; onOpen?: (button: HTMLButtonElement) => void;
 }) {
   const title = [AGENTS[family], t(STATES[value.state])].join(' · ');
   const dot = <i className="seats-mk" data-family={family} aria-hidden="true" />;
@@ -56,8 +65,9 @@ function Status({ family, value, expanded, onOpen }: {
     : <span className="seats-op-chip" data-op-state={value.state} data-agent={family} title={value.reason && operationWords(value.reason)}>{dot}{title}</span>;
 }
 
-function previewState(row: Editable, family: keyof typeof AGENTS, selected: keyof typeof AGENTS | undefined): OperationAgentState {
+function previewState(row: Editable, family: keyof typeof AGENTS, selected: keyof typeof AGENTS | undefined): OperationStatus {
   if (!row.families.includes(family) || selected && selected !== family) return { state: 'not-applicable' };
+  if (!selected) return { state: 'default' };
   return { state: 'applies', reason: t('保存后检查是否生效') };
 }
 
@@ -67,6 +77,8 @@ type OperationRowsProps = {
   baseline: OperationMap;
   catalog: SeatModel[];
   label: (model: string) => string;
+  reviewerModel?: string;
+  reviewBlocked: boolean;
   over?: OperationId;
   control?: { id: OperationId; kind: Control };
   open: (id: OperationId, button: HTMLElement, kind: Control) => void;
@@ -82,26 +94,30 @@ function OperationTitle({ row, changed }: { row: OperationRow; changed?: boolean
   </div>;
 }
 
-function OperationCard({ row, info, values, baseline, catalog, label, over, control, open, select }: OperationRowsProps & { row: Editable }) {
+function OperationCard(props: OperationRowsProps & { row: Editable }) {
+  const { row, info, values, baseline, catalog, label, reviewerModel, reviewBlocked, over, control, open, select } = props;
   const { id } = row, value = values[id];
-  const model = value === 'follow' ? undefined : value?.model;
+  const followReviewer = id === 'review' && value === 'follow';
+  const model = value === 'follow' ? followReviewer && reviewerModel && familyOf(reviewerModel) === 'codex' ? reviewerModel : undefined : value?.model;
   const family = model ? rowFor(catalog, model)?.family ?? familyOf(model) : undefined;
   const name = operationName(row), changed = !sameOperation(value, baseline[id]);
   const expanded = (kind: Control) => control?.id === id && control.kind === kind;
-  const reported = sameOperation(value, info.effective[id]);
-  const suggestion = value === 'follow' && row.suggestion && catalog.some(item => item.model === row.suggestion && item.available) ? row.suggestion : null;
-  return <article className={`seats-op-card${over === id ? ' is-over' : ''}`} data-operation={id} data-op-slot={id} aria-label={name}>
+  const reported = sameOperation(value, info.effective[id]) && (!followReviewer || model === row.effective?.model);
+  const suggestion = id === 'memory' && row.suggestion !== model && row.suggestion && isAvailable(catalog, row.suggestion) ? row.suggestion : null;
+  const blocked = id === 'review' && reviewBlocked, note = operationNote(row.note);
+  return <article className={`seats-op-card${over === id ? ' is-over' : ''}${blocked ? ' is-blocked' : ''}`} data-operation={id} data-op-slot={id} aria-label={name}>
     <OperationTitle row={row} changed={changed} />
     <div className="seats-op-info">
       <p className="seats-op-covers">{operationWords(row.covers)}</p>
-      {value === 'follow' && reported && id === 'review' && <p className="seats-op-note">{row.effective ? label(row.effective.model) : t('Codex 默认')}</p>}
+      {followReviewer && <p className="seats-op-note">{model ? label(model) : t('Codex 默认')}</p>}
       <div className="seats-op-status">
-        {(Object.keys(AGENTS) as (keyof typeof AGENTS)[]).map(agent =>
+        {blocked ? <span className="seats-state is-bad" data-op-blocked><Prohibit size={14} aria-hidden="true" />{t('已阻止 · 同模型')}</span>
+          : (Object.keys(AGENTS) as (keyof typeof AGENTS)[]).map(agent =>
           <Status key={agent} family={agent} value={reported ? row.agents[agent] : previewState(row, agent, family)}
             expanded={expanded(agent)} onOpen={button => open(id, button, agent)} />)}
-        {!reported && <span className="seats-op-note">{t('保存后检查是否生效')}</span>}
+        {!blocked && !reported && <span className="seats-op-note">{t('保存后检查是否生效')}</span>}
       </div>
-      {row.note && <p className="seats-op-note">{operationWords(row.note)}</p>}
+      {note && <p className="seats-op-note">{note}</p>}
     </div>
     <div className="seats-op-settings">
       <button type="button" className="seats-gem" data-op-model={id} aria-haspopup="menu" aria-expanded={expanded('model')}
@@ -120,13 +136,17 @@ function OperationCard({ row, info, values, baseline, catalog, label, over, cont
 
 export function OperationRows(props: OperationRowsProps) {
   return <div className="seats-operations" id="seats-operations-panel" role="tabpanel" aria-labelledby="seats-operations-tab">
-    {props.info.rows.map(row => editableOperation(row) ? <OperationCard key={row.id} row={row} {...props} /> :
-      <article key={row.id} className="seats-op-card is-readonly" data-operation={row.id}>
+    {props.info.rows.map(row => {
+      if (editableOperation(row)) return <OperationCard key={row.id} row={row} {...props} />;
+      const note = operationNote(row.note);
+      return <article key={row.id} className="seats-op-card is-readonly" data-operation={row.id}>
         <OperationTitle row={row} />
-        <div className="seats-op-info"><p>{t('不可控，由 Claude Code / Codex 内置决定')}</p>
-          {row.id === 'titles' && row.note && <p className="seats-op-note">{operationWords(row.note)}</p>}
+        <div className="seats-op-info">
+          <p>{row.id === 'compaction' && note ? note : t('不可控，由 Claude Code / Codex 内置决定')}</p>
+          {row.id === 'titles' && note && <p className="seats-op-note">{note}</p>}
         </div>
-      </article>)}
+      </article>;
+    })}
   </div>;
 }
 

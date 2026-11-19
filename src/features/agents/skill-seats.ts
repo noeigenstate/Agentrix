@@ -17,11 +17,16 @@ const AUTHORS: SeatId[] = ['developer'];
 // A shorter name for a small tile: "Opus (follows latest)" is "Opus (latest)"; the menu and the list keep the full text.
 export const shortLabel = (label: string) => label.replace(/\s*\(follows latest\)$/i, ' (latest)');
 // Where the 更换 menu goes: under its button, else above it, else on the roomier side; it never leaves the viewport, and the model list scrolls inside it (maxHeight).
-export function menuPlacement(anchor: { left: number; top: number; bottom: number }, view: { width: number; height: number }, rows: number): { left: number; top?: number; bottom?: number; maxHeight: number } {
-  const need = Math.min(rows * 32 + 200, view.height - 16), below = view.height - anchor.bottom - 12, above = anchor.top - 12;
-  const left = Math.max(8, Math.min(view.width - 288, Math.round(anchor.left)));
-  const under = { left, top: Math.round(anchor.bottom + 4), maxHeight: Math.max(below, 0) }, over = { left, bottom: Math.round(view.height - anchor.top + 4), maxHeight: Math.max(above, 0) };
-  return need <= below ? under : need <= above ? over : below >= above ? under : over;
+export function menuPlacement(anchor: { left: number; top: number; bottom: number }, view: { width: number; height: number }, rows: number) {
+  const margin = 16, gap = 4;
+  const width = Math.min(320, Math.max(0, view.width - margin * 2));
+  const limit = Math.max(0, view.height - margin * 2);
+  const left = Math.max(margin, Math.min(view.width - margin - width, Math.round(anchor.left)));
+  const top = Math.max(margin, Math.ceil(anchor.bottom + gap)), bottom = Math.max(margin, Math.ceil(view.height - anchor.top + gap));
+  const below = Math.max(0, view.height - margin - top), above = Math.max(0, view.height - margin - bottom);
+  const need = Math.min(rows * 40 + 80, 480, limit);
+  if (below >= need || below >= above) return { left, width, top, maxHeight: Math.min(below, 480) };
+  return { left, width, bottom, maxHeight: Math.min(above, 480) };
 }
 export const getSlot = (map: SeatMap, slot: SlotId): Seat | undefined => map[slot];
 export const withSlot = (map: SeatMap, slot: SlotId, seat: Seat): SeatMap => ({ ...map, [slot]: seat });
@@ -139,20 +144,37 @@ function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatMo
   return [...candidates].sort((a, b) => tier(a) - tier(b) || strength(a, b));
 }
 export const pickFix = (candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): SeatModel | null => orderSuggestions(candidates, map, catalog, defaults)[0] ?? null;
-export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults?: SeatMap): ReviewerBlock | null {
+export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults?: SeatMap, identity = canonicalModel): ReviewerBlock | null {
   const reviewer = map.reviewer;
-  const hit = reviewer ? AUTHORS.filter(id => map[id] && sameModel(catalog, map[id]!.model, reviewer.model)) : [];
+  const keyOf = (model: string) => identity(catalog, model);
+  const hit = reviewer ? AUTHORS.filter(id => map[id] && keyOf(map[id]!.model) === keyOf(reviewer.model)) : [];
   if (!reviewer || !hit.length) return null;
+  const reviewKey = keyOf(reviewer.model);
   // An alias and the id it resolves to are one model, so neither is an alternative to the other, and they count once.
   const seen = new Set<string>();
   const alternatives = catalog.filter(row => {
-    const key = canonicalModel(catalog, row.model);
-    if (!row.available || sameModel(catalog, row.model, reviewer.model) || row.rank < rankOf(catalog, reviewer.model) || seen.has(key)) return false;
+    const key = keyOf(row.model);
+    if (!row.available || key === reviewKey || row.rank < rankOf(catalog, reviewer.model) || seen.has(key)) return false;
     seen.add(key);
     return true;
   });
   if (!alternatives.length) return null;
-  return { hit, alternatives, fix: pickFix(alternatives.filter(row => AUTHORS.every(id => !map[id] || !sameModel(catalog, map[id]!.model, row.model))), map, catalog, defaults) };
+  const fixes = alternatives.filter(row => AUTHORS.every(id => !map[id] || keyOf(map[id]!.model) !== keyOf(row.model)));
+  return { hit, alternatives, fix: pickFix(fixes, map, catalog, defaults) };
+}
+
+const operationModelIdentity = (catalog: SeatModel[], model: string) => familyOf(model) === 'codex' ? model : canonicalModel(catalog, model);
+
+export function operationReviewerBlock(value: OperationValue | undefined, seats: SeatMap, catalog: SeatModel[], defaults?: SeatMap) {
+  if (!value) return null;
+  const follow = value === 'follow';
+  const reviewer = follow ? seats.reviewer : { model: value.model, effort: 'high' };
+  if (!reviewer || familyOf(reviewer.model) !== 'codex') return null;
+  const map = { ...seats, reviewer };
+  const block = reviewerBlock(map, catalog, defaults, operationModelIdentity);
+  if (!block) return null;
+  const codex = block.alternatives.filter(row => row.family === 'codex' && familyOf(row.model) === 'codex');
+  return { model: reviewer.model, follow, fix: pickFix(codex, map, catalog, defaults) };
 }
 // The same reviewer rule when it only warns: the author seats share the reviewer's model but nothing at least as strong is available to change it to.
 export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[]) =>

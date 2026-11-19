@@ -4,17 +4,23 @@ import type { SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { openSeats, routingRoleName, routingModelName } from '../../shared/routing-command.ts';
 import { editableOperation, operationLabel, operationName } from './OperationRows';
+import { operationDiff } from './skill-seats';
+
+const SUMMARY_NAMES = { background: '后台小任务', subagent: '子代理', review: '审查' } as const;
 
 function OperationSummary({ operations }: { operations: NonNullable<SeatsInfo['operations']> }) {
   const values = operations.current?.values ?? operations.effective;
-  const summary = operations.rows.filter(editableOperation).map(row => ({
-    id: row.id, name: operationName(row), model: operationLabel(row, values[row.id], routingModelName),
-  }));
-  if (!summary.length) return null;
-  const details = summary.map(row => `${row.name} · ${row.model}`).join('\n');
-  const primary = summary.find(row => row.id === 'lookup') ?? summary[0];
-  return <span className="activity-routing-operations" title={details}>
-    <span>{t('操作模型')}</span><strong>{primary.name} · {primary.model}</strong>
+  const changes = operationDiff(values, operations.defaults);
+  const rows = operations.rows.filter(editableOperation).filter(row => changes[row.id] !== undefined);
+  const title = t('操作模型');
+  const names = rows.map(row => row.id in SUMMARY_NAMES ? t(SUMMARY_NAMES[row.id as keyof typeof SUMMARY_NAMES]) : operationName(row));
+  const details = rows.map(row => {
+    const value = changes[row.id];
+    const label = operationLabel(row, value, routingModelName);
+    return [`${operationName(row)} · ${label}`, value !== 'follow' && value?.effort].filter(Boolean).join(' · ');
+  });
+  return <span className="activity-routing-operations" title={[title, ...details].join('\n')}>
+    {names.length ? <strong>{names.join(' · ')}</strong> : <><span>{title} · </span><strong>{t('默认')}</strong></>}
   </span>;
 }
 

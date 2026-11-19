@@ -113,7 +113,10 @@ function compile(file, hooks, stubs = {}) {
     if (name === 'react') return { ...React, ...hooks };
     if (name === 'react-dom') return { createPortal: node => node };
     if (name === '@phosphor-icons/react') return icon;
-    if (name === '../../shared/i18n') return { currentLanguage: () => 'en', t: (text, values = {}) => (en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) };
+    if (name === '../../shared/i18n') return {
+      currentLanguage: () => stubs.language ?? 'en',
+      t: (text, values = {}) => (stubs.language === 'zh' ? text : en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match),
+    };
     if (name === './skill-seats') return seatsLib;
     if (name === './OperationRows') return compile('OperationRows.tsx', hooks, stubs);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
@@ -147,7 +150,7 @@ function mount(t, file, name, props, stubs) {
 }
 const inlineComponents = new Set([
   'RoutingTabs', 'MenuHeader', 'OperationRows', 'OperationTitle', 'OperationCard', 'CurrentOperations', 'OperationSummary', 'Status',
-  'DialogHeader', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu',
+  'DialogHeader', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu', 'ReviewOperationBanner',
 ]);
 const childrenOf = node => inlineComponents.has(node.type?.name) ? node.type(node.props) : node.props.children;
 const walk = (node, visit) => {
@@ -174,7 +177,8 @@ function dialogHarness(t, info, props = {}) {
   globalThis.window = { agentrix: api, innerWidth: 1280, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
   const listeners = [];
   globalThis.document = { activeElement: null, elementFromPoint: () => null, addEventListener: (type, fn) => listeners.push([type, fn]), removeEventListener: (type, fn) => { const at = listeners.findIndex(entry => entry[0] === type && entry[1] === fn); if (at >= 0) listeners.splice(at, 1); } };
-  const h = mount(t, 'SeatsDialog.tsx', 'SeatsDialog', { info, projectId: 'p1', terminalId: 't1', onClose: () => closed.push(true), ...props.dialog });
+  const h = mount(t, 'SeatsDialog.tsx', 'SeatsDialog',
+    { info, projectId: 'p1', terminalId: 't1', onClose: () => closed.push(true), ...props.dialog }, { language: props.language });
   return Object.assign(h, { calls, closed, refreshes, outsideMouseDown: target => listeners.filter(entry => entry[0] === 'mousedown').forEach(entry => entry[1]({ target })) });
 }
 const keyEvent = key => ({ key, stopPropagation() {}, preventDefault() {} });
@@ -221,13 +225,79 @@ test('a refused operation save keeps the draft and names the operation', async t
   const error = { ok: false, code: 'review-same-model', operation: 'review', message: 'Choose a different review model.' };
   const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: operationCatalog() }), { reply: error });
   showOperations(h);
-  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6.2-sol').props.onClick();
+  // Main can see another project's Developer seat, which the dialog cannot validate locally.
+  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6-mini').props.onClick();
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
   const tree = h.render();
   assert.match(textOf(find(tree, node => node.props['data-kind'] === 'error')), /Review pass: Choose a different review model/);
-  assert.equal(textOf(byAttr(tree, 'data-op-model', 'review')), 'GPT-6.2-Sol');
+  assert.equal(textOf(byAttr(tree, 'data-op-model', 'review')), 'GPT-6 Mini');
   assert.equal(byAttr(tree, 'data-save').props.disabled, false);
+});
+
+test('review operations block a Developer collision before IPC and offer a valid Codex alternative', async t => {
+  const rows = [...operationCatalog(), row('gpt-6.2-astra', 'GPT-6.2 Astra', 'codex', 3)];
+  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: rows }));
+  showOperations(h);
+  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6.2-sol').props.onClick();
+  let tree = h.render();
+  assert.ok(byAttr(byAttr(tree, 'data-operation', 'review'), 'data-op-blocked'));
+  assert.match(textOf(byAttr(tree, 'data-operation-block')), /uses the same model as Developer/);
+  assert.equal(byAttr(tree, 'data-save').props.disabled, true);
+  byAttr(tree, 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls, []);
+  byAttr(tree, 'data-op-fix').props.onClick();
+  tree = h.render();
+  assert.equal(byAttr(tree, 'data-operation-block'), undefined);
+  assert.equal(byAttr(tree, 'data-save').props.disabled, false);
+  byAttr(tree, 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls[0][3], { review: { model: 'gpt-6.2-astra' } });
+});
+
+test('review follows the live Reviewer seat and a single-family collision can fall back to it', t => {
+  const rows = operationCatalog();
+  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: rows }));
+  byAttr(openMenu(h, 'reviewer'), 'data-assign', 'gpt-6.2-sol').props.onClick();
+  let tree = showOperations(h);
+  assert.ok(byAttr(byAttr(tree, 'data-operation', 'review'), 'data-op-blocked'));
+  assert.equal(byAttr(tree, 'data-save').props.disabled, true);
+  byAttr(tree, 'data-fix', 'opus').props.onClick();
+  tree = h.render();
+  assert.equal(byAttr(tree, 'data-op-blocked'), undefined);
+  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6.2-sol').props.onClick();
+  tree = h.render();
+  assert.match(textOf(byAttr(tree, 'data-op-fix')), /Follow Reviewer seat/);
+  byAttr(tree, 'data-op-fix').props.onClick();
+  assert.equal(byAttr(h.render(), 'data-op-blocked'), undefined);
+});
+
+test('review operations keep distinct Codex IDs and allow a collision when no equally strong alternative is available', () => {
+  const version = 'gpt-6.2-sol-20261119';
+  const rows = [...operationCatalog(), row(version, version, 'codex', 3)];
+  assert.equal(seatsLib.operationReviewerBlock({ model: version }, DEFAULTS, rows), null);
+  const weaker = operationCatalog().filter(row => row.family === 'codex');
+  assert.equal(seatsLib.operationReviewerBlock({ model: 'gpt-6.2-sol' }, DEFAULTS, weaker), null);
+});
+
+test('operation notes are localized by ID and the memory suggestion is a one-click draft on provider default', t => {
+  const operations = operationInfo();
+  operations.rows.find(row => row.id === 'background').note = 'explore-follows-background';
+  const memory = operations.rows.find(row => row.id === 'memory');
+  memory.note = 'codex-memories-enabled';
+  memory.agents.codex = { state: 'default' };
+  operations.rows.find(row => row.id === 'review').note = 'unrecognized provider note';
+  for (const language of ['en', 'zh']) {
+    const h = dialogHarness(t, seatsInfo({ operations, catalog: operationCatalog() }), { language });
+    const tree = showOperations(h), memory = byAttr(tree, 'data-operation', 'memory');
+    assert.match(textOf(byAttr(tree, 'data-operation', 'background')), language === 'en' ? /Explore agent also follows/ : /Explore 代理也使用此设置/);
+    assert.match(textOf(memory), language === 'en' ? /when Codex memories are enabled/ : /开启 Codex 记忆功能时生效/);
+    assert.match(textOf(byAttr(memory, 'data-op-state', 'default')), language === 'en' ? /Codex · default/ : /Codex · 默认/);
+    assert.doesNotMatch(textOf(tree), /explore-follows-background|codex-memories-enabled|unrecognized provider note/);
+    byAttr(memory, 'data-op-suggestion', 'gpt-6-mini').props.onClick();
+    assert.equal(textOf(byAttr(h.render(), 'data-op-model', 'memory')), 'GPT-6 Mini');
+  }
 });
 
 test('operation cards share the team model rows and add the family restriction only where needed', t => {
@@ -253,6 +323,26 @@ test('operation cards share the team model rows and add the family restriction o
   assert.match(textOf(codex), /only supports Claude/);
   const memory = operationMenu(h, 'memory');
   assert.match(textOf(byAttr(memory, 'data-assign', 'sonnet')), /Unavailable from this account.*only supports Codex.*Not in the latest list/);
+  const reason = byAttr(byAttr(memory, 'data-assign', 'sonnet'), 'data-family-reason');
+  assert.match(textOf(reason), /only supports Codex/);
+  assert.match(memory.props.className, /is-operation/);
+});
+
+test('model menu bounds keep a margin at both window edges and the compact cards preserve the paired read-only rows', () => {
+  const view = { width: 1280, height: 800 };
+  const nearTop = menuPlacement({ left: 1250, top: 8, bottom: 40 }, view, 29);
+  const nearBottom = menuPlacement({ left: 1250, top: 760, bottom: 792 }, view, 29);
+  for (const menu of [nearTop, nearBottom]) {
+    assert.ok(menu.left + menu.width <= view.width - 16);
+    const offset = menu.top ?? menu.bottom;
+    assert.ok(offset >= 16 && offset + menu.maxHeight <= view.height - 16);
+  }
+  assert.equal(nearTop.top, 44);
+  assert.equal(nearBottom.bottom, 44);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  assert.match(css, /\.seats-op-card \{[^}]*padding: 8px/);
+  assert.match(css, /\.seats-menu\.is-operation \.seats-menu-details \{ grid-column: 2;[^}]*max-width: none/);
+  assert.doesNotMatch(css, /max-width: 1150px[^]*?\.seats-op-card\.is-readonly \{ grid-column: 1 \/ -1; grid-template-areas/);
 });
 
 test('operation changes layer with seat changes, save both diffs, reset a scope, and preserve frozen values', async t => {
@@ -760,6 +850,25 @@ test('the moved-defaults note is a neutral banner and the discard question a war
   assert.ok(mk.some(line => line.includes('--agent-claude')) && mk.some(line => line.includes('data-family="codex"') && line.includes('--agent-codex')), 'the family dots use the existing agent tokens');
 });
 
+test('a default-move receipt survives a newer read and the first edit without collapsing the notice slot', async t => {
+  const info = seatsInfo({ operations: operationInfo(), catalog: operationCatalog() });
+  const h = dialogHarness(t, info);
+  let publish, finishOpening;
+  window.agentrix.onSkills = listener => { publish = listener; return () => {}; };
+  window.agentrix.skillSeats = async () => info;
+  window.agentrix.skillSeatsRefresh = () => new Promise(resolve => { finishOpening = resolve; });
+  showOperations(h);
+  publish();
+  await settle();
+  finishOpening({ ...info, defaultsMoved: [{ seat: 'developer', from: 'gpt-6.2-sol', to: 'gpt-6.3-sol' }] });
+  await settle();
+  assert.ok(byAttr(h.render(), 'data-moved'));
+  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Developer/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  assert.match(css, /\.seats-strip:has\(\[data-moved\]\) \.seats-notice:empty \{ display: flex; \}/);
+});
+
 // ---- second acceptance round: no tile overlaps another, small-tile chips shorten and ellipsize, the one-click fix is chosen by rule ----
 
 test('the card, banner and palette use the same short alias label and the menu keeps the full name', t => {
@@ -1040,8 +1149,10 @@ test('the app seats host opens only when main supplies routing info', async t =>
 
 test('the activity key is one button with a row for each role and opens the scoped dialog', async t => {
   const window = new EventTarget(), events = [];
-  const operations = operationInfo({ current: { values: { lookup: { model: 'gpt-6.2-sol', effort: 'high' } }, agents: {} } });
-  window.agentrix = { skillSeats: async () => seatsInfo({ operations }) };
+  const changes = { lookup: { model: 'gpt-6.2-sol', effort: 'high' }, review: { model: 'gpt-6-mini' }, background: { model: 'haiku' } };
+  const operations = operationInfo({ current: { values: changes, agents: {} } });
+  let loaded = operations;
+  window.agentrix = { skillSeats: async () => seatsInfo({ operations: loaded }) };
   window.addEventListener('agentrix:open-seats', event => events.push(event.detail));
   globalThis.window = window;
   const props = { projectId: 'p1', terminalId: 't1', sessionId: 's1' };
@@ -1053,8 +1164,15 @@ test('the activity key is one button with a row for each role and opens the scop
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
   assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row').length, 10);
   const summary = byAttr(tree, 'className', 'activity-routing-operations');
-  assert.match(textOf(summary), /Operation modelsLookup · GPT-6\.2-Sol/i);
+  assert.match(textOf(summary), /Lookup · Review/);
+  assert.match(summary.props.title, /GPT-6\.2-Sol · high[\s\S]*GPT-6-Mini/i);
+  assert.doesNotMatch(summary.props.title, /Background/);
   assert.equal(summary.props['data-seat'], undefined);
   tree.props.onClick();
   assert.deepEqual(events, [{ projectId: 'p1', terminalId: 't1' }]);
+  loaded = operationInfo();
+  h.props = { ...props, sessionId: 's2' };
+  h.render();
+  await settle();
+  assert.match(textOf(byAttr(h.render(), 'className', 'activity-routing-operations')), /Operation models · default/i);
 });
