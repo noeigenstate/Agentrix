@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { CaretDown, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
 import type { CliState, ProjectTerminal } from '../../shared/types';
-import { t } from '../../shared/i18n';
+import { currentLanguage, t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
-import { routingRoleName } from '../../shared/routing-command.ts';
 import { useNow } from '../../shared/useNow';
 import { readScreen, subscribeScreen, cliStateFor, nextCliState } from '../terminal/terminal-screen.ts';
 import { useNativeEntries } from '../native-session/native-store.ts';
@@ -90,7 +89,7 @@ export function MainModel({ turn }: { turn: NonNullable<ReturnType<typeof useMai
   }
   const hidden = Math.max(0, rows.length - 4);
   return <section className="activity-card activity-main agent-team-group" aria-label={t('主模型')}>
-    <h4>{routingRoleName('总指挥', t)}</h4>
+    <h4>{currentLanguage() === 'en' ? t('Agent 面板 · 总指挥') : '总指挥'}</h4>
     <ul className="activity-call-rows">
       <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
