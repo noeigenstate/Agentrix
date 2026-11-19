@@ -3509,5 +3509,13 @@
   "已保存，下一次对话生效": "Saved. It applies from the next conversation.",
   "{seat}：{reason}": "{seat}: {reason}",
   "Agent 按角色": "Agents by role",
-  "左侧 Agent 标签页按角色分组显示子 Agent，列出名称、模型、任务、状态和用时。点开一条即可查看简报和日志。": "The Agent tab on the left groups subagents by role and shows each one's name, model, task, status and elapsed time. Open a row to see its brief and log."
+  "左侧 Agent 标签页按角色分组显示子 Agent，列出名称、模型、任务、状态和用时。点开一条即可查看简报和日志。": "The Agent tab on the left groups subagents by role and shows each one's name, model, task, status and elapsed time. Open a row to see its brief and log.",
+  "操作模型": "Operation models",
+  "模型路由弹窗新增「团队」和「操作模型」两个标签页。可分别为检索、后台小任务、子代理默认、记忆整理和审查设置模型，可选全局或本项目，从下一次对话起生效。": "The model routing dialog now has Team and Operation models tabs. You can set a model for each of search, background tasks, the default for subagents, memory tidying and review, globally or for one project, starting with the next conversation.",
+  "不支持会置灰": "Greyed-out models",
+  "只有一种 Agent 支持的操作，另一系列的模型会置灰并说明原因。审查模型不能与开发的模型相同，界面提供一键修正。": "When only one agent supports an operation, the other family's models are greyed out with the reason. The review model cannot match the Developer's model, and a one-click fix is offered.",
+  "活动区全部显示": "Full Activity pane",
+  "右侧活动区现在无需内部滚动条即可显示全部内容，路由卡也会显示各项操作模型。": "The right Activity pane now shows everything without an inner scrollbar, and the routing card lists the operation models.",
+  "启动与设置修复": "Launch and settings fixes",
+  "修复：PowerShell 里的 claude 命令会保留原有设置和启动提示；Agent 启动器显示正确的标记和转圈；仓库里的设置文件不能再覆盖 Claude 和 Codex 的操作设置。": "Fixed: the claude command in PowerShell keeps its settings and startup note, the agent launcher shows the right marks and spinner, and a repository's settings file can no longer override the Claude and Codex operation settings."
 }
