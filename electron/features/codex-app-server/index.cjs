@@ -12,7 +12,7 @@ const { scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/co
 const { codexExecutable } = require('../codex-runtime/locator.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
-const { startupDetail } = require('../agents/start-failure.cjs');
+const { startupDetail, stderrTail } = require('../agents/start-failure.cjs');
 const { routingCommand, routingPatch, routingOwned } = require('../agents/agent-command.cjs');
 const { ownerShell, ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
 // A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
@@ -49,6 +49,33 @@ const SANDBOX_REFUSALS = {
 };
 // Codex answers with the sandbox it really applied; another one than requested stops (a start, or a change), so a session never runs with less or
 // more than asked. `place` is 'windows' for a local Windows session, 'ssh' for a remote one.
+function threadOperations(config, baseConfig, hosts) {
+  const entries = Object.keys(config || {});
+  const result = { applied: entries, refused: [] };
+  return {
+    result: entries.length ? result : undefined,
+    async request(rpc, options, threadId, assertOpen) {
+      const method = threadId ? 'thread/resume' : 'thread/start';
+      const params = { ...options, ...(threadId ? { threadId, excludeTurns: true } : {}) };
+      const configWithoutOperations = { ...baseConfig, ...options.config };
+      try {
+        return await rpc.request(method, { ...params, config: { ...(result.applied.length ? config : {}), ...configWithoutOperations } });
+      } catch (error) {
+        if (!result.applied.length || error.uncertain !== false || error.message !== 'rpc_rejected'
+          || error.missingThread || error.missingThreadId) throw error;
+        assertOpen();
+        const detail = (error.serverMessage || error.message).replace(/[\r\n]+/g, ' ');
+        const reason = stderrTail(detail, { hosts, limit: 1000 }).slice(0, 200) || error.message;
+        let response;
+        try { response = await rpc.request(method, { ...params, config: configWithoutOperations }); } catch { throw error; }
+        result.refused = result.applied.map(key => ({ key, reason }));
+        result.applied = [];
+        return response;
+      }
+    },
+  };
+}
+
 function assertSandbox(requested, applied, place, phase = 'start') {
   if (!requested || applied?.type === SANDBOX_TYPES[requested]) return;
   throw Object.assign(new Error(SANDBOX_REFUSALS[phase][requested === 'workspace-write' && place ? place : requested]),
@@ -316,6 +343,48 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         }).finally(() => { if (resetting === task) resetting = null; });
         resetting = task; await task;
       }
+      async function connectThread(executable, env, onStage, isReconnecting) {
+        child ||= spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,
+          detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
+        rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
+          onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
+          onRequest: message => requests.open(message), onDisconnect: reason => {
+            if (closed || isReconnecting()) return;
+            permissionProbe = null; permissionEvidence = null; timedOutProbes = 0;
+            requests?.cancelAll(); setState('disconnected', reason);
+          } });
+        requests = createRequests(rpc, events, setState);
+        // SSH resolves Codex before the handshake deadline starts.
+        await child.opened;
+        onStage('initialize');
+        const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
+        assertOpen();
+        const compatibility = assertCompatible(init);
+        rpc.notify('initialized');
+        onStage('capability_probe'); await probeCapabilities(rpc);
+        assertOpen();
+        return compatibility;
+      }
+
+      function acceptThread(result, options, { threadId, resumed, resuming, operations }) {
+        if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
+          && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
+        assertSandbox(options.sandbox, result.sandbox, place());
+        startedWritable = options.sandbox === 'workspace-write';
+        if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
+        assertOpen();
+        bind(result.thread.id); threadResponse = result;
+        permissionEvidence = [result.sandbox, result.approvalPolicy, result.approvalsReviewer];
+        const fast = ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : null;
+        spec.model ??= result.model ?? null;
+        spec.effort ??= result.reasoningEffort ?? null;
+        spec.fast ??= fast;
+        threadKnown();
+        events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
+          effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast },
+          observed: { model: null, effort: null, fast: null }, reason: null, ...(operations && { operations }) });
+      }
+
       async function open(resuming, override) {
         if (rpc || closed) throw new Error('session_already_started');
         Object.assign(spec, override || {}); setState('starting'); origin = resuming ? 'resume' : 'user';
@@ -343,29 +412,9 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           assertOpen();
           if (!executable) throw new Error('codex_cli_required');
           stage = 'spawn';
-          let compatibility, reconnecting = false;
-          const connect = async () => {
-            child ||= spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,
-              detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
-            rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
-              onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
-              onRequest: message => requests.open(message), onDisconnect: reason => {
-                if (closed || reconnecting) return;
-                permissionProbe = null; permissionEvidence = null; timedOutProbes = 0;
-                requests?.cancelAll(); setState('disconnected', reason);
-              } });
-            requests = createRequests(rpc, events, setState);
-            // An SSH host finds Codex in a login shell first (seconds on a busy host): the handshake deadline starts after.
-            await child.opened;
-            stage = 'initialize';
-            const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
-            assertOpen();
-            compatibility = assertCompatible(init);
-            rpc.notify('initialized');
-            stage = 'capability_probe'; await probeCapabilities(rpc);
-            assertOpen();
-          };
-          await connect();
+          let reconnecting = false;
+          const connect = () => connectThread(executable, env, value => { stage = value; }, () => reconnecting);
+          let compatibility = await connect();
           assertOpen();
           stage = resuming ? 'thread_resume' : 'thread_start';
           const threadId = spec.providerSessionId || spec.threadId || spec.sessionId;
@@ -376,13 +425,15 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const context = wireCwd === spec.cwd ? spec.context : spec.context?.replaceAll(spec.cwd, wireCwd)
             .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
-            config: { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}) }, ...threadPolicy(), approvalsReviewer: 'user' };
+            ...threadPolicy(), approvalsReviewer: 'user' };
+          const baseConfig = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}) };
+          const operations = threadOperations(spec.operations?.config, baseConfig, hosts);
           let result, resumed = resuming;
-          try { result = await rpc.request(resuming ? 'thread/resume' : 'thread/start', { ...options, ...(resuming ? { threadId, excludeTurns: true } : {}) }); }
+          try { result = await operations.request(rpc, options, resuming && threadId, assertOpen); }
           catch (error) {
             if (!resuming || !spec.allowFreshResume || !error.missingThread) throw error;
             occupied.delete(lockKey); lockKey = null; events.binding.providerSessionId = null; resumed = false;
-            result = await rpc.request('thread/start', options);
+            result = await operations.request(rpc, options, null, assertOpen);
           }
           assertOpen();
           const retry = unelevated(options, result);
@@ -392,25 +443,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             if (!resumed) releaseThread(result.thread?.id);
             else {
               reconnecting = true; rpc.close(); await stopProcess(child); child.dispose?.(); child = null; reconnecting = false;
-              assertOpen(); await connect(); stage = 'thread_resume';
+              assertOpen(); compatibility = await connect(); stage = 'thread_resume';
             }
-            result = await rpc.request(resumed ? 'thread/resume' : 'thread/start', { ...retry, ...(resumed ? { threadId, excludeTurns: true } : {}) });
+            result = await operations.request(rpc, retry, resumed && threadId, assertOpen);
             assertOpen();
           }
-          if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
-            && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
-          assertSandbox(options.sandbox, result.sandbox, place());
-          startedWritable = options.sandbox === 'workspace-write';
-          if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
-          assertOpen();
-          bind(result.thread.id); threadResponse = result;
-          permissionEvidence = [result.sandbox, result.approvalPolicy, result.approvalsReviewer];
-          spec.model ??= result.model ?? null;
-          spec.effort ??= result.reasoningEffort ?? null;
-          if (spec.fast == null) spec.fast = ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : null;
-          threadKnown();
-          events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
-            effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast: ['fast', 'priority'].includes(result.serviceTier) ? true : result.serviceTier === 'default' ? false : null }, observed: { model: null, effort: null, fast: null }, reason: null });
+          acceptThread(result, options, { threadId, resumed, resuming, operations: operations.result });
           // Dispatch needs the resumed model context, not a copy of its historical output.
           if (resumed && spec.owner !== 'dispatch') await replayHistory();
           assertOpen();

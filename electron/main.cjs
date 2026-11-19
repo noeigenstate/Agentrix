@@ -555,13 +555,13 @@ function refreshSkillNotes() {
     if (!project) continue;
     if (project.kind === 'ssh') {
       if (s.terminal?.setClaudeLead) {
-        void s.terminal.setClaudeLead(skills.leadOptions(project.id, 'claude', { remote: true })).catch(report);
+        void s.terminal.setClaudeLead(skills.terminalLead(project.id, { remote: true })).catch(report);
       }
       continue;
     }
     if (!s.skillNoteFile) continue;
     if (s.bootstrapFile) {
-      try { updateBootstrapLead(s.bootstrapFile, skills.leadOptions(project.id, 'claude')); } catch (error) { report(error); }
+      try { updateBootstrapLead(s.bootstrapFile, skills.terminalLead(project.id)); } catch (error) { report(error); }
     }
     if (s.codexActive) continue;
     const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'),
@@ -1108,8 +1108,9 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
+    const delivery = skills.delivery(project, true, sessionId, { agent, started: true });
     const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
-      sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
+      sessionId, sessionKey, cwd, env: {}, ...runOptions, operations: delivery?.operations?.codex, providerSessionId };
     nativeSpecs.set(id, spec); return spec;
   }
   // The outbox is beside this file and outlives a host process restart.
@@ -1118,10 +1119,11 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks });
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
-  const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
-    skills.delivery(project, false, sessionId, { agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
+  const delivery = skills.delivery(project, false, sessionId, { agent, started: true });
+  const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery, path.join(integrationDir, 'dispatch.cjs'));
+  if (agent === 'claude' && runOptions.model === 'haiku' && delivery?.operations?.pinnedHaiku) runOptions.model = delivery.operations.pinnedHaiku;
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
-    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, providerSessionId };
+    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, operations: delivery?.operations?.[agent], providerSessionId };
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
   nativeSpecs.set(id, spec); return spec;
@@ -1171,9 +1173,10 @@ function structuredEvent(id, event) {
     else s.reportedThreadId = event.providerSessionId;
   }
   if (event.type === 'routing.updated') {
-    const { observed, effective } = event.payload;
+    const { observed, effective, operations } = event.payload;
     if (typeof observed?.model === 'string') s.nativeObservedModel = observed.model;
     s.agentSettings = Object.fromEntries(['model', 'effort', 'fast'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
+    if (operations && skills.noteOperationResult(project.id, s.skillSessionId || spec.sessionId, spec.agent, operations)) skills.publish(false);
   }
   if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
     const clientId = event.payload.content.clientMessageId || event.itemId;
@@ -1211,7 +1214,8 @@ async function initializeNativeSessions() {
   const { createDispatchControl } = await import('./features/agents/dispatch-control.cjs');
   const { locateTeam } = require('./features/team/team-locate.cjs');
   const { resolveRegistration } = require('./features/agents/dispatch-registration.cjs');
-  dispatchControl = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions, store, locateTeam }, registration) });
+  const operations = (projectId, sessionId) => skills.operationLevers(projectId, sessionId);
+  dispatchControl = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions, store, locateTeam, operations }, registration) });
   ({ address: controlAddress } = await dispatchControl.listen());
   const directory = path.join(app.getPath('userData'), 'native-session');
   claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,
@@ -1281,14 +1285,20 @@ async function initializeNativeSessions() {
     return typeof skills === 'undefined' || !skills ? runtime : skills.trackModelRuntime(runtime,
       { family: 'claude', local: args[0]?.kind !== 'ssh', runtimes: seatModelRuntimes.claude });
   };
+  wireNativeSessions(directory, codex, codexFactory);
+}
+
+function wireNativeSessions(directory, codex, codexFactory) {
   nativeSessions = createNativeSessions({ directory, claude: claudeRuntime, codex, resolveSpec: nativeSpec,
     prepareConversation: spec => {
       const project = findProject(spec.terminalId), previous = spec.skillSessionId || spec.sessionId, skillSessionId = randomUUID();
       const lead = skills.leadOptions(project.id, spec.agent);
-      Object.assign(spec, { skillSessionId, model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null });
+      const delivery = skills.delivery(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true });
+      const levers = delivery?.operations, model = lead?.model === 'haiku' && levers?.pinnedHaiku ? levers.pinnedHaiku : lead?.model ?? null;
+      Object.assign(spec, { skillSessionId, model, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null, operations: levers?.[spec.agent] });
       if (spec.agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
       if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
-        skills.delivery(project, false, skillSessionId, { agent: spec.agent, started: true }), path.join(integrationDir, 'dispatch.cjs'));
+        delivery, path.join(integrationDir, 'dispatch.cjs'));
       return committed => skills.endSession(project.id, committed ? previous : skillSessionId);
     },
     readHistory: async (id, { signal } = {}) => {
@@ -1330,6 +1340,7 @@ async function initializeNativeSessions() {
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
     } });
   registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings, terminals: workerTerminals,
+    operations: run => run.claudeOperationEnv && { env: run.claudeOperationEnv },
     env: () => claudeBackgroundEnvironment(withoutAppImage(process.env), store.settings?.claudeBackgroundTasks) });
 }
 
@@ -1381,7 +1392,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   }
   if (bootstrapFile) writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: startPath, sessionKey, controlAddress, controlCapability,
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
-    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks, lead: skills.leadOptions?.(project.id, 'claude') ?? null });
+    nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks, lead: skills.terminalLead?.(project.id) ?? null });
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
@@ -1415,13 +1426,20 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
   const terminal = project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
     allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
-    claudeLead: skills.leadOptions?.(project.id, 'claude', { remote: true }) ?? null,
+    claudeLead: skills.terminalLead?.(project.id, { remote: true }) ?? null,
     readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
     : shellKind === 'bash' ? pty.spawn(shell.file, bashArguments(integrationDir), terminalOptions)
     : shellKind === 'cmd' ? pty.spawn(cmdPath, ['/D', '/Q', '/K', path.join(integrationDir, 'bootstrap.cmd')], terminalOptions)
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions);
+  const s = createTerminalSession({ id, project, terminal, env, transfer, sessionId, sessionKey, controlCapability,
+    bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind });
+  bindTerminalEvents(s, project, env);
+}
+
+function createTerminalSession({ id, project, terminal, env, transfer, sessionId, sessionKey, controlCapability,
+  bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind }) {
   const s = {
     switchPreviousHost: transfer, terminal, terminalId: id, projectId: project.id, sessionId, skillSessionId: null, sessionKey, controlCapability, bootstrapFile, hooks, skillNoteFile, skillNote: env.AGENTRIX_READING_NOTE, status: 'starting', agentStarting, ready: false, shellKind,
     recordRun: (call, event) => dashboard.run(project, call, event),
@@ -1469,39 +1487,46 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   });
   // A prompt the agent's own record shows it received is being worked on. History read when a session is
   // resumed is older than the agent's start and is left out.
-  s.conversation = new ConversationLog(change => {
-    publishConversation(s, change);
-    const entry = change.entry;
-    // Local transcripts already use the main clock; the hook offset includes delivery latency.
-    const at = (entry?.receivedAt ?? entry?.at) + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
-    if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at, entry.id);
-    else if (entry?.role === 'user' && entry.queued && s.codexActive && at >= (s.activitySince || 0) - 1000) s.promptQueue.enqueue(entry.original ?? entry.text, at, entry.id);
-    if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
-    // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
-    if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {
-      const localCommand = isLocalAgentCommand(s.agent, entry.text);
-      if (at >= (s.activitySince || 0) - 1000) {
-        const inputAt = s.promptQueue.start(entry.original ?? entry.text, at, entry.id, localCommand);
-        if (inputAt !== undefined) {
-          s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, inputAt);
-          s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
-        }
-      }
-      // Recalled prompts, custom slash commands and command-line prompts are not always visible to the key
-      // tracker. Codex's received user message confirms them. A time watermark excludes history and replays;
-      // working/completion snapshots alone can never grant another alert. Claude has UserPromptSubmit hooks.
-      if (s.agent === 'codex' && !localCommand && at >= Math.max(s.activitySince || 0, s.activityInputAt || 0) && at > Math.max(s.activityPromptAt || 0, s.lastCompletedAt || 0)) {
-        // task_started may already have published this turn before its user item arrives.
-        // Retire the previous turn only when no newer start is awaiting its prompt receipt.
-        const started = s.activitySnapshot?.state === 'working' && s.activitySnapshot.turnId
-          && s.activitySnapshot.updatedAt > (s.activityPromptAt || 0);
-        publishCliState(s, 'working', { at, threadId: s.reportedThreadId || s.rootThreadId, eventId: `input:${entry.id}`, newTurn: !started });
-        s.activityPromptAt = at;
-        s.completionWork?.begin(at);
-        store.expectCompletion(project.id);
+  s.conversation = new ConversationLog(change => recordTerminalConversation(s, project, change));
+  return s;
+}
+
+function recordTerminalConversation(s, project, change) {
+  publishConversation(s, change);
+  const entry = change.entry;
+  // Local transcripts already use the main clock; the hook offset includes delivery latency.
+  const at = (entry?.receivedAt ?? entry?.at) + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
+  if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at, entry.id);
+  else if (entry?.role === 'user' && entry.queued && s.codexActive && at >= (s.activitySince || 0) - 1000) s.promptQueue.enqueue(entry.original ?? entry.text, at, entry.id);
+  if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
+  // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
+  if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {
+    const localCommand = isLocalAgentCommand(s.agent, entry.text);
+    if (at >= (s.activitySince || 0) - 1000) {
+      const inputAt = s.promptQueue.start(entry.original ?? entry.text, at, entry.id, localCommand);
+      if (inputAt !== undefined) {
+        s.activityConfirmedInputAt = Math.max(s.activityConfirmedInputAt || 0, inputAt);
+        s.activityInputAt = Math.max(s.activityInputAt || 0, s.activityConfirmedInputAt);
       }
     }
-  });
+    // Recalled prompts, custom slash commands and command-line prompts are not always visible to the key
+    // tracker. Codex's received user message confirms them. A time watermark excludes history and replays;
+    // working/completion snapshots alone can never grant another alert. Claude has UserPromptSubmit hooks.
+    if (s.agent === 'codex' && !localCommand && at >= Math.max(s.activitySince || 0, s.activityInputAt || 0) && at > Math.max(s.activityPromptAt || 0, s.lastCompletedAt || 0)) {
+      // task_started may already have published this turn before its user item arrives.
+      // Retire the previous turn only when no newer start is awaiting its prompt receipt.
+      const started = s.activitySnapshot?.state === 'working' && s.activitySnapshot.turnId
+        && s.activitySnapshot.updatedAt > (s.activityPromptAt || 0);
+      publishCliState(s, 'working', { at, threadId: s.reportedThreadId || s.rootThreadId, eventId: `input:${entry.id}`, newTurn: !started });
+      s.activityPromptAt = at;
+      s.completionWork?.begin(at);
+      store.expectCompletion(project.id);
+    }
+  }
+}
+
+function bindTerminalEvents(s, project, env) {
+  const { terminal, terminalId: id, sessionId, sessionKey, bootstrapFile, skillNoteFile } = s;
   sessions.set(id, s);
   bindDispatchInbox(s, project);
   store.setRestore(id, { terminal: true, ...(restorePlans.has(id) ? {} : { codex: false }) });

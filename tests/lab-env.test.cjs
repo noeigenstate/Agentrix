@@ -6,7 +6,17 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { LabSession, copyHelper } = require('../electron/features/lab/session.cjs');
+const { cliHomes } = require('../electron/features/lab/sandbox.cjs');
 const os = require('node:os');
+
+test('Lab worker environments exclude the project operation model variables', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lab-operation-env-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const names = ['ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL'];
+  const env = Object.fromEntries(names.map(name => [name, 'claude-sonnet-5-5']));
+  const isolated = await cliHomes(env, root, false, {});
+  for (const name of names) assert.equal(isolated[name], undefined);
+});
 
 function sessionFixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lab-detach-'));

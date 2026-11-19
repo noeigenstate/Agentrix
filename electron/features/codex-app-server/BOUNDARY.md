@@ -2,6 +2,8 @@
 
 Owns an independent app-server runtime over local stdio or an injected SSH byte stream for a native Codex session; normalizes its events and keeps request tickets and input receipts within that session.
 
+Initial thread requests carry frozen operation config. A definite rejection retries once without those keys and reports which overrides were refused.
+
 ## Owns
 - `electron/features/codex-app-server/**`
 

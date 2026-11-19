@@ -103,6 +103,44 @@ test('removed projects lose their seat overrides in memory and persisted options
   assert.deepEqual(stored.projects, { p2: { designer: choice } });
 });
 
+test('operation saves layer global and project diffs, preserve team v2 and prune removed projects', t => {
+  const id = 'builtin:model-routing', team = { version: 2, global: { researcher: { model: 'opus', effort: 'high' } }, projects: {} };
+  const { store, projects } = fixture(t, ({ dataDir }) => put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: { team } })));
+  const stored = () => JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))[id];
+  assert.deepEqual(stored(), { team });
+  assert.equal(store.seatsInfo('p1').operations.defaults.memory, 'follow');
+  const global = { lookup: { model: 'opus', effort: 'high' } };
+  assert.deepEqual(store.setSeats('global', null, team.global, { ...global, memory: 'follow' }), { ok: true });
+  assert.deepEqual(stored().team, team);
+  assert.deepEqual(stored().operations, { version: 1, global, projects: {} });
+  const project = { background: { model: 'sonnet' } };
+  assert.deepEqual(store.setSeats('project', 'p1', {}, { ...global, ...project }), { ok: true });
+  assert.deepEqual(store.seatsInfo('p1').operations.project, project);
+  assert.equal(store.seatsInfo('p2').operations.effective.background.model, 'haiku');
+  assert.deepEqual(store.setSeats('project', 'p2', {}, project), { ok: true });
+  assert.deepEqual(store.setSeats('project', 'p2', {}, {}), { ok: true });
+  assert.equal(store.seatsInfo('p2').operations.project, null);
+  projects.shift();
+  store.refresh();
+  assert.deepEqual(stored().operations.projects, {});
+  assert.deepEqual(store.setSeats('global', null, team.global, {}), { ok: true });
+  assert.deepEqual(store.seatsInfo('p2').operations.effective.lookup, { model: 'haiku', effort: 'high' });
+});
+
+test('seat-only saves also refuse a review collision in a project that only overrides operations', t => {
+  const { store } = fixture(t);
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  store.getModels = () => [{ model: 'gpt-6.2-sol' }, { model: 'gpt-6.3-sol' }];
+  const model = 'gpt-6.2-sol';
+  assert.deepEqual(store.setSeats('project', 'p1', {}, { review: { model } }), { ok: true });
+  const before = fs.readFileSync(store.optionsFile, 'utf8');
+  const refused = store.setSeats('global', null, { developer: { model, effort: 'high' } });
+  assert.equal(refused.code, 'review-same-model');
+  assert.equal(refused.operation, 'review');
+  assert.equal(fs.readFileSync(store.optionsFile, 'utf8'), before);
+  assert.equal(store.seatsInfo('p1').effective.developer.model, 'gpt-6.3-sol');
+});
+
 test('global seat saves validate live projects but ignore removed overrides before a refresh', t => {
   const { store, projects } = fixture(t), choice = model => ({ model, effort: 'high' });
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
@@ -179,6 +217,11 @@ test('seat preload reads unwrap the real IPC adapter including null and transpor
 test('seat preload saves preserve validation refusals and reject real adapter errors', async t => {
   const { store } = fixture(t), bridge = seatPreload(store);
   assert.deepEqual(await bridge.setSkillSeats('global', null, { researcher: { model: 'sonnet', effort: 'high' } }), { ok: true });
+  assert.deepEqual(await bridge.setSkillSeats('project', 'p1', {}, { lookup: { model: 'opus', effort: 'high' } }), { ok: true });
+  assert.equal((await bridge.skillSeats('p1')).operations.effective.lookup.model, 'opus');
+  const invalidOperation = await bridge.setSkillSeats('global', null, {}, { memory: { model: 'opus' } });
+  assert.equal(invalidOperation.code, 'family-not-allowed');
+  assert.equal(invalidOperation.operation, 'memory');
   const refused = await bridge.setSkillSeats('global', null, { researcher: { model: 'bad;model', effort: 'high' } });
   assert.equal(refused.ok, false); assert.equal(refused.code, 'invalid-model');
   await assert.rejects(() => bridge.setSkillSeats('project', 'removed', {}), /Invalid seat scope or project/);
@@ -250,7 +293,7 @@ test('a catalog-validated Claude fast orchestrator supplies the same three value
   assert.deepEqual(store.setSeats('global', null, { orchestrator: { model: 'claude-opus-6-0', effort: 'adaptive', fast: true } }), { ok: true });
   const file = path.join(dataDir, 'bootstrap.json');
   writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead: store.leadOptions('p1', 'claude') });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-6-0\nadaptive\n1\n');
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-6-0\nadaptive\n1\n\n\n');
   store.getAgents = () => ({ claude: { installed: false }, codex: { installed: true } });
   assert.equal(store.leadOptions('p1', 'claude'), null);
   assert.deepEqual(store.leadOptions('ssh', 'claude', { remote: true }), { model: 'claude-opus-6-0', effort: 'adaptive', fast: true });

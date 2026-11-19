@@ -134,5 +134,7 @@ test('seat IPC passes the shared contract arguments unchanged', () => {
   } });
   assert.equal(handlers['skills:seats']('project', 'terminal').skill, 'declaring-skill');
   assert.deepEqual(handlers['skills:setSeats']('project', 'project', map), { ok: true });
-  assert.deepEqual(calls, [['project', 'terminal'], ['project', 'project', map]]);
+  const operations = { lookup: { model: 'opus', effort: 'high' } };
+  assert.deepEqual(handlers['skills:setSeats']('project', 'project', map, operations), { ok: true });
+  assert.deepEqual(calls, [['project', 'terminal'], ['project', 'project', map], ['project', 'project', map, operations]]);
 });

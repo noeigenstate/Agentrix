@@ -2,13 +2,15 @@
 
 The skills library: built-in, global and project skills, their options, history and proposals, session instruction delivery, and the settings page that edits them.
 
+Operation choices save atomically with team seats and freeze with their rendered instructions when a conversation starts.
+
 ## Owns
 - `electron/features/skills/**`
 - `src/features/settings/Skill*.tsx`
 - `src/features/settings/skill-*.ts`
 
 ## Interface
-- `familyOf` (`electron/features/skills/seat-rules.mjs`) — shared seat model family, fallback rank and effort lists, validation syntax and effort refusal text.
+- `familyOf` (`electron/features/skills/seat-rules.mjs`) — shared model family, rank, effort lists, validation and Claude operation environment allowlist.
 - `cleanSeats` (`electron/features/skills/model-seats.cjs`) ? validates seat choices and recovers v1 choices with migrateSeats. The declaring built-in supplies ordered seats and duties. The store exposes effective seats, role metadata and both families' resolved lead seats through `skills:seats`, and saves scoped choices under `team` version 2.
 - `SkillsStore` (`electron/features/skills/store.cjs`) — library operations, watching, current project/agent manifests, launch snapshots and injected routingNote(); trackModelRuntime observes local model-menu reads without another request. This entrypoint also exports probeCodex/probeClaude so main needs no internal catalog imports. Local `<sessionManifest>.json` carries fingerprint, projectRoot and managed roots, and SSH creates equivalent metadata using bundle.key after remote path expansion
 - `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including seat reads and saves

@@ -231,7 +231,7 @@ test('an intervention is written once when idle and never resent', async t => {
 // One worker terminal behind main's worker handler, without the helper. The clock is the test's: the 15 s notice and the
 // one-second poll run when the test says, every other wait at once.
 const SESSION = '11111111-1111-4111-8111-111111111111';
-async function unit(t, { calls = null, send, register, remove, kill, clock, payload = {} } = {}) {
+async function unit(t, { calls = null, send, register, remove, kill, clock, payload = {}, operations } = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-unit-')));
   t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const parent = parentTerminal(root); parent.write({ sessionKey: 'synthetic-owner' });
@@ -246,7 +246,7 @@ async function unit(t, { calls = null, send, register, remove, kill, clock, payl
   if (register) register(terminals);
   else terminals.register({ handle: (channel, fn) => { channels[channel] = fn; }, listen: (channel, fn) => { channels[channel] = fn; } });
   let handler, control;
-  registerClaudeWorker({ control: { onRequest: (_name, fn) => { handler = fn; } }, claude: {}, settings: () => ({}), terminals });
+  registerClaudeWorker({ control: { onRequest: (_name, fn) => { handler = fn; } }, claude: {}, settings: () => ({}), terminals, operations });
   const binding = { runId: 'run-1', projectId: 'terminal', agent: 'claude', cwd: path.join(root, 'project'), worktree: path.join(root, 'project'),
     allow: [], readOnly: false, roundtable: false, local: true, leadMode: 'terminal' };
   const events = [], stream = { supportsFinish: true, emit: event => events.push(event), onControl: fn => { control = fn; return () => {}; } };
@@ -260,6 +260,24 @@ async function unit(t, { calls = null, send, register, remove, kill, clock, payl
       sessionId: SESSION, sentAt, requestId: 'synthetic-tool', ...facts }) };
   return f;
 }
+
+test('a brokered terminal worker inherits only the frozen Claude operation models', async t => {
+  const f = await unit(t, { operations: run => {
+    assert.equal(run.runId, 'run-1');
+    return { env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL: 'opus', OTHER: 'ignored' } };
+  } });
+  try {
+    const { env } = f.pty.options;
+    assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-sonnet-5-5');
+    assert.equal(env.CLAUDE_CODE_SUBAGENT_MODEL, 'opus');
+    assert.equal(env.OTHER, undefined);
+    assert.equal(f.parent.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
+  } finally {
+    await f.control({ type: 'stop' });
+    await f.result;
+    await f.terminals.closeAll();
+  }
+});
 // The worker's private session key is the module's; a test reads it back from the command its hooks run.
 function keyOfWorker(f) {
   const settings = JSON.parse(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'));

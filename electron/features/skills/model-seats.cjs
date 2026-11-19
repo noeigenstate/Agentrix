@@ -120,6 +120,8 @@ function agentAlias(model, models) {
   return alias && aliasTargets(models).get(alias)?.model === model ? alias : null;
 }
 
+const concreteAlias = (alias, models) => aliasTargets(models).get(alias)?.model;
+
 function checkReviewer(map, models) {
   const { reviewer, developer } = map;
   if (!reviewer || !developer) return null;
@@ -171,4 +173,4 @@ function seatIssues(map, models) {
 }
 
 module.exports = { cleanSeats, cleanStoredSeats, migrateSeats, migrateDefaultModels, checkReviewer, catalog, defaultsFor, effective,
-  leadOptions, leadConfiguration, resolveSeat, agentAlias, seatIssues, rankOf };
+  leadOptions, leadConfiguration, resolveSeat, agentAlias, concreteAlias, seatIssues, rankOf };

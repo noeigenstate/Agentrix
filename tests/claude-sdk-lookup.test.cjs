@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { LOOKUP_AGENT_NAME, LOOKUP_AGENT, lookupDecision } = require('../electron/features/claude-sdk/lookup-agent.cjs');
-const { queryOptions } = require('../electron/features/claude-sdk/query.cjs');
+const { queryOptions, nativeContext, NATIVE_CONTEXT } = require('../electron/features/claude-sdk/query.cjs');
 
 test('lookup Bash accepts only fixed inspection forms for its host-identified subagent', () => {
   const input = command => ({ agent_id: 'child', agent_type: LOOKUP_AGENT_NAME, tool_name: 'Bash', tool_input: { command } });
@@ -18,7 +18,7 @@ test('only GUI queries receive the lookup preset and the parent keeps its tool p
   for (const owner of ['gui', 'dispatch']) {
     const abort = new AbortController(), seen = [];
     try {
-      const options = queryOptions({ owner, cwd: process.cwd() }, { abort, key: 'sk-ant-offline-only', executable: 'offline-only',
+      const options = queryOptions({ owner, cwd: process.cwd(), env: {} }, { abort, key: 'sk-ant-offline-only', executable: 'offline-only',
         policy: name => { seen.push(name); return { behavior: 'deny', reason: 'Parent policy' }; } });
       assert.deepEqual(options.agents, owner === 'gui' ? { [LOOKUP_AGENT_NAME]: LOOKUP_AGENT } : undefined);
       const answer = await options.hooks.PreToolUse[0].hooks[0]({ tool_name: 'Bash', tool_input: { command: 'ls' } });
@@ -28,4 +28,16 @@ test('only GUI queries receive the lookup preset and the parent keeps its tool p
       assert.equal(options.tools, undefined, 'the owner retains the CLI tool inventory');
     } finally { abort.abort(); }
   }
+});
+
+test('the native lookup preset uses the operation model and effort in its agent and context', t => {
+  const abort = new AbortController();
+  t.after(() => abort.abort());
+  const lookupAgent = { model: 'sonnet', effort: 'medium' };
+  const options = queryOptions({ owner: 'gui', cwd: process.cwd(), env: {}, operations: { lookupAgent } },
+    { abort, key: 'synthetic', executable: 'offline-only' });
+  assert.deepEqual(options.agents[LOOKUP_AGENT_NAME], { ...LOOKUP_AGENT, ...lookupAgent });
+  assert.match(options.systemPrompt.append, /agentrix-lookup sonnet subagent/);
+  assert.doesNotMatch(options.systemPrompt.append, /Haiku/);
+  assert.equal(nativeContext(), NATIVE_CONTEXT);
 });

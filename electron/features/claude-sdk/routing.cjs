@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { BACKGROUND_MODEL_ENV, operationEnv } = require('../skills/seat-rules.mjs');
 const { routeFailure } = require('./identity.cjs');
 
 // Flag settings override disk env without disabling the owner's project hooks and permissions.
@@ -76,11 +77,12 @@ function routeSettings(spec) {
     if (folder === root) break;
   }
   const env = {};
+  const operations = operationEnv(spec.operations?.env);
   for (const name of names) {
     const canonical = name.toUpperCase();
     // The saved key remains solely in the child environment, never in a settings file or CLI arguments.
     if (canonical === 'ANTHROPIC_API_KEY') continue;
-    const value = canonical === 'ANTHROPIC_AUTH_TOKEN' ? ''
+    const value = canonical === BACKGROUND_MODEL_ENV ? operations[BACKGROUND_MODEL_ENV] ?? '' : canonical === 'ANTHROPIC_AUTH_TOKEN' ? ''
       : /^CLAUDE_CODE_USE_/i.test(name) ? '0' : trusted.get(canonical) ?? (canonical === 'ANTHROPIC_BASE_URL' ? 'https://api.anthropic.com' : '');
     for (const variant of [name, canonical, name.toLowerCase()]) env[variant] = typeof value === 'string' ? value : '';
   }

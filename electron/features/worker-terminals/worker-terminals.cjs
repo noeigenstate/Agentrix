@@ -6,6 +6,7 @@ const { withoutShims } = require('../../shared/agentrix-shims.cjs');
 const { claudeBackgroundEnvironment } = require('../../shared/claude-background.cjs');
 const { TranscriptTail } = require('../../transcript-tail.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
+const { operationEnv } = require('../skills/seat-rules.mjs');
 
 const START_NOTICE_MS = 15000, POLL_MS = 1000, ENTER_DELAY_MS = 100, SETTLE_MS = 200, SETTLE_TRIES = 5, EXIT_WAIT_MS = 5000, REMOVE_TRIES = 5;
 const SCROLLBACK = 512 * 1024, KEYS_LIMIT = 65536, TEXT_LIMIT = 256, FIELD_LIMIT = 200, RECORD_LIMIT = 16384;
@@ -74,13 +75,15 @@ const userText = record => typeof record.message?.content === 'string' ? record.
 
 // The parent terminal's own environment as a worker's: no Agentrix credentials or shell wiring, the user's own zsh folder
 // back, then the shims at depth 1 with this run's identity and a private copy of the Claude Code start-up hook.
-function workerEnvironment(parentEnv, { shims, runId, sessionKey, claudeEnvFile, allowBackgroundTasks }) {
+function workerEnvironment(parentEnv, { shims, runId, sessionKey, claudeEnvFile, allowBackgroundTasks, operations }) {
   const source = { ...parentEnv };
   if (Object.hasOwn(source, 'AGENTRIX_USER_ZDOTDIR')) {
     if (source.AGENTRIX_USER_ZDOTDIR) source.ZDOTDIR = source.AGENTRIX_USER_ZDOTDIR; else delete source.ZDOTDIR;
   }
   const env = claudeBackgroundEnvironment(withoutShims(source), allowBackgroundTasks);
-  for (const name of Object.keys(env)) if (PRIVATE.test(name)) delete env[name];
+  const overrides = operationEnv(operations);
+  for (const name of Object.keys(env)) if (PRIVATE.test(name) || Object.hasOwn(overrides, name.toUpperCase())) delete env[name];
+  Object.assign(env, overrides);
   const proof = createHmac('sha256', sessionKey).update(`agentrix-run:${runId}`).digest('hex');
   const shimmed = require(path.join(shims, 'intercept.cjs')).withShims(env, { depth: 1, runId, proof });
   const hook = path.join(shims, 'hooks', 'claude-env.sh');
@@ -202,7 +205,8 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     fs.mkdirSync(w.briefs, { recursive: true, mode: 0o700 });
     const brief = path.join(w.briefs, 'brief.md'), settings = path.join(w.folder, 'settings.json');
     fs.writeFileSync(brief, prompt, { mode: 0o600 });
-    w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() });
+    w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh'),
+      allowBackgroundTasks: allowBackgroundTasks(), operations: w.spec.operations?.env });
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
     const hookSettings = w.hooks.channel === 'http' ? w.hooks.settings.http : w.hooks.settings.fallback;
     fs.writeFileSync(settings, w.spec.fast === true ? JSON.stringify({ ...JSON.parse(hookSettings), fastMode: true }) : hookSettings, { mode: 0o600 });

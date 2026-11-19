@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
+const { validModel, EFFORT, operationEnv, BACKGROUND_MODEL_ENV, SUBAGENT_MODEL_ENV } = require('../skills/seat-rules.mjs');
 
 // The file a terminal's shell integration and the dispatch helper read to reach main: the session's key, the event
 // pipe and the control channel, and for a terminal also its hook channel and settings (hook-channel.cjs) and the paths
@@ -11,9 +12,11 @@ const { writeFileAtomic } = require('../../atomic-write.cjs');
 const claudeEnvFile = file => file.replace(/\.json$/i, '') + '-claude-env.sh';
 
 function updateBootstrapLead(file, lead) {
-  if (lead && (typeof lead.model !== 'string' || lead.model.length > 160 || !/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(lead.model)
-      || typeof lead.effort !== 'string' || !/^[a-z][a-z0-9-]{0,31}$/.test(lead.effort))) throw new Error('Invalid lead seat.');
-  writeFileAtomic(file + '.lead', lead ? `${lead.model}\n${lead.effort}\n${lead.fast === true ? '1' : '0'}\n` : '');
+  if (lead && (!validModel(lead.model) || typeof lead.effort !== 'string' || !EFFORT.test(lead.effort))) throw new Error('Invalid lead seat.');
+  const env = operationEnv(lead?.env);
+  const lines = lead ? [lead.model, lead.effort, lead.fast === true ? '1' : '0',
+    env[BACKGROUND_MODEL_ENV] || '', env[SUBAGENT_MODEL_ENV] || '', ''] : [];
+  writeFileAtomic(file + '.lead', lines.join('\n'));
 }
 
 function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, ...terminal }) {

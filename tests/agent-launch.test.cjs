@@ -19,16 +19,16 @@ test('Claude launch commands leave all seat flags to the terminal wrappers', () 
   assert.equal(launchCommand('claude', { id: 'saved' }, seat), 'claude --resume saved\r');
 });
 
-test('bootstrap writes and refreshes the three lead values for fresh and resumed terminal launches', t => {
+test('bootstrap writes and refreshes five lead lines for fresh and resumed terminal launches', t => {
   const { writeBootstrap, updateBootstrapLead, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-lead-')), file = path.join(root, 'bootstrap.json');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const lead = { model: 'claude-opus-5[1m]', effort: 'adaptive', fast: true };
   writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-5[1m]\nadaptive\n1\n');
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-5[1m]\nadaptive\n1\n\n\n');
   const bytes = fs.readFileSync(file, 'utf8');
-  updateBootstrapLead(file, { model: 'sonnet', effort: 'high', fast: false });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'sonnet\nhigh\n0\n');
+  updateBootstrapLead(file, { model: 'sonnet', effort: 'high', fast: false, env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-5-5' } });
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'sonnet\nhigh\n0\nclaude-sonnet-5-5\n\n');
   assert.throws(() => updateBootstrapLead(file, { ...lead, model: 'invalid\nline' }), /Invalid lead seat/);
   updateBootstrapLead(file, null);
   assert.equal(fs.readFileSync(file + '.lead', 'utf8'), '');

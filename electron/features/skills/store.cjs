@@ -8,6 +8,7 @@ const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
+const operationSlots = require('./operation-slots.cjs');
 const { renderRoutingSkill } = require('./skill-render.cjs');
 const { ModelCatalog, trackModelRuntime } = require('./model-catalog.cjs');
 const { probeCodex, probeClaude } = require('./model-probe.cjs');
@@ -27,6 +28,43 @@ const canonical = file => {
   return process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved;
 };
 
+function operationScope(stored, projectId) {
+  const global = operationSlots.cleanStored(stored?.version === 1 ? stored.global : null);
+  const projects = stored?.version === 1 ? stored.projects : null;
+  const project = projectId !== null && Object.hasOwn(projects || {}, projectId) ? operationSlots.cleanStored(projects[projectId]) : null;
+  return { global, project };
+}
+
+function setProjectScope(projects, id, map) {
+  if (Object.keys(map).length) Object.defineProperty(projects, id, { value: map, enumerable: true, configurable: true, writable: true });
+  else delete projects[id];
+}
+
+function updateOperations(stored, scope, projectId, values, liveProjects) {
+  const previous = operationScope(stored, null).global;
+  const global = scope === 'global' ? operationSlots.difference(values, operationSlots.defaults) : previous;
+  const projects = Object.fromEntries(Object.entries(stored?.version === 1 ? stored.projects || {} : {})
+    .filter(([id]) => liveProjects.has(id)).map(([id, map]) => [id, operationSlots.cleanStored(map)]));
+  if (scope === 'project') setProjectScope(projects, projectId, operationSlots.difference(values, operationSlots.resolve(global)));
+  return { version: 1, global, projects };
+}
+
+function operationInfo(stored, projectId, seats, catalog, installed, frozen, recent) {
+  const { global, project } = operationScope(stored, projectId);
+  const operation = operationSlots.levers(operationSlots.resolve(global, project), seats, catalog, installed);
+  if (recent) {
+    const refused = Object.fromEntries([...recent].flatMap(([key, { value, reason }]) => operation.codex.config[key] === value ? [[key, reason]] : []));
+    operation.agents = operationSlots.applyRefusals(operation.agents, refused);
+  }
+  return { rows: operationSlots.makeRows(operation, catalog), defaults: operationSlots.resolve(), global, project, effective: operation.values,
+    current: frozen ? structuredClone({ values: frozen.values, agents: frozen.agents }) : null };
+}
+
+function resolveOperations(info, remoteAgent) {
+  const installed = remoteAgent ? { ...info.installed, [remoteAgent]: true } : info.installed;
+  return operationSlots.levers(info.operations.effective, info.effective, info.catalog, installed);
+}
+
 class SkillsStore {
   constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {},
     getModels = () => [], modelProbes = {}, now = Date.now, seatSession = () => null }) {
@@ -40,6 +78,7 @@ class SkillsStore {
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.projectSkills = new Map(); this.replacementFailures = new Set();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
+    this.operationResults = new Map();
     this.pruneDeliveryFiles();
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
@@ -135,8 +174,9 @@ class SkillsStore {
       } catch (error) { if (error.code === 'ENOENT') this.deliveryProjects = retained; else this.report(error); }
     }
     let modified = false;
+    for (const id of this.operationResults.keys()) if (!projects.has(id)) this.operationResults.delete(id);
     for (const options of Object.values(this.options)) {
-      for (const scoped of [options.firstOpenedProjects, options.team?.projects]) {
+      for (const scoped of [options.firstOpenedProjects, options.team?.projects, options.operations?.projects]) {
         for (const id of Object.keys(scoped || {})) if (!projects.has(id)) { delete scoped[id]; modified = true; }
       }
     }
@@ -343,6 +383,35 @@ class SkillsStore {
     return modelSeats.leadOptions(info.effective, agent, { ...info.installed, [agent]: true }, info.catalog, info.lead);
   }
 
+  terminalLead(projectId, { remote = false } = {}) {
+    const seat = this.leadOptions(projectId, 'claude', { remote });
+    if (!seat) return null;
+    const { claude, pinnedHaiku } = this.operationLevers(projectId, null, remote ? 'claude' : null);
+    const model = seat.model === 'haiku' && pinnedHaiku ? pinnedHaiku : seat.model;
+    return { ...seat, model, env: claude.env };
+  }
+
+  operationLevers(projectId, sessionId, remoteAgent = null) {
+    const snapshot = this.sessionSnapshot(projectId, sessionId);
+    if (snapshot && Object.hasOwn(snapshot, 'operations')) return snapshot.operations ?? { claude: { env: {} }, codex: { config: {} } };
+    const info = this.seatsInfo(projectId);
+    return info ? resolveOperations(info, remoteAgent) : { claude: { env: {} }, codex: { config: {} } };
+  }
+
+  noteOperationResult(projectId, sessionId, agent, { applied, refused }) {
+    const operation = this.sessionSnapshot(projectId, sessionId)?.operations;
+    if (!operation || agent !== 'codex') return false;
+    const config = operation.codex.config;
+    const recent = this.operationResults.get(projectId) || new Map();
+    const rejected = Object.fromEntries(refused.filter(({ key }) => Object.hasOwn(config, key)).map(({ key, reason }) => [key, reason]));
+    operation.agents = operationSlots.applyRefusals(operation.agents, rejected);
+    for (const key of applied) if (recent.get(key)?.value === config[key]) recent.delete(key);
+    for (const [key, reason] of Object.entries(rejected)) recent.set(key, { value: config[key], reason });
+    if (recent.size) this.operationResults.set(projectId, recent);
+    else this.operationResults.delete(projectId);
+    return true;
+  }
+
   leadAgent(projectId) { return this.seatsInfo(projectId)?.leadAgent ?? null; }
 
   observeModels(family, rows) { this.modelCatalog.accept(family, rows); }
@@ -382,36 +451,43 @@ class SkillsStore {
     const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats), lead = entry.seats[0];
     const effective = modelSeats.effective(defaults, global, project || {});
     const binding = terminalId ? this.seatSession(terminalId) : null;
-    const current = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId)?.seatsMap : null;
+    const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
+    const current = snapshot?.seatsMap, storedOps = this.options[entry.id]?.operations;
+    const operations = operationInfo(storedOps, projectId, effective, catalog, installed, snapshot?.operations, this.operationResults.get(projectId));
     return { skill: entry.id, seats: [...entry.seats], roles: structuredClone(entry.roles || []), lead, authors: ['developer'],
       ...modelSeats.leadConfiguration(effective, lead, installed, catalog), fresh: [...entry.fresh || []], defaults, global, project,
-      effective, current: current ? structuredClone(current) : null, catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
+      effective, operations, current: current ? structuredClone(current) : null, catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
   }
 
-  setSeats(scope, projectId, raw) {
+  setSeats(scope, projectId, raw, rawOperations) {
     if (!['global', 'project'].includes(scope) || scope === 'project' && !this.getProjects().some(project => project.id === projectId)) throw new Error('Invalid seat scope or project.');
     const info = this.seatsInfo(projectId);
     if (!info) return { ok: false, code: 'unknown-seat', message: 'No enabled skill declares seats.' };
     const unknown = raw && typeof raw === 'object' && Object.keys(raw).find(id => !info.seats.includes(id));
     if (unknown !== undefined && typeof unknown === 'string') return { ok: false, code: 'unknown-seat', seat: unknown, message: 'Unknown seat.' };
-    let map;
-    try { map = modelSeats.cleanSeats(raw, info.seats, info.catalog); }
-    catch (error) { return { ok: false, code: error.code, ...(error.seat ? { seat: error.seat } : {}), message: error.message }; }
+    let map, operations;
+    try {
+      map = modelSeats.cleanSeats(raw, info.seats, info.catalog);
+      if (rawOperations !== undefined) operations = operationSlots.clean(rawOperations, info.catalog);
+    } catch (error) {
+      const { code, message, seat, operation } = error;
+      return { ok: false, code, ...(seat ? { seat } : {}), ...(operation ? { operation } : {}), message };
+    }
     const old = this.options[info.skill] || {}, stored = old.team || {}, liveProjects = new Set(this.getProjects().map(project => project.id));
     const projects = Object.fromEntries(Object.entries(stored.projects || {}).filter(([id]) => liveProjects.has(id)));
     const global = scope === 'global' ? map : info.global;
-    if (scope === 'project') {
-      if (Object.keys(map).length) Object.defineProperty(projects, projectId, { value: map, enumerable: true, configurable: true, writable: true });
-      else delete projects[projectId];
-    }
+    if (scope === 'project') setProjectScope(projects, projectId, map);
+    const nextOperations = operations === undefined ? old.operations : updateOperations(old.operations, scope, projectId, operations, liveProjects);
     // A global save also changes every inherited project; validate all resulting effective choices atomically.
-    for (const override of scope === 'global' ? [{}, ...Object.values(projects)] : [map]) {
-      const clean = modelSeats.cleanStoredSeats(override, info.seats);
-      const blocked = modelSeats.checkReviewer(modelSeats.effective(info.defaults, global, clean), info.catalog);
+    for (const id of scope === 'global' ? [null, ...liveProjects] : [projectId]) {
+      const clean = modelSeats.cleanStoredSeats(id === null || !Object.hasOwn(projects, id) ? null : projects[id], info.seats);
+      const seats = modelSeats.effective(info.defaults, global, clean), scopeOps = operationScope(nextOperations, id);
+      const blocked = modelSeats.checkReviewer(seats, info.catalog)
+        || operationSlots.checkReview(operationSlots.resolve(scopeOps.global, scopeOps.project), seats, info.catalog);
       if (blocked) return blocked;
     }
-    this.options[info.skill] = { ...old, team: { version: 2, global, projects } };
+    this.options[info.skill] = { ...old, team: { version: 2, global, projects }, ...(nextOperations && { operations: nextOperations }) };
     this.persistOptions(); this.invalidateDelivery(); this.publish();
     return { ok: true };
   }
@@ -493,9 +569,9 @@ class SkillsStore {
     }
   }
 
-  renderedSkill(seats, map, leadAgent, remote) {
+  renderedSkill(seats, map, leadAgent, remote, operations) {
     const entry = this.entries.get(seats.skill);
-    const text = renderRoutingSkill(entry.text, { ...seats, map, leadAgent });
+    const text = renderRoutingSkill(entry.text, { ...seats, map, leadAgent, operations });
     if (remote || text === entry.text) return { path: entry.path, text };
     try {
       const root = path.join(this.dataDir, 'skill-delivery', 'rendered');
@@ -519,9 +595,10 @@ class SkillsStore {
     const frozen = this.sessionSnapshot(project.id, sessionId), seats = this.seatsInfo(project.id);
     const leadAgent = agent || seats?.leadAgent;
     const leadSeat = seats?.leads[leadAgent];
+    const operations = frozen && Object.hasOwn(frozen, 'operations') ? frozen.operations : seats ? resolveOperations(seats, remote ? leadAgent : null) : null;
     const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats
       ? { ...seats.effective, ...(leadSeat && { [seats.lead]: leadSeat }) } : null;
-    const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote) } : {});
+    const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote, operations) } : {});
     const names = this.builtinNames();
     const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
       && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
@@ -538,7 +615,8 @@ class SkillsStore {
     const manifest = remote ? '{AGENTRIX_SKILLS}/instructions.md' : path.join(this.dataDir, 'skill-delivery',
       `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
-      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)), manifest, routingNote, seatsMap, rendered };
+      pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)),
+      manifest, routingNote, seatsMap, operations, rendered };
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
@@ -549,14 +627,7 @@ class SkillsStore {
     const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote]);
     if (this.deliveries.has(key)) return this.deliveries.get(key);
     const delivery = this.deliveryInfo(project, remote, sessionId, agent), { manifest } = delivery;
-    if (started && sessionId) {
-      const sessionKey = JSON.stringify([canonical(this.dataDir), project.id, sessionId]);
-      let snapshot = liveSessionSnapshots.get(sessionKey);
-      if (!snapshot) { snapshot = { files: new Set() }; liveSessionSnapshots.set(sessionKey, snapshot); }
-      if (!Object.hasOwn(snapshot, 'seatsMap')) snapshot.seatsMap = structuredClone(delivery.seatsMap);
-      if (!Object.hasOwn(snapshot, 'rendered')) snapshot.rendered = structuredClone(delivery.rendered);
-      for (const { path: file } of Object.values(snapshot.rendered)) snapshot.files.add(file);
-    }
+    if (started && sessionId) this.freezeDelivery(project.id, sessionId, delivery);
     let { skills } = delivery;
     let bundle = null;
     if (remote) {
@@ -619,6 +690,16 @@ class SkillsStore {
     const result = { ...delivery, bundle };
     this.deliveries.set(key, result);
     return result;
+  }
+
+  freezeDelivery(projectId, sessionId, delivery) {
+    const key = JSON.stringify([canonical(this.dataDir), projectId, sessionId]);
+    let snapshot = liveSessionSnapshots.get(key);
+    if (!snapshot) { snapshot = { files: new Set() }; liveSessionSnapshots.set(key, snapshot); }
+    for (const field of ['seatsMap', 'operations', 'rendered']) {
+      if (!Object.hasOwn(snapshot, field)) snapshot[field] = structuredClone(delivery[field]);
+    }
+    for (const { path: file } of Object.values(snapshot.rendered)) snapshot.files.add(file);
   }
 
   endSession(projectId, sessionId) {

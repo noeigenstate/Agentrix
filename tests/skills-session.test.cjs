@@ -56,6 +56,32 @@ test('startup/resume deduplicate CLI session plus content fingerprint, compact/c
   assert.equal(sessionContext({ session_id: 'cli-session', source: 'unexpected' }, changed), null);
 });
 
+test('operation delivery and refusal chips belong to the conversation snapshot', async t => {
+  const { store, project } = await fixture(t), file = path.join(store.builtinDir, 'model-routing', 'SKILL.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), file);
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  store.getModels = () => [{ model: 'claude-haiku-5-5', alias: 'haiku' }, { model: 'claude-sonnet-5-5', alias: 'sonnet' }];
+  store.seatSession = sessionId => ({ projectId: project.id, sessionId });
+  store.refresh();
+  const original = { background: { model: 'sonnet' }, subagent: { model: 'gpt-mini', effort: 'medium' } };
+  const launch = id => store.delivery(project, false, id, { agent: 'codex', started: true });
+  assert.deepEqual(store.setSeats('global', null, { orchestrator: { model: 'haiku', effort: 'high' } }, original), { ok: true });
+  const first = launch('first');
+  assert.equal(store.terminalLead(project.id).model, 'claude-haiku-5-5');
+  assert.equal(first.operations.claude.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-sonnet-5-5');
+  const key = 'agents.default_subagent_model';
+  assert.equal(store.noteOperationResult(project.id, 'first', 'codex', { applied: [], refused: [{ key, reason: 'Unsupported key' }] }), true);
+  const current = () => store.seatsInfo(project.id, 'first').operations.current;
+  assert.equal(current().agents.subagent.codex.reason, 'Unsupported key');
+  assert.equal(store.seatsInfo(project.id).operations.rows.find(row => row.id === 'subagent').agents.codex.state, 'not-effective');
+  assert.deepEqual(store.setSeats('project', project.id, {}, { subagent: { model: 'gpt-new', effort: 'high' } }), { ok: true });
+  assert.deepEqual(current().values.subagent, original.subagent);
+  assert.equal(store.operationLevers(project.id, 'first').codex.config[key], 'gpt-mini');
+  assert.equal(launch('second').operations.codex.config[key], 'gpt-new');
+  assert.equal(store.seatsInfo(project.id).operations.rows.find(row => row.id === 'subagent').agents.codex.state, 'applies');
+});
+
 test('routing note is optional, current on a new delivery and included in bounded SSH manifests', async t => {
   let routing = '';
   const f = await fixture(t, () => routing), before = f.delivery('lead');

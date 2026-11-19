@@ -10,12 +10,13 @@ How a terminal's CLI reports to main: the Claude Code hook events (over HTTP to 
 - `createSessionMachine` (`electron/features/terminal-events/session-machine.cjs`) — a Claude terminal's session machine (C-4): `reduce(state, signal) → { state, effects }`, pure, over hooks, transcript records, screen facts and the settled read after a Stop; phases starting, ready, working, stopping, exited; effects `subagent` (C-15) and `completion`; `cliFields` is its part of the published CliState (phase, turn, queue, background, open)
 - `writeBootstrap` (`electron/features/terminal-events/bootstrap-file.cjs`) — the one writer of a terminal's or native session's bootstrap file (session key, event pipe, control channel, and a terminal's hooks), readable only by its owner
 - `updateBootstrapBackground` (`electron/features/terminal-events/bootstrap-file.cjs`) — refresh launch policy without replacing its private startup hook; busy renames retry with bounded backoff, and a separate policy file is re-read by launchers even after refresh fails
-- `updateBootstrapLead` (`electron/features/terminal-events/bootstrap-file.cjs`) — atomically writes the local Claude lead's model, effort and fast flag to the terminal's lead file. Each launch reads the current file and takes the corresponding hook settings.
+- `updateBootstrapLead` (`electron/features/terminal-events/bootstrap-file.cjs`) — atomically writes model, effort, fast, background model and subagent model to the terminal's Claude lead file.
 - `createHookServer` (`electron/features/terminal-events/hook-server.cjs`) — `(ingest, { limit }) → { port, close }`: Claude Code's HTTP hooks, POST `/h/<terminalId>/<EventName>` with `X-Agentrix-Key` on 127.0.0.1, bodies up to 4 MB
 - `createHookIngest` (`electron/features/terminal-events/hook-ingest.cjs`) — `({ keyOf, deliver, now }) → { admit, take, abort, stats }`: requests become C-2 TerminalHookEvents `{ seq, terminalId, event, at, sessionId, transcriptPath, promptId, toolUseId, agentId, payload }`; stats() counts received, refused (path, terminal, key), oversize, unparsable, failed and aborted, for pipeline health
 - `terminalHooks` (`electron/features/terminal-events/hook-channel.cjs`) — a local terminal's `hooks` (C-2): `{ url, port, key, channel, fallback, channelReason, settings: { http, fallback } }`, the one generator of the --settings every claude wrapper passes; downgradeHooks applies a wrapper's hook-channel report
 
 ## May import
+- `electron/features/skills/seat-rules.mjs` (validate the lead seat and the two Claude operation model values)
 - `electron/shared/reason.cjs` (the term.* Reasons of a hook channel)
 - `electron/atomic-write.cjs` (atomic replacement of the lead file)
 - `electron/features/agents/agent-calls.cjs` (AgentCalls.forTerminal without a factory observes an existing run board during publication)

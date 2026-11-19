@@ -5,6 +5,9 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { builtinMetadata } = require('../electron/features/skills/builtin-format.cjs');
+const { renderRoutingSkill } = require('../electron/features/skills/skill-render.cjs');
+const modelSeats = require('../electron/features/skills/model-seats.cjs');
+const { levers } = require('../electron/features/skills/operation-slots.cjs');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { MAX_BYTES } = require('../electron/features/skills/files.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
@@ -22,6 +25,34 @@ const alwaysInstruction = file => `Before any task, read and follow ${normalized
 const note = delivery => startupNote('Read.', null, null, delivery);
 const start = (store, project, sessionId, agent = 'codex') => store.delivery(project, project.kind === 'ssh', sessionId, { agent, started: true });
 const team = '\n<!-- agentrix:team -->\n| Seat | Role | Duty | Outputs | Model | Launch |\n<!-- /agentrix:team -->\n';
+
+test('operation skill rendering reproduces the shipped defaults and replaces lookup instructions and Haiku seat launches', () => {
+  let text = fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
+  // A1 can run on its integration base before Lane S's shipped region is merged.
+  if (!text.includes('<!-- agentrix:operations -->')) {
+    text += '\n<!-- agentrix:operations -->\n| Operation | Name | Covers | Claude | Codex |\n'
+      + '| lookup | Lookup | Read files | haiku · high; agentrix-lookup in native mode, else Agent call, model "haiku", effort "high"'
+      + ' | haiku · high; helper claude --seat researcher --model haiku --effort high --permission plan --detach, then wait |\n'
+      + '| review | Review pass | Review | not controllable (review is the Reviewer seat) | Codex default |\n<!-- /agentrix:operations -->\n';
+  }
+  const { roles, seats } = builtinMetadata(text, 'model-routing');
+  const installed = { claude: true, codex: true };
+  const catalog = modelSeats.catalog(installed, [
+    { model: 'gpt-6.2-sol', fast: true }, { model: 'claude-haiku-5-5', alias: 'haiku' }, { model: 'claude-sonnet-5-5', alias: 'sonnet' },
+  ]);
+  const map = modelSeats.defaultsFor(installed, catalog, seats), spec = { roles, map, leadAgent: 'claude', installed, catalog };
+  assert.equal(renderRoutingSkill(text, spec), text);
+  const changedSeats = { ...map, researcher: { model: 'haiku', effort: 'high' }, reviewer: { model: 'gpt-6.2-sol', effort: 'high' } };
+  const values = { lookup: { model: 'sonnet', effort: 'medium' }, background: { model: 'sonnet' } };
+  const operations = levers(values, changedSeats, catalog, installed);
+  const rendered = renderRoutingSkill(text, { ...spec, map: changedSeats, operations });
+  assert.match(rendered, /\| lookup \|.*agentrix-lookup.*model "sonnet".*--seat researcher --model sonnet --effort medium --permission plan/);
+  assert.match(rendered, /\| researcher \|.*helper claude --seat researcher --model claude-haiku-5-5/);
+  assert.match(rendered, /\| review \|.*gpt-6\.2-sol \(Reviewer seat\)/);
+  if (fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8').includes('<!-- agentrix:operations -->')) {
+    assert.doesNotMatch(rendered, /\bHaiku\b/);
+  }
+});
 
 function firstRunSkill({ builtinDir, dataDir }, trigger, extra = '') {
   put(path.join(builtinDir, 'code-standard', 'SKILL.md'), builtin('code-standard', { trigger: trigger === 'always' ? 'always' : 'auto' }) + extra);

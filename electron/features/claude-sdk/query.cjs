@@ -13,6 +13,8 @@ const NATIVE_CONTEXT = IDENTITY_CONTEXT + '\n'
   + 'If you need the user to run a shell command themselves, suggest they type `! <command>` in the prompt; its output becomes context in this conversation.\n'
   + `Delegate simple grep, file listings and short log lookups to the ${LOOKUP_AGENT_NAME} Haiku 5.5 subagent. Batch related lookups into one call and read its concise conclusions. Run CI judgments, diffs you must review and release steps yourself.`;
 
+const nativeContext = ({ model } = LOOKUP_AGENT) => model === LOOKUP_AGENT.model ? NATIVE_CONTEXT : NATIVE_CONTEXT.replace('Haiku 5.5', model);
+
 function privateSettings(value, signal) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-claude-settings-'));
   const file = path.join(directory, 'settings.json');
@@ -47,6 +49,7 @@ function inputQueue(onTake = () => {}) {
 }
 
 function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {} }) {
+  const lookupAgent = { ...LOOKUP_AGENT, ...spec.operations?.lookupAgent };
   const reportSubagent = kind => async (input, toolUseId) => {
     // Visibility must never block the CLI or add context to either conversation.
     try { void Promise.resolve(onSubagent(kind, input, toolUseId)).catch(() => {}); } catch { }
@@ -54,13 +57,14 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
   };
   return {
     cwd: spec.cwd, model: spec.model || undefined, effort: spec.effort || 'high', pathToClaudeCodeExecutable: executable,
-    settings: privateSettings({ fastMode: spec.fast === true, ...routeSettings(spec) }, abort.signal), env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
+    settings: privateSettings({ fastMode: spec.fast === true, ...routeSettings(spec) }, abort.signal),
+    env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui', spec.operations?.env),
     // The owner's choice: SDK sessions do not ask about each tool. A worker's limits are its PreToolUse policy, which still denies under
     // this mode, and questions still reach canUseTool: both proved against the real CLI in tests/claude-sdk-real-cli.test.cjs.
     abortController: abort, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, includePartialMessages: true,
     settingSources: ['user', 'project', 'local'],
-    ...(spec.owner === 'gui' ? { agents: { [LOOKUP_AGENT_NAME]: LOOKUP_AGENT } } : {}),
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT,
+    ...(spec.owner === 'gui' ? { agents: { [LOOKUP_AGENT_NAME]: lookupAgent } } : {}),
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? nativeContext(lookupAgent) : IDENTITY_CONTEXT,
       spec.owner === 'gui' && !Object.entries(spec.env || process.env).some(([name, value]) => name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS' && value === '1')
         ? 'The fork subagent runs in the background, so you can keep chatting with the user while it works.' : null,
       spec.context].filter(Boolean).join('\n\n') },
@@ -107,4 +111,4 @@ async function readBillingIdentity(query, { signal, timeoutMs = 30000 }) {
   return source;
 }
 
-module.exports = { inputQueue, queryOptions, openQuery, readBillingIdentity, NATIVE_CONTEXT, IDENTITY_CONTEXT };
+module.exports = { inputQueue, queryOptions, openQuery, readBillingIdentity, nativeContext, NATIVE_CONTEXT, IDENTITY_CONTEXT };
