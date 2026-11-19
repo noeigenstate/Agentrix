@@ -588,7 +588,7 @@ function callsOf(s, project) {
   const calls = s.calls || AgentCalls.forTerminal(sessions, id, () => {
     const helperPids = new WeakMap(), current = () => sessions.get(id);
     return new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
-      seatIds: () => skills?.seatsInfo?.(project.id)?.seats ?? [],
+      roles: () => skills?.sessionRoles?.(project.id, skills.seatSession?.(id)?.sessionId ?? null) ?? null,
       dispatchAlive: async call => {
         if (project.kind === 'ssh') return null;
         let pid = call.helperPid || helperPids.get(call);
@@ -1861,7 +1861,7 @@ if (!app.requestSingleInstanceLock()) {
         },
       },
       seatSession: id => {
-        const session = sessions.get(id), spec = nativeSpecs.get(id);
+        const host = sessions.get(id), session = host?.switchPreviousHost || host, spec = nativeSpecs.get(id);
         return session && session.status !== 'exited' && session.codexActive
           ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId } : null;
       },

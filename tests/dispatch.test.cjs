@@ -20,6 +20,22 @@ const worker = path.resolve(__dirname, 'fixtures/dispatch-worker.cjs');
 const session = '22222222-2222-4222-8222-222222222222';
 const at = seconds => new Date(Date.UTC(2026, 0, 1) + seconds * 1000).toISOString();
 
+test('custom and enabled specialty seats supply dispatch defaults while the original spelling is reported', () => {
+  const base = ['codex', '--role', 'exec', '--title', 'Fixture', '--cwd', '.', '--brief', 'brief.md', '--out', 'answer.md', '--seat'];
+  const developer = { model: 'gpt-6.1-sol', effort: 'high', fast: false };
+  const selected = { model: 'gpt-6.2-sol', effort: 'xhigh', fast: true };
+  for (const [spelling, map, choice] of [
+    ['x-mobile', { developer, 'x-mobile': selected }, selected],
+    ['developer/frontend', { developer, frontend: selected }, selected],
+    ['developer/frontend', { frontend: selected }, selected],
+    ['developer/frontend', { developer }, developer],
+  ]) {
+    const { seat, model, effort, fast } = argumentsOf([...base, spelling], { AGENTRIX_SEATS: JSON.stringify(map) });
+    assert.deepEqual({ seat, model, effort, fast }, { seat: spelling, ...choice });
+  }
+  assert.throws(() => argumentsOf([...base, 'developer/frontend'], { AGENTRIX_SEATS: '{}' }), /Missing --model/);
+});
+
 test('Claude fast constructs one JSON settings argv element and aliases follow future releases', () => {
   const options = argumentsOf(['claude', '--role', 'exec', '--title', 'Synthetic', '--model', 'opus', '--effort', 'adaptive', '--fast',
     '--permission', 'plan', '--cwd', __dirname, '--brief', 'synthetic.md', '--out', 'synthetic.out']);

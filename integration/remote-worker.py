@@ -281,10 +281,11 @@ try:
         hook=json.loads(raw)
         tool=hook.get("tool_input")
         if hook.get("tool_name") not in ("Agent", "Task") or not isinstance(tool, dict): sys.exit(0)
-        prefix=re.match(r"^\[([a-z][a-z0-9-]{0,31})(?:/[a-z][a-z0-9-]{0,23})?\]", str(tool.get("description", "")))
+        prefix=re.match(r"^\[([a-z][a-z0-9-]{0,31})(?:/([a-z][a-z0-9-]{0,23}))?\]", str(tool.get("description", "")))
         seats=json.loads(snapshot)
         if not prefix or not isinstance(seats, dict): sys.exit(0)
-        seat=prefix[1]
+        seat,specialty=prefix.groups()
+        if seat=="developer" and specialty in seats: seat=specialty
         choice=seats.get(seat, {})
         model, effort=choice.get("model", ""), choice.get("effort")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}", model): sys.exit(0)

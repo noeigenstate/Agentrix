@@ -77,11 +77,13 @@ class AgentCalls {
     }
     return calls?.get(id) || null;
   }
-  constructor({ terminalId = null, changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true, codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid), dispatchReplay = null, seatIds = () => [] } = {}) {
+  constructor({ terminalId = null, changed = () => {}, finished = () => {}, feedChanged = () => {}, local = true,
+    codexHome = null, claudeHome = null, now = Date.now, since = now(), dispatchAlive = call => helperAlive(call.helperPid),
+    dispatchReplay = null, roles = () => null } = {}) {
     this.changed = changed; this.finished = finished; this.local = local; this.folder = null; this.terminalId = terminalId;
     this.now = now; this.since = since; this.claudeHome = claudeHome; this.finishedIds = new Set(); this.awaitingEarly = new Map();
     this.dispatchAlive = dispatchAlive; this.clockOffset = 0;
-    this.dispatchReplay = dispatchReplay; this.seatIds = seatIds;
+    this.dispatchReplay = dispatchReplay; this.roles = roles;
     this.background = new BackgroundTasks(terminalId, { now });
     this.feeds = new SubagentFeeds({ changed: feedChanged, retired: () => this.changed(), local, codexHome, claudeHome, now,
       plannerOf: id => this.calls?.get(id)?.planner || null,
@@ -204,7 +206,7 @@ class AgentCalls {
       const entry = this.feeds.owned(call), retired = this.feeds.owned(other);
       if (tool.title) Object.assign(call, { title: tool.title, task: tool.task, role: tool.role, planner: tool.planner, cwd: tool.cwd,
         requested: tool.requested, background: tool.background, agentType: tool.agentType,
-        seat: tool.seat, specialty: tool.specialty, seatSource: tool.seatSource });
+        seat: tool.seat, specialty: tool.specialty, seatSource: tool.seatSource, seatName: tool.seatName, offTeam: tool.offTeam });
       clearTimeout(other.expiry); clearTimeout(call.expiry);
       this.calls.delete(other.key); this.calls.delete(call.key);
       this.pending.delete(other.key); this.pending.delete(call.key);
@@ -289,7 +291,7 @@ class AgentCalls {
     delete call.revival;
     if (!failed) return false;
     const identity = Object.fromEntries(['id', 'key', 'agentId', 'toolUseId', 'toolGeneration', 'title', 'task', 'role', 'planner', 'cwd', 'requested', 'background', 'continuations',
-      'agentType', 'seat', 'specialty', 'seatSource']
+      'agentType', 'seat', 'specialty', 'seatSource', 'seatName', 'offTeam']
       .map(key => [key, call[key]]));
     clearTimeout(call.expiry);
     for (const key of Object.keys(call)) delete call[key];
@@ -373,6 +375,30 @@ class AgentCalls {
     for (const group of groups.values()) group.items.reverse();
     return [...groups.values()];
   }
+  startDispatch(event, call) {
+    if (call && (!call.starting || call.done) || !call && this.calls.size >= 1024) return false;
+    if (call && (call.sourceAgent !== event.agent || call.cwd !== event.cwd)) return false;
+    // A delayed start can arrive after the lead conversation has already switched.
+    if (call?.declaredSpelling != null && event.seat != null && call.declaredSpelling !== event.seat) return false;
+    const labels = call?.declaredSpelling == null ? declaredSeat(event.seat, this.roles) : null;
+    const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
+      model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
+      planner: event.planner || UNKNOWN_PLANNER,
+      kind: taskKind(event),
+      meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
+      role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd, ...labels,
+      artifacts: this.local ? { brief: event.brief && bindArtifact(event.brief, true),
+        log: event.log && event.log === `${event.out}.log` ? bindArtifact(event.log, false) : null } : null,
+      startedAt: time(event.startedAt), helperPid: Number.isSafeInteger(event.helperPid) && event.helperPid > 0 ? event.helperPid : null,
+      done: false, rate: null, meter: new TokenRates(event.agent) };
+    if (call) {
+      clearTimeout(call.startNotice);
+      Object.assign(call, next, { starting: false }); delete call.notice;
+      this.feeds.update(call);
+    } else { this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next); }
+    this.schedule(); this.watchDispatch();
+    return true;
+  }
   dispatch(event) {
     const call = this.calls.get(event.id);
     if (event.type === 'dispatch-declared') {
@@ -381,7 +407,7 @@ class AgentCalls {
         model: 'unreported', effort: null, fast: null, requestedModel: event.requested.model, requested: event.requested,
         planner: event.planner || UNKNOWN_PLANNER, kind: taskKind(event), meeting: event.meeting ?? null,
         role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,
-        ...declaredSeat(event.seat, this.seatIds),
+        declaredSpelling: event.seat, ...declaredSeat(event.seat, this.roles),
         helperPid: event.helperPid, starting: true, unconfirmed: true, resumed: event.resumed === true, source: event.source,
         startedAt: time(event.at), done: false, rate: null, meter: new TokenRates(event.agent) };
       this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next);
@@ -391,29 +417,7 @@ class AgentCalls {
       }, Math.max(0, 15000 - (this.now() - event.at)));
       next.startNotice.unref?.(); this.schedule(); this.watchDispatch(); return true;
     }
-    if (event.type === 'dispatch-start') {
-      if (call && (!call.starting || call.done) || !call && this.calls.size >= 1024) return false;
-      if (call && (call.sourceAgent !== event.agent || call.cwd !== event.cwd)) return false;
-      const labels = declaredSeat(event.seat, this.seatIds);
-      if (call?.seatSource === 'declared' && event.seat != null && (labels?.seat !== call.seat || labels?.specialty !== call.specialty)) return false;
-      const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
-        model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
-        planner: event.planner || UNKNOWN_PLANNER,
-        kind: taskKind(event),
-        meeting: event.meeting ?? null, skipMeeting: event.skipMeeting ?? null, unconfirmed: event.unconfirmed === true,
-        role: event.role, title: event.title, task: short(event.title), sessionId: event.sessionId, cwd: event.cwd, ...labels,
-        artifacts: this.local ? { brief: event.brief && bindArtifact(event.brief, true),
-          log: event.log && event.log === `${event.out}.log` ? bindArtifact(event.log, false) : null } : null,
-        startedAt: time(event.startedAt), helperPid: Number.isSafeInteger(event.helperPid) && event.helperPid > 0 ? event.helperPid : null,
-        done: false, rate: null, meter: new TokenRates(event.agent) };
-      if (call) {
-        clearTimeout(call.startNotice);
-        Object.assign(call, next, { starting: false }); delete call.notice;
-        this.feeds.update(call);
-      } else { this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next); }
-      this.schedule(); this.watchDispatch();
-      return true;
-    }
+    if (event.type === 'dispatch-start') return this.startDispatch(event, call);
     if (!call?.dispatch) return false;
     // Input identity can arrive after the last transcript read. It changes presentation only.
     if (event.type === 'dispatch-input') {
@@ -532,10 +536,7 @@ class AgentCalls {
     }
     return changed;
   }
-  apply(record) {
-    if (record.isSidechain) return false;
-    const content = record.message?.content;
-    const at = Date.parse(record.timestamp) + this.clockOffset;
+  applyToolRecords(record, content, at) {
     let changed = false;
     for (const block of Array.isArray(content) ? content : []) {
       if (record.type === 'assistant' && block.type === 'tool_use' && ['BashOutput', 'TaskOutput', 'TaskStop', 'KillShell'].includes(block.name)) {
@@ -550,7 +551,7 @@ class AgentCalls {
         if (!['Agent', 'Task'].includes(block.name)) continue;
         const input = block.input || {};
         const description = text(input.description || block.description || input.subagent_type || block.name).replace(/\s+/g, ' ').trim();
-        const { title, labels } = agentDescription(description, this.seatIds);
+        const { title, labels } = agentDescription(description, this.roles);
         const existing = this.toolCall(block.id);
         if (existing) {
           if (labels && !existing.seatSource) {
@@ -598,6 +599,13 @@ class AgentCalls {
         }
       }
     }
+    return changed;
+  }
+  apply(record) {
+    if (record.isSidechain) return false;
+    const content = record.message?.content;
+    const at = Date.parse(record.timestamp) + this.clockOffset;
+    let changed = this.applyToolRecords(record, content, at);
     // An enqueue ends the worker; its delivered notification starts the lead's review round.
     let hasNotification = false;
     const queued = record.type === 'queue-operation';

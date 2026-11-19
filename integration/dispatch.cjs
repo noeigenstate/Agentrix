@@ -26,7 +26,7 @@ const { connectDispatchControl } = require(path.join(runtime, 'features/agents/d
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { dispatchDirectory, validSeat } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
-const { familyOf } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { familyOf, launchSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
@@ -61,7 +61,7 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const roles = new Map([['执行', '执行'], ['调查', '调查'], ['审查', '审查'], ['exec', '执行'], ['investigate', '调查'], ['review', '审查']]);
 const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审查|exec|investigate|review>
   --title <task> --model <model> --effort <effort> --cwd <dir> --brief <file> --out <file>
-  [--seat <id>[/<specialty>]] the team role for this run
+  [--seat <id>[/<specialty>]] the team role for this run, for example --seat x-mobile
                              uses the launch seat for omitted --model, --effort and --fast
   [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
   [--ledger <file>]       the task's shared context: given to the worker, its findings appended after
@@ -101,8 +101,9 @@ function seatDefaults(env, seat, agent) {
   if (typeof snapshot !== 'string' || Buffer.byteLength(snapshot) > 8192) return null;
   let seats;
   try { seats = JSON.parse(snapshot); } catch { return null; }
-  const id = seat.split('/')[0];
-  if (!seats || !Object.hasOwn(seats, id)) return null;
+  if (!seats || typeof seats !== 'object' || Array.isArray(seats)) return null;
+  const id = launchSeat(seat, Object.keys(seats));
+  if (!id) return null;
   const choice = seats[id];
   if (typeof choice?.model !== 'string' || familyOf(choice.model) !== agent) return null;
   return choice;
