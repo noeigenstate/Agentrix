@@ -3,10 +3,14 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "操作模型", text: "模型路由弹窗新增「团队」和「操作模型」两个标签页。可分别为检索、后台小任务、子代理默认、记忆整理和审查设置模型，可选全局或本项目，从下一次对话起生效。", group: "new" },
-  { title: "不支持会置灰", text: "只有一种 Agent 支持的操作，另一系列的模型会置灰并说明原因。审查模型不能与开发的模型相同，界面提供一键修正。", group: "new" },
-  { title: "活动区全部显示", text: "右侧活动区现在无需内部滚动条即可显示全部内容，路由卡也会显示各项操作模型。", group: "new" },
-  { title: "启动与设置修复", text: "修复：PowerShell 里的 claude 命令会保留原有设置和启动提示；Agent 启动器显示正确的标记和转圈；仓库里的设置文件不能再覆盖 Claude 和 Codex 的操作设置。", group: "new" },
+  { title: "公式排版", text: "回复中的行内公式和独立公式会按数学格式显示。遇到不安全或不支持的公式时，会显示原始写法。", group: "new" },
+  { title: "自动应用席位设置", text: "从下一次对话起，为某个座位启动的子代理会自动使用该座位设置的模型和思考深度，无需总指挥手动填写。", group: "new" },
+  { title: "活动区布局", text: "右侧活动区的模型路由改为与相邻区块一致的平铺样式。主模型和它收到的提示移到左侧 Agent 标签页的「总指挥」下。", group: "new" },
+  { title: "直达工作会话", text: "在左侧 Agent 标签页点击子代理，即可打开它的工作会话。", group: "new" },
+  { title: "操作模型", text: "模型路由弹窗新增「团队」和「操作模型」两个标签页。可分别为检索、后台小任务、子代理默认、记忆整理和审查设置模型，可选全局或本项目，从下一次对话起生效。" },
+  { title: "不支持会置灰", text: "只有一种 Agent 支持的操作，另一系列的模型会置灰并说明原因。审查模型不能与开发的模型相同，界面提供一键修正。" },
+  { title: "活动区全部显示", text: "右侧活动区现在无需内部滚动条即可显示全部内容，路由卡也会显示各项操作模型。" },
+  { title: "启动与设置修复", text: "修复：PowerShell 里的 claude 命令会保留原有设置和启动提示；Agent 启动器显示正确的标记和转圈；仓库里的设置文件不能再覆盖 Claude 和 Codex 的操作设置。" },
   { title: "团队式模型路由", text: "组织图中，你是所有者，下设总指挥，再往下是产品、架构师、设计师、开发、审查、测试、研究、运维和安全九个角色，每个角色都可单独设置模型、思考深度和快速模式。原有的座位设置会自动迁移。" },
   { title: "取消 /model", text: "新开和恢复的对话都由模型路由决定模型、思考深度和快速模式。/model、/effort 和 /fast 已停用，在对话输入框输入这些命令会提示你并打开模型路由。" },
   { title: "技能跟随路由", text: "系统的模型路由技能会随你的设置自动更新，从下一次对话起生效。技能可设为「每个任务」或「相关任务」触发，也可开启「首次打开项目时先运行一次」。" },

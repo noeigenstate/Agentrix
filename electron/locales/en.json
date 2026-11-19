@@ -3518,5 +3518,13 @@
   "活动区全部显示": "Full Activity pane",
   "右侧活动区现在无需内部滚动条即可显示全部内容，路由卡也会显示各项操作模型。": "The right Activity pane now shows everything without an inner scrollbar, and the routing card lists the operation models.",
   "启动与设置修复": "Launch and settings fixes",
-  "修复：PowerShell 里的 claude 命令会保留原有设置和启动提示；Agent 启动器显示正确的标记和转圈；仓库里的设置文件不能再覆盖 Claude 和 Codex 的操作设置。": "Fixed: the claude command in PowerShell keeps its settings and startup note, the agent launcher shows the right marks and spinner, and a repository's settings file can no longer override the Claude and Codex operation settings."
+  "修复：PowerShell 里的 claude 命令会保留原有设置和启动提示；Agent 启动器显示正确的标记和转圈；仓库里的设置文件不能再覆盖 Claude 和 Codex 的操作设置。": "Fixed: the claude command in PowerShell keeps its settings and startup note, the agent launcher shows the right marks and spinner, and a repository's settings file can no longer override the Claude and Codex operation settings.",
+  "公式排版": "Math display",
+  "回复中的行内公式和独立公式会按数学格式显示。遇到不安全或不支持的公式时，会显示原始写法。": "Replies format inline and display formulas as math. Unsafe or unsupported formulas appear as source.",
+  "自动应用席位设置": "Seat models",
+  "从下一次对话起，为某个座位启动的子代理会自动使用该座位设置的模型和思考深度，无需总指挥手动填写。": "Starting with the next conversation, subagents automatically use their seat's model and thinking depth.",
+  "活动区布局": "Pane layout",
+  "右侧活动区的模型路由改为与相邻区块一致的平铺样式。主模型和它收到的提示移到左侧 Agent 标签页的「总指挥」下。": "Model routing now sits flat alongside the other Activity sections. The main model and its prompts are under Orchestrator in the Agent tab on the left.",
+  "直达工作会话": "Open session",
+  "在左侧 Agent 标签页点击子代理，即可打开它的工作会话。": "Click a subagent in the Agent tab on the left to open its work session."
 }
