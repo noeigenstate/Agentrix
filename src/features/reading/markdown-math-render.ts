@@ -2,26 +2,54 @@ import katex, { type KatexOptions } from 'katex';
 import { mathDisplayClass, mathSourceAttribute, safeMathLength, safeStyle } from './markdown-math-sanitize.ts';
 
 const SOURCE_LIMIT = 2048, FORMULA_LIMIT = 300, HTML_LIMIT = 1024 * 1024;
+const NODE_LIMIT = 4000, SPACE_LIMIT_EM = 20;
 const CACHE_ENTRIES = 96, CACHE_BYTES = 512 * 1024;
 const encoder = new TextEncoder();
 const budgets = new WeakMap<object, { count: number; bytes: number }>();
 const cache = new Map<string, { html: string; bytes: number }>();
 let cachedBytes = 0;
 
+const unsupportedCommands = new Set([
+  'def', 'gdef', 'edef', 'xdef', 'let', 'futurelet', 'newcommand', 'renewcommand', 'providecommand',
+  'mathchoice', 'TextOrMath', 'html@mathml', '@firstoftwo', '@secondoftwo', '@ifnextchar', '@ifstar',
+]);
+// Consume control symbols (including \\ and \%) and KaTeX's verbatim literals before testing for a comment.
+const texTokens = /\\verb\*([^]).*?\1|\\verb([^*a-zA-Z]).*?\2|\\([A-Za-z@]+|[\s\S])|%/g;
 const hiddenNodes = new Set(['phantom', 'hphantom', 'vphantom', 'smash', 'lap', 'color']);
-type MathNode = { type?: string; dimension?: { number: number }; backgroundColor?: string; borderColor?: string };
-// Inspect the expanded KaTeX tree so macros can't disguise a hidden span, custom paint or negative space.
-const parse = (katex as typeof katex & { __parse(text: string, options: KatexOptions): unknown[] }).__parse;
-function hasHiddenContent(tree: unknown[]) {
+// Approximate KaTeX's TeX units in base-font ems for the cumulative spacing budget.
+const emPerUnit: Readonly<Record<string, number>> = {
+  em: 1, ex: 0.5, mu: 1 / 18, pt: 0.1, mm: 0.285, cm: 2.85, in: 7.227, bp: 0.101, pc: 1.2,
+  dd: 0.108, cc: 1.29, nd: 0.107, nc: 1.29, sp: 1 / 655360, px: 0.101,
+};
+type MathNode = { type?: string; text?: string; dimension?: { number: number; unit: string }; backgroundColor?: string; borderColor?: string };
+type ReadingKatexOptions = Omit<KatexOptions, 'macros' | 'globalGroup'>;
+const katexParser = katex as typeof katex & { __parse(text: string, options: ReadingKatexOptions): unknown[] };
+
+function safeSource(text: string) {
+  for (const [token, , , command] of text.matchAll(texTokens)) {
+    if (token === '%' || unsupportedCommands.has(command)) return false;
+  }
+  return true;
+}
+
+// Inspect the expanded tree once, before KaTeX builds MathML and HTML.
+function safeMathTree(tree: unknown[]) {
   const remaining = [...tree];
+  let nodes = 0, space = 0;
   while (remaining.length) {
     const value = remaining.pop();
     if (!value || typeof value !== 'object') continue;
-    const { type, dimension, backgroundColor, borderColor } = value as MathNode;
-    if (hiddenNodes.has(type ?? '') || backgroundColor || borderColor || type === 'kern' && (dimension?.number ?? 0) < 0) return true;
+    const { type, text, dimension, backgroundColor, borderColor } = value as MathNode;
+    if (type && ++nodes > NODE_LIMIT || hiddenNodes.has(type ?? '') || backgroundColor || borderColor) return false;
+    if (type === 'kern' && dimension) {
+      if (dimension.number < 0) return false;
+      space += dimension.number * (emPerUnit[dimension.unit] ?? Infinity);
+    }
+    if (type === 'spacing' && text !== '\\allowbreak' && text !== '\\nobreak') space += 1 / 3;
+    if (!(space <= SPACE_LIMIT_EM + 1e-9)) return false;
     for (const [key, child] of Object.entries(value)) if (key !== 'loc' && child && typeof child === 'object') remaining.push(child);
   }
-  return false;
+  return true;
 }
 
 function safeMathMarkup(html: string) {
@@ -34,9 +62,10 @@ function safeMathMarkup(html: string) {
 }
 
 function renderKatex(text: string, displayMode: boolean) {
-  const options: KatexOptions = { displayMode, throwOnError: false, trust: false, strict: 'ignore', maxSize: 10, maxExpand: 500 };
+  if (!text.trim() || !safeSource(text)) return '';
+  const options: ReadingKatexOptions = { displayMode, throwOnError: false, trust: false, strict: 'ignore', maxSize: 10, maxExpand: 50 };
   try {
-    if (!text.trim() || hasHiddenContent(parse(text, options))) return '';
+    if (!safeMathTree(katexParser.__parse(text, options))) return '';
     const html = katex.renderToString(text, options);
     return !html.startsWith('<span class="katex-error"') && html.length <= HTML_LIMIT && safeMathMarkup(html) ? html : '';
   } catch {

