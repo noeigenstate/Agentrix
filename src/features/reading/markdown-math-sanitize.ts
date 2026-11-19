@@ -3,6 +3,7 @@ import type { DOMPurify } from 'dompurify';
 export const mathSourceAttribute = 'data-reading-math-source';
 export const mathSelector = 'span[' + mathSourceAttribute + ']';
 export const mathDisplayClass = 'reading-math-display';
+export const mathFallbackClass = 'reading-math-source';
 
 const mathML = 'math semantics annotation mrow mi mn mo mtext mspace mfrac msqrt mroot msub msup msubsup mover munder munderover mmultiscripts mprescripts'
   + ' none mtable mtr mtd mstyle mpadded mphantom menclose mglyph';
@@ -31,6 +32,8 @@ function boundedLengths(value: string) {
 }
 
 export function safeMathLength(tag: string, name: string, value: string) {
+  // KaTeX offsets left and centered overlays by at most their own glyph width.
+  if (tag === 'mpadded' && name === 'lspace' && (value === '-1width' || value === '-0.5width')) return true;
   // Radicals and stretchy accents use a fixed 400em drawing that KaTeX crops inside its layout box.
   return !lengthAttributes.has(name) || tag === 'svg' && name === 'width' && value === '400em' || boundedLengths(value);
 }

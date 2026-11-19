@@ -3,7 +3,9 @@ import { isMac, isWindows } from '../../shared/platform';
 import { t } from '../../shared/i18n';
 import { showPopup } from '../files/file-popup.ts';
 import { isGeneratedPicture, isPicture } from './reply-links.ts';
-import { mathSelector } from './markdown-math-sanitize.ts';
+import { mathFallbackClass, mathSelector } from './markdown-math-sanitize.ts';
+
+const unlinkedText = 'a, button, [data-reading-path], ' + mathSelector + ', code.' + mathFallbackClass;
 
 // A picture's path previews it here with the modifier; any other path is shown in the system's file manager.
 const previews = (path: string) => isPicture(path) || isGeneratedPicture(path);
@@ -22,7 +24,7 @@ export function markReadingPaths(root: HTMLElement) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), nodes: Text[] = [];
   while (walker.nextNode()) {
     const node = walker.currentNode as Text;
-    if (!node.parentElement?.closest('a, button, [data-reading-path], ' + mathSelector)) nodes.push(node);
+    if (!node.parentElement?.closest(unlinkedText)) nodes.push(node);
   }
   for (const node of nodes) {
     const text = node.data, links = findPathCandidates(text, node.parentElement?.tagName === 'CODE' && !node.parentElement.closest('pre'));
