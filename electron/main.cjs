@@ -1861,7 +1861,7 @@ if (!app.requestSingleInstanceLock()) {
         },
       },
       seatSession: id => {
-        const host = sessions.get(id), session = host?.switchPreviousHost || host, spec = nativeSpecs.get(id);
+        const session = sessions.get(id), spec = nativeSpecs.get(id);
         return session && session.status !== 'exited' && session.codexActive
           ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId } : null;
       },
