@@ -50,19 +50,24 @@ function global:Get-AgentrixReadingNote {
 
 # Makes the Claude Code started next a planner: intercept.cjs (withShims) names what to set, with the shims first on PATH
 # at depth zero. Returns what Restore-AgentrixEnvironment puts back once it exits.
-function global:Set-AgentrixPlanner {
+function global:Set-AgentrixPlanner([hashtable]$LaunchEnvironment) {
     $previous = @{}
-    if (-not $global:AgentrixSession.shims) { return $previous }
-    $electron = $env:ELECTRON_RUN_AS_NODE
-    try {
-        $env:ELECTRON_RUN_AS_NODE = '1'
-        $words = & $global:AgentrixSession.nodePath (Join-Path $global:AgentrixSession.shims 'intercept.cjs') --shim-env json | ConvertFrom-Json
-    } catch { $words = @() } finally { $env:ELECTRON_RUN_AS_NODE = $electron }
-    $words = @($words)
-    for ($index = 0; $index -lt $words.Count; $index++) {
-        if ($words[$index] -ceq '-u') { $name = $words[++$index]; $value = $null } else { $name, $value = $words[$index] -split '=', 2 }
+    if ($global:AgentrixSession.shims) {
+        $electron = $env:ELECTRON_RUN_AS_NODE
+        try {
+            $env:ELECTRON_RUN_AS_NODE = '1'
+            $words = & $global:AgentrixSession.nodePath (Join-Path $global:AgentrixSession.shims 'intercept.cjs') --shim-env json | ConvertFrom-Json
+        } catch { $words = @() } finally { $env:ELECTRON_RUN_AS_NODE = $electron }
+        $words = @($words)
+        for ($index = 0; $index -lt $words.Count; $index++) {
+            if ($words[$index] -ceq '-u') { $name = $words[++$index]; $value = $null } else { $name, $value = $words[$index] -split '=', 2 }
+            $previous[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $value)
+        }
+    }
+    foreach ($name in $LaunchEnvironment.Keys) {
         $previous[$name] = [Environment]::GetEnvironmentVariable($name)
-        [Environment]::SetEnvironmentVariable($name, $value)
+        [Environment]::SetEnvironmentVariable($name, $LaunchEnvironment[$name])
     }
     return $previous
 }
@@ -182,6 +187,21 @@ function global:Get-AgentrixHookProxy {
     $proxy
 }
 
+function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
+    $launch = @{ LeadArgs = @(); Env = @{}; HookSettings = $Hooks.settings }
+    if (-not $Conversation -or -not $env:AGENTRIX_BOOTSTRAP) { return $launch }
+    $lead = $null
+    try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
+    $modelPattern = '\A[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}\z'
+    if ($lead.Length -lt 3 -or $lead[0] -cnotmatch $modelPattern -or
+        $lead[1] -cnotmatch '^[a-z][a-z0-9-]{0,31}$' -or $lead[2] -cnotmatch '^[01]$') { return $launch }
+    $launch.LeadArgs = @('--model', $lead[0], '--effort', $lead[1])
+    if ($lead[2] -eq '1' -and $Hooks.fastSettings) { $launch.HookSettings = $Hooks.fastSettings }
+    if ($lead.Length -ge 4 -and $lead[3] -cmatch $modelPattern) { $launch.Env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $lead[3] }
+    if ($lead.Length -ge 5 -and $lead[4] -cmatch $modelPattern) { $launch.Env.CLAUDE_CODE_SUBAGENT_MODEL = $lead[4] }
+    return $launch
+}
+
 # Claude Code reports each turn through the hooks main wrote for this terminal (hook-channel.cjs), passed with --settings,
 # which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
 # carry them. A proxy set in this terminal since it started falls back too, and main is told why.
@@ -212,17 +232,9 @@ function global:claude {
         return
     }
     $hooks = $global:AgentrixSession.hooks
-    $launchSettings = $hooks.settings
-    $leadArgs = @()
-    if ($conversation -and $env:AGENTRIX_BOOTSTRAP) {
-        $lead = $null
-        try { $lead = [IO.File]::ReadAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', [Text.Encoding]::UTF8) } catch { }
-        if ($lead.Length -eq 3 -and $lead[0] -cmatch '^[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}$' -and
-            $lead[1] -cmatch '^[a-z][a-z0-9-]{0,31}$' -and $lead[2] -cmatch '^[01]$') {
-            $leadArgs = @('--model', $lead[0], '--effort', $lead[1])
-            if ($lead[2] -eq '1' -and $hooks.fastSettings) { $launchSettings = $hooks.fastSettings }
-        }
-    }
+    $launch = Get-AgentrixClaudeLaunch $conversation $hooks
+    $launchSettings = $launch.HookSettings
+    $leadArgs = $launch.LeadArgs
     $settings = $launchSettings.fallback
     if ($hooks.channel -eq 'http') {
         $proxy = Get-AgentrixHookProxy $hooks.port
@@ -247,7 +259,7 @@ function global:claude {
         [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
         $settingsArgs = @('--settings', $settingsFile)
     }
-    $planner = Set-AgentrixPlanner
+    $planner = Set-AgentrixPlanner $launch.Env
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
         try { & $global:AgentrixClaudeCommand @settingsArgs @readingNote @leadArgs @args }
         finally {
