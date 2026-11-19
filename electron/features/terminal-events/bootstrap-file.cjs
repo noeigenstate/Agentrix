@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { Buffer } = require('node:buffer');
 const { randomUUID } = require('node:crypto');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
 const { validModel, EFFORT, operationEnv, BACKGROUND_MODEL_ENV, SUBAGENT_MODEL_ENV } = require('../skills/seat-rules.mjs');
@@ -21,7 +22,9 @@ function updateBootstrapLead(file, lead) {
 
 function updateDispatchSeats(file, seats) {
   const snapshot = JSON.stringify(seats ?? null);
-  writeFileAtomic(file + '.seats', Buffer.byteLength(snapshot) <= 8192 ? snapshot : 'null');
+  const bounded = Buffer.byteLength(snapshot) <= 8192 ? snapshot : 'null';
+  writeFileAtomic(file + '.seats', bounded);
+  return bounded;
 }
 
 function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, dispatchSeats, ...terminal }) {
@@ -37,8 +40,11 @@ function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey,
     shims, nodePath: process.execPath, claudeEnvFile: copy, ...terminal }), { mode: 0o600 });
   if (lead !== undefined) updateBootstrapLead(file, lead);
   else fs.rmSync(file + '.lead', { force: true });
-  if (dispatchSeats !== undefined) updateDispatchSeats(file, dispatchSeats);
-  else fs.rmSync(file + '.seats', { force: true });
+  // Seat defaults are optional. A failed write should not leave an older launch's snapshot in use.
+  if (dispatchSeats !== undefined) {
+    try { return updateDispatchSeats(file, dispatchSeats); } catch {}
+  }
+  try { fs.rmSync(file + '.seats', { force: true }); } catch {}
 }
 
 // Removes a session's bootstrap file and the files written with it.

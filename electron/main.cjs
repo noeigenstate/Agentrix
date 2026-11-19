@@ -1121,7 +1121,7 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   // The outbox is beside this file and outlives a host process restart.
   const bootstrapFile = path.join(runtimeDir, `${id}.json`);
   const delivery = library?.delivery?.(project, false, sessionId, { agent, started: true });
-  writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability,
+  const dispatchSnapshot = writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability,
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, ...(agent === 'codex' && { dispatchSeats: delivery?.agentSeats ?? null }) });
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
@@ -1129,7 +1129,7 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   if (agent === 'claude' && runOptions.model === 'haiku' && delivery?.operations?.pinnedHaiku) runOptions.model = delivery.operations.pinnedHaiku;
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
     sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, operations: delivery?.operations?.[agent], seatsMap: delivery?.agentSeats, providerSessionId };
-  env.AGENTRIX_SEATS = JSON.stringify(spec.seatsMap ?? null);
+  env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
