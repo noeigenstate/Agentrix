@@ -88,16 +88,6 @@ async function checkPaneFit(pane) {
     const fixture = live.cloneNode(true);
     const titleHeight = document.querySelector('.titlebar')?.getBoundingClientRect().height ?? 0;
     Object.assign(fixture.style, { position: 'fixed', width: '340px', top: `${titleHeight}px`, bottom: 'auto', visibility: 'hidden' });
-    const tasks = fixture.querySelector('.activity-main-tasks');
-    tasks.removeAttribute('data-expanded');
-    const row = tasks.querySelector('li');
-    while (tasks.children.length < 4) tasks.append(row.cloneNode(true));
-    if (!tasks.querySelector('.activity-task-fold')) {
-      const fold = document.createElement('li');
-      fold.className = 'activity-task-fold';
-      fold.innerHTML = '<button type="button" aria-expanded="false">还有 3 条</button>';
-      tasks.append(fold);
-    }
     const [, codex] = fixture.querySelectorAll('.api-agent');
     const codexMetrics = document.createElement('div');
     codexMetrics.className = 'activity-metrics';
@@ -108,16 +98,58 @@ async function checkPaneFit(pane) {
     fixture.setAttribute('aria-hidden', 'true');
     document.body.append(fixture);
     try {
-      for (const height of [900, 800]) {
+      for (const height of [1000, 900, 800]) {
         fixture.style.height = `${height - titleHeight}px`;
         problems.push(...inspect(fixture, `340×${height - titleHeight}`));
         const rows = getComputedStyle(fixture.querySelector('.activity-routing-rows')).gridTemplateColumns.split(' ');
-        if (rows.length !== (height === 900 ? 1 : 2)) problems.push(`${height}px window has ${rows.length} routing columns`);
+        if (rows.length !== (height === 800 ? 2 : 1)) problems.push(`${height}px window has ${rows.length} routing columns`);
       }
     } finally { fixture.remove(); }
     return problems;
   });
-  assert.deepEqual(failures, [], 'the folded pane and the full 340px fixture fit without scrolling or overlap');
+  assert.deepEqual(failures, [], 'the live pane and the full 340px fixture fit without scrolling or overlap');
+}
+
+async function openAgentTab(page) {
+  const sidebar = page.locator('.focus-sidebar');
+  await sidebar.getByRole('button', { name: 'Agent', exact: true }).click();
+  const main = sidebar.locator('.explorer-agent').getByRole('region', { name: '主模型', exact: true });
+  await main.waitFor();
+  return main;
+}
+
+async function checkPaneWindowSizes(pane) {
+  const initialSize = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getContentSize());
+  const resize = async size => {
+    await application.evaluate(({ BrowserWindow }, [width, height]) => BrowserWindow.getAllWindows()[0].setContentSize(width, height), size);
+    await page.waitForFunction(([width, height]) => innerWidth === width && innerHeight === height, size);
+  };
+  try {
+    for (const size of [[1600, 1000], [1280, 800]]) {
+      await resize(size);
+      await checkPaneFit(pane);
+    }
+  } finally {
+    await resize(initialSize);
+  }
+}
+
+async function checkRoutingKey(page, key) {
+  await page.mouse.move(0, 0);
+  assert.deepEqual(await key.evaluate(node => {
+    const style = getComputedStyle(node);
+    return [style.backgroundColor, style.backgroundImage, style.borderTopWidth, style.boxShadow];
+  }), ['rgba(0, 0, 0, 0)', 'none', '0px', 'none'], 'the routing section has a flat resting surface');
+  const seats = page.locator('.seats-dialog');
+  await key.click();
+  await seats.waitFor();
+  await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached' });
+  await page.keyboard.press('Tab');
+  await key.focus();
+  assert.ok(await key.evaluate(node => node.matches(':focus-visible') && getComputedStyle(node).outlineWidth === '2px'));
+  await page.keyboard.press('Enter');
+  await seats.waitFor();
+  await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached' });
 }
 
 async function launch() {
@@ -160,18 +192,19 @@ try {
     + step('call-2', 'Edit', { file_path: path.join(project.path, 'src', 'login.ts'), old_string: 'a', new_string: 'b' }));
   await waitFor(async () => (await state()).action?.kind === 'edit' && (await state()).action.target === 'src/login.ts', 'file edit is reported');
   assert.equal((await page.evaluate(id => window.agentrix.terminalActions(id), project.id)).value.length, 2, 'both steps are listed for the review card');
-  // Expanded, the pane beside the terminal shows the prompts being worked on, then the model's route, the context it
-  // fills and what it has used, as Claude Code's records give them.
+  // The Agent tab shows the lead's prompts and the Activity pane shows routing and usage.
   await page.getByRole('button', { name: '进入 Parent task status', exact: true }).click();
   const pane = page.locator('.activity-pane'); await pane.waitFor();
-  const overview = pane.locator('.activity-main-tasks'); await overview.waitFor();
+  const main = await openAgentTab(page);
+  const overview = main.locator('.activity-main-tasks'); await overview.waitFor();
+  assert.equal(await pane.locator('.activity-main').count(), 0);
   assert.equal(await pane.locator('.api-agent .activity-figure').count(), 0, 'no context before Claude Code counts one');
   // One reply's count: what it read (new, written to the cache, read from the cache) and what it wrote.
   const used = (fresh, cached, output) => ({ input_tokens: fresh, cache_creation_input_tokens: 0, cache_read_input_tokens: cached, output_tokens: output });
   await fs.appendFile(transcript, replied([{ type: 'text', text: '先看登录页。' }], used(30000, 290000, 4200)));
   const text = selector => pane.locator(selector).evaluateAll(nodes => nodes.map(node => node.textContent.replace(/\s+/g, ' ').trim()));
-  await waitFor(async () => (await text('.activity-main .activity-call-head p')).join() === 'Opus 5.5', 'the main model section names the model (the mark stands for the official service)');
-  assert.equal(await pane.locator('.activity-main .activity-call-note').count(), 0);
+  await waitFor(async () => await main.locator('.activity-call-head p').innerText() === 'Opus 5.5', 'the main model section names the model');
+  assert.equal(await main.locator('.activity-call-note').count(), 0);
   await waitFor(async () => (await text('.api-agent .activity-figure > small')).join() === '共 1M tokens · 还可容纳 676k', 'the context shows how full the window is');
   assert.deepEqual(await text('.api-agent .activity-figure > .activity-metric-label'), ['上下文长度'], 'the context title is the label of its meter line');
   assert.deepEqual(await text('.api-agent .activity-figure > b'), ['32%']);
@@ -196,9 +229,9 @@ try {
   // The overview lists the prompts: the one being worked on, then one sent while it works. The card's size is fixed:
   // more prompts never move the main model card.
   // Measured once the panel has finished opening: while it flies in it is still scaled a little, every top a pixel off.
-  const routeTop = () => pane.locator('.activity-main').evaluate(node => Math.round(node.getBoundingClientRect().top));
+  const mainTop = () => main.evaluate(node => Math.round(node.getBoundingClientRect().top));
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
-  const before = await routeTop();
+  const before = await mainTop();
   await input('给登录页加上验证码。然后跑一下测试\r');
   const prompts = () => overview.locator('li.is-working, li.is-queued').evaluateAll(items => items.map(item => `${item.classList.contains('is-working') ? 'working' : 'queued'}:${item.querySelector('p').lastChild.textContent}`));
   // Each prompt shows its first sentence; the hover retains the whole text before its state and clock.
@@ -208,7 +241,7 @@ try {
   assert.match(queuedTitle.slice(queuedTitle.lastIndexOf('\n') + 1), /^排队中 · \d+:\d{2}(?::\d{2})?$/);
   assert.equal(await overview.locator('.activity-progress').count(), 0, 'task rows show state without an invented progress bar');
   assert.equal(await overview.locator('li.is-working .activity-call-role').innerText(), '处理中');
-  assert.equal(await routeTop(), before, 'a second prompt leaves the main model card where it was');
+  assert.equal(await mainTop(), before, 'a second prompt leaves the main model group where it was');
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]')); await page.screenshot({ path: path.join(output, 'activity-pane.png') });
   // While the agent runs, its conversation shows as a document by default; the title-bar switch shows the terminal.
   const reading = page.locator('.project-panel .reading-view');
@@ -244,11 +277,8 @@ try {
   const key = pane.locator('.activity-routing-key');
   await key.waitFor();
   assert.equal(await key.locator('.activity-routing-row').count(), 10, 'the routing key lists all team seats');
-  await key.click();
-  const seats = page.locator('.seats-dialog');
-  await seats.waitFor();
-  await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached' });
-  await checkPaneFit(pane);
+  await checkRoutingKey(page, key);
+  await checkPaneWindowSizes(pane);
   await page.getByRole('button', { name: '隐藏活动栏', exact: true }).click(); await waitFor(async () => !await pane.count(), 'activity pane can be hidden');
   await page.getByRole('button', { name: '显示活动栏：它正在做什么', exact: true }).click(); await pane.waitFor();
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
@@ -355,12 +385,13 @@ try {
     await input('fold queued ' + n + '\r');
     await waitFor(async () => (await state()).terminals[0].prompts.some(item => item.state === 'queued' && item.text === 'fold queued ' + n), 'the fold fixture records the queued prompt');
   }
-  const folded = page.locator('.activity-main-tasks');
+  const folded = (await openAgentTab(page)).locator('.activity-main-tasks');
   const fold = folded.locator('.activity-task-fold button');
   await fold.waitFor();
   assert.equal(await fold.innerText(), '还有 2 条');
   assert.equal(await fold.getAttribute('aria-expanded'), 'false');
   assert.deepEqual(await folded.locator('.is-queued p').evaluateAll(rows => rows.map(row => row.lastChild.textContent)), ['fold queued 5', 'fold queued 4', 'fold queued 3']);
+  assert.ok(await folded.evaluate(node => node.scrollHeight === node.clientHeight), 'the folded prompt list fits without scrolling');
   await fold.click();
   assert.equal(await fold.getAttribute('aria-expanded'), 'true');
   assert.equal(await folded.locator('.is-queued').count(), 5);

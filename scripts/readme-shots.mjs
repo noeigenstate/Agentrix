@@ -252,10 +252,13 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
     const modes = page.locator('.titlebar-tools').getByRole('group', { name: '显示方式', exact: true });
     assert.deepEqual(await modes.locator('button span').allTextContents(), ['终端', '阅读']);
     assert.equal(await modes.getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).getAttribute('aria-pressed'), 'true');
-    await activity.getByRole('region', { name: '主模型', exact: true }).waitFor();
-    await waitFor(() => activity.locator('.activity-main').innerText().then(text => text.includes('GPT-6.1-Sol') && !text.includes('OpenAI')), 'Codex main model');
-    await activity.locator('.activity-main-tasks li.is-working').waitFor();
-    assert.ok((await activity.locator('.activity-main-tasks').innerText()).includes('结算页接入优惠券'));
+    const sidebar = page.locator('.focus-sidebar');
+    await sidebar.getByRole('button', { name: 'Agent', exact: true }).click();
+    const mainModel = sidebar.getByRole('region', { name: '主模型', exact: true });
+    await mainModel.waitFor();
+    await waitFor(() => mainModel.innerText().then(text => text.includes('GPT-6.1-Sol') && !text.includes('OpenAI')), 'Codex main model');
+    await mainModel.locator('.activity-main-tasks li.is-working').waitFor();
+    assert.ok((await mainModel.locator('.activity-main-tasks').innerText()).includes('结算页接入优惠券'));
     await waitFor(() => activity.locator('.activity-limit > b').allTextContents().then(values => values.join() === '23%,41%'), '5-hour and weekly limits from token_count');
     assert.deepEqual(await activity.locator('.activity-limit > .activity-metric-label').allTextContents(), ['5 小时额度', '每周额度']);
     assert.deepEqual(await activity.locator('.activity-tokens > .activity-metric-label').allTextContents(), ['本轮', '本次对话']);

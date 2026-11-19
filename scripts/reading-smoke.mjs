@@ -309,7 +309,16 @@ try {
   await write(hook('stop', { session_id: 's1' })); await renderIdle('repeated Stop');
   // Writing the next fixture command acknowledges unread completion; the accepted completion timestamp must stay put.
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].lastCompletedAt, completedAt, 'repeated Stop cannot rearm completion');
-  assert.equal(await pane.locator('.activity-main-tasks .is-working').count(), 0);
+  await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
+  await terminal.locator('.terminal-split-body').click({ position: { x: 8, y: 8 } });
+  const sidebar = page.locator('.focus-sidebar');
+  await sidebar.getByRole('button', { name: 'Agent', exact: true }).click();
+  const leadTasks = sidebar.getByRole('region', { name: '主模型', exact: true }).locator('.activity-main-tasks');
+  await leadTasks.waitFor();
+  assert.equal(await leadTasks.locator('.is-working').count(), 0);
+  await page.getByRole('button', { name: '返回总览', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   checks.push('host CLI revisions reach both views; Stop and background progress never rearm completion');
   await composer.fill('/'); await palette.waitFor(); await resetWrites(); await composer.press('Escape');
   await waitFor(async () => await composer.getAttribute('aria-expanded') === 'false', 'palette Escape closes the list');

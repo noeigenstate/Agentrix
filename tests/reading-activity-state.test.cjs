@@ -27,7 +27,11 @@ function compile(basename, frame) {
   mod._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
   return mod.exports;
 }
-const activity = (terminal, frame) => renderToStaticMarkup(React.createElement(compile('ActivityPane.tsx', frame).ActivityPane, { terminal }));
+function activity(terminal, frame) {
+  const { MainModel, useMainTurn } = compile('MainModel.tsx', frame);
+  const Main = () => React.createElement(MainModel, { turn: useMainTurn(terminal) });
+  return renderToStaticMarkup(React.createElement(Main));
+}
 
 test('the activity monitor and reading view agree on host waiting, fresh input and fresh work', () => {
   const terminal = { id: 't', sessionId: 'pty', agent: 'claude', codexActive: true, codexActivity: 'working',
