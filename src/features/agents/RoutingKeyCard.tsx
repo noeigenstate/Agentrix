@@ -3,31 +3,7 @@ import { CaretRight, Lightning } from '@phosphor-icons/react';
 import type { SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { openSeats, routingRoleName, routingModelName } from '../../shared/routing-command.ts';
-import { editableOperation, operationLabel, operationName } from './OperationRows';
-import { displayedSeat, operationDiff, seatSettingText } from './skill-seats';
-
-const SUMMARY_NAMES = { background: '后台小任务', subagent: '子代理', review: '审查' } as const;
-
-function OperationSummary({ operations }: { operations: NonNullable<SeatsInfo['operations']> }) {
-  const values = operations.current?.values ?? operations.effective;
-  const changes = operationDiff(values, operations.defaults);
-  const { pending } = operations;
-  const rows = operations.rows.filter(editableOperation).filter(row => changes[row.id] !== undefined || pending.includes(row.id));
-  const title = t('操作模型');
-  const names = rows.map(row => row.id in SUMMARY_NAMES ? t(SUMMARY_NAMES[row.id as keyof typeof SUMMARY_NAMES]) : operationName(row));
-  const details = rows.map(row => {
-    const nextLaunch = pending.includes(row.id);
-    const value = nextLaunch ? operations.effective[row.id] : values[row.id];
-    const label = operationLabel(row, value, routingModelName);
-    return [operationName(row), label, value !== 'follow' && value?.effort, nextLaunch && t('下次启动生效')].filter(Boolean).join(' · ');
-  });
-  return <span className="activity-routing-operations" title={[title, ...details].join('\n')}>
-    <span className="activity-routing-operation-names">
-      {names.length ? <strong>{names.join(' · ')}</strong> : <>{title} · <strong>{t('默认')}</strong></>}
-    </span>
-    {pending.length > 0 && <span className="activity-routing-operation-pending">{t('下次启动生效')}</span>}
-  </span>;
-}
+import { displayedSeat, seatSettingText } from './skill-seats';
 
 export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId?: string; terminalId: string; sessionId: string | null }) {
   const [info, setInfo] = useState<SeatsInfo | null>(null);
@@ -95,6 +71,5 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
         {leadRestart && <span className="activity-routing-restart">{leadRestart}</span>}
       </span>;
     })}</span>
-    {info.operations && <OperationSummary operations={info.operations} />}
   </button>;
 }
