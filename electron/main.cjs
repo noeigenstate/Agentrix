@@ -1127,9 +1127,9 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
   const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
   if (project.kind === 'ssh') {
-    const delivery = library?.delivery?.(project, true, sessionId, { agent, started: true });
+    library?.delivery?.(project, true, sessionId, { agent, started: true });
     const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
-      sessionId, sessionKey, cwd, env: {}, ...runOptions, operations: delivery?.operations?.codex, providerSessionId };
+      sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
     nativeSpecs.set(id, spec); return spec;
   }
   // The outbox is beside this file and outlives a host process restart.
@@ -1140,11 +1140,9 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery, path.join(integrationDir, 'dispatch.cjs'));
-  if (agent === 'claude' && runOptions.model === 'haiku' && delivery?.operations?.pinnedHaiku) runOptions.model = delivery.operations.pinnedHaiku;
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
-    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, operations: delivery?.operations?.[agent], seatsMap: delivery?.agentSeats, providerSessionId };
+    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId };
   env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
-  if (agent === 'claude' && library?.liveLookup) spec.liveLookup = () => library.liveLookup(project.id);
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
@@ -1197,11 +1195,9 @@ function structuredEvent(id, event) {
     else s.reportedThreadId = event.providerSessionId;
   }
   if (event.type === 'routing.updated') {
-    const { observed, effective, operations } = event.payload;
+    const { observed, effective } = event.payload;
     if (typeof observed?.model === 'string') s.nativeObservedModel = observed.model;
     s.agentSettings = Object.fromEntries(['model', 'effort', 'fast'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
-    if (operations && typeof skills !== 'undefined'
-      && skills?.noteOperationResult?.(project.id, s.skillSessionId || spec.sessionId, spec.agent, operations)) skills.publish(false);
   }
   if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
     const clientId = event.payload.content.clientMessageId || event.itemId;
@@ -1239,8 +1235,7 @@ async function initializeNativeSessions() {
   const { createDispatchControl } = await import('./features/agents/dispatch-control.cjs');
   const { locateTeam } = require('./features/team/team-locate.cjs');
   const { resolveRegistration } = require('./features/agents/dispatch-registration.cjs');
-  const operations = (projectId, sessionId) => typeof skills === 'undefined' ? null : skills?.operationLevers?.(projectId, sessionId);
-  dispatchControl = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions, store, locateTeam, operations }, registration) });
+  dispatchControl = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions, store, locateTeam }, registration) });
   ({ address: controlAddress } = await dispatchControl.listen());
   const directory = path.join(app.getPath('userData'), 'native-session');
   claudeRuntime = createClaudeRuntime({ directory, safeStorage: require('electron').safeStorage,
@@ -1322,9 +1317,8 @@ function wireNativeSessions(directory, codex, codexFactory) {
       const project = findProject(spec.terminalId), previous = spec.skillSessionId || spec.sessionId, skillSessionId = randomUUID();
       const lead = skills.leadOptions(project.id, spec.agent);
       const delivery = skills.delivery(project, project.kind === 'ssh', skillSessionId, { agent: spec.agent, started: true });
-      const levers = delivery?.operations, model = lead?.model === 'haiku' && levers?.pinnedHaiku ? levers.pinnedHaiku : lead?.model ?? null;
-      Object.assign(spec, { skillSessionId, model, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
-        operations: levers?.[spec.agent], seatsMap: delivery?.agentSeats,
+      Object.assign(spec, { skillSessionId, model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
+        seatsMap: delivery?.agentSeats,
         env: { ...spec.env, AGENTRIX_SEATS: JSON.stringify(delivery?.agentSeats ?? null) } });
       if (spec.agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
       if (spec.agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: spec.terminalId }, binding);
@@ -1377,7 +1371,6 @@ function wireNativeSessions(directory, codex, codexFactory) {
       const s = sessions.get(spec.terminalId); if (s) { s.nativePathReason = reason; s.nativeRuntimeSessionId = spec.runtimeSessionId; }
     } });
   registerClaudeWorker({ control: dispatchControl, claude: claudeRuntime, settings: nativeSessions.getSettings, terminals: workerTerminals,
-    operations: run => run.claudeOperationEnv && { env: run.claudeOperationEnv },
     env: () => claudeBackgroundEnvironment(withoutAppImage(process.env), store.settings?.claudeBackgroundTasks) });
 }
 
@@ -1883,7 +1876,6 @@ if (!app.requestSingleInstanceLock()) {
         const session = sessions.get(id), spec = nativeSpecs.get(id);
         return session && session.status !== 'exited' && session.codexActive
           ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId,
-            nativeClaude: session.nativeStructured && session.agent === 'claude',
             appliedRouting: (session.remoteConnection || session.terminal)?.appliedRouting } : null;
       },
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),

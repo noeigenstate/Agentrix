@@ -167,7 +167,7 @@ test('terminal launch snapshots drive the command hook without reading profile s
   const file = path.join(directory, 'fixture.json');
   const launch = { model: 'opus', effort: 'medium', seatsMap: seats };
   updateBootstrapLead(file, launch);
-  const launchSeats = fs.readFileSync(file + '.lead', 'utf8').split('\n')[5];
+  const launchSeats = fs.readFileSync(file + '.lead', 'utf8').split('\n')[3];
   updateBootstrapLead(file, { ...launch, seatsMap: { designer: { model: 'haiku', effort: 'low' } } });
   assert.deepEqual(seatRouting(JSON.stringify(hook()), launchSeats), {
     output: expected, observed: { toolUseId: 'toolu_1', model: 'sonnet', effort: 'high', sessionId: 'fixture', phase: 'pre',
@@ -216,20 +216,6 @@ test('a running terminal and SDK query read new seats and fall back on malformed
   await check({});
   fs.unlinkSync(sidecar);
   await check(expected);
-});
-
-test('an existing native lookup definition applies a compatible operation change on its next call', async t => {
-  const abort = new AbortController();
-  t.after(() => abort.abort());
-  let choice = { configuredModel: 'haiku', model: 'haiku', effort: 'high' };
-  const { hooks } = queryOptions({ owner: 'gui', cwd: process.cwd(), env: {}, liveLookup: () => choice },
-    { key: 'synthetic', abort, policy: deferred });
-  const lookup = { description: 'List files', subagent_type: 'agentrix-lookup' }, pre = hooks.PreToolUse[0].hooks[0];
-  assert.deepEqual(await pre(hook(lookup)), {});
-  choice = { configuredModel: 'sonnet', model: 'sonnet', effort: 'medium' };
-  assert.deepEqual((await pre(hook(lookup))).hookSpecificOutput.updatedInput, { ...lookup, model: 'sonnet', effort: 'medium' });
-  choice = null;
-  assert.deepEqual(await pre(hook(lookup)), {});
 });
 
 test('Codex dispatch resolves its seat before admission through the private bootstrap snapshot', t => {

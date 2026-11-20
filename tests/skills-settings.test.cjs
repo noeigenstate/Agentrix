@@ -112,8 +112,12 @@ function mount(t, skills, { details = {}, failure = null, language = 'zh' } = {}
 }
 
 const now = Date.now();
-const routingSummary = '谁来做什么：Opus 规划与审查架构，GPT-6.1-Sol 写核心代码并调试，Sonnet 做日常与前端并验收界面、处理小任务。GPT 默认 max + fast，Claude 默认 high；只装了一个 Agent 时也有对应分工。';
-const builtinRouting = over => skill({ id: 'builtin:model-routing', name: 'model-routing', description: 'Who does what on a task, in English, seven lines long.', title: '模型路由', summary: routingSummary, source: 'builtin', scope: 'builtin', trigger: 'auto', autoOptimize: false, requires: { codex: true, claude: true }, ...over });
+const builtinSummary = '一份代码规范，用于审查架构和更改代码。';
+const builtin = over => skill({
+  id: 'builtin:code-standard', name: 'code-standard', description: 'A procedure for work, in English, seven lines long.',
+  title: '代码规范', summary: builtinSummary, source: 'builtin', scope: 'builtin', trigger: 'auto', autoOptimize: false,
+  requires: { codex: true, claude: true }, ...over,
+});
 function skill(over = {}) {
   const named = { name: '发布流程', description: '发布新版本', ...over };
   return { id: 'user:release', title: named.name, summary: named.description, when: '描述与任务匹配时读取', extends: null, replaced: [], source: 'user', scope: 'global', projectId: null, projectName: null, path: '', enabled: true, trigger: 'auto',
@@ -127,33 +131,33 @@ const fresh = skill({ id: 'user:ssh', name: 'SSH 排错', description: '连不�
 const copy = skill({ id: 'user:copy', name: '页面文案', scope: 'project', projectId: 'p2', projectName: 'demo-site' });
 
 test('the list has the two groups with counts, the 新 mark and no search below eight skills', async t => {
-  const h = mount(t, [builtinRouting(), release, copy, fresh], { details: { 'user:release': releaseV4 } });
+  const h = mount(t, [builtin(), release, copy, fresh], { details: { 'user:release': releaseV4 } });
   await h.settle();
-  assert.deepEqual(h.items(), ['模型路由', '发布流程', '页面文案', 'SSH 排错新']);
+  assert.deepEqual(h.items(), ['代码规范', '发布流程', '页面文案', 'SSH 排错新']);
   assert.deepEqual(h.all(node => node.props['data-group']).map(node => h.text(node)), ['系统自带1', '我的技能3']);
   assert.equal(h.all(node => node.type === 'input' && node.props['aria-label'] === '搜索技能').length, 0);
-  assert.equal(h.one(node => node.props['data-skill-id'] && node.props['aria-current'] === 'true').props['data-skill-id'], 'builtin:model-routing');
+  assert.equal(h.one(node => node.props['data-skill-id'] && node.props['aria-current'] === 'true').props['data-skill-id'], 'builtin:code-standard');
   h.byLabel('导入文件夹'); h.byLabel('新建技能');
 });
 
 test('eight or more skills show a search that filters both groups', async t => {
   const many = Array.from({ length: 6 }, (_, at) => skill({ id: `user:n${at}`, name: `技能 ${at}`, description: `第 ${at} 个` }));
-  const h = mount(t, [builtinRouting(), release, ...many]);
+  const h = mount(t, [builtin(), release, ...many]);
   await h.settle();
   const search = h.byLabel('搜索技能');
   search.props.onChange({ target: { value: '发布' } });
   await h.settle();
   assert.deepEqual(h.items(), ['发布流程']);
-  search.props.onChange({ target: { value: '路由' } });
+  search.props.onChange({ target: { value: '规范' } });
   await h.settle();
-  assert.deepEqual(h.items(), ['模型路由']);
+  assert.deepEqual(h.items(), ['代码规范']);
   search.props.onChange({ target: { value: '没有这个' } });
   await h.settle();
   assert.deepEqual(h.items(), []); assert.ok(h.page().includes('无匹配'));
 });
 
 test('a built-in skill is read-only: no edit or delete, a trigger, its dependency and an unused note', async t => {
-  const h = mount(t, [builtinRouting({ requires: { codex: false, claude: true } }), release]);
+  const h = mount(t, [builtin({ requires: { codex: false, claude: true } }), release]);
   await h.settle();
   assert.equal(h.hasButton('编辑'), false); assert.equal(h.hasButton('删除'), false);
   assert.equal(h.all(node => node.props.label === '范围').length, 0);
@@ -163,18 +167,18 @@ test('a built-in skill is read-only: no edit or delete, a trigger, its dependenc
   assert.ok(h.page().includes('已安装 Claude Code，按只装 Claude Code 的方案分工'));
   assert.equal(h.text(h.one(node => node.props['data-skill-used'])), '还没有 Agent 用过');
   assert.equal(h.one(node => node.props['data-skill-used']).props.className, 'is-quiet');
-  assert.equal(h.items()[0], '模型路由');
+  assert.equal(h.items()[0], '代码规范');
   assert.equal(h.nodes().some(node => node.props.className?.includes('skills-dot is-hollow')), false);
 });
 
 test('a built-in skill needing no agents shows no dependency', async t => {
-  const h = mount(t, [builtinRouting(), release]);
+  const h = mount(t, [builtin(), release]);
   await h.settle();
-  h.state.skills = [builtinRouting({ requires: null }), release];
+  h.state.skills = [builtin({ requires: null }), release];
   h.listeners[0](h.state.skills);
   await h.settle();
   assert.equal(h.page().includes('依赖'), false);
-  h.state.skills = [builtinRouting({ requires: { codex: null, claude: null } }), release];
+  h.state.skills = [builtin({ requires: { codex: null, claude: null } }), release];
   h.listeners[0](h.state.skills);
   await h.settle();
   assert.equal(h.page().includes('依赖'), false);
@@ -188,10 +192,10 @@ for (const language of ['zh', 'en']) test(`model routing shows the requirement a
     { requires: { codex: false, claude: false }, hollow: true, zh: '都未安装，技能暂不生效', en: 'Neither is installed; this skill is inactive' },
     { requires: { codex: true, claude: true }, enabled: false, hollow: true, zh: '已关闭', en: 'Off' },
   ];
-  const h = mount(t, [builtinRouting(), release], { language });
+  const h = mount(t, [builtin(), release], { language });
   await h.settle();
   for (const item of cases) {
-    h.state.skills = [builtinRouting({ requires: item.requires, enabled: item.enabled ?? true }), release];
+    h.state.skills = [builtin({ requires: item.requires, enabled: item.enabled ?? true }), release];
     h.listeners[0](h.state.skills);
     await h.settle();
     const row = h.one(node => node.props.className === 'skills-dependency');
@@ -205,17 +209,17 @@ for (const language of ['zh', 'en']) test(`model routing shows the requirement a
 });
 
 test('a dependency on a single agent keeps its original fallback', async t => {
-  const h = mount(t, [builtinRouting({ requires: { codex: true, claude: null } }), release]);
+  const h = mount(t, [builtin({ requires: { codex: true, claude: null } }), release]);
   await h.settle();
   assert.equal(h.text(h.one(node => node.props.className === 'skills-dependency')), 'Codex 已安装');
-  h.state.skills = [builtinRouting({ requires: { codex: false, claude: null } }), release];
+  h.state.skills = [builtin({ requires: { codex: false, claude: null } }), release];
   h.listeners[0](h.state.skills);
   await h.settle();
   assert.equal(h.text(h.one(node => node.props.className === 'skills-dependency')), 'Codex 未安装 · 将由主模型自己完成');
 });
 
 test('the last use shows as today\'s clock time with project and agent', async t => {
-  const h = mount(t, [builtinRouting(), release, copy], { details: { 'user:release': releaseV4 } });
+  const h = mount(t, [builtin(), release, copy], { details: { 'user:release': releaseV4 } });
   await h.settle();
   h.items(); h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick();
   await h.settle();
@@ -226,7 +230,7 @@ test('the last use shows as today\'s clock time with project and agent', async t
 });
 
 test('a user skill shows its version line and a 变更 tab with the line diff of the latest two versions', async t => {
-  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': releaseV4 } });
+  const h = mount(t, [builtin(), release], { details: { 'user:release': releaseV4 } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick();
   await h.settle();
@@ -245,12 +249,12 @@ test('a user skill shows its version line and a 变更 tab with the line diff of
 });
 
 test('a built-in skill has no 变更 tab, even with several versions or after a user skill left the diff open', async t => {
-  const h = mount(t, [builtinRouting({ version: 3 }), release], { details: { 'user:release': releaseV4, 'builtin:model-routing': releaseV4 } });
+  const h = mount(t, [builtin({ version: 3 }), release], { details: { 'user:release': releaseV4, 'builtin:code-standard': releaseV4 } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   h.button('变更').props.onClick(); await h.settle();
   assert.ok(h.all(node => node.props['data-diff']).length > 0);
-  h.all(node => node.props['data-skill-id'] === 'builtin:model-routing')[0].props.onClick(); await h.settle();
+  h.all(node => node.props['data-skill-id'] === 'builtin:code-standard')[0].props.onClick(); await h.settle();
   assert.equal(h.hasButton('变更'), false);
   assert.equal(h.all(node => node.props['data-skill-changes']).length, 0);
   assert.equal(h.all(node => node.props['data-diff']).length, 0);
@@ -258,7 +262,7 @@ test('a built-in skill has no 变更 tab, even with several versions or after a 
 });
 
 test('each control makes its one call', async t => {
-  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': releaseV4 } });
+  const h = mount(t, [builtin(), release], { details: { 'user:release': releaseV4 } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick();
   await h.settle(); h.clear();
@@ -275,20 +279,20 @@ test('each control makes its one call', async t => {
     ['save', 'user:release', { name: '发布流程', description: '发布新版本', scope: 'project', projectId: 'p2', text: releaseV4.text }],
   ]);
   assert.equal(h.byLabel('需要我确认后再生效').props.disabled, false);
-  h.state.skills = [builtinRouting(), { ...release, autoOptimize: false }]; h.listeners[0](h.state.skills); await h.settle();
+  h.state.skills = [builtin(), { ...release, autoOptimize: false }]; h.listeners[0](h.state.skills); await h.settle();
   assert.equal(h.byLabel('需要我确认后再生效').props.disabled, true);
 });
 
 test('the trigger and the on switch of a built-in skill call setSkillOptions', async t => {
-  const h = mount(t, [builtinRouting(), release]);
+  const h = mount(t, [builtin(), release]);
   await h.settle(); h.clear();
   h.byLabel('触发').props.onChange('auto'); await h.settle();
-  h.byLabel('启用 模型路由').props.onChange({ target: { checked: false } }); await h.settle();
-  assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:model-routing', { trigger: 'auto' }], ['options', 'builtin:model-routing', { enabled: false }]]);
+  h.byLabel('启用 代码规范').props.onChange({ target: { checked: false } }); await h.settle();
+  assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:code-standard', { trigger: 'auto' }], ['options', 'builtin:code-standard', { enabled: false }]]);
 });
 
 test('a skill an agent made carries 新 and is kept with 确认保留', async t => {
-  const h = mount(t, [builtinRouting(), fresh]);
+  const h = mount(t, [builtin(), fresh]);
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:ssh')[0].props.onClick(); await h.settle(); h.clear();
   assert.ok(h.page().includes('新 · 由 Agent 创建'));
@@ -298,7 +302,7 @@ test('a skill an agent made carries 新 and is kept with 确认保留', async t 
 
 test('a proposed change shows its row and 查看 / 采用 / 放弃 work', async t => {
   const proposed = { ...releaseV4, pending: `${releaseV4.text}\n4. 打标签` };
-  const h = mount(t, [builtinRouting(), { ...release, pending: true }], { details: { 'user:release': proposed } });
+  const h = mount(t, [builtin(), { ...release, pending: true }], { details: { 'user:release': proposed } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle(); h.clear();
   assert.ok(h.page().includes('Agent 提议了修改'));
@@ -311,7 +315,7 @@ test('a proposed change shows its row and 查看 / 采用 / 放弃 work', async 
 });
 
 test('editing saves the form, cancelling drops it, and delete needs a second click', async t => {
-  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': releaseV4 } });
+  const h = mount(t, [builtin(), release], { details: { 'user:release': releaseV4 } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   h.one(node => node.props['data-skill-edit']).props.onClick(); await h.settle();
@@ -333,7 +337,7 @@ test('editing saves the form, cancelling drops it, and delete needs a second cli
 });
 
 test('a new skill is created from the form, and an empty form cannot be saved', async t => {
-  const h = mount(t, [builtinRouting()]);
+  const h = mount(t, [builtin()]);
   await h.settle(); h.clear();
   h.byLabel('新建技能').props.onClick(); await h.settle();
   assert.equal(h.button('创建').props.disabled, true);
@@ -345,7 +349,7 @@ test('a new skill is created from the form, and an empty form cannot be saved', 
 });
 
 test('with no skills of your own the right side explains how to make one, and both buttons work', async t => {
-  const h = mount(t, [builtinRouting()]);
+  const h = mount(t, [builtin()]);
   await h.settle();
   assert.ok(h.page().includes('还没有自己的技能')); assert.ok(h.page().includes('SKILL.md 的文件夹'));
   assert.equal(h.nodes().some(node => node.props['data-skill-detail']), false);
@@ -368,7 +372,7 @@ test('before the first list arrives nothing is claimed, and an empty list shows 
 });
 
 test('a failed call shows its error once and a thrown call shows the exception', async t => {
-  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': releaseV4 } });
+  const h = mount(t, [builtin(), release], { details: { 'user:release': releaseV4 } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   h.state.failure = 'Skill folder is read-only';
@@ -381,18 +385,18 @@ test('a failed call shows its error once and a thrown call shows the exception',
 });
 
 test('the create form shows the complete reserved-name message returned by the store', async t => {
-  const h = mount(t, [builtinRouting(), release]); await h.settle();
+  const h = mount(t, [builtin(), release]); await h.settle();
   h.byLabel('新建技能').props.onClick(); await h.settle();
-  h.byLabel('名称').props.onChange({ target: { value: 'model-routing' } }); await h.settle();
+  h.byLabel('名称').props.onChange({ target: { value: 'code-standard' } }); await h.settle();
   h.byLabel('描述').props.onChange({ target: { value: 'A naming collision.' } }); await h.settle();
-  const message = '与系统技能「model-routing」同名。要扩展它，请命名为 model-routing-<标识>，例如 model-routing-team。';
+  const message = '与系统技能「code-standard」同名。要扩展它，请命名为 code-standard-<标识>，例如 code-standard-team。';
   h.state.failure = message; h.button('创建').props.onClick(); await h.settle();
   assert.equal(h.text(h.one(node => node.props.role === 'alert')), message);
-  assert.equal(h.byLabel('名称').props.value, 'model-routing');
+  assert.equal(h.byLabel('名称').props.value, 'code-standard');
 });
 
 test('a reserved-name error is dropped by 取消, by editing the name, by a new form and by choosing a skill', async t => {
-  const h = mount(t, [builtinRouting(), release]); await h.settle();
+  const h = mount(t, [builtin(), release]); await h.settle();
   const alert = () => h.nodes().some(node => node.props.role === 'alert');
   const fail = async name => {
     h.byLabel('新建技能').props.onClick(); await h.settle();
@@ -400,27 +404,27 @@ test('a reserved-name error is dropped by 取消, by editing the name, by a new 
     h.state.failure = `与系统技能「${name}」同名。`; h.button('创建').props.onClick(); await h.settle();
     h.state.failure = null; assert.equal(alert(), true);
   };
-  await fail('model-routing');
+  await fail('code-standard');
   h.button('取消').props.onClick(); await h.settle();
   assert.equal(alert(), false);
-  await fail('model-routing');
-  h.byLabel('名称').props.onChange({ target: { value: 'model-routing-team' } }); await h.settle();
+  await fail('code-standard');
+  h.byLabel('名称').props.onChange({ target: { value: 'code-standard-team' } }); await h.settle();
   assert.equal(alert(), false);
-  await fail('model-routing');
+  await fail('code-standard');
   h.byLabel('新建技能').props.onClick(); await h.settle();
   assert.equal(alert(), false);
-  await fail('model-routing');
+  await fail('code-standard');
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   assert.equal(alert(), false);
 });
 
 test('the list follows what onSkills pushes', async t => {
-  const h = mount(t, [builtinRouting()]);
+  const h = mount(t, [builtin()]);
   await h.settle();
   assert.equal(h.listeners.length, 1);
-  h.listeners[0]([builtinRouting(), release, fresh]);
+  h.listeners[0]([builtin(), release, fresh]);
   await h.settle();
-  assert.deepEqual(h.items(), ['模型路由', '发布流程', 'SSH 排错新']);
+  assert.deepEqual(h.items(), ['代码规范', '发布流程', 'SSH 排错新']);
 });
 
 test('the diff keeps two lines of context, marks the rest with a gap, and says when nothing changed', () => {
@@ -445,28 +449,28 @@ test('Settings lists 技能 after 编码助手 and English strings exist for eve
 });
 
 test('the page shows a built-in skill by its title and clamped summary, never its English name or description', async t => {
-  const h = mount(t, [builtinRouting(), release]);
+  const h = mount(t, [builtin(), release]);
   await h.settle();
-  assert.equal(h.items()[0], '模型路由');
+  assert.equal(h.items()[0], '代码规范');
   const summary = h.one(node => node.props.className === 'skills-desc skills-summary');
-  assert.equal(h.text(summary), routingSummary); assert.equal(summary.props.title, routingSummary);
-  assert.equal(h.items().join().includes('model-routing'), false); assert.equal(h.page().includes('seven lines'), false);
-  assert.equal(h.text(h.one(node => node.props.className === 'skills-title')).startsWith('模型路由'), true);
-  h.byLabel('启用 模型路由');
+  assert.equal(h.text(summary), builtinSummary); assert.equal(summary.props.title, builtinSummary);
+  assert.equal(h.items().join().includes('code-standard'), false); assert.equal(h.page().includes('seven lines'), false);
+  assert.equal(h.text(h.one(node => node.props.className === 'skills-title')).startsWith('代码规范'), true);
+  h.byLabel('启用 代码规范');
   const css = fs.readFileSync(path.join(root, 'features/settings/skills-settings.css'), 'utf8');
   assert.match(css, /\.skills-summary \{[^}]*-webkit-line-clamp: 2;[^}]*overflow: hidden;/);
 });
 
 test('the search matches the shown title and summary as well as the name', async t => {
   const many = Array.from({ length: 6 }, (_, at) => skill({ id: `user:n${at}`, name: `技能 ${at}`, description: `第 ${at} 个` }));
-  const h = mount(t, [builtinRouting(), release, ...many]);
+  const h = mount(t, [builtin(), release, ...many]);
   await h.settle();
   h.byLabel('搜索技能').props.onChange({ target: { value: '审查架构' } }); await h.settle();
-  assert.deepEqual(h.items(), ['模型路由']);
+  assert.deepEqual(h.items(), ['代码规范']);
 });
 
 test('the scope picker offers local projects only, in the detail and in the form', async t => {
-  const h = mount(t, [builtinRouting(), release]);
+  const h = mount(t, [builtin(), release]);
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   const labels = select => select.props.options.map(option => option.label);
@@ -477,7 +481,7 @@ test('the scope picker offers local projects only, in the detail and in the form
 
 test('saving sends the folder name unless the name field was edited', async t => {
   const folder = skill({ id: 'user:release-flow', name: '发布流程', path: 'C:\\data\\skills\\release-flow\\SKILL.md' });
-  const h = mount(t, [builtinRouting(), folder]);
+  const h = mount(t, [builtin(), folder]);
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release-flow')[0].props.onClick(); await h.settle(); h.clear();
   h.byLabel('范围').props.onChange('p1'); await h.settle();
@@ -492,7 +496,7 @@ test('saving sends the folder name unless the name field was edited', async t =>
 
 test('saving over a pending agent proposal asks first, and 取消 keeps editing', async t => {
   const pending = { ...release, pending: true };
-  const h = mount(t, [builtinRouting(), pending], { details: { 'user:release': { ...releaseV4, pending: 'proposal' } } });
+  const h = mount(t, [builtin(), pending], { details: { 'user:release': { ...releaseV4, pending: 'proposal' } } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   h.one(node => node.props['data-skill-edit']).props.onClick(); await h.settle(); h.clear();
@@ -508,7 +512,7 @@ test('saving over a pending agent proposal asks first, and 取消 keeps editing'
 });
 
 test('the reserved-name message keeps each skill name whole on one line', async t => {
-  const h = mount(t, [builtinRouting(), release]); await h.settle();
+  const h = mount(t, [builtin(), release]); await h.settle();
   h.byLabel('新建技能').props.onClick(); await h.settle();
   h.byLabel('名称').props.onChange({ target: { value: 'code-standard' } }); await h.settle();
   h.byLabel('描述').props.onChange({ target: { value: 'A naming collision.' } }); await h.settle();
@@ -545,7 +549,6 @@ test('every settings switch has a hit area of at least 32 px around its 22 px lo
 
 test('English exists for each built-in skill title and summary', () => {
   const en = require('../electron/locales/en.json');
-  assert.equal(en['模型路由'], 'Model routing'); assert.ok(en[routingSummary]);
   const folder = path.join(__dirname, '../resources/skills');
   for (const name of fs.readdirSync(folder)) {
     const front = /^---\n([\s\S]*?)\n---/.exec(fs.readFileSync(path.join(folder, name, 'SKILL.md'), 'utf8').replace(/\r\n/g, '\n'))?.[1] ?? '';
@@ -556,7 +559,7 @@ test('English exists for each built-in skill title and summary', () => {
 test('the trigger has two choices and a separate first-open switch', async t => {
   for (const [language, labels, switchLabel] of [['zh', ['每个任务', '相关任务'], '首次打开项目时先运行一次'],
     ['en', ['Every task', 'Relevant tasks'], 'Run once when a project is first opened']]) {
-    const h = mount(t, [builtinRouting({ trigger: 'auto', firstOpenRun: true }), release], { language });
+    const h = mount(t, [builtin({ trigger: 'auto', firstOpenRun: true }), release], { language });
     await h.settle();
     const trigger = h.one(node => node.props.className === 'skills-trigger');
     assert.equal(trigger.props.value, 'auto');
@@ -564,18 +567,18 @@ test('the trigger has two choices and a separate first-open switch', async t => 
     const firstOpen = h.byLabel(switchLabel);
     assert.equal(firstOpen.props.checked, true);
     firstOpen.props.onChange({ target: { checked: false } }); await h.settle();
-    assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:model-routing', { firstOpenRun: false }]]);
+    assert.deepEqual(h.calls.filter(call => call[0] === 'options'), [['options', 'builtin:code-standard', { firstOpenRun: false }]]);
   }
 });
 
 test('the trigger hint follows the selected mode and keeps the skill guidance in relevant mode', async t => {
-  const when = '新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算';
+  const when = '每个任务开始前生效；在项目里第一次运行时先审查现有代码并提出接入计划';
   const englishWhen = require('../electron/locales/en.json')[when];
   for (const [language, relevant, always, trigger] of [
     ['zh', '任务符合技能描述时读取。', '每个任务开始前读取。', '触发'],
     ['en', 'Read this skill when the task matches its description.', 'Read this skill before every task.', 'Trigger'],
   ]) {
-    const h = mount(t, [builtinRouting({ when }), release], { language, details: { 'user:release': releaseV4 } });
+    const h = mount(t, [builtin({ when }), release], { language, details: { 'user:release': releaseV4 } });
     const setOptions = window.agentrix.setSkillOptions;
     window.agentrix.setSkillOptions = (id, options) => {
       h.state.skills = h.state.skills.map(skill => skill.id === id ? { ...skill, ...options } : skill);
@@ -596,36 +599,36 @@ test('the trigger hint follows the selected mode and keeps the skill guidance in
 });
 
 test('extensions follow their base in the system group, carry both attributes, and do not inflate group counts', async t => {
-  const extension = skill({ id: 'user:model-routing-team', name: 'model-routing-team', extends: 'model-routing' });
-  const h = mount(t, [builtinRouting(), release, extension]); await h.settle();
-  assert.deepEqual(h.all(node => node.props['data-skill-id']).map(node => node.props['data-skill-id']), ['builtin:model-routing', extension.id, release.id]);
+  const extension = skill({ id: 'user:code-standard-team', name: 'code-standard-team', extends: 'code-standard' });
+  const h = mount(t, [builtin(), release, extension]); await h.settle();
+  assert.deepEqual(h.all(node => node.props['data-skill-id']).map(node => node.props['data-skill-id']), ['builtin:code-standard', extension.id, release.id]);
   assert.deepEqual(h.all(node => node.props['data-group']).map(node => h.text(node)), ['系统自带1', '我的技能1']);
   const row = h.one(node => node.props['data-skill-id'] === extension.id);
-  assert.equal(row.props['data-skill-extends'], 'model-routing'); assert.match(h.text(row), /扩展$/); assert.equal(row.props.title, 'model-routing-team');
+  assert.equal(row.props['data-skill-extends'], 'code-standard'); assert.match(h.text(row), /扩展$/); assert.equal(row.props.title, 'code-standard-team');
   row.props.onClick(); await h.settle();
   const title = h.one(node => node.props.className === 'skills-title');
-  assert.equal(title.props['data-skill-extends'], 'model-routing'); assert.match(h.text(title), /扩展 model-routing/);
-  assert.equal(h.all(node => node.props['data-skill-extends'] === 'model-routing').length, 2);
+  assert.equal(title.props['data-skill-extends'], 'code-standard'); assert.match(h.text(title), /扩展 code-standard/);
+  assert.equal(h.all(node => node.props['data-skill-extends'] === 'code-standard').length, 2);
   assert.equal(h.all(node => node.props['data-skill-yield']).length, 0);
 });
 
 test('filtered extensions remain visible without their base, and an orphan extension remains a user skill', async t => {
-  const extension = skill({ id: 'user:model-routing-team', name: 'model-routing-team', extends: 'model-routing' });
+  const extension = skill({ id: 'user:code-standard-team', name: 'code-standard-team', extends: 'code-standard' });
   const many = Array.from({ length: 6 }, (_, n) => skill({ id: `user:other-${n}`, name: `other-${n}` }));
-  const h = mount(t, [builtinRouting(), extension, ...many]); await h.settle();
-  h.byLabel('搜索技能').props.onChange({ target: { value: 'model-routing-team' } }); await h.settle();
+  const h = mount(t, [builtin(), extension, ...many]); await h.settle();
+  h.byLabel('搜索技能').props.onChange({ target: { value: 'code-standard-team' } }); await h.settle();
   assert.deepEqual(h.all(node => node.props['data-skill-id']).map(node => node.props['data-skill-id']), [extension.id]);
-  assert.equal(h.one(node => node.props['data-skill-id'] === extension.id).props['data-skill-extends'], 'model-routing');
+  assert.equal(h.one(node => node.props['data-skill-id'] === extension.id).props['data-skill-extends'], 'code-standard');
   const orphan = mount(t, [extension]); await orphan.settle();
   assert.deepEqual(orphan.all(node => node.props['data-group']).map(node => orphan.text(node)), ['系统自带0', '我的技能1']);
-  assert.equal(orphan.all(node => node.props['data-skill-extends'] === 'model-routing').length, 2);
+  assert.equal(orphan.all(node => node.props['data-skill-extends'] === 'code-standard').length, 2);
 });
 
 test('replaced copies show the list count and one detail row per entry, with complete dates and backup paths', async t => {
   const at = new Date(2025, 3, 6, 7, 8).getTime();
-  const replaced = ['a', 'b'].map((project, n) => ({ project, name: 'model-routing', from: `${n ? '.claude/' : ''}skills/model-routing`, backup: `/synthetic/backups/${project}`, at }));
-  const h = mount(t, [builtinRouting({ replaced }), release]); await h.settle();
-  const row = h.one(node => node.props['data-skill-id'] === 'builtin:model-routing');
+  const replaced = ['a', 'b'].map((project, n) => ({ project, name: 'code-standard', from: `${n ? '.claude/' : ''}skills/code-standard`, backup: `/synthetic/backups/${project}`, at }));
+  const h = mount(t, [builtin({ replaced }), release]); await h.settle();
+  const row = h.one(node => node.props['data-skill-id'] === 'builtin:code-standard');
   assert.equal(row.props['data-skill-replaced'], 2); assert.match(h.text(row), /已替换 2/);
   const section = h.one(node => Object.hasOwn(node.props, 'data-skill-replaced-list'));
   assert.equal(section.type, 'section'); assert.match(h.text(section), /已替换的项目副本/);
@@ -634,14 +637,14 @@ test('replaced copies show the list count and one detail row per entry, with com
     assert.ok(h.text(rows[n]).includes(entry.project)); assert.ok(h.text(rows[n]).includes(entry.from));
     assert.ok(h.text(rows[n]).includes('2025-04-06 07:08')); assert.ok(h.text(rows[n]).includes(entry.backup));
   }
-  h.state.skills = [builtinRouting(), release]; h.listeners[0](h.state.skills); await h.settle();
+  h.state.skills = [builtin(), release]; h.listeners[0](h.state.skills); await h.settle();
   assert.equal(h.all(node => node.props['data-skill-replaced']).length, 0);
   assert.equal(h.all(node => Object.hasOwn(node.props, 'data-skill-replaced-list')).length, 0);
 });
 
 test('SKILL.md shows rendered headings and lists without its front matter, and 源码 shows the file as written', async t => {
   const file = '---\nname: release\ndescription: 发布新版本\n---\n\n# 发布\n\nA hard-wrapped sentence\ncontinues here.\n\nAnother paragraph.\n\n## 步骤\n\n1. 升版本号\n2. 写更新说明\n\n- 先看 [说明](https://example.com)\n- 再发布\n\n```text\nfirst line\nsecond line\n```\n\nIntentional break  \ncontinues here.\n\n---\n\n结束';
-  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': { ...releaseV4, text: file } } });
+  const h = mount(t, [builtin(), release], { details: { 'user:release': { ...releaseV4, text: file } } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   const html = h.one(node => node.props.className === 'reading-markdown').props.dangerouslySetInnerHTML.__html;
@@ -663,7 +666,7 @@ test('SKILL.md shows rendered headings and lists without its front matter, and �
 });
 
 test('a link in the rendered SKILL.md is inert, and the 变更 tab stays plain text without the toggle', async t => {
-  const h = mount(t, [builtinRouting(), release], { details: { 'user:release': releaseV4 } });
+  const h = mount(t, [builtin(), release], { details: { 'user:release': releaseV4 } });
   await h.settle();
   h.all(node => node.props['data-skill-id'] === 'user:release')[0].props.onClick(); await h.settle();
   let prevented = 0;
@@ -684,12 +687,13 @@ test('skillBody strips only the leading front matter', () => {
   assert.equal(skillBody('没有前置信息\n---\n不是前置信息\n---'), '没有前置信息\n---\n不是前置信息\n---');
 });
 
-test('the global seat summary describes the routing skill using the shared team order', async t => {
-  const fixture = require('./fixtures/team-seats.json');
-  const seatSummary = fixture.roles.map(({ id, name }) => ({ seat: id, name, ...fixture.defaults[id] }));
-  const h = mount(t, [builtinRouting({ seatSummary }), release], { language: 'en' });
+test('built-in routing has no Settings row or detail, and its extension stays visible', async t => {
+  const routing = builtin({ id: 'builtin:model-routing', name: 'model-routing', hiddenInSettings: true });
+  const extension = skill({ id: 'user:model-routing-team', name: 'model-routing-team', extends: 'model-routing' });
+  const h = mount(t, [routing, builtin(), release, extension]);
   await h.settle();
-  const description = h.text(h.one(node => node.props.className === 'skills-desc skills-summary'));
-  assert.match(description, /Orchestrator Agent Opus/);
-  assert.match(description, /Developer\/DevOps GPT-6\.2-Sol/);
+  assert.equal(h.all(node => node.props['data-skill-id'] === routing.id || node.props['data-skill-detail'] === routing.id).length, 0);
+  assert.equal(h.calls.some(call => call[0] === 'read' && call[1] === routing.id), false);
+  h.one(node => node.props['data-skill-id'] === extension.id);
+  h.one(node => node.props['data-skill-id'] === 'builtin:code-standard');
 });

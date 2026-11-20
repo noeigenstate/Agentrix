@@ -1,5 +1,4 @@
 const modelSeats = require('./model-seats.cjs');
-const operations = require('./operation-slots.cjs');
 const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText, checkTeamRules } = require('./role-rules.mjs');
 const { familyOf, BASE_EFFORTS } = require('./seat-rules.mjs');
 const { outsideFences, region } = require('./builtin-format.cjs');
@@ -7,9 +6,8 @@ const { outsideFences, region } = require('./builtin-format.cjs');
 const roleKeys = ['model', 'effort', 'fast', 'enabled', 'fresh', 'from', 'name', 'duty', 'outputs'];
 const seatKeys = ['model', 'effort', 'fast'];
 const textKeys = ['name', 'duty', 'outputs'];
-const operationKeys = Object.keys(operations.defaults);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const emptyConfig = () => ({ roles: {}, operations: {} });
+const emptyConfig = () => ({ roles: {} });
 const fail = (code, role, message = code) => { throw Object.assign(new Error(message), { code, role }); };
 const unknownKey = (value, keys) => Object.keys(value).some(key => !keys.includes(key));
 const unsafeFileModel = value => typeof value === 'string' && (value.endsWith(':') || value.includes('://'));
@@ -58,22 +56,15 @@ function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
 }
 
 function cleanConfig(raw, entry, catalog, stored = false, file = false) {
-  if (!object(raw) || !object(raw.roles) || !object(raw.operations)) fail('bad-format');
-  if (unknownKey(raw, ['roles', 'operations'])) fail('unknown-key');
+  if (!object(raw) || !object(raw.roles)) fail('bad-format');
+  if (unknownKey(raw, ['roles'])) fail('unknown-key');
   const ignored = [];
   const roles = Object.fromEntries(Object.entries(raw.roles).flatMap(([id, value]) => {
     if (file && unsafeFileModel(value?.model)) fail('bad-format', id);
     const fields = roleConfig(id, value, entry, catalog, stored, ignored, file);
     return fields ? [[id, fields]] : [];
   }));
-  for (const [id, value] of Object.entries(raw.operations)) {
-    if (!operationKeys.includes(id) || object(value) && unknownKey(value, ['model', 'effort'])) fail('unknown-key');
-    if (file && unsafeFileModel(value?.model)) fail('bad-format');
-  }
-  const candidates = file ? Object.fromEntries(Object.entries(raw.operations).filter(([, value]) => fileEffort(value))) : raw.operations;
-  const values = stored ? operations.cleanStored(candidates) : operations.clean(candidates, catalog);
-  for (const id of Object.keys(raw.operations)) if (!Object.hasOwn(values, id)) ignored.push('operations.' + id);
-  return { config: { roles, operations: values }, ignored: ignored.slice(0, 16) };
+  return { config: { roles }, ignored: ignored.slice(0, 16) };
 }
 
 function baseRows(entry) {
@@ -145,11 +136,11 @@ function englishNames(entry) {
   return names;
 }
 
-function validateTeam(team, config, catalog, entry) {
+function validateTeam(team, catalog, entry) {
   const error = checkTeamRules(team.roles, entry ? englishNames(entry) : []);
   if (error) return { ok: false, ...error, message: error.code };
   const blocked = modelSeats.checkReviewer(team.effective, catalog, team.reviewers, team.authors);
-  return blocked ? { ...blocked, role: blocked.seat } : operations.checkReview(config.operations, team.effective, catalog, team.authors);
+  return blocked ? { ...blocked, role: blocked.seat } : null;
 }
 
 function compactConfig(entry, config) {
@@ -164,8 +155,7 @@ function compactConfig(entry, config) {
     if (override.model !== undefined && !sameSeat(seat, inherited)) Object.assign(fields, seatFrom(override));
     return Object.keys(fields).length ? [[row.id, fields]] : [];
   }));
-  const changed = operations.difference(config.operations, operations.defaults);
-  return { roles, operations: Object.fromEntries(operationKeys.filter(id => Object.hasOwn(changed, id)).map(id => [id, changed[id]])) };
+  return { roles };
 }
 
 module.exports = { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam };

@@ -44,4 +44,4 @@ function seatObservation(input, model, effort, phase) {
   return { toolUseId, model: supported ? model : null, effort: supported ? effort : null, phase };
 }
 
-module.exports = { seatHookOutput, observedAgentSeat, seatToolOutput, liveSeatMap };
+module.exports = { seatHookOutput, observedAgentSeat, liveSeatMap };

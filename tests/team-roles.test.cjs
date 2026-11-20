@@ -5,7 +5,6 @@ const path = require('node:path');
 const { builtinMetadata } = require('../electron/features/skills/builtin-format.cjs');
 const { cleanConfig, compactConfig, resolveTeam, validateTeam } = require('../electron/features/skills/team-roles.cjs');
 const modelSeats = require('../electron/features/skills/model-seats.cjs');
-const operationSlots = require('../electron/features/skills/operation-slots.cjs');
 
 const skill = fs.readFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), 'utf8');
 const entry = builtinMetadata(skill, 'model-routing');
@@ -13,7 +12,7 @@ const installed = { claude: true, codex: true };
 const catalog = modelSeats.catalog(installed, [{ model: 'gpt-6.2-sol' }, { model: 'gpt-peer' }]);
 const defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
 const seat = model => ({ model, effort: 'high' });
-const config = (roles = {}, operations = {}) => ({ roles, operations });
+const config = (roles = {}) => ({ roles });
 const copy = (from, name, fields = {}) => ({ from, name, duty: 'Review builds', ...fields });
 const resolve = value => resolveTeam(entry, cleanConfig(value, entry, catalog).config, defaults);
 
@@ -36,22 +35,19 @@ test('copies inherit roles and reviewer freshness and sit next to their source',
   assert.deepEqual(team.reviewers, ['x-review']);
   assert.ok(team.fresh.includes('x-review'));
   assert.deepEqual(team.authors, ['developer', 'frontend', 'x-app']);
-  assert.equal(validateTeam(team, value, catalog), null);
-  assert.equal(operationSlots.levers({}, team.effective, catalog, installed, team.reviewers[0]).codex.config.review_model, 'gpt-peer');
-  assert.equal(validateTeam(resolve(config({ reviewer: { enabled: false } })), config(), catalog).code, 'reviewer-required');
+  assert.equal(validateTeam(team, catalog), null);
+  assert.equal(validateTeam(resolve(config({ reviewer: { enabled: false } })), catalog).code, 'reviewer-required');
 });
 
-test('reviewer independence and explicit review consider enabled authors and unused peers', () => {
+test('reviewer independence considers enabled authors and unused peers', () => {
   const value = config({ frontend: { enabled: true, ...seat('gpt-peer') }, reviewer: seat('gpt-peer') });
-  assert.equal(validateTeam(resolve(value), value, catalog).code, 'reviewer-same-model');
+  assert.equal(validateTeam(resolve(value), catalog).code, 'reviewer-same-model');
   value.roles['x-author'] = copy('developer', 'Author', seat('opus'));
   value.roles.reviewer = seat('opus');
-  assert.equal(validateTeam(resolve(value), value, catalog), null);
+  assert.equal(validateTeam(resolve(value), catalog), null);
   value.roles.frontend.enabled = false;
-  assert.equal(validateTeam(resolve(value), value, catalog).code, 'reviewer-same-model');
+  assert.equal(validateTeam(resolve(value), catalog).code, 'reviewer-same-model');
   value.roles.reviewer = seat('sonnet');
-  value.operations.review = { model: 'gpt-6.2-sol' };
-  assert.equal(validateTeam(resolve(value), value, catalog).code, 'review-same-model');
 });
 
 test('stored partial seats are ignored and saved overrides omit inherited values', () => {
@@ -62,7 +58,7 @@ test('stored partial seats are ignored and saved overrides omit inherited values
   assert.deepEqual(compactConfig(entry, clean, team), config({ frontend: { enabled: true }, docs: { enabled: true } }));
   assert.throws(() => cleanConfig(config({ reviewer: { name: 'Review' } }), entry, catalog), { code: 'invalid-role' });
   const tooMany = config(Object.fromEntries(Array.from({ length: 9 }, (_, index) => ['x-extra-' + index, copy('developer', 'Role ' + index, { enabled: false })])));
-  assert.equal(validateTeam(resolve(tooMany), tooMany, catalog).code, 'role-limit');
+  assert.equal(validateTeam(resolve(tooMany), catalog).code, 'role-limit');
 });
 
 test('Codex-only library seats expose their seed and portable files retain the explicit override', () => {

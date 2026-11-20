@@ -60,7 +60,7 @@ async function run() {
   const standard = (await call('listSkills')).find(skill => skill.id === 'builtin:code-standard');
   assert.ok(standard, 'The built-in code standard is available.');
   // Exercise both delivery timings in this isolated profile, independently of shipped defaults.
-  await call('setSkillOptions', builtin.id, { trigger: 'always' });
+  assert.equal(builtin.trigger, 'always');
   await call('setSkillOptions', standard.id, { trigger: 'auto', firstOpenRun: true });
   const standardPath = standard.path.replace(/\\/g, '/');
   const firstOpen = `Before the first task of this session, read and follow ${standardPath}; this is its first run in this project.`;

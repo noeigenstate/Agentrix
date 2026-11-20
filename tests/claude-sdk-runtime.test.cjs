@@ -37,6 +37,8 @@ test('owner queries remain alive at idle and reuse the same process on the next 
   assert.equal(runtime.usage.summary().monthUsdMicros, 200000);
   assert.equal(fake.calls[0].options.pathToClaudeCodeExecutable, process.execPath);
   assert.equal(fake.calls[0].options.env.ANTHROPIC_API_KEY, key);
+  assert.equal(Object.hasOwn(fake.calls[0].options, 'agents'), false);
+  assert.doesNotMatch(fake.calls[0].options.systemPrompt.append, /delegate.*lookup/i);
   assert.ok(!JSON.stringify(events).includes(key));
   assert.equal((await session.send({ clientMessageId: first, text: 'duplicate' })).status, 'consumed');
   assert.equal(fake.inputs.length, 2);

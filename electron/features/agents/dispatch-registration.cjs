@@ -7,7 +7,7 @@ const validScope = allow => Array.isArray(allow) && allow.length <= 256 && allow
   && !/^(?:[A-Za-z]:|[\\/~])|(?:^|[\\/])\.\.(?:[\\/]|$)|[\0\r\n]/.test(glob));
 
 // Main supplies the current terminal, project and asynchronous team lookup; credentials never enter the run binding.
-async function resolveRegistration({ sessions, store, locateTeam, operations }, registration) {
+async function resolveRegistration({ sessions, store, locateTeam }, registration) {
   const session = sessions.get(registration.projectId), project = store.findTerminal(registration.projectId)?.project;
   const refusal = () => {
     if (!session || !project || sessions.get(registration.projectId) !== session || !registration.sessionKey || session.sessionKey !== registration.sessionKey
@@ -49,11 +49,9 @@ async function resolveRegistration({ sessions, store, locateTeam, operations }, 
   refused = refusal();
   if (refused) return { refused };
   const local = project.kind !== 'ssh';
-  const levers = local ? operations?.(project.id, session.skillSessionId || session.sessionId) : null;
-  const workerOperations = worker.agent === 'codex' ? { codexConfig: levers?.codex.config } : { claudeOperationEnv: levers?.claude.env };
   return { run: { runId: worker.id, projectId: registration.projectId, agent: worker.agent, cwd: worker.cwd, worktree: worker.cwd,
     allow: [...worker.allow], readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查' || registration.readOnly === true,
-    roundtable: worker.role === '圆桌' || registration.roundtable === true, local, leadMode: leadMode(), ...(levers && workerOperations) } };
+    roundtable: worker.role === '圆桌' || registration.roundtable === true, local, leadMode: leadMode() } };
 }
 
 module.exports = { resolveRegistration };

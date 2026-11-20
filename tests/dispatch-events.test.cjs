@@ -6,51 +6,8 @@ const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { acceptDispatch, validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 const { UsageMeter } = require('../electron/features/agents/agent-usage.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
-const { resolveRegistration } = require('../electron/features/agents/dispatch-registration.cjs');
-const { createDispatchControl, connectDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 
 const routing = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
-
-test('local Codex control registration receives only the authenticated lead snapshot config', async t => {
-  const cwd = process.cwd(), project = { id: 'project', path: cwd };
-  const session = { sessionId: 'shell', skillSessionId: 'conversation', sessionKey: 'synthetic-key', controlCapability: 'synthetic-capability', agent: 'claude' };
-  const workers = ['first', 'second'].map(id => ({ id, agent: 'codex', cwd, allow: [] }));
-  const sessions = new Map([['terminal', session]]), store = { findTerminal: () => ({ project }) };
-  const locateTeam = async () => ({ status: 'found', common: cwd, team: { live: () => workers } });
-  const config = { review_model: 'gpt-6.3-sol', 'agents.default_subagent_reasoning_effort': 'medium' };
-  let configForRun = config;
-  const operations = (projectId, sessionId) => {
-    assert.equal(projectId, 'project'); assert.equal(sessionId, 'conversation');
-    return { codex: { config: configForRun } };
-  };
-  const server = createDispatchControl({ resolveRun: registration => resolveRegistration({ sessions, store, locateTeam, operations }, registration) });
-  t.after(() => server.close());
-  const { EventEmitter } = require('node:events');
-  t.mock.method(require('node:net'), 'connect', () => {
-    const client = new EventEmitter(), host = new EventEmitter();
-    const close = () => {
-      if (client.destroyed) return;
-      client.destroyed = host.destroyed = true;
-      client.emit('close'); host.emit('close');
-    };
-    for (const [side, peer] of [[client, host], [host, client]]) {
-      Object.assign(side, { write: line => { queueMicrotask(() => peer.emit('data', line)); return true; },
-        setTimeout() {}, destroy: close, end: close });
-    }
-    server.accept(host);
-    queueMicrotask(() => client.emit('connect'));
-    return client;
-  });
-  const open = runId => connectDispatchControl({ address: 'in-process', runId, projectId: 'terminal', sessionKey: session.sessionKey,
-    capability: session.controlCapability, cwd, agent: 'codex', allow: [] });
-  const valid = await open('first');
-  t.after(() => valid.close());
-  assert.deepEqual(valid.codexConfig, config);
-  configForRun = { ...config, sandbox: 'unapproved' };
-  const invalid = await open('second');
-  t.after(() => invalid.close());
-  assert.equal(invalid.codexConfig, undefined);
-});
 
 test('declarations admit dispatch and intercepted as the one source contract and reject intercept', () => {
   const event = { type: 'dispatch-declared', id: randomUUID(), helperPid: process.pid, agent: 'codex', role: '执行', title: 'Synthetic intercepted worker',

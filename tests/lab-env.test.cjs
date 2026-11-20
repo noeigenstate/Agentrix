@@ -6,19 +6,9 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { LabSession, copyHelper } = require('../electron/features/lab/session.cjs');
-const { cliHomes } = require('../electron/features/lab/sandbox.cjs');
 const { workerArguments } = require('../electron/features/lab/dispatch.cjs');
 const { argumentsOf } = require('../integration/dispatch.cjs');
 const os = require('node:os');
-
-test('Lab worker environments exclude the project operation model variables', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lab-operation-env-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const names = ['ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL'];
-  const env = Object.fromEntries(names.map(name => [name, 'claude-sonnet-5-5']));
-  const isolated = await cliHomes(env, root, false, {});
-  for (const name of names) assert.equal(isolated[name], undefined);
-});
 
 test('a routing file in a Lab worktree leaves the worker specs unchanged', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lab-project-routing-'));
@@ -31,7 +21,7 @@ test('a routing file in a Lab worktree leaves the worker specs unchanged', t => 
   fs.mkdirSync(directory);
   const seat = { model: 'haiku', effort: 'low', fast: false };
   fs.writeFileSync(path.join(directory, 'routing.json'), JSON.stringify({
-    format: 'agentrix-routing', version: 1, roles: { orchestrator: seat, developer: seat, reviewer: seat }, operations: {},
+    format: 'agentrix-routing', version: 1, roles: { orchestrator: seat, developer: seat, reviewer: seat },
   }));
   assert.deepEqual(specs(), before);
 });

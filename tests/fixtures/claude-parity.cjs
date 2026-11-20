@@ -38,11 +38,8 @@ function compareTools(sdk, tui, version) {
   assert.deepEqual(differences, [], 'new tool/schema differences need a real paired investigation');
 }
 function compareAgents(sdk, tui) {
-  // GUI queries deliberately preset this one read-only Haiku lookup agent; the
-  // terminal does not yet receive it. Keep the existing terminal-only CLI guide.
-  assert.equal(sdk.filter(name => name === 'agentrix-lookup').length, 1, 'native mode must advertise its lookup preset exactly once');
   assert.equal(tui.filter(name => name === 'claude-code-guide').length, 1, 'the terminal must retain the CLI guide');
-  assert.deepEqual(sdk.filter(name => name !== 'agentrix-lookup').sort(), tui.filter(name => name !== 'claude-code-guide').sort(),
+  assert.deepEqual([...sdk].sort(), tui.filter(name => name !== 'claude-code-guide').sort(),
     'new agent-name differences need a real paired investigation');
 }
 function compareSystem(sdk, tui, { sdkOwner = 'gui', tuiOwner = null } = {}) {

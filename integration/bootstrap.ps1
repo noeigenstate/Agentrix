@@ -71,9 +71,9 @@ function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
         $lead[1] -cnotmatch '^[a-z][a-z0-9-]{0,31}$' -or $lead[2] -cnotmatch '^[01]$') { return $launch }
     $launch.LeadArgs = @("--model", $lead[0], "--effort", $lead[1])
     if ($lead[2] -eq '1' -and $Hooks.fastSettings) { $launch.HookSettings = $Hooks.fastSettings }
-    if ($lead.Length -ge 4 -and $lead[3] -cmatch $modelPattern) { $launch.Env.ANTHROPIC_DEFAULT_HAIKU_MODEL = $lead[3] }
-    if ($lead.Length -ge 5 -and $lead[4] -cmatch $modelPattern) { $launch.Env.CLAUDE_CODE_SUBAGENT_MODEL = $lead[4] }
-    if ($lead.Length -ge 6 -and $lead[5]) { $launch.Env.AGENTRIX_SEATS = $lead[5] }
+    # Old files put the seat map on line 6, after two retired fields.
+    $seatIndex = if ($lead.Length -ge 6) { 5 } else { 3 }
+    if ($lead.Length -gt $seatIndex -and $lead[$seatIndex] -like '{*') { $launch.Env.AGENTRIX_SEATS = $lead[$seatIndex] }
     return $launch
 }
 

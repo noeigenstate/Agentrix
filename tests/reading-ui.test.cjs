@@ -1391,7 +1391,7 @@ test('reading routing commands show a notice and never enter the PTY or outbox',
   h.edit('/model'); h.press('Enter'); await h.tick(0);
   assert.equal(h.node.value, '');
   assert.deepEqual([h.pasted, h.written, h.popup(), requests.length], [[], [], undefined, 3]);
-  assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['模型路由已关闭，使用 CLI 自身的默认设置'])));
+  assert.ok(elements(h.tree()).some(node => node.props.className === 'native-toast' && node.props.children.includes(en['无法读取模型路由状态'])));
 });
 
 test('welcome command rows call the existing completion callback with the cached command', () => {

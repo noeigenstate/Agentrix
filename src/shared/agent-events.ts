@@ -59,7 +59,6 @@ export type AgentEventPayloads = {
     effective: RoutingValues;
     observed: RoutingValues;
     reason: string | null;
-    operations?: { applied: string[]; refused: { key: string; reason: string }[] };
   };
   'path.changed': { previous: 'api' | 'terminal' | 'subscription' | null; selected: 'api' | 'terminal' | 'subscription'; reason: string | null };
   'error': { code: string; message: string; retryable: boolean; willRetry: boolean; stage: string };

@@ -1224,9 +1224,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         if (fact) recordInput(fact.entryId, fact.inputId, fact.origin, fact.ownerMessageIds);
       } else if (event.type === 'routing.updated') {
         // Effective Codex settings come from the worker's app-server response, including when no turn record has arrived.
-        const { operations } = event.payload;
         output.nativeRouting(event.payload); reroute();
-        if (operations?.refused.length) signal(`routing ${id} operation keys refused: ${operations.refused.map(({ key }) => key).join(', ')}`);
       }
       else if (event.type === 'input.receipt' && controlReceipts.has(event.payload.clientMessageId)) void recordReceipt(event.payload.clientMessageId, event.payload.status).catch(() => {});
       else if (event.type === 'input.receipt' && event.payload.clientMessageId === resumeInputId) {
@@ -1336,7 +1334,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (options.agent === 'codex') {
-          if (controlClient?.codexConfig) spec.operations = { config: controlClient.codexConfig };
           codexAccountKey = controlClient?.accountKey || null;
           // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none (a test injecting only `launch` names its `locate`).
           const codex = resolveExecutable === executable ? await locate(env) : null;

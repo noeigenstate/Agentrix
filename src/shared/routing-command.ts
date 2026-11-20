@@ -15,7 +15,6 @@ export async function readRoutingCommand({ projectId, terminalId }: SeatsTarget)
   try {
     const info = await window.agentrix?.skillSeats?.(projectId, terminalId);
     if (info) return { info, notice: '模型由模型路由决定' };
-    if (info === null) return { notice: '模型路由已关闭，使用 CLI 自身的默认设置' };
   } catch { /* The routing status could not be read. */ }
   return { notice: '无法读取模型路由状态' };
 }

@@ -28,9 +28,13 @@ test('canonical digests include ignored content and ignore LF, CRLF, and key ord
   const input = document({ future: { enabled: true }, designer: { enabled: true, fast: true } });
   write(JSON.stringify(input, null, 2)); const first = read();
   assert.deepEqual(first.ignored, ['roles.future', 'roles.designer.seat']);
-  write(JSON.stringify({ operations: {}, roles: { designer: { fast: true, enabled: true }, future: { enabled: true } },
+  write(JSON.stringify({ operations: input.operations, roles: { designer: { fast: true, enabled: true }, future: { enabled: true } },
     version: 1, format: input.format }, null, 2).replace(/\n/g, '\r\n'));
   assert.equal(read().digest, first.digest);
+  input.operations = { retired: { unrelated: true } };
+  write(JSON.stringify(input));
+  assert.notEqual(read().digest, first.digest);
+  assert.deepEqual(read().config, first.config);
   input.roles.future.enabled = false;
   write(JSON.stringify(input)); assert.notEqual(read().digest, first.digest);
 });
@@ -40,7 +44,6 @@ test('routing rejects unknown keys, prototype keys, newer versions, depth, inval
   for (const [contents, code] of [
     [JSON.stringify({ ...document(), version: 2 }), 'newer-version'],
     [JSON.stringify(document({ qa: { path: 'outside' } })), 'unknown-key'],
-    [JSON.stringify(document({}, { lookup: { model: 'haiku', extra: true } })), 'unknown-key'],
     ['{"format":"agentrix-routing","version":1,"roles":{"__proto__":{}},"operations":{}}', 'unknown-key'],
     [JSON.stringify(document({ qa: { enabled: { extra: { a: {} } } } })), 'too-deep'],
     [JSON.stringify(document({ reviewer: { enabled: false } })), 'reviewer-required'],
@@ -60,7 +63,7 @@ test('routing rejects junctions and non-regular targets, preserving their conten
   fs.symlinkSync(other, folder, 'junction');
   const linked = read();
   assert.equal(linked.error.code, 'link'); assert.equal(linked.raw, undefined);
-  assert.equal(writeRouting(root, { roles: {}, operations: {} }, linked.digest, context, assert.fail).code, 'file-unwritable');
+  assert.equal(writeRouting(root, { roles: {} }, linked.digest, context, assert.fail).code, 'file-unwritable');
   assert.equal(fs.readFileSync(path.join(other, 'routing.json'), 'utf8'), 'private');
   fs.unlinkSync(folder);
   fs.mkdirSync(file, { recursive: true });
@@ -71,7 +74,7 @@ test('a project beneath a junction can read and save its own routing file', t =>
   const { root } = fixture(t), real = path.join(root, 'real'), link = path.join(root, 'linked');
   fs.mkdirSync(path.join(real, 'project'), { recursive: true });
   fs.symlinkSync(real, link, 'junction');
-  const project = path.join(link, 'project'), config = { roles: { qa: { enabled: false } }, operations: {} };
+  const project = path.join(link, 'project'), config = { roles: { qa: { enabled: false } } };
   assert.equal(readRouting(project, ...context).digest, null);
   assert.deepEqual(writeRouting(project, config, null, context, () => () => {}), { ok: true });
   assert.deepEqual(readRouting(project, ...context).config, config);
@@ -80,7 +83,7 @@ test('a project beneath a junction can read and save its own routing file', t =>
 test('routing accepts BOM and absent operations and rejects duplicate keys and unsafe file fields', t => {
   const { read, write } = fixture(t);
   write('\uFEFF{"format":"agentrix-routing","version":1,"roles":{}}');
-  assert.deepEqual(read().config, { roles: {}, operations: {} });
+  assert.deepEqual(read().config, { roles: {} });
   write('{"format":"agentrix-routing","version":1,"roles":{"qa":{"enabled":true,"en\\u0061bled":false}}}');
   assert.equal(read().error.code, 'bad-json');
   for (const roles of [
@@ -95,7 +98,7 @@ test('routing accepts BOM and absent operations and rejects duplicate keys and u
   }
   const unknown = Object.fromEntries(Array.from({ length: 20 }, (_, id) => ['future' + id, {}]));
   write(JSON.stringify(document({ qa: { model: 'sonnet', effort: 'unknown' }, ...unknown }, { lookup: { model: 'opus', effort: 'unknown' } })));
-  assert.deepEqual(read().config.operations, {});
+  assert.equal(Object.hasOwn(read().config, 'operations'), false);
   assert.equal(read().config.roles.qa.model, undefined);
   assert.equal(read().ignored[0], 'roles.qa.seat');
   assert.equal(read().ignored.length, 16);
@@ -109,25 +112,25 @@ test('the reviewer cannot share Developer’s model when another author occupies
   assert.equal(read().error.code, 'reviewer-same-model');
 });
 
-test('review flags weakened verification roles, the review operation and shared reviewer models', () => {
-  const original = { roles: { a11y: { enabled: true } }, operations: { review: { model: 'gpt-6.1-sol' } } };
+test('review flags weakened verification roles and shared reviewer models', () => {
+  const original = { roles: { a11y: { enabled: true } } };
   const config = { roles: {
     reviewer: { enabled: false }, developer: { model: 'opus', effort: 'high' },
     'x-audit': { from: 'reviewer', name: 'Audit', duty: 'Review changes', outputs: '' },
     qa: { effort: 'low', model: 'sonnet' }, security: { model: 'sonnet', effort: 'high' },
     a11y: { enabled: true, model: 'haiku', effort: 'high' },
-  }, operations: { review: { model: 'gpt-mini' } } };
-  const before = { ...resolveTeam(entry, original, context[2]), operations: original.operations };
+  } };
+  const before = resolveTeam(entry, original, context[2]);
   const after = resolveTeam(entry, config, context[2]);
   const flags = reviewFile({ config, ignored: [] }, 'changed', after, before, catalog).flags;
-  const weakened = flags.filter(flag => flag.code === 'verification-weakened').map(flag => flag.role ?? flag.operation);
-  assert.deepEqual(new Set(weakened), new Set(['reviewer', 'x-audit', 'qa', 'security', 'a11y', 'review']));
+  const weakened = flags.filter(flag => flag.code === 'verification-weakened').map(flag => flag.role);
+  assert.deepEqual(new Set(weakened), new Set(['reviewer', 'x-audit', 'qa', 'security', 'a11y']));
   assert.ok(flags.filter(flag => flag.code === 'verification-weakened' && flag.role).every(flag => flag.text === undefined));
 });
 
 function reviewChanges(roles, priorRoles = {}) {
-  const config = { roles, operations: {} };
-  const previous = { ...resolveTeam(entry, { roles: priorRoles, operations: {} }, context[2]), operations: {} };
+  const config = { roles };
+  const previous = resolveTeam(entry, { roles: priorRoles }, context[2]);
   const next = resolveTeam(entry, config, context[2]);
   return reviewFile({ config, ignored: [] }, 'changed', next, previous, catalog);
 }
@@ -173,13 +176,13 @@ test('save clears abandoned routing temporaries while keeping recent files', t =
   const abandoned = path.join(folder, '.routing-abandoned.tmp'), recent = path.join(folder, '.routing-recent.tmp');
   fs.writeFileSync(abandoned, 'old'); fs.writeFileSync(recent, 'recent');
   fs.utimesSync(abandoned, 100, 100);
-  assert.deepEqual(writeRouting(root, { roles: {}, operations: {} }, read().digest, context, () => () => {}), { ok: true });
+  assert.deepEqual(writeRouting(root, { roles: {} }, read().digest, context, () => () => {}), { ok: true });
   assert.equal(fs.existsSync(abandoned), false);
   assert.equal(fs.existsSync(recent), true);
 });
 
 test('atomic writes record trust before rename and refuse to replace a stale base', t => {
-  const { root, folder, read } = fixture(t), config = { roles: { qa: { enabled: false } }, operations: {} };
+  const { root, folder, read } = fixture(t), config = { roles: { qa: { enabled: false } } };
   let trust;
   const write = base => writeRouting(root, config, base, context, digest => {
     assert.equal(read().digest, base);
@@ -196,7 +199,7 @@ test('atomic writes record trust before rename and refuse to replace a stale bas
 });
 
 test('a competing write during trust persistence restores trust and leaves the competing file', t => {
-  const { root, folder, write, read } = fixture(t), config = { roles: {}, operations: {} };
+  const { root, folder, write, read } = fixture(t), config = { roles: {} };
   const original = JSON.stringify(document({ qa: { enabled: false } }));
   const next = JSON.stringify(document({ qa: { fresh: false } }));
   write(original); let rollback = false;
@@ -212,7 +215,7 @@ test('a competing write during trust persistence restores trust and leaves the c
 
 test('trust states select exactly one fallback and reject unavailable invalid-file actions', t => {
   const { root, write, read } = fixture(t);
-  const project = { id: 'p', path: root }, local = { roles: { qa: { enabled: false } }, operations: {} };
+  const project = { id: 'p', path: root }, local = { roles: { qa: { enabled: false } } };
   const stored = { local: { p: local } };
   write(JSON.stringify(document())); const candidate = read();
   assert.equal(routingState(project, candidate, stored).source.state, 'pending');

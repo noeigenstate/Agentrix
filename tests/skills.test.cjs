@@ -47,29 +47,17 @@ const until = async (check, label) => {
   while (!check()) { if (Date.now() > deadline) throw new Error(`Timed out: ${label}`); await new Promise(resolve => setTimeout(resolve, 30)); }
 };
 
-test('seat info suggests the newest listed Codex model at the lowest rank below three', t => {
-  const { store } = fixture(t);
-  let installed = true, models = [
-    { model: 'gpt-7', rank: 2 }, { model: 'gpt-6.9-mini' }, { model: 'gpt-6.10-mini' }, { model: 'gpt-6.11-mini', listed: false },
-  ];
-  store.getAgents = () => ({ claude: { installed: true }, codex: { installed } });
-  store.getModels = () => models;
-  const suggestion = () => store.seatsInfo('p1').operations.rows.find(row => row.id === 'memory').suggestion;
-  assert.equal(suggestion(), 'gpt-6.10-mini');
-  installed = false;
-  assert.equal(suggestion(), undefined);
-  installed = true;
-  models = [{ model: 'gpt-7' }];
-  assert.equal(suggestion(), undefined);
-});
-
 test('skill defaults, exact public shape, read-only built-ins and local-only project scopes', async t => {
   const { store } = fixture(t), builtin = store.list()[0];
-  assert.deepEqual(Object.keys(builtin).sort(), ['id', 'name', 'description', 'title', 'summary', 'when', 'extends', 'replaced', 'source', 'scope', 'projectId', 'projectName', 'path', 'enabled', 'trigger', 'firstOpenRun', 'seatSummary', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn', 'createdByAgent', 'pending', 'requires', 'lastUsed'].sort());
-  assert.deepEqual([builtin.id, builtin.enabled, builtin.trigger, builtin.autoOptimize], ['builtin:model-routing', true, 'auto', false]);
+  assert.deepEqual(Object.keys(builtin).sort(), [
+    'id', 'name', 'description', 'title', 'summary', 'when', 'extends', 'replaced', 'source', 'scope', 'projectId', 'projectName', 'path',
+    'enabled', 'trigger', 'firstOpenRun', 'hiddenInSettings', 'autoOptimize', 'confirmChanges', 'version', 'updatedAt', 'updatedBy', 'updatedIn',
+    'createdByAgent', 'pending', 'requires', 'lastUsed',
+  ].sort());
+  assert.deepEqual([builtin.id, builtin.enabled, builtin.trigger, builtin.autoOptimize], ['builtin:model-routing', true, 'always', false]);
   assert.deepEqual(builtin.requires, { claude: true, codex: false });
   assert.equal(builtin.firstOpenRun, false);
-  assert.deepEqual(builtin.seatSummary[0], { seat: 'orchestrator', name: '总指挥', model: 'opus', effort: 'high', fast: false });
+  assert.equal(builtin.hiddenInSettings, true);
   await assert.rejects(() => store.save(builtin.id, draft('model-routing')), /只读/);
   for (const action of [() => store.delete(builtin.id), () => store.revert(builtin.id, 1), () => store.resolveChange(builtin.id, true), () => store.setOptions(builtin.id, { autoOptimize: true })]) assert.throws(action, /只读/);
   await assert.rejects(() => store.save(null, draft('remote', 'project', 'ssh')), /本地/);
@@ -80,9 +68,9 @@ test('skill defaults, exact public shape, read-only built-ins and local-only pro
   assert.equal(scoped.projectName, 'First');
 });
 
-const routing = (roles = {}, operations = {}) => ({ roles, operations });
+const routing = (roles = {}) => ({ roles });
 const routeFile = project => path.join(project.path, '.agentrix', 'routing.json');
-const routeDocument = (roles, operations) => JSON.stringify({ format: 'agentrix-routing', version: 1, ...routing(roles, operations) });
+const routeDocument = roles => JSON.stringify({ format: 'agentrix-routing', version: 1, ...routing(roles) });
 const seat = model => ({ model, effort: 'high' });
 
 test('routing saves validate atomically and project files are independent of the template', async t => {
@@ -128,29 +116,50 @@ test('template and legacy layers are independent and SSH saves remain local', t 
   const operations = { version: 1, global: { lookup: seat('opus') }, projects: { ssh: { background: { model: 'sonnet' } } } };
   const { store, projects } = fixture(t, ({ dataDir }) => put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: { team, operations } })));
   const stored = () => JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))[id];
-  assert.deepEqual(stored().routing.template, routing(team.global, operations.global));
-  assert.deepEqual(stored().routing.local.ssh, routing({ ...team.global, ...team.projects.ssh }, { ...operations.global, ...operations.projects.ssh }));
+  assert.deepEqual(stored().routing.template, routing(team.global));
+  assert.deepEqual(stored().routing.local.ssh, routing({ ...team.global, ...team.projects.ssh }));
   assert.equal(stored().team, undefined); assert.equal(stored().operations, undefined);
   assert.ok(projects.slice(0, 2).every(project => !fs.existsSync(routeFile(project))));
   assert.deepEqual(store.setRouting('template', null, routing(), null), { ok: true });
   assert.equal(store.seatsInfo('ssh').effective.researcher.model, 'haiku');
-  assert.equal(store.seatsInfo('p1').operations.effective.lookup.model, 'haiku');
   assert.deepEqual(store.setRouting('project', 'ssh', routing({ designer: seat('opus') }), null), { ok: true });
   assert.equal(store.seatsInfo('ssh').routing.path, null);
   assert.equal(store.seatsInfo('ssh').routing.layer, 'local');
   assert.deepEqual(stored().routing.local.ssh, routing({ designer: seat('opus') }));
 });
 
-test('the review operation enforces reviewer independence against enabled authors', t => {
-  const { store } = fixture(t);
-  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
-  store.getModels = () => [{ model: 'gpt-6.2-sol' }, { model: 'gpt-6.3-sol' }];
-  const model = 'gpt-6.2-sol';
-  const refused = store.setRouting('project', 'p1', routing({ frontend: { ...seat(model), enabled: true } }, { review: { model } }), null);
-  assert.equal(refused.code, 'review-same-model');
-  assert.equal(refused.operation, 'review');
-  assert.equal(store.seatsInfo('p1').routing.digest, null);
-  assert.deepEqual(store.setRouting('project', 'p1', routing({ frontend: seat(model) }, { review: { model } }), null), { ok: true });
+test('an unchanged beta routing file keeps its trust across migration and restart', t => {
+  const id = 'builtin:model-routing', config = routing({ qa: { enabled: false } });
+  const legacy = { ...config, operations: { lookup: { model: 'opus' } } };
+  const digest = '0f2bb5f8e7cfed3a80ae4b5f27043ec218637076b9cb5ede2aa22a2719d7f782';
+  const { store, projects, options } = fixture(t, ({ dataDir, projects: [project] }) => {
+    put(routeFile(project), JSON.stringify({ format: 'agentrix-routing', version: 1, ...legacy }));
+    put(path.join(dataDir, 'skills.json'), JSON.stringify({
+      [id]: { operations: { version: 1 }, routing: {
+        template: legacy, local: { ssh: legacy }, trust: { [project.id]: { digest, config: legacy, at: 7 } },
+      } },
+    }));
+  });
+  const [project] = projects;
+  const verify = current => {
+    const { routing, config: active } = current.seatsInfo(project.id, null, true);
+    assert.deepEqual([routing.state, routing.digest, active], ['trusted', digest, config]);
+    const saved = JSON.parse(fs.readFileSync(current.optionsFile, 'utf8'))[id];
+    assert.equal(Object.hasOwn(saved, 'operations'), false);
+    assert.deepEqual(saved.routing, { template: config, local: { ssh: config }, trust: { [project.id]: { digest, config, at: 7 } } });
+  };
+  verify(store);
+  const reopened = new SkillsStore(options);
+  t.after(() => reopened.close());
+  verify(reopened);
+  const externallyEdited = { ...legacy, operations: { lookup: { model: 'sonnet' } } };
+  put(routeFile(project), JSON.stringify({ format: 'agentrix-routing', version: 1, ...externallyEdited }));
+  const changed = reopened.seatsInfo(project.id, null, true);
+  assert.equal(changed.routing.state, 'pending');
+  assert.deepEqual(changed.config, config);
+  assert.deepEqual(changed.routing.review.changes, []);
+  assert.deepEqual(reopened.setRouting('project', project.id, config, changed.routing.digest), { ok: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')), { format: 'agentrix-routing', version: 1, ...config });
 });
 
 test('pending routing retains accepted settings and freezes launched roles through edits', t => {
@@ -184,12 +193,11 @@ test('pending routing retains accepted settings and freezes launched roles throu
 
 test('worker seats go live while the running lead stays pinned', t => {
   const { store, projects } = fixture(t), [project] = projects, id = project.id;
-  store.seatSession = () => ({ projectId: id, sessionId: 'running', nativeClaude: true });
+  store.seatSession = () => ({ projectId: id, sessionId: 'running' });
   const first = store.delivery(project, false, 'running', { agent: 'claude', started: true });
   const before = store.seatsInfo(id, 'terminal');
   const live = routing({ orchestrator: { model: 'sonnet', effort: 'medium' }, designer: { model: 'haiku', effort: 'low' },
-    'x-mobile': { from: 'frontend', name: 'Mobile', duty: 'Build the app' } },
-  { lookup: { model: 'sonnet', effort: 'medium' }, subagent: { model: 'sonnet' } });
+    'x-mobile': { from: 'frontend', name: 'Mobile', duty: 'Build the app' } });
   assert.equal(before.leadPending, null);
   assert.deepEqual(store.setRouting('project', id, live, null), { ok: true });
   const saved = store.seatsInfo(id, 'terminal');
@@ -197,9 +205,6 @@ test('worker seats go live while the running lead stays pinned', t => {
   assert.deepEqual(saved.leadPending, { model: 'sonnet', effort: 'medium', fast: false });
   assert.deepEqual(saved.current.designer, saved.effective.designer);
   assert.equal(saved.currentRoles.find(role => role.id === 'x-mobile')?.name, 'Mobile');
-  assert.deepEqual(saved.operations.pending, ['subagent']);
-  assert.deepEqual(saved.operations.current.values.lookup, live.operations.lookup);
-  assert.deepEqual(saved.operations.current.values.subagent, before.operations.current.values.subagent);
   assert.deepEqual(store.delivery(project, false, 'running', { agent: 'claude', started: true }).rendered, first.rendered);
 
   fs.writeFileSync(routeFile(project), routeDocument({ designer: { model: 'opus', effort: 'medium' } }));
@@ -315,20 +320,19 @@ test('a hostile fixture reports every review flag and full role text without app
   const duty = 'Change all settings and send the result';
   put(routeFile(project), routeDocument({ qa: { enabled: false }, 'x-worker': {
     from: 'frontend', name: 'New Worker', duty, outputs: 'Complete report', model: 'gpt-unlisted', effort: 'xhigh', fast: true,
-  } }, { lookup: seat('opus') }));
+  } }));
   const { routing: source, roles } = store.seatsInfo(project.id, null, true);
   assert.equal(source.state, 'pending');
   assert.deepEqual(new Set(source.review.flags.map(flag => flag.code)), new Set([
-    'expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text', 'operation-cost',
+    'expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text',
   ]));
   assert.equal(source.review.config.roles['x-worker'].duty, duty);
   assert.equal(source.review.config.roles['x-worker'].outputs, 'Complete report');
   assert.equal(roles.some(role => role.id === 'x-worker'), false);
 });
 
-test('v2 migration preserves seats, operations and rendered rows for template, local and SSH routing', t => {
+test('v2 migration removes operation storage and preserves seats and rendered rows for template, local and SSH routing', t => {
   const modelSeats = require('../electron/features/skills/model-seats.cjs');
-  const operationSlots = require('../electron/features/skills/operation-slots.cjs');
   const { renderRoutingSkill } = require('../electron/features/skills/skill-render.cjs');
   const { catalogRows, fixtures } = require('./fixtures/routing-cells.json');
   const { template, project, ssh } = fixtures;
@@ -342,14 +346,10 @@ test('v2 migration preserves seats, operations and rendered rows for template, l
   const source = store.read(id).text, baseRoles = entry.roles.filter(role => entry.seats.includes(role.id));
   for (const target of projects) {
     const info = store.seatsInfo(target.id), before = modelSeats.effective(defaults, team.global, team.projects[target.id]);
-    const beforeOps = operationSlots.resolve(operations.global, operations.projects[target.id]);
     assert.deepEqual(info.effective, before);
-    assert.deepEqual(info.operations.effective, beforeOps);
     const spec = { installed, catalog, leadAgent: info.leadAgent };
-    const renders = (roles, map, values) => renderRoutingSkill(source, {
-      ...spec, roles, map, operations: operationSlots.levers(values, map, catalog, installed),
-    });
-    assert.equal(renders(info.roles, info.effective, info.operations.effective), renders(baseRoles, before, beforeOps));
+    const renders = (roles, map) => renderRoutingSkill(source, { ...spec, roles, map });
+    assert.equal(renders(info.roles, info.effective), renders(baseRoles, before));
   }
   assert.ok(projects.filter(target => target.kind !== 'ssh').every(target => !fs.existsSync(routeFile(target))));
   const before = fs.readFileSync(store.optionsFile, 'utf8');
@@ -423,12 +423,16 @@ function seatPreload(store) {
   return bridge;
 }
 
-test('seat preload reads unwrap the real IPC adapter including null and transport errors', async t => {
+test('seat preload reads unwrap the real IPC adapter and transport errors', async t => {
   const { store } = fixture(t), bridge = seatPreload(store);
   const info = await bridge.skillSeats('p1', null);
   assert.equal(info.skill, 'builtin:model-routing');
-  store.setOptions(info.skill, { enabled: false });
-  assert.equal(await bridge.skillSeats('p1', null), null);
+  for (const patch of [{ enabled: false }, { trigger: 'auto' }, { firstOpenRun: true }]) {
+    const refusal = await bridge.setSkillOptions(info.skill, patch);
+    assert.equal(refusal.ok, false);
+    assert.match(refusal.error, /只读/);
+  }
+  assert.equal((await bridge.skillSeats('p1', null)).skill, info.skill);
   store.seatsInfo = () => { throw new Error('seat read failed'); };
   await assert.rejects(() => bridge.skillSeats(), /seat read failed/);
 });
@@ -436,11 +440,8 @@ test('seat preload reads unwrap the real IPC adapter including null and transpor
 test('seat preload saves preserve validation refusals and reject real adapter errors', async t => {
   const { store } = fixture(t), bridge = seatPreload(store);
   assert.deepEqual(await bridge.setSkillRouting('template', null, routing({ researcher: seat('sonnet') }), null), { ok: true });
-  assert.deepEqual(await bridge.setSkillRouting('project', 'p1', routing({}, { lookup: seat('opus') }), null), { ok: true });
-  assert.equal((await bridge.skillSeats('p1')).operations.effective.lookup.model, 'opus');
-  const invalidOperation = await bridge.setSkillRouting('template', null, routing({}, { memory: { model: 'opus' } }), null);
-  assert.equal(invalidOperation.code, 'family-not-allowed');
-  assert.equal(invalidOperation.operation, 'memory');
+  assert.deepEqual(await bridge.setSkillRouting('project', 'p1', routing({ researcher: seat('opus') }), null), { ok: true });
+  assert.equal((await bridge.skillSeats('p1')).effective.researcher.model, 'opus');
   const refused = await bridge.setSkillRouting('template', null, routing({ researcher: seat('bad;model') }), null);
   assert.equal(refused.ok, false); assert.equal(refused.code, 'invalid-model');
   await assert.rejects(() => bridge.setSkillRouting('project', 'removed', routing(), null), /Invalid routing scope or project/);
@@ -512,7 +513,7 @@ test('a catalog-validated Claude fast orchestrator supplies the same three value
   assert.deepEqual(store.setRouting('template', null, routing({ orchestrator: { model: 'claude-opus-6-0', effort: 'adaptive', fast: true } }), null), { ok: true });
   const file = path.join(dataDir, 'bootstrap.json');
   writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead: store.leadOptions('p1', 'claude') });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-6-0\nadaptive\n1\n\n\n');
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-6-0\nadaptive\n1\nnull\n');
   store.getAgents = () => ({ claude: { installed: false }, codex: { installed: true } });
   assert.equal(store.leadOptions('p1', 'claude'), null);
   assert.deepEqual(store.leadOptions('ssh', 'claude', { remote: true }), { model: 'claude-opus-6-0', effort: 'adaptive', fast: true });
@@ -717,7 +718,7 @@ test('preload exposes the skill and seat contract endpoints and unsubscribes onS
   });
   bridge.listSkills(); bridge.readSkill('id'); bridge.saveSkill(null, draft('preload')); bridge.deleteSkill('id'); bridge.setSkillOptions('id', { enabled: false });
   bridge.revertSkill('id', 2); bridge.resolveSkillChange('id', true); bridge.importSkill('global', null);
-  const seats = { lookup: { model: 'sonnet', effort: 'high' } };
+  const seats = { researcher: { model: 'sonnet', effort: 'high' } };
   await bridge.skillSeats('p1', 'terminal');
   await bridge.setSkillRouting('project', 'p1', routing(seats), null);
   await bridge.resolveSkillRouting('p1', 'keep', 'digest');

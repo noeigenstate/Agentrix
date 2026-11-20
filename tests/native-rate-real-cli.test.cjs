@@ -11,7 +11,6 @@ const { once } = require('node:events');
 const { spawn, spawnSync } = require('node:child_process');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
-const { LOOKUP_AGENT_NAME, LOOKUP_AGENT } = require('../electron/features/claude-sdk/lookup-agent.cjs');
 const { inputQueue } = require('../electron/features/claude-sdk/query.cjs');
 
 test('real Claude streaming usage reaches the main native rate before the turn result', {
@@ -58,23 +57,26 @@ test('real Claude child usage and Agent tool wait never enter the main rate', {
   skip: !process.env.AGENTRIX_REAL_CLAUDE && 'set AGENTRIX_REAL_CLAUDE to locked CLI', timeout: 45000,
 }, async t => {
   let childRequests = 0;
+  const childName = 'rate-fixture', childPrompt = 'You are the offline rate test child.';
+  const agents = { [childName]: { description: 'Respond to the offline rate fixture.', prompt: childPrompt, model: 'haiku' } };
   const finish = output => [{ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: output } }, { type: 'message_stop' }];
   const f = await harness(t, (data, response) => {
-    if (JSON.stringify(data.system).includes(LOOKUP_AGENT.prompt)) {
+    if (JSON.stringify(data.system).includes(childPrompt)) {
       childRequests++;
       setTimeout(() => response.end(stream([...textBlock(0, 'CHILD_RATE_PROOF'), ...finish(777)])), 300);
       return { hold: true, events: [opening(data)] };
     }
     if (JSON.stringify(data.messages).includes('toolu_rate_child')) return [opening(data), ...textBlock(0, 'ROOT_RATE_PROOF'), ...finish(20)];
+    const input = { subagent_type: childName, prompt: 'Return the offline fixture result.', description: 'Offline rate child', run_in_background: false };
     return [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_rate_child', name: 'Agent', input: {} } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ subagent_type: LOOKUP_AGENT_NAME, prompt: 'Return the offline lookup result.', description: 'Offline rate child', run_in_background: false }) } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
       { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 10 } }, { type: 'message_stop' }];
   });
   const meter = new TokenRates('claude'), began = Date.now(), marks = [], shapes = [];
   meter.nativeBegin(began);
   const queue = inputQueue(); queue.push({ type: 'user', uuid: randomUUID(), session_id: '', parent_tool_use_id: null, message: { role: 'user', content: 'Run the offline lookup.' } });
   let result;
-  try { result = await f.run({}, message => {
+  try { result = await f.run({ agents }, message => {
     const at = Date.now(); meter.nativeClaude(message, at);
     if (message.type === 'stream_event' && message.event.type === 'message_delta' && !message.parent_tool_use_id) marks.push({ output: message.event.usage?.output_tokens, at });
     if (message.type === 'user' && message.message?.content?.some?.(block => block.type === 'tool_result')) marks.push({ tool: true, at });

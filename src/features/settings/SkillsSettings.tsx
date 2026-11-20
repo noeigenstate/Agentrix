@@ -38,7 +38,7 @@ function withNames(message: string) {
 // Settings › 技能: the built-in and the user's own skills on the left, one skill's controls and text on the right.
 export function SkillsSettings({ projects }: { projects: Project[] }) {
   // null until the first list arrives, so the empty state does not flash before it.
-  const [loaded, setSkills] = useState<SkillInfo[] | null>(null), skills = loaded ?? [];
+  const [loaded, setSkills] = useState<SkillInfo[] | null>(null), skills = loaded?.filter(skill => !skill.hiddenInSettings) ?? [];
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<(SkillDetail & { id: string }) | null>(null);
   const [tab, setTab] = useState<SkillTab>('text');

@@ -112,9 +112,6 @@ function builtinMetadata(text, folder) {
   const { visible, fence } = outsideFences(front.body.split(/\r?\n/));
   if (fields.seats && !region(visible, 'team')) fail('expected one agentrix:team region outside fences');
   if (fields.library) checkLibraryRegion(visible, fields.library, fail);
-  if (visible.some(line => /^\s*<!-- \/?agentrix:operations -->\s*$/.test(line)) && !region(visible, 'operations')) {
-    fail('expected one agentrix:operations region outside fences');
-  }
   const body = visible.join('\n');
   const headings = [...body.matchAll(/^ {0,3}(#{1,2})(?:[ \t]+(.*)|$)/gm)];
   if (fence || !/^# [A-Za-z][^\n]*\n/.test(body.trimStart()) || chinese(front.body) || headings.length !== 5

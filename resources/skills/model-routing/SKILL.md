@@ -1,8 +1,8 @@
 ---
 name: model-routing
 description: Use before any task that changes the project, however small (a new feature or a change to one, a bug fix or debugging, a UI tweak, tests, a refactor, a review or a release), before doing any of it yourself; route the task across the seats of the project's team (by default orchestrator, product, architect, designer, developer, reviewer, QA, researcher, DevOps and security, plus any library or project roles the owner adds), each with fixed model settings, run independent work in parallel and have fresh instances review and test it.
-trigger: auto
-when: 新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算
+trigger: always
+when: 每个任务开始前
 requires: any-agent
 title: 模型路由
 summary: 总指挥按席位把任务分给产品、架构、设计、开发、审查、测试、研究、运维和安全角色，能并行的尽量并行。审查和测试由全新实例独立完成。
@@ -71,11 +71,6 @@ shows the defaults with both agents installed and a Claude lead.
   as its row says; any other runs on the developer seat's model with `--seat developer/<specialty>`.
 - Every helper worker call passes `--seat <id>`; every Agent call's `description` starts with `[<seat>]`, for example
   `[designer] Mockup of the settings page`. Agentrix shows each worker under its seat in the Agent tab.
-- Quick lookups are not a seat. Searching, reading logs and reading files to find something go to the lookup
-  operation's model (see Operation models), launched as its row says for the lead's agent, several in one call, and the
-  orchestrator keeps only the conclusion: every tool call in a long session re-reads its whole context. The orchestrator
-  still reads for itself what it must judge exactly: a diff under review, a CI verdict it acts on, the steps of a
-  release. When the lookup operation's model is not available, it does the lookup itself.
 - Every reviewer seat (Reviewer and any project role that reviews), QA and Accessibility are always fresh instances
   that neither planned nor wrote the work. Every reviewer seat uses a model that no author seat (Developer, its
   specialty seats, Performance) runs, wherever the account has an available model at least as strong.
@@ -97,28 +92,6 @@ routing; it then moves into the team table with its own model. When one would cl
 | performance | Performance | Performance tuning: profiling, bottlenecks, startup, memory | Profiling report, optimizations |
 | a11y | Accessibility | Accessibility verification: keyboard, contrast, screen readers, focus | Accessibility report |
 <!-- /agentrix:library -->
-
-### Operation models
-
-Seats say who does a kind of task; operations say which model runs a specific step inside any session, whoever does
-the task: lookups, background helper calls, sub-agents started without a model, memory upkeep and Codex's review pass.
-Operation slots apply inside every session Agentrix starts, workers included. When they disagree, the owner's explicit
-instruction for a task wins, then a seat's model when a worker is launched, then the operation slot, then the agent's
-built-in default. Each column says what applies in a conversation led by that agent. Agentrix fills the Claude and
-Codex cells from the project's saved operations when it delivers this skill; the table as shipped shows the defaults.
-Compaction and titles are listed so their models are not guessed: Agentrix cannot set them.
-
-<!-- agentrix:operations -->
-| Operation | Name | Covers | Claude | Codex |
-| --- | --- | --- | --- | --- |
-| lookup | Lookup | Searching, listing and reading files, log excerpts | haiku · high; agentrix-lookup in native mode, else Agent call, model "haiku", effort "high" | haiku · high; helper claude --seat researcher --model haiku --effort high --permission plan --detach, then wait |
-| background | Background helpers | Claude Code's own light background calls; titles and web-page summaries move with it | haiku | not controllable |
-| subagent | Sub-agent default | Sub-agents started without an explicit model | follows the conversation | follows the conversation |
-| memory | Memory | Extracting and consolidating memories | not controllable | Codex default |
-| review | Review pass | Codex's built-in review (/review, review/start) | not controllable (review is the Reviewer seat) | Codex default |
-| compaction | Compaction | Compacting a long conversation's context | not controllable (built into Claude Code / Codex) | not controllable (built into Claude Code / Codex) |
-| titles | Titles | Conversation titles | not controllable (moves with background) | not controllable (built into Codex) |
-<!-- /agentrix:operations -->
 
 ### Seats and model settings
 
@@ -428,7 +401,6 @@ project memory itself is not committed. The next round's roundtable (a new meeti
 - QA accepts visible changes from screenshots of each state with a realistic data set and a click test on every control.
 - Security reviews permissions, new file-read or process surfaces and dependencies whenever a change adds them.
 - DevOps builds, deploys or rolls back only when a release is requested.
-- Quick lookups go to the lookup operation's model (see Operation models), not a seat; the orchestrator keeps the conclusion and reads itself only what it must judge exactly.
 - Codex always runs in native mode. Claude workers follow the lead's run mode and never cross: native-mode lead, native subagents, API billing; terminal-mode lead, terminal subagents, subscription billing. Dispatch and billing are separate questions.
 - Use separate worktrees for parallel builds, with no overlapping file ownership.
 - Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.

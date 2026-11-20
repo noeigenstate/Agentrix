@@ -211,7 +211,7 @@ export type SkillInfo = {
   replaced: { project: string; name: string; from: string; backup: string; at: number }[];
   projectId: string | null; projectName: string | null; path: string;
   enabled: boolean; trigger: 'always' | 'auto'; firstOpenRun: boolean; autoOptimize: boolean; confirmChanges: boolean;
-  seatSummary?: { seat: SeatId; name: string; model: string; effort: string; fast: boolean }[];
+  hiddenInSettings?: true;
   // The latest version and who made it; createdByAgent until the user has looked at it (the 新 mark).
   // updatedIn and lastUsed.project are project NAMES (for display), never ids.
   version: number; updatedAt: number | null; updatedBy: 'agent' | 'user' | 'app' | null; updatedIn: string | null; createdByAgent: boolean;
@@ -247,15 +247,12 @@ export type SeatModel = {
 };
 // A saved seat main ran differently: the slot, why, and what it ran instead.
 export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsupported' | 'fast-unsupported'; substitute: string };
-export type OperationId = 'lookup' | 'background' | 'subagent' | 'memory' | 'review';
-export type OperationValue = { model: string; effort?: string } | 'follow';
-export type OperationMap = Partial<Record<OperationId, OperationValue>>;
-export type RoutingConfig = { roles: Record<SeatId, RoleConfig>; operations: OperationMap };
+export type RoutingConfig = { roles: Record<SeatId, RoleConfig> };
 export type RoutingAction = 'apply' | 'keep' | 'overwrite';
 export type RoleRuleCode = 'invalid-role' | 'role-text' | 'role-limit' | 'reviewer-required' | 'lead-locked';
 export type RoutingFlag = {
-  code: 'expensive-model' | 'fast-on' | 'high-effort' | 'unlisted-model' | 'verification-weakened' | 'custom-text' | 'operation-cost';
-  role?: SeatId; operation?: OperationId; text?: string;
+  code: 'expensive-model' | 'fast-on' | 'high-effort' | 'unlisted-model' | 'verification-weakened' | 'custom-text';
+  role: SeatId; text?: string;
 };
 export type RoutingRoleState = {
   enabled: boolean; fresh: boolean; model?: string; effort?: string; fast: boolean; from?: SeatId;
@@ -267,7 +264,7 @@ export type RoutingRoleChange = {
 };
 export type RoutingReview = {
   digest: string; reason: 'new-on-machine' | 'changed'; config: RoutingConfig;
-  changes: { role?: SeatId; operation?: OperationId; field: string; from: unknown; to: unknown }[];
+  changes: { role: SeatId; field: string; from: unknown; to: unknown }[];
   roleChanges: RoutingRoleChange[];
   flags: RoutingFlag[]; ignored: string[];
 };
@@ -281,22 +278,6 @@ export type RoutingSource = {
     message: string;
   };
   review?: RoutingReview;
-};
-export type OperationAgentState = { state: 'applies' | 'default' | 'not-applicable' | 'not-effective'; reason?: string };
-export type OperationRow = {
-  id: OperationId | 'compaction' | 'titles';
-  name: string;
-  nameEn: string;
-  covers: string;
-  editable: boolean;
-  families: ('claude' | 'codex')[];
-  effort: 'always' | 'codex' | 'never';
-  follow: string | null;
-  default: OperationValue | null;
-  effective: { model: string; effort?: string } | null;
-  suggestion?: string;
-  agents: { claude: OperationAgentState; codex: OperationAgentState };
-  note?: string;
 };
 export type SeatsInfo = {
   skill: string;
@@ -323,27 +304,13 @@ export type SeatsInfo = {
   // Seats whose default moved to a newer model, reported once.
   defaultsMoved?: { seat: string; from: string; to: string }[];
   migrated?: string;
-  operations?: {
-    rows: OperationRow[];
-    defaults: OperationMap;
-    template: OperationMap;
-    config: OperationMap | null;
-    effective: OperationMap;
-    pending: OperationId[];
-    current: {
-      values: OperationMap;
-      agents: Partial<Record<OperationId, { claude: OperationAgentState; codex: OperationAgentState }>>;
-    } | null;
-  };
 };
 export type SeatsSaveError = {
   ok: false;
   code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model'
-    | 'unknown-operation' | 'family-not-allowed' | 'follow-not-allowed' | 'review-same-model'
     | RoleRuleCode | 'file-changed' | 'file-unwritable' | 'action-unavailable';
   seat?: string;
   role?: SeatId;
-  operation?: string;
   message: string;
 };
 // Where the Claude Code a session runs was found (claude-runtime/BOUNDARY.md); `fileShown` writes home as ~.

@@ -203,22 +203,20 @@ claude() {
   fi
   program=("${reply[@]}")
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  local model effort fast background_model subagent_model seat_map lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  local model effort fast seat_map legacy_seats lead_file=${AGENTRIX_BOOTSTRAP-}.lead
   local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
-  local -a lead_args=() lead_env=()
+  local -a lead_args=()
   if [[ $conversation == 1 && -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
     { IFS= read -r model && IFS= read -r effort && IFS= read -r fast && {
-        IFS= read -r background_model || :
-        IFS= read -r subagent_model || :
-      IFS= read -r seat_map || :
+        # Old files put the seat map on line 6, after two retired fields.
+        IFS= read -r seat_map || :
+        if IFS= read -r legacy_seats && IFS= read -r legacy_seats; then seat_map=$legacy_seats; fi
       }; } < "$lead_file" &&
     [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $fast == 0 || $fast == 1 ) ]]; then
     lead_args=(--model "$model" --effort "$effort")
     if [[ $fast == 1 ]]; then launch_http=$__pg_fast_hook_settings launch_fallback=$__pg_fast_hook_fallback; fi
-    [[ $background_model =~ $model_pattern ]] && lead_env+=("ANTHROPIC_DEFAULT_HAIKU_MODEL=$background_model")
-    [[ $subagent_model =~ $model_pattern ]] && lead_env+=("CLAUDE_CODE_SUBAGENT_MODEL=$subagent_model")
   fi
-  lead_env+=("AGENTRIX_SEATS=${seat_map:-null}")
+  [[ ${seat_map-} == \{* ]] || seat_map=null
   local settings=$launch_fallback
   if [[ $__pg_hook_channel == http ]]; then
     if __pg_hook_proxy $__pg_hook_port; then __pg_send hook-channel 0 claude $REPLY; else settings=$launch_http; fi
@@ -244,7 +242,7 @@ claude() {
   # This Claude Code is a planner: the shims come first on its PATH, at depth zero (shims/BOUNDARY.md).
   local -a planner=()
   [[ -n $__pg_shims ]] && planner=(${(0)"$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env 2>/dev/null)"})
-  command env "${planner[@]}" "${lead_env[@]}" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
+  command env "${planner[@]}" AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
     "${program[@]}" "${settings_args[@]}" "${note[@]}" "${lead_args[@]}" "$@"
   local code=$?
   [[ -n $settings_file ]] && rm -f -- "$settings_file"

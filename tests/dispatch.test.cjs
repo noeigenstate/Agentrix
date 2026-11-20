@@ -167,54 +167,6 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-test('dispatch forwards registered Codex operation config and names refused keys in routing output', async t => {
-  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'dispatch-operations-')));
-  t.after(() => fs.rm(directory, { recursive: true, force: true }));
-  const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), bootstrap = path.join(directory, 'bootstrap.json');
-  await fs.writeFile(brief, 'Synthetic operation settings');
-  await fs.writeFile(bootstrap, JSON.stringify({ projectId: 'fixture', sessionKey: 'fixture-key', controlAddress: 'fixture', controlCapability: 'fixture' }));
-  const config = { review_model: 'gpt-6.1-sol', 'agents.default_subagent_model': 'gpt-6.2-sol',
-    'agents.default_subagent_reasoning_effort': 'high', 'memories.extract_model': 'gpt-6.1-sol', 'memories.consolidation_model': 'gpt-6.1-sol' };
-  const refusedKeys = ['review_model', 'memories.extract_model'];
-  const launches = [];
-  t.mock.method(require('../electron/features/team/team.cjs'), 'projectTeam', () => null);
-  t.mock.method(require('../electron/features/agents/dispatch-control.cjs'), 'connectDispatchControl', async () => ({ codexConfig: config, close() {} }));
-  t.mock.method(require('../electron/features/codex-app-server/index.cjs'), 'createCodexRuntime', () => ({
-    create(spec, emit) {
-      function routing(mode) {
-        launches.push({ mode, operations: spec.operations });
-        const operations = spec.operations && { applied: [], refused: refusedKeys.map(key => ({ key, reason: 'Synthetic refusal' })) };
-        emit({ type: 'routing.updated', providerSessionId: session, payload: { effective: { model: spec.model }, operations } });
-      }
-      return {
-        pid: 12345, start: () => routing('start'), resume: () => routing('resume'), close() {}, readLimits: async () => {},
-        send: async () => {
-          emit({ type: 'turn.started', providerSessionId: session, turnId: 'turn', payload: {} });
-          emit({ type: 'turn.completed', turnId: 'turn', payload: { status: 'completed' } });
-          return { status: 'delivered' };
-        },
-      };
-    },
-  }));
-  const original = require.cache[helper];
-  delete require.cache[helper];
-  t.after(() => { require.cache[helper] = original; });
-  const { run } = require(helper);
-  for (const [registered, resume] of [[true, false], [true, true], [false, false]]) {
-    const args = ['codex', '--role', 'exec', '--title', 'Operation settings', '--model', 'gpt-6.2-sol', '--effort', 'high',
-      '--cwd', directory, '--brief', brief, '--out', out, ...(resume ? ['--resume', session] : [])];
-    const env = { PATH: '', CODEX_HOME: path.join(directory, 'codex'), ...(registered ? { AGENTRIX_BOOTSTRAP: bootstrap } : {}) };
-    let reports = '';
-    assert.equal(await run(args, { env, stdout: { write: value => { reports += value; } },
-      resolveExecutable: () => assert.fail('Unexpected executable lookup'), launch: () => assert.fail('Unexpected CLI launch') }), 0, reports);
-    const routingLines = reports.split('\n').filter(line => line.startsWith('[dispatch] routing '));
-    assert.deepEqual(routingLines.map(line => line.split(' refused: ')[1]), registered ? [refusedKeys.join(', ')] : []);
-  }
-  assert.deepEqual(launches, [
-    { mode: 'start', operations: { config } }, { mode: 'resume', operations: { config } }, { mode: 'start', operations: undefined },
-  ]);
-});
-
 async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, hold, timeout = 30000, requestTimeout, extra = [], setup, isolated = false, environment = () => ({}), thread } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;

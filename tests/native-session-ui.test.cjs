@@ -2756,7 +2756,7 @@ test('native routing commands request the seats dialog without sending text or c
       assert.deepEqual(requests, Array(3).fill({ projectId: 'p1', terminalId: 't1', info }));
       window.agentrix.skillSeats = async () => null;
       await typeIn(view, '/model'); keyIn(view, 'Enter'); await settle();
-      assert.deepEqual(view.toasts(), ['模型路由已关闭，使用 CLI 自身的默认设置']);
+      assert.deepEqual(view.toasts(), ['无法读取模型路由状态']);
       assert.equal(requests.length, 3);
       assert.deepEqual(runtime, []);
     } finally { view.done(); }

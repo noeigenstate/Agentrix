@@ -19,16 +19,16 @@ test('Claude launch commands leave all seat flags to the terminal wrappers', () 
   assert.equal(launchCommand('claude', { id: 'saved' }, seat), 'claude --resume saved\r');
 });
 
-test('bootstrap writes and refreshes five lead lines for fresh and resumed terminal launches', t => {
+test('bootstrap writes and refreshes four lead lines for fresh and resumed terminal launches', t => {
   const { writeBootstrap, updateBootstrapLead, removeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'route-lead-')), file = path.join(root, 'bootstrap.json');
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const lead = { model: 'claude-opus-5[1m]', effort: 'adaptive', fast: true };
   writeBootstrap({ file, eventServer: { name: 'fake', address: 'fake' }, lead });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-5[1m]\nadaptive\n1\n\n\n');
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'claude-opus-5[1m]\nadaptive\n1\nnull\n');
   const bytes = fs.readFileSync(file, 'utf8');
-  updateBootstrapLead(file, { model: 'sonnet', effort: 'high', fast: false, env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-5-5' } });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'sonnet\nhigh\n0\nclaude-sonnet-5-5\n\n');
+  updateBootstrapLead(file, { model: 'sonnet', effort: 'high', fast: false, seatsMap: { researcher: { model: 'sonnet', effort: 'high' } } });
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'sonnet\nhigh\n0\n{"researcher":{"model":"sonnet","effort":"high"}}\n');
   assert.throws(() => updateBootstrapLead(file, { ...lead, model: 'invalid\nline' }), /Invalid lead seat/);
   updateBootstrapLead(file, null);
   assert.equal(fs.readFileSync(file + '.lead', 'utf8'), '');
@@ -61,7 +61,7 @@ test('native starts and resumes take the selected family lead and ignore obsolet
   assert.equal(pendingHistory.providerSessionId, null); assert.equal(pendingHistory.model, 'sonnet');
 });
 
-test('team defaults and the other-family lead are always present until routing is disabled', t => {
+test('team defaults and the other-family lead are always present even after a disable request', t => {
   const { SkillsStore } = require('../electron/features/skills/store.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-seat-lead-'));
   const project = { id: 'p', name: 'Isolated', path: path.join(root, 'project') }; fs.mkdirSync(project.path);
@@ -71,14 +71,14 @@ test('team defaults and the other-family lead are always present until routing i
   const start = nativeSeatStart({ leadOptions: store.leadOptions.bind(store) });
   assert.equal(start('claude').model, 'opus'); assert.equal(start('codex').model, 'gpt-6.1-sol');
   const claude = { model: 'sonnet', effort: 'max' };
-  assert.deepEqual(store.setRouting('template', null, { roles: { orchestrator: claude }, operations: {} }, null), { ok: true });
+  assert.deepEqual(store.setRouting('template', null, { roles: { orchestrator: claude } }, null), { ok: true });
   assert.deepEqual(store.leadOptions('p', 'claude'), claude);
   const codex = { model: 'gpt-6.1-sol', effort: 'low', fast: false };
-  assert.deepEqual(store.setRouting('project', 'p', { roles: { orchestrator: codex }, operations: {} }, null), { ok: true });
+  assert.deepEqual(store.setRouting('project', 'p', { roles: { orchestrator: codex } }, null), { ok: true });
   assert.deepEqual(store.leadOptions('p', 'claude'), { model: 'opus', effort: 'high' });
   assert.deepEqual(store.leadOptions('p', 'codex'), codex);
-  store.setOptions('builtin:model-routing', { enabled: false });
-  assert.equal(start('claude').model, null); assert.equal(start('codex', true).effort, null);
+  assert.throws(() => store.setOptions('builtin:model-routing', { enabled: false }), /\u53ea\u8bfb/);
+  assert.equal(start('claude').model, 'opus'); assert.equal(start('codex', true).effort, 'low');
 });
 
 test('latest and deferred Codex resumes take the current seat', () => {

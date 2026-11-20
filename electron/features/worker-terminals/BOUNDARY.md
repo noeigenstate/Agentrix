@@ -2,8 +2,6 @@
 
 Under a local terminal lead, a dispatched Claude worker runs as a hidden interactive `claude` in a PTY of its own, billed like the lead's terminal: main starts it, routes its hooks, reads its transcript into the dispatch stream, lets the owner answer its confirmations from the split, and kills it when the run ends.
 
-The PTY takes only the two validated Claude operation overrides from its brokered launch spec.
-
 ## Owns
 - `electron/features/worker-terminals/**`
 
@@ -12,7 +10,6 @@ The PTY takes only the two validated Claude operation overrides from its brokere
 - `meterRecord` (`electron/features/worker-terminals/worker-terminals.cjs`) — what of a transcript record reaches the dispatch helper's meter
 
 ## May import
-- `electron/features/skills/seat-rules.mjs` (validate the lead conversation's frozen Claude operation environment)
 - `electron/shared/claude-background.cjs` (the current Settings choice replaces the parent's saved background policy)
 - `electron/shared/agentrix-shims.cjs` (withoutShims: the worker starts from the owner's environment)
 - `electron/transcript-tail.cjs` (following the worker's transcript)

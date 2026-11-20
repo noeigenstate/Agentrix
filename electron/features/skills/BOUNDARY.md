@@ -2,10 +2,12 @@
 
 The skills library: built-in, global and project skills, their options, history and proposals, session instruction delivery, and the settings page that edits them.
 
-Routing saves roles and operation choices together. Accepted worker seats update running conversations. The launch snapshot retains the lead seat, launch-only operations and rendered instructions.
+Routing saves roles. Accepted worker seats update running conversations. The launch snapshot retains the lead seat and rendered instructions.
+Legacy routing documents keep their complete digest and only their roles affect routing.
 A project file can contain short custom duty and output text. Its author can write misleading prose within those limits, so applying an external edit requires owner confirmation.
 The same snapshot carries a launch map with Claude Agent aliases resolved against the catalog at launch time.
 Built-in defaults, timing and requirements come from front matter. Shipped files refuse save, delete, revert, proposal acceptance and optimization options.
+Model routing runs before every task and has no Settings controls.
 Built-in IDs and names live in Skills, as checked by `tests/boundary-skills.test.cjs`.
 Claude keeps startup instructions and the manifest fallback on its command line. SessionStart gets only the skill manifest.
 Actual CLI session and launch fingerprint deduplicate delivery. Compact and clear force delivery.
@@ -18,7 +20,7 @@ Delivery reuses instructions already in context and preserves owner prompts verb
 - `src/features/settings/skill-*.ts`
 
 ## Interface
-- `familyOf` (`electron/features/skills/seat-rules.mjs`) — shared model family, rank, effort lists, validation and Claude operation environment allowlist.
+- `familyOf` (`electron/features/skills/seat-rules.mjs`) — shared model family, rank, effort lists and validation.
 - `authorIdentityConflict` (`electron/features/skills/role-rules.mjs`) — shared role validation, limits, kinds and reviewer independence.
 - `SkillsStore` (`electron/features/skills/store.cjs`) — skill library, project routing, launch manifests, frozen sessionRoles, catalog observation and model probes.
 - `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including routing reads, saves and confirmation actions
@@ -47,7 +49,7 @@ Delivery reuses instructions already in context and preserves owner prompts verb
 
 ## Invariants
 - Built-ins refuse save, delete, revert, proposals and optimization. — test: `tests/skills.test.cjs` › "skill defaults, exact public shape, read-only built-ins and local-only project scopes"
-- Confirmed worker settings apply live while launch-only settings stay pinned — test: `tests/skills.test.cjs` › "worker seats go live while the running lead stays pinned"
+- Confirmed worker settings apply live while the running lead stays pinned — test: `tests/skills.test.cjs` › "worker seats go live while the running lead stays pinned"
 - Skill folders never escape managed storage; invalid names and symlinks are refused on read, save, import and delete — agents and imports supply these paths — test: `tests/skills.test.cjs` › "invalid names, imports and symlinked skill folders cannot escape managed storage"
 - SSH receives only enabled built-in/global text and optional adopted routing weights, never project skills or local paths — remote copies stay private to the remote session and weights stay outside committed files — test: `tests/skills.test.cjs` › "SSH bundle contains only enabled built-in/global files, never project skills or local paths"; test: `tests/skills-session.test.cjs` › "routing note is optional, current on a new delivery and included in bounded SSH manifests"
 - User-confirmed proposals wait in skill-pending; workers need a literal allowed SKILL.md path to apply an edit, and broad globs preserve proposals then restore pre-run bytes only in an isolated worker worktree; managed and shared changes remain live with unknown authorship — the user and lead retain their respective approval controls — test: `tests/skills.test.cjs` › "pending proposals do not change the active file; accept, reject and agent-created review"; test: `tests/dispatch-skill-proposals.test.cjs` › "broad scope restores edited/new/deleted skills and preserves worker versions beside the answer"; test: `tests/dispatch-skill-proposals.test.cjs` › "concurrent owner edits to global and built-in skills are report-only, unrelated inherited deliveries are ignored"

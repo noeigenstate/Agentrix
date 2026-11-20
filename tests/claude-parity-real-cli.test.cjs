@@ -6,19 +6,14 @@ const { bashEnvironment, missingTmpWarning } = require('./fixtures/bash-environm
 const { terminal } = require('./fixtures/claude-terminal.cjs');
 const skip = !process.env.AGENTRIX_REAL_CLAUDE;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-test('agent catalog parity admits only the exact native lookup and existing terminal guide differences', () => {
+test('agent catalog parity allows only the existing terminal guide difference', () => {
   const { compareAgents } = require('./fixtures/claude-parity.cjs');
-  const sdk = ['general-purpose', 'parity-project', 'agentrix-lookup'];
-  const tui = ['general-purpose', 'claude-code-guide', 'parity-project'];
+  const sdk = ['general-purpose', 'parity-project'];
+  const tui = [...sdk, 'claude-code-guide'];
   compareAgents(sdk, tui);
-  for (const name of ['unexpected-agent', 'agentrix-lookup-extra']) {
-    assert.throws(() => compareAgents([...sdk, name], tui), /new agent-name differences/);
-    assert.throws(() => compareAgents(sdk, [...tui, name]), /new agent-name differences/);
-  }
-  assert.throws(() => compareAgents(sdk.filter(name => name !== 'agentrix-lookup'), tui), /lookup preset exactly once/);
-  assert.throws(() => compareAgents([...sdk, 'agentrix-lookup'], tui), /lookup preset exactly once/);
-  assert.throws(() => compareAgents(sdk, tui.filter(name => name !== 'claude-code-guide')), /retain the CLI guide/);
-  assert.throws(() => compareAgents(sdk, [...tui, 'agentrix-lookup']), /new agent-name differences/);
+  assert.throws(() => compareAgents([...sdk, 'unexpected-agent'], tui), /new agent-name differences/);
+  assert.throws(() => compareAgents(sdk, [...tui, 'unexpected-agent']), /new agent-name differences/);
+  assert.throws(() => compareAgents(sdk, sdk), /retain the CLI guide/);
 });
 async function until(check) {
   for (let i = 0; i < 300; i++) { if (check()) return; await sleep(50); }
