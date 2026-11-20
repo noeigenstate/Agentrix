@@ -3677,5 +3677,17 @@
   "名称与角色「{role}」重复。": "This name is already used by the role “{role}”.",
   "跟随默认设置": "Follow default",
   "文件未应用": "File not applied",
-  "应用后": "After applying"
+  "应用后": "After applying",
+  "项目模型路由": "Per project",
+  "每个项目可单独设置模型路由，保存在项目文件夹的 .agentrix/routing.json 中，打开项目时一同读取。原来的全局设置已成为「我的默认模板」，供没有路由文件的项目使用。":
+    "Each project can save model routing in .agentrix/routing.json, which Agentrix reads when the project opens. Projects without that file use My default template, your former global settings.",
+  "团队角色库": "Role library",
+  "可从角色库把前端、后端、桌面端、数据库、人工智能、文档、性能和无障碍这八个角色加入项目团队。":
+    "Add eight roles from the library to a project team: Frontend, Backend, Desktop, Database, AI, Docs, Performance, and Accessibility.",
+  "自定义角色": "Custom roles",
+  "复制现有角色即可自定名称和职责。每个项目最多创建 8 个自定义角色，团队最多启用 16 个角色。":
+    "Copy an existing role and give it your own name and duties. Each project can have up to 8 custom roles, and a team can have up to 16 enabled roles.",
+  "确认外部更改": "File review",
+  "克隆仓库、执行 git pull 或用编辑器修改带来的路由文件更改，会在应用前请你确认，并标出有风险的变化。":
+    "Agentrix asks you to review routing files brought in by a clone or git pull, or changed in an editor. Risky changes are marked before you apply them."
 }
