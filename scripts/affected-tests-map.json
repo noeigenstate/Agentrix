@@ -369,7 +369,7 @@
       "reason": "Loads a downloaded external native speech engine."
     },
     "integration/agent-event.cjs": {
-      "digest": "adcb8bc420a0c1c67685982f8f0faf9d697468077406cbd6bc6d9046c564350a",
+      "digest": "0397ebbce70e529c39f981d1f3487722c09468422a4396d9b8660898df66bf73",
       "targets": [
         "electron/features/skills/session.cjs",
         "electron/features/skills/agent-seat.cjs",
@@ -378,7 +378,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "10861461bfc4eff15dd628a1dab7d9e76f574b1c3646be6d893776232560cf66",
+      "digest": "4d7c15c58a70002936203be79cac72ab5bf7563f4bc13784a2ababb9e679b75d",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
