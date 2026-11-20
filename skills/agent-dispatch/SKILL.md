@@ -1,9 +1,14 @@
 ---
 name: agent-dispatch
-description: Use whenever a session inside Agentrix starts a Codex or Claude Code worker from the command line — launch it only through Agentrix's dispatch helper, which declares the assignment to the app and reports how the worker ended; covers the helper's arguments, the roundtable before work, the shared project memory and the per-round consolidation, the event protocol and what the activity pane shows. Also use when changing the helper, the event server or the called-models pane.
+description: Use when changing Agentrix's worker engine (integration/dispatch.cjs), the conductor's role tools it serves over MCP (integration/role-tools.cjs, `dispatch.cjs mcp`), the shell shims, the event server or the called-models pane. Sessions never run the engine themselves: a conductor starts roles with the start_role tool, and native mode runs the real CLI.
 ---
 
 # Dispatching command-line workers
+
+> Sessions no longer call this engine. A lead in conductor mode starts roles with the role tools (`start_role`, `roles_status`,
+> `role_result`, `stop_role`), which `dispatch.cjs mcp` serves and which run the engine below in-process; the shell shims refuse
+> `codex exec` and `claude -p` in conductor mode and run the real CLI in native mode. The commands below are the engine's own
+> interface, for its code and tests.
 
 The activity pane's 调用的模型 shows command-line workers only from what the helper declares at the start and reports at
 the end — never from guessing a command line. A session inside Agentrix finds the helper's path in its startup note
@@ -255,8 +260,7 @@ and its failed-start/end pair remain separate from the 15-second visibility noti
 
 ## Rules
 
-- Start every command-line Codex or Claude worker through the helper with `--detach`, followed by `wait`; never `codex` or
-  `claude -p` directly.
+- Roles start only through the role tools; the engine's command line is for its own code and tests.
 - Give every worker that changes files `--allow` for its module, and every task with owner decisions a `--ledger`.
 - A roundtable (`--meeting`) and a round summary (`consolidate`) are the orchestrator's choice, never required. A build with
   `--allow` and no roundtable passes `--skip-meeting <reason>`; after a roundtable, resume the confirmed session with the

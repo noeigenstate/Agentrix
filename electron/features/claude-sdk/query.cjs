@@ -75,6 +75,7 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
         ? 'The fork subagent runs in the background, so you can keep chatting with the user while it works.' : null,
       spec.context].filter(Boolean).join('\n\n') },
     ...(providerSessionId ? { resume: providerSessionId } : {}),
+    ...(spec.roleServer && { mcpServers: { agentrix: { type: 'stdio', ...spec.roleServer } } }),
     hooks: { PreToolUse: [{ onFailure: 'block', hooks: [async input => {
       const decision = policy(input.tool_name, input.tool_input);
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",

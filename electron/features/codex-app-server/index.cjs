@@ -400,7 +400,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             ...threadPolicy(), approvalsReviewer: 'user' };
-          const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}) };
+          const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}),
+            ...(spec.roleServer && { mcp_servers: { agentrix: spec.roleServer } }) };
           const requestThread = (options, resumeId) => rpc.request(resumeId ? 'thread/resume' : 'thread/start', {
             ...options, ...(resumeId && { threadId: resumeId, excludeTurns: true }), config: { ...config, ...options.config },
           });

@@ -726,7 +726,11 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
 }
 
 async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable, locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT, detached = null } = {}) {
-  if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env, stdout, dispatch: (args, deps) => run(args, { ...deps, launch, resolveExecutable, locate, locateClaude: findClaude, startTimeout, rateInterval, requestTimeout }) });
+  if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
+  if (argv[0] === 'mcp') {
+    const { serve, createRoleTools } = require('./role-tools.cjs');
+    return serve({ roles: createRoleTools({ env, engine: run }) }).then(() => 0);
+  }
   if (usesRoundtable(argv)) { stdout.write('[dispatch] ' + roundtablesRemoved + '\n'); return 1; }
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'stop', 'wait'].includes(argv[0]))) {
     stdout.write(USAGE); return 0;

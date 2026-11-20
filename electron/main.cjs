@@ -15,7 +15,7 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
 const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
-const { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats, updateDispatchLaunchSeats } = require('./features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateBootstrapMode, updateDispatchSeats, updateDispatchLaunchSeats } = require('./features/terminal-events/bootstrap-file.cjs');
 const { refreshRemoteRouting } = require('./features/ssh/routing.cjs');
 const { claudeBackgroundEnvironment } = require('./shared/claude-background.cjs');
 const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
@@ -247,7 +247,7 @@ const host = {
   get controlAddress() { return controlAddress; }, get claudeRuntime() { return claudeRuntime; }, get terminalInput() { return terminalInput; },
   get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
 };
-Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host));
+Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host), { roleEnded: (...args) => roleEnded(...args) });
 const { followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook, acceptDispatchEvent, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox } = host;
 const { localSwitchSessions, observeSwitchTerminal, retainAgentState, prepareSwitchTerminal, retireTerminal, activateNative } = host;
 const { readNativeConnections, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment } = host;
@@ -533,7 +533,7 @@ function startSkillSession(project, s, sequence, started = true) {
   const remote = project.kind === 'ssh';
   const delivery = skills.delivery(project, remote, s.skillSessionId, { agent: s.agent, started });
   const note = startupNote(READING_NOTE, remote ? '{AGENTRIX_HANDOFF}' : handoffFile(s.terminalId),
-    (remote ? path.posix : path).join(project.path, 'skills'), delivery, remote ? '{AGENTRIX_DISPATCH}' : path.join(integrationDir, 'dispatch.cjs'));
+    (remote ? path.posix : path).join(project.path, 'skills'), delivery, remote ? '{AGENTRIX_DISPATCH}' : null);
   if (remote) {
     void s.terminal.request('skill-note', { sequence, note, skills: delivery.bundle }).then(paths => {
       if (s.terminal.info) s.terminal.info.skills = paths;
@@ -573,14 +573,14 @@ function refreshSkillNotes() {
       continue;
     }
     if (s.bootstrapFile) {
-      try { updateDispatchSeats(s.bootstrapFile, skills.dispatchSeats(project.id) ?? {}); } catch (error) { report(error); }
+      try { updateDispatchSeats(s.bootstrapFile, skills.dispatchSeats(project.id) ?? {}); updateBootstrapMode(s.bootstrapFile, skills.seatsInfo(project.id)?.conductor); } catch (error) { report(error); }
       if (s.skillNoteFile) {
         try { updateBootstrapLead(s.bootstrapFile, skills.terminalLead(project.id)); } catch (error) { report(error); }
       }
     }
     if (!s.skillNoteFile || s.codexActive) continue;
     const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'),
-      skills.delivery(project, false, s.sessionId, { agent: 'claude' }), path.join(integrationDir, 'dispatch.cjs'));
+      skills.delivery(project, false, s.sessionId, { agent: 'claude' }));
     if (note !== s.skillNote) { writeFileAtomic(s.skillNoteFile, note); s.skillNote = note; }
   }
   return remoteWrites.length ? Promise.allSettled(remoteWrites) : null;
@@ -1141,14 +1141,29 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, dispatchSeats: delivery?.agentSeats ?? null });
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
-  const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery, path.join(integrationDir, 'dispatch.cjs'));
+  const conductor = !!library?.seatsInfo?.(project.id)?.conductor;
+  updateBootstrapMode(bootstrapFile, conductor);
+  const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery);
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
-    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId };
+    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId,
+    ...(conductor && { roleServer: roleServer(env) }) };
   env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
   nativeSpecs.set(id, spec); return spec;
+}
+
+// The conductor's role tools, served by the worker engine over MCP stdio.
+function roleServer(env) {
+  return { command: process.execPath, args: [path.join(integrationDir, 'dispatch.cjs'), 'mcp'], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
+}
+
+// A role the conductor started has ended: a native conductor hears it as its next message, so it can report without polling.
+function roleEnded(s, project, event) {
+  if (!s?.nativeStructured || !s.nativeRuntimeSessionId || !skills?.seatsInfo(project.id)?.conductor) return;
+  const text = `[Agentrix] Role run ${event.id} has ended (${event.reason}${event.exitCode == null ? '' : `, exit ${event.exitCode}`}). Read it with role_result and report to the owner.`;
+  nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: randomUUID(), text }).catch(report);
 }
 
 function nativeSubagent(spec, signal, { runtimeSessionId, providerSessionId, folder }) {
@@ -1325,7 +1340,7 @@ function wireNativeSessions(directory, codex, codexFactory) {
       if (spec.agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
       if (spec.agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: spec.terminalId }, binding);
       if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
-        delivery, path.join(integrationDir, 'dispatch.cjs'));
+        delivery);
       return committed => {
         if (committed && spec.bootstrapFile) {
           try { updateDispatchLaunchSeats(spec.bootstrapFile, delivery?.agentSeats); } catch (error) { report(error); }
@@ -1426,6 +1441,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
     claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, powershellPath, notifyPath: path.join(integrationDir, 'notify.ps1'), claudeHookPath,
     nodePath: process.execPath, accountScopeHelper: path.join(integrationDir, 'codex-account-scope.cjs'), hooks,
     lead: skills.terminalLead?.(project.id) ?? null, dispatchSeats: skills.dispatchSeats?.(project.id) });
+  if (bootstrapFile) updateBootstrapMode(bootstrapFile, skills.seatsInfo?.(project.id)?.conductor);
   // The wrapper runs, after the user's own alias, the Claude Code claude-runtime chose for the terminal (an inherited
   // choice never passes, createTerminalEnvironment drops it); an SSH project runs the server's own.
   const claudeFile = project.kind !== 'ssh' && claudeLocator.peek()?.terminal?.path;
@@ -1439,7 +1455,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   // and where the work done in this folder before is written down for them (handoff.cjs), so either one carries it on.
   if (project.kind !== 'ssh') {
     env.AGENTRIX_READING_NOTE = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'),
-      skills.delivery(project, false, sessionId, { agent: 'claude' }), path.join(integrationDir, 'dispatch.cjs'));
+      skills.delivery(project, false, sessionId, { agent: 'claude' }));
     writeFileAtomic(skillNoteFile, env.AGENTRIX_READING_NOTE);
     env.AGENTRIX_READING_NOTE_FILE = skillNoteFile;
     void writeHandoff(handoffFile(id), startPath, { memoryDir: memoryDir() }).catch(() => {});

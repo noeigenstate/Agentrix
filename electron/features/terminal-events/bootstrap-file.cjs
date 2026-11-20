@@ -63,8 +63,10 @@ function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey,
 }
 
 // Removes a session's bootstrap file and the files written with it.
+function updateBootstrapMode(file, conductor) { writeFileAtomic(file + '.mode', conductor ? 'conductor\n' : 'native\n'); }
+
 function removeBootstrap(file) {
-  for (const suffix of ['', '.background.json', '.lead', '.seats', '.launch-seats']) fs.rmSync(file + suffix, { force: true });
+  for (const suffix of ['', '.background.json', '.lead', '.seats', '.launch-seats', '.mode']) fs.rmSync(file + suffix, { force: true });
   fs.rmSync(claudeEnvFile(file), { force: true });
 }
 
@@ -93,4 +95,4 @@ async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats, updateDispatchLaunchSeats };
+module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateBootstrapMode, updateDispatchSeats, updateDispatchLaunchSeats };
