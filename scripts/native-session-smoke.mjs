@@ -100,39 +100,6 @@ async function executable() {
   throw new Error('Packaged app was not found');
 }
 
-async function checkOperationLayout(app, page, seats) {
-  const size = await app.evaluate(({ BrowserWindow }) => {
-    const window = BrowserWindow.getAllWindows()[0], previous = window.getContentSize();
-    window.setContentSize(1280, 800);
-    return previous;
-  });
-  try {
-    await page.waitForFunction(() => innerWidth === 1280 && innerHeight === 800);
-    const panel = seats.locator('.seats-operations');
-    const layout = await panel.evaluate(node => {
-      const compaction = node.querySelector('[data-operation="compaction"]').getBoundingClientRect();
-      const titles = node.querySelector('[data-operation="titles"]').getBoundingClientRect();
-      return { overflow: node.scrollHeight - node.clientHeight, sameRow: Math.abs(compaction.top - titles.top) <= 1 };
-    });
-    assert.ok(layout.overflow <= 0 && layout.sameRow, `all operation cards fit side by side at the bottom: ${JSON.stringify(layout)}`);
-    for (const id of ['memory', 'review']) {
-      await seats.locator(`[data-op-model="${id}"]`).click();
-      const menu = seats.locator('[data-model-picker-menu]');
-      await menu.waitFor();
-      const fits = await menu.evaluate(node => {
-        const box = node.getBoundingClientRect();
-        return box.top >= 15 && box.left >= 15 && box.bottom <= innerHeight - 15 && box.right <= innerWidth - 15;
-      });
-      assert.ok(fits, `${id} menu has space on every side of the window`);
-      await page.keyboard.press('Escape');
-      await menu.waitFor({ state: 'detached' });
-    }
-  } finally {
-    await app.evaluate(({ BrowserWindow }, previous) => BrowserWindow.getAllWindows()[0].setContentSize(...previous), size);
-    await page.waitForFunction(([width, height]) => innerWidth === width && innerHeight === height, size);
-  }
-}
-
 async function runtimeSmoke(output, stages) {
   const stage = stages.run;
   const runtime = await stage('prepare isolated runtime', () => fs.mkdtemp(path.join(os.tmpdir(), 'agx-native-')));
@@ -263,25 +230,15 @@ async function runtimeSmoke(output, stages) {
         assert.equal(await seats.locator('[data-seat]').count(), 10);
         const teamTab = seats.locator('[data-routing-tab="team"]');
         const libraryTab = seats.locator('[data-routing-tab="library"]');
-        const operationsTab = seats.locator('[data-routing-tab="operations"]');
         await teamTab.press('ArrowRight');
         assert.equal(await libraryTab.getAttribute('aria-selected'), 'true');
         await libraryTab.press('ArrowRight');
-        assert.equal(await operationsTab.getAttribute('aria-selected'), 'true');
-        assert.equal(await seats.locator('[data-operation]').count(), 7);
-        assert.equal(await seats.locator('[data-op-slot]').count(), 5);
-        assert.equal(await seats.locator('[data-operation][data-seat]').count(), 0);
-        const lookup = seats.locator('[data-op-model="lookup"]');
-        assert.ok(await lookup.evaluate(button => {
-          const box = button.getBoundingClientRect();
-          return parseFloat(getComputedStyle(button).fontSize) >= 14 &&
-            document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2) === button;
-        }), 'the operation model control is readable and owns its center hit target');
-        await lookup.click();
+        assert.equal(await seats.getByRole('tab').count(), 2);
+        assert.equal(await teamTab.getAttribute('aria-selected'), 'true');
+        await seats.locator('[data-pick="orchestrator"]').click();
         await seats.getByRole('menu').waitFor();
         await page.keyboard.press('Escape');
         await seats.getByRole('menu').waitFor({ state: 'detached' });
-        await checkOperationLayout(app, page, seats);
         await page.keyboard.press('Escape');
         await seats.waitFor({ state: 'detached' });
       });
@@ -470,7 +427,7 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
     defaultEnabled: false, defaultFresh: false, inherits: 'developer' });
   const routing = { ...team, roles, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors, fresh,
     leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer },
-    template: { roles: {}, operations: {} }, config: null, current: null, currentRoles: null,
+    template: { roles: {} }, config: null, current: null, currentRoles: null,
     routing: { layer: 'template', state: 'absent', remote: false, path: null, digest: null, actions: [] },
     effective: team.defaults, installed: { claude: true, codex: true }, issues: [], catalogAt: { claude: null, codex: null } };
   // Main side: canned answers; mode 'hold' keeps the next answer back until released so the loading state can be seen.

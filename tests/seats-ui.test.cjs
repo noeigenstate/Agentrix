@@ -35,15 +35,13 @@ const shipped = (role, source = 'builtin') => {
 const source = (patch = {}) => ({ layer: 'file', state: 'trusted', remote: false, path: '.agentrix/routing.json', digest: 'at-open', actions: [], ...patch });
 const SEATS = team.seats;
 const clone = value => JSON.parse(JSON.stringify(value));
-function seatsInfo({ global = {}, project = null, operations, ...overrides } = {}) {
-  const config = (roles, operations) => ({ roles, operations: operations ?? {} });
-  const template = config(global, operations?.template);
-  const applied = project || operations?.config ? config(project ?? {}, operations?.config) : null;
+function seatsInfo({ global = {}, project = null, ...overrides } = {}) {
+  const template = { roles: global }, applied = project ? { roles: project } : null;
   return {
     skill: 'model-routing', seats: SEATS, roles: team.roles.map(role => shipped(role)), lead: 'orchestrator',
     authors: ['developer'], leadAgent: 'claude', leads: { claude: DEFAULTS.orchestrator, codex: DEFAULTS.developer },
     fresh: ['qa', 'reviewer'], defaults: clone(DEFAULTS), template, config: applied,
-    effective: { ...clone(DEFAULTS), ...(applied ?? template).roles }, current: null, currentRoles: null, leadPending: null, routing: source(), operations,
+    effective: { ...clone(DEFAULTS), ...(applied ?? template).roles }, current: null, currentRoles: null, leadPending: null, routing: source(),
     catalog: catalog(), installed: { claude: true, codex: true }, ...overrides,
   };
 }
@@ -105,11 +103,11 @@ test('the applied project layer starts at built-in defaults and excludes templat
   assert.equal(startScope(info, 'p1'), 'project');
   assert.deepEqual(baseline.architect, project.architect);
   assert.deepEqual(baseline.reviewer, DEFAULTS.reviewer);
-  assert.deepEqual(seatsLib.cleanDraft(info, info.config), { roles: project, operations: {} });
+  assert.deepEqual(seatsLib.cleanDraft(info, info.config), { roles: project });
 });
 
 test('routing saves send one scoped config and the on-disk base, and preserve structured refusals', async () => {
-  const calls = [], config = { roles: { architect: { model: 'sonnet', effort: 'low' } }, operations: {} };
+  const calls = [], config = { roles: { architect: { model: 'sonnet', effort: 'low' } } };
   const api = { setSkillRouting: async (...args) => { calls.push(args); return { ok: true }; } };
   assert.deepEqual(await saveSeats(api, 'project', 'p1', config, 'original'), { ok: true });
   assert.deepEqual(await saveSeats(api, 'template', 'p1', config, 'original'), { ok: true });
@@ -136,7 +134,7 @@ function compile(file, hooks, stubs = {}) {
       t: (text, values = {}) => (stubs.language === 'zh' ? text : en[text] ?? text).replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match),
     };
     if (name === './skill-seats') return seatsLib;
-    if (['./OperationRows', './RoleEditor', './RoutingReview'].includes(name)) return compile(name.slice(2) + '.tsx', hooks, stubs);
+    if (['./RoleEditor', './RoutingReview'].includes(name)) return compile(name.slice(2) + '.tsx', hooks, stubs);
     if (name.endsWith('/role-rules.mjs')) return original(name);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
       routingModelName: require('../src/shared/routing-command.ts').routingModelName,
@@ -169,8 +167,8 @@ function mount(t, file, name, props, stubs) {
   return handle;
 }
 const inlineComponents = new Set([
-  'RoutingTabs', 'MenuHeader', 'OperationRows', 'OperationTitle', 'OperationCard', 'CurrentOperations', 'OperationSummary', 'Status',
-  'DialogHeader', 'DialogToolbar', 'RoutingStatus', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu', 'ReviewOperationBanner',
+  'RoutingTabs', 'MenuHeader',
+  'DialogHeader', 'DialogToolbar', 'RoutingStatus', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu',
   'TeamCard', 'SeatPicker', 'PickerSettings', 'TeamModelOptions', 'RoleLibrary', 'RoleActions', 'RoutingReview', 'RoleTextFields', 'RoleModel',
 ]);
 const childrenOf = node => inlineComponents.has(node.type?.name) ? node.type(node.props) : node.props.children;
@@ -203,7 +201,6 @@ function dialogHarness(t, info, props = {}) {
       if (props.reply && !props.reply.ok) return props.reply;
       const [scope, , config] = args, key = scope === 'project' ? 'config' : 'template';
       current = { ...current, [key]: config, routing: source() };
-      if (current.operations) current.operations = { ...current.operations, [key]: config.operations };
       return { ok: true };
     },
     skillSeatsRefresh: async (...args) => { refreshes.push(args); if (props.refreshError) throw new Error(props.refreshError); return props.refreshed ?? null; } };
@@ -217,152 +214,7 @@ function dialogHarness(t, info, props = {}) {
 }
 const keyEvent = key => ({ key, stopPropagation() {}, preventDefault() {} });
 
-function operationInfo({ global = {}, project = null, ...overrides } = {}) {
-  const defaults = { lookup: { model: 'haiku', effort: 'high' }, background: { model: 'haiku' }, subagent: 'follow', memory: 'follow', review: 'follow' };
-  const entries = [
-    ['lookup', '检索', 'Lookup', ['claude', 'codex'], 'always', null],
-    ['background', '后台小任务', 'Background helpers', ['claude'], 'never', null],
-    ['subagent', '子代理默认', 'Sub-agent default', ['claude', 'codex'], 'codex', 'follows the conversation'],
-    ['memory', '记忆整理', 'Memory', ['codex'], 'never', 'Codex default'],
-    ['review', '审查', 'Review pass', ['codex'], 'never', 'Reviewer seat'],
-    ['compaction', '压缩', 'Compaction', [], 'never', null],
-    ['titles', '标题', 'Titles', [], 'never', null],
-  ];
-  const rows = entries.map(([id, name, nameEn, families, effort, follow]) => ({
-    id, name, nameEn, covers: nameEn, families, effort, follow, editable: !!defaults[id], default: defaults[id] ?? null,
-    effective: typeof defaults[id] === 'object' ? defaults[id] : null,
-    agents: {
-      claude: { state: families.includes('claude') ? 'applies' : 'not-applicable' },
-      codex: id === 'memory' ? { state: 'not-effective', reason: 'The provider refused memories.consolidation_model.' }
-        : { state: families.includes('codex') ? 'applies' : 'not-applicable' },
-    },
-    ...(id === 'memory' ? { suggestion: 'gpt-6-mini' } : {}),
-  }));
-  return { rows, defaults, template: global, config: project, effective: { ...defaults, ...(project ?? global) }, current: null, pending: [], ...overrides };
-}
-
-const operationCatalog = () => [
-  ...catalog({ sonnet: { available: false, reason: 'Unavailable from this account.', listed: false } }),
-  row('gpt-6-mini', 'GPT-6 Mini', 'codex', 1),
-];
-function showOperations(h) {
-  byAttr(h.render(), 'data-routing-tab', 'operations').props.onClick();
-  return h.render();
-}
-function operationMenu(h, id, attr = 'data-op-model') {
-  byAttr(h.render(), attr, id).props.onClick(pickButton(id));
-  return liveMenu(h);
-}
-const menuRows = menu => findAll(menu, node => node.props['data-assign'] !== undefined);
-
-test('a refused operation save keeps the draft and names the operation', async t => {
-  const error = { ok: false, code: 'review-same-model', operation: 'review', message: 'Choose a different review model.' };
-  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: operationCatalog() }), { reply: error });
-  showOperations(h);
-  // Main can see another project's Developer seat, which the dialog cannot validate locally.
-  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6-mini').props.onClick();
-  byAttr(h.render(), 'data-save').props.onClick();
-  await settle();
-  const tree = h.render();
-  assert.match(textOf(find(tree, node => node.props['data-kind'] === 'error')), /Review pass: Choose a different review model/);
-  assert.equal(textOf(byAttr(tree, 'data-op-model', 'review')), 'GPT-6 Mini');
-  assert.equal(byAttr(tree, 'data-save').props.disabled, false);
-});
-
-test('review operations block a Developer collision before IPC and offer a valid Codex alternative', async t => {
-  const rows = [...operationCatalog(), row('gpt-6.2-astra', 'GPT-6.2 Astra', 'codex', 3)];
-  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: rows }));
-  showOperations(h);
-  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6.2-sol').props.onClick();
-  let tree = h.render();
-  assert.ok(byAttr(byAttr(tree, 'data-operation', 'review'), 'data-op-blocked'));
-  assert.match(textOf(byAttr(tree, 'data-operation-block')), /uses the same model as Developer/);
-  assert.equal(byAttr(tree, 'data-save').props.disabled, true);
-  byAttr(tree, 'data-save').props.onClick();
-  await settle();
-  assert.deepEqual(h.calls, []);
-  byAttr(tree, 'data-op-fix').props.onClick();
-  tree = h.render();
-  assert.equal(byAttr(tree, 'data-operation-block'), undefined);
-  assert.equal(byAttr(tree, 'data-save').props.disabled, false);
-  byAttr(tree, 'data-save').props.onClick();
-  await settle();
-  assert.deepEqual(h.calls[0][2].operations, { review: { model: 'gpt-6.2-astra' } });
-});
-
-test('review follows the live Reviewer seat and a single-family collision can fall back to it', t => {
-  const rows = operationCatalog();
-  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: rows }));
-  byAttr(openMenu(h, 'reviewer'), 'data-assign', 'gpt-6.2-sol').props.onClick();
-  let tree = showOperations(h);
-  assert.ok(byAttr(byAttr(tree, 'data-operation', 'review'), 'data-op-blocked'));
-  assert.equal(byAttr(tree, 'data-save').props.disabled, true);
-  byAttr(tree, 'data-fix', 'opus').props.onClick();
-  tree = h.render();
-  assert.equal(byAttr(tree, 'data-op-blocked'), undefined);
-  byAttr(operationMenu(h, 'review'), 'data-assign', 'gpt-6.2-sol').props.onClick();
-  tree = h.render();
-  assert.match(textOf(byAttr(tree, 'data-op-fix')), /Follow Reviewer seat/);
-  byAttr(tree, 'data-op-fix').props.onClick();
-  assert.equal(byAttr(h.render(), 'data-op-blocked'), undefined);
-});
-
-test('review operations keep distinct Codex IDs and allow a collision when no equally strong alternative is available', () => {
-  const version = 'gpt-6.2-sol-20261119';
-  const rows = [...operationCatalog(), row(version, version, 'codex', 3)];
-  assert.equal(seatsLib.operationReviewerBlock({ model: version }, DEFAULTS, rows, undefined, reviewerRoles), null);
-  const weaker = operationCatalog().filter(row => row.family === 'codex');
-  assert.equal(seatsLib.operationReviewerBlock({ model: 'gpt-6.2-sol' }, DEFAULTS, weaker, undefined, reviewerRoles), null);
-});
-
-test('operation notes are localized by ID and the memory suggestion is a one-click draft on provider default', t => {
-  const operations = operationInfo();
-  operations.rows.find(row => row.id === 'background').note = 'explore-follows-background';
-  const memory = operations.rows.find(row => row.id === 'memory');
-  memory.note = 'codex-memories-enabled';
-  memory.agents.codex = { state: 'default' };
-  operations.rows.find(row => row.id === 'review').note = 'unrecognized provider note';
-  for (const language of ['en', 'zh']) {
-    const h = dialogHarness(t, seatsInfo({ operations, catalog: operationCatalog() }), { language });
-    const tree = showOperations(h), memory = byAttr(tree, 'data-operation', 'memory');
-    assert.match(textOf(byAttr(tree, 'data-operation', 'background')), language === 'en' ? /Explore agent also follows/ : /Explore 代理也使用此设置/);
-    assert.match(textOf(memory), language === 'en' ? /when Codex memories are enabled/ : /开启 Codex 记忆功能时生效/);
-    assert.match(textOf(byAttr(memory, 'data-op-state', 'default')), language === 'en' ? /Codex · default/ : /Codex · 默认/);
-    assert.doesNotMatch(textOf(tree), /explore-follows-background|codex-memories-enabled|unrecognized provider note/);
-    byAttr(memory, 'data-op-suggestion', 'gpt-6-mini').props.onClick();
-    assert.equal(textOf(byAttr(h.render(), 'data-op-model', 'memory')), 'GPT-6 Mini');
-  }
-});
-
-test('operation cards share the team model rows and add the family restriction only where needed', t => {
-  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: operationCatalog() }));
-  const teamMenu = openMenu(h, 'qa');
-  const tree = showOperations(h);
-  assert.equal(findAll(tree, node => node.props['data-operation']).length, 7);
-  assert.equal(findAll(tree, node => node.props['data-op-slot']).length, 5);
-  assert.equal(findAll(tree, node => node.props['data-seat']).length, 0);
-  for (const id of ['compaction', 'titles']) {
-    const readOnly = byAttr(tree, 'data-operation', id);
-    assert.match(textOf(readOnly), /Built into Claude Code \/ Codex/);
-    assert.equal(findAll(readOnly, node => node.type === 'button' || node.props.tabIndex !== undefined).length, 0);
-  }
-  const lookup = operationMenu(h, 'lookup');
-  const describe = item => [item.props['data-assign'], item.props.disabled, !!byAttr(item, 'data-unlisted')];
-  assert.deepEqual(menuRows(lookup).map(describe), menuRows(teamMenu).map(describe));
-  assert.match(textOf(byAttr(lookup, 'data-assign', 'sonnet')), /Unavailable from this account.*Not in the latest list/);
-  const background = operationMenu(h, 'background');
-  assert.deepEqual(menuRows(background).map(item => item.props['data-assign']), menuRows(teamMenu).map(item => item.props['data-assign']));
-  const codex = byAttr(background, 'data-assign', 'gpt-6-mini');
-  assert.equal(codex.props.disabled, true);
-  assert.match(textOf(codex), /only supports Claude/);
-  const memory = operationMenu(h, 'memory');
-  assert.match(textOf(byAttr(memory, 'data-assign', 'sonnet')), /Unavailable from this account.*only supports Codex.*Not in the latest list/);
-  const reason = byAttr(byAttr(memory, 'data-assign', 'sonnet'), 'data-family-reason');
-  assert.match(textOf(reason), /only supports Codex/);
-  assert.match(memory.props.className, /is-operation/);
-});
-
-test('model menu bounds keep a margin at both window edges and the compact cards preserve the paired read-only rows', () => {
+test('model menu bounds keep a margin at both window edges', () => {
   const view = { width: 1280, height: 800 };
   const nearTop = menuPlacement({ left: 1250, top: 8, bottom: 40 }, view, 29);
   const nearBottom = menuPlacement({ left: 1250, top: 760, bottom: 792 }, view, 29);
@@ -373,118 +225,6 @@ test('model menu bounds keep a margin at both window edges and the compact cards
   }
   assert.equal(nearTop.top, 44);
   assert.equal(nearBottom.bottom, 44);
-  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  assert.match(css, /\.seats-op-card \{[^}]*padding: 8px/);
-  assert.match(css, /\.seats-menu\.is-operation \.seats-menu-details \{ grid-column: 2;[^}]*max-width: none/);
-  assert.doesNotMatch(css, /max-width: 1150px[^]*?\.seats-op-card\.is-readonly \{ grid-column: 1 \/ -1; grid-template-areas/);
-});
-
-test('operation changes layer with seat changes, save both diffs, reset a scope, and preserve frozen values', async t => {
-  const operations = operationInfo({
-    global: { background: { model: 'opus' } },
-    project: { memory: { model: 'gpt-6-mini' } },
-    current: { values: { lookup: { model: 'haiku', effort: 'high' }, memory: 'follow' }, agents: {} },
-    pending: ['memory'],
-  });
-  const h = dialogHarness(t, seatsInfo({ operations, catalog: operationCatalog() }));
-  assert.equal(byAttr(h.render(), 'data-scope', 'project').props['aria-pressed'], true, 'an operations-only project override chooses project scope');
-  byAttr(openMenu(h, 'qa'), 'data-assign', 'haiku').props.onClick();
-  showOperations(h);
-  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
-  byAttr(operationMenu(h, 'lookup', 'data-op-effort'), 'data-pop-effort', 'max').props.onClick();
-  let tree = h.render();
-  assert.match(textOf(tree), /2 unsaved changes/);
-  find(tree, node => node.props.role === 'dialog').props.onKeyDown(keyEvent('Escape'));
-  assert.match(textOf(find(h.render(), node => node.props.role === 'alertdialog')), /2 unsaved changes/);
-  byAttr(h.render(), 'data-keep').props.onClick();
-  tree = h.render();
-  assert.match(textOf(byAttr(tree, 'data-op-model', 'memory')), /GPT-6 Mini/);
-  byAttr(tree, 'data-save').props.onClick();
-  await settle();
-  assert.deepEqual(h.calls[0], ['project', 'p1', { roles: { qa: { model: 'haiku', effort: 'high' } }, operations: {
-    memory: { model: 'gpt-6-mini' }, lookup: { model: 'opus', effort: 'max' },
-  } }, 'at-open']);
-  h.deliver(seatsInfo({ operations: operationInfo({
-    project: h.calls[0][2].operations, current: operations.current, pending: ['lookup'],
-  }), catalog: operationCatalog() }));
-  await settle();
-  tree = h.render();
-  assert.match(textOf(byAttr(tree, 'data-operation', 'lookup')), /Takes effect on next launch/);
-  assert.doesNotMatch(textOf(byAttr(tree, 'data-operation', 'memory')), /next launch/);
-  assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /take effect on next launch/);
-  byAttr(tree, 'aria-labelledby', 'seats-title').props.onClickCapture();
-  byAttr(h.render(), 'data-now').props.onClick();
-  assert.equal(textOf(byAttr(h.render(), 'className', 'seats-notice')), '');
-  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Haiku · high/);
-  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Codex default/);
-  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Takes effect on next launch: Opus · max/);
-  assert.doesNotMatch(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /next launch/);
-  byAttr(h.render(), 'data-reset').props.onClick();
-  byAttr(h.render(), 'data-save').props.onClick();
-  await settle();
-  assert.deepEqual(h.calls[1], ['project', 'p1', { roles: {}, operations: {} }, 'at-open']);
-});
-
-test('old pending operations stay out of unrelated save and file review notices', async t => {
-  const operations = operationInfo({ pending: ['lookup', 'memory'] });
-  const info = seatsInfo({ operations, catalog: operationCatalog() });
-  const h = dialogHarness(t, info);
-  showOperations(h);
-  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
-  byAttr(h.render(), 'data-save').props.onClick();
-  await settle();
-  const notice = () => textOf(byAttr(h.render(), 'className', 'seats-notice'));
-  assert.match(notice(), /take effect on next launch/);
-  byAttr(h.render(), 'data-scope', 'template').props.onClick();
-  assert.equal(notice(), '');
-  byAttr(h.render(), 'data-scope', 'project').props.onClick();
-  byAttr(openMenu(h, 'qa'), 'data-assign', 'haiku').props.onClick();
-  byAttr(h.render(), 'data-save').props.onClick();
-  await settle();
-  assert.equal(notice(), '');
-  showOperations(h);
-  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'haiku').props.onClick();
-  byAttr(h.render(), 'data-save').props.onClick();
-  await settle();
-  assert.match(notice(), /take effect on next launch/);
-  h.deliver({ ...info, routing: source({ state: 'pending', digest: 'new', actions: ['keep'] }) });
-  await settle();
-  assert.ok(byAttr(h.render(), 'data-routing-review', 'pending'));
-  assert.equal(notice(), '');
-});
-
-test('operation chips show the provider reason and model editing works through the suggestion, custom input and palette drag', t => {
-  const h = dialogHarness(t, seatsInfo({ operations: operationInfo(), catalog: operationCatalog() }));
-  const listeners = {};
-  window.addEventListener = (type, callback) => { listeners[type] = callback; };
-  window.removeEventListener = type => { delete listeners[type]; };
-  document.elementFromPoint = () => ({ closest: () => ({ dataset: { opSlot: 'subagent' } }) });
-  let tree = showOperations(h);
-  const memory = byAttr(tree, 'data-operation', 'memory');
-  assert.equal(byAttr(memory, 'data-op-state', 'not-applicable').type, 'span');
-  assert.ok(byAttr(tree, 'data-op-state', 'applies'));
-  const refused = byAttr(memory, 'data-op-state', 'not-effective');
-  refused.props.onClick(pickButton('memory'));
-  assert.match(textOf(h.render()), /provider refused memories/);
-  byAttr(h.render(), 'data-op-state', 'not-effective').props.onClick(pickButton('memory'));
-  assert.doesNotMatch(textOf(h.render()), /provider refused memories/);
-  byAttr(h.render(), 'data-op-suggestion', 'gpt-6-mini').props.onClick();
-  assert.equal(textOf(byAttr(h.render(), 'data-op-model', 'memory')), 'GPT-6 Mini');
-  byAttr(operationMenu(h, 'memory'), 'data-custom').props.onClick();
-  byAttr(h.render(), 'data-custom-input').props.onChange({ target: { value: 'claude-custom' } });
-  byAttr(h.render(), 'data-custom-apply').props.onClick();
-  assert.match(textOf(byAttr(h.render(), 'data-custom-error')), /only supports Codex/);
-  byAttr(h.render(), 'data-custom-input').props.onChange({ target: { value: 'gpt-custom' } });
-  byAttr(h.render(), 'data-custom-apply').props.onClick();
-  assert.equal(textOf(byAttr(h.render(), 'data-op-model', 'memory')), 'gpt-custom');
-  byAttr(h.render(), 'data-chip', 'gpt-6-mini').props.onPointerDown({ button: 0, clientX: 4, clientY: 4 });
-  listeners.pointermove({ clientX: 40, clientY: 40 });
-  listeners.pointerup({ clientX: 40, clientY: 40 });
-  tree = h.render();
-  assert.equal(textOf(byAttr(tree, 'data-op-model', 'subagent')), 'GPT-6 Mini');
-  assert.ok(byAttr(tree, 'data-op-effort', 'subagent'));
-  byAttr(operationMenu(h, 'subagent'), 'data-op-follow').props.onClick();
-  assert.equal(byAttr(h.render(), 'data-op-effort', 'subagent'), undefined);
 });
 
 test('the dialog saves the chosen scope and the edited map; the keyboard 更换 menu assigns a model, effort and fast', async t => {
@@ -513,7 +253,7 @@ test('the dialog saves the chosen scope and the edited map; the keyboard 更换 
   assert.equal(save.props.disabled, false);
   save.props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['project', 'p1', { roles: { architect: { model: 'gpt-6.2-sol', effort: 'xhigh' } }, operations: {} }, 'at-open']], 'only the changed seat');
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: { architect: { model: 'gpt-6.2-sol', effort: 'xhigh' } } }, 'at-open']], 'only the changed seat');
   tree = h.render();
   assert.match(textOf(byAttr(tree, 'data-routing-status')), /^✓Saved\. Takes effect immediately\.$/);
 });
@@ -528,7 +268,7 @@ test('the scope select sends the project id, and 恢复默认 saves an empty map
   assert.equal(byAttr(tree, 'data-save').props.disabled, false, 'resetting is a change to save');
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['project', 'p1', { roles: {}, operations: {} }, 'at-open']], 'an empty map clears the global scope');
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: {} }, 'at-open']], 'an empty map clears the global scope');
   const project = dialogHarness(t, seatsInfo());
   tree = project.render();
   byAttr(tree, 'data-scope', 'project').props.onClick();
@@ -536,7 +276,7 @@ test('the scope select sends the project id, and 恢复默认 saves an empty map
   byAttr(find(project.render(), node => node.props.role === 'menu'), 'data-assign', 'haiku').props.onClick();
   byAttr(project.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(project.calls, [['project', 'p1', { roles: { researcher: { model: 'haiku', effort: 'high' } }, operations: {} }, 'at-open']]);
+  assert.deepEqual(project.calls, [['project', 'p1', { roles: { researcher: { model: 'haiku', effort: 'high' } } }, 'at-open']]);
 });
 
 test('a blocked reviewer is framed, named 已阻止, explained with a one-click fix and cannot be saved; main’s refusal is shown', async t => {
@@ -644,7 +384,7 @@ test('the chart places connector drops at the columns and moves the palette into
   assert.match(compact, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(2,/);
   assert.match(css, /\.seats-palette \{ display: none; \}/);
   assert.match(css, /\.seats-palette\.is-open \{[^}]*display: flex/);
-  assert.match(css, /@media \(width >= 1400px\) \{[^]*?\.seats-palette:not\(\.is-operation-drawer\) \{[^}]*display: flex/);
+  assert.match(css, /@media \(width >= 1400px\) \{[^]*?\.seats-palette \{[^}]*display: flex/);
   assert.match(css, /\.seats-chart-bus::after \{[^}]*inset: 8px var\(--bus-inset\) 0/);
   assert.match(css, /\.seats-chart-link, \.seats-chart-bus \{[^}]*pointer-events: none/);
   assert.doesNotMatch(css, /@keyframes|animation:/);
@@ -659,7 +399,7 @@ test('the project and template retain independent unsaved drafts', async t => {
   byAttr(openMenu(h, 'researcher'), 'data-assign', 'opus').props.onClick();
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['template', null, { roles: { researcher: { model: 'opus', effort: 'high' } }, operations: {} }, null]]);
+  assert.deepEqual(h.calls, [['template', null, { roles: { researcher: { model: 'opus', effort: 'high' } } }, null]]);
   byAttr(h.render(), 'data-scope', 'project').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'data-pick', 'researcher')), /Haiku/);
 });
@@ -690,7 +430,7 @@ test('a file-watch refresh does not replace a draft’s compare-and-swap digest'
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: {
     developer: { model: 'haiku', effort: 'low' }, architect: { model: 'sonnet', effort: 'high' },
-  }, operations: {} }, 'at-open']]);
+  } }, 'at-open']]);
   assert.match(textOf(h.render()), /changed on disk/i);
 });
 
@@ -793,7 +533,7 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /gpt-6\.3-sol/);
   byAttr(tree, 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['project', 'p1', { roles: { developer: { model: 'gpt-6.3-sol', effort: 'high', fast: true } }, operations: {} }, 'at-open']]);
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: { developer: { model: 'gpt-6.3-sol', effort: 'high', fast: true } } }, 'at-open']]);
   // A custom model of the other family can be used by the orchestrator.
   const lead = dialogHarness(t, seatsInfo());
   byAttr(openMenu(lead, 'orchestrator'), 'data-custom').props.onClick();
@@ -928,19 +668,20 @@ test('the moved-defaults note is a neutral banner and the discard question a war
 });
 
 test('a default-move receipt survives a newer read and the first edit without collapsing the notice slot', async t => {
-  const info = seatsInfo({ operations: operationInfo(), catalog: operationCatalog() });
+  const info = seatsInfo();
   const h = dialogHarness(t, info);
   let publish, finishOpening;
   window.agentrix.onSkills = listener => { publish = listener; return () => {}; };
   window.agentrix.skillSeats = async () => info;
   window.agentrix.skillSeatsRefresh = () => new Promise(resolve => { finishOpening = resolve; });
-  showOperations(h);
+  h.render();
   publish();
   await settle();
   finishOpening({ ...info, defaultsMoved: [{ seat: 'developer', from: 'gpt-6.2-sol', to: 'gpt-6.3-sol' }] });
   await settle();
   assert.ok(byAttr(h.render(), 'data-moved'));
-  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
+  byAttr(openMenu(h, 'architect'), 'data-assign', 'haiku').props.onClick();
+  assert.equal(byAttr(h.render(), 'data-save').props.disabled, false);
   assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Developer/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
   assert.match(css, /\.seats-strip:not\(:has\(p:not\(:empty\), \.seats-banner, button\)\)/);
@@ -1106,7 +847,7 @@ test('the picker footer changes effort and fast and explains unsupported fast mo
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: {
     architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high' }, designer: { fresh: true },
-  }, operations: {} }, 'at-open']]);
+  } }, 'at-open']]);
 });
 
 test('picker arrows reach provider folds and other models in both directions', t => {
@@ -1250,11 +991,7 @@ test('the app seats host opens only when main supplies routing info', async t =>
 
 test('the activity key is one button with a row for each role and opens the scoped dialog', async t => {
   const window = new EventTarget(), events = [];
-  const changes = { lookup: { model: 'gpt-6.2-sol', effort: 'high' }, review: { model: 'gpt-6-mini' }, background: { model: 'haiku' } };
-  const operations = operationInfo({ pending: ['lookup'], project: { lookup: changes.lookup } });
-  operations.current = { values: { ...changes, lookup: operations.defaults.lookup }, agents: {} };
-  let loaded = operations;
-  window.agentrix = { skillSeats: async () => seatsInfo({ operations: loaded }) };
+  window.agentrix = { skillSeats: async () => seatsInfo() };
   window.addEventListener('agentrix:open-seats', event => events.push(event.detail));
   globalThis.window = window;
   const props = { projectId: 'p1', terminalId: 't1', sessionId: 's1' };
@@ -1269,18 +1006,8 @@ test('the activity key is one button with a row for each role and opens the scop
   assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row').length, 10);
   const developer = byAttr(tree, 'data-seat', 'developer');
   assert.deepEqual(developer.props.children.slice(0, 3).map(textOf), ['Developer', 'GPT-6.2-Sol', 'high · Fast']);
-  const summary = byAttr(tree, 'className', 'activity-routing-operations');
-  assert.match(textOf(summary), /Lookup · Review.*Takes effect on next launch/);
-  assert.match(summary.props.title, /GPT-6\.2-Sol · high[\s\S]*GPT-6-Mini/i);
-  assert.doesNotMatch(summary.props.title, /Background/);
-  assert.equal(summary.props['data-seat'], undefined);
   tree.props.onClick();
   assert.deepEqual(events, [{ projectId: 'p1', terminalId: 't1' }]);
-  loaded = operationInfo();
-  h.props = { ...props, sessionId: 's2' };
-  h.render();
-  await settle();
-  assert.match(textOf(byAttr(h.render(), 'className', 'activity-routing-operations')), /Operation models · default/i);
 });
 
 test('routing rows reduce height before using two columns and expand as usage shrinks', async t => {
@@ -1345,7 +1072,7 @@ test('role drafts follow their sources and reviewer conflicts use enabled author
     'x-review': { from: 'reviewer', name: 'Review copy', duty: 'Review code' },
     reviewer: { enabled: false },
     developer: { model: 'opus', effort: 'max' },
-  }, operations: {} };
+  } };
   const roles = seatsLib.draftRoles(info, project);
   const models = seatsLib.resolveDraftSeats(info.defaults, roles, project);
   assert.equal(roles.find(role => role.id === 'x-review').kind, 'reviewer');
@@ -1457,7 +1184,7 @@ test('the first project file is an explicit save with a null base and frozen cho
   checkCreate(h.render());
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  assert.deepEqual(h.calls, [['project', 'p1', { roles: {}, operations: {} }, null]]);
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: {} }, null]]);
   h.deliver({ ...info, routing: source({ digest: 'other', state: 'pending', actions: ['keep'] }) });
   await settle();
   assert.ok(byAttr(h.render(), 'data-routing-review', 'pending'));
@@ -1579,7 +1306,9 @@ test('the role library and Developer specialties use the supplied labels and dut
     shipped({ id: 'a11y', name: '无障碍', duty: '无障碍验证', detail: '主进程提供的无障碍职责', outputs: '' }, 'library'),
   ];
   const h = dialogHarness(t, seatsInfo({ roles }), { language: 'zh' });
-  const developer = byAttr(h.render(), 'data-seat', 'developer');
+  const chart = h.render();
+  assert.deepEqual(findAll(chart, node => node.props.role === 'tab').map(node => node.props['data-routing-tab']), ['team', 'library']);
+  const developer = byAttr(chart, 'data-seat', 'developer');
   const specialty = byAttr(developer, 'className', 'seats-tag');
   assert.match(specialty.props['aria-label'], /人工智能/);
   assert.equal(specialty.props.tabIndex, 0);
@@ -1624,7 +1353,7 @@ test('the library displays both limits and the reviewer locks beside their contr
     'x-dev-' + i, { from: 'developer', name: 'Extra ' + i, duty: 'Develop', enabled: i < 6 },
   ]));
   const libraryRole = shipped({ id: 'a11y', name: '无障碍', duty: '无障碍验证', detail: '', outputs: '' }, 'library');
-  const info = seatsInfo({ roles: [...team.roles.map(role => shipped(role)), libraryRole], config: { roles: custom, operations: {} } });
+  const info = seatsInfo({ roles: [...team.roles.map(role => shipped(role)), libraryRole], config: { roles: custom } });
   const h = dialogHarness(t, info, { language: 'zh' });
   const teamChart = h.render();
   assert.match(textOf(byAttr(openMenu(h, 'reviewer'), 'data-role-lock', 'fresh')), /始终使用新实例/);
@@ -1691,7 +1420,7 @@ test('drafts use the main process role defaults and preserve its library order',
     enabled: false, fresh: false, defaultEnabled: true, defaultFresh: true, defaultSeat: { model: 'gpt-6.2-sol', effort: 'low' } };
   const frontend = { ...shipped({ ...developer, id: 'frontend', name: '前端' }, 'library'), inherits: 'architect' };
   const info = seatsInfo({ roles: [...mainRoles, a11y, frontend] });
-  const config = { roles: { a11y: { fresh: false }, frontend: { enabled: true } }, operations: {} };
+  const config = { roles: { a11y: { fresh: false }, frontend: { enabled: true } } };
   const roles = seatsLib.draftRoles(info, config);
   const seats = seatsLib.resolveDraftSeats(info.defaults, roles, config);
   assert.deepEqual(roles.slice(-2).map(role => role.id), ['a11y', 'frontend']);

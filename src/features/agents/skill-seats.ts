@@ -1,6 +1,6 @@
 import type { CallRow } from './subagent-splits.ts';
 import type {
-  OperationId, OperationMap, OperationRow, OperationValue, RoleConfig, RoutingConfig, Seat, SeatId, SeatIssue, SeatMap, SeatModel,
+  RoleConfig, RoutingConfig, Seat, SeatId, SeatIssue, SeatMap, SeatModel,
   SeatRole, SeatsInfo, SeatsSaveError, TeamRole,
 } from '../../shared/types';
 import { BASE_EFFORTS, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
@@ -158,7 +158,7 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
     const value = { ...rest, ...(seat && !sameSeat(seat, inherited) ? seat : {}) };
     return Object.keys(value).length ? [[role.id, value] as const] : [];
   });
-  return { roles: Object.fromEntries(entries), operations: operationDiff(config.operations, info.operations?.defaults ?? {}) };
+  return { roles: Object.fromEntries(entries) };
 }
 
 // A seat's model moved into another seat keeps its effort and fast only where the new model allows them (Claude fast stays off unless the seat already had it).
@@ -227,20 +227,9 @@ export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults: Seat
   return null;
 }
 
-function authorConflict(model: string, seats: SeatMap, authors: SeatId[], catalog: SeatModel[], operation = false) {
+function authorConflict(model: string, seats: SeatMap, authors: SeatId[], catalog: SeatModel[]) {
   const models = Object.fromEntries(authors.flatMap(id => seats[id] ? [[id, seats[id].model]] : []));
-  return authorIdentityConflict(model, models, catalog, id => operation && familyOf(id) === 'codex' ? id : canonicalModel(catalog, id));
-}
-
-export function operationReviewerBlock(value: OperationValue | undefined, seats: SeatMap, catalog: SeatModel[], defaults: SeatMap | undefined, roles: ReviewRoles) {
-  if (!value) return null;
-  const follow = value === 'follow', reviewer = roles.reviewers[0];
-  const model = follow ? seats[reviewer]?.model : value.model;
-  if (!model || familyOf(model) !== 'codex') return null;
-  const block = authorConflict(model, seats, roles.authors, catalog, true);
-  if (!block) return null;
-  const codex = block.alternatives.filter(row => row.family === 'codex' && familyOf(row.model) === 'codex');
-  return { model, follow, hit: block.hit, fix: orderSuggestions(codex, seats, catalog, roles.authors, reviewer, defaults)[0] ?? null };
+  return authorIdentityConflict(model, models, catalog, id => canonicalModel(catalog, id));
 }
 
 export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[], role: SeatId, authors: SeatId[]) =>
@@ -283,36 +272,6 @@ export async function saveSeats(api: SeatsApi, scope: Scope, projectId: string |
     return { ok: false as const, message: error instanceof Error ? error.message : String(error) };
   }
 }
-
-export const sameOperation = (a?: OperationValue, b?: OperationValue) =>
-  a === b || (!!a && !!b && a !== 'follow' && b !== 'follow' && a.model === b.model && a.effort === b.effort);
-
-export function operationLayers(operations: SeatsInfo['operations'], scope: Scope) {
-  const lower = operations?.defaults ?? {};
-  const saved = scope === 'project' ? operations?.config ?? operations?.template : operations?.template;
-  return { lower, baseline: { ...lower, ...saved } };
-}
-
-export function operationDiff(values: OperationMap, base: OperationMap): OperationMap {
-  return Object.fromEntries(Object.entries(values).filter(([id, value]) => !sameOperation(value, base[id as OperationId])));
-}
-
-export const operationUsesEffort = (row: OperationRow, family: Family) => row.effort === 'always' || (row.effort === 'codex' && family === 'codex');
-
-export function operationFamilyReason(row: OperationRow, family: Family) {
-  if (row.families.includes(family)) return '';
-  return row.families.includes('claude') ? '此操作只能用 Claude 模型' : '此操作只能用 Codex 模型';
-}
-
-export function operationAssignment(row: OperationRow, model: string, catalog: SeatModel[], previous?: OperationValue) {
-  const choice = rowFor(catalog, model);
-  if (!choice) return { reason: '模型名只能含字母、数字和 . : @ + / [ ] - _，以字母或数字开头，最多 160 个字符' };
-  const family = operationFamilyReason(row, choice.family);
-  if (family || !choice.available) return { reason: family || choice.reason || '不可用' };
-  const effort = operationUsesEffort(row, choice.family) ? fitEffort(choice, previous === 'follow' ? undefined : previous?.effort) : undefined;
-  return { value: effort ? { model, effort } : { model } };
-}
-
 
 // 模型盘: the catalog grouped by family and then by model line, the line read from the id (never from a list of names, so a new line shows up by itself). Each line shows its aliases
 // and its newest version first; older versions fold away. A search keeps only the matching rows.

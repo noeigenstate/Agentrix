@@ -536,6 +536,22 @@
     "id": "src/features/agents/ResetQuota.tsx:3f7e1aa4367a37c480556014"
   },
   {
+    "text": "run(() => {\n    const panel = state.panels.dialog.current;\n    (panel?.querySelector<HTMLElement>('[role=\"tab\"][aria-selected=\"true\"]') ?? panel)?.focus({ preventScroll: true });\n    action();\n  })",
+    "id": "src/features/agents/SeatsDialog.tsx:dfbae0c0f74c00dd48b8c34c"
+  },
+  {
+    "text": "run(() => edit(role))",
+    "id": "src/features/agents/SeatsDialog.tsx:c1aa469747bb2153fab508fd"
+  },
+  {
+    "text": "run(() => create(role))",
+    "id": "src/features/agents/SeatsDialog.tsx:d268fe60e53211df87ad2aad"
+  },
+  {
+    "text": "run(() => create(role, role.id))",
+    "id": "src/features/agents/SeatsDialog.tsx:ad680e826eec287412b1315c"
+  },
+  {
     "text": "run(window.agentrix.interveneAgent(terminalId, callId, value), sent => {\n      received(sent);\n      if (sent.status === 'rejected') return;\n      setText(current => current.trim() === value ? '' : current); onSent(sent);\n    })",
     "id": "src/features/agents/SubagentInput.tsx:debaaa685309da5d25f81619"
   },

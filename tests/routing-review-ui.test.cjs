@@ -14,14 +14,13 @@ sourceModule.paths = Module._nodeModulePaths(path.dirname(filename));
 const originalRequire = sourceModule.require.bind(sourceModule);
 sourceModule.require = id => {
   if (id === '../../shared/i18n') return { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (pattern, key) => values[key] ?? pattern) };
-  if (id === './OperationRows') return { operationName: row => row.name };
   return originalRequire(id);
 };
 sourceModule._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'),
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
 const { RoutingReview, resolveRouting } = sourceModule.exports;
 const action = () => {};
-const flags = ['expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text', 'operation-cost'];
+const flags = ['expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text'];
 const writer = { name: 'Writer', duty: '<script>never execute</script>', outputs: '<b>Plain output</b>' };
 const active = { model: 'opus', effort: 'high', fast: true, fresh: false, enabled: true };
 const foreign = {
@@ -29,25 +28,20 @@ const foreign = {
   raw: '{"custom":"<script>never execute</script>"}',
   review: {
     digest: 'seen-file', reason: 'new-on-machine',
-    config: { roles: { 'x-writer': { from: 'developer', name: 'Writer', duty: '<script>never execute</script>', outputs: '<b>Plain output</b>' } }, operations: {} },
-    changes: [
-      { role: 'x-writer', field: 'enabled', from: false, to: true },
-      { role: 'x-writer', field: 'fresh', from: true, to: false },
-      { operation: 'lookup', field: 'value', from: { model: 'haiku', effort: 'low' }, to: { model: 'opus', effort: 'high' } },
-    ],
+    config: { roles: { 'x-writer': { from: 'developer', name: 'Writer', duty: '<script>never execute</script>', outputs: '<b>Plain output</b>' } } },
     roleChanges: [
       { role: 'x-writer', source: 'custom', status: 'added', before: null, after: { ...active, custom: writer } },
       { role: 'x-old', source: 'custom', status: 'removed', before: { ...active, custom: { ...writer, name: 'Retired' } }, after: null },
       { role: 'developer', source: 'builtin', status: 'changed', before: active, after: { ...active, effort: 'max' } },
     ],
-    flags: [...flags.map(code => code === 'operation-cost' ? { code, operation: 'lookup' } : { code, role: 'x-writer' }),
+    flags: [...flags.map(code => ({ code, role: 'x-writer' })),
       { code: 'verification-weakened', role: 'reviewer' }],
     ignored: ['roles.unknown', 'roles.frontend.seat'],
   },
 };
 const render = (source, props = {}) => renderToStaticMarkup(React.createElement(RoutingReview, {
   source, busy: false, act: action, rawOpen: false, toggleRaw: action,
-  roles: [{ id: 'developer', name: '开发' }, { id: 'reviewer', name: '审查' }], operations: [{ id: 'lookup', name: '检索' }], ...props,
+  roles: [{ id: 'developer', name: '开发' }, { id: 'reviewer', name: '审查' }], ...props,
 }));
 
 test('routing review shows every change, flag and custom text as plain text', () => {
@@ -55,12 +49,12 @@ test('routing review shows every change, flag and custom text as plain text', ()
   assert.match(html, /首次在此电脑打开/);
   assert.match(html, /\.agentrix\/routing\.json/);
   assert.match(html, /当前使用：本机项目设置/);
-  assert.match(html, /新增角色.*移除或停用的角色.*修改的角色.*操作模型/s);
+  assert.match(html, /<th scope="col">角色<\/th>/);
+  assert.match(html, /新增角色.*移除或停用的角色.*修改的角色/s);
   assert.equal((html.match(/data-review-role=/g) ?? []).length, 3);
   assert.match(html, /<tr data-review-role="x-writer" data-risk="true">[^]*?<dt>名称<\/dt><dd>Writer<\/dd>[^]*?&lt;b&gt;Plain output&lt;\/b&gt;[^]*?<\/tr>/);
   assert.match(html, /<tr data-review-role="x-old">[^]*?Retired[^]*?&lt;b&gt;Plain output&lt;\/b&gt;[^]*?<\/tr>/);
   assert.match(html, /<tr data-review-role="developer">[^]*?开发<\/span>[^]*?developer[^]*?<div class="seats-review-settings"><span>强度 <span>high<\/span> → <span>max<\/span><\/span><\/div>/);
-  assert.match(html, /data-review-operation="lookup" data-risk="true"[^]*?检索[^]*?haiku · low.*opus · high/);
   for (const code of flags) {
     assert.ok(html.includes(`data-routing-flag="${code}"`));
     assert.ok(html.includes('data-routing-risk-count="' + code + '"'));

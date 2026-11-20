@@ -1,6 +1,6 @@
 # Boundary: Model-routing dialog
 
-Shows accepted team settings for the selected project, the running Orchestrator, and operation models. Saves edits to the selected scope.
+Shows the selected project's accepted team settings and its running Orchestrator. Saves edits to the selected scope.
 The dialog uses `src/features/agents/seats-dialog.css` for its layout and controls.
 
 ## Owns
@@ -8,7 +8,6 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - `src/features/agents/skill-seats.ts`
 - `src/features/agents/SeatsHost.tsx`
 - `src/features/agents/RoutingKeyCard.tsx`
-- `src/features/agents/OperationRows.tsx`
 - `src/features/agents/RoleEditor.tsx`
 - `src/features/agents/RoutingReview.tsx`
 - `src/features/agents/role-rules.d.ts`

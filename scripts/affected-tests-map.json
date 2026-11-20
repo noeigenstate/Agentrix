@@ -378,7 +378,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "4d7c15c58a70002936203be79cac72ab5bf7563f4bc13784a2ababb9e679b75d",
+      "digest": "a2a397a1ccc19d0d4fda9f4f020d51306deeb00c8b9d9411d476cf8ede75eec6",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -439,7 +439,7 @@
       "reason": "The intercept entrypoint invokes the existing dispatch helper beside the source, packaged or SSH runtime."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "2eebae685aaeda64ccbc20ac3d33d6cbec44e6df2b3ffe5bbaa4b1deb56e1bdf",
+      "digest": "057fc0d23273a8ea93e614e21d42761a934e7bfd3ea70813e966568dd6981947",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
