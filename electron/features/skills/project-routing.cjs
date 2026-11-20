@@ -206,9 +206,29 @@ function reviewSeat(value, team, catalog) {
   return { ...value, effort: value.effort ?? catalog.find(row => row.model === value.model)?.defaultEffort ?? 'high' };
 }
 
+function reviewRoleState(item) {
+  if (!item) return null;
+  const { row, seat } = item, { enabled, fresh, from, name, duty, outputs } = row;
+  return {
+    enabled, fresh, ...(seat && { model: seat.model, effort: seat.effort }), fast: seat?.fast === true,
+    ...(from && { from }), ...(row.source === 'custom' && { custom: { name, duty, outputs } }),
+  };
+}
+
+function diffRole(id, before, after, diff) {
+  const oldState = reviewRoleState(before), newState = reviewRoleState(after);
+  if (isDeepStrictEqual(oldState, newState)) return null;
+  for (const field of ['enabled', 'fresh', 'from', 'model', 'effort', 'fast']) diff('role', id, field, oldState?.[field], newState?.[field]);
+  for (const field of ['name', 'duty', 'outputs']) diff('role', id, field, oldState?.custom?.[field], newState?.custom?.[field]);
+  let status = 'changed';
+  if (!oldState || !oldState.enabled && newState?.enabled) status = 'added';
+  else if (!newState || oldState.enabled && !newState.enabled) status = 'removed';
+  return { role: id, source: (after ?? before).row.source, status, before: oldState, after: newState };
+}
+
 function reviewFile(file, reason, team, previous, catalog) {
-  const { config, digest, ignored } = file, changes = [], flags = [];
-  const flag = (code, key, id, text) => flags.push({ code, [key]: id, text });
+  const { config, digest, ignored } = file, changes = [], roleChanges = [], flags = [];
+  const flag = (code, key, id, text) => flags.push({ code, [key]: id, ...(text !== undefined && { text }) });
   const rank = model => catalog.find(row => row.model === model)?.rank ?? rankByName(model);
   const listed = model => catalog.some(row => row.model === model && row.listed !== false);
   const diff = (key, id, field, from, to) => {
@@ -220,34 +240,33 @@ function reviewFile(file, reason, team, previous, catalog) {
   const authors = new Set(team.authors.flatMap(id => team.effective[id] ? [identity(team.effective[id].model)] : []));
   for (const id of new Set([...oldRoles.keys(), ...nextRoles.keys()])) {
     const before = oldRoles.get(id), after = nextRoles.get(id), role = after?.row, old = before?.row, seat = after?.seat;
-    for (const field of ['enabled', 'name', 'duty', 'outputs', 'fresh', 'from']) diff('role', id, field, old?.[field], role?.[field]);
-    for (const field of ['model', 'effort', 'fast']) diff('role', id, field, before?.seat?.[field], seat?.[field]);
-    if (role?.source === 'custom') flag('custom-text', 'role', id, [role.duty, role.outputs].filter(Boolean).join(' / '));
+    if (!old?.enabled && !role?.enabled && !Object.hasOwn(config.roles, id)) continue;
+    const change = diffRole(id, before, after, diff);
+    if (change) roleChanges.push(change);
+    if (role?.source === 'custom') flag('custom-text', 'role', id, role.name);
     const weakened = old?.enabled && verificationRole(old) && (!role?.enabled || old.fresh && !role.fresh || verificationDropped(before.seat, seat, rank));
     const shared = role?.enabled && role.kind === 'reviewer' && seat && authors.has(identity(seat.model));
-    if (weakened || shared) {
-      flag('verification-weakened', 'role', id, role?.name || id);
-    }
+    if (weakened || shared) flag('verification-weakened', 'role', id);
     if (!role?.enabled || !seat) continue;
     const modelChanged = !old?.enabled || before.seat?.model !== seat.model;
     if (modelChanged && rank(seat.model) === 3) flag('expensive-model', 'role', id, seat.model);
     if (modelChanged && !listed(seat.model)) flag('unlisted-model', 'role', id, seat.model);
     if (seat.fast && (!old?.enabled || !before.seat?.fast)) flag('fast-on', 'role', id, seat.model);
-    if (['xhigh', 'max'].includes(seat.effort) && (!old?.enabled || before.seat?.effort !== seat.effort)) flag('high-effort', 'role', id, seat.effort);
+    if (['xhigh', 'max'].includes(seat.effort) && (!old?.enabled || before.seat?.effort !== seat.effort)) flag('high-effort', 'role', id);
   }
   const nextOps = operationSlots.resolve(config.operations);
   for (const [id, value] of Object.entries(nextOps)) {
     const old = previous.operations[id];
     diff('operation', id, 'value', old, value);
     if (id === 'review' && verificationDropped(reviewSeat(old, previous, catalog), reviewSeat(value, team, catalog), rank)) {
-      flag('verification-weakened', 'operation', id, typeof value === 'string' ? value : value.model);
+      flag('verification-weakened', 'operation', id, typeof value === 'string' ? undefined : value.model);
     }
     if (typeof value === 'string' || old?.model === value.model && old?.effort === value.effort) continue;
     if (!listed(value.model)) flag('unlisted-model', 'operation', id, value.model);
     if (['lookup', 'background'].includes(id) && familyOf(value.model) === 'claude' && rank(value.model) === 3) flag('operation-cost', 'operation', id, value.model);
-    if (['xhigh', 'max'].includes(value.effort) && old?.effort !== value.effort) flag('high-effort', 'operation', id, value.effort);
+    if (['xhigh', 'max'].includes(value.effort) && old?.effort !== value.effort) flag('high-effort', 'operation', id);
   }
-  return { digest, reason, config, changes, flags, ignored };
+  return { digest, reason, config, changes, roleChanges, flags, ignored };
 }
 
 function routingState(project, file, stored, seen = false) {

@@ -122,6 +122,49 @@ test('review flags weakened verification roles, the review operation and shared 
   const flags = reviewFile({ config, ignored: [] }, 'changed', after, before, catalog).flags;
   const weakened = flags.filter(flag => flag.code === 'verification-weakened').map(flag => flag.role ?? flag.operation);
   assert.deepEqual(new Set(weakened), new Set(['reviewer', 'x-audit', 'qa', 'security', 'a11y', 'review']));
+  assert.ok(flags.filter(flag => flag.code === 'verification-weakened' && flag.role).every(flag => flag.text === undefined));
+});
+
+function reviewChanges(roles, priorRoles = {}) {
+  const config = { roles, operations: {} };
+  const previous = { ...resolveTeam(entry, { roles: priorRoles, operations: {} }, context[2]), operations: {} };
+  const next = resolveTeam(entry, config, context[2]);
+  return reviewFile({ config, ignored: [] }, 'changed', next, previous, catalog);
+}
+
+test('changing Developer omits unmentioned disabled inheritors from the routing diff', () => {
+  const developer = { model: 'gpt-mini', effort: 'medium' };
+  const review = reviewChanges({ developer });
+  assert.deepEqual(new Set(review.changes.flatMap(change => change.role ? [change.role] : [])), new Set(['developer']));
+  assert.deepEqual(review.roleChanges.map(change => change.role), ['developer']);
+  const named = reviewChanges({ developer, frontend: { enabled: false } });
+  assert.deepEqual(named.roleChanges.map(change => change.role), ['developer', 'frontend']);
+});
+
+test('the grouped routing diff carries status, source and full custom text once per role', () => {
+  const old = { from: 'frontend', name: 'Mobile', duty: 'Build the app', outputs: 'Release brief' };
+  const current = { ...old, name: 'Mobile lead', duty: 'Ship the next app', outputs: 'Release and test report' };
+  const removed = { ...old, name: 'Legacy', duty: 'Maintain the previous app' };
+  const review = reviewChanges(
+    { qa: { enabled: false }, frontend: { enabled: true }, 'x-mobile': current, 'x-new': { ...old, name: 'New role' } },
+    { 'x-mobile': old, 'x-old': removed },
+  );
+  const byId = Object.fromEntries(review.roleChanges.map(change => [change.role, change]));
+  assert.equal(Object.keys(byId).length, review.roleChanges.length);
+  assert.equal(byId.frontend.source, 'library');
+  assert.equal(byId.frontend.status, 'added');
+  assert.equal(byId.qa.source, 'builtin');
+  assert.equal(byId.qa.status, 'removed');
+  assert.equal(byId.qa.after.enabled, false);
+  assert.equal(byId['x-mobile'].source, 'custom');
+  assert.equal(byId['x-mobile'].status, 'changed');
+  assert.deepEqual(byId['x-mobile'].before.custom, { name: old.name, duty: old.duty, outputs: old.outputs });
+  assert.deepEqual(byId['x-mobile'].after.custom, { name: current.name, duty: current.duty, outputs: current.outputs });
+  assert.equal(byId['x-old'].status, 'removed');
+  assert.equal(byId['x-old'].after, null);
+  assert.equal(byId['x-new'].status, 'added');
+  assert.equal(byId['x-new'].before, null);
+  assert.equal(review.flags.find(flag => flag.code === 'custom-text' && flag.role === 'x-mobile').text, current.name);
 });
 
 test('save clears abandoned routing temporaries while keeping recent files', t => {

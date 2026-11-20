@@ -254,11 +254,20 @@ export type RoutingAction = 'apply' | 'keep' | 'overwrite';
 export type RoleRuleCode = 'invalid-role' | 'role-text' | 'role-limit' | 'reviewer-required' | 'lead-locked';
 export type RoutingFlag = {
   code: 'expensive-model' | 'fast-on' | 'high-effort' | 'unlisted-model' | 'verification-weakened' | 'custom-text' | 'operation-cost';
-  role?: SeatId; operation?: OperationId; text: string;
+  role?: SeatId; operation?: OperationId; text?: string;
+};
+export type RoutingRoleState = {
+  enabled: boolean; fresh: boolean; model?: string; effort?: string; fast: boolean; from?: SeatId;
+  custom?: Pick<SeatRole, 'name' | 'duty' | 'outputs'>;
+};
+export type RoutingRoleChange = {
+  role: SeatId; source: TeamRole['source']; status: 'added' | 'removed' | 'changed';
+  before: RoutingRoleState | null; after: RoutingRoleState | null;
 };
 export type RoutingReview = {
   digest: string; reason: 'new-on-machine' | 'changed'; config: RoutingConfig;
   changes: { role?: SeatId; operation?: OperationId; field: string; from: unknown; to: unknown }[];
+  roleChanges: RoutingRoleChange[];
   flags: RoutingFlag[]; ignored: string[];
 };
 export type RoutingSource = {
