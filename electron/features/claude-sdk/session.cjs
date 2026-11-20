@@ -528,6 +528,15 @@ function createClaudeSession(spec, emit, dependencies) {
       return [...new Map(rows.map(row => [row.value, row])).values()];
     } catch (error) { error.message = clean(error.message); throw error; }
   }
+  async function applyRouting({ model, effort, fast }) {
+    Object.assign(spec, { model, effort, fast });
+    const run = active;
+    if (run?.initialized && !run.closing) {
+      await run.query.setModel(model || undefined);
+      await run.query.applyFlagSettings({ effortLevel: effort || null, fastMode: fast === true });
+    }
+    return optionsSnapshot();
+  }
   async function runOptions(patch) {
     if (routingPatch(patch)) throw routingOwned();
     if (Object.keys(patch).length) throw new Error('此会话不支持切换权限。');
@@ -592,7 +601,7 @@ function createClaudeSession(spec, emit, dependencies) {
   }
   return { start, resume: start, send, close, stopBackground, answer: requests.answer, snapshot: stream.snapshot,
     tokenRate: () => ({ ...rates.snapshot(), model: rates.model }),
-    runOptions, models, shell,
+    runOptions, applyRouting, models, shell,
     fallbackInput: () => fallbackInput && structuredClone(fallbackInput),
     async commands(fallback = []) {
       if (closed) return [];

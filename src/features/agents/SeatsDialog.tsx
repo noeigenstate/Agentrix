@@ -648,7 +648,7 @@ function RoleLibrary({ state, query, setQuery, filter, setFilter }: DialogPart &
 }
 
 function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole; lead?: boolean; changed: boolean }) {
-  const { info, label } = state.source, { over } = state.drag;
+  const { over } = state.drag;
   const { menu, openMenu } = state.popup;
   const { slotState, stateMark } = seatControls(state);
   const id = role.id, mark = slotState(id), custom = role.source === 'custom';
@@ -658,8 +658,6 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
   const specialtyCount = specialties.length === 1 ? t('专长 1') : t('专长 {count}', { count: specialties.length });
   const specialtyNames = specialties.join(roleSeparator());
   const leadDetail = [duty, output].filter(Boolean).join(' · ');
-  const running = lead && info.leadPending ? info.current?.[id] : undefined;
-  const restartTitle = running ? t('本次对话仍使用 {settings}', { settings: seatSettingText(running, label(running.model), t('快速')) }) : undefined;
   const classes = ['seats-team-card', lead && 'is-lead', over === id && 'is-over'].filter(Boolean).join(' ');
   const moreTitle = t('{seat}：角色操作', { seat: roleName(role) });
   return <article className={classes} data-seat={id} data-slot={id} aria-label={roleName(role)}>
@@ -671,7 +669,6 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
           aria-label={`${specialtyCount} · ${specialtyNames}`} data-role-detail>{specialtyCount}</span>}
         {custom && <span className="seats-tag">{t('项目角色')}</span>}
         {lead && <span className="seats-tag seats-lead-lock" title={t('总指挥必须保留。')}><LockSimple size={14} aria-hidden="true" /></span>}
-        {lead && info.leadPending && <span className="seats-tag seats-lead-restart" data-lead-pending title={restartTitle}>{t('重启后生效')}</span>}
         {changed && <span className="seats-chg" title={t('已改')}>●<span className="seats-sr-only">{t('已改')}</span></span>}
       </div>
       {lead
@@ -764,7 +761,6 @@ function RoutingStatus({ state }: DialogPart) {
     </> : <>
       <span aria-hidden="true">✓</span>{t(scope === 'project' ? '已保存，立即生效' : '已保存')}
       {scope === 'template' && templateProjects !== undefined && <span>· {t('{count} 个项目使用此模板', { count: templateProjects })}</span>}
-      {scope === 'project' && info.leadPending && <span>· {t('总指挥重启后生效')}</span>}
     </>}
   </span>;
 }
@@ -839,10 +835,9 @@ function ConversationChoices({ state }: DialogPart) {
   const { nowBox, setNowOpen, nowButton } = state.panels;
   const { terminalId } = state.props;
   const seatTags = info.current && info.roles.filter(role => role.enabled !== false).map(role => {
-    const seat = displayedSeat(info, role.id), pending = role.id === info.lead ? info.leadPending : null;
-    return <span key={role.id} className="seats-now" data-current-seat={role.id} data-lead-pending={pending ? true : undefined}>
+    const seat = displayedSeat(info, role.id);
+    return <span key={role.id} className="seats-now" data-current-seat={role.id}>
       <b>{roleName(role)}</b>{seat ? seatSettingText(seat, label(seat.model), t('快速')) : '—'}
-      {pending && <span className="seats-now-restart">{t('重启后生效：{settings}', { settings: seatSettingText(pending, label(pending.model), t('快速')) })}</span>}
     </span>;
   });
   return <div ref={nowBox} className="seats-nowbox" role="region" aria-label={t('本次对话（只读）')}>

@@ -294,7 +294,6 @@ export type SeatsInfo = {
   effective: SeatMap;
   current: SeatMap | null;
   currentRoles: TeamRole[] | null;
-  leadPending: { model: string; effort: string; fast: boolean } | null;
   routing: RoutingSource;
   catalog: SeatModel[];
   installed: { claude: boolean; codex: boolean };

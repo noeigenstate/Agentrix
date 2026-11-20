@@ -3,7 +3,7 @@ import { CaretRight, Lightning } from '@phosphor-icons/react';
 import type { SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { openSeats, routingRoleName, routingModelName } from '../../shared/routing-command.ts';
-import { displayedSeat, seatSettingText } from './skill-seats';
+import { displayedSeat } from './skill-seats';
 
 export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId?: string; terminalId: string; sessionId: string | null }) {
   const [info, setInfo] = useState<SeatsInfo | null>(null);
@@ -51,24 +51,20 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
   const pending = info.routing?.state === 'pending' || info.routing?.state === 'invalid';
   const titleOf = (role: typeof roles[number]) => role.source === 'custom' ? role.name : routingRoleName(role.name, t);
   const fast = t('快速');
-  const lead = info.leadPending;
-  const restart = lead ? t('重启后生效：{settings}', { settings: seatSettingText(lead, routingModelName(lead.model), fast) }) : null;
   const title = t('模型路由'), badge = pending ? t('路由文件待确认') : '';
   return <button type="button" className="activity-routing-key" aria-label={badge ? `${title} · ${badge}` : title} aria-haspopup="dialog"
-    aria-description={restart ?? undefined}
     onClick={() => openSeats({ projectId, terminalId })}>
     <span className="activity-card-title activity-routing-title">{title}{badge && <span data-routing-pending>{badge}</span>}<CaretRight size={14} aria-hidden="true" /></span>
     <span ref={rowsRef} className="activity-routing-rows">{roles.map(role => {
-      const seat = displayedSeat(info, role.id), leadRestart = role.id === info.lead ? restart : null;
+      const seat = displayedSeat(info, role.id);
       const name = titleOf(role), effort = seat?.effort ?? '—';
-      return <span key={role.id} className="activity-routing-row" data-seat={role.id} data-lead-pending={leadRestart ? true : undefined}>
+      return <span key={role.id} className="activity-routing-row" data-seat={role.id}>
         <span className="activity-routing-role" title={name}>{name}</span>
         <strong className="activity-routing-model" title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>
         <span className="activity-routing-setting" title={seat?.fast ? `${seat.effort} · ${fast}` : seat?.effort}>
           {effort}{seat?.fast && <><span className="activity-routing-fast"> · {fast}</span>
             <Lightning className="activity-routing-fast-icon" size={14} aria-hidden="true" /></>}
         </span>
-        {leadRestart && <span className="activity-routing-restart">{leadRestart}</span>}
       </span>;
     })}</span>
   </button>;

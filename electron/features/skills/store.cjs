@@ -501,12 +501,10 @@ class SkillsStore {
     const restartLead = agent && (remote && agent === 'claude'
       ? modelSeats.leadOptions(effective, agent, { ...installed, claude: true }, catalog, lead) : leadConfig.leads[agent]);
     const applied = snapshot && binding.appliedRouting;
-    const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: runningLead } : null;
-    const leadPending = restartLead && (runningLead.model !== restartLead.model || runningLead.effort !== restartLead.effort
-      || Boolean(runningLead.fast) !== Boolean(restartLead.fast)) ? { ...restartLead, fast: restartLead.fast === true } : null;
+    const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: restartLead || runningLead } : null;
     return { skill: entry.id, seats: team.seats, roles, lead, authors: team.authors, fresh: team.fresh,
       ...leadConfig, defaults, template, config, routing: source,
-      effective, current, leadPending, currentRoles: current ? applied?.roles ?? roles : null,
+      effective, current, currentRoles: current ? applied?.roles ?? roles : null,
       catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
   }

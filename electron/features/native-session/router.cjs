@@ -346,6 +346,14 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       if (record.spec.agent === 'codex' && result.permissions !== undefined) record.spec.permissions = result.permissions;
       return result;
     },
+    async applyRouting(id, seat) {
+      const record = sessions.get(id);
+      if (!record?.runtime.applyRouting || ended.has(record.runtime.snapshot().state)) return null;
+      const { model = null, effort = null, fast = false } = seat;
+      if (record.spec.model === model && record.spec.effort === effort && (record.spec.fast === true) === fast) return null;
+      Object.assign(record.spec, { model, effort, fast });
+      return record.runtime.applyRouting({ model, effort, fast });
+    },
     async shell(id, runtimeSessionId, clientMessageId, command) {
       const record = current(id, runtimeSessionId);
       if (!record.runtime.shell) throw new Error('此会话不支持运行命令。');

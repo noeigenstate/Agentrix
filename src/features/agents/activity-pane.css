@@ -230,7 +230,6 @@
 }
 .activity-routing-role { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-routing-model { overflow-wrap: anywhere; }
-.activity-routing-restart { grid-column: 1 / -1; color: var(--warning); line-height: 16px; overflow-wrap: anywhere; }
 .activity-routing-setting { text-align: end; white-space: nowrap; }
 .activity-routing-fast-icon { display: none; }
 .activity-routing-key strong { color: var(--flow-ink); font-weight: 500; }

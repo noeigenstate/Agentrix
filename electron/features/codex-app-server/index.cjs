@@ -567,6 +567,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       // The owner's session also reports the permissions it runs with now; the router keeps them for its next conversation.
       const permissionsField = () => ownPermissions() ? { permissions: spec.permissions } : {};
+      function applyRouting({ model, effort, fast }) {
+        Object.assign(spec, { model, effort, fast });
+        return optionsSnapshot();
+      }
       async function runOptions(patch) {
         if (!Object.keys(patch).length) { await changingOptions; assertOpen(); return { ...optionsSnapshot(), ...permissionsField() }; }
         if (routingPatch(patch)) throw routingOwned();
@@ -762,7 +766,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       return { start: override => open(false, override), resume: override => open(true, override), send, interrupt,
         answer: (id, answer) => requests.answer(id, answer), cancel: id => requests.cancel(id), snapshot: () => ({ ...events.snapshot(), state, requests: requests?.snapshot() || [] }), close,
-        readLimits, readAccount, commands, models, runOptions, activity: events.activity, tokenRate: events.tokenRate,
+        readLimits, readAccount, commands, models, runOptions, applyRouting, activity: events.activity, tokenRate: events.tokenRate,
         shell: async (id, command) => {
           try { await send({ clientMessageId: id, text: '!' + command }); return { exitCode: null }; }
           catch (error) {

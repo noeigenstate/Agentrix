@@ -48,8 +48,6 @@
 .seats-now { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; border: 1px solid var(--divider); border-radius: 8px; background: var(--bg-card); font-size: 14px; color: var(--text-2); white-space: nowrap; }
 .seats-now b { font-weight: 600; color: var(--text-1); }
 .seats-now[data-lead-pending] { flex-wrap: wrap; height: auto; min-height: 24px; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
-.seats-now[data-lead-pending] .seats-now-restart { flex-basis: 100%; }
-.seats-now-restart { font-size: 14px; color: var(--text-2); }
 .seats-notice { display: flex; align-items: center; gap: 8px; min-height: 16px; font-size: 14px; line-height: 16px; color: var(--text-2); }
 .seats-notice:empty { display: none; }
 .seats-notice[data-kind="error"] { color: var(--danger); }
@@ -96,7 +94,6 @@
 .seats-role-icon { display: grid; place-items: center; flex: none; color: var(--text-2); pointer-events: none; }
 .seats-team-card:not(.is-lead) .seats-role-more { position: absolute; top: 12px; inset-inline-end: 12px; }
 .seats-tag.seats-lead-lock { padding-inline: 4px; }
-.seats-tag.seats-lead-restart { border-style: dashed; border-color: var(--text-2); color: var(--text-1); }
 .seats-team-card .seats-chg { padding: 0; border: 0; }
 .seats-gem { display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr) auto; flex: none; align-items: center;
   gap: 8px; width: 100%; min-width: 0; height: 32px; padding: 0 8px;

@@ -555,6 +555,8 @@ function refreshSkillNotes() {
     if (s.status === 'exited') continue;
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
+    const lead = s.nativeStructured && nativeSessions && skills.leadOptions(project.id, s.agent);
+    if (lead) nativeSessions.applyRouting(s.terminalId, { model: lead.model, effort: lead.effort, fast: lead.fast === true }).catch(report);
     if (project.kind === 'ssh') {
       const remote = s.remoteConnection || s.terminal;
       if (remote?.request && !remote.closed) {
