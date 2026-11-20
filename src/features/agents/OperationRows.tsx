@@ -12,6 +12,8 @@ type Control = 'model' | 'effort' | keyof typeof AGENTS;
 
 export const editableOperation = (row: OperationRow): row is Editable => row.editable && row.id !== 'compaction' && row.id !== 'titles';
 export const operationName = (row: OperationRow) => currentLanguage() === 'en' ? row.nameEn : row.name;
+// Lookup is invoked per call. The other editable operations use Claude env or Codex thread config.
+export const operationNeedsLaunch = (id: OperationId) => id !== 'lookup';
 
 const OPERATION_WORDS: Record<string, string> = {
   'Searching, listing and reading files, log excerpts': '检索、列出和读取文件、摘录日志',
@@ -105,6 +107,7 @@ function OperationCard(props: OperationRowsProps & { row: Editable }) {
   const reported = sameOperation(value, info.effective[id]) && (!followReviewer || model === row.effective?.model);
   const suggestion = id === 'memory' && row.suggestion !== model && row.suggestion && isAvailable(catalog, row.suggestion) ? row.suggestion : null;
   const blocked = id === 'review' && reviewBlocked, note = operationNote(row.note);
+  const nextLaunch = operationNeedsLaunch(id) && (!reported || info.current && !sameOperation(value, info.current.values[id]));
   return <article className={`seats-op-card${over === id ? ' is-over' : ''}${blocked ? ' is-blocked' : ''}`} data-operation={id} data-op-slot={id} aria-label={name}>
     <OperationTitle row={row} changed={changed} />
     <div className="seats-op-info">
@@ -118,6 +121,7 @@ function OperationCard(props: OperationRowsProps & { row: Editable }) {
         {!blocked && !reported && <span className="seats-op-note">{t('保存后检查是否生效')}</span>}
       </div>
       {note && <p className="seats-op-note">{note}</p>}
+      {nextLaunch && <p className="seats-op-note">{t('下次启动生效')}</p>}
     </div>
     <div className="seats-op-settings">
       <button type="button" className="seats-gem" data-op-model={id} aria-haspopup="menu" aria-expanded={expanded('model')}
@@ -156,11 +160,14 @@ export function CurrentOperations({ info, label }: { info: SeatsInfo['operations
   return <div className="seats-now-operations">
     <b>{t('操作模型')}</b>
     <div className="seats-nows">{info.rows.filter(editableOperation).map(row => {
-      const value = current.values[row.id], agents = current.agents[row.id];
+      const value = current.values[row.id], agents = current.agents[row.id], saved = info.effective[row.id];
+      const setting = (choice: OperationValue | undefined) =>
+        [operationLabel(row, choice, label), choice !== 'follow' && choice?.effort].filter(Boolean).join(' · ');
       return <div key={row.id} className="seats-now-op" data-now-operation={row.id}>
-        <span className="seats-now"><b>{operationName(row)}</b>
-          {operationLabel(row, value, label)}{value && value !== 'follow' && value.effort && ` · ${value.effort}`}</span>
+        <span className="seats-now"><b>{operationName(row)}</b>{setting(value)}</span>
         {agents && <><Status family="claude" value={agents.claude} /><Status family="codex" value={agents.codex} /></>}
+        {operationNeedsLaunch(row.id) && !sameOperation(value, saved) &&
+          <span className="seats-now-restart">{t('下次启动生效：{settings}', { settings: setting(saved) })}</span>}
       </div>;
     })}</div>
   </div>;

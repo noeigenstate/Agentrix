@@ -217,11 +217,15 @@
 .activity-routing-key:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .activity-routing-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .activity-routing-rows { display: grid; min-width: 0; }
-.activity-routing-row { display: grid; grid-template-columns: minmax(44px, 30%) minmax(0, 1fr) auto; gap: 4px; font-size: 12px; line-height: 16px; color: var(--flow-muted); }
+.activity-routing-row { display: grid; grid-template-columns: minmax(44px, 30%) minmax(0, 1fr) auto; column-gap: 4px; font-size: 14px; line-height: 16px; color: var(--flow-muted); }
 .activity-routing-row > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-routing-row[data-lead-pending] { grid-column: 1 / -1; }
+.activity-routing-restart { grid-column: 1 / -1; color: var(--flow-muted); overflow-wrap: anywhere; }
+.activity-routing-setting { display: flex; align-items: center; white-space: nowrap; }
+.activity-routing-fast-icon { display: none; }
 .activity-routing-operations {
   display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 12px; line-height: 16px; color: var(--flow-muted);
+  font-size: 14px; line-height: 16px; color: var(--flow-muted);
 }
 .activity-routing-key strong { min-width: 0; color: var(--flow-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -231,12 +235,16 @@
 }
 @container activity (max-height: 752px) {
   .activity-routing-rows { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
-  .activity-routing-fast { display: none; }
 }
 .activity-call-rows .activity-task-fold button { grid-column: 2 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 0; background: none; color: var(--flow-muted); font: inherit; cursor: pointer; }
 .activity-task-fold button { min-height: 32px; }
 .activity-task-fold button[aria-expanded="true"] svg { transform: rotate(180deg); }
 
-.activity-routing-title [data-routing-pending] { margin-inline-start: auto; color: var(--warning); font-size: 12px; }
+.activity-routing-title [data-routing-pending] { margin-inline-start: auto; color: var(--warning); font-size: 14px; }
 .activity-routing-rows[data-compact] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
-.activity-routing-rows[data-compact] .activity-routing-fast { display: none; }
+.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-fast { display: none; }
+.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-fast-icon { display: inline-block; }
+@container activity (max-height: 752px) {
+  .activity-routing-row:not([data-lead-pending]) .activity-routing-fast { display: none; }
+  .activity-routing-row:not([data-lead-pending]) .activity-routing-fast-icon { display: inline-block; }
+}

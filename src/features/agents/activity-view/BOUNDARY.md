@@ -36,5 +36,5 @@ Shows the expanded project's usage and quota in the Activity pane. The routing d
 ## Not ours
 - Reading agent records and account data — Activity pane.
 - Showing the lead model and its prompts — Agent tab.
-- Handling routing edits and showing frozen choices — Model-routing dialog.
+- Handling routing edits and showing accepted seat settings — Model-routing dialog.
 - Deciding when to show the pane or expand the project — Workspace.

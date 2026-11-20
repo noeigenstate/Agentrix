@@ -43,7 +43,7 @@ function seatsInfo({ global = {}, project = null, operations, ...overrides } = {
     skill: 'model-routing', seats: SEATS, roles: team.roles.map(role => shipped(role)), lead: 'orchestrator',
     authors: ['developer'], leadAgent: 'claude', leads: { claude: DEFAULTS.orchestrator, codex: DEFAULTS.developer },
     fresh: ['qa', 'reviewer'], defaults: clone(DEFAULTS), template, config: applied,
-    effective: { ...clone(DEFAULTS), ...(applied ?? template).roles }, current: null, currentRoles: null, routing: source(), operations,
+    effective: { ...clone(DEFAULTS), ...(applied ?? template).roles }, current: null, currentRoles: null, leadPending: null, routing: source(), operations,
     catalog: catalog(), installed: { claude: true, codex: true }, ...overrides,
   };
 }
@@ -405,6 +405,8 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
   byAttr(h.render(), 'data-now').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Haiku · high/);
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Codex default/);
+  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Takes effect on next launch: GPT-6 Mini/);
+  assert.doesNotMatch(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /next launch/);
   byAttr(h.render(), 'data-reset').props.onClick();
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
@@ -472,7 +474,7 @@ test('the dialog saves the chosen scope and the edited map; the keyboard 更换 
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: { architect: { model: 'gpt-6.2-sol', effort: 'xhigh' } }, operations: {} }, 'at-open']], 'only the changed seat');
   tree = h.render();
-  assert.match(textOf(find(tree, node => node.props.role === 'status')), /Saved\. It applies from the next conversation/);
+  assert.match(textOf(find(tree, node => node.props.role === 'status')), /^Saved\. Takes effect immediately\.$/);
 });
 
 test('the scope select sends the project id, and 恢复默认 saves an empty map that clears the scope', async t => {
@@ -533,7 +535,9 @@ test('unavailable models are greyed with their reason, cannot be picked, and thi
   byAttr(tree, 'data-now').props.onClick();
   tree = h.render();
   assert.match(textOf(tree), /This conversation \(read-only\)/);
-  assert.match(textOf(find(tree, node => node.props.className?.includes('seats-now is-diff'))), /Architect\s*Sonnet · low → Opus · high/, 'a seat that differs from this conversation shows both');
+  const current = byAttr(tree, 'aria-label', 'This conversation (read-only)');
+  assert.match(textOf(byAttr(current, 'data-current-seat', 'architect')), /Architect\s*Opus · high/);
+  assert.doesNotMatch(textOf(current), /Sonnet · low|after restart/i);
   byAttr(tree, 'data-pick', 'developer').props.onClick(pickButton('developer'));
   tree = h.render();
   const item = byAttr(find(tree, node => node.props.role === 'menu'), 'data-assign', 'gpt-6.2-sol');
@@ -1312,22 +1316,49 @@ test('the role editor validates text, regenerates a new ID and clears the seat w
   assert.equal(saves[0][1].model, undefined);
 });
 
-test('the routing key uses the frozen role names and compacts sixteen roles when a file needs review', async t => {
-  const frozen = Array.from({ length: 16 }, (_, index) => ({
-    id: 'x-role-' + index, name: 'Frozen ' + index, enabled: true, source: 'custom',
-  }));
-  const current = Object.fromEntries(frozen.map(role => [role.id, { model: 'opus', effort: 'high' }]));
-  const info = seatsInfo({ current, currentRoles: [...frozen, { id: 'x-off', enabled: false }], routing: source({ state: 'pending' }) });
-  globalThis.window = { agentrix: { skillSeats: async () => info } };
+test('the routing key refreshes accepted roles while keeping the running lead and marking its saved settings', async t => {
+  const lead = shipped(team.roles.find(role => role.id === 'orchestrator'));
+  const roles = [lead, ...Array.from({ length: 15 }, (_, index) => ({
+    id: 'x-role-' + index, name: 'Saved ' + index, enabled: true, source: 'custom',
+  }))];
+  const leadPending = { model: 'gpt-6.2-sol', effort: 'medium', fast: true };
+  const effective = Object.fromEntries(roles.map(role => [role.id, leadPending]));
+  const initial = seatsInfo({ current: DEFAULTS, currentRoles: team.roles.map(role => shipped(role)) });
+  let info = initial, notify;
+  globalThis.window = { agentrix: { skillSeats: async () => info, onSkills: listener => { notify = listener; } } };
   const handle = mount(t, 'RoutingKeyCard.tsx', 'RoutingKeyCard', { projectId: 'p1', terminalId: 't1' }, {});
   handle.render();
+  await settle();
+  assert.equal(byAttr(handle.render(), 'data-seat', 'x-role-0'), undefined);
+  assert.doesNotMatch(textOf(handle.render()), /after restart/i);
+  info = { ...initial, effective, leadPending, roles: [...roles, { id: 'x-off', enabled: false }],
+    routing: source({ state: 'pending' }) };
+  notify();
   await settle();
   const tree = handle.render();
   assert.equal(findAll(tree, node => node.props['data-seat']).length, 16);
   assert.equal(byAttr(tree, 'data-seat', 'x-off'), undefined);
   assert.ok(byAttr(tree, 'data-compact'));
-  assert.match(textOf(byAttr(tree, 'data-seat', 'x-role-0')), /Frozen 0/);
+  assert.match(textOf(byAttr(tree, 'data-seat', 'x-role-0')), /Saved 0GPT-6\.2-Solmedium · Fast/i);
+  assert.match(textOf(byAttr(tree, 'data-seat', 'orchestrator')), /Orchestrator AgentOpushighAfter restart: GPT-6\.2-Sol · medium · Fast/i);
   assert.match(tree.props['aria-label'], /needs review/);
+});
+
+test('the conversation box uses accepted settings across drafts and limits restart wording to the pending lead', async t => {
+  const leadPending = { model: 'gpt-6.2-sol', effort: 'medium', fast: true };
+  const info = seatsInfo({ project: { orchestrator: leadPending, architect: { model: 'sonnet', effort: 'medium' } },
+    current: DEFAULTS, currentRoles: team.roles.map(role => shipped(role)), leadPending });
+  const h = dialogHarness(t, info, { language: 'zh' });
+  byAttr(openMenu(h, 'architect'), 'data-assign', 'haiku').props.onClick();
+  byAttr(h.render(), 'data-now').props.onClick();
+  const choices = byAttr(h.render(), 'aria-label', '本次对话（只读）');
+  assert.match(textOf(byAttr(choices, 'data-current-seat', 'architect')), /Sonnet · medium/);
+  assert.doesNotMatch(textOf(choices), /Haiku|→/);
+  assert.match(textOf(byAttr(choices, 'data-current-seat', 'orchestrator')), /Opus · high重启后生效：GPT-6\.2-Sol · medium · 快速/);
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  const notice = find(h.render(), node => node.props.className === 'seats-notice');
+  assert.equal(textOf(notice), '已保存，立即生效；总指挥重启后生效');
 });
 
 test('the role library and Developer specialties use the supplied labels and duties', t => {
@@ -1464,8 +1495,13 @@ test('pending and invalid project files replace the green application status and
 test('a changed review digest temporarily disables every action and sends only the latest digest', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const pending = digest => source({ state: 'pending', digest, actions: ['apply', 'keep', 'overwrite'] });
-  const info = seatsInfo({ routing: pending('old') }), calls = [];
-  const h = dialogHarness(t, info, { resolveSkillRouting: async (...args) => { calls.push(args); return { ok: true }; } });
+  const info = seatsInfo({ routing: pending('old'), current: DEFAULTS }), calls = [];
+  const accepted = seatsInfo({ current: DEFAULTS, project: { architect: { model: 'sonnet', effort: 'medium' } } });
+  const h = dialogHarness(t, info, { resolveSkillRouting: async (...args) => {
+    calls.push(args);
+    h.deliver(accepted);
+    return { ok: true };
+  } });
   const action = (tree, id = 'apply') => byAttr(tree, 'data-routing-action', id);
   assert.equal(action(h.render()).props.disabled, false);
   h.deliver({ ...info, routing: pending('new') });
@@ -1483,4 +1519,9 @@ test('a changed review digest temporarily disables every action and sends only t
   action(ready).props.onClick();
   await settle();
   assert.deepEqual(calls, [['p1', 'apply', 'new']]);
+  assert.equal(byAttr(h.render(), 'data-routing-review'), undefined);
+  const notice = find(h.render(), node => node.props.className === 'seats-notice');
+  assert.equal(textOf(notice), 'Saved. Takes effect immediately.');
+  byAttr(h.render(), 'data-now').props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'data-current-seat', 'architect')), /Sonnet · medium/);
 });
