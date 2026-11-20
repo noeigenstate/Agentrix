@@ -162,6 +162,7 @@ function mount(t, file, name, props, stubs) {
       effects.push(() => { last?.cleanup?.(); slots[index] = { deps, cleanup: callback() }; });
     },
   };
+  hooks.useLayoutEffect = hooks.useEffect;
   const component = compile(file, hooks, stubs)[name];
   const handle = { props, render(commit) { cursor = 0; const tree = component(handle.props); commit?.(tree); while (effects.length) effects.shift()(); return tree; }, unmount() { for (const slot of slots) slot?.cleanup?.(); } };
   t.after(() => { handle.unmount(); globalThis.window = previous.window; globalThis.document = previous.document; });
@@ -237,7 +238,7 @@ function operationInfo({ global = {}, project = null, ...overrides } = {}) {
     },
     ...(id === 'memory' ? { suggestion: 'gpt-6-mini' } : {}),
   }));
-  return { rows, defaults, template: global, config: project, effective: { ...defaults, ...(project ?? global) }, current: null, ...overrides };
+  return { rows, defaults, template: global, config: project, effective: { ...defaults, ...(project ?? global) }, current: null, pending: [], ...overrides };
 }
 
 const operationCatalog = () => [
@@ -383,6 +384,7 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
     global: { background: { model: 'opus' } },
     project: { memory: { model: 'gpt-6-mini' } },
     current: { values: { lookup: { model: 'haiku', effort: 'high' }, memory: 'follow' }, agents: {} },
+    pending: ['memory'],
   });
   const h = dialogHarness(t, seatsInfo({ operations, catalog: operationCatalog() }));
   assert.equal(byAttr(h.render(), 'data-scope', 'project').props['aria-pressed'], true, 'an operations-only project override chooses project scope');
@@ -402,11 +404,19 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
   assert.deepEqual(h.calls[0], ['project', 'p1', { roles: { qa: { model: 'haiku', effort: 'high' } }, operations: {
     memory: { model: 'gpt-6-mini' }, lookup: { model: 'opus', effort: 'max' },
   } }, 'at-open']);
+  h.deliver(seatsInfo({ operations: operationInfo({
+    project: h.calls[0][2].operations, current: operations.current, pending: ['lookup'],
+  }), catalog: operationCatalog() }));
+  await settle();
+  tree = h.render();
+  assert.match(textOf(byAttr(tree, 'data-operation', 'lookup')), /Takes effect on next launch/);
+  assert.doesNotMatch(textOf(byAttr(tree, 'data-operation', 'memory')), /next launch/);
+  assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /Saved.*take effect on next launch/);
   byAttr(h.render(), 'data-now').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Haiku · high/);
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Codex default/);
-  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Takes effect on next launch: GPT-6 Mini/);
-  assert.doesNotMatch(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /next launch/);
+  assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Takes effect on next launch: Opus · max/);
+  assert.doesNotMatch(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /next launch/);
   byAttr(h.render(), 'data-reset').props.onClick();
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
@@ -1183,7 +1193,8 @@ test('the app seats host opens only when main supplies routing info', async t =>
 test('the activity key is one button with a row for each role and opens the scoped dialog', async t => {
   const window = new EventTarget(), events = [];
   const changes = { lookup: { model: 'gpt-6.2-sol', effort: 'high' }, review: { model: 'gpt-6-mini' }, background: { model: 'haiku' } };
-  const operations = operationInfo({ current: { values: changes, agents: {} } });
+  const operations = operationInfo({ pending: ['lookup'], project: { lookup: changes.lookup } });
+  operations.current = { values: { ...changes, lookup: operations.defaults.lookup }, agents: {} };
   let loaded = operations;
   window.agentrix = { skillSeats: async () => seatsInfo({ operations: loaded }) };
   window.addEventListener('agentrix:open-seats', event => events.push(event.detail));
@@ -1199,7 +1210,7 @@ test('the activity key is one button with a row for each role and opens the scop
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
   assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row').length, 10);
   const summary = byAttr(tree, 'className', 'activity-routing-operations');
-  assert.match(textOf(summary), /Lookup · Review/);
+  assert.match(textOf(summary), /Lookup · Review.*Takes effect on next launch/);
   assert.match(summary.props.title, /GPT-6\.2-Sol · high[\s\S]*GPT-6-Mini/i);
   assert.doesNotMatch(summary.props.title, /Background/);
   assert.equal(summary.props['data-seat'], undefined);
@@ -1210,6 +1221,41 @@ test('the activity key is one button with a row for each role and opens the scop
   h.render();
   await settle();
   assert.match(textOf(byAttr(h.render(), 'className', 'activity-routing-operations')), /Operation models · default/i);
+});
+
+test('routing rows use one column when it fits and return to it when usage shrinks', async t => {
+  let resize, compact = false, singleHeight = 566;
+  const observed = new Set(), usage = {}, button = {};
+  const pane = { children: [usage, button], clientHeight: 708,
+    get scrollHeight() { return Math.max(this.clientHeight, singleHeight - (compact ? 80 : 0)); } };
+  const rows = {
+    closest: selector => selector === '.activity-pane' ? pane : null,
+    removeAttribute: () => { compact = false; },
+    toggleAttribute: (_, value) => { compact = value; },
+  };
+  const observers = { ResizeObserver: globalThis.ResizeObserver, MutationObserver: globalThis.MutationObserver };
+  t.after(() => Object.assign(globalThis, observers));
+  globalThis.ResizeObserver = class {
+    constructor(callback) { resize = callback; }
+    observe(node) { observed.add(node); }
+    disconnect() { observed.clear(); }
+  };
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  const h = mount(t, 'RoutingKeyCard.tsx', 'RoutingKeyCard', { terminalId: 't1' });
+  window = { agentrix: { skillSeats: async () => seatsInfo() } };
+  h.render();
+  await settle();
+  h.render(tree => { byAttr(tree, 'className', 'activity-routing-rows').props.ref.current = rows; });
+  assert.deepEqual([...observed], [pane, usage, button]);
+  assert.equal(compact, false);
+  singleHeight = 740;
+  resize();
+  assert.equal(compact, true);
+  resize();
+  assert.equal(compact, true, 'a compact layout that fits must not cause the overflowing column to return');
+  singleHeight = 708;
+  resize();
+  assert.equal(compact, false);
 });
 
 test('role drafts follow their sources and reviewer conflicts use enabled author roles', () => {
@@ -1338,7 +1384,6 @@ test('the routing key refreshes accepted roles while keeping the running lead an
   const tree = handle.render();
   assert.equal(findAll(tree, node => node.props['data-seat']).length, 16);
   assert.equal(byAttr(tree, 'data-seat', 'x-off'), undefined);
-  assert.ok(byAttr(tree, 'data-compact'));
   assert.match(textOf(byAttr(tree, 'data-seat', 'x-role-0')), /Saved 0GPT-6\.2-Solmedium · Fast/i);
   assert.match(textOf(byAttr(tree, 'data-seat', 'orchestrator')), /Orchestrator AgentOpushighAfter restart: GPT-6\.2-Sol · medium · Fast/i);
   assert.match(tree.props['aria-label'], /needs review/);
