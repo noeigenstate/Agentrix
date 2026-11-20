@@ -68,7 +68,7 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--ledger <file>]       the task's shared context: given to the worker, its findings appended after
   [--resume <session>]    continue that worker session (same context) instead of starting a new one
   [--meeting <id>]        roundtable before work; no file changes and no --read-only
-  [--skip-meeting <reason>] execution with --allow may bypass confirmation; the reason is recorded
+  [--skip-meeting <reason>] optionally record why a roundtable was skipped on an execution run with --allow
   [--kind <${TASK_KINDS.join('|')}>] task category for long-term evaluation
   [--detach]             survive the launching shell; collect results with wait
   Codex: [--fast] [--image <file> ...] [--read-only]

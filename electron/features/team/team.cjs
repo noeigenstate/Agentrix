@@ -13,7 +13,6 @@ const FINDINGS = '## Findings for the ledger';
 const fields = { Goal: 'goal', Files: 'files', Provides: 'provides', Uses: 'uses', 'Done when': 'doneWhen', 'Questions and risks': 'questions' };
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
 const read = file => { try { return fs.readFileSync(file, 'utf8'); } catch (error) { if (error.code === 'ENOENT') return ''; throw error; } };
-const sameScope = (a, b) => new Set(a).size === new Set(b).size && a.every(glob => b.includes(glob));
 const boundedText = (value, limit) => typeof value === 'string' && value.trim().length > 0 && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);
 const shape = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 const nonnegative = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
@@ -225,13 +224,7 @@ class Team {
             if (shared.length) throw new Error(`Scope overlaps "${worker.title}" (pid ${worker.pid}; board "${worker.boardFile}"): ${shared.slice(0, 3).join(', ')}`);
           }
         }
-        const agreed = history.findLast(entry => entry.type === 'meeting' && entry.agent === options.agent && entry.session === options.resume);
-        if (execution && options.allow.length && !options.meeting && !options.skipMeeting) {
-          const problem = !agreed ? 'no meeting for the session' : agreed.status !== 'confirmed' ? 'roundtable not confirmed'
-            : history.some(entry => entry.type === 'consolidate' && entry.meeting === agreed.meeting) ? `roundtable ${agreed.meeting} is closed`
-            : !sameScope(options.allow, agreed.allow || []) ? 'scope differs from the one agreed' : null;
-          if (problem) throw new Error(`${problem}; hold a roundtable with --meeting <id> (same --allow), then --resume its session for the build, or pass --skip-meeting <reason>; see --help`);
-        }
+        const resumedMeeting = history.findLast(entry => entry.type === 'meeting' && entry.agent === options.agent && entry.session === options.resume);
         if (options.meeting) {
           if (history.some(entry => entry.type === 'consolidate' && entry.meeting === options.meeting)) throw new Error(`Meeting ${options.meeting} is closed; use a new --meeting id`);
           const pending = [...pendingMeetings(history)].find(meeting => meeting !== options.meeting);
@@ -239,7 +232,7 @@ class Team {
         }
         const prior = options.resume && history.findLast(entry => entry.type === 'meeting' && entry.agent === options.agent && entry.session === options.resume
           && entry.meeting === options.meeting && entry.status === 'understood' && Object.values(fields).every(key => entry.understanding?.[key]));
-        const admitted = { meeting: options.meeting || agreed?.meeting || null, phase: prior ? 'confirmation' : 'understanding', repo };
+        const admitted = { meeting: options.meeting || resumedMeeting?.meeting || null, phase: prior ? 'confirmation' : 'understanding', repo };
         const entry = { id, pid: process.pid, title: options.title, role: options.role, agent: options.agent, model: options.model,
           cwd: options.cwd, allow: options.allow, meeting: admitted.meeting, startedAt: Date.now() };
         const temporary = path.join(this.board, id + '.tmp');

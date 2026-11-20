@@ -325,13 +325,12 @@ test('dead board entries and stale locks are removed while a live lock is respec
   }
 });
 
-test('execution requires a confirmed resumed session and the same scope set', async t => {
+test('scoped execution can start without roundtable approval', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), session = randomUUID(), allow = ['src/a.js', 'src/b.js'];
   const absent = await start(f);
-  const refused = await output(absent);
-  assert.equal(refused.code, 1); assert.match(refused.stdout, /no meeting for the session.*--skip-meeting/); assert.equal(exists(absent.capture), false);
-  await until(() => f.events.length >= 2);
-  assert.deepEqual(f.events.slice(0, 2).map(event => [event.type, event.unconfirmed || event.reason]), [['dispatch-start', true], ['dispatch-end', 'unconfirmed']]);
+  const result = await output(absent);
+  assert.equal(result.code, 0, result.stdout); assert.match(result.stdout, /^\[dispatch\] started /m);
+  assert.equal(team.entries().at(-1).meeting, null);
   const answer = understanding.replace('Files: src/a.js', 'Files: src/a.js\n  src/b.js');
   const first = await start(f, { meeting: 'r1', session, allow, answer });
   assert.match((await output(first)).stdout, /roundtable r1 · understanding complete/);
@@ -344,8 +343,9 @@ test('execution requires a confirmed resumed session and the same scope set', as
   assert.match(firstBrief, /Do not propose alternatives or reopen decisions/);
   assert.match(firstBrief, /Under "Questions and risks", list only points where the brief is ambiguous or contradicts itself, and facts in the code that make it impossible as written; write none if there are none/);
   assert.match(firstBrief, /fields may continue on following lines/);
-  const notConfirmed = await start(f, { resume: session, allow });
-  assert.match((await output(notConfirmed)).stdout, /roundtable not confirmed/);
+  const notConfirmed = await start(f, { resume: session, session, allow });
+  assert.equal((await output(notConfirmed)).code, 0); assert.ok(exists(notConfirmed.capture));
+  assert.equal(team.entries().at(-1).meeting, 'r1');
   const confirm = await start(f, { meeting: 'r1', resume: session, session, allow, answer: confirmation });
   assert.match((await output(confirm)).stdout, /roundtable r1 · confirmed/);
   const captured = await json(confirm.capture);
@@ -354,8 +354,8 @@ test('execution requires a confirmed resumed session and the same scope set', as
   assert.deepEqual(captured.args, ['app-server', '--listen', 'stdio://']);
   const resumed = captured.requests.find(request => request.method === 'thread/resume' && request.params.threadId);
   assert.equal(resumed.params.threadId, session); assert.equal(resumed.params.sandbox, 'read-only');
-  const differs = await start(f, { resume: session, allow: ['src/a.js'] });
-  assert.match((await output(differs)).stdout, /scope differs from the one agreed/); assert.equal(exists(differs.capture), false);
+  const differs = await start(f, { resume: session, session, allow: ['src/a.js'] });
+  assert.equal((await output(differs)).code, 0); assert.ok(exists(differs.capture));
   const build = await start(f, { resume: session, session, allow: ['src/b.js', 'src/a.js', 'src/a.js'], answer: 'Built.' });
   assert.equal((await output(build)).code, 0);
   const buildRequest = (await json(build.capture)).requests.find(request => request.method === 'thread/resume' && request.params.threadId);
@@ -365,7 +365,7 @@ test('execution requires a confirmed resumed session and the same scope set', as
   assert.deepEqual(team.live(), []);
 });
 
-test('skip reasons are printed and journaled while investigation and review bypass execution gates', async t => {
+test('skip reasons are printed and journaled while investigations and reviews can run alongside execution', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true);
   const skipped = await start(f, { skip: 'isolated regression fixture' }), result = await output(skipped);
   assert.equal(result.code, 0); assert.match(result.stdout.split('\n').find(line => line.startsWith('[dispatch] started ')), /roundtable skipped: isolated regression fixture/);
@@ -387,10 +387,11 @@ test('failed meetings are invalid even when the answer confirms', async t => {
   await output(await start(f, { meeting: 'r1', session }));
   await output(await start(f, { meeting: 'r1', session, resume: session, answer: confirmation, exitCode: 7 }));
   assert.equal(team.entries().at(-1).status, 'invalid');
-  const refused = await start(f, { resume: session });
-  assert.match((await output(refused)).stdout, /roundtable not confirmed/); assert.equal(exists(refused.capture), false);
+  const build = await start(f, { resume: session, session });
+  assert.equal((await output(build)).code, 0); assert.ok(exists(build.capture));
   const retry = await start(f, { meeting: 'r1', session, resume: session, answer: '## Roundtable confirmation\nStatus: open\n- Clarify ownership.\n' });
   assert.match((await output(retry)).stdout, /roundtable r1 · open/);
+  await team.consolidate('r1', summary);
   const invalid = await start(f, { meeting: 'r2', answer: understanding, exitCode: 2 });
   await output(invalid); assert.equal(team.entries().at(-1).status, 'invalid');
   const repeat = await start(f, { meeting: 'r2', session: invalid.session, resume: invalid.session });
@@ -588,8 +589,9 @@ test('meeting lifecycle keeps consolidated ids closed even after late ends', asy
   assert.equal(await fs.readFile(team.memory, 'utf8'), before); assert.equal(team.entries().length, count);
   team.release(active); await team.consolidate('r1', summary);
   await assert.rejects(team.admit(options(f.repo, ['--meeting', 'r1', '--allow', 'src/a.js']), randomUUID(), helper), /closed.*new --meeting/);
-  await assert.rejects(team.admit(options(f.repo, ['--resume', session, '--allow', 'src/a.js']), randomUUID(), helper), /closed.*--meeting <id>.*--resume.*--skip-meeting.*--help/);
-  team.append({ type: 'end', id: 'late-build', meeting: 'r1', session });
+  const resumed = await start(f, { resume: session, session });
+  assert.equal((await output(resumed)).code, 0); assert.ok(exists(resumed.capture));
+  assert.equal(team.entries().at(-1).meeting, 'r1');
   const next = randomUUID();
   await team.admit(options(f.repo, ['--meeting', 'already-seen-r2', '--allow', 'src/b.js']), next, helper);
   team.release(next);
@@ -667,12 +669,10 @@ test('bookkeeping failures preserve worker results and never retry findings', as
   } finally { busy.mock.restore(); }
 });
 
-test('gate refusals explain starting a roundtable and expose occupying board records', async t => {
+test('scope overlap refusals expose occupying board records', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), id = randomUUID();
-  await assert.rejects(team.admit(options(f.repo, ['--allow', 'src/a.js']), randomUUID(), helper),
-    /--meeting <id> \(same --allow\).*--resume.*--skip-meeting <reason>.*--help/);
-  await team.admit(options(f.repo, ['--allow', 'src/a.js', '--skip-meeting', 'ghost diagnostic']), id, helper);
-  await assert.rejects(team.admit(options(f.repo, ['--allow', 'src/**', '--skip-meeting', 'test']), randomUUID(), helper), error => {
+  await team.admit(options(f.repo, ['--allow', 'src/a.js']), id, helper);
+  await assert.rejects(team.admit(options(f.repo, ['--allow', 'src/**']), randomUUID(), helper), error => {
     assert.ok(error.message.includes('pid ' + process.pid)); assert.ok(error.message.includes(path.join(team.board, id + '.json')));
     return true;
   });
