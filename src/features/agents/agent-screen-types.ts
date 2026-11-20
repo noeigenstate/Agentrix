@@ -75,6 +75,6 @@ export type AgentScreen = {
   // added, or one clipped by the window): the reading view shows a generic card that opens the terminal instead.
   // title is the dialog's own heading when one was read. Absent or null when nothing waits or choice holds the card.
   waiting?: { title: string | null } | null;
-  // Messages main holds queued for the agent, stamped by the screen registry: Claude's "Press up to edit queued messages" placeholder is no draft while any wait.
-  queued?: number;
+  // The terminal registry found only a placeholder in the input box.
+  inputHint?: boolean;
 };

@@ -3,7 +3,8 @@ import type { IBuffer, IBufferCell, IBufferLine, Terminal } from '@xterm/xterm';
 import type { ApprovalStamp } from '../../shared/types';
 import type { ScreenAgent, ScreenChoice } from '../agents/agent-screen-types';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen.ts';
-import { claudePromptRange, cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from '../agents/agent-screen-input.ts';
+import { claudeInputHint, claudePromptRange, cliDialogShown, cliInputAvailable, cliInputDraft, isAtPrompt, isCliWorking, withoutClaudeCursor }
+  from '../agents/agent-screen-input.ts';
 import { createFactsPublisher } from '../agents/agent-screen-facts.ts';
 export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 
@@ -11,7 +12,11 @@ export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 // choices it is asking about) for the reading view to present without switching to the terminal. Each
 // UI updates coalesce over 100 ms. Delivery observes every completed parse, including the instant pending reaches zero.
 // parsed describes the cached rows, not permission to write: pending must be false before any mutation.
-export type Screen = { rows: string[]; sessionId: string | null; epoch?: number; revision: number; parse?: number; updatedAt: number; stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; queued?: number; approval?: ApprovalStamp | null; instances?: Record<ScreenAgent, number>; inputFrames?: Record<ScreenAgent, number> };
+export type Screen = {
+  rows: string[]; sessionId: string | null; epoch?: number; revision: number; parse?: number; updatedAt: number;
+  stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; queued?: number; approval?: ApprovalStamp | null;
+  instances?: Record<ScreenAgent, number>; inputFrames?: Record<ScreenAgent, number>; inputHint?: boolean;
+};
 type Entry = { id: string; terminal: Terminal; listeners: Set<(screen: Screen) => void>; parses: Set<(screen: Screen) => void>; timer: number; dispose: () => void; frame?: Screen; epoch: number;
   sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; parse: number; updatedAt: number;
   states: Partial<Record<ScreenAgent, string | null>>; stateUpdatedAt: Record<ScreenAgent, number>;
@@ -40,9 +45,9 @@ export function recordScreenPaste(id: string, sessionId: string, text: string, a
 }
 export function canPasteScreen(agent: ScreenAgent, frame: Screen | null, emptyInput = false) {
   if (!frame) return false;
-  const screen = { ...parseAgentScreen(agent, frame.rows), queued: frame.queued };
+  const screen = { ...parseAgentScreen(agent, frame.rows), inputHint: frame.inputHint };
   return !cliDialogShown(agent, frame.rows, screen)
-    && (!emptyInput || !frame.pending && hasCliInput(agent, frame.rows, screen) && !cliInputDraft(agent, frame.rows, screen));
+    && (!emptyInput || !frame.pending && cliInputAvailable(agent, frame.rows) && !cliInputDraft(agent, frame.rows, screen));
 }
 export const screenPaste = (id: string, sessionId: string, text: string) => {
   const receipt = pastes.get(id);
@@ -53,42 +58,53 @@ function isPromptHint(cell: IBufferCell) {
   if (cell.isDim()) return true;
   const color = cell.getFgColor();
   // ANSI gray and its explicit gray equivalents. Normal input uses the terminal's foreground.
-  if (cell.isFgPalette()) return color === 8 || color === 247;
+  if (cell.isFgPalette()) return color === 8 || color >= 244 && color <= 247;
   return cell.isFgRGB() && (color === 0x808080 || color === 0x999999 || color === 0x9d9d9d);
 }
 
 function promptRow(line: IBufferLine, prefix: number, scratch: IBufferCell) {
-  let text = line.translateToString(false, 0, prefix);
+  let text = line.translateToString(false, 0, prefix), styled = false, cursor = -1;
   for (let column = prefix; column < line.length; column++) {
     const cell = line.getCell(column, scratch);
-    if (cell?.getWidth() && !isPromptHint(cell)) text += cell.getChars() || ' ';
+    if (!cell?.getWidth()) continue;
+    const chars = cell.getChars() || ' ';
+    if (isPromptHint(cell)) { styled ||= !!chars.trim(); continue; }
+    if (chars.trim()) cursor = cell.isInverse() ? text.length : -1;
+    text += chars;
   }
-  return text.trimEnd();
+  return { text: text.trimEnd(), styled, cursor };
 }
 
 function omitClaudeHints(buffer: IBuffer, rows: string[]) {
-  if (!buffer.getNullCell) return;
   const lineAt = (row: number) => buffer.getLine(buffer.baseY + row);
   const range = claudePromptRange(rows, row => !!lineAt(row)?.isWrapped);
-  if (!range) return;
-  const scratch = buffer.getNullCell();
-  for (let row = range.first; row < range.end; row++) {
+  if (!range) return false;
+  const scratch = buffer.getNullCell?.();
+  let styled = false, editable = false;
+  for (let row = range.first; scratch && row < range.end; row++) {
     const line = lineAt(row);
     if (!line) continue;
     const prefix = row === range.first ? range.prefix : 0;
     // Keep the continuation shape even when xterm hard-wraps or all the padding was dim.
-    const text = promptRow(line, prefix, scratch);
-    rows[row] = !prefix && text && !/^ {2}\S/.test(text) ? '  ' + text.trimStart() : text;
+    const result = promptRow(line, prefix, scratch);
+    styled ||= result.styled;
+    rows[row] = !prefix && result.text && !/^ {2}\S/.test(result.text) ? '  ' + result.text.trimStart() : result.text;
+    // A final inverse cell can be the CLI's cursor following a styled hint.
+    editable ||= !!withoutClaudeCursor(result.text.slice(prefix, result.cursor >= 0 ? result.cursor : undefined)).trim();
   }
+  if (!(styled && !editable) && !claudeInputHint(rows)) return false;
+  rows[range.first] = rows[range.first].slice(0, range.prefix).trimEnd();
+  rows.fill('', range.first + 1, range.end);
+  return true;
 }
 
-function read(terminal: Terminal, agent?: ScreenAgent | null): Pick<Screen, 'rows'> {
+function read(terminal: Terminal, agent?: ScreenAgent | null): Pick<Screen, 'rows' | 'inputHint'> {
   const buffer = terminal.buffer.active, rows: string[] = [];
   // The live screen, from baseY: viewportY stays wherever the reader scrolled the terminal back to, and writes made from
   // the reading view never scroll it down again, so the questions and command output would be read from old rows.
   for (let index = 0; index < terminal.rows; index++) rows.push(buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '');
-  if (agent === 'claude') omitClaudeHints(buffer, rows);
-  return { rows };
+  const inputHint = agent === 'claude' && omitClaudeHints(buffer, rows);
+  return inputHint ? { rows, inputHint } : { rows };
 }
 
 function capture(entry: Entry): Screen {
@@ -102,7 +118,7 @@ function capture(entry: Entry): Screen {
     for (const agent of ['claude', 'codex'] as const) {
       const parsed = parseAgentScreen(agent, screen.rows), choice = parsed.choice;
       const waiting = cliDialogShown(agent, screen.rows, parsed);
-      entry.inputShown[agent] = !waiting && hasCliInput(agent, screen.rows, parsed);
+      entry.inputShown[agent] = !waiting && cliInputAvailable(agent, screen.rows);
       const state = waiting ? 'waiting' : isCliWorking(agent, screen.rows, parsed) ? 'working' : isAtPrompt(agent, screen.rows, parsed) ? 'idle' : null;
       if (entry.states[agent] !== state) { entry.states[agent] = state; entry.stateUpdatedAt[agent] = entry.updatedAt; }
       const identity = choice ? choiceIdentity(choice) : null;

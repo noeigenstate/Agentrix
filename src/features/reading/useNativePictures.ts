@@ -4,8 +4,9 @@ import { isWindows } from '../../shared/platform';
 import { dataUrl, thumbnail } from '../../shared/image-thumbnail';
 import { parseAgentScreen } from '../agents/agent-screen';
 import { readScreen, subscribeParsed, type Screen } from '../terminal/terminal-screen';
-import { cliDialogShown, cliInputDraft, hasCliInput } from './cli-panel';
+import { cliDialogShown, cliInputAvailable, cliInputDraft } from './cli-panel';
 import { imageRemoval, inputImageLabels } from './image-input';
+import { normalizePrompt } from './pending-prompts';
 
 export type NativeImage = { id: number; src: string };
 type Paste = { before?: string[]; label?: string; ready?: Promise<void>; conflicted?: boolean };
@@ -33,8 +34,8 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
   const readInput = (admit = false) => {
     const current = readScreen(terminalId);
     if (!valid() || !current || current.sessionId != null && current.sessionId !== sessionId || current.pending && (!admit || !current.parsed) || blocked(current)) return null;
-    const screen = { ...parseAgentScreen(agent, current.rows), queued: current.queued };
-    if (!hasCliInput(agent, current.rows, screen) || cliDialogShown(agent, current.rows, screen)) return null;
+    const screen = { ...parseAgentScreen(agent, current.rows), inputHint: current.inputHint };
+    if (!cliInputAvailable(agent, current.rows) || cliDialogShown(agent, current.rows, screen)) return null;
     return { rows: current.rows, text: cliInputDraft(agent, current.rows, screen), epoch: current.epoch, parse: current.parse };
   };
   // A cached parse may admit a message; every mutation requires all queued output to have parsed first.
@@ -64,12 +65,17 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
   const settle = (owns: () => boolean, limit = 500) => awaitInput(owns, limit);
   // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
   const clearInput = async (owns: () => boolean, epoch = readScreen(terminalId)?.epoch, expected = readInput()?.text) => {
+    let previous = normalizePrompt(expected ?? '');
     for (let tries = 0; owns(); tries++) {
       if (parsing()) await settle(owns);
       const current = owns() ? readInput() : null;
       if (!current || current.epoch !== epoch) return false;
-      if (!current.text) return true;
-      if (tries === 30 || current.text !== expected) return false;
+      const text = normalizePrompt(current.text);
+      if (!text) return true;
+      // Ctrl+U may erase one line at a time. Continue only after a strict reduction of the text we last checked.
+      const expectedChange = tries === 0 ? text === previous : text.length < previous.length && previous.startsWith(text);
+      if (tries === 30 || !expectedChange) return false;
+      previous = text;
       window.agentrix.writeTerminal(terminalId, '\x15'); await new Promise(resolve => setTimeout(resolve, 80));
     }
     return false;

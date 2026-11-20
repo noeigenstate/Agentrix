@@ -3230,6 +3230,7 @@
   "{agent} 已将这条消息排队，会在当前工作结束后读取。": "{agent} has queued this message and will read it after the current work.",
   "Agentrix 尚未确认终端可以安全接收输入，因此还没有发送这条消息。": "Agentrix has not sent this message because it cannot yet confirm a safe terminal input.",
   "终端输入框中还有未发送的草稿。请先发送或清空草稿。": "The terminal contains an unsent draft. Send or clear that draft first.",
+  "这条消息未能粘贴到终端，重试也未成功。请取回消息后重新发送。": "The message could not be pasted into the terminal. The retry also failed. Retrieve the message and send it again.",
   "这条消息是否送达尚未确认。请先检查终端，再决定是否重新发送。": "Delivery is not confirmed. Check the terminal before sending this message again.",
   "启动中 · 未确认": "Starting · not confirmed",
   "这一行由规划员续派唤醒。": "The planner woke this row again by sending it a follow-up.",

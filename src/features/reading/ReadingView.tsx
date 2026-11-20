@@ -6,7 +6,7 @@ import { dictateInto } from '../voice/voice-input';
 import { VoiceButton } from '../voice/VoiceButton';
 import { beginScreenPaste, bindApproval, useScreen } from '../terminal/terminal-screen';
 import { parseAgentScreen, waitingTitle } from '../agents/agent-screen';
-import { claudeInputMatches, cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from './cli-panel';
+import { claudeInputMatches, cliDialogShown, cliInputAvailable, cliInputDraft, isAtPrompt, isCliWorking } from './cli-panel';
 import { readingState, nextCliState, type CliState } from './reading-state.ts';
 import { cliReady, dismissDialog, endDialog, observeDialog, rearmDialog, rememberReady, startDialog } from './reading-ready';
 import { popupIdentity } from './popup-identity.ts';
@@ -126,11 +126,11 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const visibleScreen = useScreen(terminal.id, terminal.sessionId);
   const parsedScreen = useMemo(() => {
     const parsed = parseAgentScreen(kind, visibleScreen?.rows ?? []);
-    return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen), queued: visibleScreen?.queued };
+    return { ...parsed, choice: bindApproval(parsed.choice, kind, visibleScreen), inputHint: visibleScreen?.inputHint };
   }, [kind, visibleScreen]);
   // Readiness outlives this component: a dialog with no input box must still show after a trip to the raw terminal.
   // Rendering only reads it; the effect remembers it.
-  const inputShown = hasCliInput(kind, visibleScreen?.rows ?? [], parsedScreen);
+  const inputShown = cliInputAvailable(kind, visibleScreen?.rows ?? []);
   const run = { session: terminal.sessionId, thread, start: terminal.agentStartedAt, active: terminal.codexActive };
   const preview = !!terminal.readingHistory && !cliReady(terminal.id, run, inputShown);
   useEffect(() => rememberReady(terminal.id, run, inputShown));
@@ -325,7 +325,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     else if (terminalPopup === null) input.current?.focus();
   }, [terminal.id, autoFocus]);
   const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
-  const reasonWords = (code: string) => t(termWords[code], { agent });
+  const reasonWords = (code: string) => code === 'term.paste_rejected'
+    ? t('这条消息未能粘贴到终端，重试也未成功。请取回消息后重新发送。') : t(termWords[code], { agent });
   const grouped = useMemo(() => blocks(entries), [entries]);
   const tail = useVisibleTail(grouped, conversation, scroller, stuck, holdPosition, historyPage);
   useEffect(() => {
@@ -418,9 +419,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const leftoverStill = async (shown: Leftover) => {
     if (native.parsing()) await native.settle(leftoverOwns);
     const current = leftoverOwns() ? native.readInput() : null;
-    if (current && sameMessage(current.text, shown.text)) return true;
+    if (current && sameMessage(current.text, shown.text)) return current;
     setLeftover(value => value === shown ? { ...shown } : value);
-    return false;
+    return null;
   };
   const submitLeftover = async (shown: Leftover) => {
     if (!await leftoverStill(shown) || !sameMessage(shown.text, native.readInput()?.text ?? '')) return;
@@ -429,9 +430,10 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // The outbox waits while the input is cleared: a message pasted meanwhile would be cleared with it.
   const leftoverClearing = useRef(false);
   const clearLeftover = async (shown: Leftover) => {
-    if (!await leftoverStill(shown)) return;
+    const current = await leftoverStill(shown);
+    if (!current) return;
     leftoverClearing.current = true;
-    const cleared = await native.clearInput(leftoverOwns).finally(() => { leftoverClearing.current = false; });
+    const cleared = await native.clearInput(leftoverOwns, current.epoch, current.text).finally(() => { leftoverClearing.current = false; });
     if (!mounted.current) return;
     setLeftover(cleared ? null : { ...shown });
     if (!cleared) return;
@@ -545,17 +547,19 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     return submitFromInput(message, readyInput, pendingId, initialInput.epoch);
   };
   const submitFromInput = async (message: MessageSend, readyInput: () => Delivery, pendingId: string | null, inputEpoch?: number) => {
-    const { text, words, own, owner, automatic, place, attempt, batch, uploads, pictureSend, carried, remember } = message;
+    const { text, words, own, automatic, place, attempt, batch, pictureSend, carried } = message;
     const currentInput = text && !batch.length ? readyInput() : null;
     const left = currentInput?.text ?? '';
     const hasPictureInput = pictureSend || IMAGE_PLACEHOLDER.test(left);
-    const matchingInput = currentInput && kind === 'claude' && !hasPictureInput ? claudeInputMatches(currentInput.rows, text) : sameMessage(text, left);
+    const matchesInput = (current: Delivery) => !!current?.text && (kind === 'claude' && !hasPictureInput
+      ? claudeInputMatches(current.rows, text) : sameMessage(text, current.text));
+    const matchingInput = matchesInput(currentInput);
     if (attempt?.resuming && (!left || !matchingInput || !waitingMessages.get(ownHistory)?.some(message => message.attempt === attempt))) return;
     const queuedLeft = !!left && queuedInput(left);
     const ownedLeft = !!left && ownInput(left);
-    if (kind === 'claude' && !pictureSend && left && !ownedLeft && (automatic || left !== lastNativeDraft.current.text)) {
+    if (kind === 'claude' && !attempt?.resuming && !pictureSend && left && !ownedLeft && (automatic || left !== lastNativeDraft.current.text)) {
       if (pendingId) cancelEcho(pendingId);
-      if (!attempt) hold(text, own, null, place);
+      if (!attempt) hold(words, own, carried, place);
       return false;
     }
     const returnedQueued = kind === 'claude' && ownedLeft && !queuedLeft && cancelledInput(left)
@@ -576,22 +580,32 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     }
     if (unsent && !automatic && pendingId) cancelEcho(pendingId); // Its earlier card stands for it.
     if (carried && quoteRef.current === carried) holdQuote(null);
-    const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
-    const clearDraft = () => { if (own && input.current?.value.trim() === words) edit(''); };
     if (left && (attempt?.resuming || !queuedLeft || returnedQueued) && matchingInput) {
-      if (!readyInput()) return false;
-      if (automatic) echo(text, [], 0); // These words were already pasted by the earlier send.
-      uploads.forEach(picture => { picture.sent = true; });
-      if (pictureSend) clearDraft(); if (own) clearPictures();
-      if (attempt) attempt.phase = 'entered';
-      toBottom(); window.agentrix.writeTerminal(terminal.id, '\r');
-      // Recovery owns only this Enter. Until its receipt arrives it stays uncertain, never a fresh automatic send.
-      if (attempt?.resuming) { remember(); return; }
-      await submitted(text, owner, returnedQueued, inputEpoch, hasPictureInput);
-      remember(); return true;
+      if (!matchesInput(readyInput())) return false;
+      return submitMatchingInput(message, returnedQueued, hasPictureInput, inputEpoch);
     }
+    return replaceInputAndSubmit(message, left, queuedLeft, returnedQueued, readyInput, pendingId, inputEpoch);
+  };
+  const clearSentDraft = ({ own, words }: MessageSend) => { if (own && input.current?.value.trim() === words) edit(''); };
+  const submitMatchingInput = async (message: MessageSend, returnedQueued: boolean, hasPictureInput: boolean, inputEpoch?: number) => {
+    const { text, own, owner, automatic, attempt, uploads, pictureSend, remember } = message;
+    if (automatic) echo(text, [], 0); // These words were already pasted by the earlier send.
+    uploads.forEach(picture => { picture.sent = true; });
+    if (pictureSend) clearSentDraft(message);
+    if (own) clearPictures();
+    if (attempt) attempt.phase = 'entered';
+    toBottom(); window.agentrix.writeTerminal(terminal.id, '\r');
+    // Recovery owns this Enter and waits for a receipt before removing the outbox entry.
+    if (attempt?.resuming) { remember(); return; }
+    await submitted(text, owner, returnedQueued, inputEpoch, hasPictureInput);
+    remember(); return true;
+  };
+  const replaceInputAndSubmit = async (message: MessageSend, left: string, queuedLeft: boolean, returnedQueued: boolean,
+    readyInput: () => Delivery, pendingId: string | null, inputEpoch?: number) => {
+    const { words, own, owner, automatic, place, pictureSend, carried } = message;
+    const restoreQuote = () => { if (carried && !quoteRef.current && ownsSend(owner)) holdQuote(carried); };
     if (left && (returnedQueued || !queuedLeft && pending.some(prompt => sameMessage(prompt.text, left)))) {
-      if (!readyInput()) return false;
+      if (!sameMessage(left, readyInput()?.text ?? '')) return false;
       window.agentrix.writeTerminal(terminal.id, '\r');
       await submitted(left, owner, returnedQueued, inputEpoch);
       if (returnedQueued && ownsSend(owner)) {
@@ -620,21 +634,17 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (automatic) return false;
       hold(words, own, carried, place); return;
     }
-    return pasteAndSubmit({ text, words, own, owner, automatic, place, attempt, pendingId, readyInput, pictureSend,
-      batch, uploads, remember, restoreQuote, clearDraft });
+    return pasteAndSubmit(message, readyInput, pendingId, restoreQuote);
   };
-  const pasteAndSubmit = async ({ text, words, own, owner, automatic, place, attempt, pendingId, readyInput, pictureSend,
-    batch, uploads, remember, restoreQuote, clearDraft }: {
-    text: string; words: string; own: boolean; owner: number; automatic: boolean; place: number; attempt?: WaitingAttempt; pendingId: string | null;
-    readyInput: () => Delivery; pictureSend: boolean; batch: typeof images; uploads: ServerPicture[];
-    remember: () => void; restoreQuote: () => void; clearDraft: () => void;
-  }) => {
+  const pasteAndSubmit = async (message: MessageSend, readyInput: () => Delivery, pendingId: string | null, restoreQuote: () => void) => {
+    const { text, words, own, owner, automatic, place, pictureSend, batch, uploads, carried, remember } = message;
+    let attempt = message.attempt;
     const before = readyInput();
     if (!before || !terminal.sessionId) return false;
     const tracked = kind === 'claude' && !pictureSend;
     if (tracked && before.text) {
       if (pendingId) cancelEcho(pendingId);
-      if (!attempt) hold(text, own, null, place);
+      if (!attempt) hold(words, own, carried, place);
       return false;
     }
     const direct = tracked && !attempt;
@@ -664,7 +674,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (automatic) { pendingId = echo(text, [], 0); if (attempt && pendingId) attempt.echo = pendingId; }
       remember();
     }
-    if (pictureSend) clearDraft();
+    if (pictureSend) clearSentDraft(message);
     toBottom();
     if (text) await new Promise(resolve => setTimeout(resolve, 400));
     // The words are in the terminal now. Handing them back on a frame that only has not parsed yet would leave them in
@@ -932,7 +942,9 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);
   const shownOutbox = outbox.filter(message => message.id !== directPaste.current);
-  const outboxReason = sending.current ? null : awaitsReceipt(shownOutbox[0]) ? 'term.receipt_missing'
+  const head = shownOutbox[0];
+  const pasteRejected = head?.attempt?.phase === 'rejected' && head.attempt.paste?.status !== 'refused' && (head.recoveries ?? 0) >= 1;
+  const outboxReason = pasteRejected ? 'term.paste_rejected' : sending.current ? null : awaitsReceipt(head) ? 'term.receipt_missing'
     : parsedScreen.choice?.kind === 'question' ? 'term.waiting_question'
     : parsedScreen.choice?.kind === 'permission' ? 'term.waiting_permission'
     : hasChoice && !cliDialogShown(kind, visibleScreen?.rows ?? [], parsedScreen) ? 'term.reported_waiting'

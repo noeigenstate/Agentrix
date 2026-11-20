@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
-const { cliDialogShown, cliInputDraft, hasCliInput, isCliIdle, isAtPrompt } = require('../src/features/reading/cli-panel.ts');
+const { cliDialogShown, cliInputAvailable, cliInputDraft, hasCliInput, isCliIdle, isAtPrompt } = require('../src/features/reading/cli-panel.ts');
 const fixture = name => fs.readFileSync(path.join(__dirname, 'fixtures/screens', name + '.txt'), 'utf8').split('\n');
 const inspect = (agent, rows) => parseAgentScreen(agent, rows);
 const footer = agent => agent === 'claude' ? ['  ⏺ Opus 5.5 · demo · ctx 4%   ● high · /effort', '  ⏸ manual mode on · ← for agents'] : ['  GPT-6.1-Sol high · C:\\work\\demo · 90% left', '? for shortcuts'];
@@ -56,7 +56,7 @@ test('Claude prompt hints leave a usable empty input', async t => {
   global.window = { setTimeout: fn => { report = fn; return 1; }, agentrix: { screenFacts: (_, value) => facts.push(value) } };
   registry.setScreenAgent('hint', 'claude');
   const unregister = registry.registerScreen('hint', terminal, 'pty');
-  t.after(() => { unregister(); registry.setScreenAgent('hint', null); terminal.dispose(); global.window = before; });
+  t.after(() => { unregister(); registry.setScreenAgent('hint', null); registry.setQueueCount('hint', 0); terminal.dispose(); global.window = before; });
   const style = (sgr, text) => `\x1b[${sgr}m${text}\x1b[0m`;
   const draw = async (...body) => {
     const rows = [style(2, '✻ Worked for 9m 36s · done 19:34'), '────', ...body, '────', ...footer('claude')];
@@ -68,15 +68,19 @@ test('Claude prompt hints leave a usable empty input', async t => {
   const english = 'Compare the other two results';
   for (const body of [
     ['❯ ' + style(2, chinese)],
-    ['❯ ' + style(90, english)],
+    ['❯\u00a0' + style(90, english) + style(7, ' ')],
     ['❯ ' + style('38;2;157;157;157', english), '  ' + style('38;5;247', 'Compare each result separately')],
     ['❯ ' + style(2, english.repeat(3))],
+    ['❯\u00a0' + style(2, 'Localized hint in unknown wording') + style(7, '█')],
+    ['❯\u00a0' + style(2, 'A CLI hint with an unstyled cursor') + '▮'],
   ]) {
-    const frame = await draw(...body), rows = frame.rows, screen = inspect('claude', rows);
+    const frame = await draw(...body), rows = frame.rows, screen = { ...inspect('claude', rows), inputHint: frame.inputHint };
     assert.match(rows[0], /Worked for 9m 36s · done/, 'dim output outside the input is preserved');
     assert.equal(cliInputDraft('claude', rows, screen), '');
     assert.equal(sameMessage(chinese, cliInputDraft('claude', rows, screen)), false);
-    assert.equal(hasCliInput('claude', rows, screen), true);
+    assert.equal(hasCliInput('claude', rows, screen), false);
+    assert.equal(cliInputAvailable('claude', rows), true);
+    assert.equal(registry.canPasteScreen('claude', frame, true), true);
     assert.equal(isCliIdle('claude', rows, screen), true);
     const state = registry.cliStateFor('claude', frame, { sessionId: 'pty', needsInput: 'Old prompt' });
     assert.equal(state.waiting, false); assert.equal(state.canDeliver, true);
@@ -92,6 +96,19 @@ test('Claude prompt hints leave a usable empty input', async t => {
   assert.equal(isCliIdle('claude', mixed.rows, inspect('claude', mixed.rows)), false);
   const startup = await draw('❯ ' + style(2, 'Try "fix this"'));
   assert.equal(isCliIdle('claude', startup.rows, inspect('claude', startup.rows)), true);
+  for (const body of [
+    ['❯\u00a0Press up to edit queued messages'], ['❯ Press up to edit que', '  ued messages' + style(7, '█')],
+    ['❯' + ' '.repeat(46) + 'Press up to edit queued messages'],
+  ]) {
+    const frame = await draw(...body);
+    assert.equal(frame.inputHint, true, 'normal-colour hint is recognized by its full text');
+    assert.equal(cliInputDraft('claude', frame.rows, inspect('claude', frame.rows)), '', 'other terminal senders also see empty rows');
+    assert.equal(registry.canPasteScreen('claude', frame, true), true);
+  }
+  const factCount = facts.length;
+  registry.setQueueCount('hint', 3); report();
+  assert.equal(registry.readScreen('hint').queued, 3);
+  assert.equal(facts.length, factCount, 'a queue-count change does not change the input facts');
 
   registry.setScreenAgent('hint', 'codex');
   await new Promise(resolve => terminal.write('\x1b[H\x1b[2J' + input('codex', style(2, 'Ask Codex to do anything')).join('\r\n'), resolve));
@@ -164,7 +181,8 @@ test('Claude Code 2.1.317 lists queued messages above its working line, never in
   for (const name of ['one', 'two', 'same']) {
     const rows = fixture('claude-2-1-317-queue-' + name), screen = inspect('claude', rows);
     assert.equal(cliInputDraft('claude', rows, screen), '', name + ': the placeholder is no draft');
-    assert.equal(hasCliInput('claude', rows, screen), true); assert.equal(cliDialogShown('claude', rows, screen), false);
+    assert.equal(hasCliInput('claude', rows, screen), false); assert.equal(cliDialogShown('claude', rows, screen), false);
+    assert.equal(cliInputAvailable('claude', rows), true);
     assert.ok(rows.some(row => /^❯ QUEUED_ONE first queued message\s*$/.test(row)), name + ': the queue is drawn outside the input box');
   }
   assert.equal(fixture('claude-2-1-317-queue-same').filter(row => /^❯ QUEUED_ONE first queued message\s*$/.test(row)).length, 2, 'the same words twice are two rows');
@@ -175,13 +193,21 @@ test('Claude Code 2.1.317 lists queued messages above its working line, never in
   assert.equal(isCliIdle('claude', after, screen), true);
 });
 
-test('the queue placeholder is empty only with Claude Code\'s queue row on screen', () => {
-  const typed = ['────', '❯ Press up to edit queued messages', '────', '  ⏸ manual mode on'];
-  assert.equal(cliInputDraft('claude', typed, inspect('claude', typed)), 'Press up to edit queued messages', 'without the queue row the words were typed');
-  const queued = ['❯ first queued', '  ctrl+x ctrl+s to send now', '✶ Befuddling… (2s)', ...typed];
-  assert.equal(cliInputDraft('claude', queued, inspect('claude', queued)), '');
-  queued.splice(1, 1, '  ctrl+x ctrl+s to', '    send now');
-  assert.equal(cliInputDraft('claude', queued, inspect('claude', queued)), '', 'a wrapped shortcut still identifies the queue hint');
-  queued.splice(1, 2, '  ctrl+x ctrl+s to', '    send something else');
-  assert.equal(cliInputDraft('claude', queued, inspect('claude', queued)), 'Press up to edit queued messages');
+test('Claude fallback recognizes only complete input placeholders, independently of queue controls', () => {
+  for (const body of [
+    ['❯ Press up to edit queued messages'], ['❯\u00a0↑ to edit queued messages\u00a0'],
+    ['❯ Press up to edit que', '  ued messages▏', ''], ['❯ Press', '  up to edit', '  queued messages'],
+    ['❯ 按向上键编辑已排队的消', '  息'], ['❯ Try "write a test"'], ['❯ T', '  ry "write a test"'],
+  ]) {
+    const rows = ['✶ Befuddling… (2s)', '────', ...body, '────', ...footer('claude')];
+    const screen = inspect('claude', rows);
+    assert.equal(cliInputDraft('claude', rows, screen), '', body.join(' / '));
+    assert.equal(hasCliInput('claude', rows, screen), false);
+    assert.equal(cliInputAvailable('claude', rows), true);
+  }
+  for (const typed of ['Please explain Press up to edit queued messages', 'Press up to edit queued messages later', 'Try "one" and "two"']) {
+    const rows = ['❯ queued', '✶ Befuddling… (2s)', ...input('claude', typed)], screen = inspect('claude', rows);
+    assert.equal(cliInputDraft('claude', rows, screen), typed);
+    assert.equal(hasCliInput('claude', rows, screen), true);
+  }
 });

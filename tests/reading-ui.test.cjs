@@ -507,7 +507,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
   };
   window.agentrix.writeTerminal = (id, text) => {
     h.written.push({ id, text });
-    if (text === '\x15') view.draft = '';
+    if (text === '\x15') view.draft = view.clearOneLine ? view.draft.split('\n').slice(0, -1).join('\n') : '';
     if (text === '\r' && view.accept && view.draft) {
       view.records.push({ id: 'receipt-' + ++sequence, role: 'user', text: view.draft, at: clock, queued: view.working });
       if (!view.retain) view.draft = '';
@@ -558,6 +558,37 @@ test('an interrupted paste positively refused before arrival retries once on par
   delete h.view.rows; h.render(); h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
   assert.deepEqual(h.pasted.map(item => item.text), ['try the refused paste']);
   assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.deepEqual(outboxTexts(h), []);
+});
+
+test('a paste accepted just before changing splits finishes once, even before the send is remembered', async t => {
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
+  let finish;
+  window.agentrix.pasteTerminal = async (...args) => {
+    const accepted = await paste(...args);
+    await new Promise(resolve => { finish = resolve; });
+    return accepted;
+  };
+  h.edit('accepted before switching'); h.press('Enter'); await h.tick(0);
+  assert.equal(h.pasted.length, 1);
+  h.props.active = false; h.render(); finish(); await h.tick(0);
+  assert.deepEqual(h.written, []);
+  h.props.active = true; h.render(); await h.tick(0); await h.tick(700);
+  assert.deepEqual(h.pasted.map(item => item.text), ['accepted before switching']);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
+  assert.deepEqual(h.view.records.map(record => record.text), ['accepted before switching']);
+  h.view.records = [...h.view.records]; h.render(); h.render();
+  assert.deepEqual(outboxTexts(h), []);
+});
+
+test('two IPC paste rejections leave a retrievable message with its own reason', async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.onError = error => errors.push(error);
+  window.agentrix.pasteTerminal = async () => ({ ok: false, error: 'paste rejected' });
+  h.edit('try twice'); h.press('Enter'); await h.tick(0); await h.tick(0); await h.tick(700);
+  assert.deepEqual(errors, ['paste rejected', 'paste rejected']);
+  assert.deepEqual(h.written, []);
+  assert.deepEqual(outboxTexts(h), ['try twice']);
+  assert.equal(outboxReason(h), 'The message could not be pasted into the terminal. The retry also failed. Retrieve the message and send it again.');
 });
 
 test('an interrupted paste with no arrival proof stays held without a second write', async t => {
@@ -3844,6 +3875,19 @@ const DIALOG = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to canc
 const pickQuote = (h, text) => { elements(h.tree()).find(element => element.props.value?.quote).props.value.quote.pick('Claude Code', text); h.render(); };
 const quoteChip = h => elements(h.tree()).find(element => element.type?.name === 'QuoteChip')?.props.quote.excerpt;
 
+test('claude: a new terminal draft holds the outgoing quote exactly once', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  pickQuote(h, 'quote for one message');
+  h.view.pending = true;
+  h.edit('first message'); h.press('Enter'); await h.tick(0);
+  h.view.draft = 'typed while output was parsing'; h.view.pending = false; h.parsed(false);
+  await h.tick(0); assert.deepEqual(h.pasted, []);
+  assert.deepEqual(outboxTexts(h), ['> quote for one message\n\nfirst message']);
+  assert.equal(quoteChip(h), undefined);
+  h.edit('second message'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), ['> quote for one message\n\nfirst message', 'second message']);
+});
+
 test('claude: what the owner writes and quotes while a message waits stays when that message is held', async t => {
   const h = workingComposerHarness(t, 'claude');
   h.view.rows = ['✶ Swooping… (12s)']; h.render();
@@ -3932,20 +3976,64 @@ for (const next of ['other words', 'the same words']) test(`claude: a message th
   assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined);
 });
 
-test('a half frame without the queue row leaves the reading composer empty while main holds queued messages', t => {
-  const { bindApproval } = require('../src/features/terminal/terminal-screen.ts');
-  const rows = ['────', '❯ Press up to edit queued messages', '────', '  ⏸ manual mode on'];
-  let queued = 0;
-  const h = dictationHarness(t, {
-    './terminal-screen': { bindApproval, useScreen: () => ({ rows, queued }), readScreen: () => ({ rows, queued }) },
-    './agent-screen': require('../src/features/agents/agent-screen.ts'),
-  });
-  Object.assign(h.props.terminal, { agent: 'claude', codexActive: false });
-  h.render();
-  assert.equal(h.render().props.value, 'Press up to edit queued messages', 'with nothing queued the words are typed ones');
-  h.remount(); queued = 2; h.render();
-  assert.equal(h.render().props.value, '', 'main holds two queued: the placeholder is no draft');
+for (const count of [1, 2, 3]) test(`Claude's screenshot 35 hint never becomes a draft with ${count} queued message(s)`, async t => {
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
+  h.view.records = Array.from({ length: count }, (_, index) => ({ id: `queued-${index}`, text: `queued words ${index}`, role: 'user', at: Date.now(), queued: true }));
+  const hint = count === 3 ? '↑ to edit queued messages▏' : 'Press up to edit queued messages' + (count === 2 ? '\u00a0' : '');
+  h.view.rows = [...h.view.records.map(entry => '❯ ' + entry.text), '✶ Working…', '────', '❯\u00a0' + hint, '────', '  ⏸ manual mode on'];
+  window.agentrix.pasteTerminal = (...args) => { delete h.view.rows; return paste(...args); };
+  h.render(); assert.equal(h.render().props.value, '');
+  const message = '所以设置中的模型路由 skill 可以删掉了';
+  h.edit(message); h.press('Enter'); await h.tick(0);
+  assert.equal(leftoverNotice(h), undefined); assert.equal(outboxReason(h), undefined);
+  await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.pasted.map(item => item.text), [message]);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
+  assert.deepEqual(h.view.records.slice(count).map(({ text, queued }) => ({ text, queued })), [{ text: message, queued: true }]);
+  assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined);
 });
+
+for (const agent of ['claude', 'codex']) {
+  const multiline = 'first line\nsecond line\nlast line';
+  test(`${agent}: clear before paste handles a terminal that erases one line per Ctrl+U`, async t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.clearOneLine = true; h.view.draft = multiline; h.render(); h.render();
+    h.edit('new text'); h.press('Enter'); await h.tick(0);
+    for (let line = 0; line < 3; line++) await h.tick(80);
+    assert.deepEqual(h.written.map(item => item.text), ['\x15', '\x15', '\x15']);
+    assert.deepEqual(h.pasted.map(item => item.text), ['new text']);
+    await h.tick(400); await h.tick(700);
+    assert.deepEqual(h.view.records.map(item => item.text), ['new text']);
+  });
+
+  test(`${agent}: clearing a leftover draft removes each line and releases the next message`, async t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.clearOneLine = true; h.view.retain = true;
+    h.edit(multiline); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+    h.edit('next message'); h.press('Enter'); await h.tick(0);
+    const notice = leftoverNotice(h);
+    assert.equal(notice.text, 'first line second line last line');
+    h.view.retain = false;
+    notice.actions[en['清空它，再发送新消息']].onClick(); await h.tick(0);
+    for (let line = 0; line < 3; line++) await h.tick(80);
+    await h.tick(400); await h.tick(700);
+    assert.deepEqual(h.written.map(item => item.text), ['\r', '\x15', '\x15', '\x15', '\r']);
+    assert.deepEqual(h.view.records.map(item => item.text), [multiline, 'next message']);
+    assert.equal(leftoverNotice(h), undefined);
+  });
+
+  test(`${agent}: clear before paste stops if the owner changes the remaining draft`, async t => {
+    const h = workingComposerHarness(t, agent);
+    h.view.clearOneLine = true; h.view.draft = multiline; h.render(); h.render();
+    h.edit('wait for the owner'); h.press('Enter'); await h.tick(0);
+    assert.equal(h.view.draft, 'first line\nsecond line');
+    h.view.draft = 'different new terminal text'; await h.tick(80);
+    assert.deepEqual(h.written.map(item => item.text), ['\x15']);
+    assert.deepEqual(h.pasted, []);
+    assert.equal(h.view.draft, 'different new terminal text');
+    assert.deepEqual(outboxTexts(h), ['wait for the owner']);
+  });
+}
 
 test('claude: a screenIdle host signal over an idle frame leaves the composer idle, so Esc writes nothing', t => {
   const h = workingComposerHarness(t, 'claude');

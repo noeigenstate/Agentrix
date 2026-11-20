@@ -25,7 +25,7 @@ function cliInputArea(agent: ScreenAgent, rows: string[], wrapped?: (row: number
     if (agent === 'claude') {
       if (!rule(rows[index - 1] ?? '')) continue;
       let end = index + 1;
-      while (end < rows.length && (wrapped?.(end) || !rule(rows[end]) && (/^ {2}\S/.test(rows[end]) || !rows[end].trim()))) end++;
+      while (end < rows.length && (wrapped?.(end) || !rule(rows[end]) && (/^[ \u00a0]{2}\S/.test(rows[end]) || !rows[end].trim()))) end++;
       if (!rule(rows[end] ?? '')) continue;
       // Claude Code 2.1.296 draws its effort right over the input box ("◉ xhigh · /effort"): part of it, never output.
       const start = /^\s*[●◉]\s+\S+\s+·\s+\/effort\b/.test(rows[index - 2] ?? '') ? index - 2 : index - 1;
@@ -45,7 +45,7 @@ function cliInputArea(agent: ScreenAgent, rows: string[], wrapped?: (row: number
 export function claudePromptRange(rows: string[], wrapped: (row: number) => boolean) {
   const input = cliInputArea('claude', rows, wrapped);
   if (!input) return null;
-  const marker = /^ *❯(?: +|$)/.exec(rows[input.row]);
+  const marker = /^[ \u00a0]*❯(?:[ \u00a0]+|$)/.exec(rows[input.row]);
   return marker ? { first: input.row, end: input.footer - 1, prefix: marker[0].length } : null;
 }
 
@@ -59,31 +59,46 @@ export function isCliWorking(agent: ScreenAgent, rows: string[], _screen: AgentS
   return claudeWorking(rows) || !!input && claudeShellRunning(rows, input.start);
 }
 
-// The registry omits styled Claude hints. Text-only placeholders ("Try …", "Ask Codex to do anything") are handled here.
-// Claude puts interrupted prompts back in the input, so it can hold text the reading view did not type. Claude Code 2.1.317 lists the
-// messages it queued above its working line, over "ctrl+x ctrl+s to send now", and shows "Press up to edit queued
-// messages" in the empty input; without that queue row the same words are typed ones.
 export const queueShown = (rows: string[]) => rows.some((row, index) => {
   const first = row.trim();
   return first.startsWith('ctrl+x') && [first, first + ' ' + (rows[index + 1] ?? '').trim()].includes('ctrl+x ctrl+s to send now');
 });
-const placeholder = (agent: ScreenAgent, text: string, rows: string[], queued: number) => agent === 'claude'
-  ? /^Try ["“].+["”]$/.test(text) || text === 'Press up to edit queued messages' && (queueShown(rows) || queued > 0)
-  : text === 'Ask Codex to do anything';
-// A half-drawn frame can lack the queue row; the queue count main reports (screen.queued) stands in for it.
+// The registry reads Claude's cell attributes first. For plain rows, match the entire placeholder independently of
+// queue state: a redraw can show the hint without its shortcut, and the CLI's queue can precede main's report.
+const claudeQueueHint = /^(?:press up|↑) to edit queued messages[.。]?$|^(?:按(?:向上键|上方向键|上箭头|↑)|↑) *(?:编辑|可编辑)(?:已排队(?:的)?消息|队列中的消息)[.。]?$/i;
+const claudeTryHint = /^(?:Try|试试) *["“][^"”]*["”]$/i;
+export const withoutClaudeCursor = (text: string) => text.replace(/[█▉▊▋▌▍▎▏▮]\s*$/, '').trimEnd();
+const claudeHintText = (text: string) => claudeQueueHint.test(text) || claudeTryHint.test(text);
+const claudePieces = (rows: string[], area: NonNullable<ReturnType<typeof cliInputArea>>) =>
+  [prompt('claude', rows[area.row]) ?? '', ...rows.slice(area.row + 1, area.footer - 1)].map(row => row.trim());
+
+export function claudeInputHint(rows: string[], area = cliInputArea('claude', rows)): boolean {
+  if (!area || !/^\s*❯/.test(rows[area.row])) return false;
+  const text = withoutClaudeCursor(area.text).replace(/\s+/g, ' ');
+  if (claudeHintText(text)) return true;
+  // Hard wraps can bisect a word. Preserve spaces within each row and only make row boundaries optional.
+  if (area.footer - area.row <= 2) return false;
+  const pieces = claudePieces(rows, area).filter(Boolean).map(piece => piece.replace(/\s+/g, ' ').toLowerCase());
+  if (pieces.length) pieces[pieces.length - 1] = withoutClaudeCursor(pieces[pieces.length - 1]);
+  const suffix = /[.。]$/.exec(text)?.[0] ?? '';
+  const joined = pieces.join('');
+  return claudeHintText(joined) || ['press up', '↑'].some(key => matchesPieces(pieces, `${key} to edit queued messages${suffix}`));
+}
+
 export function cliInputDraft(agent: ScreenAgent, rows: string[], screen: AgentScreen) {
-  const text = cliInputArea(agent, rows)?.text ?? '';
-  return placeholder(agent, text, rows, screen.queued ?? 0) ? '' : commandInputText(text);
+  const area = cliInputArea(agent, rows);
+  if (!area || (agent === 'claude' ? screen.inputHint || claudeInputHint(rows, area) : area.text === 'Ask Codex to do anything')) return '';
+  return commandInputText(area.text);
 }
 
 // A visual line break can split a word. Compare the visible pieces without inventing spaces at their boundaries.
 export function claudeInputMatches(rows: string[], expected: string) {
   const area = cliInputArea('claude', rows);
-  let remaining = expected.trim();
-  if (!area || !remaining) return false;
-  const pieces = [prompt('claude', rows[area.row]) ?? '', ...rows.slice(area.row + 1, area.footer - 1)];
-  for (const piece of pieces) {
-    const text = piece.trim();
+  return !!area && !!expected.trim() && !claudeInputHint(rows, area) && matchesPieces(claudePieces(rows, area), expected.trim());
+}
+
+function matchesPieces(pieces: string[], remaining: string) {
+  for (const text of pieces) {
     if (!remaining.startsWith(text)) return false;
     remaining = remaining.slice(text.length).trimStart();
   }
@@ -109,9 +124,14 @@ export function isAtPrompt(agent: ScreenAgent, rows: string[], screen: AgentScre
   return !cliDialogShown(agent, rows, screen) && !isCliWorking(agent, rows, screen) && !!cliInputArea(agent, rows);
 }
 
-// A dialog (Claude's /usage, /status, /config) takes the input's place; its content is the command's result.
-export function hasCliInput(agent: ScreenAgent, rows: string[], _screen: AgentScreen): boolean {
+// An empty editor can accept a paste even when its placeholder occupies the box.
+export function cliInputAvailable(agent: ScreenAgent, rows: string[]): boolean {
   return !!cliInputArea(agent, rows);
+}
+
+export function hasCliInput(agent: ScreenAgent, rows: string[], screen: AgentScreen): boolean {
+  const area = cliInputArea(agent, rows);
+  return !!area && (agent !== 'claude' || !screen.inputHint && !claudeInputHint(rows, area));
 }
 
 // At its prompt with nothing typed, as the offline reading fixture expects.
