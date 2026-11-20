@@ -3523,7 +3523,7 @@
   "上次接受的配置": "Last accepted configuration",
   "本机项目设置": "Local project settings",
   "SSH（本机设置）": "SSH (local settings)",
-  "{count} 个项目使用此模板": "{count} projects use this template",
+  "新项目从此模板创建配置": "New projects start from this template",
   "路由文件待确认": "Routing file needs review",
   "为本项目创建配置": "Create project configuration",
   "保存模板": "Save template",
