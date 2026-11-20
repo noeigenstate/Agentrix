@@ -117,7 +117,7 @@ async function checkOperationLayout(app, page, seats) {
     assert.ok(layout.overflow <= 0 && layout.sameRow, `all operation cards fit side by side at the bottom: ${JSON.stringify(layout)}`);
     for (const id of ['memory', 'review']) {
       await seats.locator(`[data-op-model="${id}"]`).click();
-      const menu = seats.getByRole('menu');
+      const menu = seats.locator('[data-model-picker-menu]');
       await menu.waitFor();
       const fits = await menu.evaluate(node => {
         const box = node.getBoundingClientRect();
@@ -262,8 +262,11 @@ async function runtimeSmoke(output, stages) {
         await seats.waitFor();
         assert.equal(await seats.locator('[data-seat]').count(), 10);
         const teamTab = seats.locator('[data-routing-tab="team"]');
+        const libraryTab = seats.locator('[data-routing-tab="library"]');
         const operationsTab = seats.locator('[data-routing-tab="operations"]');
         await teamTab.press('ArrowRight');
+        assert.equal(await libraryTab.getAttribute('aria-selected'), 'true');
+        await libraryTab.press('ArrowRight');
         assert.equal(await operationsTab.getAttribute('aria-selected'), 'true');
         assert.equal(await seats.locator('[data-operation]').count(), 7);
         assert.equal(await seats.locator('[data-op-slot]').count(), 5);
@@ -648,12 +651,14 @@ async function checkRoutingCardControls(dialog, count) {
     await check(picker);
     await check(card.locator('[data-role-more]'));
     await picker.click();
-    const menu = dialog.getByRole('menu');
+    const menu = dialog.locator('[data-model-picker-menu]');
+    await menu.waitFor();
     const efforts = await menu.locator('[data-tile-effort] [data-pop-effort]').all();
     assert.ok(efforts.length, 'the opened picker contains effort choices');
     for (const effort of efforts) await check(effort);
     await check(menu.locator('[data-tile-fast]'));
     await menu.locator('[data-menu-close]').click();
+    await menu.waitFor({ state: 'detached' });
   }
 }
 

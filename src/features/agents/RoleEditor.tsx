@@ -1,4 +1,4 @@
-import { X } from '@phosphor-icons/react';
+import { Warning, X } from '@phosphor-icons/react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { RoleConfig, Seat, SeatMap, SeatModel, TeamRole } from '../../shared/types';
 import { t } from '../../shared/i18n';
@@ -10,6 +10,10 @@ import { assignModel, rowFor } from './skill-seats';
 import { escapeRoutingText, routingError } from './RoutingReview';
 
 export const roleName = (role: TeamRole) => role.source === 'custom' ? role.name : routingRoleName(role.name, t);
+export function sameRoleConfig(a?: RoleConfig, b?: RoleConfig) {
+  return a === b || !!a && !!b && Object.keys(a).length === Object.keys(b).length &&
+    (Object.keys(a) as (keyof RoleConfig)[]).every(key => Object.hasOwn(b, key) && a[key] === b[key]);
+}
 const labels = { name: '名称', duty: '职责', outputs: '产出' };
 type RoleField = keyof typeof labels;
 const textFields = Object.keys(labels) as RoleField[];
@@ -96,9 +100,8 @@ type EditorProps = {
   catalog: SeatModel[]; models: SeatMap; idLocked?: boolean; close: () => void; save: (id: string, value: RoleConfig) => void; copy: (role: TeamRole) => void;
 };
 
-function useEditor({ id, initial, existing, idLocked, replace, roles, taken, save, close }: EditorProps) {
+function useEditor({ id, initial, existing, idLocked, replace, roles, taken, save }: EditorProps) {
   const [form, setForm] = useState({ id, value: initial, editedId: false });
-  const fieldset = useRef<HTMLDivElement>(null);
   const { id: roleId, value } = form;
   const setValue = (value: RoleConfig) => setForm(previous => ({ ...previous, value }));
   const locked = !!existing && existing.source !== 'custom';
@@ -124,24 +127,44 @@ function useEditor({ id, initial, existing, idLocked, replace, roles, taken, sav
     const field = (key: keyof typeof labels) => normalizeRoleText(key, value[key] ?? '') ?? '';
     save(roleId, { ...value, name: field('name'), duty: field('duty'), outputs: field('outputs') });
   };
+  return { roleId, value, setValue, setForm, locked, sources, from, error, fieldErrors, fieldsInvalid, changeFrom, submit };
+}
+
+function useEditorClose(dirty: boolean, close: () => void) {
+  const [discard, setDiscard] = useState(false);
+  const fieldset = useRef<HTMLDivElement>(null), prompt = useRef<HTMLDivElement>(null);
+  const previous = useRef<HTMLElement | null>(null);
+  const requestClose = () => {
+    if (!dirty) { close(); return; }
+    if (discard) return;
+    previous.current = document.activeElement as HTMLElement | null;
+    setDiscard(true);
+  };
+  const keep = () => setDiscard(false);
   const keys = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Escape') { event.stopPropagation(); close(); return; }
+    if (event.key === 'Escape') { event.stopPropagation(); if (discard) keep(); else requestClose(); return; }
     if (event.key !== 'Tab') return;
-    const controls = fieldset.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea, select');
+    const controls = (discard ? prompt : fieldset).current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea, select');
     if (!controls?.length) return;
     const first = controls[0], last = controls[controls.length - 1];
     if (event.shiftKey ? document.activeElement !== first : document.activeElement !== last) return;
     event.stopPropagation(); event.preventDefault();
     (event.shiftKey ? last : first).focus();
   };
-  useEffect(() => { fieldset.current?.querySelector<HTMLElement>('input, button')?.focus(); }, []);
-  return { roleId, value, setValue, setForm, locked, sources, from, error, fieldErrors, fieldsInvalid, changeFrom, submit, keys, fieldset };
+  useEffect(() => {
+    if (discard) { prompt.current?.querySelector<HTMLElement>('button')?.focus({ preventScroll: true }); return; }
+    const target = previous.current?.isConnected ? previous.current : fieldset.current?.querySelector<HTMLElement>('input, button');
+    target?.focus({ preventScroll: true });
+    previous.current = null;
+  }, [discard]);
+  return { requestClose, discard, keep, keys, fieldset, prompt };
 }
 
 export function RoleEditor(props: EditorProps) {
   const { existing, idLocked, catalog, models, roles, close, copy, replace } = props;
   const form = useEditor(props);
-  const { roleId, value, setValue, setForm, locked, sources, from, error, changeFrom, submit, keys, fieldset } = form;
+  const { roleId, value, setValue, setForm, locked, sources, from, error, changeFrom, submit } = form;
+  const { requestClose, discard, keep, keys, fieldset, prompt } = useEditorClose(roleId !== props.id || !sameRoleConfig(value, props.initial), close);
   const lastReviewer = existing?.enabled && existing.kind === 'reviewer' &&
     roles.filter(role => role.enabled && role.kind === 'reviewer').length === 1;
   const seat = value.model && value.effort ? { model: value.model, effort: value.effort, fast: value.fast } : undefined;
@@ -149,13 +172,13 @@ export function RoleEditor(props: EditorProps) {
     const { model, effort, fast, ...rest } = value;
     setValue({ ...rest, ...next });
   };
-  return <div className="seats-role-scrim" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
+  return <div className="seats-role-scrim" onMouseDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); requestClose(); } }}>
     <div className="seats-role-editor" ref={fieldset} role="dialog" aria-modal="true" aria-labelledby="role-editor-title" onKeyDown={keys}>
-      <header>
+      <header inert={discard}>
         <h3 id="role-editor-title">{existing ? t('角色设置 · {role}', { role: roleName(existing) }) : t('新建角色')}</h3>
-        <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} onClick={close}><X size={16} aria-hidden="true" /></button>
+        <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} onClick={requestClose}><X size={16} aria-hidden="true" /></button>
       </header>
-      <div className="seats-role-editor-body">
+      <div className="seats-role-editor-body" inert={discard}>
         <div className="seats-role-fields">
           {!locked && <>
             <label>{t('基于')}<select required value={value.from} onChange={event => {
@@ -188,12 +211,18 @@ export function RoleEditor(props: EditorProps) {
         </aside>}
       </div>
       <footer>
-        <button type="button" className="seats-btn" onClick={close}>{t('取消')}</button>
-        {locked ? !existing?.locked.includes('copy') && <button type="button" className="seats-btn is-primary"
-          onClick={() => existing && copy(existing)}>{t('复制后自定义')}</button> :
-          <button type="button" className="seats-btn is-primary" data-save-role disabled={!!error || form.fieldsInvalid} onClick={submit}>
-            {t(replace ? '复制并替换' : '保存角色')}
-          </button>}
+        {discard ? <div ref={prompt} className="seats-banner is-warn seats-editor-discard" role="alertdialog" aria-label={t('放弃未保存的修改？')}>
+          <Warning size={14} aria-hidden="true" /><span>{t('关闭会丢掉未保存的修改。')}</span>
+          <button type="button" className="seats-btn" onClick={keep}>{t('继续编辑')}</button>
+          <button type="button" className="seats-btn" onClick={close}>{t('放弃修改')}</button>
+        </div> : <div className="seats-editor-actions">
+          <button type="button" className="seats-btn" onClick={requestClose}>{t('取消')}</button>
+          {locked ? !existing?.locked.includes('copy') && <button type="button" className="seats-btn is-primary"
+            onClick={() => existing && copy(existing)}>{t('复制后自定义')}</button> :
+            <button type="button" className="seats-btn is-primary" data-save-role disabled={!!error || form.fieldsInvalid} onClick={submit}>
+              {t(replace ? '复制并替换' : '保存角色')}
+            </button>}
+        </div>}
       </footer>
     </div>
   </div>;

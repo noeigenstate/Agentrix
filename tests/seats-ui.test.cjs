@@ -251,7 +251,7 @@ function showOperations(h) {
 }
 function operationMenu(h, id, attr = 'data-op-model') {
   byAttr(h.render(), attr, id).props.onClick(pickButton(id));
-  return find(h.render(), node => node.props.role === 'menu');
+  return liveMenu(h);
 }
 const menuRows = menu => findAll(menu, node => node.props['data-assign'] !== undefined);
 
@@ -412,7 +412,9 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
   assert.match(textOf(byAttr(tree, 'data-operation', 'lookup')), /Takes effect on next launch/);
   assert.doesNotMatch(textOf(byAttr(tree, 'data-operation', 'memory')), /next launch/);
   assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /take effect on next launch/);
+  byAttr(tree, 'aria-labelledby', 'seats-title').props.onClickCapture();
   byAttr(h.render(), 'data-now').props.onClick();
+  assert.equal(textOf(byAttr(h.render(), 'className', 'seats-notice')), '');
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Haiku · high/);
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Codex default/);
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Takes effect on next launch: Opus · max/);
@@ -421,6 +423,34 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
   assert.deepEqual(h.calls[1], ['project', 'p1', { roles: {}, operations: {} }, 'at-open']);
+});
+
+test('old pending operations stay out of unrelated save and file review notices', async t => {
+  const operations = operationInfo({ pending: ['lookup', 'memory'] });
+  const info = seatsInfo({ operations, catalog: operationCatalog() });
+  const h = dialogHarness(t, info);
+  showOperations(h);
+  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  const notice = () => textOf(byAttr(h.render(), 'className', 'seats-notice'));
+  assert.match(notice(), /take effect on next launch/);
+  byAttr(h.render(), 'data-scope', 'template').props.onClick();
+  assert.equal(notice(), '');
+  byAttr(h.render(), 'data-scope', 'project').props.onClick();
+  byAttr(openMenu(h, 'qa'), 'data-assign', 'haiku').props.onClick();
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.equal(notice(), '');
+  showOperations(h);
+  byAttr(operationMenu(h, 'lookup'), 'data-assign', 'haiku').props.onClick();
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.match(notice(), /take effect on next launch/);
+  h.deliver({ ...info, routing: source({ state: 'pending', digest: 'new', actions: ['keep'] }) });
+  await settle();
+  assert.ok(byAttr(h.render(), 'data-routing-review', 'pending'));
+  assert.equal(notice(), '');
 });
 
 test('operation chips show the provider reason and model editing works through the suggestion, custom input and palette drag', t => {
@@ -694,10 +724,10 @@ for (const dismissal of ['Escape', 'Keep editing']) test(`${dismissal} preserves
 });
 
 // ---- catalog-driven dialog (round cat-r1): the menu follows each row, a typed-in id is accepted by the helper's syntax, the lists can be refreshed ----
-const openMenu = (h, slot) => { byAttr(h.render(), 'data-pick', slot).props.onClick(pickButton(slot)); return find(h.render(), node => node.props.role === 'menu'); };
+const openMenu = (h, slot) => { byAttr(h.render(), 'data-pick', slot).props.onClick(pickButton(slot)); return liveMenu(h); };
 const optionValues = select => findAll(select, node => node.type === 'option').map(node => node.props.value);
 const assignable = menu => findAll(menu, node => node.props.role === 'menuitemradio').map(node => node.props['data-assign']);
-const liveMenu = h => find(h.render(), node => node.props.role === 'menu');
+const liveMenu = h => find(h.render(), node => node.props.role === 'menu' || node.props['data-model-picker-menu']);
 const typeCustom = (h, text) => byAttr(liveMenu(h), 'data-custom-input').props.onChange({ target: { value: text } });
 const applyCustom = h => byAttr(liveMenu(h), 'data-custom-apply').props.onClick();
 
@@ -806,7 +836,7 @@ test('issues show on their seat until it is edited, a moved default is said, and
   assert.deepEqual(marks.map(node => node.props.title), [
     'Adjusted: this model is not in the current list; it runs as opus', 'Adjusted: this model does not support the saved effort; it runs high', 'Adjusted: this model does not support fast mode; it runs fast off']);
   assert.equal(issuesOf(seatsInfo({ issues }), 'developer').length, 1);
-  assert.match(textOf(byAttr(tree, 'data-moved')), /Defaults moved to Developer：GPT-6\.2-Sol → gpt-6\.3-sol/);
+  assert.match(textOf(byAttr(tree, 'data-moved')), /Defaults moved to Developer: GPT-6\.2-Sol → gpt-6\.3-sol/);
   assert.ok(findAll(tree, node => node.props['data-unlisted'] !== undefined).length >= 1, 'Sonnet is marked as no longer listed');
   assert.match(textOf(byAttr(openMenu(h, 'designer'), 'data-assign', 'sonnet')), /Not in the latest list/);
   // Editing the seat makes its saved issue stale: the mark goes.
@@ -824,7 +854,7 @@ test('the dialog reads once when it opens, keeps the opened info until the answe
   assert.equal(byAttr(tree, 'data-moved'), undefined, 'the note waits for the answer');
   assert.equal(findAll(tree, node => node.props.className === 'seats-notice' && textOf(node)).length, 0, 'an opening read says nothing while it works');
   await settle();
-  assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Developer：GPT-6\.2-Sol → gpt-6\.3-sol/);
+  assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Developer: GPT-6\.2-Sol → gpt-6\.3-sol/);
   const quiet = dialogHarness(t, seatsInfo(), { refreshError: 'offline' });
   quiet.render(); await settle();
   assert.match(textOf(byAttr(quiet.render(), 'className', 'seats-notice')), /Not refreshed: offline/, 'a failed opening read keeps the info and says so');
@@ -1051,6 +1081,8 @@ test('the picker footer changes effort and fast and explains unsupported fast mo
   const h = dialogHarness(t, seatsInfo({ catalog: rows }));
   const efforts = menu => findAll(menu, node => node.props['data-pop-effort']).map(node => node.props['data-pop-effort']);
   const pop = openMenu(h, 'architect');
+  assert.equal(byAttr(byAttr(pop, 'role', 'menu'), 'data-tile-effort'), undefined);
+  assert.equal(byAttr(byAttr(pop, 'role', 'menu'), 'role', 'switch'), undefined);
   assert.deepEqual(efforts(pop), ['low', 'high', 'ultra']);
   assert.equal(byAttr(pop, 'data-tile-fast', 'architect').props.disabled, false);
   assert.match(textOf(byAttr(pop, 'data-fast-note')), /billed at a different price \(for example Opus fast\)/);
@@ -1075,6 +1107,25 @@ test('the picker footer changes effort and fast and explains unsupported fast mo
   assert.deepEqual(h.calls, [['project', 'p1', { roles: {
     architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high' }, designer: { fresh: true },
   }, operations: {} }, 'at-open']]);
+});
+
+test('picker arrows reach provider folds and other models in both directions', t => {
+  const h = dialogHarness(t, seatsInfo({ catalog: REAL }));
+  const menu = byAttr(openMenu(h, 'architect'), 'role', 'menu');
+  const rows = findAll(menu, node => ['menuitem', 'menuitemradio'].includes(node.props.role));
+  const controls = rows.map(row => ({ row, focus() { document.activeElement = this; } }));
+  const currentTarget = { querySelectorAll: selector => controls.filter(({ row }) =>
+    selector.includes(`[role="${row.props.role}"]`) && !row.props.disabled) };
+  for (const attr of ['data-picker-fold', 'data-custom']) {
+    const index = controls.findIndex(({ row }) => row.props[attr] !== undefined);
+    assert.ok(index > 0);
+    const previous = currentTarget.querySelectorAll('[role="menuitemradio"], [role="menuitem"]').filter(item => controls.indexOf(item) < index).at(-1);
+    previous.focus();
+    menu.props.onKeyDown({ ...keyEvent('ArrowDown'), currentTarget });
+    assert.equal(document.activeElement, controls[index]);
+    menu.props.onKeyDown({ ...keyEvent('ArrowUp'), currentTarget });
+    assert.equal(document.activeElement, previous);
+  }
 });
 
 test('the model and role menus close on an outside click, on a second click of their button, on ✕ and on Escape', t => {
@@ -1304,6 +1355,54 @@ test('the role library locks the last reviewer and the editor supports copy and 
   assert.equal(byAttr(next, 'data-toggle-role', 'x-reviewer-1').props.disabled, true);
 });
 
+for (const action of ['disable', 'delete', 'replace']) test(`role menu ${action} keeps Escape and the Tab trap after removing the card`, t => {
+  const custom = action === 'delete' ? { 'x-build': { from: 'developer', name: 'Builder', duty: 'Build features' } } : null;
+  const id = custom ? 'x-build' : 'designer';
+  const h = dialogHarness(t, seatsInfo({ project: custom }));
+  const focusable = () => ({ isConnected: true, getClientRects: () => [true], focus() {
+    document.activeElement = this.isConnected ? this : document.body;
+  } });
+  document.body = {};
+  const first = focusable(), teamTab = focusable(), opener = { ...focusable(), ...pickButton(id).currentTarget, focus: focusable().focus };
+  const panel = { ...focusable(), contains: node => [first, teamTab, opener].includes(node), querySelectorAll: () => [first, teamTab],
+    querySelector: () => teamTab };
+  const dialog = tree => byAttr(tree, 'aria-labelledby', 'seats-title');
+  const initial = h.render(tree => { dialog(tree).props.ref.current = panel; });
+  byAttr(initial, 'data-role-more', id).props.onClick({ currentTarget: opener });
+  const menu = liveMenu(h);
+  if (action === 'replace') {
+    byAttr(menu, 'data-replace-role', id).props.onClick();
+    assert.equal(document.activeElement, opener);
+    const editor = find(h.render(), node => node.type?.name === 'RoleEditor');
+    editor.props.save(editor.props.id, editor.props.initial);
+  } else if (action === 'delete') {
+    find(menu, node => node.type === 'button' && textOf(node) === 'Delete role').props.onClick();
+  } else byAttr(menu, 'data-toggle-role', id).props.onClick();
+  const next = h.render(() => {
+    opener.isConnected = false;
+    if (document.activeElement === opener) document.activeElement = document.body;
+  });
+  assert.equal(byAttr(next, 'data-seat', id), undefined);
+  assert.equal(document.activeElement, action === 'replace' ? panel : teamTab);
+  teamTab.focus();
+  dialog(next).props.onKeyDown(keyEvent('Tab'));
+  assert.equal(document.activeElement, first);
+  dialog(next).props.onKeyDown(keyEvent('Escape'));
+  assert.ok(byAttr(h.render(), 'role', 'alertdialog'));
+});
+
+test('reviewer validation uses the new custom role name before the project is saved', t => {
+  const h = dialogHarness(t, seatsInfo({ project: { developer: { model: 'sonnet', effort: 'high' } } }));
+  byAttr(h.render(), 'data-routing-tab', 'library').props.onClick();
+  byAttr(h.render(), 'data-new-role').props.onClick();
+  const editor = find(h.render(), node => node.type?.name === 'RoleEditor');
+  editor.props.save(editor.props.id, { ...editor.props.initial, name: 'Build crew', model: 'opus', effort: 'high' });
+  byAttr(h.render(), 'data-routing-tab', 'team').props.onClick();
+  const alert = byAttr(h.render(), 'role', 'alert');
+  assert.match(textOf(alert), /Build crew/);
+  assert.doesNotMatch(textOf(alert), /x-developer-1/);
+});
+
 test('frozen role groups retain a row name and put off-team calls last after terminal reuse', () => {
   const dev = { ...team.roles.find(role => role.id === 'developer'), name: 'Developer' };
   const selected = [{ ...dev, id: 'x-ui', name: 'Selected name' }, dev];
@@ -1332,7 +1431,12 @@ test('the first project file is an explicit save with a null base and frozen cho
     current: DEFAULTS, currentRoles: team.roles.map(role => shipped(role)),
   });
   const h = dialogHarness(t, info);
-  assert.match(byAttr(h.render(), 'data-save').props.title, /Creates \.agentrix\/routing\.json/);
+  const checkCreate = tree => {
+    const button = byAttr(tree, 'data-save');
+    assert.equal(textOf(button), 'Create project configuration');
+    assert.match(textOf(byAttr(tree, 'id', button.props['aria-describedby'])), /Creates \.agentrix\/routing\.json/);
+  };
+  checkCreate(h.render());
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: {}, operations: {} }, null]]);
@@ -1341,6 +1445,16 @@ test('the first project file is an explicit save with a null base and frozen cho
   assert.ok(byAttr(h.render(), 'data-routing-review', 'pending'));
   byAttr(h.render(), 'data-now').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'aria-label', 'This conversation (read-only)')), /Orchestrator/);
+});
+
+test('a dirty first project draft still creates a file and SSH explains its local scope in the header', t => {
+  const h = dialogHarness(t, seatsInfo({ routing: source({ layer: 'template', state: 'absent', digest: null }) }));
+  byAttr(openMenu(h, 'designer'), 'data-assign', 'haiku').props.onClick();
+  const dirty = h.render(), save = byAttr(dirty, 'data-save');
+  assert.equal(textOf(save), 'Create project configuration');
+  assert.match(textOf(byAttr(dirty, 'id', save.props['aria-describedby'])), /Creates \.agentrix\/routing\.json/);
+  const remote = dialogHarness(t, seatsInfo({ routing: source({ layer: 'local', state: 'absent', remote: true, digest: null }) }));
+  assert.match(textOf(byAttr(remote.render(), 'data-scope', 'project')), /SSH \(local settings\)/);
 });
 
 test('the role editor validates text, regenerates a new ID and clears the seat when the source changes', t => {
@@ -1367,6 +1481,32 @@ test('the role editor validates text, regenerates a new ID and clears the seat w
   assert.equal(saves[0][0], 'x-reviewer-2');
   assert.equal(saves[0][1].from, 'reviewer');
   assert.equal(saves[0][1].model, undefined);
+});
+
+test('the role editor scrim confirms discarding typed changes and keeps the draft on Escape', t => {
+  let closed = 0;
+  dialogHarness(t, seatsInfo());
+  const roles = team.roles.map(role => shipped(role));
+  const editor = mount(t, 'RoleEditor.tsx', 'RoleEditor', {
+    id: 'x-developer-1', initial: { from: 'developer', name: 'Role', duty: 'Build' },
+    roles, catalog: catalog(), models: DEFAULTS, taken: [],
+    save: () => assert.fail('scrim saved a role'), close: () => { closed++; }, copy: () => {},
+  });
+  const scrim = tree => tree.props.onMouseDown({ target: document.body, currentTarget: document.body, preventDefault() {} });
+  let tree = editor.render();
+  byAttr(tree, 'data-role-text', 'duty').props.onChange({ target: { value: 'Build the app' } });
+  scrim(editor.render());
+  tree = editor.render();
+  assert.equal(closed, 0);
+  assert.equal(byAttr(tree, 'role', 'alertdialog').props['aria-label'], 'Discard unsaved changes?');
+  byAttr(tree, 'aria-labelledby', 'role-editor-title').props.onKeyDown(keyEvent('Escape'));
+  tree = editor.render();
+  assert.equal(byAttr(tree, 'role', 'alertdialog'), undefined);
+  assert.equal(byAttr(tree, 'data-role-text', 'duty').props.value, 'Build the app');
+  scrim(tree);
+  const prompt = byAttr(editor.render(), 'role', 'alertdialog');
+  find(prompt, node => node.type === 'button' && textOf(node) === en['放弃修改']).props.onClick();
+  assert.equal(closed, 1);
 });
 
 test('the routing key refreshes accepted roles while keeping the running lead and marking its saved settings', async t => {
@@ -1422,12 +1562,31 @@ test('the role library and Developer specialties use the supplied labels and dut
   ];
   const h = dialogHarness(t, seatsInfo({ roles }), { language: 'zh' });
   const developer = byAttr(h.render(), 'data-seat', 'developer');
-  assert.match(byAttr(developer, 'className', 'seats-tag').props.title, /人工智能/);
+  const specialty = byAttr(developer, 'className', 'seats-tag');
+  assert.match(specialty.props['aria-label'], /人工智能/);
+  assert.equal(specialty.props.tabIndex, 0);
+  const details = findAll(developer, node => node.type === 'p' && node.props['data-role-detail']);
+  assert.equal(details.length, 2);
+  for (const detail of details) {
+    assert.equal(detail.props['aria-label'], textOf(detail));
+    assert.equal(detail.props.tabIndex, 0);
+  }
   assert.doesNotMatch(textOf(developer), /\bAI\b/);
   byAttr(h.render(), 'data-routing-tab', 'library').props.onClick();
   const library = h.render();
   assert.match(textOf(byAttr(library, 'data-library-role', 'ai')), /人工智能.*主进程提供的模型职责/);
   assert.match(textOf(byAttr(library, 'data-library-role', 'a11y')), /无障碍.*主进程提供的无障碍职责/);
+});
+
+test('English counts one specialty and multiple specialties with the right inflection', t => {
+  const specialist = id => ({ ...shipped({ id, name: id, duty: '', detail: '', outputs: '' }, 'library'), kind: 'author' });
+  const defaults = team.roles.map(role => shipped(role));
+  for (const count of [1, 2]) {
+    const roles = [...defaults, ...['frontend', 'backend'].slice(0, count).map(specialist)];
+    const h = dialogHarness(t, seatsInfo({ roles }));
+    const card = byAttr(h.render(), 'data-seat', 'developer');
+    assert.equal(textOf(byAttr(card, 'className', 'seats-tag')), count === 1 ? '1 specialty' : '2 specialties');
+  }
 });
 
 test('English localizes every shipped role library field and the copy suffix', () => {
@@ -1451,6 +1610,13 @@ test('the library displays both limits and the reviewer locks beside their contr
   const h = dialogHarness(t, info, { language: 'zh' });
   const teamChart = h.render();
   assert.match(textOf(byAttr(openMenu(h, 'reviewer'), 'data-role-lock', 'fresh')), /始终使用新实例/);
+  byAttr(h.render(), 'data-role-more', 'reviewer').props.onClick(pickButton('reviewer'));
+  const reviewerMenu = liveMenu(h), disabled = byAttr(reviewerMenu, 'data-toggle-role', 'reviewer');
+  assert.equal(disabled.props['aria-disabled'], true);
+  assert.equal(disabled.props.disabled, false);
+  assert.match(textOf(byAttr(reviewerMenu, 'id', disabled.props['aria-describedby'])), /至少保留一个审查角色/);
+  disabled.props.onClick();
+  assert.ok(liveMenu(h));
   assert.match(textOf(byAttr(teamChart, 'data-scope', 'project')), /本项目 \.agentrix\/routing\.json/);
   byAttr(teamChart, 'data-routing-tab', 'library').props.onClick();
   const library = h.render();
@@ -1460,7 +1626,7 @@ test('the library displays both limits and the reviewer locks beside their contr
   const join = byAttr(library, 'data-toggle-role', 'a11y');
   assert.equal(textOf(join), '加入团队');
   assert.equal(join.props.disabled, true);
-  assert.match(join.props.title, /停用一个后才能再启用/);
+  assert.match(textOf(byAttr(library, 'id', join.props['aria-describedby'])), /停用一个后才能再启用/);
   assert.equal(textOf(byAttr(library, 'data-toggle-role', 'developer')), '移出团队');
   for (const [id, reason] of [['orchestrator', /总指挥必须保留/], ['reviewer', /至少保留一个审查角色/]]) {
     const card = byAttr(library, 'data-library-role', id);

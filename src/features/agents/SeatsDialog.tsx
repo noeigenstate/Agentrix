@@ -1,4 +1,3 @@
-import { routingRoleName } from '../../shared/routing-command.ts';
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -16,7 +15,7 @@ import {
 } from './skill-seats';
 import { CurrentOperations, OperationRows, editableOperation, operationLabel, operationName, operationWords } from './OperationRows';
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
-import { copyRole, roleName, RoleEditor } from './RoleEditor';
+import { copyRole, roleName, RoleEditor, sameRoleConfig } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
 import './seats-dialog.css';
 
@@ -25,6 +24,7 @@ const ROLE_ICONS = { orchestrator: GitBranch, product: ClipboardText, architect:
   frontend: Browser, backend: HardDrives, desktop: Desktop, database: Database, ai: Cpu, docs: FileText, performance: Gauge, a11y: Person };
 const enabledLimit = () => t('已启用 {limit} 个角色（上限 {limit}）；停用一个后才能再启用', { limit: MAX_ENABLED_ROLES });
 const customLimit = () => t('已创建 {limit} 个项目角色（上限 {limit}）；删除一个后才能新建', { limit: MAX_CUSTOM_ROLES });
+const roleSeparator = () => currentLanguage() === 'en' ? ', ' : '、';
 
 function RoleIcon({ id }: { id: string }) {
   const Icon = ROLE_ICONS[id as keyof typeof ROLE_ICONS] ?? User;
@@ -54,7 +54,7 @@ const ageText = (at: number | null) => {
   return unit === 'never' ? t('未刷新') : unit === 'now' ? t('刚刚') : t(unit === 'min' ? '{count} 分钟前' : unit === 'hour' ? '{count} 小时前' : '{count} 天前', { count });
 };
 
-type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | { kind: 'saved' };
+type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | { kind: 'operations-saved'; ids: string[] };
 type Menu = { kind: 'model' | 'effort' | 'role' | 'claude' | 'codex'; slot: SlotId } & ReturnType<typeof menuPlacement>;
 type Custom = { text: string; error: string };
 const operationSlot = (id: string) => `operation:${id}`;
@@ -148,11 +148,10 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
   const { operations } = info;
   const catalog = withInstalled(info.catalog, info.installed, family => t('{agent} 未安装', { agent: family === 'codex' ? 'Codex' : 'Claude' }));
   const roles = info.roles ?? [];
-  const seatName = (id: SeatId) => routingRoleName(roles.find(role => role.id === id)?.name ?? id, t);
   const opRows = operations?.rows.filter(editableOperation) ?? [];
   const opAt = (slot: SlotId) => opRows.find(row => operationSlot(row.id) === slot);
-  const slotName = (slot: SlotId) => { const row = opAt(slot); return row ? operationName(row) : seatName(slot); };
   const label = (model: string) => shortLabel(modelRow(catalog, model)?.label ?? model);
+  const clearOperationNotice = () => setNotice(previous => previous?.kind === 'operations-saved' ? null : previous);
 
   const refresh = async (opening = false) => {
     if (reading.current) { if (!opening) queued.current = true; return; }
@@ -178,12 +177,7 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
       if (alive.current) { setRefreshing(null); if (queued.current) { queued.current = false; void refresh(); } }
     }
   };
-  return { info, catalog, operations, roles, seatName, opAt, opRows, slotName, label, notice, setNotice, setRefreshed, refreshing, refresh, moved, alive, loadInfo };
-}
-
-function sameRoleConfig(a?: RoleConfig, b?: RoleConfig) {
-  return a === b || !!a && !!b && Object.keys(a).length === Object.keys(b).length &&
-    (Object.keys(a) as (keyof RoleConfig)[]).every(key => a[key] === b[key]);
+  return { info, catalog, operations, roles, opAt, opRows, label, notice, setNotice, clearOperationNotice, refreshing, refresh, moved, alive, loadInfo };
 }
 
 type ScopeDraft = { config: RoutingConfig; base: string | null };
@@ -234,6 +228,8 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
   };
   const save = async () => {
     if ((!dirty && !createFile) || refusal || reviewBlock || teamError || saving || !mayOverwrite) return;
+    const operationIds = Object.keys(operationDiff(opValues, { ...ops.lower, ...original.operations }));
+    setNotice(null);
     setSaving(true);
     const result = await saveSeats(window.agentrix, scope, projectId ?? null, clean, current ? current.base : info.routing.digest);
     if (!alive.current) return;
@@ -243,7 +239,7 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
       setDrafts(previous => ({ ...previous, [scope]: undefined }));
     }
     setSaving(false);
-    if (result.ok) { setNotice({ kind: 'saved' }); return; }
+    if (result.ok) { if (operationIds.length) setNotice({ kind: 'operations-saved', ids: operationIds }); return; }
     if (result.error?.code === 'file-changed') setStale(true);
     const operation = opRows.find(row => row.id === result.error?.operation);
     const reason = result.error ? routingError(result.error) : result.message;
@@ -256,6 +252,15 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
     canReset: !!(Object.keys(clean.roles).length || Object.keys(clean.operations).length),
     discardShown: discarding, setDiscarding, setDraft, setOperationsDraft, setConfig, changeScope: setScope, reset, save,
   };
+}
+
+function routingNames(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof useDraft>) {
+  const seatName = (id: SeatId) => {
+    const role = draft.roles.find(item => item.id === id) ?? source.roles.find(item => item.id === id);
+    return role ? roleName(role) : id;
+  };
+  const slotName = (slot: SlotId) => { const row = source.opAt(slot); return row ? operationName(row) : seatName(slot); };
+  return { seatName, slotName };
 }
 
 function usePanels({ dirty, discardShown, setDiscarding }: ReturnType<typeof useDraft>, onClose: () => void) {
@@ -304,7 +309,7 @@ function useMenu(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof
   const [custom, setCustom] = useState<Custom | null>(null);
   const [modelFolds, setModelFolds] = useState<Record<string, boolean>>({});
   const menuBox = useRef<HTMLDivElement>(null), opener = useRef<HTMLElement | null>(null);
-  const itemSelector = '[role="menuitemradio"]:not(:disabled), .is-role [role="menuitem"]:not(:disabled)';
+  const itemSelector = ':is([role="menuitemradio"], [role="menuitem"]):not(:disabled)';
   useEffect(() => {
     if (!menu) return;
     const items = Array.from(menuBox.current?.querySelectorAll<HTMLElement>(itemSelector) ?? []);
@@ -340,16 +345,18 @@ function useMenu(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof
   const closeMenu = () => { setMenu(null); setCustom(null); opener.current?.focus({ preventScroll: true }); };
   const menuKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    const items = Array.from(menuBox.current?.querySelectorAll<HTMLElement>(itemSelector) ?? []);
+    const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(itemSelector));
     const index = items.indexOf(document.activeElement as HTMLElement);
     if (index < 0) return;
     event.preventDefault();
-    items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+    const next = items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length];
+    next.focus({ preventScroll: true });
+    next.scrollIntoView?.({ block: 'nearest' });
   };
   return { menu, setMenu, custom, setCustom, menuBox, openMenu, closeMenu, menuKeys, modelFolds, setModelFolds };
 }
 
-function choiceActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof useDraft>, popup: ReturnType<typeof useMenu>) {
+function choiceActions(source: ReturnType<typeof useCatalog> & ReturnType<typeof routingNames>, draft: ReturnType<typeof useDraft>, popup: ReturnType<typeof useMenu>) {
   const { opAt, label, seatName, slotName, catalog, setNotice } = source;
   const { working, opValues, setDraft, setOperationsDraft, setDiscarding, block, reviewBlock, saving } = draft;
   const { custom, setCustom, closeMenu } = popup;
@@ -458,9 +465,9 @@ function useModelDrag(catalog: SeatModel[], drop: ReturnType<typeof choiceAction
 
 type EditorState = { id: string; initial: RoleConfig; existing?: TeamRole; replace?: string; idLocked?: boolean; base: string | null };
 
-function useRoleActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof useDraft>) {
+function useRoleActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof useDraft>, { dialog }: ReturnType<typeof usePanels>) {
   const [editor, setEditor] = useState<EditorState | null>(null);
-  const opener = useRef<HTMLElement | null>(null);
+  const opener = useRef<HTMLElement | null | undefined>(undefined);
   const taken = [...new Set([
     ...Object.keys(draft.config.roles), ...Object.keys(source.info.template.roles), ...Object.keys(source.info.config?.roles ?? {}),
     ...(source.info.currentRoles ?? []).map(role => role.id),
@@ -469,7 +476,13 @@ function useRoleActions(source: ReturnType<typeof useCatalog>, draft: ReturnType
     if (!editor) opener.current = document.activeElement as HTMLElement | null;
     setEditor({ ...next, base: source.info.routing.digest });
   };
-  const close = () => { setEditor(null); queueMicrotask(() => opener.current?.focus()); };
+  useEffect(() => {
+    if (editor || opener.current === undefined) return;
+    const target = opener.current?.isConnected ? opener.current : dialog.current;
+    target?.focus({ preventScroll: true });
+    opener.current = undefined;
+  }, [editor]);
+  const close = () => setEditor(null);
   const edit = (role: TeamRole) => open({
     id: role.id, existing: role, idLocked: Object.hasOwn(configFor(source.info, draft.scope).roles, role.id),
     initial: role.source === 'custom' ? draft.config.roles[role.id] : { name: role.name, duty: role.detail || role.duty, outputs: role.outputs },
@@ -527,7 +540,7 @@ function useRoutingReview(source: ReturnType<typeof useCatalog>, draft: ReturnTy
       await source.loadInfo();
       if (!source.alive.current || !result) return;
       if (!result.ok) source.setNotice({ kind: 'error', text: routingError(result) });
-      else { setOpened(false); setRaw(false); source.setNotice(action === 'apply' ? { kind: 'saved' } : null); }
+      else { setOpened(false); setRaw(false); source.setNotice(null); }
     } catch (error) {
       if (source.alive.current) source.setNotice({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -539,13 +552,18 @@ function useRoutingReview(source: ReturnType<typeof useCatalog>, draft: ReturnTy
 }
 
 function useDialogState(props: SeatsDialogProps) {
-  const source = useCatalog(props), draft = useDraft(source, props.projectId);
-  const roles = useRoleActions(source, draft), review = useRoutingReview(source, draft, props.projectId);
+  const catalog = useCatalog(props), draft = useDraft(catalog, props.projectId);
+  const source = { ...catalog, ...routingNames(catalog, draft) };
   const panels = usePanels({ ...draft, dirty: draft.hasDrafts }, props.onClose), popup = useMenu(source, draft, panels);
-  useEffect(() => { if (review.visible) popup.setMenu(null); }, [review.visible]);
+  const roles = useRoleActions(source, draft, panels), review = useRoutingReview(source, draft, props.projectId);
+  useEffect(() => {
+    if (!review.visible) return;
+    popup.setMenu(null);
+    source.clearOperationNotice();
+  }, [review.visible]);
   const edits = choiceActions(source, draft, popup), drag = useModelDrag(source.catalog, edits.drop);
   const [tab, setTab] = useState<Tab>('team');
-  const switchTab = (next: Tab) => { popup.setMenu(null); panels.setPaletteOpen(false); setTab(next); };
+  const switchTab = (next: Tab) => { source.clearOperationNotice(); popup.setMenu(null); panels.setPaletteOpen(false); setTab(next); };
   const { dialog, nowOpen, nowButton, paletteOpen, paletteButton, setNowOpen, setPaletteOpen, close } = panels;
   const { menu, closeMenu } = popup;
   const { discardShown, setDiscarding } = draft;
@@ -580,9 +598,9 @@ function reviewerMessage({ source, draft }: DialogState) {
   const { shown, total } = topAlternatives(block.alternatives, 3, {
     fix: block.fix, map: working, catalog, defaults: info.defaults, authors: reviewRoles.authors, reviewer: block.reviewer,
   });
-  const names = shown.map(row => label(row.model)).join('、');
+  const names = shown.map(row => label(row.model)).join(roleSeparator());
   return t('审查（{model}）与{seats}使用同一模型，账户里还有不弱于它的 {others}，所以不能保存。', {
-    model, seats: block.hit.map(seatName).join('、'), others: total > shown.length ? t('{names} 等 {count} 个', { names, count: total }) : names });
+    model, seats: block.hit.map(seatName).join(roleSeparator()), others: total > shown.length ? t('{names} 等 {count} 个', { names, count: total }) : names });
 }
 
 function seatControls(state: DialogState) {
@@ -632,22 +650,34 @@ function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; li
   const custom = role.source === 'custom', canCopy = !custom && !role.locked.includes('copy');
   const toggleReason = lock ? t(lastReviewer ? '至少保留一个审查角色。' : '总指挥必须保留。') : !role.enabled && full ? enabledLimit() : undefined;
   const run = (action: () => void) => { if (!library) state.popup.closeMenu(); action(); };
+  const membership = (action: () => void) => run(() => {
+    const panel = state.panels.dialog.current;
+    (panel?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? panel)?.focus({ preventScroll: true });
+    action();
+  });
   const cls = library ? 'seats-btn' : 'seats-menu-item', itemRole = library ? undefined : 'menuitem';
+  const reasonId = `seats-${role.id}-${library ? 'library' : 'menu'}-lock`;
+  const copyReasonId = library ? 'seats-library-custom-limit' : 'seats-menu-custom-limit';
   return <div className={library ? 'seats-role-actions' : 'seats-menu-list'}>
     <button type="button" className={cls} role={itemRole} data-edit-role={role.id} disabled={saving} onClick={() => run(() => edit(role))}>{t('角色设置')}</button>
-    <button type="button" className={cls} role={itemRole} data-toggle-role={role.id} disabled={saving || !!toggleReason}
-      title={toggleReason} onClick={() => run(() => change(role, { enabled: !role.enabled }))}>
+    <button type="button" className={cls} role={itemRole} data-toggle-role={role.id} disabled={saving || !!library && !!toggleReason}
+      aria-disabled={!!toggleReason || undefined} aria-describedby={toggleReason ? reasonId : undefined}
+      onClick={() => { if (!toggleReason) membership(() => change(role, { enabled: !role.enabled })); }}>
       {t(role.enabled ? library ? '移出团队' : '停用' : '加入团队')}
     </button>
-    {toggleReason && <span className="seats-role-reason" data-role-lock="membership">{toggleReason}</span>}
+    {toggleReason && <span id={reasonId} className="seats-role-reason" data-role-lock="membership">{toggleReason}</span>}
     {canCopy && <>
-      <button type="button" className={cls} role={itemRole} disabled={saving || copiesFull} onClick={() => run(() => create(role))}>{t('复制后自定义')}</button>
-      {role.enabled && <button type="button" className={cls} role={itemRole} data-replace-role={role.id} disabled={saving || copiesFull}
-        onClick={() => run(() => create(role, role.id))}>{t('复制并替换')}</button>}
-      {!library && copiesFull && <span className="seats-role-reason">{customLimit()}</span>}
+      <button type="button" className={cls} role={itemRole} disabled={saving || !!library && copiesFull}
+        aria-disabled={copiesFull || undefined} aria-describedby={copiesFull ? copyReasonId : undefined}
+        onClick={() => { if (!copiesFull) run(() => create(role)); }}>{t('复制后自定义')}</button>
+      {role.enabled && <button type="button" className={cls} role={itemRole} data-replace-role={role.id} disabled={saving || !!library && copiesFull}
+        aria-disabled={copiesFull || undefined} aria-describedby={copiesFull ? copyReasonId : undefined}
+        onClick={() => { if (!copiesFull) run(() => create(role, role.id)); }}>{t('复制并替换')}</button>}
+      {!library && copiesFull && <span id={copyReasonId} className="seats-role-reason">{customLimit()}</span>}
     </>}
-    {custom && <button type="button" className={cls} role={itemRole} disabled={saving || lock} title={toggleReason}
-      onClick={() => run(() => remove(role))}>{t('删除角色')}</button>}
+    {custom && <button type="button" className={cls} role={itemRole} disabled={saving || !!library && lock}
+      aria-disabled={lock || undefined} aria-describedby={lock ? reasonId : undefined}
+      onClick={() => { if (!lock) membership(() => remove(role)); }}>{t('删除角色')}</button>}
   </div>;
 }
 
@@ -675,18 +705,21 @@ function RoleLibrary({ state, query, setQuery, filter, setFilter }: DialogPart &
         onClick={() => state.roles.create()}>{t('新建角色')}</button>
       {(enabled.length >= MAX_ENABLED_ROLES || customCount >= MAX_CUSTOM_ROLES) && <div className="seats-library-limits">
         {enabled.length >= MAX_ENABLED_ROLES && <p data-role-limit="enabled">{enabledLimit()}</p>}
-        {customCount >= MAX_CUSTOM_ROLES && <p data-role-limit="custom">{customLimit()}</p>}
+        {customCount >= MAX_CUSTOM_ROLES && <p id="seats-library-custom-limit" data-role-limit="custom">{customLimit()}</p>}
       </div>}
     </div>
-    <div className="seats-library-grid">{visible.map(role => <article className="seats-library-card" data-library-role={role.id} data-enabled={role.enabled} key={role.id}>
-      <div className="seats-team-name"><RoleIcon id={role.id} /><h3 title={roleName(role)}>{roleName(role)}</h3>
-        {currentLanguage() === 'zh' && ROLE_NAMES[role.id] && <span className="seats-role-english" lang="en">{ROLE_NAMES[role.id]}</span>}
-        {role.source === 'custom' && <span className="seats-tag">{t('项目角色')}</span>}
-        {role.enabled && <span className="seats-tag seats-library-joined">✓ {t('已加入')}</span>}
-      </div>
-      <p title={role.source === 'custom' ? role.duty : t(role.detail || role.duty)}>{role.source === 'custom' ? role.duty : t(role.detail || role.duty)}</p>
-      <RoleActions state={state} role={role} library />
-    </article>)}</div>
+    <div className="seats-library-grid">{visible.map(role => {
+      const duty = role.source === 'custom' ? role.duty : t(role.detail || role.duty);
+      return <article className="seats-library-card" data-library-role={role.id} data-enabled={role.enabled} key={role.id}>
+        <div className="seats-team-name"><RoleIcon id={role.id} /><h3 title={roleName(role)}>{roleName(role)}</h3>
+          {currentLanguage() === 'zh' && ROLE_NAMES[role.id] && <span className="seats-role-english" lang="en">{ROLE_NAMES[role.id]}</span>}
+          {role.source === 'custom' && <span className="seats-tag">{t('项目角色')}</span>}
+          {role.enabled && <span className="seats-tag seats-library-joined">✓ {t('已加入')}</span>}
+        </div>
+        <p title={duty} role="group" tabIndex={0} aria-label={duty} data-role-detail>{duty}</p>
+        <RoleActions state={state} role={role} library />
+      </article>;
+    })}</div>
     {!visible.length && <p>{t('没有匹配的角色')}</p>}
   </section>;
 }
@@ -699,6 +732,9 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
   const duty = custom ? role.duty : t(role.detail || role.duty);
   const output = role.outputs && t('产出：{outputs}', { outputs: custom ? role.outputs : t(role.outputs) });
   const specialties = id === 'developer' ? state.draft.roles.filter(item => item.source === 'library' && item.kind === 'author').map(roleName) : [];
+  const specialtyCount = specialties.length === 1 ? t('专长 1') : t('专长 {count}', { count: specialties.length });
+  const specialtyNames = specialties.join(roleSeparator());
+  const leadDetail = [duty, output].filter(Boolean).join(' · ');
   const running = lead && info.leadPending ? info.current?.[id] : undefined;
   const restartTitle = running ? t('本次对话仍使用 {settings}', { settings: seatSettingText(running, label(running.model), t('快速')) }) : undefined;
   const classes = ['seats-team-card', lead && 'is-lead', over === id && 'is-over', id === block?.reviewer && 'is-blocked'].filter(Boolean).join(' ');
@@ -708,17 +744,19 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
       <div className="seats-team-name"><RoleIcon id={id} />
         <h3 title={roleName(role)}>{roleName(role)}</h3>
         {currentLanguage() === 'zh' && ROLE_NAMES[id] && <span className="seats-role-english" lang="en" title={ROLE_NAMES[id]}>{ROLE_NAMES[id]}</span>}
-        {specialties.length > 0 && <span className="seats-tag" title={specialties.join('、')}>{t('专长 {count}', { count: specialties.length })}</span>}
+        {specialties.length > 0 && <span className="seats-tag" title={specialtyNames} role="group" tabIndex={0}
+          aria-label={`${specialtyCount} · ${specialtyNames}`} data-role-detail>{specialtyCount}</span>}
         {custom && <span className="seats-tag">{t('项目角色')}</span>}
         {lead && <span className="seats-tag seats-lead-lock" title={t('总指挥必须保留。')}><LockSimple size={14} aria-hidden="true" /></span>}
         {lead && info.leadPending && <span className="seats-tag seats-lead-restart" data-lead-pending title={restartTitle}>{t('重启后生效')}</span>}
         {changed && <span className="seats-chg" title={t('已改')}>●<span className="seats-sr-only">{t('已改')}</span></span>}
       </div>
       {lead
-        ? <div className="seats-team-output"><p title={[duty, output].filter(Boolean).join(' · ')}>
+        ? <div className="seats-team-output"><p title={leadDetail} role="group" tabIndex={0} aria-label={leadDetail} data-role-detail>
           {duty}{output && <span> · {output}</span>}</p>{mark && stateMark(mark)}</div>
-        : <><p title={duty}>{duty}</p>
-          <div className="seats-team-output"><p title={output || undefined}>{output}</p>{mark && stateMark(mark)}</div></>}
+        : <><p title={duty} role="group" tabIndex={0} aria-label={duty} data-role-detail>{duty}</p>
+          <div className="seats-team-output">{output && <p title={output} role="group" tabIndex={0} aria-label={output} data-role-detail>{output}</p>}
+            {mark && stateMark(mark)}</div></>}
     </div>
     {role.fresh !== role.defaultFresh && <span className="seats-sr-only" data-fresh-override>{t(role.fresh ? '改为新实例' : '改为复用实例')}</span>}
     <SeatPicker state={state} role={role} />
@@ -767,7 +805,7 @@ function ModelPalette({ state }: DialogPart) {
   const classes = ['seats-palette', state.tab === 'operations' && 'is-operation-drawer', paletteOpen && 'is-open', ghost && 'is-dragging'];
   return <aside id="seats-model-tray" ref={paletteBox} className={classes.filter(Boolean).join(' ')} aria-label={t('模型盘')}>
     <header className="seats-palette-head">
-      <h3>{t('模型盘')}</h3><span>{t('拖到座位上')}</span><span className="seats-grow" />
+      <h3>{t('模型盘')}</h3><span>{t('拖到角色上')}</span><span className="seats-grow" />
       <button type="button" className="seats-btn is-icon seats-palette-close" aria-label={t('关闭')} onClick={close}><X size={16} aria-hidden="true" /></button>
     </header>
     <label className="seats-search"><MagnifyingGlass size={16} aria-hidden="true" />
@@ -815,16 +853,16 @@ function DialogHeader({ state }: DialogPart) {
   const { routing } = info;
   const switchScope = (scope: Scope) => { state.switchTab('team'); changeScope(scope); };
   const busy = saving || state.review.busy;
-  const saveLabel = createFile && !dirty ? '为本项目创建配置' : scope === 'template' ? '保存模板' : '保存路由';
-  const saveHint = block ? reviewerMessage(state) : createFile ? t('创建后保存到 .agentrix/routing.json，可随项目提交。') : undefined;
+  const saveLabel = createFile ? '为本项目创建配置' : scope === 'template' ? '保存模板' : '保存路由';
+  const createHint = t('创建 .agentrix/routing.json。');
   const projectScope = t(routing.remote ? '本项目' : '本项目 .agentrix/routing.json');
   return <header className="seats-head">
     <h2 id="seats-title">{t('模型路由')}</h2>
     <div className="seats-sources" role="group" aria-label={t('设置范围')}>
       {projectId && <button type="button" className="seats-btn" data-scope="project" aria-pressed={scope === 'project'}
         data-routing-source={scope === 'project' ? routing.layer : undefined}
-        title={routing.remote ? t('SSH（本机设置）') : routingLayer(routing)} disabled={busy} onClick={() => switchScope('project')}>
-        {projectScope}
+        title={routing.remote ? undefined : routingLayer(routing)} disabled={busy} onClick={() => switchScope('project')}>
+        {projectScope}{routing.remote && <span className="seats-scope-note">{t('SSH（本机设置）')}</span>}
       </button>}
       <button type="button" className="seats-btn" data-scope="template" aria-pressed={scope === 'template'}
         disabled={busy} onClick={() => switchScope('template')}>{t('我的默认模板')}</button>
@@ -835,9 +873,13 @@ function DialogHeader({ state }: DialogPart) {
       onClick={() => { state.popup.setMenu(null); state.draft.reset(); }}>
       <ArrowCounterClockwise size={16} aria-hidden="true" />{t('恢复默认')}
     </button>
-    <button type="button" className={`seats-btn${dirty && !state.review.visible ? ' is-primary' : ''}`} data-save
-      disabled={(!dirty && !createFile) || !!refusal || !!reviewBlock || !!teamError || busy || !mayOverwrite || state.review.visible}
-      title={saveHint} onClick={() => { void save(); }}>{t(saveLabel)}</button>
+    <div className="seats-save">
+      <button type="button" className={`seats-btn${dirty && !state.review.visible ? ' is-primary' : ''}`} data-save
+        disabled={(!dirty && !createFile) || !!refusal || !!reviewBlock || !!teamError || busy || !mayOverwrite || state.review.visible}
+        aria-describedby={createFile ? 'seats-create-hint' : undefined}
+        title={block ? reviewerMessage(state) : undefined} onClick={() => { void save(); }}>{t(saveLabel)}</button>
+      {createFile && <span id="seats-create-hint" className="seats-scope-note">{createHint}</span>}
+    </div>
     <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} disabled={busy} onClick={close}><X size={16} aria-hidden="true" /></button>
   </header>;
 }
@@ -862,7 +904,7 @@ function DialogToolbar({ state }: DialogPart) {
       <ArrowsClockwise size={16} aria-hidden="true" />
     </button>
     {!state.review.visible && tab !== 'library' && <button type="button" ref={paletteButton} className="seats-btn"
-      data-palette-toggle data-operation-drawer={tab === 'operations' || undefined} aria-expanded={paletteOpen} aria-pressed={paletteOpen}
+      data-palette-toggle data-operation-drawer={tab === 'operations' || undefined} aria-expanded={paletteOpen}
       aria-controls="seats-model-tray" onClick={() => setPaletteOpen(!paletteOpen)}>
       <SidebarSimple size={16} aria-hidden="true" />{t('模型盘')}
     </button>}
@@ -902,7 +944,7 @@ function ReviewOperationBanner({ state }: DialogPart) {
   return <div className="seats-banner is-bad" role="alert" data-operation-block>
     <Prohibit size={14} aria-hidden="true" />
     <span><b>{t('审查模型已阻止。')}</b>{t('审查（{model}）与{seat}使用同一模型，账户里还有不弱于它的模型。', {
-      model: label(reviewBlock.model), seat: reviewBlock.hit.map(seatName).join('、'),
+      model: label(reviewBlock.model), seat: reviewBlock.hit.map(seatName).join(roleSeparator()),
     })}</span>
     <button type="button" className="seats-btn" data-op-fix onClick={state.edits.fixOperationReview}>{fix}</button>
   </div>;
@@ -914,9 +956,12 @@ function DialogStrip({ state }: DialogPart) {
   const { keepButton } = state.panels;
   const { migration, onDismissMigration, onClose } = state.props;
   const { fix } = state.edits;
-  const noticeKind = notice?.kind === 'saved' ? 'ok' : notice?.kind;
-  const noticeText = notice?.kind === 'saved'
-    ? operations?.pending.length ? t('部分操作模型下次启动生效') : undefined
+  const english = currentLanguage() === 'en';
+  const movedText = moved.map(({ seat, from, to }) =>
+    `${seatName(seat)}${english ? ': ' : '：'}${label(from)} → ${label(to)}`).join(english ? '; ' : '；');
+  const noticeKind = notice?.kind === 'operations-saved' ? 'ok' : notice?.kind;
+  const noticeText = notice?.kind === 'operations-saved'
+    ? !state.review.visible && operations?.pending.some(id => notice.ids.includes(id)) ? t('部分操作模型下次启动生效') : undefined
     : notice?.text;
   return (
     <section className="seats-strip" aria-label={t('模型路由')}>
@@ -931,13 +976,13 @@ function DialogStrip({ state }: DialogPart) {
       {teamError && <div className="seats-banner is-bad" role="alert">{routingError(teamError)}</div>}
       <ReviewOperationBanner state={state} />
       {moved.length > 0 && <div className="seats-banner" role="status" data-moved><CheckCircle size={14} aria-hidden="true" />
-        <span>{t('默认已更新为 {changes}', { changes: moved.map(item => `${seatName(item.seat)}：${label(item.from)} → ${label(item.to)}`).join('；') })}</span></div>}
+        <span>{t('默认已更新为 {changes}', { changes: movedText })}</span></div>}
       {migration && <div className="seats-banner" role="status" data-migrated>
         <div>{migration.split('\n').map(line => <p key={line}>{migrationLine(line)}</p>)}</div>
         <button type="button" className="seats-btn" onClick={onDismissMigration}>{t('知道了')}</button>
       </div>}
       {block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" />
-        <span><b>{t('审查座位被阻止。')}</b>{reviewerMessage(state)}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join('、') })}`}</span>
+        <span><b>{t('审查座位被阻止。')}</b>{reviewerMessage(state)}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join(roleSeparator()) })}`}</span>
         {block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: label(block.fix.model) })}</button>}</div>}
       {refusal && !block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
       {discardShown && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" />
@@ -1023,21 +1068,22 @@ function DialogMenu({ state }: DialogPart) {
     <MenuHeader title={slotName(menu.slot)} close={closeMenu} />
     <RoleActions state={state} role={role} />
   </div>}
-  {menu && menu.kind === 'model' && <div key={menu.slot} ref={menuBox} className={menuOp ? 'seats-menu is-operation' : 'seats-menu'} role="menu"
-    aria-label={t('{seat}：选择模型', { seat: slotName(menu.slot) })} style={menuStyle} onKeyDown={menuKeys}>
+  {menu.kind === 'model' && <div key={menu.slot} ref={menuBox} className={menuOp ? 'seats-menu is-operation' : 'seats-menu'} data-model-picker-menu style={menuStyle}>
     <MenuHeader title={t('{seat}：选择模型', { seat: slotName(menu.slot) })} close={closeMenu} />
-    <div className="seats-menu-list">
+    <div className={menuOp ? 'seats-menu-list' : 'seats-menu-list seats-model-list'} role="menu"
+      aria-label={t('{seat}：选择模型', { seat: slotName(menu.slot) })} onKeyDown={menuKeys}>
     {menuOp?.follow && <button type="button" role="menuitemradio" className="seats-menu-item" data-op-follow
       aria-checked={menuValue === 'follow'} onClick={() => { updateOperation(menuOp, 'follow'); closeMenu(); }}>{operationLabel(menuOp, 'follow', label)}</button>}
     {menuOp ? modelMenuItems(catalog, selected, model => pick(menu.slot, model), menuOp)
       : <TeamModelOptions state={state} selected={selected} pick={model => pick(menu.slot, model)} />}
-    {custom ? <div className="seats-menu-custom">
+    {!custom && <button type="button" role="menuitem" className="seats-menu-item" data-custom onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
+    </div>
+    {custom && <div className="seats-menu-custom">
       <input type="text" data-custom-input maxLength={160} autoFocus spellCheck={false} aria-label={t('模型名')} placeholder={t('模型名，例如 gpt-6.3-sol')} value={custom.text}
         onChange={event => setCustom({ text: event.target.value, error: '' })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submitCustom(menu.slot); } }} />
       <button type="button" className="seats-btn is-small" data-custom-apply onClick={() => submitCustom(menu.slot)}>{t('使用')}</button>
       {custom.error && <small className="seats-menu-error" role="alert" data-custom-error>{custom.error}</small>}
-    </div> : <button type="button" role="menuitem" className="seats-menu-item" data-custom onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
-    </div>
+    </div>}
     {role && <PickerSettings state={state} role={role} />}
   </div>}
   {menu?.kind === 'effort' && <div ref={menuBox} className="seats-menu is-effort" role="menu"
@@ -1065,7 +1111,8 @@ export function SeatsDialog(props: SeatsDialogProps) {
   const control = menuOp && menu && menu.kind !== 'role' ? { id: menuOp.id, kind: menu.kind } : undefined;
   return createPortal(
     <div className="seats-overlay" onMouseDown={event => { if (event.target === event.currentTarget && !menu && !nowOpen && !paletteOpen && !editor && !review.busy) close(); }}>
-      <div ref={dialog} className="seats-dialog" role="dialog" aria-modal="true" aria-labelledby="seats-title" tabIndex={-1} onKeyDown={keys}>
+      <div ref={dialog} className="seats-dialog" role="dialog" aria-modal="true" aria-labelledby="seats-title" tabIndex={-1} onKeyDown={keys}
+        onClickCapture={state.source.notice?.kind === 'operations-saved' ? state.source.clearOperationNotice : undefined}>
         <div className="seats-dialog-content" inert={!!editor}>
         <DialogHeader state={state} />
         <DialogToolbar state={state} />
