@@ -209,27 +209,51 @@
 
 /* The section lines up with the usage heading and shares the pane's row hover. */
 .activity-routing-key {
-  flex: none; display: grid; gap: 4px; min-width: 0; min-height: 32px;
-  padding: 4px 8px; margin: -4px -8px 0; border: 0; border-radius: 8px;
+  flex: none; display: grid; gap: 8px; min-width: 0; min-height: 32px;
+  padding: 4px 8px; margin: 4px -8px 0; border: 0; border-radius: 8px;
   background: none; color: var(--flow-ink); font: inherit; text-align: start; cursor: pointer;
 }
 .activity-routing-key:is(:hover, :active) { background: var(--bg-hover); }
 .activity-routing-key:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .activity-routing-title { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.activity-routing-rows { display: grid; min-width: 0; }
-.activity-routing-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, max-content) auto; column-gap: 4px; font-size: 14px; line-height: 16px; color: var(--flow-muted); }
-.activity-routing-row > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.activity-routing-row[data-lead-pending] { grid-column: 1 / -1; }
-.activity-routing-restart { grid-column: 1 / -1; color: var(--warning); overflow-wrap: anywhere; }
-.activity-routing-setting { display: flex; align-items: center; white-space: nowrap; }
+.activity-routing-title [data-routing-pending] { margin-inline-start: auto; color: var(--warning); font-size: 14px; }
+.activity-routing-rows {
+  --routing-label-width: 88px; --routing-row-height: 28px;
+  display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0;
+}
+.activity-routing-rows:lang(en) { --routing-label-width: 128px; }
+.activity-routing-rows[data-dense] { --routing-row-height: 24px; }
+.activity-routing-row {
+  display: grid; grid-template-columns: var(--routing-label-width) minmax(0, 1fr) max-content;
+  grid-template-rows: minmax(var(--routing-row-height), auto); column-gap: 8px; align-items: center;
+  font-size: 14px; line-height: 20px; color: var(--flow-muted);
+}
+.activity-routing-role { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-routing-model { overflow-wrap: anywhere; }
+.activity-routing-restart { grid-column: 1 / -1; color: var(--warning); line-height: 16px; overflow-wrap: anywhere; }
+.activity-routing-setting { text-align: end; white-space: nowrap; }
 .activity-routing-fast-icon { display: none; }
 .activity-routing-operations {
   display: flex; justify-content: space-between; gap: 4px; min-width: 0;
-  font-size: 14px; line-height: 16px; color: var(--flow-muted);
+  font-size: 14px; line-height: 20px; color: var(--flow-muted);
 }
 .activity-routing-operation-names { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-routing-operation-pending { flex: none; color: var(--warning); }
-.activity-routing-key strong { min-width: 0; color: var(--flow-ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-routing-key strong { color: var(--flow-ink); font-weight: 500; }
+
+/* A half-width row gives the model a full line. The lead's restart note keeps the full width. */
+.activity-routing-rows[data-compact] { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 8px; }
+.activity-routing-rows[data-compact] .activity-routing-row[data-lead-pending] { grid-column: 1 / -1; }
+.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) {
+  grid-template-columns: minmax(0, 1fr) max-content; grid-template-rows: auto auto;
+  min-height: 36px; align-content: center; column-gap: 4px; line-height: 16px;
+}
+.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-model { grid-area: 2 / 1 / auto / -1; }
+.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-setting { grid-area: 1 / 2; }
+.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-fast { display: none; }
+.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-fast-icon {
+  display: inline-block; margin-inline-start: 4px; vertical-align: middle;
+}
 
 /* Keep quota values and warnings visible. Secondary usage details give up their lines before the routing rows change columns. */
 @container activity (max-height: 820px) {
@@ -238,8 +262,3 @@
 .activity-call-rows .activity-task-fold button { grid-column: 2 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 4px; border: 0; background: none; color: var(--flow-muted); font: inherit; cursor: pointer; }
 .activity-task-fold button { min-height: 32px; }
 .activity-task-fold button[aria-expanded="true"] svg { transform: rotate(180deg); }
-
-.activity-routing-title [data-routing-pending] { margin-inline-start: auto; color: var(--warning); font-size: 14px; }
-.activity-routing-rows[data-compact] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 8px; }
-.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-fast { display: none; }
-.activity-routing-rows[data-compact] .activity-routing-row:not([data-lead-pending]) .activity-routing-fast-icon { display: inline-block; }

@@ -1267,6 +1267,8 @@ test('the activity key is one button with a row for each role and opens the scop
   assert.match(textOf(heading), /Model routing/i);
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
   assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row').length, 10);
+  const developer = byAttr(tree, 'data-seat', 'developer');
+  assert.deepEqual(developer.props.children.slice(0, 3).map(textOf), ['Developer', 'GPT-6.2-Sol', 'high · Fast']);
   const summary = byAttr(tree, 'className', 'activity-routing-operations');
   assert.match(textOf(summary), /Lookup · Review.*Takes effect on next launch/);
   assert.match(summary.props.title, /GPT-6\.2-Sol · high[\s\S]*GPT-6-Mini/i);
@@ -1281,15 +1283,25 @@ test('the activity key is one button with a row for each role and opens the scop
   assert.match(textOf(byAttr(h.render(), 'className', 'activity-routing-operations')), /Operation models · default/i);
 });
 
-test('routing rows use one column when it fits and return to it when usage shrinks', async t => {
-  let resize, compact = false, singleHeight = 566;
+test('routing rows reduce height before using two columns and expand as usage shrinks', async t => {
+  let resize, singleHeight = 668;
+  const attributes = new Set();
   const observed = new Set(), usage = {}, button = {};
-  const pane = { children: [usage, button], clientHeight: 708,
-    get scrollHeight() { return Math.max(this.clientHeight, singleHeight - (compact ? 80 : 0)); } };
+  const pane = {
+    children: [usage, button], clientHeight: 708,
+    get scrollHeight() {
+      const saved = attributes.has('data-compact') ? 100 : attributes.has('data-dense') ? 40 : 0;
+      return Math.max(this.clientHeight, singleHeight - saved);
+    },
+  };
   const rows = {
     closest: selector => selector === '.activity-pane' ? pane : null,
-    removeAttribute: () => { compact = false; },
-    toggleAttribute: (_, value) => { compact = value; },
+    removeAttribute: name => { attributes.delete(name); },
+    toggleAttribute: (name, value) => {
+      if (value) attributes.add(name);
+      else attributes.delete(name);
+      return value;
+    },
   };
   const observers = { ResizeObserver: globalThis.ResizeObserver, MutationObserver: globalThis.MutationObserver };
   t.after(() => Object.assign(globalThis, observers));
@@ -1305,15 +1317,21 @@ test('routing rows use one column when it fits and return to it when usage shrin
   await settle();
   h.render(tree => { byAttr(tree, 'className', 'activity-routing-rows').props.ref.current = rows; });
   assert.deepEqual([...observed], [pane, usage, button]);
-  assert.equal(compact, false);
-  singleHeight = 740;
+  assert.deepEqual([...attributes], []);
+  singleHeight = 748;
   resize();
-  assert.equal(compact, true);
+  assert.deepEqual([...attributes], ['data-dense'], '24px rows still fit in one column');
+  singleHeight = 749;
   resize();
-  assert.equal(compact, true, 'a compact layout that fits must not cause the overflowing column to return');
+  assert.deepEqual([...attributes], ['data-dense', 'data-compact']);
+  resize();
+  assert.deepEqual([...attributes], ['data-dense', 'data-compact'], 'a two-column layout that fits must stay put');
+  singleHeight = 748;
+  resize();
+  assert.deepEqual([...attributes], ['data-dense']);
   singleHeight = 708;
   resize();
-  assert.equal(compact, false);
+  assert.deepEqual([...attributes], []);
 });
 
 test('role drafts follow their sources and reviewer conflicts use enabled author roles', () => {

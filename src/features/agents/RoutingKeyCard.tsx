@@ -51,9 +51,12 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
     const rows = rowsRef.current, pane = rows?.closest('.activity-pane');
     if (!rows || !pane) return;
     const fit = () => {
-      // Measure the single column first, including any measured usage rows above the card.
+      // Usage and wrapped labels take their measured space before the routing list changes columns.
       rows.removeAttribute('data-compact');
-      rows.toggleAttribute('data-compact', pane.scrollHeight > pane.clientHeight);
+      rows.removeAttribute('data-dense');
+      if (rows.toggleAttribute('data-dense', pane.scrollHeight > pane.clientHeight)) {
+        rows.toggleAttribute('data-compact', pane.scrollHeight > pane.clientHeight);
+      }
     };
     const resize = new ResizeObserver(fit);
     const observe = () => {
@@ -81,10 +84,12 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
     <span className="activity-card-title activity-routing-title">{title}{badge && <span data-routing-pending>{badge}</span>}<CaretRight size={14} aria-hidden="true" /></span>
     <span ref={rowsRef} className="activity-routing-rows">{roles.map(role => {
       const seat = displayedSeat(info, role.id), leadRestart = role.id === info.lead ? restart : null;
+      const name = titleOf(role), effort = seat?.effort ?? '—';
       return <span key={role.id} className="activity-routing-row" data-seat={role.id} data-lead-pending={leadRestart ? true : undefined}>
-        <span title={titleOf(role)}>{titleOf(role)}</span><strong title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>
+        <span className="activity-routing-role" title={name}>{name}</span>
+        <strong className="activity-routing-model" title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>
         <span className="activity-routing-setting" title={seat?.fast ? `${seat.effort} · ${fast}` : seat?.effort}>
-          {seat?.effort ?? '—'}{seat?.fast && <><span className="activity-routing-fast"> · {fast}</span>
+          {effort}{seat?.fast && <><span className="activity-routing-fast"> · {fast}</span>
             <Lightning className="activity-routing-fast-icon" size={14} aria-hidden="true" /></>}
         </span>
         {leadRestart && <span className="activity-routing-restart">{leadRestart}</span>}
