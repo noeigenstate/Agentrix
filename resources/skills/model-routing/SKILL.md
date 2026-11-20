@@ -1,11 +1,11 @@
 ---
 name: model-routing
-description: Use before any task that changes the project; the lead session is the orchestrator and decides by its own judgment who does the work, itself or any seats of the project's team (by default orchestrator, product, architect, designer, developer, reviewer, QA, researcher, DevOps and security, plus any library or project roles the owner adds), each with fixed model settings; the seats are a toolbox and no stage or seat is mandatory.
+description: Use before any task while Agentrix runs the session in conductor mode; the lead session is the project's conductor and gets every task done fast and well by planning it and calling the roles of the project's team (by default product, architect, designer, developer, reviewer, QA, researcher, DevOps and security, plus any library or project roles the owner adds), each with fixed model settings, instead of doing the tasks itself; it answers the owner and reports every role's progress while they work.
 trigger: always
 when: 每个任务开始前
 requires: any-agent
 title: 模型路由
-summary: 总指挥按席位把任务分给产品、架构、设计、开发、审查、测试、研究、运维和安全角色，能并行的尽量并行。审查和测试由全新实例独立完成。
+summary: 指挥家模式下，总指挥只规划和调度，把任务交给产品、架构、设计、开发、审查、测试、研究、运维和安全角色完成，执行期间随时回答你并汇报各角色进度。
 seats: orchestrator, product, architect, designer, developer, reviewer, qa, researcher, devops, security
 library: frontend, backend, desktop, database, ai, docs, performance, a11y
 authors: developer, frontend, backend, desktop, database, ai, performance
@@ -13,29 +13,29 @@ fresh: reviewer, qa, a11y
 duties: orchestrator=总指挥|任务调度|任务调度、依赖管理、状态追踪、冲突协调|任务图、执行状态; product=产品|需求与规划|需求分析、功能定义、优先级|PRD、验收标准; architect=架构师|系统架构|架构设计、技术选型、模块拆分|设计文档、接口规范; designer=设计师|交互与视觉|用户体验、交互、视觉|界面规范、页面原型; developer=开发|编码与实现|编码、功能、缺陷修复|提交、模块; reviewer=审查|独立审查|代码与质量审查|审查意见、风险报告; qa=测试|测试验证|测试用例、自动化、回归、截图验收|测试报告; researcher=研究|技术研究|调研、方案比较、检索|研究报告; devops=运维|构建与交付|构建、环境、部署、回滚|构建产物、部署报告; security=安全|安全与权限|权限、依赖漏洞、安全审计|安全报告; frontend=前端|前端开发|界面组件、状态、样式与交互|界面改动、截图; backend=后端|后端开发|接口、服务、数据流与稳定性|接口改动、测试; desktop=桌面端|桌面开发|窗口、系统集成、打包与更新|代码改动、打包验证; database=数据库|数据与存储|表结构、迁移、查询与索引|迁移脚本、查询改动; ai=人工智能|模型接入|提示词、模型接入、评测与成本|提示词改动、评测报告; docs=文档|文档编写|说明、变更记录、使用指南|文档改动; performance=性能|性能优化|性能剖析、瓶颈、启动与内存|剖析报告、优化改动; a11y=无障碍|无障碍验证|键盘、对比度、读屏与焦点|无障碍报告
 ---
 
-# Orchestrating the team
+# Conducting the team
 
 ## When this applies
 
-Read this skill before any task that changes the project. The lead session is the orchestrator, and the orchestration is
-its own judgment: who does the work, in what order, and how it is checked. The team's seats are a toolbox. No seat, stage
-or meeting is mandatory, and nothing here is a process to walk through. A plain question that changes nothing needs no
-orchestration.
+Agentrix gives this skill only to a session in conductor mode; in native mode the session is the plain CLI conversation
+and never sees it. In conductor mode, forget how you used to work: you are this project's conductor. A team of roles is
+at your call, and your aim is to get every task done fast and well through them. Which roles, how many, in what order
+and how the result is checked is your judgment alone; nothing here is a process to walk through.
 This skill is the single home of routing. To add project-specific routing rules, extend it with a skill named
 model-routing-<id>; follow this skill first, and where the two conflict this skill wins.
 
 ## What to do
 
-1. Read the task and decide how to staff it: do it yourself, or call the seats that will make the result better or faster. Pick what the task needs, for example an Architect when the split across modules is unclear, a Designer when the look or interaction is open, a Developer for the build, a Reviewer or QA when an independent check is worth its cost.
-2. Tell the owner in one or two lines who you chose and why, then start. The owner can change it at any time.
-3. Launch the seats you chose with the settings in the team table, in parallel where their work is independent.
-4. Check the result yourself to the depth the risk calls for, and report what was done, by whom, and what was verified.
+1. For a task, plan it and pick the roles that will do it fastest and best, for example an Architect when the split across modules is unclear, a Designer when the look or interaction is open, a Developer for the build, a Reviewer or QA when an independent check is worth its cost.
+2. Tell the owner in one or two lines who you picked and why, then launch them with the settings in the team table, in parallel where their work is independent.
+3. While the roles work, stay with the owner: answer questions, keep talking, and report each role's progress when asked or when it changes.
+4. When the roles finish, check their results, send back what falls short, and report what was done, by whom, and what was verified.
 
 ### The team
 
-The lead session is the **orchestrator**: it reads the task, decides the staffing, briefs the workers it calls, integrates
-their work and holds the permissions (commits, pushes, releases, secrets). It may do any part of the work itself. Each
-seat is a role with a fixed model, effort and fast setting. Agentrix writes the table from the project's routing (the
+You, the lead session, are the **conductor**: you plan the task, pick the roles, brief them, follow their progress,
+integrate their work and hold the permissions (commits, pushes, releases, secrets). You do not carry out the tasks
+yourself; you answer the owner's questions yourself. Each role is a seat with a fixed model, effort and fast setting. Agentrix writes the table from the project's routing (the
 roles on its team and their models) and the installed agents when it delivers this skill; the table as shipped shows
 the defaults with both agents installed and a Claude lead. The project's `.agentrix/routing.json` holds the current
 settings; a table delivered when the session started can be older than the file, so read the file when they may differ.
@@ -58,7 +58,7 @@ settings; a table delivered when the session started can be older than the file,
 - "Agent call" is the lead's own subagent; "helper" is the dispatch helper (see Launching workers), started detached
   and then collected with `wait`. A Codex lead launches Claude seats through `helper claude`.
 - A seat has model settings only when it is in the team table. Work that would suit a role outside it goes to whichever
-  seat the orchestrator sees fit, or the orchestrator does it.
+  seat you see fit.
 - The Developer seat may split into specialty workers (frontend, backend, desktop, database, ai), each in its own
   worktree. A specialty with its own row in the team table launches as that seat, as its row says; any other runs on
   the developer seat's model with `--seat developer/<specialty>`.
@@ -108,7 +108,7 @@ Seats decide. An explicit instruction from the owner in the conversation wins fo
 
 ### Run mode and billing
 
-Dispatching a worker and paying for it are two questions. How a worker is dispatched (the helper, the roundtable, the
+Dispatching a worker and paying for it are two questions. How a worker is dispatched (the helper, the
 `--allow` scope, its entry in the left sidebar) never decides how it is billed, and billing never decides how it is
 dispatched. Billing follows the run mode only: native mode (the Claude Agent SDK with the API key saved in Agentrix, or
 the Codex app-server) or terminal mode (Claude Code in a terminal, on the subscription).
@@ -175,14 +175,12 @@ helper can be had, start a Claude worker directly with Claude's non-interactive 
 permission mode and the brief on standard input.
 
 ```
-node "<helper>" codex --detach --seat <id>[/<specialty>] --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
-node "<helper>" claude --detach --seat <id>[/<specialty>] --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md> [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>] [--meeting <id>] [--skip-meeting <reason>]
+node "<helper>" codex --detach --seat <id>[/<specialty>] --role <role> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <dir> --brief <brief.md> --out <answer.md> [--image <png> …] [--read-only] [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>]
+node "<helper>" claude --detach --seat <id>[/<specialty>] --role <role> --title "<one line>" --model <model> --effort <effort> --permission <plan|acceptEdits> --cwd <dir> --brief <brief.md> --out <answer.md> [--allow <glob> …] [--ledger <ledger.md>] [--resume <session>]
 node "<helper>" wait <run id> [<run id> …] --cwd <dir> [--timeout <seconds>]
-node "<helper>" minutes --cwd <dir> --meeting <id> --out <minutes.md> [--issues <issues.json>] [--language zh|en]
-node "<helper>" consolidate --cwd <dir> --meeting <id> --summary <summary.md>
 ```
 
-Detached starts return after the start receipt (up to about 60 seconds); if the session is still unknown, the receipt says it follows in `wait`. Start parallel workers with several detached calls, then one `node "<helper>" wait <id-a> <id-b> --cwd <dir>`. `wait` defaults to 540 seconds and refuses timeouts above 570 seconds. Exit 75 means runs remain active: read their last-activity lines and call `wait` again. Exit 0 means all named runs ended; inspect each end line for its worker exit code. `stop <id>` also works for detached runs. Run `wait` with the Bash tool timeout set to `600000` ms, or pass a `--timeout` below the shell's command limit (Claude Bash otherwise stops at 120 seconds). Keep calling `wait` in the same turn; do not end the turn while detached runs remain active. For `wait`, `--cwd` is the worker's folder or any folder in the same Git repository; standalone runs require the worker's folder. `stop` requires Git. Main's signed dispatch events are authoritative; local receipts only report progress to the lead.
+Detached starts return after the start receipt (up to about 60 seconds); if the session is still unknown, the receipt says it follows in `wait`. Start parallel workers with several detached calls, then one `node "<helper>" wait <id-a> <id-b> --cwd <dir>`. `wait` defaults to 540 seconds and refuses timeouts above 570 seconds. Exit 75 means runs remain active: read their last-activity lines and call `wait` again. Exit 0 means all named runs ended; inspect each end line for its worker exit code. `stop <id>` also works for detached runs. Run `wait` with the Bash tool timeout set to `600000` ms, or pass a `--timeout` below the shell's command limit (Claude Bash otherwise stops at 120 seconds). Do not sit in `wait` while the owner may want you: give it a short `--timeout`, answer the owner, and call `wait` again to collect results and report progress. For `wait`, `--cwd` is the worker's folder or any folder in the same Git repository; standalone runs require the worker's folder. `stop` requires Git. Main's signed dispatch events are authoritative; local receipts only report progress to the lead.
 
 - `--seat` names the worker's seat from the team table (with `/<specialty>` for a Developer specialty that has no seat
   of its own); `--role` says
@@ -206,21 +204,17 @@ Detached starts return after the start receipt (up to about 60 seconds); if the 
   `## Findings for the ledger` section is appended to it, so the next worker knows what earlier ones learned.
 - `--resume <session>` (the start line's `session`) for a follow-up on the same work, so the worker keeps its context.
 - In a git repository the helper keeps a team folder in the repository's git directory, shared by every worktree and never
-  committed: the project memory (workers' findings and the orchestrator's round summaries, read first by every worker), a
-  journal of the roundtables, and a board of the workers running now. It refuses a build whose `--allow` overlaps a
-  running worker's, refuses a build without a confirmed roundtable for the same `--allow` (`--skip-meeting <reason>` is
-  the recorded exception), and refuses a new round's roundtable while the last round is not consolidated. Outside a git
-  repository none of this applies.
+  committed: the project memory (workers' findings, read first by every worker) and a board of the workers running now.
 - Every worker starts with the project memory, the list of what the others are working on now and the repository's
   state, put before its brief by the helper.
 
-### Tools the orchestrator may use
+### Tools you may use
 
 None of these is required. Use one when it earns its cost.
 
 **A written plan.** For work across several modules, a plan with one task per worker, an exact file scope each and the
-shared contract (types, payloads, names) lets workers build in parallel without colliding. The orchestrator writes it,
-or asks the Architect.
+shared contract (types, payloads, names) lets workers build in parallel without colliding. You write it, or ask the
+Architect.
 
 **A ledger.** `--ledger <file>` carries the owner's words, decisions and known pitfalls to every worker of a task.
 
@@ -234,76 +228,26 @@ git worktree add <scratch>/wt-frontend -b work/<topic>-frontend
 **A brief.** A worker knows only its brief: the goal, what was wrong before, the files it may change, the behaviour it
 must keep, the project's code standard, and what to report. A Codex run has no approvals, so its scope comes from the
 prompt alone. A non-interactive Claude Code worker (the helper's terminal path) under `--permission acceptEdits` can
-edit files but every shell command is refused, so the orchestrator runs its tests.
-
-**A roundtable.** When several workers share an interface, a roundtable lets the orchestrator check that each brief was
-read as meant before anyone builds. `--meeting` needs a git repository and a new id per round (`<topic>-r1`,
-`[\w.-]{1,64}`).
-
-1. **Understanding.** One run per worker, in parallel, each in its own worktree, with the seat, role and `--allow` it
-   will have at work plus `--meeting <id>` (never `--read-only`: the same session builds later; the helper checks that
-   no file changed). The brief is the whole plan and that worker's task; the helper adds the request to end with a
-   `## Roundtable understanding` block (Goal, Files, Provides, Uses, Done when, Questions and risks). Under Questions and
-   risks, list only points where the brief is ambiguous or contradicts itself, and facts in the code that make it
-   impossible as written; write `none` if there are none. For a Claude worker use `--permission plan`:
-
-   ```
-   node "<helper>" codex --detach --seat <id> --role <role> --meeting <id> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <worktree> --brief <plan.md> --out <meeting.md> --allow '<module glob>'
-   ```
-
-2. **The planner's check.** Check each restatement against what the plan meant. Correct misreadings and answer real ambiguities,
-   contradictions or code facts that block the brief as written; check that shared interfaces match and file scopes are
-   disjoint. The planner decides design questions outside this check. Write the clarifications, corrections and answers
-   to `issues.json`, and build the minutes (two Markdown tables, plus the same as an HTML page beside it; a worker's
-   unresolved confirmation questions are appended to its questions cell, marked as open in the minutes language):
-
-   ```
-   [{ "issue": "<ambiguity, misreading or blocker>", "raisedBy": "<worker>", "answer": "<your answer>", "result": "<settled | changed the plan | open>" }]
-   node "<helper>" minutes --cwd <repo> --meeting <id> --out <minutes.md> --issues <issues.json> [--language zh|en]
-   ```
-
-3. **Confirmation.** Resume each worker's session with `minutes.md` as the brief. Check that the minutes record its task
-   as restated, with the planner's corrections, and that its shared interfaces match the others'. The helper requests
-   `## Roundtable confirmation` and `Status: confirmed`; use `Status: open` only for a misreading that is still
-   uncorrected, followed by bullets naming it. Correct that misreading and repeat from the minutes. A build refused for
-   lack of a confirmed roundtable gets this same flow back from the helper:
-   hold the roundtable with `--meeting <new id>` and the build's `--allow`, then resume that session for the build.
-
-   ```
-   node "<helper>" codex --detach --seat <id> --role <role> --meeting <id> --resume <session> --title "<one line>" --model <model> --effort <effort> [--fast] --cwd <worktree> --brief <minutes.md> --out <confirm.md> --allow '<same globs>'
-   ```
-
-4. **The owner.** Run `minutes` again after the confirmations and show both tables in your reply and the path of the HTML
-   page, then start the build; the owner can change the plan at any time.
-
-The build then resumes each worker's meeting session with the same `--allow` globs. A subagent started through an Agent
-call has no helper session: give it the whole plan, ask it to change nothing and restate its task, and show what it
-restated beside the minutes. A read-only seat (Product, Architect, Designer, Researcher, any reviewer seat, QA, Security, Accessibility) may take
-part with `--meeting` too; the gates apply only to execution runs.
+edit files but every shell command is refused, so another worker runs its tests.
 
 **An independent check.** A reviewer, QA, Security or Accessibility worker that neither planned nor wrote the work,
-given the diff range and the requirement, not the orchestrator's conclusions. Each confirmed finding goes back to the
-worker that owns the file, or the orchestrator fixes it.
-
-**A round summary.** `node "<helper>" consolidate --cwd <repo> --meeting <id> --summary <summary.md>` appends a summary
-(headings `### Results` and `### Architecture changes`) to the shared project memory, which every later helper worker
-reads first, and closes the meeting.
-
-**Without a roundtable.** The helper refuses a build with `--allow` that has no confirmed roundtable; pass
-`--skip-meeting <reason>` and it starts.
+given the diff range and the requirement, not your conclusions. Each confirmed finding goes back to the worker that owns
+the file, or to a new worker.
 
 ## Rules
 
-- The orchestrator decides the staffing, the order and the checks of every task by its own judgment; no seat, stage or meeting is required.
-- The orchestrator holds the permissions: commits, pushes, releases and secrets follow the owner's authorization, and a release happens only when requested.
-- A seat's model, effort and fast setting come from the team table; an explicit instruction from the owner in the conversation wins for that task.
+- In conductor mode you plan and call roles; you do not carry out the tasks yourself. You answer the owner's questions yourself.
+- Which roles, how many, in what order and how the result is checked is your judgment; no role, stage or meeting is required.
+- While roles work, stay available: answer the owner, and report each role's progress when asked or when it changes.
+- You hold the permissions: commits, pushes, releases and secrets follow the owner's authorization, and a release happens only when requested.
+- A role's model, effort and fast setting come from the team table; an explicit instruction from the owner in the conversation wins for that task.
 - Every helper worker call passes `--seat`; every Agent call's description starts with `[<seat>]`.
-- Start command-line workers only through the dispatch helper with `--detach`, then collect results with `wait`; read the start line and act on `failed to start` or `routing MISMATCH`.
+- Start command-line workers only through the dispatch helper with `--detach`; read the start line and act on `failed to start` or `routing MISMATCH`.
 - Give a worker that changes files `--allow` for its scope, and deal with any `OUT OF SCOPE` result before accepting the work.
 - A worker does not start another worker.
 - Codex always runs in native mode. Claude workers follow the lead's run mode and never cross: native-mode lead, native subagents, API billing; terminal-mode lead, terminal subagents, subscription billing.
 
 ## Done when
 
-- The task is done and checked to the depth its risk calls for.
-- The owner has been told who did the work and why, the files changed, what was verified and what was not, and any remaining limits.
+- The roles have done the task and it is checked to the depth its risk calls for.
+- The owner has been told which roles did the work and why, the files changed, what was verified and what was not, and any remaining limits.

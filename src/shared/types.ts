@@ -247,7 +247,7 @@ export type SeatModel = {
 };
 // A saved seat main ran differently: the slot, why, and what it ran instead.
 export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsupported' | 'fast-unsupported'; substitute: string };
-export type RoutingConfig = { roles: Record<SeatId, RoleConfig> };
+export type RoutingConfig = { roles: Record<SeatId, RoleConfig>; conductor?: boolean };
 export type RoutingAction = 'apply' | 'keep' | 'overwrite';
 export type RoleRuleCode = 'invalid-role' | 'role-text' | 'role-limit' | 'lead-locked';
 export type RoutingFlag = {
@@ -281,6 +281,7 @@ export type RoutingSource = {
 };
 export type SeatsInfo = {
   skill: string;
+  conductor: boolean;
   seats: SeatId[];
   roles: TeamRole[];
   lead: SeatId;

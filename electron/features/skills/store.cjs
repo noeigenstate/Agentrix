@@ -503,7 +503,7 @@ class SkillsStore {
     const applied = snapshot && binding.appliedRouting;
     const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: restartLead || runningLead } : null;
     return { skill: entry.id, seats: team.seats, roles, lead, authors: team.authors, fresh: team.fresh,
-      ...leadConfig, defaults, template, config, routing: source,
+      ...leadConfig, defaults, template, config, routing: source, conductor: !!(config ?? template).conductor,
       effective, current, currentRoles: current ? applied?.roles ?? roles : null,
       catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
@@ -705,8 +705,9 @@ class SkillsStore {
     const agentSeats = frozen && Object.hasOwn(frozen, 'agentSeats') ? frozen.agentSeats : launchSeatMap(seatsMap, seats?.catalog);
     const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote) } : {});
     const names = this.builtinNames();
-    // Routing is not delivered as an instruction: the lead works its own way and the seats stay an app-side toolbox.
-    const entries = [...this.entries.values()].filter(entry => entry.id !== ROUTING_ID && (entry.scope !== 'project' || !remote && entry.projectId === project.id)
+    // Native mode delivers no routing: the lead works as the plain CLI conversation.
+    const conductor = !!seats?.conductor;
+    const entries = [...this.entries.values()].filter(entry => (conductor || entry.id !== ROUTING_ID) && (entry.scope !== 'project' || !remote && entry.projectId === project.id)
       && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
     const remotePath = entry => `{AGENTRIX_SKILLS}/${entry.scope === 'builtin' ? 'builtin' : 'global'}/${entry.folder}/SKILL.md`;
     const infos = entries.map(entry => this.info(entry));
@@ -722,7 +723,7 @@ class SkillsStore {
       `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)),
-      manifest, routingNote, seatsMap, agentSeats, rendered, roles };
+      manifest, routingNote, seatsMap, agentSeats, rendered, roles, conductor };
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {

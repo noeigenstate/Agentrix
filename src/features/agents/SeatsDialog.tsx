@@ -184,7 +184,7 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
   const clean = cleanDraft(info, config);
   const saved = cleanDraft(info, original);
   const roleIds = new Set([...Object.keys(clean.roles), ...Object.keys(saved.roles)]);
-  const count = [...roleIds].filter(id => !sameRoleConfig(clean.roles[id], saved.roles[id])).length;
+  const count = [...roleIds].filter(id => !sameRoleConfig(clean.roles[id], saved.roles[id])).length + Number(!!clean.conductor !== !!saved.conductor);
   const dirty = !!current && count > 0;
   const teamError = checkTeamRules(roles);
   const refusal = firstRefusal(live, catalog);
@@ -227,7 +227,7 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
   return {
     baseline, working, roles, config, enabled, dirty, count, refusal, teamError, scope, saving, createFile, mayOverwrite, stale, reload,
     hasDrafts: dirty || !!drafts[scope === 'project' ? 'template' : 'project'],
-    canReset: Object.keys(clean.roles).length > 0,
+    canReset: Object.keys(clean.roles).length > 0 || !!clean.conductor,
     discardShown: discarding, setDiscarding, setDraft, setConfig, changeScope: setScope, reset, save,
   };
 }
@@ -669,6 +669,10 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
           aria-label={`${specialtyCount} · ${specialtyNames}`} data-role-detail>{specialtyCount}</span>}
         {custom && <span className="seats-tag">{t('项目角色')}</span>}
         {lead && <span className="seats-tag seats-lead-lock" title={t('总指挥必须保留。')}><LockSimple size={14} aria-hidden="true" /></span>}
+        {lead && <button type="button" className={`seats-btn seats-conductor${state.draft.config.conductor ? ' is-on' : ''}`} data-conductor
+          aria-pressed={!!state.draft.config.conductor} disabled={state.draft.saving}
+          onClick={() => state.draft.setConfig({ ...state.draft.config, conductor: !state.draft.config.conductor })}>
+          {t(state.draft.config.conductor ? '指挥家模式：开' : '指挥家模式：关')}</button>}
         {changed && <span className="seats-chg" title={t('已改')}>●<span className="seats-sr-only">{t('已改')}</span></span>}
       </div>
       {lead
@@ -697,7 +701,8 @@ function TeamChart({ state }: DialogPart) {
     </div>
     {lead && <><div className="seats-chart-link" aria-hidden="true" />
       <TeamCard state={state} role={lead} lead changed={changed.includes(lead.id)} /><div className="seats-chart-bus" aria-hidden="true" /></>}
-    <div className="seats-team-grid">
+    {!state.draft.config.conductor && <p className="seats-mode-note" role="status">{t('指挥家模式已关闭：总指挥自己完成所有任务，其余角色不可用。')}</p>}
+    <div className={`seats-team-grid${state.draft.config.conductor ? '' : ' is-unavailable'}`} aria-disabled={!state.draft.config.conductor || undefined}>
       {team.map(role => <TeamCard key={role.id} state={state} role={role} changed={changed.includes(role.id)} />)}
       {enabled.length < MAX_ENABLED_ROLES && <button type="button" className="seats-btn seats-add-role" onClick={() => state.switchTab('library')}>
         <Plus size={16} aria-hidden="true" />{t('添加角色')}<span>{t('{count}/{limit}，从角色库选', { count: enabled.length, limit: MAX_ENABLED_ROLES })}</span>

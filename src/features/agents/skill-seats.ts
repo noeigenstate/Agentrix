@@ -144,7 +144,7 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
     const value = { ...rest, ...(seat && !sameSeat(seat, inherited) ? seat : {}) };
     return Object.keys(value).length ? [[role.id, value] as const] : [];
   });
-  return { roles: Object.fromEntries(entries) };
+  return { roles: Object.fromEntries(entries), ...(config.conductor && { conductor: true }) };
 }
 
 // A seat's model moved into another seat keeps its effort and fast only where the new model allows them (Claude fast stays off unless the seat already had it).

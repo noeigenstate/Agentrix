@@ -57,14 +57,15 @@ function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
 
 function cleanConfig(raw, entry, catalog, stored = false, file = false) {
   if (!object(raw) || !object(raw.roles)) fail('bad-format');
-  if (unknownKey(raw, ['roles'])) fail('unknown-key');
+  if (unknownKey(raw, ['roles', 'conductor'])) fail('unknown-key');
+  if (raw.conductor !== undefined && typeof raw.conductor !== 'boolean') fail('bad-format');
   const ignored = [];
   const roles = Object.fromEntries(Object.entries(raw.roles).flatMap(([id, value]) => {
     if (file && unsafeFileModel(value?.model)) fail('bad-format', id);
     const fields = roleConfig(id, value, entry, catalog, stored, ignored, file);
     return fields ? [[id, fields]] : [];
   }));
-  return { config: { roles }, ignored: ignored.slice(0, 16) };
+  return { config: { roles, ...(raw.conductor && { conductor: true }) }, ignored: ignored.slice(0, 16) };
 }
 
 function baseRows(entry) {
@@ -153,7 +154,7 @@ function compactConfig(entry, config) {
     if (override.model !== undefined && !sameSeat(seat, inherited)) Object.assign(fields, seatFrom(override));
     return Object.keys(fields).length ? [[row.id, fields]] : [];
   }));
-  return { roles };
+  return { roles, ...(config.conductor && { conductor: true }) };
 }
 
 module.exports = { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam };

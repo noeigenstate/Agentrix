@@ -260,7 +260,7 @@ test('shipped descriptions include trigger timing and system precedence without 
   const fields = name => builtinMetadata(fs.readFileSync(path.join(resources, name, 'SKILL.md'), 'utf8'), name);
   const routing = fields('model-routing'), standard = fields('code-standard'), ui = fields('ui-standard');
   assert.equal(routing.trigger, 'always');
-  assert.match(routing.description, /^Use before any task that changes the project; the lead session is the orchestrator and decides by its own judgment/);
+  assert.match(routing.description, /^Use before any task while Agentrix runs the session in conductor mode; the lead session is the project.s conductor/);
   assert.doesNotMatch(routing.description, /unless the project has its own|yield/i);
   assert.equal(routing.when, '\u6bcf\u4e2a\u4efb\u52a1\u5f00\u59cb\u524d');
   assert.equal(standard.trigger, 'always');

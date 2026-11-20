@@ -72,6 +72,9 @@
 .seats-chart-bus { height: 20px; }
 .seats-chart-bus::before { height: 8px; }
 .seats-chart-bus::after { content: ''; position: absolute; inset: 8px var(--bus-inset) 0; border: 1px solid var(--border-hover); border-bottom: 0; }
+.seats-team-grid.is-unavailable { opacity: 0.45; pointer-events: none; }
+.seats-mode-note { margin: 0; color: var(--text-2); }
+.seats-btn.seats-conductor.is-on { border-color: var(--accent); color: var(--accent); }
 .seats-team-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); grid-auto-rows: 150px; gap: var(--seat-gap); }
 .seats-team-card { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0;
   padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }

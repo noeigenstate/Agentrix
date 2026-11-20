@@ -2,8 +2,12 @@ const MAX_NOTE = 6000;
 const SSH_REFERENCE_NOTE = 'Shipped built-in and global skills are read-only reference copies containing SKILL.md text only. The current bundle survives closed terminals for resume. Other bundles and receipts older than 30 days are pruned on the next SSH terminal start.';
 const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'").replace(/[\x00-\x1f\x7f]+/g, ' ');
 
-function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false, skippedNote = '', routingNote = '' }) {
+const NATIVE_MODE = 'Agentrix runs this session in native mode: you are the plain CLI conversation you were born as and do what you always did, the tasks yourself. Conductor mode is off, so the team roles are unavailable: do not dispatch them.';
+const CONDUCTOR_MODE = 'Agentrix runs this session in conductor mode: forget how you used to work. You are this project\'s conductor, with a team of roles to call, and your aim is to get every task done fast and well through them; the model-routing skill says how.';
+
+function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false, skippedNote = '', routingNote = '', conductor = false }) {
   const enabled = skills.filter(skill => skill.enabled), parts = [];
+  parts.push(conductor ? CONDUCTOR_MODE : NATIVE_MODE);
   parts.push(remote ? '{AGENTRIX_AGENTS}' : `Installed agents: Claude Code ${agents?.claude?.installed ? 'installed' : 'missing'}; Codex ${agents?.codex?.installed ? 'installed' : 'missing'}.`);
   for (const skill of enabled) {
     if (skill.trigger === 'always') parts.push(`Before any task, read and follow ${skill.path}${skill.firstRun ? '; this is its first run in this project' : ''}.`);

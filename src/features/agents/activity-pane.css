@@ -223,6 +223,7 @@
 }
 .activity-routing-rows:lang(en) { --routing-label-width: 128px; }
 .activity-routing-rows[data-dense] { --routing-row-height: 24px; }
+.activity-routing-row.is-unavailable { opacity: 0.45; }
 .activity-routing-row {
   display: grid; grid-template-columns: var(--routing-label-width) minmax(0, 1fr) max-content;
   grid-template-rows: minmax(var(--routing-row-height), auto); column-gap: 8px; align-items: center;
