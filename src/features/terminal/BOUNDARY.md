@@ -32,6 +32,8 @@ split is in use.
 - `src/features/workspace/useProjectReorder.ts`
 
 ## Invariants
+
+- Claude's styled prompt hints leave an editable empty input in the parsed screen — test: `tests/cli-panel.test.cjs` › "Claude prompt hints leave a usable empty input"
 - Typing, selecting and copying inside a small card's terminal only select its split and never expand the project — AGENTS.md: expansion belongs to the project header, the waiting-status action and explicit expand buttons — test: `tests/boundary-terminal.test.cjs` › "typing, selecting or copying in a small card's terminal never expands the project"; the screen facts a Claude terminal sends main are booleans, on change only, read from the screen alone — test: `tests/screen-facts.test.cjs` › "facts are sent on change only, for the current session"
 - The pane takes only copy (with a selection), paste and select-all; Ctrl+= / Ctrl+- / Ctrl+0 and Ctrl+C without a selection reach the program — a zoom change once swallowed the keys the terminal must receive — test: `tests/boundary-terminal.test.cjs` › "the terminal key handler passes zoom keys and Ctrl+C without a selection to the program"
 - No window-level handler takes the zoom keys from the terminals — the same keys, guarded where the window handles zoom — test: `tests/window-zoom.test.cjs` › "wheel and pinch zoom are reset to the effective setting, and zoom keys still reach the terminals"

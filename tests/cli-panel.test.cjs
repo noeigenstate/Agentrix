@@ -46,6 +46,60 @@ test('Claude wrapped draft and its working line remain distinct from a dialog', 
   assert.equal(isCliIdle('claude', done, inspect('claude', done)), true);
 });
 
+test('Claude prompt hints leave a usable empty input', async t => {
+  const { Terminal } = require('@xterm/xterm');
+  const registry = require('../src/features/terminal/terminal-screen.ts');
+  const { sameMessage } = require('../src/features/reading/pending-prompts.ts');
+  const terminal = new Terminal({ cols: 64, rows: 10, allowProposedApi: true });
+  const before = global.window, facts = [];
+  let report;
+  global.window = { setTimeout: fn => { report = fn; return 1; }, agentrix: { screenFacts: (_, value) => facts.push(value) } };
+  registry.setScreenAgent('hint', 'claude');
+  const unregister = registry.registerScreen('hint', terminal, 'pty');
+  t.after(() => { unregister(); registry.setScreenAgent('hint', null); terminal.dispose(); global.window = before; });
+  const style = (sgr, text) => `\x1b[${sgr}m${text}\x1b[0m`;
+  const draw = async (...body) => {
+    const rows = [style(2, '✻ Worked for 9m 36s · done 19:34'), '────', ...body, '────', ...footer('claude')];
+    await new Promise(resolve => terminal.write('\x1b[H\x1b[2J' + rows.join('\r\n'), resolve));
+    report();
+    return registry.readScreen('hint');
+  };
+  const chinese = '另外两路回来后给出逐条异同评价';
+  const english = 'Compare the other two results';
+  for (const body of [
+    ['❯ ' + style(2, chinese)],
+    ['❯ ' + style(90, english)],
+    ['❯ ' + style('38;2;157;157;157', english), '  ' + style('38;5;247', 'Compare each result separately')],
+    ['❯ ' + style(2, english.repeat(3))],
+  ]) {
+    const frame = await draw(...body), rows = frame.rows, screen = inspect('claude', rows);
+    assert.match(rows[0], /Worked for 9m 36s · done/, 'dim output outside the input is preserved');
+    assert.equal(cliInputDraft('claude', rows, screen), '');
+    assert.equal(sameMessage(chinese, cliInputDraft('claude', rows, screen)), false);
+    assert.equal(hasCliInput('claude', rows, screen), true);
+    assert.equal(isCliIdle('claude', rows, screen), true);
+    const state = registry.cliStateFor('claude', frame, { sessionId: 'pty', needsInput: 'Old prompt' });
+    assert.equal(state.waiting, false); assert.equal(state.canDeliver, true);
+    assert.equal(facts.at(-1).draft, false); assert.equal(facts.at(-1).dialog, false);
+  }
+  const hint = await draw('❯ ' + style(2, chinese));
+  const accepted = await draw('❯ ' + chinese);
+  assert.ok(accepted.revision > hint.revision, 'a style-only redraw can turn a suggestion into typed input');
+  assert.equal(cliInputDraft('claude', accepted.rows, inspect('claude', accepted.rows)), chinese);
+  assert.equal(facts.at(-1).draft, true);
+  const mixed = await draw('❯ my words' + style(2, ' with a suggestion'), '  ' + style(90, 'more ghost text') + ' remain here');
+  assert.equal(cliInputDraft('claude', mixed.rows, inspect('claude', mixed.rows)), 'my words remain here');
+  assert.equal(isCliIdle('claude', mixed.rows, inspect('claude', mixed.rows)), false);
+  const startup = await draw('❯ ' + style(2, 'Try "fix this"'));
+  assert.equal(isCliIdle('claude', startup.rows, inspect('claude', startup.rows)), true);
+
+  registry.setScreenAgent('hint', 'codex');
+  await new Promise(resolve => terminal.write('\x1b[H\x1b[2J' + input('codex', style(2, 'Ask Codex to do anything')).join('\r\n'), resolve));
+  const codex = registry.readScreen('hint').rows;
+  assert.match(codex[0], /Ask Codex to do anything/);
+  assert.equal(isCliIdle('codex', codex, inspect('codex', codex)), true);
+});
+
 test('captured Claude and Codex shell editors keep their draft, and a running Bash is not idle', () => {
   for (const agent of ['claude', 'codex']) {
     const rows = fixture(agent + '-bang-typed'), screen = inspect(agent, rows);
