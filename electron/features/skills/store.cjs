@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { isDeepStrictEqual } = require('node:util');
 const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
@@ -552,17 +553,34 @@ class SkillsStore {
     return this.routingChanged();
   }
 
-  seedProjectRouting(project, context) {
+  acceptProjectRouting(context, id, { digest, config }) {
+    const { stored } = context;
+    const local = { ...stored.local }; delete local[id];
+    return this.saveRoutingOptions(context, { trust: { ...stored.trust, [id]: { digest, config, at: this.now() } }, local });
+  }
+
+  seedProjectRouting(project) {
     if (!project || project.kind === 'ssh' || this.routingSeedTried.has(project.id)) return false;
+    const { id } = project;
     try {
-      if (context === undefined) context = this.routingContext();
-      if (!context || context.invalidTemplate || Object.hasOwn(context.stored.trust || {}, project.id)) return false;
+      const context = this.routingContext();
+      if (!context) return false;
       const { entry, catalog, defaults, stored, restore, template } = context;
-      this.routingSeedTried.add(project.id);
+      const hasTrust = Object.hasOwn(stored.trust || {}, id);
+      if (!hasTrust && context.invalidTemplate) return false;
+      this.routingSeedTried.add(id);
+      if (hasTrust) return false;
+      const raw = Object.hasOwn(stored.local || {}, id) ? stored.local[id] : null, local = restore(raw);
+      if (raw != null && !local) return false;
       const file = readRouting(project.path, entry, catalog, defaults);
-      if (file.digest !== null || file.error) return false;
-      return this.writeProjectRouting(context, project, compactConfig(entry, restore(stored.local?.[project.id]) ?? template), null).ok;
-    } catch { return false; }
+      if (file.error) return false;
+      const config = compactConfig(entry, local ?? template);
+      if (file.digest === null) return this.writeProjectRouting(context, project, config, null).ok;
+      // Compare in the parsed form used by the writer's trust record.
+      const parsed = cleanConfig(config, entry, catalog, true, true);
+      if (parsed.ignored.length || !isDeepStrictEqual(file.config, parsed.config)) return false;
+      return this.acceptProjectRouting(context, id, file).ok;
+    } catch (error) { this.report(error); return false; }
   }
 
   setRouting(scope, projectId, raw, base) {
@@ -601,13 +619,12 @@ class SkillsStore {
     if (action === 'overwrite') {
       return this.writeProjectRouting(context, project, compactConfig(entry, config ?? template), digest);
     }
-    const trust = stored.trust || {};
     if (action === 'keep') {
+      const trust = stored.trust || {};
       const previous = Object.hasOwn(trust, projectId) ? trust[projectId] : {};
       return this.saveRoutingOptions(context, { trust: { ...trust, [projectId]: { ...previous, rejected: digest, at: this.now() } } });
     }
-    const local = { ...stored.local }; delete local[projectId];
-    return this.saveRoutingOptions(context, { trust: { ...trust, [projectId]: { digest, config: file.config, at: this.now() } }, local });
+    return this.acceptProjectRouting(context, projectId, file);
   }
 
   replace(entry, text, by, project) {

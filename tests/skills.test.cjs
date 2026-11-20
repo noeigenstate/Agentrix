@@ -133,6 +133,31 @@ test('an existing routing file is never overwritten by the seed', t => {
   assert.equal(source.review.config.roles.researcher.model, 'haiku');
 });
 
+test('a re-added project trusts its matching seed file without rewriting it', t => {
+  const { store, projects } = fixture(t), [project] = projects, file = routeFile(project);
+  const roles = { researcher: seat('haiku'), 'x-history': { from: 'researcher', name: 'Historian', duty: 'Review project history' } };
+  assert.deepEqual(store.setRouting('template', null, routing(roles), null), { ok: true });
+  store.syncWatchers();
+  const original = fs.readFileSync(file), initial = store.seatsInfo(project.id);
+  assert.equal(initial.routing.state, 'trusted');
+
+  projects.shift();
+  store.syncWatchers();
+  const stored = () => JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))[initial.skill].routing;
+  assert.equal(Object.hasOwn(stored().trust, project.id), false);
+  const readded = { ...project, id: 'readded' };
+  projects.push(readded);
+  store.syncWatchers();
+
+  assert.deepEqual(fs.readFileSync(file), original);
+  const { routing: source, config } = store.seatsInfo(readded.id, null, true);
+  assert.deepEqual([source.state, source.layer, source.review, source.actions], ['trusted', 'file', undefined, []]);
+  const { digest, config: accepted } = stored().trust[readded.id];
+  assert.equal(digest, initial.routing.digest);
+  assert.deepEqual(accepted, config);
+  assert.deepEqual(config, initial.config);
+});
+
 test('SSH projects get no routing file', t => {
   const { root, store, projects } = fixture(t), remote = projects[2];
   remote.path = path.join(root, 'remote');
@@ -201,6 +226,7 @@ test('a deleted routing file is not seeded again', t => {
   const reopened = new SkillsStore(options);
   t.after(() => reopened.close());
   reopened.syncWatchers();
+  assert.ok(reopened.routingSeedTried.has(project.id));
   reopened.delivery(project);
   assert.equal(fs.existsSync(routeFile(project)), false);
   assert.equal(reopened.seatsInfo(project.id).routing.notice, 'file-deleted');
@@ -451,6 +477,22 @@ test('invalid stored templates and local routing explicitly report their fallbac
   assert.equal(store.seatsInfo('p1').routing.notice, 'invalid-local');
   assert.equal(store.seatsInfo('p2').routing.notice, 'invalid-template');
   assert.equal(store.seatsInfo('p1').routing.layer, 'template');
+});
+
+test('a valid template does not seed over an invalid stored local layer', t => {
+  const id = 'builtin:model-routing', template = routing({ researcher: seat('haiku') });
+  const local = { p1: routing({ orchestrator: { enabled: false } }) };
+  const { store, projects } = fixture(t, ({ dataDir }) => {
+    put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: { routing: { template, local, trust: {} } } }));
+  });
+  const [project, other] = projects;
+  store.syncWatchers();
+  store.delivery(project);
+  assert.equal(fs.existsSync(routeFile(project)), false);
+  assert.equal(fs.existsSync(routeFile(other)), true);
+  const { routing: source, effective } = store.seatsInfo(project.id);
+  assert.deepEqual([source.state, source.layer, source.notice, effective.researcher.model], ['absent', 'template', 'invalid-local', 'haiku']);
+  assert.deepEqual(JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))[id].routing.local, local);
 });
 
 test('keeping then overwriting a malformed file retains and restores the active config', t => {

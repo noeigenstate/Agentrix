@@ -32,6 +32,7 @@ for (const dir of [project.path, ssh.project]) {
   await fs.writeFile(path.join(dir, 'src/app.ts'), 'export const value = 3;\n');
   await fs.unlink(path.join(dir, 'obsolete.txt')); await fs.writeFile(path.join(dir, '待提交.txt'), '新的未提交文件');
 }
+await fs.appendFile(path.join(project.path, '.git/info/exclude'), '\n/.agentrix/\n');
 await fs.writeFile(path.join(profile, 'workspace.json'), JSON.stringify({ version: 2, projects: [project, plain], settings: { language: 'zh', autoSave: false, restoreSessions: false, closeToTray: false, notifications: false } }));
 const env = { ...process.env, AGENTRIX_DATA_DIR: profile, CODEX_HOME: home, AGENTRIX_TEST_SSH_CONFIG: ssh.configFile }; delete env.ELECTRON_RUN_AS_NODE; delete env.AGENTRIX_DEV_URL;
 const packaged = process.argv.includes('--packaged'), errors = [];
