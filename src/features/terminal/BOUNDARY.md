@@ -11,7 +11,8 @@ split is in use.
 - `ProjectTerminals` (`src/features/terminal/ProjectTerminals.tsx`) — the terminal splits of one project card, each with its pane, reading view or launcher
 - `useActiveTerminal` (`src/features/terminal/active-terminal.ts`) — the split a project's reader last picked, and `setActiveTerminal` to pick one
 - `visibleTerminals` (`src/features/terminal/terminal-visibility.ts`) — the splits a small card or an expanded project shows, and `terminalInUse` (the picked split, else the first)
-- `readScreen` (`src/features/terminal/terminal-screen.ts`) — a terminal's live screen rows and approval stamp, `subscribeScreen` and `useScreen` for updates; the file also exports the Screen type with per-agent `inputFrames` counts (parsed input with no dialog, retained while the reader is unmounted or output remains pending), `canPasteScreen` (the final parsed-prompt paste guard), `hasScreenPaste` (whether this packet has a receipt) and `beginScreenPaste` / `recordScreenPaste` with PasteReceipt (a local receiver receipt, so IPC acceptance alone never proves that text reached xterm)
+- `readScreen` (`src/features/terminal/terminal-screen.ts`) — live rows and approval stamp, with `subscribeScreen`, `useScreen` and per-agent `Screen.inputFrames` retained across mounts
+- `canPasteScreen` (`src/features/terminal/terminal-screen.ts`) — guarded Claude pastes need drained, empty input. `beginScreenPaste`, `screenPaste` and `recordScreenPaste` track xterm receipts
 - `findPathCandidates` (`src/features/terminal/terminal-links.ts`) — the paths and links in a line of text, shared with the reading view
 - `terminalFontFamily` (`src/features/terminal/terminal-font.ts`) — the CSS font list for the chosen terminal fonts
 - `setTerminalRenderer` (`src/features/terminal/terminal-renderer.ts`) — switches every terminal between the GPU and DOM renderers

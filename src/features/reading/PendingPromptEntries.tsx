@@ -60,15 +60,17 @@ export function UserImages({ images, numbers, onRemove }: { images: readonly str
 // Messages sent from here that no record has shown yet. One the agent holds in its queue says it waits there for the
 // step in hand to finish; one the agent never took, even after it was sent again, says so and offers to send it once
 // more or drop it.
-export function PendingPromptEntries({ prompts, queued = () => false, queuedNote, undelivered = () => false, onResend, onDiscard }: {
-  prompts: readonly PendingPrompt[]; queued?: (prompt: PendingPrompt) => boolean; queuedNote?: string; undelivered?: (prompt: PendingPrompt) => boolean; onResend?: (prompt: PendingPrompt) => void; onDiscard?: (prompt: PendingPrompt) => void;
+export function PendingPromptEntries({ prompts, queued = () => false, queuedNote, unconfirmedNote, undelivered = () => false, onResend, onDiscard }: {
+  prompts: readonly PendingPrompt[]; queued?: (prompt: PendingPrompt) => boolean; queuedNote?: string; unconfirmedNote?: string;
+  undelivered?: (prompt: PendingPrompt) => boolean; onResend?: (prompt: PendingPrompt) => void; onDiscard?: (prompt: PendingPrompt) => void;
 }) {
   return prompts.map(prompt => {
     const lost = undelivered(prompt), waiting = queued(prompt);
     return <TimelineStep key={prompt.id} at={prompt.at} kind="user" who={t('你')} mark={<UserAvatar />}><div className={`reading-user reading-pending${prompt.sending && !waiting ? ' is-sending' : ''}${waiting ? ' is-queued' : ''}${lost ? ' is-undelivered' : ''}`}>
       <UserMessage text={prompt.text} images={prompt.images} />
       {waiting ? <small role="status">{queuedNote ?? t('已送达，排队中：当前这一步完成后它就会读到')}</small> : prompt.sending && <small role="status">{t('发送中')}</small>}
-      {lost && <div className="reading-undelivered" role="alert"><small>{prompt.imageCount ? t('图片是否送达尚未确认。请先在终端中检查对话，再决定是否重新发送。') : t('未送达：助手没有收到这条消息')}</small>
+      {lost && <div className="reading-undelivered" role="alert"><small>{prompt.imageCount
+        ? t('图片是否送达尚未确认。请先在终端中检查对话，再决定是否重新发送。') : unconfirmedNote ?? t('未送达：助手没有收到这条消息')}</small>
         {!prompt.imageCount && <button type="button" className="text-button" onClick={() => onResend?.(prompt)}>{t('重新发送')}</button>}
         <button type="button" className="text-button" onClick={() => onDiscard?.(prompt)}>{t('移除')}</button></div>}
     </div></TimelineStep>;

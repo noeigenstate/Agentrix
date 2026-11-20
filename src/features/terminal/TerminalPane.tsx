@@ -9,7 +9,7 @@ import { styleTerminal } from './terminal-styling';
 import { terminalOptions, terminalTheme } from './terminal-theme';
 import { gpuRenderer, setTerminalWeight, terminalRenderer, useTerminalRenderer } from './terminal-renderer';
 import { terminalFontFamily } from './terminal-font';
-import { canPasteScreen, hasScreenPaste, readScreen, recordScreenPaste, registerScreen, setQueueCount, setScreenAgent, writeScreen } from './terminal-screen';
+import { canPasteScreen, readScreen, recordScreenPaste, registerScreen, screenPaste, setQueueCount, setScreenAgent, writeScreen } from './terminal-screen';
 import '@xterm/xterm/css/xterm.css';
 import { t } from '../../shared/i18n';
 import { isMac, isWindows } from '../../shared/platform';
@@ -165,7 +165,8 @@ export function TerminalPane({ id, sessionId, agent = null, queue = 0, fontSize,
     const offPaste = window.agentrix.onTerminalPaste(packet => {
       if (disposed || packet.id !== id || packet.sessionId !== sessionId) return;
       const agent = currentAgent.current;
-      const accepted = !hasScreenPaste(id, sessionId, packet.text) || !agent || canPasteScreen(agent, readScreen(id));
+      const receipt = screenPaste(id, sessionId, packet.text);
+      const accepted = !receipt || (agent ? canPasteScreen(agent, readScreen(id), receipt.emptyInput) : !receipt.emptyInput);
       recordScreenPaste(id, sessionId, packet.text, accepted);
       if (!accepted) return;
       if (packet.lineBreak) terminal.input(packet.text.replace(/\r\n?|\n/g, packet.lineBreak), true);

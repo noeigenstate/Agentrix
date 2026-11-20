@@ -486,7 +486,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
   const parsed = (render = true) => { capture(); parse++; for (const listener of listeners) listener(frame()); if (render) h?.render(); };
   const subscribe = (_id, listener) => { listeners.add(listener); return () => listeners.delete(listener); };
   h = dictationHarness(t, {
-    './terminal-screen': { useScreen: frame, readScreen: frame, subscribeScreen: subscribe, subscribeParsed: subscribe },
+    './terminal-screen': { useScreen: frame, readScreen: () => { view.beforeRead?.(); return frame(); }, subscribeScreen: subscribe, subscribeParsed: subscribe },
     './agent-screen': { parseAgentScreen },
     './useReadingConversation': { useReadingHistory: () => historySnapshot(view.records) },
     './usePendingPrompts': { usePendingPrompts: () => {
@@ -600,13 +600,15 @@ test('a direct reading send reaches the receiver during pending output and is no
   const screen = require('../src/features/terminal/terminal-screen.ts');
   const source = fs.readFileSync(path.join(__dirname, '../src/features/terminal/TerminalPane.tsx'), 'utf8');
   const start = source.indexOf('    const offPaste = '), end = source.indexOf('    const selection = ', start);
-  let receive;
-  Function('window', 'disposed', 'id', 'sessionId', 'readScreen', 'currentAgent', 'terminal', 'canPasteScreen', 'recordScreenPaste', 'hasScreenPaste', source.slice(start, end))(
+  let receive, pending = true;
+  Function('window', 'disposed', 'id', 'sessionId', 'readScreen', 'currentAgent', 'terminal', 'canPasteScreen', 'recordScreenPaste', 'screenPaste', source.slice(start, end))(
     { agentrix: { onTerminalPaste(fn) { receive = fn; } } }, false, h.props.terminal.id, 'session',
-    () => ({ rows: ['────', '❯ ', '────'], parsed: true, pending: true }), { current: 'claude' },
-    { paste: text => { void paste(h.props.terminal.id, text, 'session'); } }, screen.canPasteScreen, screen.recordScreenPaste, screen.hasScreenPaste);
+    () => ({ rows: ['────', '❯ ', '────'], parsed: true, pending }), { current: 'claude' },
+    { paste: text => { void paste(h.props.terminal.id, text, 'session'); } }, screen.canPasteScreen, screen.recordScreenPaste, screen.screenPaste);
   window.agentrix.pasteTerminal = async (id, text, sessionId) => { receive({ id, text, sessionId }); return { ok: true }; };
-  h.edit('direct during output'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  h.edit('direct during output'); h.press('Enter'); await h.advance(0, false);
+  assert.deepEqual(h.pasted, []); assert.deepEqual(h.written, []);
+  pending = false; await h.tick(0); await h.tick(400); await h.tick(700);
   assert.deepEqual(h.view.records.map(record => record.text), ['direct during output']);
   assert.deepEqual(h.pasted.map(item => item.text), ['direct during output']); assert.deepEqual(outboxTexts(h), []);
 });
@@ -802,19 +804,22 @@ for (const agent of ['claude', 'codex']) {
     assert.deepEqual(h.written.map(item => item.text), ['\r']); assert.equal(h.pasted.length, 1);
     h.view.retain = false;
     h.edit('next message'); h.press('Enter'); await h.tick(0);
-    if (agent === 'codex' && retain) {
+    if (retain) {
       await h.tick(30000);
       assert.deepEqual(h.written.map(item => item.text), ['\r']);
       assert.deepEqual(h.pasted.map(item => item.text), ['queued message']);
       assert.equal(h.view.draft, 'queued message'); assert.equal(h.node.value, '');
       assert.deepEqual(outboxTexts(h), ['next message'], 'the next message waits behind the retained input');
-      assert.deepEqual(Object.keys(leftoverNotice(h).actions), [en['清空它，再发送新消息']], 'a delivered input is never offered for sending again');
+      if (agent === 'codex') assert.deepEqual(Object.keys(leftoverNotice(h).actions), [en['清空它，再发送新消息']]);
+      h.view.draft = ''; await h.tick(0); await h.tick(400); await h.tick(700);
+      assert.deepEqual(h.view.records.map(record => record.text), ['queued message', 'next message']);
+      assert.deepEqual(h.pasted.map(item => item.text), ['queued message', 'next message']);
       assert.equal(h.popup(), undefined); assert.deepEqual(errors, []); return;
     }
-    assert.equal(h.written.filter(item => item.text === '\r').length, retain ? 2 : 1, 'an idle returned input is submitted only by the next explicit send');
+    assert.equal(h.written.filter(item => item.text === '\r').length, 1);
     await h.tick(700); await h.tick(400); await h.tick(700);
     assert.deepEqual(h.pasted.map(item => item.text), ['queued message', 'next message']);
-    assert.equal(h.written.filter(item => item.text === '\r').length, retain ? 3 : 2);
+    assert.equal(h.written.filter(item => item.text === '\r').length, 2);
     assert.equal(h.written.some(item => item.text === '\x15'), false);
   });
 
@@ -840,15 +845,23 @@ for (const agent of ['claude', 'codex']) {
     assert.deepEqual(outboxTexts(h), ['after the choice']);
   });
 
-  test(agent + ': an input still parsing after the paste is left unconfirmed, never pressed or pasted again', async t => {
+  test(agent + ': an input still parsing after the paste stays unconfirmed until a safe input is visible', async t => {
     const h = workingComposerHarness(t, agent);
     h.edit('maybe delivered'); h.press('Enter'); await h.tick(0);
     assert.equal(h.pasted.length, 1);
     h.view.pending = true; await h.tick(400);
     for (let step = 0; step < 50; step++) await h.tick(50);
-    h.view.pending = false; await h.tick(700); await h.tick(30000);
     assert.deepEqual(h.written, [], 'no Enter without a parsed input');
-    assert.equal(h.pasted.length, 1); assert.equal(h.node.value, 'maybe delivered', 'the words come back to the box, as before');
+    h.view.pending = false; await h.tick(700); await h.tick(30000);
+    assert.equal(h.pasted.length, 1);
+    if (agent === 'claude') {
+      assert.deepEqual(h.written.map(write => write.text), ['\r']);
+      assert.deepEqual(h.view.records.map(record => record.text), ['maybe delivered']);
+      assert.equal(h.node.value, '');
+    } else {
+      assert.deepEqual(h.written, []);
+      assert.equal(h.node.value, 'maybe delivered');
+    }
   });
 
   test(agent + ': busy input without a receipt never retries Enter or safety-net resends', async t => {
@@ -990,6 +1003,18 @@ test('a retry drain timeout keeps the sent echo available for a receipt', async 
   h.view.records = [...h.view.records, { id: 'late-receipt', role: 'user', text: 'uncertain retry', at: Date.now() }]; h.render();
   assert.equal(cards().prompts.some(prompt => prompt.text === 'uncertain retry'), false);
   assert.equal(h.pasted.length, 1);
+});
+
+test('claude: a missing receipt after Enter does not replay an earlier send at idle', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.view.working = false; h.view.accept = false;
+  h.edit('one attempt'); h.press('Enter'); await h.tick(0); await h.tick(400);
+  h.view.draft = ''; await h.tick(700);
+  for (let step = 0; step < 5; step++) await h.tick(10000);
+  assert.deepEqual(h.pasted.map(item => item.text), ['one attempt']);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
+  const cards = elements(h.tree()).find(node => node.props.queued).props;
+  assert.equal(cards.undelivered(cards.prompts[0]), true);
 });
 
 test('a slow receipt after Enter and a dialog releases the send and later outbox messages', async t => {
@@ -1210,8 +1235,16 @@ for (const removal of ['stale', 'popAll', 'remove', 'history-only', 'history-rem
   h.edit(next); h.press('Enter'); await h.tick(0);
   for (let attempt = 0; attempt < 5; attempt++) await h.tick(700);
   assert.equal(h.written.some(item => item.text === '\x15'), false, 'the returned queued input must never be cleared');
+  if (removal === 'stale' || removal.startsWith('history-')) {
+    assert.deepEqual(accepted, [first], 'the screen alone cannot prove Claude cancelled the queued copy');
+    assert.equal(h.view.draft, first);
+    assert.deepEqual(outboxTexts(h), [next]);
+    remaining = 0; h.view.draft = ''; await h.tick(0); await h.tick(400); await h.tick(700);
+    assert.deepEqual(accepted, [first, next]);
+    return;
+  }
   if (dropped === 4) {
-    assert.deepEqual(accepted, [first]); assert.equal(h.view.draft, first); assert.equal(h.node.value, next);
+    assert.deepEqual(accepted, [first]); assert.equal(h.view.draft, first); assert.deepEqual(outboxTexts(h), [next]);
     assert.deepEqual(h.pasted.map(item => item.text), [first], 'do not paste the next message over an unaccepted returned draft');
     assert.deepEqual(queued().props.prompts.map(prompt => prompt.text), removal === 'stale' ? [first] : [], 'the next message has no false sent card');
   } else {
@@ -2000,7 +2033,11 @@ function imageComposerHarness(t, agent, { decode = file => Promise.resolve(file.
       } else if (event === '\r') { h.received = { text, images: attached.map(image => image.image) }; text = ''; cursor = 0; attached.length = 0; }
     }
   };
-  window.agentrix.pasteTerminal = async (id, value) => { h.pasted.push({ id, text: value }); insert(value); return { ok: true }; };
+  window.agentrix.pasteTerminal = async (id, value, session) => {
+    h.pasted.push({ id, text: value }); insert(value);
+    require('../src/features/terminal/terminal-screen.ts').recordScreenPaste(id, session, value, true);
+    return { ok: true };
+  };
   const folder = `/remote/paste-${++imageComposerSequence}`, picturePath = image => `${folder}/image-${image}.png`;
   window.agentrix.saveImage = async (id, bytes) => ({ ok: true, value: picturePath(new Uint8Array(bytes)[0]) });
   const previews = () => elements(h.tree()).find(element => element.props.onRemove && element.props.images);
@@ -2507,7 +2544,9 @@ for (const agent of ['claude', 'codex']) {
         };
         window.agentrix.pasteTerminal = async (id, text, sessionId) => {
           assert.equal(id, h.props.terminal.id); assert.equal(sessionId, h.props.terminal.sessionId);
-          actions.push(text); draft += text; return { ok: true };
+          actions.push(text); draft += text;
+          require('../src/features/terminal/terminal-screen.ts').recordScreenPaste(id, sessionId, text, true);
+          return { ok: true };
         };
         assert.equal(h.render().props.disabled, false);
         if (picture !== 'none') {
@@ -3372,11 +3411,12 @@ test('a locked composer looks locked: no input fill, the quiet divider edge and 
 });
 
 test('claude: a message Claude Code has queued no longer counts as a leftover input', async t => {
-  const h = workingComposerHarness(t, 'claude'), errors = [];
+  const h = workingComposerHarness(t, 'claude'), errors = [], paste = window.agentrix.pasteTerminal;
   h.props.onError = error => errors.push(error);
   // The real 2.1.317 screen with one message queued: the queue above the working line, a placeholder in the input.
   h.view.rows = fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-2-1-317-queue-one.txt'), 'utf8').split(/\r?\n/);
   h.view.records.push({ id: 'queued', role: 'user', text: 'QUEUED_ONE first queued message', at: Date.now(), queued: true });
+  window.agentrix.pasteTerminal = (...args) => { delete h.view.rows; return paste(...args); };
   h.render(); h.render();
   assert.equal(h.node.value, '', 'the placeholder is not mirrored into the box');
   h.edit('second while it works'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
@@ -3386,12 +3426,54 @@ test('claude: a message Claude Code has queued no longer counts as a leftover in
   assert.equal(leftoverNotice(h), undefined); assert.deepEqual(outboxTexts(h), []);
 });
 
+test('claude: screenshot 31 queue cards leave room for another send when the queue hint wraps', async t => {
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
+  const first = '目前claude code的阅读模式页面还有一个问题就是信息发不出去提示取回的问题，这个问题很影响体验';
+  const second = '可以专门派一个codex的子agent来解决这个问题';
+  const third = '必须要和我讲清楚这个问题发生的原因';
+  h.view.records = [first, second].map((text, index) => ({ id: 'queued-' + index, role: 'user', text, at: Date.now() + index, queued: true }));
+  h.view.rows = [
+    '❯ ' + second, '  ctrl+x ctrl+s to', '    send now', '✶ Swooping… (12s)', '────',
+    '❯ Press up to edit queued messages', '────', '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+  ];
+  window.agentrix.pasteTerminal = (...args) => { delete h.view.rows; return paste(...args); };
+  h.render(); h.render();
+  assert.equal(h.node.value, '');
+  h.edit(third); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.view.records.map(record => [record.text, record.queued]), [[first, true], [second, true], [third, true]]);
+  assert.deepEqual(h.pasted.map(item => item.text), [third]);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
+  assert.deepEqual(outboxTexts(h), []);
+});
+
+test('claude: a direct paste refused while the terminal has new text waits and retries in order', async t => {
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
+  const { recordScreenPaste } = require('../src/features/terminal/terminal-screen.ts');
+  window.agentrix.pasteTerminal = async (id, text, sessionId) => {
+    h.view.draft = 'new text typed directly in Claude';
+    recordScreenPaste(id, sessionId, text, false);
+    window.agentrix.pasteTerminal = paste;
+    return { ok: true };
+  };
+  h.edit('first'); h.press('Enter'); await h.tick(0);
+  h.edit('second'); h.press('Enter'); await h.tick(400);
+  assert.deepEqual(h.written, []);
+  assert.equal(h.view.draft, 'new text typed directly in Claude');
+  assert.deepEqual(outboxTexts(h), ['first', 'second']);
+  h.view.draft = ''; await h.tick(0); await h.tick(400); await h.tick(0); await h.tick(400);
+  assert.deepEqual(h.view.records.map(record => record.text), ['first', 'second']);
+  assert.deepEqual(h.pasted.map(item => item.text), ['first', 'second']);
+  assert.deepEqual(outboxTexts(h), []);
+});
+
 test('Claude suggestions never submit before a composer paste', async t => {
   const { Terminal } = require('@xterm/xterm');
   const registry = require('../src/features/terminal/terminal-screen.ts');
   const terminal = new Terminal({ cols: 80, rows: 8, allowProposedApi: true });
-  const suggestion = 'Compare the other two results';
-  const rows = ['✻ Worked for 9m 36s · done 19:34', ...composerRows('claude', 'idle', `\x1b[2m${suggestion}\x1b[0m`)];
+  const suggestion = '另外两路回来后给出逐条异同评价';
+  // Screenshot 34 gives the text and appearance. The dim ANSI attribute is a fixture assumption.
+  const rows = ['✻ Worked for 9m 36s · done 19:34', '────', `❯ \x1b[2m${suggestion}\x1b[0m`, '────',
+    '  ● Fable 5.2 · gitlab_single_pipe · ctx 11%', '  ⏵⏵ bypass permissions on (shift+tab to cycle)'];
   await new Promise(resolve => terminal.write(rows.join('\r\n'), resolve));
   const h = workingComposerHarness(t, 'claude'), id = h.props.terminal.id;
   window.setTimeout = setTimeout; window.agentrix.screenFacts = () => {};
@@ -3426,13 +3508,35 @@ test('Claude suggestions never submit before a composer paste', async t => {
 });
 
 test('claude: a message waiting in the outbox goes while Claude Code shows its queue', async t => {
-  const h = workingComposerHarness(t, 'claude');
+  const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
   h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
   h.edit('waited for the dialog'); h.press('Enter'); await h.tick(0);
   h.popup()?.props.onClose();
   h.view.rows = fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-2-1-317-queue-two.txt'), 'utf8').split(/\r?\n/);
+  window.agentrix.pasteTerminal = (...args) => { delete h.view.rows; return paste(...args); };
   h.render(); await h.tick(0); await h.tick(400); await h.tick(700);
   assert.deepEqual(h.pasted.map(item => item.text), ['waited for the dialog'], 'the placeholder holds nothing back');
+  assert.deepEqual(outboxTexts(h), []);
+});
+
+test('claude: clearing the leftover closes its warning popup and sends the waiting message', async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.onError = error => errors.push(error);
+  h.view.draft = 'older words';
+  h.view.records = [{ id: 'older', role: 'user', text: h.view.draft, at: Date.now(), queued: true }];
+  h.render();
+  const clipboard = { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] };
+  h.render().props.onPaste({ preventDefault() {}, clipboardData: clipboard });
+  h.render();
+  assert.match(errors[0], /terminal input still contains a previously sent message/i);
+  assert.ok(h.popup());
+  h.edit('the next message'); h.press('Enter'); await h.tick(0);
+  assert.deepEqual(outboxTexts(h), ['the next message']);
+  assert.deepEqual(h.written, []);
+  h.view.draft = ''; await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.equal(h.popup(), undefined);
+  assert.deepEqual(h.view.records.map(record => record.text), ['older words', 'the next message']);
+  assert.deepEqual(h.pasted.map(paste => paste.text), ['the next message']);
   assert.deepEqual(outboxTexts(h), []);
 });
 
@@ -3573,24 +3677,49 @@ test('claude: a waiting message goes once the frame settles, without later outpu
   assert.deepEqual(h.pasted.map(item => item.text), ['after the dialog']); assert.deepEqual(outboxTexts(h), []);
 });
 
-for (const action of ['先发送终端里这段', '清空它，再发送新消息']) test(`claude: the same words with no card left here wait as a leftover and go once (${action})`, async t => {
+test('claude: a delayed paste never submits different words that appear after it', async t => {
   const h = workingComposerHarness(t, 'claude');
   h.edit('send me'); h.press('Enter'); await h.tick(0);
   assert.equal(h.pasted.length, 1);
-  // The frame stays unparsed past the paste check: the send is left unconfirmed, its card withdrawn, its words back here.
-  h.view.pending = true; await h.tick(400); for (let step = 0; step < 50; step++) await h.tick(50);
-  h.view.pending = false; h.render();
-  assert.equal(h.node.value, 'send me'); assert.equal(h.view.draft, 'send me'); assert.deepEqual(h.written, []);
-  h.press('Enter'); await h.tick(0); await h.tick(1000);
-  assert.deepEqual(h.written, [], 'no Enter for words whose send was never confirmed here');
-  assert.equal(h.node.value, ''); assert.deepEqual(outboxTexts(h), [], 'the same words are not queued behind themselves');
-  const notice = leftoverNotice(h);
-  assert.equal(notice.text, 'send me');
-  notice.actions[en[action]].onClick(); await h.tick(80); h.render();
-  for (let step = 0; step < 6; step++) await h.tick(700);
-  assert.deepEqual(h.view.records.map(record => record.text), ['send me'], 'sent exactly once');
-  assert.equal(h.pasted.length, action === '先发送终端里这段' ? 1 : 2);
-  assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined);
+  h.view.draft = 'different terminal draft'; await h.tick(400); await h.tick(700);
+  assert.equal(h.view.draft, 'different terminal draft');
+  assert.deepEqual(h.written, []);
+  assert.deepEqual(outboxTexts(h), ['send me']);
+  h.view.draft = ''; await h.tick(30000);
+  assert.deepEqual(h.written, []); assert.equal(h.pasted.length, 1);
+  assert.deepEqual(outboxTexts(h), ['send me'], 'an empty input after an accepted paste does not justify a second paste');
+});
+
+test('claude: a recovered send cannot repaste when its input disappears before Enter', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  h.edit('only paste once'); h.press('Enter'); await h.tick(0);
+  h.view.pending = true; await h.tick(400);
+  for (let step = 0; step < 5; step++) await h.tick(500);
+  assert.deepEqual(outboxTexts(h), ['only paste once']);
+  h.view.pending = false;
+  let reads = 0;
+  h.view.beforeRead = () => { if (++reads === 3) h.view.draft = ''; };
+  h.parsed(false); await h.advance(0, false);
+  delete h.view.beforeRead; await h.tick(400); await h.tick(700);
+  assert.deepEqual(h.pasted.map(item => item.text), ['only paste once']);
+  assert.deepEqual(h.written, []);
+  assert.deepEqual(outboxTexts(h), ['only paste once']);
+});
+
+test('claude: a late parse can finish a paste that wraps inside a word', async t => {
+  const h = workingComposerHarness(t, 'claude'), write = window.agentrix.writeTerminal;
+  const text = 'Please check reconciliation before replying';
+  h.edit(text); h.press('Enter'); await h.tick(0);
+  h.view.pending = true; await h.tick(400);
+  for (let step = 0; step < 5; step++) await h.tick(500);
+  assert.deepEqual(h.written, []);
+  h.view.rows = ['────', '❯ Please check reconcilia', '  tion before replying', '────'];
+  h.view.pending = false;
+  window.agentrix.writeTerminal = (id, key) => { delete h.view.rows; write(id, key); };
+  await h.tick(0); await h.tick(700);
+  assert.deepEqual(h.view.records.map(record => record.text), [text]);
+  assert.deepEqual(h.pasted.map(item => item.text), [text]);
+  assert.deepEqual(h.written.map(item => item.text), ['\r']);
 });
 
 test('claude: queued words typed again in the terminal are a leftover there, never pasted onto', async t => {
@@ -3606,22 +3735,13 @@ test('claude: queued words typed again in the terminal are a leftover there, nev
   assert.deepEqual(Object.keys(notice.actions), [en['先发送终端里这段'], en['清空它，再发送新消息']]);
 });
 
-for (const action of ['清空它，再发送新消息', 'again']) test(`claude: words the owner cleared from the terminal are never sent again by the safety net (${action})`, async t => {
+test('claude: words the owner cleared from the terminal are never sent again by the safety net', async t => {
   const h = workingComposerHarness(t, 'claude');
-  const first = action === 'again' ? 'send me once' : 'left in the box';
-  if (action === 'again') {
-    // The frame stays unparsed past the paste check: the send is left unconfirmed and its words come back to the box.
-    h.edit(first); h.press('Enter'); await h.tick(0);
-    h.view.pending = true; await h.tick(400); for (let step = 0; step < 50; step++) await h.tick(50);
-    h.view.pending = false; h.render();
-    assert.equal(h.node.value, first);
-    h.press('Enter'); await h.tick(0); await h.tick(1000);
-  } else {
-    h.view.accept = false;
-    h.edit(first); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700); await h.tick(30000);
-    h.view.accept = true;
-    h.edit('the next message'); h.press('Enter'); await h.tick(0); await h.tick(1000);
-  }
+  const first = 'left in the box';
+  h.view.accept = false;
+  h.edit(first); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700); await h.tick(30000);
+  h.view.accept = true;
+  h.edit('the next message'); h.press('Enter'); await h.tick(0); await h.tick(1000);
   assert.equal(h.view.draft, first); assert.deepEqual(h.view.records, []);
   leftoverNotice(h).actions[en['清空它，再发送新消息']].onClick(); await h.tick(80); h.render();
   for (let step = 0; step < 6; step++) await h.tick(700);
@@ -3629,8 +3749,8 @@ for (const action of ['清空它，再发送新消息', 'again']) test(`claude: 
   h.view.working = false; h.render();
   for (let step = 0; step < 8; step++) await h.tick(10000);
   const sent = h.view.records.map(record => record.text);
-  assert.deepEqual(sent, action === 'again' ? [first] : ['the next message'], 'the cleared words go no further than the owner chose');
-  assert.equal(h.pasted.filter(item => item.text === first).length, action === 'again' ? 2 : 1, 'the cleared words are not pasted again by the safety net');
+  assert.deepEqual(sent, ['the next message'], 'the cleared words go no further than the owner chose');
+  assert.equal(h.pasted.filter(item => item.text === first).length, 1, 'the cleared words are not pasted again by the safety net');
 });
 
 test('claude: a paste whose frame parses within two seconds is sent, not handed back', async t => {

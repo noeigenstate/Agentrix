@@ -180,4 +180,8 @@ test('the queue placeholder is empty only with Claude Code\'s queue row on scree
   assert.equal(cliInputDraft('claude', typed, inspect('claude', typed)), 'Press up to edit queued messages', 'without the queue row the words were typed');
   const queued = ['❯ first queued', '  ctrl+x ctrl+s to send now', '✶ Befuddling… (2s)', ...typed];
   assert.equal(cliInputDraft('claude', queued, inspect('claude', queued)), '');
+  queued.splice(1, 1, '  ctrl+x ctrl+s to', '    send now');
+  assert.equal(cliInputDraft('claude', queued, inspect('claude', queued)), '', 'a wrapped shortcut still identifies the queue hint');
+  queued.splice(1, 2, '  ctrl+x ctrl+s to', '    send something else');
+  assert.equal(cliInputDraft('claude', queued, inspect('claude', queued)), 'Press up to edit queued messages');
 });

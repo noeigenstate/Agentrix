@@ -7,7 +7,7 @@ const wrapAnsi = require('wrap-ansi');
 const fs = require('node:fs');
 const path = require('node:path');
 const screens = require('../src/features/terminal/terminal-screen.ts');
-const { canPasteScreen, beginScreenPaste, recordScreenPaste, hasScreenPaste } = screens;
+const { canPasteScreen, beginScreenPaste, recordScreenPaste, screenPaste } = screens;
 const { DIALOG_SETTLE } = require('../src/features/reading/reading-ready.ts');
 const { registerReadingTerminal, mountReadingTerminal } = require('../src/features/terminal/terminal-popup.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
@@ -92,9 +92,9 @@ function pasteReceiver(readScreen, paste) {
   let receive;
   // The actual receiver, including its final pre-paste guard. No xterm, preload or PTY is started.
   return (id, sessionId) => {
-    Function('window', 'disposed', 'id', 'sessionId', 'readScreen', 'currentAgent', 'terminal', 'canPasteScreen', 'recordScreenPaste', 'hasScreenPaste', source.slice(start, end))(
+    Function('window', 'disposed', 'id', 'sessionId', 'readScreen', 'currentAgent', 'terminal', 'canPasteScreen', 'recordScreenPaste', 'screenPaste', source.slice(start, end))(
       { agentrix: { onTerminalPaste(fn) { receive = fn; } } }, false, id, sessionId, readScreen, { current: 'claude' },
-      { paste, input: paste }, canPasteScreen, recordScreenPaste, hasScreenPaste);
+      { paste, input: paste }, canPasteScreen, recordScreenPaste, screenPaste);
     return receive;
   };
 }
@@ -114,6 +114,14 @@ test('a tracked paste refuses a parsed prompt; pending output and untracked call
   const receipt = beginScreenPaste('terminal', 'session', 'held words');
   receive({ id: 'terminal', sessionId: 'session', text: 'held words' });
   assert.equal(receipt.status, 'accepted'); assert.deepEqual(writes, ['owner paste', 'held words']);
+});
+
+test('a reading message requires an empty Claude input at the paste receiver', () => {
+  const rows = ['────', '❯ words typed in the terminal', '────'];
+  assert.equal(canPasteScreen('claude', { rows }, true), false);
+  rows[1] = '❯ ';
+  assert.equal(canPasteScreen('claude', { rows, pending: true }, true), false);
+  assert.equal(canPasteScreen('claude', { rows, pending: false }, true), true);
 });
 
 test('send-to-agent reaches an untracked receiver during pending output and reports actual success', async t => {

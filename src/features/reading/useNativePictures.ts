@@ -63,13 +63,13 @@ export function useNativePictures({ owner, terminalId, sessionId, agent, sending
   });
   const settle = (owns: () => boolean, limit = 500) => awaitInput(owns, limit);
   // True once the input is empty; false when it went away (a dialog took its place), would not clear, or the caller let go.
-  const clearInput = async (owns: () => boolean, epoch = readScreen(terminalId)?.epoch) => {
+  const clearInput = async (owns: () => boolean, epoch = readScreen(terminalId)?.epoch, expected = readInput()?.text) => {
     for (let tries = 0; owns(); tries++) {
       if (parsing()) await settle(owns);
       const current = owns() ? readInput() : null;
       if (!current || current.epoch !== epoch) return false;
       if (!current.text) return true;
-      if (tries === 30) return false;
+      if (tries === 30 || current.text !== expected) return false;
       window.agentrix.writeTerminal(terminalId, '\x15'); await new Promise(resolve => setTimeout(resolve, 80));
     }
     return false;

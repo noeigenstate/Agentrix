@@ -63,7 +63,10 @@ export function isCliWorking(agent: ScreenAgent, rows: string[], _screen: AgentS
 // Claude puts interrupted prompts back in the input, so it can hold text the reading view did not type. Claude Code 2.1.317 lists the
 // messages it queued above its working line, over "ctrl+x ctrl+s to send now", and shows "Press up to edit queued
 // messages" in the empty input; without that queue row the same words are typed ones.
-export const queueShown = (rows: string[]) => rows.some(row => /^\s*ctrl\+x ctrl\+s to send now\s*$/.test(row));
+export const queueShown = (rows: string[]) => rows.some((row, index) => {
+  const first = row.trim();
+  return first.startsWith('ctrl+x') && [first, first + ' ' + (rows[index + 1] ?? '').trim()].includes('ctrl+x ctrl+s to send now');
+});
 const placeholder = (agent: ScreenAgent, text: string, rows: string[], queued: number) => agent === 'claude'
   ? /^Try ["“].+["”]$/.test(text) || text === 'Press up to edit queued messages' && (queueShown(rows) || queued > 0)
   : text === 'Ask Codex to do anything';
@@ -71,6 +74,20 @@ const placeholder = (agent: ScreenAgent, text: string, rows: string[], queued: n
 export function cliInputDraft(agent: ScreenAgent, rows: string[], screen: AgentScreen) {
   const text = cliInputArea(agent, rows)?.text ?? '';
   return placeholder(agent, text, rows, screen.queued ?? 0) ? '' : commandInputText(text);
+}
+
+// A visual line break can split a word. Compare the visible pieces without inventing spaces at their boundaries.
+export function claudeInputMatches(rows: string[], expected: string) {
+  const area = cliInputArea('claude', rows);
+  let remaining = expected.trim();
+  if (!area || !remaining) return false;
+  const pieces = [prompt('claude', rows[area.row]) ?? '', ...rows.slice(area.row + 1, area.footer - 1)];
+  for (const piece of pieces) {
+    const text = piece.trim();
+    if (!remaining.startsWith(text)) return false;
+    remaining = remaining.slice(text.length).trimStart();
+  }
+  return !remaining;
 }
 
 // Busy agents can take queued messages; dialogs and pickers own the keys even when the input stays visible.

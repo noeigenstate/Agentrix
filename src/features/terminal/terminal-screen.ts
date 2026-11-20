@@ -3,7 +3,7 @@ import type { IBuffer, IBufferCell, IBufferLine, Terminal } from '@xterm/xterm';
 import type { ApprovalStamp } from '../../shared/types';
 import type { ScreenAgent, ScreenChoice } from '../agents/agent-screen-types';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen.ts';
-import { claudePromptRange, cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from '../agents/agent-screen-input.ts';
+import { claudePromptRange, cliDialogShown, cliInputDraft, hasCliInput, isAtPrompt, isCliWorking } from '../agents/agent-screen-input.ts';
 import { createFactsPublisher } from '../agents/agent-screen-facts.ts';
 export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 
@@ -25,12 +25,12 @@ let incarnation = 0;
 let frameRevision = 0;
 const pending = new Map<string, Set<(screen: Screen) => void>>();
 const pendingParses = new Map<string, Set<(screen: Screen) => void>>();
-export type PasteReceipt = { sessionId: string; text: string; status: 'pending' | 'accepted' | 'refused' };
+export type PasteReceipt = { sessionId: string; text: string; status: 'pending' | 'accepted' | 'refused'; emptyInput: boolean };
 const pastes = new Map<string, PasteReceipt>();
 
 // IPC acceptance is not terminal acceptance. The packet receiver can prove it refused this paste without writing it.
-export function beginScreenPaste(id: string, sessionId: string, text: string): PasteReceipt {
-  const receipt: PasteReceipt = { sessionId, text, status: 'pending' };
+export function beginScreenPaste(id: string, sessionId: string, text: string, emptyInput = false): PasteReceipt {
+  const receipt: PasteReceipt = { sessionId, text, status: 'pending', emptyInput };
   pastes.set(id, receipt); return receipt;
 }
 export function recordScreenPaste(id: string, sessionId: string, text: string, accepted: boolean) {
@@ -38,11 +38,15 @@ export function recordScreenPaste(id: string, sessionId: string, text: string, a
   if (receipt?.sessionId !== sessionId || receipt.text !== text) return;
   receipt.status = accepted ? 'accepted' : 'refused'; pastes.delete(id);
 }
-export const canPasteScreen = (agent: ScreenAgent, frame: Screen | null) => !!frame
-  && !cliDialogShown(agent, frame.rows, parseAgentScreen(agent, frame.rows));
-export const hasScreenPaste = (id: string, sessionId: string, text: string) => {
+export function canPasteScreen(agent: ScreenAgent, frame: Screen | null, emptyInput = false) {
+  if (!frame) return false;
+  const screen = { ...parseAgentScreen(agent, frame.rows), queued: frame.queued };
+  return !cliDialogShown(agent, frame.rows, screen)
+    && (!emptyInput || !frame.pending && hasCliInput(agent, frame.rows, screen) && !cliInputDraft(agent, frame.rows, screen));
+}
+export const screenPaste = (id: string, sessionId: string, text: string) => {
   const receipt = pastes.get(id);
-  return receipt?.sessionId === sessionId && receipt.text === text;
+  return receipt?.sessionId === sessionId && receipt.text === text ? receipt : undefined;
 };
 
 function isPromptHint(cell: IBufferCell) {
