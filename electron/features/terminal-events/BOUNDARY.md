@@ -13,7 +13,7 @@ The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook
 - `createSessionMachine` (`electron/features/terminal-events/session-machine.cjs`) — a Claude terminal's session machine (C-4): `reduce(state, signal) → { state, effects }`, pure, over hooks, transcript records, screen facts and the settled read after a Stop; phases starting, ready, working, stopping, exited; effects `subagent` (C-15) and `completion`; `cliFields` is its part of the published CliState (phase, turn, queue, background, open)
 - `writeBootstrap` (`electron/features/terminal-events/bootstrap-file.cjs`) — writes the private session bootstrap and returns the optional bounded seat JSON when written, otherwise undefined
 - `updateBootstrapBackground` (`electron/features/terminal-events/bootstrap-file.cjs`) — refresh launch policy without replacing its private startup hook; busy renames retry with bounded backoff, and a separate policy file is re-read by launchers even after refresh fails
-- `updateBootstrapLead` (`electron/features/terminal-events/bootstrap-file.cjs`) — atomically writes model, effort, fast, background model and subagent model to the terminal's Claude lead file.
+- `updateBootstrapLead` (`electron/features/terminal-events/bootstrap-file.cjs`) — writes the Claude lead file atomically. Its lines carry model, effort, fast flag and seat-map JSON.
 - `updateDispatchSeats` (`electron/features/terminal-events/bootstrap-file.cjs`) — atomically writes the bounded live worker seats beside the private bootstrap. Bootstrap cleanup removes both.
 - `updateDispatchLaunchSeats` (`electron/features/terminal-events/bootstrap-file.cjs`) — records the bounded launch baseline for helpers whose environment omits the launch seat map. Bootstrap cleanup removes the baseline.
 - `createHookServer` (`electron/features/terminal-events/hook-server.cjs`) — `(ingest, { limit }) → { port, close }`: Claude Code's HTTP hooks, POST `/h/<terminalId>/<EventName>` with `X-Agentrix-Key` on 127.0.0.1, bodies up to 4 MB
@@ -21,7 +21,7 @@ The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook
 - `terminalHooks` (`electron/features/terminal-events/hook-channel.cjs`) — a local terminal's `hooks` (C-2): `{ url, port, key, channel, fallback, channelReason, settings: { http, fallback } }`, the one generator of the --settings every claude wrapper passes; downgradeHooks applies a wrapper's hook-channel report
 
 ## May import
-- `electron/features/skills/seat-rules.mjs` (validate the lead seat and the two Claude operation model values)
+- `electron/features/skills/seat-rules.mjs` (validate the lead seat)
 - `electron/shared/reason.cjs` (the term.* Reasons of a hook channel)
 - `electron/atomic-write.cjs` (atomic replacement of the lead file)
 - `electron/features/agents/agent-calls.cjs` (AgentCalls.forTerminal without a factory observes an existing run board during publication)

@@ -81,7 +81,7 @@ function runtime(t, { kind = 'local', platform = 'linux', server = codexServer()
   const root = directory(t), remote = kind === 'ssh';
   if (remote) Object.assign(server.child, { remote: true, remoteScope: 'remote-scope' });
   const factory = createCodexRuntime({ platform, timers, optionsHome: root, resolveExecutable: async () => 'fake-only', spawnProcess: () => server.child,
-    launchRemote: async () => ({ cwd: '/srv/project', child: server.child, hosts: [] }) });
+    launchRemote: async () => ({ cwd: '/srv/project', child: server.child, hosts: [], context: spec.context }) });
   const session = factory.create({ owner: 'gui', projectId: 'p', terminalId: 't', ...(remote ? { kind: 'ssh', cwd: '/srv/project', env: {} } : { cwd: root, env: { CODEX_HOME: root, PATH: '' } }), ...spec }, () => {});
   t.after(() => session.close());
   return { session, server, root };
@@ -107,9 +107,11 @@ for (const kind of ['local', 'ssh']) {
   test(`${kind}: each Codex permissions choice gives its own thread/start and thread/resume parameters`, async t => {
     for (const [permissions, expected] of [['full', FULL], ['config', CONFIG], ['ask', ASK]]) {
       for (const resume of [false, true]) {
-        const { session, server } = runtime(t, { kind, spec: { permissions, providerSessionId: resume ? 'owner-thread' : null } });
+        const spec = { permissions, effort: 'high', context: 'Follow the project instructions.', providerSessionId: resume ? 'owner-thread' : null };
+        const { session, server } = runtime(t, { kind, spec });
         await session[resume ? 'resume' : 'start']();
         const [request] = server.threadRequests(resume ? 'thread/resume' : 'thread/start');
+        assert.deepEqual(request.params.config, { model_reasoning_effort: 'high', developer_instructions: spec.context });
         assert.deepEqual(policyOf(request.params), expected, `${kind} ${permissions} ${resume ? 'resume' : 'start'}`);
         assert.equal((await session.runOptions({})).permissions, permissions);
         await session.close();

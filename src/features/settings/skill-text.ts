@@ -1,4 +1,3 @@
-import { routingRoleName, routingModelName } from '../../shared/routing-command.ts';
 import type { Project, SkillInfo, SkillVersion } from '../../shared/types';
 import { currentLanguage, t } from '../../shared/i18n';
 import { relativeTime } from '../../shared/time';
@@ -7,17 +6,7 @@ const AGENT_NAMES = { claude: 'Claude Code', codex: 'Codex' };
 
 // What the page shows of a skill: a built-in's Chinese title and summary go through translation, a user's own words stay as written.
 export const skillTitle = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.title) : skill.title;
-export function skillSummary(skill: SkillInfo) {
-  const [lead, ...team] = skill.seatSummary ?? [];
-  if (!lead) return skill.source === 'builtin' ? t(skill.summary) : skill.summary;
-  const models = new Map<string, string[]>();
-  for (const seat of team) {
-    const roles = models.get(seat.model) ?? [];
-    roles.push(routingRoleName(seat.name, t));
-    models.set(seat.model, roles);
-  }
-  return [`${routingRoleName(lead.name, t)} ${routingModelName(lead.model)}`, ...Array.from(models, ([model, roles]) => `${roles.join('/')} ${routingModelName(model)}`)].join(' · ');
-}
+export const skillSummary = (skill: SkillInfo) => skill.source === 'builtin' ? t(skill.summary) : skill.summary;
 export function skillWhen(skill: SkillInfo) {
   if (skill.trigger === 'always') return t('每个任务开始前读取。');
   const description = t('任务符合技能描述时读取。');

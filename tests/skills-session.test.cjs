@@ -56,41 +56,6 @@ test('startup/resume deduplicate CLI session plus content fingerprint, compact/c
   assert.equal(sessionContext({ session_id: 'cli-session', source: 'unexpected' }, changed), null);
 });
 
-test('operation delivery and refusal chips belong to the conversation snapshot', async t => {
-  const { store, project } = await fixture(t), file = path.join(store.builtinDir, 'model-routing', 'SKILL.md');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.copyFileSync(path.join(__dirname, '../resources/skills/model-routing/SKILL.md'), file);
-  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
-  store.getModels = () => [{ model: 'claude-haiku-5-5', alias: 'haiku' }, { model: 'claude-sonnet-5-5', alias: 'sonnet' }];
-  store.seatSession = sessionId => ({ projectId: project.id, sessionId });
-  store.refresh();
-  const original = { background: { model: 'sonnet' }, subagent: { model: 'gpt-mini', effort: 'medium' } };
-  const launch = id => store.delivery(project, false, id, { agent: 'codex', started: true });
-  assert.deepEqual(store.setRouting('template', null, { roles: { orchestrator: { model: 'haiku', effort: 'high' },
-    designer: { model: 'claude-sonnet-5-5', effort: 'high' }, qa: { model: 'claude-sonnet-4-5', effort: 'high' } }, operations: original }, null), { ok: true });
-  const first = launch('first');
-  assert.equal(first.agentSeats.designer.agentModel, 'sonnet');
-  assert.equal(first.agentSeats.qa.agentModel, null);
-  assert.equal(store.terminalLead(project.id).model, 'claude-haiku-5-5');
-  assert.equal(first.operations.claude.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-sonnet-5-5');
-  const key = 'agents.default_subagent_model';
-  assert.equal(store.noteOperationResult(project.id, 'first', 'codex', { applied: [], refused: [{ key, reason: 'Unsupported key' }] }), true);
-  const current = () => store.seatsInfo(project.id, 'first').operations.current;
-  assert.equal(current().agents.subagent.codex.reason, 'Unsupported key');
-  assert.equal(store.seatsInfo(project.id).operations.rows.find(row => row.id === 'subagent').agents.codex.state, 'not-effective');
-  assert.deepEqual(store.setRouting('project', project.id, { roles: { designer: { model: 'opus', effort: 'medium' } },
-    operations: { subagent: { model: 'gpt-new', effort: 'high' } } }, null), { ok: true });
-  assert.deepEqual(current().values.subagent, original.subagent);
-  assert.deepEqual(launch('first').agentSeats.designer, first.agentSeats.designer);
-  assert.equal(store.operationLevers(project.id, 'first').codex.config[key], 'gpt-mini');
-  const second = launch('second');
-  assert.equal(second.operations.codex.config[key], 'gpt-new');
-  assert.deepEqual(second.agentSeats.designer, { model: 'opus', effort: 'medium', agentModel: 'opus' });
-  assert.equal(store.seatsInfo(project.id).operations.rows.find(row => row.id === 'subagent').agents.codex.state, 'applies');
-  store.setOptions(store.seatsInfo(project.id).skill, { enabled: false });
-  assert.equal(launch('disabled').agentSeats, null);
-});
-
 test('routing note is optional, current on a new delivery and included in bounded SSH manifests', async t => {
   let routing = '';
   const f = await fixture(t, () => routing), before = f.delivery('lead');
@@ -125,7 +90,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   const instructions = fs.readFileSync(launch.sessionManifest, 'utf8');
   const allText = launch.skills.filter(item => item.enabled).map(item => [item.id, f.store.entry(item.id).text]);
   assert.equal(launch.fingerprint, digest(JSON.stringify([instructions, allText])));
-  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, operations: {} }, null), { ok: true });
+  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('haiku') } }, null), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.researcher.model, 'haiku');
   assert.equal(f.store.seatsInfo(null, 'terminal').current.researcher.model, 'haiku');
   assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
@@ -145,7 +110,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   assert.ok(fs.statSync(rendered.path).mtimeMs > expired.getTime(), 'reusing a rendered skill renews its retention');
   assert.notEqual(next.fingerprint, launch.fingerprint);
   const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
-  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') }, operations: {} }, null), { ok: true });
+  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') } }, null), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'opus');
   for (const source of ['compact', 'clear']) {
     const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
@@ -159,7 +124,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   const remoteFirst = bundle('remote-first');
   assert.match(remoteFirst.files.find(item => item.id === skill).text, /\| researcher \|.*\| opus · high \|/);
   assert.match(remoteFirst.instructions, /\{AGENTRIX_SKILLS\}\/builtin\/model-routing\/SKILL\.md/);
-  f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, operations: {} }, null);
+  f.store.setRouting('template', null, { roles: { researcher: choice('haiku') } }, null);
   assert.notEqual(bundle('remote-next').key, remoteFirst.key);
 
   const reopened = new SkillsStore({ dataDir: f.root, builtinDir: f.store.builtinDir, getProjects: () => [f.project], getAgents: f.store.getAgents });
@@ -278,20 +243,19 @@ test('first-open launch snapshots stay correct when later sessions rewrite the c
   assert.equal(sessionContext({ session_id: 'second-cli', source: 'resume' }, secondNote), null);
 });
 
-test('beta.4 first-run claims survive the team migration, Claude resume, new launches and restart', async t => {
+test('routing discards first-run claims while other built-ins keep them through migration, resume and restart', async t => {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-skills-')));
   const project = { id: 'project', path: path.join(root, 'project'), name: 'Long-running project' };
   const workspaceFile = path.join(root, 'workspace.json'), skillsFile = path.join(root, 'skills.json');
   const code = 'builtin:code-standard', ui = 'builtin:ui-standard', routing = 'builtin:model-routing';
-  const claims = { [code]: { [project.id]: 'old-code-launch' }, [ui]: { [project.id]: 'old-ui-launch' },
-    [routing]: { [project.id]: 'old-routing-launch' } };
+  const claims = { [code]: { [project.id]: 'old-code-launch' }, [ui]: { [project.id]: 'old-ui-launch' } };
   const seats = { global: { lookup: { model: 'haiku', effort: 'high' } }, projects: { [project.id]: { visual: { model: 'sonnet', effort: 'high' } } } };
   fs.mkdirSync(project.path);
   fs.writeFileSync(workspaceFile, JSON.stringify({ version: 2, projects: [project] }));
   fs.writeFileSync(skillsFile, JSON.stringify({
     [code]: { firstOpenedProjects: claims[code] },
     [ui]: { trigger: 'first-open', firstOpenedProjects: claims[ui] },
-    [routing]: { trigger: 'first-open', firstOpenedProjects: claims[routing], seats },
+    [routing]: { enabled: false, trigger: 'auto', firstOpenRun: true, firstOpenedProjects: { [project.id]: 'old-routing-launch' }, seats },
   }));
 
   let store;
@@ -321,10 +285,9 @@ test('beta.4 first-run claims survive the team migration, Claude resume, new lau
     assert.deepEqual(options[routing].seats, seats);
     assert.equal(options[routing].team, undefined);
     assert.deepEqual(options[routing].routing.local[project.id].roles.designer, seats.projects[project.id].visual);
-    for (const id of [ui, routing]) {
-      assert.equal(options[id].trigger, 'auto');
-      assert.equal(options[id].firstOpenRun, true);
-    }
+    assert.equal(options[ui].trigger, 'auto');
+    assert.equal(options[ui].firstOpenRun, true);
+    for (const key of ['enabled', 'trigger', 'firstOpenRun', 'firstOpenedProjects']) assert.equal(Object.hasOwn(options[routing], key), false);
     store.setOptions(ui, { firstOpenRun: true });
     await store.refreshSeats(project.id);
     for (const source of ['resume', 'startup']) {
@@ -334,7 +297,9 @@ test('beta.4 first-run claims survive the team migration, Claude resume, new lau
       assert.doesNotMatch(startupNote('Read.', null, null, preview), /this is its first run in this project/);
       store.endSession(current.id, `${launchId}-shell`);
       const launch = store.delivery(current, false, launchId, { agent: 'claude', started: true });
-      for (const id of [code, ui, routing]) assert.equal(launch.skills.find(skill => skill.id === id).firstRun, false, id);
+      for (const id of [code, ui]) assert.equal(launch.skills.find(skill => skill.id === id).firstRun, false, id);
+      const skill = launch.skills.find(skill => skill.id === routing);
+      assert.deepEqual([skill.enabled, skill.trigger, skill.firstRun], [true, 'always', undefined]);
       const note = startupNote('Read.', null, null, launch);
       assert.doesNotMatch(note, /this is its first run in this project/);
       const instructions = readDelivery(note).instructions;

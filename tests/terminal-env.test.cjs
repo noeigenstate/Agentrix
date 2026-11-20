@@ -18,7 +18,7 @@ for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} 
   assert.equal(JSON.stringify({ settings: hooks.settings }), before);
   writeBootstrap({ file, eventServer: { name: 'injected', address: 'injected' }, hooks,
     lead: fast === undefined ? null : { model: 'opus', effort: 'high', fast } });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), fast === undefined ? '' : `opus\nhigh\n${fast ? 1 : 0}\n\n\n`);
+  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), fast === undefined ? '' : `opus\nhigh\n${fast ? 1 : 0}\nnull\n`);
   const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
   for (const channel of ['http', 'fallback']) {
     const settings = JSON.parse(saved.hooks.settings[channel]);
@@ -27,18 +27,6 @@ for (const fast of [true, false, undefined]) test(`terminal launch fast=${fast} 
     assert.equal(hooks.settings[channel], saved.hooks.settings[channel]);
     assert.equal(JSON.parse(saved.hooks.fastSettings[channel]).fastMode, true);
   }
-});
-
-test('Claude lead files write operation models by position and discard invalid optional values', t => {
-  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
-  const { updateBootstrapLead } = require('../electron/features/terminal-events/bootstrap-file.cjs');
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-lead-ops-')), file = path.join(root, 'test.json');
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const lead = { model: 'opus', effort: 'high', fast: true };
-  updateBootstrapLead(file, { ...lead, env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' } });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'opus\nhigh\n1\nclaude-sonnet-5-5\nsonnet\n');
-  updateBootstrapLead(file, { ...lead, env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'sonnet\nopus', CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' } });
-  assert.equal(fs.readFileSync(file + '.lead', 'utf8'), 'opus\nhigh\n1\n\nsonnet\n');
 });
 
 test('a terminal drops inherited SDK entrypoints in every letter case', () => {

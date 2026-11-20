@@ -5,7 +5,7 @@ const { createEventStream } = require('./events.cjs');
 const { validModel, EFFORT } = require('../skills/seat-rules.mjs');
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // terminals: main's worker terminals (worker-terminals/BOUNDARY.md); a local terminal lead's worker runs in one of them.
-function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env, operations = () => {} }) {
+function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env }) {
   return control.onRequest('claude-sdk.run', async (run, payload, stream) => {
     assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out', 'permission']) && text(payload.prompt) &&
       (payload.model === undefined || validModel(payload.model)) && (payload.effort === undefined || typeof payload.effort === 'string' && EFFORT.test(payload.effort))
@@ -16,7 +16,7 @@ function registerClaudeWorker({ control, claude, settings, terminals = null, con
     for (const name of Object.keys(runtimeEnv)) if (/^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|.*SESSION_KEY)|^CLAUDE_CODE_ENTRYPOINT$/i.test(name)) delete runtimeEnv[name];
     const spec = { agent: 'claude', owner: 'dispatch', runtimeSessionId, terminalId: run.runId, projectId: run.projectId, runId: run.runId,
       cwd: run.cwd, worktree: run.worktree || run.cwd, allow: run.allow, readOnly: run.readOnly, roundtable: run.roundtable,
-      model: payload.model, effort: payload.effort, fast: payload.fast, context: context(run), env: runtimeEnv, operations: operations(run),
+      model: payload.model, effort: payload.effort, fast: payload.fast, context: context(run), env: runtimeEnv,
       providerSessionId: payload.resume || null, permission: run.readOnly || run.roundtable ? 'plan' : payload.permission || 'acceptEdits' };
     const pathEvent = reason => createEventStream(spec, event => stream.emit(event)).publish('path.changed', { previous: null, selected: 'terminal', reason });
     // Only a local terminal lead's worker is billed like its terminal; an SSH one keeps the CLI path.

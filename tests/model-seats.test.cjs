@@ -128,7 +128,7 @@ test('the other-family lead uses its family default and an uninstalled family ha
 
 test('routing IPC forwards saves and review actions with the exact contract arguments', async () => {
   const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
-  const handlers = {}, calls = [], config = { roles: { researcher: seat('sonnet') }, operations: {} };
+  const handlers = {}, calls = [], config = { roles: { researcher: seat('sonnet') } };
   const record = (...args) => { calls.push(args); return { ok: true }; };
   registerSkillsIpc({ handle: (name, fn) => handlers[name] = fn, skills: {
     seatsInfo: (...args) => { calls.push(args); return { skill: 'declaring-skill' }; },

@@ -23,12 +23,8 @@ const prefixedSubcommands = [['--settings', 'owner-settings', 'mcp', 'list'], ['
 const invalidSeats = [['claude-opus&extra', 'high'], ['m'.repeat(161), 'high'], ['opus', 'High'], ['opus', 'e'.repeat(33)]];
 const nextModel = 'claude-sonnet-5-5[1m]';
 const background = 'claude-opus-5-5', subagent = 'claude-sonnet-5-5[1m]';
-const operationCases = [
-  [[background, subagent, 'ANTHROPIC_BASE_URL=unexpected'], [background, subagent]],
-  [['', subagent], ['inherited', subagent]],
-  [['unsafe&word', subagent], ['inherited', subagent]],
-  [[background, 'm'.repeat(161)], [background, 'unset']],
-];
+const seats = '{"researcher":{"model":"sonnet","effort":"high"}}';
+const leadFormats = [[seats], [background, subagent, seats], [background, subagent], []];
 const cases = [
   ['bash-integration.bash', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
   ['zsh-integration.zsh', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
@@ -52,17 +48,19 @@ function assertLaunches(output) {
   const calls = output.split(/^CALL\n/gm).slice(1);
   assert.deepEqual(calls.map(call => [...call.matchAll(/^SETTINGS=(.*)$/gm)].map(row => row[1])),
     [['fast'], ...utilities.map(() => ['ordinary']), ...prefixedSubcommands.map(() => ['fast']),
-      ...invalidSeats.map(() => ['ordinary']), ['ordinary'], ...operationCases.map(() => ['ordinary']), ['ordinary']]);
+      ...invalidSeats.map(() => ['ordinary']), ['ordinary'], ...leadFormats.map(() => ['ordinary']), ['ordinary']]);
   assert.deepEqual(calls.map(call => [...call.matchAll(/^WORD=(.*)$/gm)].map(row => row[1])),
     [resumed, ...utilities, ...prefixedSubcommands.map(words => [...resumed.slice(0, 4), ...words]),
       ...invalidSeats.map(() => []), ['--model', nextModel, '--effort', 'medium', 'Explain', 'doctor'],
-      ...operationCases.map(() => ['--model', nextModel, '--effort', 'medium']), ['--version']]);
+      ...leadFormats.map(() => ['--model', nextModel, '--effort', 'medium']), ['--version']]);
   const env = calls.map(call => /^ENV=(.*)$/m.exec(call)?.[1]);
   assert.deepEqual(env, [
     ...Array(2 + utilities.length + prefixedSubcommands.length + invalidSeats.length).fill('inherited|unset|unset|unset'),
-    ...operationCases.map(([, values]) => [...values, 'unset', 'unset'].join('|')),
+    ...leadFormats.map(() => 'inherited|unset|unset|unset'),
     'inherited|unset|unset|unset',
   ]);
+  const maps = calls.map(call => /^SEATS=(.*)$/m.exec(call)?.[1]);
+  assert.deepEqual(maps.slice(-5, -1), [seats, seats, 'null', 'null']);
   assert.match(output, /^RESTORED=inherited\|unset$/m);
 }
 
@@ -76,6 +74,7 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       '#!/bin/sh', 'printf "CALL\\nSETTINGS=%s\\n" "$(cat "$2")"',
       'printf "ENV=%s|%s|%s|%s\\n" "${ANTHROPIC_DEFAULT_HAIKU_MODEL-unset}" "${CLAUDE_CODE_SUBAGENT_MODEL-unset}" \\',
       '  "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE-unset}" "${ANTHROPIC_BASE_URL-unset}"',
+      'printf "SEATS=%s\\n" "$AGENTRIX_SEATS"',
       'shift 2', 'for word in "$@"; do printf "WORD=%s\\n" "$word"; done', '',
     ].join('\n'), { mode: 0o700 });
     fs.writeFileSync(script, [
@@ -88,8 +87,8 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       ...invalidSeats.flatMap(([model, effort]) => [`printf '%s\\n' '${model}' '${effort}' 1 > "$AGENTRIX_BOOTSTRAP.lead"`, 'claude']),
       `printf '%s\\n' '${nextModel}' medium 0 > "$AGENTRIX_BOOTSTRAP.lead"`,
       'claude Explain doctor',
-      ...operationCases.flatMap(([lines]) => [
-        `printf '%s\\n' '${nextModel}' medium 0 ${lines.map(line => "'" + line + "'").join(' ')} > "$AGENTRIX_BOOTSTRAP.lead"`, 'claude',
+      ...leadFormats.flatMap(lines => [
+        `printf '%s\\n' '${nextModel}' medium 0${lines.map(line => " '" + line + "'").join('')} > "$AGENTRIX_BOOTSTRAP.lead"`, 'claude',
       ]),
       `printf '%s\\n' '${nextModel}' medium 0 '${background}' '${subagent}' > "$AGENTRIX_BOOTSTRAP.lead"`,
       'claude --version',
@@ -120,6 +119,7 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
     '  $force = if ($env:CLAUDE_CODE_SUBAGENT_MODEL_FORCE) { $env:CLAUDE_CODE_SUBAGENT_MODEL_FORCE } else { "unset" }',
     '  $base = if ($env:ANTHROPIC_BASE_URL) { $env:ANTHROPIC_BASE_URL } else { "unset" }',
     '  "ENV=$background|$subagent|$force|$base"',
+    '  "SEATS=$env:AGENTRIX_SEATS"',
     '  if ($args.Length -gt 2) { $args[2..($args.Length - 1)] | ForEach-Object { "WORD=" + $_ } }',
     '  $global:LASTEXITCODE = 0',
   ].join('\n'));
@@ -136,8 +136,8 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
     ...invalidSeats.flatMap(([model, effort]) => [`[IO.File]::WriteAllLines($lead, @('${model}', '${effort}', '1'))`, 'claude']),
     `[IO.File]::WriteAllLines($lead, @('${nextModel}', 'medium', '0'))`,
     'claude Explain doctor',
-    ...operationCases.flatMap(([lines]) => [
-      `[IO.File]::WriteAllLines($lead, @('${nextModel}', 'medium', '0', ${lines.map(line => "'" + line + "'").join(', ')}))`, 'claude',
+    ...leadFormats.flatMap(lines => [
+      `[IO.File]::WriteAllLines($lead, @('${nextModel}', 'medium', '0'${lines.map(line => ", '" + line + "'").join('')}))`, 'claude',
     ]),
     `[IO.File]::WriteAllLines($lead, @('${nextModel}', 'medium', '0', '${background}', '${subagent}'))`,
     'claude --version',

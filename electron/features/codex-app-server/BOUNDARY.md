@@ -2,8 +2,6 @@
 
 Owns an independent app-server runtime over local stdio or an injected SSH byte stream for a native Codex session; normalizes its events and keeps request tickets and input receipts within that session.
 
-Initial thread requests carry frozen operation config. A definite rejection retries once without those keys and reports which overrides were refused.
-
 ## Owns
 - `electron/features/codex-app-server/**`
 
@@ -23,7 +21,6 @@ Initial thread requests carry frozen operation config. A definite rejection retr
 - `electron/features/codex-runtime/locator.cjs` (codexExecutable: the default executable resolver, this process's Codex locator)
 - `electron/features/agents/token-rate.cjs` (shared response samples from root-thread token usage, excluding tool waits and child threads)
 - `electron/features/agents/agent-command.cjs` (routing command names and their refusal)
-- `electron/features/agents/dispatch-control.cjs` (shared validation for the five Codex operation overrides)
 - `electron/features/agents/start-failure.cjs` (startupDetail: a failed start's reason as one line, redacted with skill-privacy's scrubText before the owner sees it; shared with the Claude billing check)
 
 ## Invariants

@@ -1,5 +1,4 @@
 const { readJson, writeJson } = require('../native-session/storage.cjs');
-const { operationEnv } = require('../skills/seat-rules.mjs');
 function createCredentials({ file, safeStorage, platform = process.platform, onChange = () => {} }) {
   function secure() {
     if (!safeStorage?.isEncryptionAvailable() || platform === 'linux' && safeStorage.getSelectedStorageBackend?.() === 'basic_text') throw new Error('系统安全存储不可用。');
@@ -20,15 +19,14 @@ function createCredentials({ file, safeStorage, platform = process.platform, onC
   };
 }
 // Never mutate process.env. Remove alternative authentication and routing before selecting the key.
-function apiEnvironment(env, key, owner = 'dispatch', operationValues) {
+function apiEnvironment(env, key, owner = 'dispatch') {
   const clean = { ...env };
-  const operations = operationEnv(operationValues);
   for (const name of Object.keys(clean)) if (/^(ANTHROPIC_|CLAUDE_CODE_(OAUTH|USE_|API_KEY|AUTH|SESSION_ACCESS_TOKEN)|CLAUDE_(OAUTH|AUTH|API_KEY)|AGENTRIX_(SESSION|CONTROL|CAPABILITY|EVENT))/i.test(name)
     || owner === 'dispatch' && /^AGENTRIX_BOOTSTRAP$/i.test(name)) delete clean[name];
   clean.ANTHROPIC_API_KEY = key;
-  for (const name of Object.keys(clean)) if (name.toUpperCase() === 'CLAUDE_CODE_ENTRYPOINT' || Object.hasOwn(operations, name.toUpperCase())) delete clean[name];
+  for (const name of Object.keys(clean)) if (name.toUpperCase() === 'CLAUDE_CODE_ENTRYPOINT') delete clean[name];
   clean.AGENTRIX_SDK_PARENT = '1';
   clean.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = owner === 'dispatch' ? '1' : '0';
-  return { ...clean, ...operations };
+  return clean;
 }
 module.exports = { createCredentials, apiEnvironment };

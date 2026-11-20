@@ -261,23 +261,6 @@ async function unit(t, { calls = null, send, register, remove, kill, clock, payl
   return f;
 }
 
-test('a brokered terminal worker inherits only the frozen Claude operation models', async t => {
-  const f = await unit(t, { operations: run => {
-    assert.equal(run.runId, 'run-1');
-    return { env: { ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-5-5', CLAUDE_CODE_SUBAGENT_MODEL: 'opus', OTHER: 'ignored' } };
-  } });
-  try {
-    const { env } = f.pty.options;
-    assert.equal(env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'claude-sonnet-5-5');
-    assert.equal(env.CLAUDE_CODE_SUBAGENT_MODEL, 'opus');
-    assert.equal(env.OTHER, undefined);
-    assert.equal(f.parent.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, undefined);
-  } finally {
-    await f.control({ type: 'stop' });
-    await f.result;
-    await f.terminals.closeAll();
-  }
-});
 // The worker's private session key is the module's; a test reads it back from the command its hooks run.
 function keyOfWorker(f) {
   const settings = JSON.parse(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'));

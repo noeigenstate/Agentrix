@@ -2,10 +2,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { isDeepStrictEqual, TextDecoder } = require('node:util');
-const { familyOf, rankByName } = require('./seat-rules.mjs');
+const { rankByName } = require('./seat-rules.mjs');
 const { modelIdentity } = require('./model-seats.cjs');
 const { cleanConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
-const operationSlots = require('./operation-slots.cjs');
 
 const ROUTING_PATH = '.agentrix/routing.json';
 const MAX_BYTES = 32 * 1024;
@@ -69,11 +68,11 @@ function parseRouting(bytes, entry, catalog, defaults) {
   if (document?.format !== FORMAT) return invalid('bad-format', digest, raw);
   if (Number.isInteger(document.version) && document.version > 1) return invalid('newer-version', digest, raw);
   if (document.version !== 1) return invalid('bad-format', digest, raw);
-  const { format, version, ...body } = document;
+  // Digest the entire legacy document before discarding obsolete configuration.
+  const { format, version, operations, ...body } = document;
   try {
-    if (!Object.hasOwn(body, 'operations')) body.operations = {};
     const { config, ignored } = cleanConfig(body, entry, catalog, true, true), team = resolveTeam(entry, config, defaults);
-    const error = validateTeam(team, config, catalog, entry);
+    const error = validateTeam(team, catalog, entry);
     return error ? invalid(error.code, digest, raw) : { digest, raw, config, ignored };
   } catch (error) {
     return invalid(error.code || 'bad-format', digest, raw);
@@ -139,7 +138,7 @@ function readAtRoot(root, entry, catalog, defaults) {
 }
 
 function serializeRouting(config) {
-  return JSON.stringify({ format: FORMAT, version: 1, roles: config.roles, operations: config.operations }, null, 2) + '\n';
+  return JSON.stringify({ format: FORMAT, version: 1, roles: config.roles }, null, 2) + '\n';
 }
 
 function removeStaleTemps(target) {
@@ -198,14 +197,6 @@ function verificationDropped(before, after, rank) {
   return newEffort >= 0 && newEffort < oldEffort;
 }
 
-function reviewSeat(value, team, catalog) {
-  if (!value || value === 'follow') {
-    const reviewer = team.effective[team.reviewers[0]];
-    return reviewer && familyOf(reviewer.model) === 'codex' ? reviewer : undefined;
-  }
-  return { ...value, effort: value.effort ?? catalog.find(row => row.model === value.model)?.defaultEffort ?? 'high' };
-}
-
 function reviewRoleState(item) {
   if (!item) return null;
   const { row, seat } = item, { enabled, fresh, from, name, duty, outputs } = row;
@@ -218,8 +209,8 @@ function reviewRoleState(item) {
 function diffRole(id, before, after, diff) {
   const oldState = reviewRoleState(before), newState = reviewRoleState(after);
   if (isDeepStrictEqual(oldState, newState)) return null;
-  for (const field of ['enabled', 'fresh', 'from', 'model', 'effort', 'fast']) diff('role', id, field, oldState?.[field], newState?.[field]);
-  for (const field of ['name', 'duty', 'outputs']) diff('role', id, field, oldState?.custom?.[field], newState?.custom?.[field]);
+  for (const field of ['enabled', 'fresh', 'from', 'model', 'effort', 'fast']) diff(id, field, oldState?.[field], newState?.[field]);
+  for (const field of ['name', 'duty', 'outputs']) diff(id, field, oldState?.custom?.[field], newState?.custom?.[field]);
   let status = 'changed';
   if (!oldState || !oldState.enabled && newState?.enabled) status = 'added';
   else if (!newState || oldState.enabled && !newState.enabled) status = 'removed';
@@ -228,11 +219,11 @@ function diffRole(id, before, after, diff) {
 
 function reviewFile(file, reason, team, previous, catalog) {
   const { config, digest, ignored } = file, changes = [], roleChanges = [], flags = [];
-  const flag = (code, key, id, text) => flags.push({ code, [key]: id, ...(text !== undefined && { text }) });
+  const flag = (code, role, text) => flags.push({ code, role, ...(text !== undefined && { text }) });
   const rank = model => catalog.find(row => row.model === model)?.rank ?? rankByName(model);
   const listed = model => catalog.some(row => row.model === model && row.listed !== false);
-  const diff = (key, id, field, from, to) => {
-    if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ [key]: id, field, from, to });
+  const diff = (role, field, from, to) => {
+    if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ role, field, from, to });
   };
   const oldRoles = new Map(previous.team.map(item => [item.row.id, item]));
   const nextRoles = new Map(team.team.map(item => [item.row.id, item]));
@@ -243,28 +234,16 @@ function reviewFile(file, reason, team, previous, catalog) {
     if (!old?.enabled && !role?.enabled && !Object.hasOwn(config.roles, id)) continue;
     const change = diffRole(id, before, after, diff);
     if (change) roleChanges.push(change);
-    if (role?.source === 'custom') flag('custom-text', 'role', id, role.name);
+    if (role?.source === 'custom') flag('custom-text', id, role.name);
     const weakened = old?.enabled && verificationRole(old) && (!role?.enabled || old.fresh && !role.fresh || verificationDropped(before.seat, seat, rank));
     const shared = role?.enabled && role.kind === 'reviewer' && seat && authors.has(identity(seat.model));
-    if (weakened || shared) flag('verification-weakened', 'role', id);
+    if (weakened || shared) flag('verification-weakened', id);
     if (!role?.enabled || !seat) continue;
     const modelChanged = !old?.enabled || before.seat?.model !== seat.model;
-    if (modelChanged && rank(seat.model) === 3) flag('expensive-model', 'role', id, seat.model);
-    if (modelChanged && !listed(seat.model)) flag('unlisted-model', 'role', id, seat.model);
-    if (seat.fast && (!old?.enabled || !before.seat?.fast)) flag('fast-on', 'role', id, seat.model);
-    if (['xhigh', 'max'].includes(seat.effort) && (!old?.enabled || before.seat?.effort !== seat.effort)) flag('high-effort', 'role', id);
-  }
-  const nextOps = operationSlots.resolve(config.operations);
-  for (const [id, value] of Object.entries(nextOps)) {
-    const old = previous.operations[id];
-    diff('operation', id, 'value', old, value);
-    if (id === 'review' && verificationDropped(reviewSeat(old, previous, catalog), reviewSeat(value, team, catalog), rank)) {
-      flag('verification-weakened', 'operation', id, typeof value === 'string' ? undefined : value.model);
-    }
-    if (typeof value === 'string' || old?.model === value.model && old?.effort === value.effort) continue;
-    if (!listed(value.model)) flag('unlisted-model', 'operation', id, value.model);
-    if (['lookup', 'background'].includes(id) && familyOf(value.model) === 'claude' && rank(value.model) === 3) flag('operation-cost', 'operation', id, value.model);
-    if (['xhigh', 'max'].includes(value.effort) && old?.effort !== value.effort) flag('high-effort', 'operation', id);
+    if (modelChanged && rank(seat.model) === 3) flag('expensive-model', id, seat.model);
+    if (modelChanged && !listed(seat.model)) flag('unlisted-model', id, seat.model);
+    if (seat.fast && (!old?.enabled || !before.seat?.fast)) flag('fast-on', id, seat.model);
+    if (['xhigh', 'max'].includes(seat.effort) && (!old?.enabled || before.seat?.effort !== seat.effort)) flag('high-effort', id);
   }
   return { digest, reason, config, changes, roleChanges, flags, ignored };
 }

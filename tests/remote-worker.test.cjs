@@ -75,27 +75,19 @@ connection = module['Channel'](1, messages.append)
 with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
     connection.worker.temp = directory
     file = pathlib.Path(directory) / 'claude-lead'
-    background = 'ANTHROPIC_DEFAULT_HAIKU_MODEL'
-    subagent = 'CLAUDE_CODE_SUBAGENT_MODEL'
-    first = {'model':'claude-opus-5-5[1m]', 'effort':'high', 'fast':True,
-             'env':{background:'claude-sonnet-5-5', subagent:'claude-opus-5-5[1m]', subagent+'_FORCE':'ignored'}}
+    seats = {'researcher': {'model':'sonnet', 'effort':'high'}}
+    first = {'model':'claude-opus-5-5[1m]', 'effort':'high', 'fast':True, 'seatsMap':seats}
     current = {'model':'sonnet', 'effort':'medium'}
     connection.worker.write_claude_lead(first)
-    assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\nclaude-sonnet-5-5\nclaude-opus-5-5[1m]\n'
+    assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\n{"researcher":{"model":"sonnet","effort":"high"}}\n'
     def update(lead, ok):
         connection.receive({'op':'claude-lead', 'id':len(messages)+1, 'claudeLead':lead})
         assert messages[-1]['type'] == 'response' and messages[-1]['ok'] is ok, messages
-    update(dict(current, env={subagent:'haiku'}), True)
-    assert file.read_bytes() == b'sonnet\nmedium\n0\n\nhaiku\n'
-    for bad in [dict(current, model='bad&model'), dict(current, model='x'*161), dict(current, effort='High'),
-                dict(current, effort='x'*33), dict(current, fast='true'), dict(current, env=[]),
-                dict(current, env={background:'sonnet\nchanged'}), dict(current, env={subagent:'x'*161}), dict(current, env={subagent:True})]:
-        update(bad, False)
-        assert file.read_bytes() == b'sonnet\nmedium\n0\n\nhaiku\n'
     update(current, True)
-    assert file.read_bytes() == b'sonnet\nmedium\n0\n\n\n'
-    update(dict(first, seatsMap={'padding':'x'*8192}), False)
-    assert file.read_bytes() == b'sonnet\nmedium\n0\n\n\n'
+    for bad in [dict(current, model='bad&model'), dict(current, model='x'*161), dict(current, effort='High'),
+                dict(current, effort='x'*33), dict(current, fast='true'), dict(first, seatsMap={'padding':'x'*8192})]:
+        update(bad, False)
+        assert file.read_bytes() == b'sonnet\nmedium\n0\nnull\n'
     update(None, True)
     assert file.read_bytes() == b''
 `);
@@ -185,7 +177,7 @@ with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
 `);
 });
 
-test('SSH Bash exports only valid operation models to Claude conversations', { skip: process.platform === 'win32' }, t => {
+test('SSH Bash reads four, six and three line lead files without exporting retired values', { skip: process.platform === 'win32' }, t => {
   const output = pythonProbe(t, String.raw`
 import pathlib, runpy, shutil, subprocess, sys, tempfile
 module = runpy.run_path(sys.argv[1])
@@ -197,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-shell-') as directory:
     root = pathlib.Path(directory)
     stub = root / 'claude'
     stub.write_text('''#!/bin/sh
-printf "values=%s|%s|%s|" "$ANTHROPIC_DEFAULT_HAIKU_MODEL" "$CLAUDE_CODE_SUBAGENT_MODEL" "$CLAUDE_CODE_SUBAGENT_MODEL_FORCE"
+printf "values=%s|%s|%s|" "$ANTHROPIC_DEFAULT_HAIKU_MODEL" "$CLAUDE_CODE_SUBAGENT_MODEL" "$AGENTRIX_SEATS"
 shift 2
 printf "%s " "$@"
 printf "\\n"
@@ -205,8 +197,7 @@ printf "\\n"
     stub.chmod(0o700)
     worker = module['Worker'](lambda _event: None)
     worker.temp = directory
-    worker.write_claude_lead({'model':'sonnet', 'effort':'high', 'env':{
-        'ANTHROPIC_DEFAULT_HAIKU_MODEL':'claude-opus-5-5', 'CLAUDE_CODE_SUBAGENT_MODEL':'haiku'}})
+    worker.write_claude_lead({'model':'sonnet', 'effort':'high', 'seatsMap':{}})
     rc = root / 'agentrix.bash'
     rc.write_text(module['BASH_SOURCE'], encoding='utf-8')
     probe = '''
@@ -214,7 +205,7 @@ source "$1"
 [[ $(type -P claude) -ef "$AGENTRIX_ROOT/claude" ]] || exit 87
 claude --resume fixture
 claude --version
-printf '%s\\n' sonnet high 0 'invalid&word' haiku > "$AGENTRIX_CLAUDE_LEAD_FILE"
+printf '%s\\n' sonnet high 0 opus haiku '{}' > "$AGENTRIX_CLAUDE_LEAD_FILE"
 claude
 printf '%s\\n' sonnet high 0 > "$AGENTRIX_CLAUDE_LEAD_FILE"
 claude
@@ -225,8 +216,8 @@ claude
     result = subprocess.run([bash, '--noprofile', '--norc', '-c', probe, 'probe', str(rc)], env=env, text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert [line.rstrip() for line in result.stdout.splitlines() if line.startswith('values=')] == [
-        'values=claude-opus-5-5|haiku||--model sonnet --effort high --resume fixture',
-        'values=|||--version', 'values=|haiku||--model sonnet --effort high', 'values=|||--model sonnet --effort high',
+        'values=||{}|--model sonnet --effort high --resume fixture',
+        'values=||null|--version', 'values=||{}|--model sonnet --effort high', 'values=||null|--model sonnet --effort high',
     ], result.stdout
 `);
   if (output?.includes('SKIP Bash missing')) t.skip('Bash missing');

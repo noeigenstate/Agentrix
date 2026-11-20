@@ -2,12 +2,10 @@
 
 The dispatch helper that every command-line Codex or Claude worker is started through — it builds the real command, confirms the worker started, and reports its routing, rate and end — and the main-process gate that accepts its events for the activity pane. Claude --fast reaches its CLI as a JSON settings argv element. Claude aliases accept their own family at the bundled CLAUDE_ALIAS_FLOOR (currently major 5, minor 5) or newer, ignoring date and context/speed suffixes; older versions remain mismatches. A release bump changes the one floor constant in routingVerdict; no caller option or environment variable sets it.
 
-Codex workers registered through local dispatch control use the lead conversation's frozen operation config and report refused keys on a routing line.
-Main delivers frozen Claude operation settings to its brokered workers. SSH-dispatched workers and direct Claude helper launches use agent defaults.
-Local and SSH Claude terminal wrappers read the live lead file at launch, including the optional background and subagent model lines.
-The lead file's sixth line carries fallback choices. Terminal hooks and the helper read accepted seats from the private sidecar at invocation.
 The helper pins the admitted model, effort and fast settings.
 The Codex shell wrappers request native launch. The local and SSH native launches keep a separate baseline next to the live sidecar so the helper can identify flags copied from the original routing table even when the seat environment variable is absent.
+Local and SSH Claude wrappers read the lead file at launch. It carries model, effort, fast flag and seat-map JSON.
+Readers also accept the legacy three-line and six-line forms. Hooks and the helper read accepted seats from the private sidecar at invocation.
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"
 Claude's terminal Agent and Task hooks report provisional and final input by tool-use ID.

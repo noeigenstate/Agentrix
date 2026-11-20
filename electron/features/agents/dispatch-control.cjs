@@ -17,19 +17,6 @@ const status = value => ['queued', 'delivered', 'consumed', 'rejected', 'unknown
 const registrationCodes = new Set(['dispatch.session_mismatch', 'dispatch.control_unbound', 'dispatch.unknown_run',
   'dispatch.project_mismatch', 'dispatch.duplicate_run']);
 const leadModes = new Set(['native', 'terminal', 'codex']);
-const CODEX_MODEL_KEYS = new Set(['review_model', 'agents.default_subagent_model', 'memories.extract_model', 'memories.consolidation_model']);
-const CODEX_EFFORT_KEY = 'agents.default_subagent_reasoning_effort';
-
-// The SSH helper's load graph is CJS-only. Admit only these five string-valued overrides.
-function cleanCodexConfig(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
-  const entries = Object.entries(value);
-  if (!entries.length || entries.some(([key, setting]) => typeof setting !== 'string' || (key === CODEX_EFFORT_KEY
-    ? !/^[a-z][a-z0-9-]{0,31}$/.test(setting)
-    : !CODEX_MODEL_KEYS.has(key) || setting.length > 160 || !/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(setting)))) return undefined;
-  return Object.fromEntries(entries);
-}
-
 function frames(socket, receive, disconnected) {
   let queue = [], bytes = 0, blocked = false, ended = false;
   const flush = () => {
@@ -91,9 +78,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
         if (clients.has(run.runId)) return refuse(run.runId, 'dispatch.duplicate_run', run.leadMode);
         client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
-        const codexConfig = verified.local === true && run.agent === 'codex' ? cleanCodexConfig(run.codexConfig) : undefined;
-        send({ type: 'registered', runId: run.runId, ...(accountKey && verified.local === true ? { accountKey } : {}),
-          ...(codexConfig && { codexConfig }) });
+        send({ type: 'registered', runId: run.runId, ...(accountKey && verified.local === true ? { accountKey } : {}) });
         return;
       }
       if (value.type === 'receipt' && validId(value.messageId) && status(value.status)) {
@@ -184,7 +169,6 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
       if (!registered && value.type === 'registered' && value.runId === runId) {
         registered = true; clearTimeout(timer);
         if (typeof value.accountKey === 'string' && /^[a-f\d]{64}$/.test(value.accountKey)) client.accountKey = value.accountKey;
-        if (agent === 'codex') client.codexConfig = cleanCodexConfig(value.codexConfig);
         resolve(client);
       }
       else if (!registered && value.type === 'refused' && value.runId === runId) {
@@ -227,4 +211,4 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
   });
 }
 
-module.exports = { createDispatchControl, connectDispatchControl, cleanCodexConfig };
+module.exports = { createDispatchControl, connectDispatchControl };

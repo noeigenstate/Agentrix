@@ -12,9 +12,8 @@ const { scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/co
 const { codexExecutable } = require('../codex-runtime/locator.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
-const { startupDetail, stderrTail } = require('../agents/start-failure.cjs');
+const { startupDetail } = require('../agents/start-failure.cjs');
 const { routingCommand, routingPatch, routingOwned } = require('../agents/agent-command.cjs');
-const { cleanCodexConfig } = require('../agents/dispatch-control.cjs');
 const { ownerShell, ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
 // A resumed conversation reads back this many of its newest generated pictures at once; older ones wait for the reader.
 const RECENT_PICTURES = 6;
@@ -48,38 +47,7 @@ const SANDBOX_REFUSALS = {
     ssh: REMOTE_WRITE,
   },
 };
-// Codex answers with the sandbox it really applied; another one than requested stops (a start, or a change), so a session never runs with less or
-// more than asked. `place` is 'windows' for a local Windows session, 'ssh' for a remote one.
-function threadOperations(rawConfig, baseConfig, hosts) {
-  const config = cleanCodexConfig(rawConfig);
-  const entries = Object.keys(config || {});
-  const result = { applied: entries, refused: [] };
-  return {
-    result: entries.length ? result : undefined,
-    async request(rpc, options, threadId, assertOpen) {
-      const method = threadId ? 'thread/resume' : 'thread/start';
-      const params = { ...options, ...(threadId ? { threadId, excludeTurns: true } : {}) };
-      const configWithoutOperations = { ...baseConfig, ...options.config };
-      try {
-        return await rpc.request(method, { ...params, config: { ...(result.applied.length ? config : {}), ...configWithoutOperations } });
-      } catch (error) {
-        if (!result.applied.length || error.uncertain !== false || error.message !== 'rpc_rejected'
-          || error.missingThread || error.missingThreadId) throw error;
-        assertOpen();
-        const detail = (error.serverMessage || error.message).replace(/[\r\n]+/g, ' ');
-        const reason = stderrTail(detail, { hosts, limit: 1000 }).slice(0, 200) || error.message;
-        result.refused = result.applied.map(key => ({ key, reason }));
-        result.applied = [];
-        try {
-          return await rpc.request(method, { ...params, config: configWithoutOperations });
-        } catch (retryError) {
-          throw threadId && retryError.missingThread ? retryError : error;
-        }
-      }
-    },
-  };
-}
-
+// A session stops when Codex applies a different sandbox from the one requested.
 function assertSandbox(requested, applied, place, phase = 'start') {
   if (!requested || applied?.type === SANDBOX_TYPES[requested]) return;
   throw Object.assign(new Error(SANDBOX_REFUSALS[phase][requested === 'workspace-write' && place ? place : requested]),
@@ -372,7 +340,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         return compatibility;
       }
 
-      function acceptThread(result, options, { threadId, resumed, resuming, operations }) {
+      function acceptThread(result, options, { threadId, resumed, resuming }) {
         if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
           && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
         assertSandbox(options.sandbox, result.sandbox, place());
@@ -388,7 +356,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         threadKnown();
         events.publish('routing.updated', { declared: { model: spec.model ?? null, effort: spec.effort ?? null, fast: spec.fast ?? null },
           effective: { model: result.model ?? null, effort: result.reasoningEffort ?? null, fast },
-          observed: { model: null, effort: null, fast: null }, reason: null, ...(operations && { operations }) });
+          observed: { model: null, effort: null, fast: null }, reason: null });
       }
 
       async function open(resuming, override) {
@@ -432,14 +400,16 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             .replaceAll(spec.cwd.replace(/\\/g, '/'), wireCwd.replace(/\\/g, '/'));
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             ...threadPolicy(), approvalsReviewer: 'user' };
-          const baseConfig = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}) };
-          const operations = threadOperations(spec.operations?.config, baseConfig, hosts);
+          const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}) };
+          const requestThread = (options, resumeId) => rpc.request(resumeId ? 'thread/resume' : 'thread/start', {
+            ...options, ...(resumeId && { threadId: resumeId, excludeTurns: true }), config: { ...config, ...options.config },
+          });
           let result, resumed = resuming;
-          try { result = await operations.request(rpc, options, resuming && threadId, assertOpen); }
+          try { result = await requestThread(options, resuming && threadId); }
           catch (error) {
             if (!resuming || !spec.allowFreshResume || !error.missingThread) throw error;
             occupied.delete(lockKey); lockKey = null; events.binding.providerSessionId = null; resumed = false;
-            result = await operations.request(rpc, options, null, assertOpen);
+            result = await requestThread(options, null);
           }
           assertOpen();
           const retry = unelevated(options, result);
@@ -451,10 +421,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
               reconnecting = true; rpc.close(); await stopProcess(child); child.dispose?.(); child = null; reconnecting = false;
               assertOpen(); compatibility = await connect(); stage = 'thread_resume';
             }
-            result = await operations.request(rpc, retry, resumed && threadId, assertOpen);
+            result = await requestThread(retry, resumed && threadId);
             assertOpen();
           }
-          acceptThread(result, options, { threadId, resumed, resuming, operations: operations.result });
+          acceptThread(result, options, { threadId, resumed, resuming });
           // Dispatch needs the resumed model context, not a copy of its historical output.
           if (resumed && spec.owner !== 'dispatch') await replayHistory();
           assertOpen();

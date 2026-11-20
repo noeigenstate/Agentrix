@@ -9,7 +9,6 @@ const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
 const { familyOf } = require('./seat-rules.mjs');
-const operationSlots = require('./operation-slots.cjs');
 const { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
 const { readRouting, writeRouting, routingState, reviewFile, routingWatch } = require('./project-routing.cjs');
 const { renderRoutingSkill } = require('./skill-render.cjs');
@@ -20,50 +19,18 @@ const MAX_SSH_BUNDLE_BYTES = 512 * 1024;
 // Closing a library watcher does not end its CLI sessions. Keep their references across store recreation in this process.
 const liveSessionSnapshots = new Map();
 
-const defaults = entry => ({ enabled: true, trigger: entry.source === 'builtin' ? entry.trigger : 'auto', firstOpenRun: false,
+const ROUTING_ID = 'builtin:model-routing';
+const defaults = entry => ({ enabled: true,
+  trigger: entry.id === ROUTING_ID ? 'always' : entry.source === 'builtin' ? entry.trigger : 'auto', firstOpenRun: false,
   autoOptimize: entry.source !== 'builtin', confirmChanges: false, createdByAgent: false, reviewed: false, lastUsed: null });
 const triggerWhen = { always: '每个任务开始前', auto: '描述匹配时' };
 const migrateTrigger = options => options.trigger === 'first-open' ? { ...options, trigger: 'auto', firstOpenRun: true } : options;
-const runsOnFirstOpen = skill => skill.trigger === 'always' || skill.trigger === 'auto' && skill.firstOpenRun;
+const runsOnFirstOpen = skill => skill.id !== ROUTING_ID && (skill.trigger === 'always' || skill.trigger === 'auto' && skill.firstOpenRun);
 const replacementHistory = value => Array.isArray(value) ? value.filter(item => item && ['project', 'name', 'from', 'backup'].every(key => typeof item[key] === 'string') && Number.isFinite(item.at)).slice(0, 20) : [];
 const canonical = file => {
   const resolved = path.resolve(file);
   return process.platform === 'win32' ? resolved.replace(/\\/g, '/').toLowerCase() : resolved;
 };
-
-function operationScope(stored, projectId) {
-  const global = operationSlots.cleanStored(stored?.version === 1 ? stored.global : null);
-  const projects = stored?.version === 1 ? stored.projects : null;
-  const project = projectId !== null && Object.hasOwn(projects || {}, projectId) ? operationSlots.cleanStored(projects[projectId]) : null;
-  return { global, project };
-}
-
-function operationInfo(template, config, team, catalog, installed, frozen, recent, nativeClaude) {
-  const operation = operationSlots.levers(config?.operations ?? template.operations, team.effective, catalog, installed, team.reviewers[0]);
-  if (recent) {
-    const refused = Object.fromEntries([...recent].flatMap(([key, { value, reason }]) => operation.codex.config[key] === value ? [[key, reason]] : []));
-    operation.agents = operationSlots.applyRefusals(operation.agents, refused);
-  }
-  const liveLookup = nativeClaude && frozen?.claude?.lookupAgent && lookupSeat(operation, catalog);
-  const pending = frozen ? Object.keys(operation.values).filter(id => !(id === 'lookup' && liveLookup)
-    && (JSON.stringify(operation.values[id]) !== JSON.stringify(frozen.values[id])
-    || JSON.stringify(operation.choices[id]) !== JSON.stringify(frozen.choices?.[id]))) : [];
-  const current = frozen ? structuredClone({ values: frozen.values, agents: frozen.agents }) : null;
-  if (liveLookup) {
-    current.values.lookup = operation.values.lookup;
-    current.agents.lookup = operation.agents.lookup;
-  }
-  return { rows: operationSlots.makeRows(operation, catalog), defaults: operationSlots.resolve(), pending,
-    template: template.operations, config: config?.operations ?? null, effective: operation.values,
-    current };
-}
-
-function lookupSeat(operation, catalog) {
-  const choice = operation.claude.lookupAgent;
-  if (!choice || choice.model.includes('[')) return null;
-  const model = modelSeats.agentAlias(choice.model, catalog);
-  return model ? { model, effort: choice.effort, configuredModel: choice.model } : null;
-}
 
 function launchSeatMap(map, catalog) {
   if (!map) return null;
@@ -73,18 +40,26 @@ function launchSeatMap(map, catalog) {
   }]));
 }
 
-function resolveOperations(info, remoteAgent) {
-  const installed = remoteAgent ? { ...info.installed, [remoteAgent]: true } : info.installed;
-  const reviewer = info.roles.find(role => role.enabled && role.kind === 'reviewer')?.id;
-  return operationSlots.levers(info.operations.effective, info.effective, info.catalog, installed, reviewer);
-}
-
-const leadModel = (model, operations) => model === 'haiku' && operations?.pinnedHaiku ? operations.pinnedHaiku : model;
-
 const routingFailure = (code, error = {}) => ({
   ok: false, code, message: error.message ?? code,
-  ...(error.role && { role: error.role }), ...(error.seat && { seat: error.seat }), ...(error.operation && { operation: error.operation }),
+  ...(error.role && { role: error.role }), ...(error.seat && { seat: error.seat }),
 });
+
+function stripOperationConfig(config) {
+  if (!config || !Object.hasOwn(config, 'operations')) return;
+  delete config.operations;
+}
+
+function migrateRoutingOptions(options) {
+  const routing = options[ROUTING_ID];
+  if (!routing) return;
+  for (const key of ['enabled', 'trigger', 'firstOpenRun', 'firstOpenedProjects', 'operations']) delete routing[key];
+  const saved = routing.routing;
+  if (!saved) return;
+  stripOperationConfig(saved.template);
+  for (const config of Object.values(saved.local || {})) stripOperationConfig(config);
+  for (const record of Object.values(saved.trust || {})) stripOperationConfig(record?.config);
+}
 
 class SkillsStore {
   constructor({ dataDir, builtinDir, getProjects = () => [], getAgents = () => ({}), routingNote = () => '', activeProjects = () => [], changed = () => {}, report = () => {},
@@ -95,12 +70,12 @@ class SkillsStore {
     const stored = readJson(this.optionsFile, {}, report, value => value && !Array.isArray(value) && typeof value === 'object'
       && Object.values(value).every(item => item && typeof item === 'object' && !Array.isArray(item)));
     this.options = Object.fromEntries(Object.entries(stored).map(([id, options]) => [id, migrateTrigger(options)]));
+    migrateRoutingOptions(this.options);
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.routingWatchers = new Map(); this.routingSeen = new Set(); this.routingReviews = new Map();
     this.projectSkills = new Map(); this.replacementFailures = new Set();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
-    this.operationResults = new Map();
     this.pruneDeliveryFiles();
     for (const folder of [this.globalFolder, path.join(dataDir, 'skill-pending')]) {
       try { fs.mkdirSync(folder, { recursive: true }); } catch (error) { report(error); }
@@ -169,16 +144,15 @@ class SkillsStore {
       let options = this.options[entry.id];
       if (entry.source !== 'builtin' || !entry.seats?.length || !options || options.routing) continue;
       if (options.team?.version !== 2 && (options.seats || options.seatDefaultModels)) options = this.migrateLegacySeats(entry, options);
-      const { team, operations, ...rest } = options;
-      if (!team && !operations) continue;
+      const { team, ...rest } = options;
+      if (!team) continue;
       const roles = modelSeats.cleanStoredSeats(team?.global, entry.seats);
-      const template = { roles, operations: operationScope(operations, null).global };
+      const template = { roles };
       const local = Object.fromEntries(this.getProjects().flatMap(({ id }) => {
         const seatOverride = Object.hasOwn(team?.projects || {}, id);
-        const operationOverride = Object.hasOwn(operations?.projects || {}, id);
-        if (!seatOverride && !operationOverride) return [];
-        const projectRoles = modelSeats.cleanStoredSeats(seatOverride ? team.projects[id] : null, entry.seats);
-        return [[id, { roles: { ...roles, ...projectRoles }, operations: { ...template.operations, ...operationScope(operations, id).project } }]];
+        if (!seatOverride) return [];
+        const projectRoles = modelSeats.cleanStoredSeats(team.projects[id], entry.seats);
+        return [[id, { roles: { ...roles, ...projectRoles } }]];
       }));
       this.options[entry.id] = { ...rest, routing: { template, local, trust: {} } };
     }
@@ -212,7 +186,6 @@ class SkillsStore {
       } catch (error) { if (error.code === 'ENOENT') this.deliveryProjects = retained; else this.report(error); }
     }
     let modified = false;
-    for (const id of this.operationResults.keys()) if (!projects.has(id)) this.operationResults.delete(id);
     for (const id of this.routingSeen) if (!projects.has(id)) this.routingSeen.delete(id);
     for (const id of this.routingReviews.keys()) if (!projects.has(id)) this.routingReviews.delete(id);
     for (const options of Object.values(this.options)) {
@@ -310,19 +283,14 @@ class SkillsStore {
     const latest = this.history.latest(entry.id), options = { ...defaults(entry), ...this.options[entry.id] };
     const agents = this.getAgents(), required = entry.source === 'builtin' ? entry.requires : 'none';
     const lastUsed = options.lastUsed && { at: options.lastUsed.at, project: this.projectName(options.lastUsedProjectId || options.lastUsed.project, options.lastUsed.project), agent: options.lastUsed.agent };
-    const seats = entry.source === 'builtin' && entry.seats?.length && options.enabled ? this.seatsInfo() : null;
-    const seatSummary = seats?.skill === entry.id ? seats.roles.flatMap(({ id, name }) => {
-      if (!Object.hasOwn(seats.effective, id)) return [];
-      const { model, effort, fast } = seats.effective[id];
-      return [{ seat: id, name, model, effort, fast: fast === true }];
-    }) : null;
     return { id: entry.id, name: entry.name, description: entry.description, title: entry.source === 'builtin' ? entry.title : entry.name,
       summary: entry.source === 'builtin' ? entry.summary : entry.description, source: entry.source, scope: entry.scope,
       when: entry.source === 'builtin' ? entry.when : triggerWhen[options.trigger],
       extends: entry.source === 'builtin' ? null : extensionBase(entry.name, this.builtinNames()),
       replaced: entry.source === 'builtin' ? replacementHistory(options.replaced).map(item => ({ ...item })) : [],
       projectId: entry.projectId, projectName: this.projectName(entry.projectId), path: entry.path,
-      enabled: options.enabled, trigger: options.trigger, firstOpenRun: options.firstOpenRun === true, ...(seatSummary && { seatSummary }),
+      enabled: options.enabled, trigger: options.trigger, firstOpenRun: options.firstOpenRun === true,
+      ...(entry.id === ROUTING_ID && { hiddenInSettings: true }),
       autoOptimize: entry.source !== 'builtin' && options.autoOptimize,
       confirmChanges: entry.source !== 'builtin' && options.confirmChanges,
       version: latest?.version || 0, updatedAt: latest?.at || null, updatedBy: latest?.by || null, updatedIn: this.projectName(latest?.projectId || latest?.project, latest?.project || null),
@@ -407,6 +375,7 @@ class SkillsStore {
   setOptions(id, patch) {
     this.refresh();
     const entry = this.entry(id);
+    if (id === ROUTING_ID) throw new Error('系统自带技能为只读。');
     if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('技能选项无效。');
     for (const [key, value] of Object.entries(patch)) {
       if (key === 'trigger' ? value !== 'first-open' && !TRIGGERS.includes(value)
@@ -433,39 +402,12 @@ class SkillsStore {
   terminalLead(projectId, { remote = false } = {}) {
     const seat = this.leadOptions(projectId, 'claude', { remote });
     if (!seat) return null;
-    const operations = this.operationLevers(projectId, null, remote ? 'claude' : null);
-    return { ...seat, model: leadModel(seat.model, operations), env: operations.claude.env, seatsMap: this.dispatchSeats(projectId) };
+    return { ...seat, seatsMap: this.dispatchSeats(projectId) };
   }
 
   dispatchSeats(projectId) {
     const info = this.seatsInfo(projectId);
     return launchSeatMap(info?.effective, info?.catalog);
-  }
-
-  liveLookup(projectId) {
-    const info = this.seatsInfo(projectId);
-    return info && lookupSeat(resolveOperations(info), info.catalog);
-  }
-
-  operationLevers(projectId, sessionId, remoteAgent = null) {
-    const snapshot = this.sessionSnapshot(projectId, sessionId);
-    if (snapshot && Object.hasOwn(snapshot, 'operations')) return snapshot.operations ?? { claude: { env: {} }, codex: { config: {} } };
-    const info = this.seatsInfo(projectId);
-    return info ? resolveOperations(info, remoteAgent) : { claude: { env: {} }, codex: { config: {} } };
-  }
-
-  noteOperationResult(projectId, sessionId, agent, { applied, refused }) {
-    const operation = this.sessionSnapshot(projectId, sessionId)?.operations;
-    if (!operation || agent !== 'codex') return false;
-    const config = operation.codex.config;
-    const recent = this.operationResults.get(projectId) || new Map();
-    const rejected = Object.fromEntries(refused.filter(({ key }) => Object.hasOwn(config, key)).map(({ key, reason }) => [key, reason]));
-    operation.agents = operationSlots.applyRefusals(operation.agents, rejected);
-    for (const key of applied) if (recent.get(key)?.value === config[key]) recent.delete(key);
-    for (const [key, reason] of Object.entries(rejected)) recent.set(key, { value: config[key], reason });
-    if (recent.size) this.operationResults.set(projectId, recent);
-    else this.operationResults.delete(projectId);
-    return true;
   }
 
   leadAgent(projectId) { return this.seatsInfo(projectId)?.leadAgent ?? null; }
@@ -497,7 +439,7 @@ class SkillsStore {
   }
 
   routingContext() {
-    const entry = [...this.entries.values()].find(entry => entry.source === 'builtin' && entry.seats?.length && this.options[entry.id]?.enabled !== false);
+    const entry = [...this.entries.values()].find(entry => entry.source === 'builtin' && entry.seats?.length);
     if (!entry) return null;
     const agents = this.getAgents(), installed = { claude: !!agents.claude?.installed, codex: !!agents.codex?.installed };
     const catalog = modelSeats.catalog(installed, [...(this.modelCatalog?.rows() || []), ...this.getModels()]);
@@ -507,7 +449,7 @@ class SkillsStore {
       if (raw === undefined || raw === null) return null;
       try {
         const { config } = cleanConfig(raw, entry, catalog, true);
-        return validateTeam(resolveTeam(entry, config, defaults), config, catalog, entry) ? null : config;
+        return validateTeam(resolveTeam(entry, config, defaults), catalog, entry) ? null : config;
       } catch { return null; }
     };
     const template = restore(stored.template);
@@ -536,7 +478,6 @@ class SkillsStore {
     const cached = this.routingReviews.get(project.id);
     if (cached?.entry === entry && cached.key === key) return structuredClone(cached.review);
     const next = resolveTeam(entry, file.config, defaults), previous = resolveTeam(entry, active, defaults);
-    previous.operations = operationSlots.resolve(active.operations);
     const review = reviewFile(file, reason, next, previous, catalog);
     this.routingReviews.set(project.id, { entry, key, review });
     return structuredClone(review);
@@ -555,22 +496,17 @@ class SkillsStore {
     const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
     const roles = team.team.map(item => item.row);
     const leadConfig = modelSeats.leadConfiguration(effective, lead, installed, catalog);
-    const launchLead = snapshot?.seatsMap?.[lead];
-    const runningLead = launchLead && { ...launchLead, model: leadModel(launchLead.model, snapshot.operations) };
+    const runningLead = snapshot?.seatsMap?.[lead];
     const agent = runningLead && familyOf(runningLead.model), remote = project?.kind === 'ssh';
     const restartLead = agent && (remote && agent === 'claude'
       ? modelSeats.leadOptions(effective, agent, { ...installed, claude: true }, catalog, lead) : leadConfig.leads[agent]);
     const applied = snapshot && binding.appliedRouting;
     const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: runningLead } : null;
-    const operations = operationInfo(template, config, team, catalog, installed, snapshot?.operations, this.operationResults.get(projectId),
-      snapshot && binding.nativeClaude);
-    const restartModel = restartLead?.model === 'haiku'
-      ? leadModel('haiku', resolveOperations({ effective, operations, installed, catalog, roles }, remote ? agent : null)) : restartLead?.model;
-    const leadPending = restartLead && (runningLead.model !== restartModel || runningLead.effort !== restartLead.effort
-      || Boolean(runningLead.fast) !== Boolean(restartLead.fast)) ? { ...restartLead, model: restartModel, fast: restartLead.fast === true } : null;
+    const leadPending = restartLead && (runningLead.model !== restartLead.model || runningLead.effort !== restartLead.effort
+      || Boolean(runningLead.fast) !== Boolean(restartLead.fast)) ? { ...restartLead, fast: restartLead.fast === true } : null;
     return { skill: entry.id, seats: team.seats, roles, lead, authors: team.authors, fresh: team.fresh,
       ...leadConfig, defaults, template, config, routing: source,
-      effective, operations, current, leadPending, currentRoles: current ? applied?.roles ?? roles : null,
+      effective, current, leadPending, currentRoles: current ? applied?.roles ?? roles : null,
       catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
   }
@@ -629,7 +565,7 @@ class SkillsStore {
     try {
       ({ config } = cleanConfig(raw, entry, catalog));
       team = resolveTeam(entry, config, defaults);
-      const invalid = validateTeam(team, config, catalog, entry);
+      const invalid = validateTeam(team, catalog, entry);
       if (invalid) return invalid;
       config = compactConfig(entry, config);
     } catch (error) {
@@ -738,9 +674,9 @@ class SkillsStore {
     }
   }
 
-  renderedSkill(seats, map, leadAgent, remote, operations) {
+  renderedSkill(seats, map, leadAgent, remote) {
     const entry = this.entries.get(seats.skill);
-    const text = renderRoutingSkill(entry.text, { ...seats, map, leadAgent, operations });
+    const text = renderRoutingSkill(entry.text, { ...seats, map, leadAgent });
     if (remote || text === entry.text) return { path: entry.path, text };
     try {
       const root = path.join(this.dataDir, 'skill-delivery', 'rendered');
@@ -766,11 +702,10 @@ class SkillsStore {
     const leadAgent = agent || seats?.leadAgent;
     const leadSeat = seats && remote && leadAgent === 'claude'
       ? modelSeats.leadOptions(seats.effective, leadAgent, { ...seats.installed, claude: true }, seats.catalog, seats.lead) : seats?.leads[leadAgent];
-    const operations = frozen && Object.hasOwn(frozen, 'operations') ? frozen.operations : seats ? resolveOperations(seats, remote ? leadAgent : null) : null;
     const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats
       ? { ...seats.effective, ...(leadSeat && { [seats.lead]: leadSeat }) } : null;
     const agentSeats = frozen && Object.hasOwn(frozen, 'agentSeats') ? frozen.agentSeats : launchSeatMap(seatsMap, seats?.catalog);
-    const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote, operations) } : {});
+    const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote) } : {});
     const names = this.builtinNames();
     const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
       && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
@@ -788,7 +723,7 @@ class SkillsStore {
       `${safeId(project.id).slice(0, 32)}-${agent === 'claude' || agent === 'codex' ? agent : 'preview'}.md`);
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)),
-      manifest, routingNote, seatsMap, agentSeats, operations, rendered, roles };
+      manifest, routingNote, seatsMap, agentSeats, rendered, roles };
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
@@ -869,7 +804,7 @@ class SkillsStore {
     const key = JSON.stringify([canonical(this.dataDir), projectId, sessionId]);
     let snapshot = liveSessionSnapshots.get(key);
     if (!snapshot) { snapshot = { files: new Set() }; liveSessionSnapshots.set(key, snapshot); }
-    for (const field of ['seatsMap', 'agentSeats', 'operations', 'rendered', 'roles']) {
+    for (const field of ['seatsMap', 'agentSeats', 'rendered', 'roles']) {
       if (!Object.hasOwn(snapshot, field)) snapshot[field] = structuredClone(delivery[field]);
     }
     for (const { path: file } of Object.values(snapshot.rendered)) snapshot.files.add(file);

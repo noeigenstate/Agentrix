@@ -2,8 +2,6 @@
 
 Owns provider-neutral session routing, validated renderer IPC, settings and worker SDK registration.
 
-Brokered Claude workers take the lead conversation's operation environment from the authenticated run binding.
-
 ## Owns
 - `electron/features/native-session/**`
 

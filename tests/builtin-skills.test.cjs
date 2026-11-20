@@ -7,7 +7,6 @@ const vm = require('node:vm');
 const { builtinMetadata } = require('../electron/features/skills/builtin-format.cjs');
 const { renderRoutingSkill } = require('../electron/features/skills/skill-render.cjs');
 const modelSeats = require('../electron/features/skills/model-seats.cjs');
-const { levers } = require('../electron/features/skills/operation-slots.cjs');
 const { SkillsStore } = require('../electron/features/skills/store.cjs');
 const { MAX_BYTES } = require('../electron/features/skills/files.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
@@ -26,34 +25,6 @@ const note = delivery => startupNote('Read.', null, null, delivery);
 const start = (store, project, sessionId, agent = 'codex') => store.delivery(project, project.kind === 'ssh', sessionId, { agent, started: true });
 const team = '\n<!-- agentrix:team -->\n| Seat | Role | Duty | Outputs | Model | Launch |\n<!-- /agentrix:team -->\n';
 
-test('operation skill rendering reproduces the shipped defaults and replaces lookup instructions and Haiku seat launches', () => {
-  let text = fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8').replace(/\r\n/g, '\n');
-  // A1 can run on its integration base before Lane S's shipped region is merged.
-  if (!text.includes('<!-- agentrix:operations -->')) {
-    text += '\n<!-- agentrix:operations -->\n| Operation | Name | Covers | Claude | Codex |\n'
-      + '| lookup | Lookup | Read files | haiku · high; agentrix-lookup in native mode, else Agent call, model "haiku", effort "high"'
-      + ' | haiku · high; helper claude --seat researcher --model haiku --effort high --permission plan --detach, then wait |\n'
-      + '| review | Review pass | Review | not controllable (review is the Reviewer seat) | Codex default |\n<!-- /agentrix:operations -->\n';
-  }
-  const { roles, seats } = builtinMetadata(text, 'model-routing');
-  const installed = { claude: true, codex: true };
-  const catalog = modelSeats.catalog(installed, [
-    { model: 'gpt-6.2-sol', fast: true }, { model: 'claude-haiku-5-5', alias: 'haiku' }, { model: 'claude-sonnet-5-5', alias: 'sonnet' },
-  ]);
-  const map = modelSeats.defaultsFor(installed, catalog, seats), spec = { roles, map, leadAgent: 'claude', installed, catalog };
-  assert.equal(renderRoutingSkill(text, spec), text);
-  const changedSeats = { ...map, researcher: { model: 'haiku', effort: 'high' }, reviewer: { model: 'gpt-6.2-sol', effort: 'high' } };
-  const values = { lookup: { model: 'sonnet', effort: 'medium' }, background: { model: 'sonnet' } };
-  const operations = levers(values, changedSeats, catalog, installed);
-  const rendered = renderRoutingSkill(text, { ...spec, map: changedSeats, operations });
-  assert.match(rendered, /\| lookup \|.*agentrix-lookup.*model "sonnet".*--seat researcher --model sonnet --effort medium --permission plan/);
-  assert.match(rendered, /\| researcher \|.*helper claude --seat researcher --model claude-haiku-5-5/);
-  assert.match(rendered, /\| review \|.*gpt-6\.2-sol \(Reviewer seat\)/);
-  if (fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8').includes('<!-- agentrix:operations -->')) {
-    assert.doesNotMatch(rendered, /\bHaiku\b/);
-  }
-});
-
 test('routing renderer retains the pinned HEAD cells for template, project and SSH', () => {
   const text = fs.readFileSync(path.join(resources, 'model-routing/SKILL.md'), 'utf8');
   const { resolveTeam } = require('../electron/features/skills/team-roles.cjs');
@@ -65,9 +36,9 @@ test('routing renderer retains the pinned HEAD cells for template, project and S
     const { leadAgent } = modelSeats.leadConfiguration(map, 'orchestrator', installed, catalog);
     return renderRoutingSkill(text, { roles, map, leadAgent, installed, catalog });
   };
-  assert.equal(render({ roles: {}, operations: {} }), text);
+  assert.equal(render({ roles: {} }), text);
   for (const { global, project, cells } of Object.values(fixtures)) {
-    const table = render({ roles: { ...global, ...project }, operations: {} }).split('<!-- agentrix:team -->')[1].split('<!-- /agentrix:team -->')[0];
+    const table = render({ roles: { ...global, ...project } }).split('<!-- agentrix:team -->')[1].split('<!-- /agentrix:team -->')[0];
     const rendered = Object.fromEntries(table.trim().split(/\r?\n/).slice(2).map(line => {
       const columns = line.split('|').map(cell => cell.trim());
       return [columns[1], columns.slice(5, 7)];
@@ -81,7 +52,7 @@ test('routing renderer moves enabled library roles into the team and frames cust
   const { cleanConfig, resolveTeam } = require('../electron/features/skills/team-roles.cjs');
   const entry = builtinMetadata(text, 'model-routing'), installed = { claude: true, codex: true };
   const catalog = modelSeats.catalog(installed), defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
-  const { config } = cleanConfig({ operations: {}, roles: {
+  const { config } = cleanConfig({ roles: {
     qa: { enabled: false },
     frontend: { enabled: true },
     'x-mobile': { from: 'frontend', name: 'Mobile', duty: 'Verify builds', outputs: 'Build notes' },
@@ -125,7 +96,7 @@ test('rendered routing writes safe summaries and exposes role freshness changes'
   const { resolveTeam } = require('../electron/features/skills/team-roles.cjs');
   const entry = builtinMetadata(text, 'model-routing'), installed = { claude: true, codex: true };
   const catalog = modelSeats.catalog(installed), defaults = modelSeats.defaultsFor(installed, catalog, entry.seats);
-  const { roles, effective: map } = resolveTeam(entry, { operations: {}, roles: {
+  const { roles, effective: map } = resolveTeam(entry, { roles: {
     qa: { fresh: false }, designer: { fresh: true, model: 'evil:', effort: 'high' }, performance: { enabled: true },
     'x-mobile': { from: 'designer', name: 'Mobile Team', duty: 'Build mobile', outputs: '' },
   } }, defaults);
@@ -288,10 +259,10 @@ test('seat ids, fresh roles, and duties come from front matter and the team regi
 test('shipped descriptions include trigger timing and system precedence without yielding', () => {
   const fields = name => builtinMetadata(fs.readFileSync(path.join(resources, name, 'SKILL.md'), 'utf8'), name);
   const routing = fields('model-routing'), standard = fields('code-standard'), ui = fields('ui-standard');
-  assert.equal(routing.trigger, 'auto');
+  assert.equal(routing.trigger, 'always');
   assert.match(routing.description, /^Use before any task that changes the project, however small \(a new feature or a change to one, a bug fix or debugging/);
   assert.doesNotMatch(routing.description, /unless the project has its own|yield/i);
-  assert.equal(routing.when, '新增或修改功能、调试和修复缺陷、改界面、规划、审查或发布时生效，再小的改动也算');
+  assert.equal(routing.when, '\u6bcf\u4e2a\u4efb\u52a1\u5f00\u59cb\u524d');
   assert.equal(standard.trigger, 'always');
   assert.match(standard.description, /^Use before every task/);
   assert.match(standard.description, /on its first run in a project/);
@@ -512,11 +483,12 @@ for (const trigger of ['always', 'first-open']) test(`simultaneous launches clai
   assert.doesNotMatch(fs.readFileSync(first.skillNoteFile, 'utf8'), /this is its first run/);
 });
 
-test('auto skills never claim a first run', t => {
+test('built-in routing runs before every task without claiming a first run', t => {
   const { store, projects } = fixture(t), id = 'builtin:model-routing';
   const first = start(store, projects[0], 'first');
-  assert.equal(first.skills.find(skill => skill.id === id).trigger, 'auto');
-  assert.ok(note(first).includes(`model-routing: ${store.entry(id).description}`));
+  const routing = first.skills.find(skill => skill.id === id);
+  assert.equal(routing.trigger, 'always');
+  assert.ok(note(first).includes(alwaysInstruction(routing.path)));
   assert.equal(store.options[id]?.firstOpenedProjects, undefined);
 });
 
