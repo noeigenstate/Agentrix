@@ -187,11 +187,9 @@ export function registerScreen(id: string, terminal: Terminal, sessionId?: strin
   };
 }
 
-// The queue count main reports for a terminal: the parsed screen carries it, and subscribers hear of a change on an unchanged frame.
+// Keep main's queue count available to snapshot readers without publishing a new parse.
 export function setQueueCount(id: string, count: number) {
-  if ((queueCounts.get(id) ?? 0) === count) return;
   if (count) queueCounts.set(id, count); else queueCounts.delete(id);
-  const entry = entries.get(id); if (entry) publish(entry);
 }
 
 // The agent running in a terminal; only Claude's screen is read for facts.

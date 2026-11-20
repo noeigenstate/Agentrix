@@ -27,12 +27,15 @@ function setup(t, rows, agent) {
   return { term, sent };
 }
 
-test('a half frame without the queue row keeps the placeholder', () => {
+test('the complete Claude queue hint leaves an empty draft without a queue row', () => {
   const parsed = parseAgentScreen('claude', half);
-  assert.equal(cliInputDraft('claude', half, parsed), 'Press up to edit queued messages', 'no queue row, no count: typed words');
-  assert.equal(cliInputDraft('claude', half, { ...parsed, queued: 2 }), '', 'main holds two queued: the placeholder');
+  assert.equal(cliInputDraft('claude', half, parsed), '', 'the hint leaves the draft empty without a queue count');
+  assert.equal(cliInputDraft('claude', half, { ...parsed, queued: 2 }), '', 'the hint leaves the draft empty with a queue count');
   const own = parseAgentScreen('claude', typed);
-  assert.equal(cliInputDraft('claude', typed, { ...own, queued: 2 }), 'my own words', 'a real draft stays one');
+  assert.equal(cliInputDraft('claude', typed, { ...own, queued: 2 }), 'my own words');
+  const text = 'Explain why the input says Press up to edit queued messages';
+  const draft = ['────', `❯ ${text}`, '────', ...footer];
+  assert.equal(cliInputDraft('claude', draft, parseAgentScreen('claude', draft)), text);
 });
 
 test('facts are sent on change only, for the current session', t => {
@@ -46,20 +49,9 @@ test('facts are sent on change only, for the current session', t => {
   assert.equal(sent.length, 2); assert.equal(sent[1].draft, false); assert.ok(sent[1].revision > sent[0].revision);
 });
 
-test('a queue count change on an unchanged frame reaches the parsed subscribers and main', t => {
-  const { sent } = setup(t, half, 'claude'), frames = [];
-  t.after(screen.subscribeParsed('facts', frame => frames.push(frame)));
-  assert.equal(sent.at(-1).draft, true);
-  const before = frames.length, revision = sent.at(-1).revision;
-  screen.setQueueCount('facts', 1); t.mock.timers.tick(100);
-  assert.equal(frames.length, before + 1); assert.equal(frames.at(-1).queued, 1);
-  assert.equal(sent.at(-1).draft, false); assert.ok(sent.at(-1).revision > revision);
-});
-
 test('a terminal that is not Claude sends nothing', t => {
   const codex = setup(t, typed, 'codex');
   codex.term.draw(['────', '❯', '────', ...footer]);
-  screen.setQueueCount('facts', 3); t.mock.timers.tick(100);
   assert.equal(codex.sent.length, 0);
 });
 

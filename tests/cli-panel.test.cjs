@@ -106,8 +106,11 @@ test('Claude prompt hints leave a usable empty input', async t => {
     assert.equal(registry.canPasteScreen('claude', frame, true), true);
   }
   const factCount = facts.length;
+  const parse = registry.readScreen('hint').parse;
   registry.setQueueCount('hint', 3); report();
-  assert.equal(registry.readScreen('hint').queued, 3);
+  const frame = registry.readScreen('hint');
+  assert.equal(frame.queued, 3);
+  assert.equal(frame.parse, parse, 'a queue-count change does not publish a parse');
   assert.equal(facts.length, factCount, 'a queue-count change does not change the input facts');
 
   registry.setScreenAgent('hint', 'codex');
