@@ -408,8 +408,8 @@
     "id": "integration/dispatch.cjs:0d06e497f7ec9a5ac21b7973"
   },
   {
-    "text": "run(entry.argv, { ...deps, stdout, source: entry.source, detached: { id, admitted: () => receipt({ admitted: true }) }, startTimeout: 60000 })",
-    "id": "integration/dispatch.cjs:f9ca1c28c64a41d4ae3c3372"
+    "text": "run(entry.argv, { ...deps, env, stdout, source: entry.source, detached: { id, admitted: () => receipt({ admitted: true }) }, startTimeout: 60000 })",
+    "id": "integration/dispatch.cjs:e344f5c4081416c1f948c63d"
   },
   {
     "text": "run(args, { ...deps, launch, resolveExecutable, locate, locateClaude: findClaude, startTimeout, rateInterval, requestTimeout })",
