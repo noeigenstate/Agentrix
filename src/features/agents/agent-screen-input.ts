@@ -18,14 +18,14 @@ const prompt = (agent: ScreenAgent, row: string) => {
 // rows before the closing one (a dictated message left there unsent); Codex needs its footer right under it (a long
 // draft wraps over a few rows first): the prompt Codex pins to its top row, over a view that took the input's place
 // (/plugins), has none.
-function cliInputArea(agent: ScreenAgent, rows: string[]) {
+function cliInputArea(agent: ScreenAgent, rows: string[], wrapped?: (row: number) => boolean) {
   for (let index = rows.length - 1; index >= 0; index--) {
     const text = prompt(agent, rows[index]);
     if (text === null) continue;
     if (agent === 'claude') {
       if (!rule(rows[index - 1] ?? '')) continue;
       let end = index + 1;
-      while (end < rows.length && !rule(rows[end]) && (/^ {2}\S/.test(rows[end]) || !rows[end].trim())) end++;
+      while (end < rows.length && (wrapped?.(end) || !rule(rows[end]) && (/^ {2}\S/.test(rows[end]) || !rows[end].trim()))) end++;
       if (!rule(rows[end] ?? '')) continue;
       // Claude Code 2.1.296 draws its effort right over the input box ("◉ xhigh · /effort"): part of it, never output.
       const start = /^\s*[●◉]\s+\S+\s+·\s+\/effort\b/.test(rows[index - 2] ?? '') ? index - 2 : index - 1;
@@ -41,6 +41,14 @@ function cliInputArea(agent: ScreenAgent, rows: string[]) {
   return null;
 }
 
+// Limit styled hint detection to Claude's boxed message input, which uses ❯ rather than the shell's ! marker.
+export function claudePromptRange(rows: string[], wrapped: (row: number) => boolean) {
+  const input = cliInputArea('claude', rows, wrapped);
+  if (!input) return null;
+  const marker = /^ *❯(?: +|$)/.exec(rows[input.row]);
+  return marker ? { first: input.row, end: input.footer - 1, prefix: marker[0].length } : null;
+}
+
 // Claude's live status line while it works: a cycling glyph and a verb ending in "…" ("✶ Osmosing… (running
 // UserPromptSubmit hooks…)"). Claude 2.1 empties its input on Enter and shows this while hooks run, before a command
 // draws anything, so an empty input beside it is not idle. A finished turn's "✻ Worked for 25s" has no ellipsis.
@@ -51,8 +59,8 @@ export function isCliWorking(agent: ScreenAgent, rows: string[], _screen: AgentS
   return claudeWorking(rows) || !!input && claudeShellRunning(rows, input.start);
 }
 
-// What is typed in the CLI's own input, without its placeholder ("Try …", "Ask Codex to do anything"). Claude puts an
-// interrupted prompt back there, so it can hold text the reading view did not type. Claude Code 2.1.317 lists the
+// The registry omits styled Claude hints. Text-only placeholders ("Try …", "Ask Codex to do anything") are handled here.
+// Claude puts interrupted prompts back in the input, so it can hold text the reading view did not type. Claude Code 2.1.317 lists the
 // messages it queued above its working line, over "ctrl+x ctrl+s to send now", and shows "Press up to edit queued
 // messages" in the empty input; without that queue row the same words are typed ones.
 export const queueShown = (rows: string[]) => rows.some(row => /^\s*ctrl\+x ctrl\+s to send now\s*$/.test(row));

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { Terminal } from '@xterm/xterm';
+import type { IBuffer, IBufferCell, IBufferLine, Terminal } from '@xterm/xterm';
 import type { ApprovalStamp } from '../../shared/types';
 import type { ScreenAgent, ScreenChoice } from '../agents/agent-screen-types';
 import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen.ts';
-import { cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from '../agents/agent-screen-input.ts';
+import { claudePromptRange, cliDialogShown, hasCliInput, isAtPrompt, isCliWorking } from '../agents/agent-screen-input.ts';
 import { createFactsPublisher } from '../agents/agent-screen-facts.ts';
 export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 
@@ -45,16 +45,50 @@ export const hasScreenPaste = (id: string, sessionId: string, text: string) => {
   return receipt?.sessionId === sessionId && receipt.text === text;
 };
 
-function read(terminal: Terminal): Pick<Screen, 'rows'> {
+function isPromptHint(cell: IBufferCell) {
+  if (cell.isDim()) return true;
+  const color = cell.getFgColor();
+  // ANSI gray and its explicit gray equivalents. Normal input uses the terminal's foreground.
+  if (cell.isFgPalette()) return color === 8 || color === 247;
+  return cell.isFgRGB() && (color === 0x808080 || color === 0x999999 || color === 0x9d9d9d);
+}
+
+function promptRow(line: IBufferLine, prefix: number, scratch: IBufferCell) {
+  let text = line.translateToString(false, 0, prefix);
+  for (let column = prefix; column < line.length; column++) {
+    const cell = line.getCell(column, scratch);
+    if (cell?.getWidth() && !isPromptHint(cell)) text += cell.getChars() || ' ';
+  }
+  return text.trimEnd();
+}
+
+function omitClaudeHints(buffer: IBuffer, rows: string[]) {
+  if (!buffer.getNullCell) return;
+  const lineAt = (row: number) => buffer.getLine(buffer.baseY + row);
+  const range = claudePromptRange(rows, row => !!lineAt(row)?.isWrapped);
+  if (!range) return;
+  const scratch = buffer.getNullCell();
+  for (let row = range.first; row < range.end; row++) {
+    const line = lineAt(row);
+    if (!line) continue;
+    const prefix = row === range.first ? range.prefix : 0;
+    // Keep the continuation shape even when xterm hard-wraps or all the padding was dim.
+    const text = promptRow(line, prefix, scratch);
+    rows[row] = !prefix && text && !/^ {2}\S/.test(text) ? '  ' + text.trimStart() : text;
+  }
+}
+
+function read(terminal: Terminal, agent?: ScreenAgent | null): Pick<Screen, 'rows'> {
   const buffer = terminal.buffer.active, rows: string[] = [];
   // The live screen, from baseY: viewportY stays wherever the reader scrolled the terminal back to, and writes made from
   // the reading view never scroll it down again, so the questions and command output would be read from old rows.
   for (let index = 0; index < terminal.rows; index++) rows.push(buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '');
+  if (agent === 'claude') omitClaudeHints(buffer, rows);
   return { rows };
 }
 
 function capture(entry: Entry): Screen {
-  const screen = read(entry.terminal);
+  const screen = read(entry.terminal, agentKinds.get(entry.id));
   // State timestamps advance only when the observed state changes, never for spinner or background output.
   const rowsKey = JSON.stringify(screen.rows);
   if (rowsKey !== entry.rowsKey) {

@@ -3386,6 +3386,45 @@ test('claude: a message Claude Code has queued no longer counts as a leftover in
   assert.equal(leftoverNotice(h), undefined); assert.deepEqual(outboxTexts(h), []);
 });
 
+test('Claude suggestions never submit before a composer paste', async t => {
+  const { Terminal } = require('@xterm/xterm');
+  const registry = require('../src/features/terminal/terminal-screen.ts');
+  const terminal = new Terminal({ cols: 80, rows: 8, allowProposedApi: true });
+  const suggestion = 'Compare the other two results';
+  const rows = ['✻ Worked for 9m 36s · done 19:34', ...composerRows('claude', 'idle', `\x1b[2m${suggestion}\x1b[0m`)];
+  await new Promise(resolve => terminal.write(rows.join('\r\n'), resolve));
+  const h = workingComposerHarness(t, 'claude'), id = h.props.terminal.id;
+  window.setTimeout = setTimeout; window.agentrix.screenFacts = () => {};
+  registry.setScreenAgent(id, 'claude');
+  const unregister = registry.registerScreen(id, terminal, 'session');
+  t.after(() => { unregister(); registry.setScreenAgent(id, null); terminal.dispose(); });
+  h.view.working = false;
+  h.view.rows = registry.readScreen(id).rows;
+  h.view.records.push({ id: 'earlier', role: 'user', text: suggestion, at: Date.now() - 5000 });
+  const events = [], errors = [];
+  h.props.onError = message => errors.push(message);
+  const { pasteTerminal, writeTerminal } = window.agentrix;
+  window.agentrix.pasteTerminal = (...args) => {
+    events.push(['paste', args[1]]);
+    delete h.view.rows; // In this fixture the paste replaces the empty input's suggestion.
+    return pasteTerminal(...args);
+  };
+  window.agentrix.writeTerminal = (id, key) => { events.push(['key', key]); writeTerminal(id, key); };
+  h.render(); h.render();
+  assert.equal(h.node.value, '');
+  h.edit('Send only these words'); h.press('Enter'); await h.tick(0); await h.tick(400); await h.tick(700);
+  assert.deepEqual(events, [['paste', 'Send only these words'], ['key', '\r']]);
+  assert.deepEqual(h.view.records.map(record => record.text), [suggestion, 'Send only these words']);
+  assert.deepEqual(outboxTexts(h), []); assert.equal(leftoverNotice(h), undefined); assert.deepEqual(errors, []);
+
+  h.view.draft = suggestion; h.edit('Keep this for later');
+  h.render().props.onPaste({ preventDefault() {}, clipboardData: { getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => ({ size: 1 }) }] } });
+  await h.tick(0);
+  assert.equal(h.view.draft, suggestion); assert.equal(h.node.value, 'Keep this for later');
+  assert.equal(events.length, 2);
+  assert.match(errors[0], /terminal input still contains a previously sent message/i);
+});
+
 test('claude: a message waiting in the outbox goes while Claude Code shows its queue', async t => {
   const h = workingComposerHarness(t, 'claude');
   h.view.rows = ['Settings', 'Esc to close']; h.render(); h.render();
