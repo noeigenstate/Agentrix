@@ -3507,12 +3507,6 @@
   "总指挥重启后生效": "Orchestrator changes take effect after restart",
   "Agent 按角色": "Agents by role",
   "左侧 Agent 标签页按角色分组显示子 Agent，列出名称、模型、任务、状态和用时。点开一条即可查看简报和日志。": "The Agent tab on the left groups subagents by role and shows each one's name, model, task, status and elapsed time. Open a row to see its brief and log.",
-  "操作模型": "Operation models",
-  "模型路由弹窗新增「团队」和「操作模型」两个标签页。可分别为检索、后台小任务、子代理默认、记忆整理和审查设置模型，可选全局或本项目，从下一次对话起生效。": "The model routing dialog now has Team and Operation models tabs. You can set a model for each of search, background tasks, the default for subagents, memory tidying and review, globally or for one project, starting with the next conversation.",
-  "不支持会置灰": "Greyed-out models",
-  "只有一种 Agent 支持的操作，另一系列的模型会置灰并说明原因。审查模型不能与开发的模型相同，界面提供一键修正。": "When only one agent supports an operation, the other family's models are greyed out with the reason. The review model cannot match the Developer's model, and a one-click fix is offered.",
-  "活动区全部显示": "Full Activity pane",
-  "右侧活动区现在无需内部滚动条即可显示全部内容，路由卡也会显示各项操作模型。": "The right Activity pane now shows everything without an inner scrollbar, and the routing card lists the operation models.",
   "启动与设置修复": "Launch and settings fixes",
   "修复：PowerShell 里的 claude 命令会保留原有设置和启动提示；Agent 启动器显示正确的标记和转圈；仓库里的设置文件不能再覆盖 Claude 和 Codex 的操作设置。": "Fixed: the claude command in PowerShell keeps its settings and startup note, the agent launcher shows the right marks and spinner, and a repository's settings file can no longer override the Claude and Codex operation settings.",
   "公式排版": "Math display",
@@ -3689,9 +3683,6 @@
   "总指挥重启提示": "Orchestrator restart notice",
   "团队席位中，只有总指挥自己的模型要重启对话才会切换。重启前，该行会显示「重启后生效」和保存的设置。":
     "Of the team seats, only the Orchestrator needs a conversation restart to switch models. Until then, its row shows “After restart” with the saved settings.",
-  "操作模型生效提示": "Operation model timing",
-  "需要重新启动才会应用的操作模型设置会标注「下次启动生效」。":
-    "Operation model settings that require a new launch are marked “Takes effect on next launch.”",
   "模型路由更清楚": "Clearer model routing",
   "弹窗顶部精简为两行，十个默认角色用等高卡片平铺，一屏可见。每张卡片用一个模型选择器设置模型、强度、快速和新实例。状态栏提示未保存的改动和生效时机，有改动待保存时才突出显示「保存路由」。":
     "Two header rows and flat, even cards fit ten roles. Set model, Effort, Fast and Fresh instance in one picker. See unsaved changes and when they apply. Save routing lights up when needed.",
@@ -3703,5 +3694,14 @@
     "You can send messages from the reading view as usual when Claude Code shows a grey prompt suggestion in its input line.",
   "活动区路由对齐": "Aligned routing rows",
   "右侧活动区的「模型路由」行距统一，各列对齐。":
-    "Model routing in the right activity pane has evenly spaced rows and aligned columns."
+    "Model routing in the right activity pane has evenly spaced rows and aligned columns.",
+  "阅读发送更稳": "Safer sends",
+  "Claude Code 的输入提示和建议不会被当成未发送的草稿。粘贴失败会自动重试，已提交的消息不会重复发送。":
+    "The reading view ignores Claude Code's input hints and suggestions when checking for an unsent draft. It retries failed pastes and prevents duplicate sends.",
+  "移除操作模型": "CLI defaults",
+  "检索、后台任务、子代理默认模型、记忆整理和审查改用 Claude Code 或 Codex 各自的默认设置。搜索遵循 Claude Code 的默认行为。":
+    "Lookups, background tasks, subagent defaults, memory and review use the defaults of Claude Code or Codex. Search follows Claude Code's default behavior.",
+  "内置模型路由": "Routing",
+  "每个任务都启用模型路由。请在活动区的「模型路由」中配置，设置里的「技能」页已移除此入口。":
+    "Model routing runs on every task. Configure it in Model routing in the activity pane. Its entry under Settings → Skills has been removed."
 }
