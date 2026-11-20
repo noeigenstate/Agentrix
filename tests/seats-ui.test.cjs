@@ -29,7 +29,8 @@ const DEFAULTS = team.defaults;
 const { roleKind, roleLocks } = require('../electron/features/skills/role-rules.mjs');
 const shipped = (role, source = 'builtin') => {
   const kind = roleKind(role.id, ['developer', 'frontend']);
-  return { ...role, source, kind, enabled: source === 'builtin', fresh: ['qa', 'reviewer'].includes(role.id), locked: roleLocks(kind, source) };
+  const defaultEnabled = source === 'builtin', defaultFresh = ['qa', 'reviewer'].includes(role.id);
+  return { ...role, source, kind, enabled: defaultEnabled, fresh: defaultFresh, defaultEnabled, defaultFresh, locked: roleLocks(kind, source) };
 };
 const source = (patch = {}) => ({ layer: 'file', state: 'trusted', remote: false, path: '.agentrix/routing.json', digest: 'at-open', actions: [], ...patch });
 const SEATS = team.seats;
@@ -1354,6 +1355,56 @@ test('English localizes every shipped role library field and the copy suffix', (
     }
   }
   assert.equal(en['副本'], ' copy');
+});
+
+test('the library displays both limits and the reviewer locks beside their controls', t => {
+  const custom = Object.fromEntries(Array.from({ length: 8 }, (_, i) => [
+    'x-dev-' + i, { from: 'developer', name: 'Extra ' + i, duty: 'Develop', enabled: i < 6 },
+  ]));
+  const libraryRole = shipped({ id: 'a11y', name: '无障碍', duty: '无障碍验证', detail: '', outputs: '' }, 'library');
+  const info = seatsInfo({ roles: [...team.roles.map(role => shipped(role)), libraryRole], config: { roles: custom, operations: {} } });
+  const h = dialogHarness(t, info, { language: 'zh' });
+  const teamChart = h.render();
+  assert.match(textOf(byAttr(byAttr(teamChart, 'data-seat', 'reviewer'), 'data-role-lock', 'fresh')), /始终使用新实例/);
+  assert.match(textOf(byAttr(teamChart, 'data-scope', 'project')), /本项目 · 保存在 \.agentrix\/routing\.json/);
+  byAttr(teamChart, 'data-routing-tab', 'library').props.onClick();
+  const library = h.render();
+  assert.match(textOf(byAttr(library, 'data-role-limit', 'enabled')), /已启用 16 个角色（上限 16）；停用一个后才能再启用/);
+  assert.match(textOf(byAttr(library, 'data-role-limit', 'custom')), /已创建 8 个项目角色/);
+  assert.equal(byAttr(library, 'data-new-role').props.disabled, true);
+  const join = byAttr(library, 'data-toggle-role', 'a11y');
+  assert.equal(textOf(join), '加入团队');
+  assert.equal(join.props.disabled, true);
+  assert.match(join.props.title, /停用一个后才能再启用/);
+  assert.equal(textOf(byAttr(library, 'data-toggle-role', 'developer')), '移出团队');
+  assert.match(textOf(byAttr(byAttr(library, 'data-library-role', 'reviewer'), 'data-role-lock', 'membership')), /至少保留一个审查角色/);
+  assert.match(textOf(byAttr(library, 'data-library-role', 'x-dev-0')), /项目角色/);
+});
+
+test('role editor errors name the invalid field, limit, character or conflicting role', t => {
+  const roles = team.roles.map(role => shipped(role));
+  const handle = mount(t, 'RoleEditor.tsx', 'RoleEditor', {
+    id: 'x-editor-1', initial: { from: 'developer', name: 'Role', duty: 'Implement' },
+    roles, catalog: catalog(), models: DEFAULTS, taken: [],
+    save: () => assert.fail('invalid role saved'), close: () => {}, copy: () => {},
+  }, { language: 'zh' });
+  const change = (field, value, message) => {
+    const input = byAttr(handle.render(), 'data-role-text', field);
+    input.props.onChange({ target: { value } });
+    const tree = handle.render(), error = byAttr(tree, 'data-role-error', field);
+    assert.match(textOf(error), message);
+    const invalid = byAttr(tree, 'data-role-text', field);
+    assert.equal(invalid.props['aria-invalid'], true);
+    assert.equal(invalid.props['aria-describedby'], error.props.id);
+    assert.equal(byAttr(tree, 'data-save-role').props.disabled, true);
+  };
+  change('name', '', /请输入名称/);
+  change('name', 'A'.repeat(13), /名称最多可填 12 个字符，当前为 13 个/);
+  change('name', '开发', /名称与角色「开发」重复/);
+  change('name', 'a|b', /不允许字符 \|/);
+  change('duty', '', /请输入职责/);
+  change('duty', 'A'.repeat(161), /职责最多可填 160 个字符/);
+  change('outputs', 'A'.repeat(61), /产出最多可填 60 个字符/);
 });
 
 test('drafts use the main process role defaults and preserve its library order', t => {

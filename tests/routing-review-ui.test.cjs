@@ -12,14 +12,18 @@ const sourceModule = new Module(filename, module);
 sourceModule.filename = filename;
 sourceModule.paths = Module._nodeModulePaths(path.dirname(filename));
 const originalRequire = sourceModule.require.bind(sourceModule);
-sourceModule.require = id => id === '../../shared/i18n' ? {
-  t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (pattern, key) => values[key] ?? pattern),
-} : originalRequire(id);
+sourceModule.require = id => {
+  if (id === '../../shared/i18n') return { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (pattern, key) => values[key] ?? pattern) };
+  if (id === './OperationRows') return { operationName: row => row.name };
+  return originalRequire(id);
+};
 sourceModule._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'),
-  { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
+  { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
 const { RoutingReview, resolveRouting } = sourceModule.exports;
 const action = () => {};
 const flags = ['expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text', 'operation-cost'];
+const writer = { name: 'Writer', duty: '<script>never execute</script>', outputs: '<b>Plain output</b>' };
+const active = { model: 'opus', effort: 'high', fast: true, fresh: false, enabled: true };
 const foreign = {
   layer: 'local', state: 'pending', remote: false, path: '.agentrix/routing.json', digest: 'seen-file', actions: ['apply', 'keep', 'overwrite'],
   raw: '{"custom":"<script>never execute</script>"}',
@@ -29,13 +33,21 @@ const foreign = {
     changes: [
       { role: 'x-writer', field: 'enabled', from: false, to: true },
       { role: 'x-writer', field: 'fresh', from: true, to: false },
-      { operation: 'lookup', field: 'model', from: 'haiku', to: 'opus' },
+      { operation: 'lookup', field: 'value', from: { model: 'haiku', effort: 'low' }, to: { model: 'opus', effort: 'high' } },
     ],
-    flags: flags.map(code => ({ code, text: 'Reported ' + code })), ignored: ['roles.unknown', 'roles.frontend.seat'],
+    roleChanges: [
+      { role: 'x-writer', source: 'custom', status: 'added', before: null, after: { ...active, custom: writer } },
+      { role: 'x-old', source: 'custom', status: 'removed', before: { ...active, custom: { ...writer, name: 'Retired' } }, after: null },
+      { role: 'developer', source: 'builtin', status: 'changed', before: { ...active, model: 'sonnet' }, after: active },
+    ],
+    flags: [...flags.map(code => code === 'operation-cost' ? { code, operation: 'lookup' } : { code, role: 'x-writer' }),
+      { code: 'verification-weakened', role: 'reviewer' }],
+    ignored: ['roles.unknown', 'roles.frontend.seat'],
   },
 };
 const render = (source, props = {}) => renderToStaticMarkup(React.createElement(RoutingReview, {
-  source, busy: false, act: action, rawOpen: false, toggleRaw: action, ...props,
+  source, busy: false, act: action, rawOpen: false, toggleRaw: action,
+  roles: [{ id: 'developer', name: '开发' }, { id: 'reviewer', name: '审查' }], operations: [{ id: 'lookup', name: '检索' }], ...props,
 }));
 
 test('routing review shows every change, flag and custom text as plain text', () => {
@@ -43,12 +55,18 @@ test('routing review shows every change, flag and custom text as plain text', ()
   assert.match(html, /首次在此电脑打开/);
   assert.match(html, /\.agentrix\/routing\.json/);
   assert.match(html, /当前使用：本机项目设置/);
-  assert.match(html, /启用.*新实例.*lookup.*haiku.*opus/);
+  assert.match(html, /新增角色.*移除或停用的角色.*修改的角色.*操作模型/s);
+  assert.equal((html.match(/data-review-role=/g) ?? []).length, 3);
+  assert.match(html, /<tr data-review-role="x-writer" data-risk="true">[^]*?Writer[^]*?&lt;b&gt;Plain output&lt;\/b&gt;[^]*?<\/tr>/);
+  assert.match(html, /<tr data-review-role="x-old">[^]*?Retired[^]*?&lt;b&gt;Plain output&lt;\/b&gt;[^]*?<\/tr>/);
+  assert.match(html, /开发<\/span>.*developer.*sonnet · high · 快速 · 复用实例 · 已启用.*opus · high/s);
+  assert.match(html, /data-review-operation="lookup" data-risk="true"[^]*?检索[^]*?haiku · low.*opus · high/);
   for (const code of flags) {
     assert.ok(html.includes(`data-routing-flag="${code}"`));
-    assert.ok(html.includes('Reported ' + code));
+    assert.ok(html.includes('data-routing-risk-count="' + code + '"'));
   }
-  assert.match(html, /验证减弱/);
+  assert.match(html, /data-routing-risk-count="verification-weakened">验证减弱 × 2/);
+  assert.match(html, /seats-review-other-risks"[^]*?审查<\/span>[^]*?验证减弱/);
   assert.match(html, /roles\.unknown.*roles\.frontend\.seat/);
   assert.match(html, /&lt;script&gt;never execute&lt;\/script&gt;/);
   assert.match(html, /&lt;b&gt;Plain output&lt;\/b&gt;/);
@@ -72,6 +90,7 @@ test('invalid and rejected routing show only main’s allowed actions and readab
   const { review, ...source } = foreign;
   const link = { ...source, raw: undefined, state: 'invalid', actions: ['keep'], error: { code: 'link', message: 'code wins' } };
   const html = render(link);
+  assert.match(html, /这个文件没有被应用/);
   assert.match(html, /路由路径是链接/);
   assert.match(html, /data-routing-action="keep"/);
   assert.doesNotMatch(html, /data-routing-action="(?:apply|overwrite)"|查看原文|忽略的条目/);

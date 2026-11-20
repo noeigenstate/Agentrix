@@ -88,18 +88,15 @@ export const configFor = (info: SeatsInfo, scope: Scope): RoutingConfig =>
   scope === 'template' ? info.template : info.config ?? info.template;
 export const startScope = (_info: SeatsInfo, projectId?: string): Scope => projectId ? 'project' : 'template';
 
-// The optional fields let the frontend compile against the integration head before A1's payload is merged.
-export type DraftRole = TeamRole & { defaultEnabled?: boolean; defaultFresh?: boolean; inherits?: SeatId; defaultSeat?: Seat };
-
-export function draftRoles(info: SeatsInfo, config: RoutingConfig): DraftRole[] {
-  const shipped: DraftRole[] = info.roles.filter(role => role.source !== 'custom');
+export function draftRoles(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
+  const shipped = info.roles.filter(role => role.source !== 'custom');
   const overrides = Object.keys(config.roles).sort().map(id => [id, config.roles[id]] as const);
   return shipped.flatMap(role => {
     const values = config.roles[role.id];
-    const defaultEnabled = role.defaultEnabled ?? role.enabled, defaultFresh = role.defaultFresh ?? role.fresh;
+    const defaultEnabled = role.defaultEnabled === true, defaultFresh = role.defaultFresh === true;
     const base = { ...role, defaultEnabled, defaultFresh, enabled: role.locked.includes('enabled') ? defaultEnabled : values?.enabled ?? defaultEnabled,
       fresh: role.locked.includes('fresh') ? defaultFresh : values?.fresh ?? defaultFresh };
-    const copies = overrides.filter(([, value]) => value.from === role.id).map(([id, value]): DraftRole => ({
+    const copies = overrides.filter(([, value]) => value.from === role.id).map(([id, value]): TeamRole => ({
       ...base, id, source: 'custom', from: role.id, name: value.name ?? '', duty: value.duty ?? '', detail: '',
       outputs: value.outputs ?? '', defaultEnabled: true, defaultFresh: base.fresh, inherits: role.id, defaultSeat: undefined,
       enabled: value.enabled ?? true, fresh: role.locked.includes('fresh') ? base.fresh : value.fresh ?? base.fresh,
@@ -112,13 +109,13 @@ export function draftRoles(info: SeatsInfo, config: RoutingConfig): DraftRole[] 
 const seatOf = (value?: RoleConfig): Seat | undefined =>
   value?.model && value.effort ? { model: value.model, effort: value.effort, ...(value.fast ? { fast: true } : {}) } : undefined;
 
-function seedSeat(role: DraftRole | undefined, defaults: SeatMap, resolve: (id: SeatId) => Seat | undefined) {
+function seedSeat(role: TeamRole | undefined, defaults: SeatMap, resolve: (id: SeatId) => Seat | undefined) {
   if (!role) return;
   const parent = role.inherits ?? role.from;
   return parent ? resolve(parent) : role.defaultSeat ?? defaults[role.id];
 }
 
-export function resolveDraftSeats(defaults: SeatMap, roles: DraftRole[], config: RoutingConfig): SeatMap {
+export function resolveDraftSeats(defaults: SeatMap, roles: TeamRole[], config: RoutingConfig): SeatMap {
   const byId = new Map(roles.map(role => [role.id, role]));
   const map: SeatMap = {};
   const resolve = (id: string): Seat | undefined => {

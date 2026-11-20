@@ -1,7 +1,10 @@
 import { routingRoleName } from '../../shared/routing-command.ts';
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowCounterClockwise, ArrowsClockwise, BookOpen, CaretDown, CheckCircle, ClipboardText, Code, Flask, GitBranch, Infinity as InfinityIcon, MagnifyingGlass, PencilSimple, Prohibit, ShieldCheck, Stack, User, Warning, X } from '@phosphor-icons/react';
+import {
+  ArrowCounterClockwise, ArrowsClockwise, BookOpen, Browser, CaretDown, CheckCircle, ClipboardText, Code, Cpu, Database, Desktop, FileText, Flask, Gauge, GitBranch,
+  Infinity as InfinityIcon, MagnifyingGlass, PencilSimple, Person, Prohibit, ShieldCheck, Stack, User, Warning, X,
+} from '@phosphor-icons/react';
 import type { OperationMap, OperationRow, OperationValue, RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
 import {
@@ -15,11 +18,18 @@ import { CurrentOperations, OperationRows, editableOperation, operationLabel, op
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
 import { copyRole, roleName, RoleEditor } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
-import type { DraftRole } from './skill-seats';
 import './seats-dialog.css';
 
 const ROLE_ICONS = { orchestrator: GitBranch, product: ClipboardText, architect: Stack, designer: PencilSimple, developer: Code,
-  reviewer: MagnifyingGlass, qa: Flask, researcher: BookOpen, devops: InfinityIcon, security: ShieldCheck };
+  reviewer: MagnifyingGlass, qa: Flask, researcher: BookOpen, devops: InfinityIcon, security: ShieldCheck,
+  frontend: Browser, backend: Stack, desktop: Desktop, database: Database, ai: Cpu, docs: FileText, performance: Gauge, a11y: Person };
+const enabledLimit = () => t('已启用 {limit} 个角色（上限 {limit}）；停用一个后才能再启用', { limit: MAX_ENABLED_ROLES });
+const customLimit = () => t('已创建 {limit} 个项目角色（上限 {limit}）；删除一个后才能新建', { limit: MAX_CUSTOM_ROLES });
+
+function RoleIcon({ id }: { id: string }) {
+  const Icon = ROLE_ICONS[id as keyof typeof ROLE_ICONS] ?? User;
+  return <span className="seats-role-icon"><Icon size={18} aria-hidden="true" /></span>;
+}
 const ROLE_NAMES: Record<string, string> = { orchestrator: 'Orchestrator Agent', product: 'Product', architect: 'Architect', designer: 'Designer', developer: 'Developer', reviewer: 'Reviewer', qa: 'QA / Tester', researcher: 'Researcher', devops: 'DevOps', security: 'Security' };
 const effortLine = (seat: { effort: string; fast?: boolean }) => [seat.effort, seat.fast && t('快速')].filter(Boolean).join(' · ');
 const REFUSALS = {
@@ -610,20 +620,29 @@ function seatControls(state: DialogState) {
   return { slotState, stateMark, modelButton, effortButton, fastSwitch };
 }
 
-function RoleActions({ state, role, library }: DialogPart & { role: DraftRole; library?: boolean }) {
+function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; library?: boolean }) {
   const { saving, enabled, roles } = state.draft, { edit, create, change, remove } = state.roles;
   const lastReviewer = role.enabled && role.kind === 'reviewer' && state.draft.reviewRoles.reviewers.length === 1;
   const lock = role.locked.includes('enabled') || lastReviewer;
   const full = enabled.length >= MAX_ENABLED_ROLES, copiesFull = roles.filter(role => role.source === 'custom').length >= MAX_CUSTOM_ROLES;
   const toggleReason = lock ? t(lastReviewer ? '至少保留一个审查角色。' : '总指挥必须保留。') : undefined;
+  const freshReason = role.locked.includes('fresh') ? t('审查角色始终使用新实例。') : undefined;
   return <div className="seats-role-actions">
-    {!library && role.kind !== 'lead' && <label title={role.locked.includes('fresh') ? t('审查角色始终使用新实例。') : undefined}>
-      <input type="checkbox" aria-label={t('新实例')} checked={role.fresh} disabled={saving || role.locked.includes('fresh')}
-        onChange={event => change(role, { fresh: event.target.checked })} />{t('新实例')}</label>}
+    {!library && role.kind !== 'lead' && <div className="seats-role-toggle">
+      <label className="seats-check" title={freshReason}>
+        <input type="checkbox" aria-label={t('新实例')} checked={role.fresh} disabled={saving || !!freshReason}
+          onChange={event => change(role, { fresh: event.target.checked })} />{t('新实例')}
+      </label>
+      {freshReason && <span className="seats-role-reason" data-role-lock="fresh">{freshReason}</span>}
+    </div>}
     <button type="button" className="seats-btn is-small" data-edit-role={role.id} disabled={saving} onClick={() => edit(role)}>{t('角色设置')}</button>
     {library && <>
-      <button type="button" className="seats-btn is-small" data-toggle-role={role.id} disabled={saving || lock || !role.enabled && full}
-        title={toggleReason} onClick={() => change(role, { enabled: !role.enabled })}>{t(role.enabled ? '停用' : '启用')}</button>
+      <div className="seats-role-toggle">
+        <button type="button" className="seats-btn is-small" data-toggle-role={role.id} disabled={saving || lock || !role.enabled && full}
+          title={toggleReason ?? (!role.enabled && full ? enabledLimit() : undefined)}
+          onClick={() => change(role, { enabled: !role.enabled })}>{t(role.enabled ? '移出团队' : '加入团队')}</button>
+        {toggleReason && <span className="seats-role-reason" data-role-lock="membership">{toggleReason}</span>}
+      </div>
       {role.source !== 'custom' && !role.locked.includes('copy') && <>
         <button type="button" className="seats-btn is-small" disabled={saving || copiesFull} onClick={() => create(role)}>{t('复制后自定义')}</button>
         {role.enabled && <button type="button" className="seats-btn is-small" data-replace-role={role.id}
@@ -657,9 +676,15 @@ function RoleLibrary({ state, query, setQuery, filter, setFilter }: DialogPart &
       })}</span>
       <button type="button" className="seats-btn" data-new-role disabled={saving || customCount >= MAX_CUSTOM_ROLES}
         onClick={() => state.roles.create()}>{t('新建角色')}</button>
+      {(enabled.length >= MAX_ENABLED_ROLES || customCount >= MAX_CUSTOM_ROLES) && <div className="seats-library-limits">
+        {enabled.length >= MAX_ENABLED_ROLES && <p data-role-limit="enabled">{enabledLimit()}</p>}
+        {customCount >= MAX_CUSTOM_ROLES && <p data-role-limit="custom">{customLimit()}</p>}
+      </div>}
     </div>
     <div className="seats-library-grid">{visible.map(role => <article className="seats-library-card" data-library-role={role.id} data-enabled={role.enabled} key={role.id}>
-      <h3>{roleName(role)}</h3><p>{role.source === 'custom' ? role.duty : t(role.detail || role.duty)}</p>
+      <div className="seats-team-name"><RoleIcon id={role.id} /><h3>{roleName(role)}</h3>
+        {role.source === 'custom' && <span className="seats-tag">{t('项目角色')}</span>}</div>
+      <p>{role.source === 'custom' ? role.duty : t(role.detail || role.duty)}</p>
       <RoleActions state={state} role={role} library />
     </article>)}</div>
     {!visible.length && <p>{t('没有匹配的角色')}</p>}
@@ -674,15 +699,14 @@ function TeamChart({ state }: DialogPart) {
   const changed = changedSeats(seats, working, baseline);
   const specialties = state.draft.roles.filter(role => role.source === 'library' && role.kind === 'author');
   const stateOuter = state;
-  const card = (role: DraftRole, isLead = false) => {
+  const card = (role: TeamRole, isLead = false) => {
     const id = role.id, seat = getSlot(working, id), state = slotState(id);
-    const Icon = ROLE_ICONS[id as keyof typeof ROLE_ICONS] ?? User;
     return <article key={id} className={['seats-team-card', isLead && 'is-lead', over === id && 'is-over', id === block?.reviewer && 'is-blocked'].filter(Boolean).join(' ')}
       data-seat={id} data-slot={id}>
       <div className="seats-team-info">
-        <div className="seats-team-name"><span className="seats-role-icon"><Icon size={18} aria-hidden="true" /></span>
+        <div className="seats-team-name"><RoleIcon id={id} />
           <h3>{roleName(role)}</h3>{currentLanguage() === 'zh' && ROLE_NAMES[id] && <span lang="en">{ROLE_NAMES[id]}</span>}
-          {role.source === 'custom' && <span className="seats-tag">{t('自定义')}</span>}
+          {role.source === 'custom' && <span className="seats-tag">{t('项目角色')}</span>}
           {role.fresh !== role.defaultFresh && <span className="seats-tag" data-fresh-override>{t(role.fresh ? '改为新实例' : '改为复用实例')}</span>}
           {changed.includes(id) && <span className="seats-chg">{t('已改')}</span>}</div>
         <p title={t(role.detail)}>{role.source === 'custom' ? role.duty : t(role.duty)}{role.detail && role.detail !== role.duty && <> · {t(role.detail)}</>}</p>
@@ -744,12 +768,14 @@ function DialogHeader({ state }: DialogPart) {
     <div><h2 id="seats-title">{t('模型路由')}</h2></div>
     <div className="seats-sources" role="group" aria-label={t('设置范围')}>
       {projectId && <button type="button" className="seats-btn" data-scope="project" aria-pressed={scope === 'project'}
-        disabled={saving || state.review.busy} onClick={() => switchScope('project')}>{t('本项目')}</button>}
+        disabled={saving || state.review.busy} onClick={() => switchScope('project')}>
+        {t(routing.remote ? '本项目' : '本项目 · 保存在 .agentrix/routing.json')}
+      </button>}
       <button type="button" className="seats-btn" data-scope="template" aria-pressed={scope === 'template'}
         disabled={saving || state.review.busy} onClick={() => switchScope('template')}>{t('我的默认模板')}</button>
     </div>
     {scope === 'project' && <span className="seats-source" data-routing-source={routing.layer}>
-      {routing.remote ? t('SSH（本机设置）') : routingLayer(routing)}{routing.state === 'trusted' && routing.path && <> · <code>{routing.path}</code></>}
+      {routing.remote ? t('SSH（本机设置）') : routingLayer(routing)}
     </span>}
     {scope === 'template' && routing.templateProjects !== undefined &&
       <span className="seats-source">{t('{count} 个项目使用此模板', { count: routing.templateProjects })}</span>}
@@ -941,7 +967,8 @@ export function SeatsDialog(props: SeatsDialogProps) {
         <DialogHeader state={state} />
         <div className="seats-body">
           <DialogStrip state={state} />
-          {review.visible ? <RoutingReview source={state.source.info.routing} busy={review.busy} refreshed={review.refreshed} act={review.act}
+          {review.visible ? <RoutingReview source={state.source.info.routing} roles={state.source.info.roles} operations={operations?.rows}
+            busy={review.busy} refreshed={review.refreshed} act={review.act}
             close={state.source.info.routing.state === 'rejected' ? review.close : undefined} rawOpen={review.raw} toggleRaw={review.toggle} /> : <>
           <RoutingTabs tab={tab} choose={switchTab} operations={!!operations} />
           <div className="seats-work">

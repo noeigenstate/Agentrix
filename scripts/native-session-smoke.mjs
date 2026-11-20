@@ -462,6 +462,9 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
     return { ...role, kind, source: 'builtin', enabled: true, fresh: defaultFresh, locked: roleLocks(kind, 'builtin'),
       defaultEnabled: true, defaultFresh, defaultSeat: team.defaults[role.id] };
   });
+  roles.push({ id: 'frontend', name: '前端', duty: '前端开发', detail: '界面组件、状态、样式与交互', outputs: '界面改动、截图',
+    kind: 'author', source: 'library', enabled: false, fresh: false, locked: roleLocks('author', 'library'),
+    defaultEnabled: false, defaultFresh: false, inherits: 'developer' });
   const routing = { ...team, roles, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors, fresh,
     leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer },
     template: { roles: {}, operations: {} }, config: null, current: null, currentRoles: null,
@@ -600,6 +603,8 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
   await seats.waitFor({ timeout: 4000 });
   assert.match(await toast.innerText(), /模型由模型路由决定|Model routing decides/);
   assert.equal(await seats.locator('[data-seat]').count(), team.seats.length);
+  await seats.locator('[data-routing-tab="library"]').click();
+  await seats.locator('[data-library-role="frontend"]').waitFor({ timeout: 4000 });
   await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached', timeout: 4000 });
   const shown = Date.now();
   measures.toast = await page.evaluate(() => {

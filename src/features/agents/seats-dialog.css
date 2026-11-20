@@ -276,9 +276,15 @@ button.seats-op-chip:hover { background: var(--bg-hover); }
 .seats-library-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 16px; }
 .seats-library-card { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
 .seats-library-card .seats-role-actions { margin-top: auto; }
-.seats-role-actions label { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.seats-dialog .seats-check { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; white-space: nowrap; }
+.seats-role-toggle { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+.seats-role-reason, .seats-library-limits { color: var(--text-2); font-size: 14px; }
+.seats-library-limits { flex: 1 0 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 16px; }
 .seats-role-actions input { accent-color: var(--button-primary); }
 .seats-team-settings { flex-wrap: wrap; }
+.seats-team-settings .seats-gem { flex: 1 0 100%; }
+.seats-team-settings .seats-gem-name { white-space: normal; overflow-wrap: anywhere; text-align: start; }
+.seats-dialog :is(.seats-chip, .seats-fold) { min-height: 32px; }
 .seats-role-scrim { position: absolute; inset: 0; display: grid; place-items: center; z-index: 20; padding: 16px; background: color-mix(in srgb, var(--bg-app) 72%, transparent); }
 .seats-role-editor {
   display: flex; flex-direction: column; width: min(760px, 100%); max-height: 100%; min-height: 0;
@@ -292,30 +298,47 @@ button.seats-op-chip:hover { background: var(--bg-hover); }
 .seats-role-fields > label :is(input, textarea, select) { grid-column: 1 / -1; width: 100%; }
 .seats-role-fields :is(input:not([type="checkbox"]), textarea) {
   border: 1px solid var(--border); border-radius: 8px; padding: 4px 8px;
-  background: var(--bg-input); color: var(--text-1); font: inherit;
+  background: var(--bg-input); color: var(--text-1); font: inherit; min-height: 32px;
 }
 .seats-role-fields textarea { resize: vertical; }
-.seats-role-fields small { color: var(--text-2); }
+.seats-role-counter { color: var(--text-2); font-size: 14px; text-align: end; }
+.seats-role-error { grid-column: 1 / -1; color: var(--danger); font-size: 14px; }
 .seats-role-fields [aria-invalid="true"] { border-color: var(--danger); }
 .seats-role-model { display: flex; flex-wrap: wrap; gap: 12px; }
 .seats-role-model label { display: inline-flex; align-items: center; gap: 8px; }
 .seats-routing-review {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); align-items: start; gap: 16px;
-  min-height: 0; overflow: auto; padding: 16px 24px; background: var(--bg-app);
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px;
+  flex: 1; min-height: 0; overflow: hidden; padding: 16px 24px; background: var(--bg-app);
 }
-.seats-review-main, .seats-review-control { display: grid; gap: 12px; min-width: 0; }
-.seats-review-control, .seats-review-text { padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
+.seats-review-main, .seats-review-control { display: flex; flex-direction: column; gap: 12px; min-width: 0; min-height: 0; }
+.seats-review-control { align-self: start; max-height: 100%; overflow: auto; }
+.seats-review-control, .seats-review-scroll { border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
+.seats-review-control { padding: 12px; }
+.seats-review-scroll { overflow: auto; min-height: 0; }
+.seats-review-scroll:empty { display: none; }
+.seats-review-pills { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.seats-risk-pill { color: var(--danger); border: 1px solid currentColor; border-radius: 999px; padding: 0 8px; font-size: 14px; }
+.seats-routing-review [data-risk] > th:first-child { box-shadow: inset 4px 0 var(--danger); }
+.seats-review-group { background: var(--bg-app); }
+.seats-review-role-col { width: 24%; }
+.seats-review-risk-col { width: 24%; }
+.seats-review-id { color: var(--text-2); font-weight: 400; }
+.seats-review-text { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; padding-block-start: 8px; }
+.seats-review-text dt { color: var(--text-2); }
+.seats-review-other-risks { list-style: none; padding: 8px 12px; }
+.seats-review-other-risks li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: 4px; }
+.seats-routing-review :is(code, pre) { font-size: 14px; }
 .seats-routing-review :is(h4, ul, dl, dd) { margin: 0; }
 .seats-routing-review :is(td, th, pre, dd, li) { overflow-wrap: anywhere; }
 .seats-routing-review table { border-collapse: collapse; background: var(--bg-card); }
-.seats-routing-review :is(td, th, caption) { padding: 8px; text-align: start; border-bottom: 1px solid var(--divider); }
+.seats-routing-review :is(td, th) { padding: 8px 12px; text-align: start; vertical-align: top; border-bottom: 1px solid var(--divider); }
 .seats-routing-review pre { white-space: pre-wrap; margin: 0; padding: 12px; background: var(--bg-card); }
 .seats-routing-review table { width: 100%; table-layout: fixed; }
 .seats-routing-review :is(td, th) > span { display: block; }
 .seats-routing-review :is(td > span, th > span, pre, .seats-review-text) { contain: paint; overflow: hidden; overflow-wrap: anywhere; }
 .seats-routing-review li { contain: paint; overflow: hidden; }
 @media (max-width: 760px) {
-  .seats-routing-review { grid-template-columns: minmax(0, 1fr); }
+  .seats-routing-review { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .seats-review-control { grid-row: 1; }
 }
 

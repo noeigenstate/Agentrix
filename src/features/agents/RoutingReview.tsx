@@ -1,5 +1,9 @@
-import type { RoutingAction, RoutingFlag, RoutingSource } from '../../shared/types';
+import type {
+  OperationRow, RoutingAction, RoutingFlag, RoutingReview as Review, RoutingRoleChange, RoutingRoleState, RoutingSource, SeatRole,
+} from '../../shared/types';
 import { t } from '../../shared/i18n';
+import { routingRoleName } from '../../shared/routing-command.ts';
+import { operationName } from './OperationRows';
 
 const actions = { apply: '应用', keep: '保留当前', overwrite: '用当前设置覆盖文件' } as const;
 const layers = { file: '本项目路由文件', accepted: '上次接受的配置', local: '本机项目设置', template: '我的默认模板' } as const;
@@ -37,8 +41,16 @@ const flagLabels: Record<RoutingFlag['code'], string> = {
   'custom-text': '自定义角色文字',
   'operation-cost': '操作模型成本',
 };
-const valueText = (value: unknown) =>
-  value == null ? '—' : typeof value === 'string' ? value : typeof value === 'boolean' ? t(value ? '是' : '否') : JSON.stringify(value);
+function valueText(value: unknown) {
+  if (value == null) return '—';
+  if (value === 'follow') return t('跟随默认设置');
+  if (typeof value === 'string') return value;
+  if (typeof value === 'boolean') return t(value ? '是' : '否');
+  if (typeof value === 'object' && 'model' in value && typeof value.model === 'string') {
+    return 'effort' in value && typeof value.effort === 'string' ? value.model + ' · ' + value.effort : value.model;
+  }
+  return JSON.stringify(value);
+}
 export const routingLayer = (source: RoutingSource) => t(layers[source.layer]);
 export const routingError = (error: { code: string; message?: string }) => t(Object.hasOwn(errors, error.code) ? errors[error.code] : error.message ?? error.code);
 
@@ -54,38 +66,120 @@ export function resolveRouting(api: Pick<Window['agentrix'], 'resolveSkillRoutin
   return api.resolveSkillRouting(projectId, action, source.digest);
 }
 
-export function RoutingReview({ source, busy, refreshed, act, close, rawOpen, toggleRaw }: {
+const groups = { added: '新增角色', removed: '移除或停用的角色', changed: '修改的角色' } as const;
+
+function roleSettings(state: RoutingRoleState | null) {
+  if (!state) return '—';
+  return [state.model ?? '—', state.effort ?? '—', t(state.fast ? '快速' : '普通'),
+    t(state.fresh ? '新实例' : '复用实例'), t(state.enabled ? '已启用' : '已停用')].join(' · ');
+}
+
+function roleTitle(change: RoutingRoleChange, roles: readonly SeatRole[]) {
+  if (change.source === 'custom') return (change.after ?? change.before)?.custom?.name ?? change.role;
+  return routingRoleName(roles.find(role => role.id === change.role)?.name ?? change.role, t);
+}
+
+function RiskPills({ flags }: { flags: RoutingFlag[] }) {
+  return <div className="seats-review-pills">{flags.map(({ code, text }, index) =>
+    <span key={index} className="seats-risk-pill" data-routing-flag={code} title={text}>{t(flagLabels[code])}</span>)}</div>;
+}
+
+function RiskSummary({ flags }: { flags: RoutingFlag[] }) {
+  const counts = new Map<RoutingFlag['code'], number>();
+  for (const { code } of flags) counts.set(code, (counts.get(code) ?? 0) + 1);
+  return <div className="seats-review-pills" aria-label={t('风险摘要')}>
+    {[...counts].map(([code, count]) => <span key={code} className="seats-risk-pill" data-routing-risk-count={code}>
+      {t('{label} × {count}', { label: t(flagLabels[code]), count })}
+    </span>)}
+  </div>;
+}
+
+function CustomSnapshot({ state, label }: { state: RoutingRoleState | null; label: string }) {
+  if (!state?.custom) return null;
+  const { name, duty, outputs } = state.custom;
+  return <dl className="seats-review-text">
+    <dt>{label}</dt><dd>{name}</dd><dt>{t('职责')}</dt><dd>{duty}</dd><dt>{t('产出')}</dt><dd>{outputs || '—'}</dd>
+  </dl>;
+}
+
+function ReviewRoleRow({ change, roles, flags }: { change: RoutingRoleChange; roles: readonly SeatRole[]; flags: RoutingFlag[] }) {
+  const { before, after, role, source } = change;
+  const customChanged = JSON.stringify(before?.custom) !== JSON.stringify(after?.custom);
+  return <tr data-review-role={role} data-risk={flags.length > 0 || undefined}>
+    <th scope="row"><span>{roleTitle(change, roles)}</span><span className="seats-review-id">{role}</span></th>
+    <td><span>{roleSettings(before)} → {roleSettings(after)}</span>
+      {source === 'custom' && (customChanged ? <>
+        <CustomSnapshot state={before} label={t('当前')} /><CustomSnapshot state={after} label={t('文件')} />
+      </> : <CustomSnapshot state={after ?? before} label={t('名称')} />)}
+    </td>
+    <td>{flags.length > 0 && <RiskPills flags={flags} />}</td>
+  </tr>;
+}
+
+function ReviewTable({ review, roles, operations }: { review: Review; roles: readonly SeatRole[]; operations: readonly OperationRow[] }) {
+  const operationsChanged = new Set(review.changes.flatMap(change => change.operation ? [change.operation] : []));
+  return <table aria-label={t('与当前配置的差异')}>
+    <colgroup><col className="seats-review-role-col" /><col /><col className="seats-review-risk-col" /></colgroup>
+    <thead><tr><th scope="col">{t('角色或操作')}</th><th scope="col">{t('变化')}</th><th scope="col">{t('风险')}</th></tr></thead>
+    {(Object.keys(groups) as (keyof typeof groups)[]).map(group => {
+      const changes = review.roleChanges.filter(change => change.status === group);
+      return changes.length ? <tbody key={group} data-review-group={group}>
+        <tr className="seats-review-group"><th colSpan={3} scope="rowgroup">{t(groups[group])}</th></tr>
+        {changes.map(change => <ReviewRoleRow key={change.role} change={change} roles={roles} flags={review.flags.filter(flag => flag.role === change.role)} />)}
+      </tbody> : null;
+    })}
+    {operationsChanged.size > 0 && <tbody data-review-group="operations">
+      <tr className="seats-review-group"><th colSpan={3} scope="rowgroup">{t('操作模型')}</th></tr>
+      {[...operationsChanged].map(id => {
+        const changes = review.changes.filter(change => change.operation === id);
+        const flags = review.flags.filter(flag => flag.operation === id), operation = operations.find(row => row.id === id);
+        return <tr key={id} data-review-operation={id} data-risk={flags.length > 0 || undefined}>
+          <th scope="row"><span>{operation ? operationName(operation) : id}</span>{operation && <span className="seats-review-id">{id}</span>}</th>
+          <td>{changes.map(({ field, from, to }) => <span key={field}>
+            {field !== 'value' && <>{Object.hasOwn(fields, field) ? t(fields[field]) : field} · </>}{valueText(from)} → {valueText(to)}
+          </span>)}</td>
+          <td>{flags.length > 0 && <RiskPills flags={flags} />}</td>
+        </tr>;
+      })}
+    </tbody>}
+  </table>;
+}
+
+function OtherRisks({ review, roles, operations }: { review: Review; roles: readonly SeatRole[]; operations: readonly OperationRow[] }) {
+  const flags = review.flags.filter(flag => (flag.role && !review.roleChanges.some(change => change.role === flag.role)) ||
+    (flag.operation && !review.changes.some(change => change.operation === flag.operation)));
+  if (!flags.length) return null;
+  return <ul className="seats-review-other-risks" aria-label={t('风险')}>
+    {flags.map((flag, index) => {
+      const role = roles.find(item => item.id === flag.role), operation = operations.find(item => item.id === flag.operation);
+      const label = role ? routingRoleName(role.name, t) : operation ? operationName(operation) : flag.role ?? flag.operation;
+      return <li key={index}><span>{label}</span><RiskPills flags={[flag]} /></li>;
+    })}
+  </ul>;
+}
+
+export function RoutingReview({ source, roles = [], operations = [], busy, refreshed, act, close, rawOpen, toggleRaw }: {
   source: RoutingSource; busy: boolean; refreshed?: boolean; act: (action: RoutingAction) => void;
   close?: () => void; rawOpen: boolean; toggleRaw: () => void;
+  roles?: readonly SeatRole[]; operations?: readonly OperationRow[];
 }) {
   const review = source.review;
-  const reason = source.error ? routingError(source.error) : t(review?.reason === 'new-on-machine' ?
-    '首次在此电脑打开' : '文件在 Agentrix 之外被修改（git、编辑器或代理）');
-  const custom = Object.entries(review?.config.roles ?? {}).filter(([, role]) => role.from);
+  const reason = t(review?.reason === 'new-on-machine' ? '首次在此电脑打开' : '文件在 Agentrix 之外被修改（git、编辑器或代理）');
   return <section className="seats-routing-review" aria-labelledby="routing-review-heading" data-routing-review={source.state}>
     <div className="seats-review-main">
-      <h3 id="routing-review-heading">{reason}</h3>
-      {review && <>
-        <table><caption>{t('与当前配置的差异')}</caption>
-          <thead><tr><th>{t('角色或操作')}</th><th>{t('字段')}</th><th>{t('当前')}</th><th>{t('文件')}</th></tr></thead>
-          <tbody>{review.changes.map(({ role, operation, field, from, to }, index) => <tr key={index}>
-            <th scope="row"><span>{role ?? operation}</span></th>
-            <td><span>{Object.hasOwn(fields, field) ? t(fields[field]) : field}</span></td>
-            <td><span>{valueText(from)}</span></td><td><span>{valueText(to)}</span></td>
-          </tr>)}</tbody>
-        </table>
-        {custom.map(([id, role]) => <article className="seats-review-text" key={id} data-routing-custom={id}>
-          <h4>{role.name ?? id}</h4><dl><dt>{t('职责')}</dt><dd>{role.duty}</dd><dt>{t('产出')}</dt><dd>{role.outputs}</dd></dl>
-        </article>)}
-        {review.ignored.length > 0 && <div><h4>{t('忽略的条目')}</h4><ul>{review.ignored.map(entry => <li key={entry}>{entry}</li>)}</ul></div>}
-      </>}
-      {rawOpen && source.raw !== undefined && <pre id="routing-raw" tabIndex={0}>{escapeRoutingText(source.raw)}</pre>}
+      <h3 id="routing-review-heading">{source.error ? t('这个文件没有被应用') : reason}</h3>
+      {source.error && <p>{routingError(source.error)}</p>}
+      {!!review?.flags.length && <RiskSummary flags={review.flags} />}
+      <div className="seats-review-scroll" role="region" aria-label={t('与当前配置的差异')} tabIndex={0}>
+        {review && <ReviewTable review={review} roles={roles} operations={operations} />}
+        {review && <OtherRisks review={review} roles={roles} operations={operations} />}
+        {!!review?.ignored.length && <div><h4>{t('忽略的条目')}</h4><ul>{review.ignored.map(entry => <li key={entry}>{entry}</li>)}</ul></div>}
+        {rawOpen && source.raw !== undefined && <pre id="routing-raw" tabIndex={0}>{escapeRoutingText(source.raw)}</pre>}
+      </div>
     </div>
     <aside className="seats-review-control">
       <h4>{t('配置来源')}</h4><code>{source.path}</code>
       <p>{t('当前使用：{layer}', { layer: routingLayer(source) })}</p>
-      {!!review?.flags.length && <ul>{review.flags.map((flag, index) =>
-        <li key={index} data-routing-flag={flag.code}><b>{t(flagLabels[flag.code])}</b> {flag.role ?? flag.operation} {flag.text}</li>)}</ul>}
       {refreshed && <p role="status" data-review-refreshed>{t('文件已更改，已刷新')}</p>}
       {source.actions.map(action => <button type="button" data-routing-action={action} key={action}
         className={action === 'apply' ? 'seats-btn is-primary' : 'seats-btn'} disabled={busy || refreshed || !source.digest}
