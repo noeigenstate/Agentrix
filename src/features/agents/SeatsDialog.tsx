@@ -12,9 +12,9 @@ import {
   changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
   sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, familyOf,
   operationAssignment, operationDiff, operationFamilyReason, operationLayers, operationReviewerBlock,
-  type Edit, type Scope, type SlotId,
+  displayedSeat, seatSettingText, type Edit, type LiveSeatsInfo, type Scope, type SlotId,
 } from './skill-seats';
-import { CurrentOperations, OperationRows, editableOperation, operationLabel, operationName, operationWords } from './OperationRows';
+import { CurrentOperations, OperationRows, editableOperation, operationLabel, operationName, operationNeedsLaunch, operationWords } from './OperationRows';
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
 import { copyRole, roleName, RoleEditor } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
@@ -31,7 +31,6 @@ function RoleIcon({ id }: { id: string }) {
   return <span className="seats-role-icon"><Icon size={18} aria-hidden="true" /></span>;
 }
 const ROLE_NAMES: Record<string, string> = { orchestrator: 'Orchestrator Agent', product: 'Product', architect: 'Architect', designer: 'Designer', developer: 'Developer', reviewer: 'Reviewer', qa: 'QA / Tester', researcher: 'Researcher', devops: 'DevOps', security: 'Security' };
-const effortLine = (seat: { effort: string; fast?: boolean }) => [seat.effort, seat.fast && t('快速')].filter(Boolean).join(' · ');
 const REFUSALS = {
   'unknown-model': '没有这个模型', unavailable: '不可用', same: '', effort: '这个模型不支持该强度', fast: '这个模型不能开快速',
   'invalid-id': '模型名只能含字母、数字和 . : @ + / [ ] - _，以字母或数字开头，最多 160 个字符',
@@ -51,7 +50,7 @@ const ageText = (at: number | null) => {
   return unit === 'never' ? t('未刷新') : unit === 'now' ? t('刚刚') : t(unit === 'min' ? '{count} 分钟前' : unit === 'hour' ? '{count} 小时前' : '{count} 天前', { count });
 };
 
-type Notice = { kind: 'info' | 'ok' | 'error'; text: string };
+type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | { kind: 'saved' };
 type Menu = { kind: 'model' | 'effort' | 'claude' | 'codex'; slot: SlotId } & ReturnType<typeof menuPlacement>;
 type Custom = { text: string; error: string };
 const operationSlot = (id: string) => `operation:${id}`;
@@ -109,13 +108,13 @@ function migrationLine(line: string) {
 }
 
 type SeatsDialogProps = {
-  info: SeatsInfo; projectId?: string; terminalId?: string; migration?: string;
+  info: LiveSeatsInfo; projectId?: string; terminalId?: string; migration?: string;
   onMigration: (text: string) => void; onDismissMigration: () => void; onClose: () => void;
 };
 
 function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDialogProps) {
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [refreshed, setRefreshed] = useState<SeatsInfo | null>(null);
+  const [refreshed, setRefreshed] = useState<LiveSeatsInfo | null>(null);
   const [refreshing, setRefreshing] = useState<'dialog' | 'manual' | null>(null);
   const reading = useRef<'dialog' | 'manual' | null>(null), queued = useRef(false), alive = useRef(true);
   const [moved, setMoved] = useState(() => given.defaultsMoved ?? []);
@@ -221,7 +220,7 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
   const reset = () => {
     setConfig({ roles: {}, operations: {} });
     setDiscarding(false);
-    setNotice({ kind: 'info', text: t('已恢复默认设置；下一次对话生效') });
+    setNotice({ kind: 'info', text: t('草稿已恢复默认设置') });
   };
   const reload = async () => {
     if (!await loadInfo() || !alive.current) return;
@@ -240,7 +239,7 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
       setDrafts(previous => ({ ...previous, [scope]: undefined }));
     }
     setSaving(false);
-    if (result.ok) { setNotice({ kind: 'ok', text: t('已保存，下一次对话生效') }); return; }
+    if (result.ok) { setNotice({ kind: 'saved' }); return; }
     if (result.error?.code === 'file-changed') setStale(true);
     const operation = opRows.find(row => row.id === result.error?.operation);
     const reason = result.error ? routingError(result.error) : result.message;
@@ -358,12 +357,13 @@ function choiceActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<
     if (!row || saving) return;
     setOperationsDraft({ ...opValues, [row.id]: value });
     setDiscarding(false);
-    setNotice({ kind: 'info', text: t('{seat} 换成 {model}；下一次对话生效', { seat: operationName(row), model: operationLabel(row, value, label) }) });
+    const text = t('草稿 · {seat} 换成 {model}', { seat: operationName(row), model: operationLabel(row, value, label) });
+    setNotice({ kind: 'info', text: operationNeedsLaunch(row.id) ? `${text} · ${t('下次启动生效')}` : text });
   };
   const assign = (slot: SlotId, model: string) => {
     const row = opAt(slot);
     if (!row) {
-      apply(assignModel(working, slot, model, catalog), t('{seat} 换成 {model}；下一次对话生效', { seat: seatName(slot), model: label(model) }), model);
+      apply(assignModel(working, slot, model, catalog), t('草稿 · {seat} 换成 {model}', { seat: seatName(slot), model: label(model) }), model);
       return;
     }
     const choice = operationAssignment(row, model, catalog, opValues[row.id]);
@@ -372,7 +372,7 @@ function choiceActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<
   };
   const swap = (from: SlotId, slot: SlotId) => {
     const result = swapSlots(working, from, slot, catalog);
-    apply(result, t('{first} 与 {second} 互换了模型；下一次对话生效', { first: slotName(from), second: slotName(slot) }));
+    apply(result, t('草稿 · {first} 与 {second} 互换了模型', { first: slotName(from), second: slotName(slot) }));
   };
   const drop = (slot: SlotId, model: string, from: SlotId | null) => { if (from && !opAt(slot)) swap(from, slot); else assign(slot, model); };
   // 其他模型…: a refused id stays in the box with its reason; an accepted one is assigned like a listed model.
@@ -387,7 +387,7 @@ function choiceActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<
     }
     const result = assignCustom(working, slot, model, catalog);
     if (!result.ok && result.reason !== 'same') { setCustom({ text: model, error: refusalText(result, model) ?? '' }); return; }
-    apply(result, t('{seat} 换成 {model}；下一次对话生效', { seat: slotName(slot), model: label(model) }));
+    apply(result, t('草稿 · {seat} 换成 {model}', { seat: slotName(slot), model: label(model) }));
     closeMenu();
   };
   const edit = (result: Edit) => { if (!saving && result.ok) { setDraft(result.map); setDiscarding(false); } };
@@ -516,7 +516,7 @@ function useRoutingReview(source: ReturnType<typeof useCatalog>, draft: ReturnTy
       await source.loadInfo();
       if (!source.alive.current || !result) return;
       if (!result.ok) source.setNotice({ kind: 'error', text: routingError(result) });
-      else { setOpened(false); setRaw(false); source.setNotice(null); }
+      else { setOpened(false); setRaw(false); source.setNotice(action === 'apply' ? { kind: 'saved' } : null); }
     } catch (error) {
       if (source.alive.current) source.setNotice({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -789,16 +789,15 @@ function DialogHeader({ state }: DialogPart) {
 }
 
 function ConversationChoices({ state }: DialogPart) {
-  const { info, label, operations } = state.source, { working } = state.draft;
+  const { info, label, operations } = state.source;
   const { nowBox, setNowOpen, nowButton } = state.panels;
   const { terminalId } = state.props;
-  const current = info.current;
-  const seatTags = current && (info.currentRoles ?? info.roles).filter(role => role.enabled !== false && current[role.id]).map(role => {
-    const id = role.id;
-    const seat = current[id], next = working[id];
-    const text = (value: typeof seat) => value ? [label(value.model), effortLine(value)].join(' · ') : '—';
-    return <span key={id} className={sameSeat(seat, next) ? 'seats-now' : 'seats-now is-diff'}><b>{roleName(role)}</b>{text(seat)}
-      {!sameSeat(seat, next) && <> → {text(next)}</>}</span>;
+  const seatTags = info.current && info.roles.filter(role => role.enabled !== false).map(role => {
+    const seat = displayedSeat(info, role.id), pending = role.id === info.lead ? info.leadPending : null;
+    return <span key={role.id} className="seats-now" data-current-seat={role.id} data-lead-pending={pending ? true : undefined}>
+      <b>{roleName(role)}</b>{seat ? seatSettingText(seat, label(seat.model), t('快速')) : '—'}
+      {pending && <span className="seats-now-restart">{t('重启后生效：{settings}', { settings: seatSettingText(pending, label(pending.model), t('快速')) })}</span>}
+    </span>;
   });
   return <div ref={nowBox} className="seats-nowbox" role="region" aria-label={t('本次对话（只读）')}>
     <div className="seats-menu-head"><b>{t('本次对话（只读）')}</b>
@@ -838,11 +837,15 @@ function DialogStrip({ state }: DialogPart) {
   const routingStatus = state.review.visible
     ? info.routing.state === 'pending' ? '等你确认' : info.routing.state === 'invalid' ? '文件未应用' : null
     : null;
+  const timing = t(info.leadPending ? '保存后立即生效；总指挥重启后生效' : '保存后立即生效');
+  const noticeKind = notice?.kind === 'saved' ? 'ok' : notice?.kind;
+  const noticeText = notice?.kind === 'saved'
+    ? t(info.leadPending ? '已保存，立即生效；总指挥重启后生效' : '已保存，立即生效') : notice?.text;
   return (
-    <section className="seats-strip" aria-label={t(routingStatus || '下一次对话生效')}>
+    <section className="seats-strip" aria-label={routingStatus ? t(routingStatus) : t('模型路由')}>
       <div className="seats-strip-row">
         {routingStatus ? <span className="seats-effective" role="status">{t(routingStatus)}</span> : <>
-          <span className="seats-effective"><i className={`seats-dot ${block || reviewBlock ? 'is-bad' : dirty ? 'is-on' : 'is-ok'}`} />{t('下一次对话生效')}</span>
+          <span className="seats-effective"><i className={`seats-dot ${block || reviewBlock ? 'is-bad' : dirty ? 'is-on' : 'is-ok'}`} />{timing}</span>
           <span>{block ? t('有座位被阻止，不能保存') : reviewBlock ? t('审查模型被阻止，不能保存') : dirty
             ? t(operations ? '草稿未保存 · 已改 {count} 项' : '草稿未保存 · 已改 {count} 个座位', { count }) : t('没有改动')}</span>
         </>}
@@ -883,7 +886,8 @@ function DialogStrip({ state }: DialogPart) {
           t('关闭会丢掉未保存的修改。')}</span>
         <button ref={keepButton} type="button" className="seats-btn" data-keep onClick={() => setDiscarding(false)}>{t('继续编辑')}</button>
         <button type="button" className="seats-btn" data-discard onClick={onClose}>{t('放弃修改')}</button></div>}
-      <p className="seats-notice" role="status" aria-live="polite" data-kind={notice?.kind}>{notice?.kind === 'ok' && <CheckCircle size={14} aria-hidden="true" />}{notice?.text}</p>
+      <p className="seats-notice" role="status" aria-live="polite" data-kind={noticeKind}>
+        {noticeKind === 'ok' && <CheckCircle size={14} aria-hidden="true" />}{noticeText}</p>
     </section>
   );
 }

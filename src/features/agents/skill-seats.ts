@@ -9,6 +9,16 @@ import { authorIdentityConflict, roleLocks } from '../../../electron/features/sk
 
 export { familyOf };
 
+// The renderer can run on a main process without the live routing payload.
+export type LiveSeatsInfo = SeatsInfo & { leadPending?: { model: string; effort: string; fast: boolean } | null };
+
+export function displayedSeat(info: SeatsInfo, id: SeatId) {
+  return id === info.lead ? info.current?.[id] ?? info.effective[id] : info.effective[id];
+}
+
+export const seatSettingText = (seat: Seat, model: string, fast: string) =>
+  [model, seat.effort, seat.fast && fast].filter(Boolean).join(' · ');
+
 // The dialog checks seat edits before saving. Main still validates saves and the dialog shows its refusal.
 export type SlotId = SeatId;
 export type Scope = 'template' | 'project';
