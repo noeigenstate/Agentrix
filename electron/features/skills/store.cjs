@@ -449,7 +449,7 @@ class SkillsStore {
       if (raw === undefined || raw === null) return null;
       try {
         const { config } = cleanConfig(raw, entry, catalog, true);
-        return validateTeam(resolveTeam(entry, config, defaults), catalog, entry) ? null : config;
+        return validateTeam(resolveTeam(entry, config, defaults), entry) ? null : config;
       } catch { return null; }
     };
     const template = restore(stored.template);
@@ -565,7 +565,7 @@ class SkillsStore {
     try {
       ({ config } = cleanConfig(raw, entry, catalog));
       team = resolveTeam(entry, config, defaults);
-      const invalid = validateTeam(team, catalog, entry);
+      const invalid = validateTeam(team, entry);
       if (invalid) return invalid;
       config = compactConfig(entry, config);
     } catch (error) {

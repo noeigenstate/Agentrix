@@ -95,7 +95,7 @@ function resolveTeam(entry, config, defaults) {
     const inherited = inherits ? chosen(inherits).seat : defaultSeat;
     const resolved = { inherited, seat: seatFrom(override) ?? inherited, row: {
       ...row, ...(inherits ? { inherits } : { defaultSeat }),
-      enabled: override.enabled ?? row.defaultEnabled, fresh: row.kind === 'reviewer' || (override.fresh ?? row.defaultFresh),
+      enabled: override.enabled ?? row.defaultEnabled, fresh: override.fresh ?? row.defaultFresh,
     } };
     picks.set(id, resolved);
     return resolved;
@@ -107,7 +107,7 @@ function resolveTeam(entry, config, defaults) {
       inherited: resolved.seat, seat: seatFrom(value) ?? resolved.seat,
       row: { id, name: value.name, duty: value.duty, detail: '', outputs: value.outputs, kind: base.kind, source: 'custom',
         from: base.id, inherits: base.id, defaultEnabled: true, defaultFresh: resolved.row.fresh,
-        enabled: value.enabled ?? true, fresh: base.kind === 'reviewer' || (value.fresh ?? resolved.row.fresh), locked: roleLocks(base.kind, 'custom') },
+        enabled: value.enabled ?? true, fresh: value.fresh ?? resolved.row.fresh, locked: roleLocks(base.kind, 'custom') },
     }));
     return [resolved, ...custom];
   });
@@ -136,11 +136,9 @@ function englishNames(entry) {
   return names;
 }
 
-function validateTeam(team, catalog, entry) {
+function validateTeam(team, entry) {
   const error = checkTeamRules(team.roles, entry ? englishNames(entry) : []);
-  if (error) return { ok: false, ...error, message: error.code };
-  const blocked = modelSeats.checkReviewer(team.effective, catalog, team.reviewers, team.authors);
-  return blocked ? { ...blocked, role: blocked.seat } : null;
+  return error ? { ok: false, ...error, message: error.code } : null;
 }
 
 function compactConfig(entry, config) {

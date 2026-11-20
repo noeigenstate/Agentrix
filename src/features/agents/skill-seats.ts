@@ -5,7 +5,7 @@ import type {
 } from '../../shared/types';
 import { BASE_EFFORTS, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
 
-import { authorIdentityConflict, roleLocks } from '../../../electron/features/skills/role-rules.mjs';
+import { roleLocks } from '../../../electron/features/skills/role-rules.mjs';
 
 export { familyOf };
 
@@ -22,9 +22,7 @@ export type Scope = 'template' | 'project';
 type Family = 'claude' | 'codex';
 type EditRefusal = 'unknown-model' | 'unavailable' | 'same' | 'effort' | 'fast' | 'invalid-id';
 export type Edit = { ok: true; map: SeatMap } | { ok: false; reason: EditRefusal };
-type ReviewerBlock = { reviewer: SeatId; hit: SeatId[]; alternatives: SeatModel[]; fix: SeatModel | null };
 
-type ReviewRoles = { authors: SeatId[]; reviewers: SeatId[] };
 
 // A shorter name for a small tile: "Opus (follows latest)" is "Opus (latest)"; the menu and the list keep the full text.
 export const shortLabel = (label: string) => label.replace(/\s*\(follows latest\)$/i, ' (latest)');
@@ -62,18 +60,6 @@ export function canonicalModel(catalog: SeatModel[], model: string): string {
   return best ? bare(best).replace(/-\d{8}$/, '') : id;
 }
 export const sameModel = (catalog: SeatModel[], a: string, b: string) => a === b || canonicalModel(catalog, a) === canonicalModel(catalog, b);
-// The few alternatives the blocked-reviewer banner names, strongest first, and how many there are in all.
-// The blocked banner names the alternatives in the order the one-click fix prefers them (the fix first), one per model line (the alias, else the newest version, not every old one).
-export function topAlternatives(alternatives: SeatModel[], max = 3, ctx?: {
-  fix: SeatModel | null; map: SeatMap; catalog: SeatModel[]; defaults: SeatMap | undefined; authors: SeatId[]; reviewer: SeatId;
-}) {
-  const preferred = (a: SeatModel, b: SeatModel) => Number(isAliasRow(b)) - Number(isAliasRow(a)) || (versionNewer(idVersion(a.model), idVersion(b.model)) ? -1 : versionNewer(idVersion(b.model), idVersion(a.model)) ? 1 : 0);
-  const lineKey = (row: SeatModel) => row.family + lineOf(row), best = new Map<string, SeatModel>();
-  for (const row of [...alternatives].sort(preferred)) if (!best.has(lineKey(row))) best.set(lineKey(row), row);
-  const lines = [...best.values()], ordered = ctx ? orderSuggestions(lines, ctx.map, ctx.catalog, ctx.authors, ctx.reviewer, ctx.defaults) : [...lines].sort(strength);
-  const fix = ctx?.fix, shown = fix ? [fix, ...ordered.filter(row => lineKey(row) !== lineKey(fix))] : ordered;
-  return { shown: shown.slice(0, max), total: alternatives.length };
-}
 // A typed-in id the catalog does not list: its family comes from the id, its efforts from the family's base list, fast only where Codex can apply it.
 const customRow = (model: string): SeatModel => {
   const family = familyOf(model);
@@ -207,37 +193,8 @@ export function setFast(map: SeatMap, slot: SlotId, fast: boolean, catalog: Seat
   return !fast || rowFor(catalog, seat.model)?.fast ? { ok: true, map: withSlot(map, slot, { ...seat, fast }) } : { ok: false, reason: 'fast' };
 }
 
-// The shared reviewer rule compares each enabled reviewer to the enabled authors.
-// The fix is such a model that none of the author seats runs, or null when the author seats themselves must change.
-const strength = (a: SeatModel, b: SeatModel) => b.rank - a.rank || b.model.localeCompare(a.model, 'en', { numeric: true });
-// The candidates in the order the one-click fix and the banner prefer them, never by list order: the reviewer seat's default first, then models another seat already runs, then the rest;
-// within each the strongest.
-function orderSuggestions(candidates: SeatModel[], map: SeatMap, catalog: SeatModel[], authors: SeatId[], reviewer: SeatId, defaults?: SeatMap): SeatModel[] {
-  const running = Object.entries(map).filter(([id]) => id !== reviewer && !authors.includes(id)).map(([, seat]) => seat);
-  const tier = (row: SeatModel) => defaults?.[reviewer] && sameModel(catalog, row.model, defaults[reviewer].model) ? 0 : running.some(seat => sameModel(catalog, seat.model, row.model)) ? 1 : 2;
-  return [...candidates].sort((a, b) => tier(a) - tier(b) || strength(a, b));
-}
-export function reviewerBlock(map: SeatMap, catalog: SeatModel[], defaults: SeatMap | undefined, roles: ReviewRoles): ReviewerBlock | null {
-  for (const reviewer of roles.reviewers) {
-    const seat = map[reviewer];
-    if (!seat) continue;
-    const block = authorConflict(seat.model, map, roles.authors, catalog);
-    if (block) return { reviewer, ...block, fix: orderSuggestions(block.alternatives, map, catalog, roles.authors, reviewer, defaults)[0] ?? null };
-  }
-  return null;
-}
-
-function authorConflict(model: string, seats: SeatMap, authors: SeatId[], catalog: SeatModel[]) {
-  const models = Object.fromEntries(authors.flatMap(id => seats[id] ? [[id, seats[id].model]] : []));
-  return authorIdentityConflict(model, models, catalog, id => canonicalModel(catalog, id));
-}
-
-export const reviewerSameButAllowed = (map: SeatMap, catalog: SeatModel[], role: SeatId, authors: SeatId[]) =>
-  !!map[role] && !authorConflict(map[role].model, map, authors, catalog) &&
-  authors.some(id => !!map[id] && sameModel(catalog, map[id].model, map[role].model));
-
 // The first refusal main would give for this map, or null: 保存 is disabled on it.
-export function firstRefusal(map: SeatMap, catalog: SeatModel[], roles: ReviewRoles): SeatsSaveError | null {
+export function firstRefusal(map: SeatMap, catalog: SeatModel[]): SeatsSaveError | null {
   const refuse = (code: SeatsSaveError['code'], seat: string, message: string): SeatsSaveError => ({ ok: false, code, seat, message });
   for (const seat of Object.keys(map)) {
     const value = getSlot(map, seat);
@@ -247,8 +204,7 @@ export function firstRefusal(map: SeatMap, catalog: SeatModel[], roles: ReviewRo
     if (!(row?.efforts ?? BASE_EFFORTS[family]).includes(value.effort)) return refuse('invalid-effort', seat, unsupportedEffort(family));
     if (value.fast && !row?.fast) return refuse('fast-not-allowed', seat, 'This model has no fast mode.');
   }
-  const block = reviewerBlock(map, catalog, undefined, roles);
-  return block && refuse('reviewer-same-model', block.reviewer, 'Choose a different reviewer model when another available model is at least as strong.');
+  return null;
 }
 
 // The seats whose slots differ between two maps, in the skill's own order.

@@ -79,7 +79,6 @@
   padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
 .seats-team-card.is-lead { flex-direction: row; align-items: center; gap: 12px; min-height: 76px; padding: 8px 16px; }
 .seats-team-card.is-over { outline: 2px solid var(--focus-ring); }
-.seats-team-card.is-blocked { border-color: var(--danger); }
 .seats-team-info { display: grid; gap: 4px; min-width: 0; }
 .seats-team-card:not(.is-lead) .seats-team-name { padding-inline-end: 40px; }
 .seats-team-card.is-lead .seats-team-info { flex: 1; }

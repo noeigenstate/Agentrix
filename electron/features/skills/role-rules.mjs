@@ -1,5 +1,3 @@
-import { rankByName } from './seat-rules.mjs';
-
 export const MAX_CUSTOM_ROLES = 8;
 export const MAX_ENABLED_ROLES = 16;
 export const ROLE_TEXT_LIMITS = Object.freeze({ name: [1, 12], duty: [1, 160], outputs: [0, 60] });
@@ -27,7 +25,6 @@ export function roleKind(id, authors) {
 /** @param {ReturnType<typeof roleKind>} kind @param {'builtin' | 'library' | 'custom'} source @returns {RoleLock[]} */
 export function roleLocks(kind, source) {
   if (kind === 'lead') return ['enabled', 'text', 'copy'];
-  if (kind === 'reviewer') return source === 'custom' ? ['fresh'] : ['fresh', 'text'];
   return source === 'custom' ? [] : ['text'];
 }
 
@@ -65,7 +62,6 @@ export function checkTeamRules(roles, reservedNames = []) {
   const enabled = roles.filter(role => role.enabled);
   const leads = roles.filter(role => role.kind === 'lead');
   if (leads.length !== 1 || !leads[0].enabled) return { code: /** @type {const} */ ('lead-locked'), role: leads[0]?.id };
-  if (!enabled.some(role => role.kind === 'reviewer')) return { code: /** @type {const} */ ('reviewer-required') };
   if (roles.filter(role => role.source === 'custom').length > MAX_CUSTOM_ROLES || enabled.length > MAX_ENABLED_ROLES) {
     return { code: /** @type {const} */ ('role-limit') };
   }
@@ -81,24 +77,3 @@ export function checkTeamRules(roles, reservedNames = []) {
   return null;
 }
 
-/**
- * Authors are the enabled author IDs mapped to the model each runs. The caller supplies catalog-aware model identity.
- * @template {{ model: string, rank: number, available: boolean }} Row
- * @param {string} reviewer @param {Readonly<Record<string, string>>} authors
- * @param {readonly Row[]} catalog @param {(model: string) => string} identity
- */
-export function authorIdentityConflict(reviewer, authors, catalog, identity) {
-  const reviewKey = identity(reviewer);
-  const entries = Object.entries(authors).map(([id, model]) => [id, identity(model)]);
-  const hit = entries.filter(([, key]) => key === reviewKey).map(([id]) => id);
-  if (!hit.length) return null;
-  const rank = catalog.find(row => row.model === reviewer)?.rank ?? rankByName(reviewer);
-  const used = new Set(hit.includes('developer') ? [reviewKey] : entries.map(([, key]) => key));
-  const alternatives = catalog.filter(row => {
-    const key = identity(row.model);
-    if (!row.available || row.rank < rank || used.has(key)) return false;
-    used.add(key);
-    return true;
-  });
-  return alternatives.length ? { hit, alternatives } : null;
-}

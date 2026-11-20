@@ -1,6 +1,5 @@
 // Seat choices are configuration, never evidence of which model actually ran.
 const { modelRow } = require('./model-catalog.cjs');
-const { authorIdentityConflict } = require('./role-rules.mjs');
 const { BASE_EFFORTS, EFFORT, familyOf: family, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const ALIASES = ['opus', 'sonnet', 'haiku'];
@@ -126,20 +125,6 @@ function modelIdentity(models) {
   };
 }
 
-function checkReviewer(map, models, reviewers = ['reviewer'], authors = ['developer']) {
-  const identity = modelIdentity(models);
-  const authorModels = Object.fromEntries(authors.filter(id => Object.hasOwn(map, id)).map(id => [id, map[id].model]));
-  for (const id of reviewers) {
-    if (!Object.hasOwn(map, id)) continue;
-    const conflict = authorIdentityConflict(map[id].model, authorModels, models, identity);
-    if (conflict) {
-      const author = conflict.hit.includes('developer') ? 'developer' : 'the authors';
-      return refusal('reviewer-same-model', id, 'Choose a reviewer different from ' + author + ' when another available model is at least as strong.');
-    }
-  }
-  return null;
-}
-
 function resolveSeat(choice, fallback, installed, models) {
   const selected = choice && installed[family(choice.model)] ? choice : fallback;
   if (!selected) return null;
@@ -174,5 +159,5 @@ function seatIssues(map, models) {
   return issues;
 }
 
-module.exports = { cleanSeat, cleanStoredSeats, migrateSeats, migrateDefaultModels, checkReviewer, modelIdentity, catalog, defaultsFor, effective,
+module.exports = { cleanSeat, cleanStoredSeats, migrateSeats, migrateDefaultModels, modelIdentity, catalog, defaultsFor, effective,
   leadOptions, leadConfiguration, resolveSeat, agentAlias, concreteAlias, seatIssues, rankOf };

@@ -3,7 +3,6 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { isDeepStrictEqual, TextDecoder } = require('node:util');
 const { rankByName } = require('./seat-rules.mjs');
-const { modelIdentity } = require('./model-seats.cjs');
 const { cleanConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
 
 const ROUTING_PATH = '.agentrix/routing.json';
@@ -72,7 +71,7 @@ function parseRouting(bytes, entry, catalog, defaults) {
   const { format, version, operations, ...body } = document;
   try {
     const { config, ignored } = cleanConfig(body, entry, catalog, true, true), team = resolveTeam(entry, config, defaults);
-    const error = validateTeam(team, catalog, entry);
+    const error = validateTeam(team, entry);
     return error ? invalid(error.code, digest, raw) : { digest, raw, config, ignored };
   } catch (error) {
     return invalid(error.code || 'bad-format', digest, raw);
@@ -187,16 +186,6 @@ function writeRouting(root, config, base, context, beforeRename) {
   }
 }
 
-const effortOrder = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-const verificationRole = role => role && (role.kind === 'reviewer' || ['qa', 'security', 'a11y'].includes(role.id));
-
-function verificationDropped(before, after, rank) {
-  if (!before) return false;
-  if (!after || rank(after.model) < rank(before.model)) return true;
-  const oldEffort = effortOrder.indexOf(before.effort), newEffort = effortOrder.indexOf(after.effort);
-  return newEffort >= 0 && newEffort < oldEffort;
-}
-
 function reviewRoleState(item) {
   if (!item) return null;
   const { row, seat } = item, { enabled, fresh, from, name, duty, outputs } = row;
@@ -227,17 +216,12 @@ function reviewFile(file, reason, team, previous, catalog) {
   };
   const oldRoles = new Map(previous.team.map(item => [item.row.id, item]));
   const nextRoles = new Map(team.team.map(item => [item.row.id, item]));
-  const identity = modelIdentity(catalog);
-  const authors = new Set(team.authors.flatMap(id => team.effective[id] ? [identity(team.effective[id].model)] : []));
   for (const id of new Set([...oldRoles.keys(), ...nextRoles.keys()])) {
     const before = oldRoles.get(id), after = nextRoles.get(id), role = after?.row, old = before?.row, seat = after?.seat;
     if (!old?.enabled && !role?.enabled && !Object.hasOwn(config.roles, id)) continue;
     const change = diffRole(id, before, after, diff);
     if (change) roleChanges.push(change);
     if (role?.source === 'custom') flag('custom-text', id, role.name);
-    const weakened = old?.enabled && verificationRole(old) && (!role?.enabled || old.fresh && !role.fresh || verificationDropped(before.seat, seat, rank));
-    const shared = role?.enabled && role.kind === 'reviewer' && seat && authors.has(identity(seat.model));
-    if (weakened || shared) flag('verification-weakened', id);
     if (!role?.enabled || !seat) continue;
     const modelChanged = !old?.enabled || before.seat?.model !== seat.model;
     if (modelChanged && rank(seat.model) === 3) flag('expensive-model', id, seat.model);

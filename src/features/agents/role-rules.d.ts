@@ -11,7 +11,4 @@ declare module '*electron/features/skills/role-rules.mjs' {
   export function normalizeRoleText(field: TextField, value: unknown): string | null;
   export function validateCustomRole(id: string, config: RoleConfig, sources: readonly string[]): { code: RoleRuleCode; role: string; field?: TextField } | null;
   export function checkTeamRules(roles: readonly TeamRole[], reservedNames?: readonly string[]): { code: RoleRuleCode; role?: string; field?: TextField } | null;
-  export function authorIdentityConflict<T extends { model: string; rank: number; available: boolean }>(
-    reviewer: string, authors: Readonly<Record<string, string>>, catalog: readonly T[], identity: (id: string) => string,
-  ): { hit: string[]; alternatives: T[] } | null;
 }

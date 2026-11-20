@@ -7,8 +7,8 @@ import {
 import type { RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
 import {
-  shortLabel, paletteGroups, ageOf, menuPlacement, topAlternatives, withInstalled, assignCustom, assignModel, baselineFor, cleanDraft, configFor, draftRoles, resolveDraftSeats, updateDraftSeats,
-  changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
+  shortLabel, paletteGroups, ageOf, menuPlacement, withInstalled, assignCustom, assignModel, baselineFor, cleanDraft, configFor, draftRoles, resolveDraftSeats, updateDraftSeats,
+  changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, rowFor,
   sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, familyOf,
   displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
 } from './skill-seats';
@@ -181,16 +181,13 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
   const original = configFor(info, scope), current = drafts[scope], config = current?.config ?? original;
   const roles = draftRoles(info, config), working = resolveDraftSeats(info.defaults, roles, config), baseline = baselineFor(info, scope);
   const enabled = roles.filter(role => role.enabled), live = Object.fromEntries(enabled.flatMap(role => working[role.id] ? [[role.id, working[role.id]]] : []));
-  const authors = enabled.filter(role => role.kind === 'author').map(role => role.id);
-  const reviewers = enabled.filter(role => role.kind === 'reviewer').map(role => role.id);
-  const reviewRoles = { authors, reviewers };
   const clean = cleanDraft(info, config);
   const saved = cleanDraft(info, original);
   const roleIds = new Set([...Object.keys(clean.roles), ...Object.keys(saved.roles)]);
   const count = [...roleIds].filter(id => !sameRoleConfig(clean.roles[id], saved.roles[id])).length;
   const dirty = !!current && count > 0;
-  const block = reviewerBlock(live, catalog, info.defaults, reviewRoles), teamError = checkTeamRules(roles);
-  const refusal = firstRefusal(live, catalog, reviewRoles);
+  const teamError = checkTeamRules(roles);
+  const refusal = firstRefusal(live, catalog);
   const createFile = scope === 'project' && !info.routing.remote && info.routing.state === 'absent';
   const { state: routingState, actions } = info.routing;
   const mayOverwrite = scope === 'template' || routingState === 'trusted' || routingState === 'absent' ||
@@ -228,7 +225,7 @@ function useDraft(source: ReturnType<typeof useCatalog>, projectId?: string) {
     setNotice({ kind: 'error', text: t('没有保存：{message}', { message }) });
   };
   return {
-    baseline, working, roles, config, enabled, reviewRoles, dirty, count, block, refusal, teamError, scope, saving, createFile, mayOverwrite, stale, reload,
+    baseline, working, roles, config, enabled, dirty, count, refusal, teamError, scope, saving, createFile, mayOverwrite, stale, reload,
     hasDrafts: dirty || !!drafts[scope === 'project' ? 'template' : 'project'],
     canReset: Object.keys(clean.roles).length > 0,
     discardShown: discarding, setDiscarding, setDraft, setConfig, changeScope: setScope, reset, save,
@@ -335,7 +332,7 @@ function useMenu({ catalog }: ReturnType<typeof useCatalog>, { setNowOpen }: Ret
 
 function choiceActions(source: ReturnType<typeof useCatalog> & ReturnType<typeof routingNames>, draft: ReturnType<typeof useDraft>, popup: ReturnType<typeof useMenu>) {
   const { label, seatName, catalog, setNotice } = source;
-  const { working, setDraft, setDiscarding, block, saving } = draft;
+  const { working, setDraft, setDiscarding, saving } = draft;
   const { custom, setCustom, closeMenu } = popup;
   const refusalText = (result: Extract<Edit, { ok: false }>, model: string) => {
     if (result.reason === 'same') return null;
@@ -365,8 +362,7 @@ function choiceActions(source: ReturnType<typeof useCatalog> & ReturnType<typeof
     closeMenu();
   };
   const edit = (result: Edit) => { if (!saving && result.ok) { setDraft(result.map); setDiscarding(false); } };
-  const fix = () => { if (block?.fix) apply(assignModel(working, block.reviewer, block.fix.model, catalog), t('审查改用 {model}', { model: label(block.fix.model) })); };
-  return { assign, drop, submitCustom, edit, fix };
+  return { assign, drop, submitCustom, edit };
 }
 
 function useModelDrag(catalog: SeatModel[], drop: ReturnType<typeof choiceActions>['drop']) {
@@ -535,28 +531,12 @@ function useDialogState(props: SeatsDialogProps) {
 type DialogState = ReturnType<typeof useDialogState>;
 type DialogPart = { state: DialogState };
 
-function reviewerMessage({ source, draft }: DialogState) {
-  const { label, catalog, seatName, info } = source, { block, working, reviewRoles } = draft;
-  if (!block) return '';
-  const model = label(working[block.reviewer]?.model ?? '');
-  const { shown, total } = topAlternatives(block.alternatives, 3, {
-    fix: block.fix, map: working, catalog, defaults: info.defaults, authors: reviewRoles.authors, reviewer: block.reviewer,
-  });
-  const names = shown.map(row => label(row.model)).join(roleSeparator());
-  return t('审查（{model}）与{seats}使用同一模型，账户里还有不弱于它的 {others}，所以不能保存。', {
-    model, seats: block.hit.map(seatName).join(roleSeparator()), others: total > shown.length ? t('{names} 等 {count} 个', { names, count: total }) : names });
-}
-
 function seatControls(state: DialogState) {
-  const { info, catalog, label } = state.source, { working, baseline, block, enabled, reviewRoles } = state.draft;
+  const { info, catalog, label } = state.source, { working, baseline } = state.draft;
   // What the seat says under its model: why it is not what the owner chose.
   const slotState = (slot: SlotId) => {
     const seat = getSlot(working, slot);
     if (!seat) return null;
-    if (slot === block?.reviewer) return { kind: 'bad', short: t('已阻止 · 同模型'), title: reviewerMessage(state) };
-    if (enabled.some(role => role.id === slot && role.kind === 'reviewer') && reviewerSameButAllowed(working, catalog, slot, reviewRoles.authors)) {
-      return { kind: 'warn', short: t('同模型 · 无更强可换'), title: t('账户里没有不弱于它的其他模型，允许保留') };
-    }
     const issues = sameSeat(seat, getSlot(baseline, slot)) ? issuesOf(info, slot) : [];
     if (issues.length) return { kind: 'warn', short: t('已调整 · {substitute}', { substitute: issues[0].substitute }), title: issues.map(issueText).join('；') };
     if (isAvailable(catalog, seat.model)) return null;
@@ -588,11 +568,10 @@ function SeatPicker({ state, role }: DialogPart & { role: TeamRole }) {
 
 function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; library?: boolean }) {
   const { saving, enabled, roles } = state.draft, { edit, create, change, remove } = state.roles;
-  const lastReviewer = role.enabled && role.kind === 'reviewer' && state.draft.reviewRoles.reviewers.length === 1;
-  const lock = role.locked.includes('enabled') || lastReviewer;
+  const lock = role.locked.includes('enabled');
   const full = enabled.length >= MAX_ENABLED_ROLES, copiesFull = roles.filter(role => role.source === 'custom').length >= MAX_CUSTOM_ROLES;
   const custom = role.source === 'custom', canCopy = !custom && !role.locked.includes('copy');
-  const toggleReason = lock ? t(lastReviewer ? '至少保留一个审查角色。' : '总指挥必须保留。') : !role.enabled && full ? enabledLimit() : undefined;
+  const toggleReason = lock ? t('总指挥必须保留。') : !role.enabled && full ? enabledLimit() : undefined;
   const run = (action: () => void) => { if (!library) state.popup.closeMenu(); action(); };
   const membership = (action: () => void) => run(() => {
     const panel = state.panels.dialog.current;
@@ -669,7 +648,7 @@ function RoleLibrary({ state, query, setQuery, filter, setFilter }: DialogPart &
 }
 
 function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole; lead?: boolean; changed: boolean }) {
-  const { info, label } = state.source, { block } = state.draft, { over } = state.drag;
+  const { info, label } = state.source, { over } = state.drag;
   const { menu, openMenu } = state.popup;
   const { slotState, stateMark } = seatControls(state);
   const id = role.id, mark = slotState(id), custom = role.source === 'custom';
@@ -681,7 +660,7 @@ function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole;
   const leadDetail = [duty, output].filter(Boolean).join(' · ');
   const running = lead && info.leadPending ? info.current?.[id] : undefined;
   const restartTitle = running ? t('本次对话仍使用 {settings}', { settings: seatSettingText(running, label(running.model), t('快速')) }) : undefined;
-  const classes = ['seats-team-card', lead && 'is-lead', over === id && 'is-over', id === block?.reviewer && 'is-blocked'].filter(Boolean).join(' ');
+  const classes = ['seats-team-card', lead && 'is-lead', over === id && 'is-over'].filter(Boolean).join(' ');
   const moreTitle = t('{seat}：角色操作', { seat: roleName(role) });
   return <article className={classes} data-seat={id} data-slot={id} aria-label={roleName(role)}>
     <div className="seats-team-info">
@@ -792,7 +771,7 @@ function RoutingStatus({ state }: DialogPart) {
 
 function DialogHeader({ state }: DialogPart) {
   const { info } = state.source, { close } = state.panels;
-  const { scope, changeScope, saving, dirty, canReset, createFile, mayOverwrite, refusal, teamError, block, save } = state.draft;
+  const { scope, changeScope, saving, dirty, canReset, createFile, mayOverwrite, refusal, teamError, save } = state.draft;
   const { projectId } = state.props;
   const { routing } = info;
   const switchScope = (scope: Scope) => { state.switchTab('team'); changeScope(scope); };
@@ -820,8 +799,7 @@ function DialogHeader({ state }: DialogPart) {
     <div className="seats-save">
       <button type="button" className={`seats-btn${dirty && !state.review.visible ? ' is-primary' : ''}`} data-save
         disabled={(!dirty && !createFile) || !!refusal || !!teamError || busy || !mayOverwrite || state.review.visible}
-        aria-describedby={createFile ? 'seats-create-hint' : undefined}
-        title={block ? reviewerMessage(state) : undefined} onClick={() => { void save(); }}>{t(saveLabel)}</button>
+        aria-describedby={createFile ? 'seats-create-hint' : undefined} onClick={() => { void save(); }}>{t(saveLabel)}</button>
       {createFile && <span id="seats-create-hint" className="seats-scope-note">{createHint}</span>}
     </div>
     <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} disabled={busy} onClick={close}><X size={16} aria-hidden="true" /></button>
@@ -880,10 +858,9 @@ function ConversationChoices({ state }: DialogPart) {
 
 function DialogStrip({ state }: DialogPart) {
   const { moved, label, seatName, notice, info } = state.source;
-  const { block, count, scope, saving, refusal, discardShown, setDiscarding, teamError, stale, reload } = state.draft;
+  const { count, scope, saving, refusal, discardShown, setDiscarding, teamError, stale, reload } = state.draft;
   const { keepButton } = state.panels;
   const { migration, onDismissMigration, onClose } = state.props;
-  const { fix } = state.edits;
   const english = currentLanguage() === 'en';
   const movedText = moved.map(({ seat, from, to }) =>
     `${seatName(seat)}${english ? ': ' : '：'}${label(from)} → ${label(to)}`).join(english ? '; ' : '；');
@@ -904,10 +881,7 @@ function DialogStrip({ state }: DialogPart) {
         <div>{migration.split('\n').map(line => <p key={line}>{migrationLine(line)}</p>)}</div>
         <button type="button" className="seats-btn" onClick={onDismissMigration}>{t('知道了')}</button>
       </div>}
-      {block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" />
-        <span><b>{t('审查座位被阻止。')}</b>{reviewerMessage(state)}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join(roleSeparator()) })}`}</span>
-        {block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: label(block.fix.model) })}</button>}</div>}
-      {refusal && !block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
+      {refusal && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
       {discardShown && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" />
         <span> {count ? t('有 {count} 个座位的修改还没保存，关闭会丢掉它们。', { count }) :
           t('关闭会丢掉未保存的修改。')}</span>

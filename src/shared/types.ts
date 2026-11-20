@@ -249,9 +249,9 @@ export type SeatModel = {
 export type SeatIssue = { slot: string; code: 'model-unlisted' | 'effort-unsupported' | 'fast-unsupported'; substitute: string };
 export type RoutingConfig = { roles: Record<SeatId, RoleConfig> };
 export type RoutingAction = 'apply' | 'keep' | 'overwrite';
-export type RoleRuleCode = 'invalid-role' | 'role-text' | 'role-limit' | 'reviewer-required' | 'lead-locked';
+export type RoleRuleCode = 'invalid-role' | 'role-text' | 'role-limit' | 'lead-locked';
 export type RoutingFlag = {
-  code: 'expensive-model' | 'fast-on' | 'high-effort' | 'unlisted-model' | 'verification-weakened' | 'custom-text';
+  code: 'expensive-model' | 'fast-on' | 'high-effort' | 'unlisted-model' | 'custom-text';
   role: SeatId; text?: string;
 };
 export type RoutingRoleState = {
@@ -274,7 +274,7 @@ export type RoutingSource = {
   raw?: string; actions: RoutingAction[]; notice?: 'file-deleted' | 'invalid-template' | 'invalid-local'; templateProjects?: number;
   error?: {
     code: 'too-large' | 'too-deep' | 'bad-utf8' | 'bad-json' | 'unknown-key' | 'newer-version' | 'link' | 'not-file' | 'bad-format'
-      | RoleRuleCode | 'reviewer-same-model' | 'review-same-model';
+      | RoleRuleCode;
     message: string;
   };
   review?: RoutingReview;
@@ -307,7 +307,7 @@ export type SeatsInfo = {
 };
 export type SeatsSaveError = {
   ok: false;
-  code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'reviewer-same-model'
+  code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed'
     | RoleRuleCode | 'file-changed' | 'file-unwritable' | 'action-unavailable';
   seat?: string;
   role?: SeatId;

@@ -19,9 +19,7 @@ const errors: Record<string, string> = {
   'invalid-role': '角色 ID 或来源无效。',
   'role-text': '角色文字无效，或已启用角色的名称重复。',
   'role-limit': '超过角色数量上限。',
-  'reviewer-required': '至少保留一个审查角色。',
   'lead-locked': '总指挥必须保留。',
-  'reviewer-same-model': '审查角色与写作角色使用了相同的模型。',
   'file-changed': '文件已在磁盘上更改，请重新查看。',
   'file-unwritable': '无法写入路由文件。',
   'action-unavailable': '此操作已不可用。',
@@ -31,7 +29,6 @@ const flagLabels: Record<RoutingFlag['code'], string> = {
   'fast-on': '开启快速模式',
   'high-effort': '高强度设置',
   'unlisted-model': '模型未列出',
-  'verification-weakened': '验证减弱',
   'custom-text': '自定义角色文字',
 };
 function valueText(value: string | boolean | undefined) {
