@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
-const { isDeepStrictEqual } = require('node:util');
+const { isDeepStrictEqual, TextDecoder } = require('node:util');
 const { familyOf, rankByName } = require('./seat-rules.mjs');
 const { modelIdentity } = require('./model-seats.cjs');
 const { cleanConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
