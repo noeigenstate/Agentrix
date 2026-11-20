@@ -85,7 +85,7 @@ async function fixture(t) {
   const control = createDispatchControl({ resolveRun: auth => {
     const entry = team.live().find(value => value.id === auth.runId);
     return auth.sessionKey === owner.sessionKey && auth.capability === 'synthetic-capability' && entry ? { runId: entry.id, projectId: owner.terminalId,
-      cwd: repo, worktree: repo, allow: entry.allow, readOnly: false, roundtable: false, agent: entry.agent, local: true, leadMode: 'terminal' } : null;
+      cwd: repo, worktree: repo, allow: entry.allow, readOnly: false, agent: entry.agent, local: true, leadMode: 'terminal' } : null;
   } });
   const { address } = await control.listen();
   lifetime.defer('close control', () => control.close());
@@ -101,7 +101,7 @@ async function fixture(t) {
   fs.mkdirSync(path.dirname(out)); fs.writeFileSync(brief, 'Synthetic terminal task');
   let stdout = '', finished = false;
   const result = run(['claude', '--role', 'exec', '--title', 'Synthetic terminal worker', '--model', 'synthetic-model', '--effort', 'high',
-    '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**', '--skip-meeting', 'Synthetic terminal regression'], {
+    '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**'], {
     env: { PATH: '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), CODEX_HOME: path.join(root, 'codex'), AGENTRIX_BOOTSTRAP: parent.bootstrap },
     stdout: { write: text => { stdout += text; } }, rateInterval: 20,
     resolveExecutable: () => assert.fail('a terminal worker never resolves a CLI in the helper'),
@@ -248,7 +248,7 @@ async function unit(t, { calls = null, send, register, remove, kill, clock, payl
   let handler, control;
   registerClaudeWorker({ control: { onRequest: (_name, fn) => { handler = fn; } }, claude: {}, settings: () => ({}), terminals, operations });
   const binding = { runId: 'run-1', projectId: 'terminal', agent: 'claude', cwd: path.join(root, 'project'), worktree: path.join(root, 'project'),
-    allow: [], readOnly: false, roundtable: false, local: true, leadMode: 'terminal' };
+    allow: [], readOnly: false, local: true, leadMode: 'terminal' };
   const events = [], stream = { supportsFinish: true, emit: event => events.push(event), onControl: fn => { control = fn; return () => {}; } };
   const result = handler(binding, { prompt: 'Synthetic brief', permission: 'acceptEdits', ...payload }, stream);
   await until(() => spawned.length === 1, 'the worker terminal to start');

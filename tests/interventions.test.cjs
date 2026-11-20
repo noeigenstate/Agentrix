@@ -15,7 +15,7 @@ async function fixture(t) {
   const repo = path.join(root, 'repo'); fs.mkdirSync(repo);
   execFileSync('git', ['init', '-q'], { cwd: repo, stdio: 'ignore', windowsHide: true });
   const team = projectTeam(repo, true), id = randomUUID();
-  await team.admit({ title: 'Synthetic worker', role: '审查', agent: 'codex', model: 'test', cwd: repo, allow: [] }, id);
+  team.register({ title: 'Synthetic worker', role: '审查', agent: 'codex', model: 'test', cwd: repo, allow: [] }, id);
   const inbox = new RunInbox(team, id); await inbox.open();
   const target = { terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, done: false,
     route: 'dispatch', runId: id, title: 'Synthetic worker', cwd: repo, projectPath: repo, local: true };

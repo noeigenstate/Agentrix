@@ -196,7 +196,7 @@ run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTim
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', declaredModel || (agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5'), '--effort', agent === 'codex' ? 'max' : 'high',
     '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan']),
-    ...(extra.includes('--allow') ? ['--skip-meeting', 'Existing dispatch scope regression fixture'] : []), ...extra];
+    ...extra];
   const env = { ...process.env, CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
   delete env.AGENTRIX_BOOTSTRAP;
   delete env.AGENTRIX_READING_NOTE_FILE; delete env.AGENTRIX_READING_NOTE;
@@ -305,7 +305,7 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.equal(start.helperPid, f.child.pid, 'liveness follows the helper rather than its provider child');
   assert.equal(start.sessionId, session); assert.equal(start.title, 'Exact dispatch task'); assert.equal(start.declared, undefined);
   assert.equal(end.id, start.id); assert.equal(end.outputTokens, 150); assert.equal(end.activeMs, 4000);
-  assert.equal(start.kind, null); assert.equal(start.meeting, null); assert.equal(start.skipMeeting, null);
+  assert.equal(start.kind, null); assert.equal(Object.hasOwn(start, 'meeting'), false); assert.equal(Object.hasOwn(start, 'skipMeeting'), false);
   assert.equal(end.verdict, 'ok'); assert.equal(end.inputTokens, null); assert.equal(end.cachedTokens, null); assert.equal(end.reportedCostUsd, null);
   const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   assert.equal(capture.cwd, f.directory); assert.match(capture.brief, /Unicode: 执行/);
@@ -802,7 +802,7 @@ test('N5: resumed execution explicitly uses workspace-write and resumed read-onl
   assert.ok(!commandOf(options).includes('-C') && !commandOf(options).includes('-s'));
   assert.equal(options.readOnly, false);
   assert.equal(argumentsOf(['codex', ...base, '--resume', session, '--read-only']).readOnly, true);
-  assert.equal(argumentsOf(['codex', ...base, '--resume', session, '--meeting', 'r12', '--allow', 'src/**']).meeting, 'r12');
+  assert.equal(argumentsOf(['codex', ...base, '--resume', session, '--allow', 'src/**']).resume, session);
   assert.throws(() => argumentsOf(['codex', ...base, '--resume', 'bad id']), /session id/);
   const claude = argumentsOf(['claude', ...base, '--permission', 'plan', '--resume', session]);
   assert.deepEqual(commandOf(claude).slice(0, 3), ['-p', '--resume', session]);

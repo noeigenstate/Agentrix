@@ -241,7 +241,7 @@ class LabSession {
   async checkArguments(args, cwd) {
     if (!Array.isArray(args) || args.length > 160 ||
       args.some(arg => typeof arg !== 'string' || arg.length > 8192 || /[\0\r\n]/.test(arg)) ||
-      !['codex', 'claude', 'minutes', 'consolidate', 'wait', 'stop'].includes(args[0])) throw new Error('Invalid lab dispatch arguments.');
+      !['codex', 'claude', 'wait', 'stop'].includes(args[0])) throw new Error('Invalid lab dispatch arguments.');
     const roots = [this.workspaceRoot];
     await localPath(cwd, cwd, roots, true);
     if (['wait', 'stop'].includes(args[0])) {

@@ -2,6 +2,7 @@
 
 Runs Virtual Lab experiments on macOS and Windows: takes tasks from its sources (the project's own past changes, and the oss and aa providers behind `sources/contract.cjs`), runs each source as one lane
 and each approach in its own sandboxed workspace through the dispatch helper, grades it by the source's own tests and, when the provider asks, a blind review, and owns the lab window, its IPC and dedicated preload. Unknown measurements stay null.
+Orchestrated briefs launch their workers directly. The phase reports also read historical journal records.
 
 ## Owns
 - `electron/features/lab/**`

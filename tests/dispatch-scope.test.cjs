@@ -54,7 +54,7 @@ function fixture(t) {
     fs.mkdirSync(path.join(cwd, '.dispatch'), { recursive: true });
     let stdout = '';
     const result = run(['claude', '--role', 'exec', '--title', name, '--model', 'synthetic-model', '--effort', 'high', '--permission', 'acceptEdits',
-      '--cwd', cwd, '--brief', brief, '--out', path.join(cwd, '.dispatch', name + '.md'), '--allow', allow, '--skip-meeting', 'Synthetic scope regression'], {
+      '--cwd', cwd, '--brief', brief, '--out', path.join(cwd, '.dispatch', name + '.md'), '--allow', allow], {
       env: { PATH: '', DISPATCH_SCOPE_FIXTURE: configFile }, stdout: { write: text => { stdout += text; } },
       resolveExecutable: () => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server-scope.cjs')] }),
       launch: (file, args, options) => lifetime.child(spawn(file, args, options)),

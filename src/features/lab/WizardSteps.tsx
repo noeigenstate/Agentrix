@@ -38,7 +38,7 @@ function Orchestration() {
 }
 
 const ARM_TEXT: Record<LabArm, () => string> = {
-  orchestrated: () => t('计划、圆桌、Sol + Sonnet 分工、Opus 评审'),
+  orchestrated: () => t('计划、Sol + Sonnet 分工、Opus 评审'),
   opus: () => t('一个模型独自完成，不分工'), sol: () => t('一个模型独自完成，不分工'), sonnet: () => t('一个模型独自完成，不分工'),
 };
 

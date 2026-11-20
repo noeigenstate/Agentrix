@@ -52,7 +52,7 @@ test('registration rejection reports the failed binding without exposing credent
   const channel = createDispatchControl({ resolveRun: registration => resolveRegistration(deps, registration) });
   const { address } = await channel.listen(); t.after(() => channel.close());
   const registration = { runId: worker.id, projectId: 'terminal', sessionKey: session.sessionKey, capability: session.controlCapability,
-    cwd: worker.cwd, agent: worker.agent, allow: worker.allow, readOnly: false, roundtable: false };
+    cwd: worker.cwd, agent: worker.agent, allow: worker.allow, readOnly: false };
   const client = await connectDispatchControl({ address, ...registration }); t.after(() => client.close());
   for (const [patch, code] of [
     [{ sessionKey: 'synthetic-stale-secret' }, 'dispatch.session_mismatch'],
@@ -112,7 +112,7 @@ test('authenticated refusals carry the lead mode on the wire and client error; f
         team: { live: () => [worker] } }) }, registration) });
     const { address } = await channel.listen(); t.after(() => channel.close());
     const registration = { runId: worker.id, projectId: 'terminal', sessionKey: session.sessionKey, capability: session.controlCapability,
-      cwd: worker.cwd, agent: worker.agent, allow: worker.allow, readOnly: false, roundtable: false, leadMode: 'forged' };
+      cwd: worker.cwd, agent: worker.agent, allow: worker.allow, readOnly: false, leadMode: 'forged' };
     const client = await connectDispatchControl({ address, ...registration }); t.after(() => client.close());
     for (const [patch, code, authenticated] of [
       [{ sessionKey: 'stale' }, 'dispatch.session_mismatch', false],
@@ -140,7 +140,7 @@ test('authenticated refusals carry the lead mode on the wire and client error; f
 
 test('persistent channel authenticates a binding, streams events and deduplicates control receipts', async t => {
   const id = randomUUID(), controls = [];
-  const run = { runId: id, projectId: 'p', cwd: os.tmpdir(), worktree: os.tmpdir(), allow: [], readOnly: false, roundtable: false };
+  const run = { runId: id, projectId: 'p', cwd: os.tmpdir(), worktree: os.tmpdir(), allow: [], readOnly: false };
   const control = createDispatchControl({ resolveRun: input => input.sessionKey === 'synthetic-key' && input.runId === id ? run : null });
   const { address } = await control.listen(); t.after(() => control.close());
   await assert.rejects(connectDispatchControl({ address, runId: id, projectId: 'p', sessionKey: 'wrong' }));
@@ -195,7 +195,7 @@ test('a disconnected in-flight push reports unknown and never resends automatica
 });
 
 test('registration may tighten plan mode but cannot loosen the main-owned read-only binding', async t => {
-  const control = createDispatchControl({ resolveRun: auth => ({ runId: auth.runId, projectId: 'p', cwd: os.tmpdir(), allow: [], readOnly: auth.runId === 'trusted-read-only', roundtable: false }) });
+  const control = createDispatchControl({ resolveRun: auth => ({ runId: auth.runId, projectId: 'p', cwd: os.tmpdir(), allow: [], readOnly: auth.runId === 'trusted-read-only' }) });
   const { address } = await control.listen(); t.after(() => control.close());
   control.onRequest('mode', async (run, _payload, stream) => stream.emit({ readOnly: run.readOnly }));
   for (const [runId, readOnly] of [['client-plan', true], ['trusted-read-only', false]]) {
@@ -236,13 +236,13 @@ for (const action of ['intervene', 'stop', 'npm']) test(`helper delivers ${actio
     await (await import('../scripts/gui-codex-env.mjs')).windowsCodexStandIn(vendor);
   }
   const control = createDispatchControl({ resolveRun: auth => auth.sessionKey === 'synthetic-key' && team.live().some(x => x.id === auth.runId)
-    ? { runId: auth.runId, projectId: 'p', cwd: repo, worktree: repo, allow: [], readOnly: false, roundtable: false } : null });
+    ? { runId: auth.runId, projectId: 'p', cwd: repo, worktree: repo, allow: [], readOnly: false } : null });
   const { address } = await control.listen();
   lifetime.defer('close control', () => control.close());
   fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: address + '-unused', controlAddress: address, controlCapability: 'synthetic-capability', projectId: 'p', sessionKey: 'synthetic-key' }));
   let stdout = '', finished = false;
   const result = run(['codex', '--role', 'exec', '--title', 'Synthetic native', '--model', 'synthetic-model', '--effort', 'high', '--fast',
-    '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**', '--skip-meeting', 'Synthetic native fixture'], {
+    '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**'], {
     env: { PATH: action === 'npm' ? bin : '', CODEX_HOME: path.join(root, 'home'), CLAUDE_CONFIG_DIR: path.join(root, 'claude'),
       AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SDK_PARENT: '1', ANTHROPIC_API_KEY: 'synthetic-injected',
       SYNTHETIC_CODEX_MODE: action === 'npm' ? 'normal' : 'worker',

@@ -1,4 +1,3 @@
-const { TASK_KINDS } = require('../dashboard/records-routing.cjs');
 const { estimateCost, modelKey } = require('../dashboard/cost.cjs');
 const { LAB_ARMS: ARMS, LAB_SOURCES, TASK_ID } = require('./sources/contract.cjs');
 
@@ -130,6 +129,6 @@ function upgradeExperiment(value) {
 }
 
 module.exports = {
-  ARMS, MODELS, DEFAULTS, TASK_KINDS, validId, hash, text, finite,
+  ARMS, MODELS, DEFAULTS, validId, hash, text, finite,
   sampleRequest, experimentInput, taskPasses, armEstimate, estimateExperiment, upgradeExperiment,
 };

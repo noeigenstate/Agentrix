@@ -68,13 +68,13 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
         registering = true;
         // Credentials are consumed by main's resolver, never retained or sent to the provider.
         const result = await resolveRun({ runId: value.runId, projectId: value.projectId, sessionKey: value.sessionKey, capability: value.capability,
-          cwd: value.cwd, agent: value.agent, allow: value.allow, readOnly: value.readOnly, roundtable: value.roundtable });
+          cwd: value.cwd, agent: value.agent, allow: value.allow, readOnly: value.readOnly });
         if (socket.destroyed) return;
         if (result?.refused) return refuse(value.runId, result.refused, result.leadMode);
         const verified = result?.run || result;
         if (!verified || verified.runId !== value.runId || verified.projectId !== value.projectId || !path.isAbsolute(verified.cwd || '') || !Array.isArray(verified.allow)) return refuse(value.runId, 'dispatch.control_unbound', verified?.leadMode);
         // A worker may tighten its admitted mode (for example --permission plan), never loosen main's binding.
-        const run = { ...verified, readOnly: !!verified.readOnly || value.readOnly === true, roundtable: !!verified.roundtable || value.roundtable === true };
+        const run = { ...verified, readOnly: !!verified.readOnly || value.readOnly === true };
         if (clients.has(run.runId)) return refuse(run.runId, 'dispatch.duplicate_run', run.leadMode);
         client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
@@ -157,7 +157,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
   };
 }
 
-function connectDispatchControl({ address, runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly = false, roundtable = false, onControl = async () => 'queued', onEvent = () => {}, timeout = 2000 }) {
+function connectDispatchControl({ address, runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly = false, onControl = async () => 'queued', onEvent = () => {}, timeout = 2000 }) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(address), pending = new Map();
     let registered = false, connected = false, failure, counter = 0, serial = Promise.resolve();
@@ -206,7 +206,7 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
     };
     socket.once('connect', () => {
       connected = true;
-      try { send({ type: 'register', runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly, roundtable, finishProtocol: 1 }); } catch { socket.destroy(); }
+      try { send({ type: 'register', runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly, finishProtocol: 1 }); } catch { socket.destroy(); }
     });
   });
 }

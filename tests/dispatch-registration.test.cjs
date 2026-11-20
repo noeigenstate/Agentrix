@@ -18,7 +18,7 @@ function fixture(t) {
   const deps = { sessions: new Map([['terminal', session]]), store: { findTerminal: () => ({ project }) },
     locateTeam: async (cwd, options) => { asked.push(cwd); const result = locations.get(cwd); return options?.details ? result : result?.team || null; } };
   const registration = { runId: worker.id, projectId: 'terminal', sessionKey: session.sessionKey, capability: session.controlCapability,
-    cwd: worker.cwd, agent: worker.agent, allow: worker.allow, readOnly: false, roundtable: false };
+    cwd: worker.cwd, agent: worker.agent, allow: worker.allow, readOnly: false };
   return { root, project, session, worker, common, locations, deps, registration, asked };
 }
 
@@ -33,7 +33,7 @@ test('a worker in a worktree registers against the board its helper admitted it 
   const declared = { ...f.registration, readOnly: true, allow: ['docs/**'], leadMode: 'native', local: false, worktree: f.root };
   const outside = (await resolveRegistration(f.deps, declared)).run;
   assert.deepEqual(outside, { runId: declared.runId, projectId: declared.projectId, agent: 'claude', cwd: declared.cwd,
-    worktree: declared.cwd, allow: ['docs/**'], readOnly: true, roundtable: false, local: true, leadMode: 'terminal' });
+    worktree: declared.cwd, allow: ['docs/**'], readOnly: true, local: true, leadMode: 'terminal' });
   declared.allow.push('**'); assert.deepEqual(outside.allow, ['docs/**'], 'later declaration mutations cannot widen a binding');
 });
 
@@ -74,10 +74,10 @@ test('board scope and lead mode come from main and the admitted run, never a wid
   assert.deepEqual(await resolveRegistration(f.deps, { ...f.registration, agent: 'codex' }), { refused: 'dispatch.control_unbound', leadMode: 'codex' });
 });
 
-test('outside-Git declarations require a bounded relative scope and cannot claim a roundtable or another worktree', async t => {
+test('outside-Git declarations require a bounded relative scope and cannot claim another worktree', async t => {
   const f = fixture(t); f.locations.set(f.worker.cwd, { status: 'outside_git', common: null, team: null });
   for (const patch of [{ cwd: 'relative' }, { agent: 'other' }, { allow: ['../outside/**'] }, { allow: ['/absolute/**'] },
-    { allow: ['C:/absolute/**'] }, { allow: ['src\n/**'] }, { allow: [null] }, { allow: 'src/**' }, { roundtable: true }, { readOnly: 'false' }]) {
+    { allow: ['C:/absolute/**'] }, { allow: ['src\n/**'] }, { allow: [null] }, { allow: 'src/**' }, { readOnly: 'false' }]) {
     assert.deepEqual(await resolveRegistration(f.deps, { ...f.registration, ...patch }), { refused: 'dispatch.control_unbound', leadMode: 'terminal' });
   }
   const { run } = await resolveRegistration(f.deps, { ...f.registration, allow: [], worktree: f.root });

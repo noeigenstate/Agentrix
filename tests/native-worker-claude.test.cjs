@@ -108,7 +108,7 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
     if (reopenFailure && ++registrations > 1) return null;
     const entry = team.live().find(value => value.id === auth.runId);
     return auth.sessionKey === owner.sessionKey && auth.capability === 'synthetic-capability' && entry ? {
-      runId: entry.id, projectId: owner.terminalId, cwd: repo, worktree: repo, allow: entry.allow, readOnly: false, roundtable: false, agent: entry.agent,
+      runId: entry.id, projectId: owner.terminalId, cwd: repo, worktree: repo, allow: entry.allow, readOnly: false, agent: entry.agent,
     } : null;
   } });
   const { address } = await control.listen();
@@ -136,7 +136,7 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   });
   let stdout = '', finished = false;
   const result = run(['claude', '--role', 'exec', '--title', 'Synthetic Claude worker', '--model', 'synthetic-model', '--effort', 'high',
-    '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**', '--skip-meeting', 'Synthetic SDK regression'], {
+    '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**'], {
     env: { PATH: '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), CODEX_HOME: path.join(root, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap,
       ANTHROPIC_API_KEY: 'synthetic-parent-key', CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-oauth' },
     stdout: { write: text => { stdout += text; } },

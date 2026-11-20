@@ -7,6 +7,8 @@ unknown number shows as a dash, never as 0.
 One named exception to "the interface uses only theme tokens": the four approach colours (`--lab-arm-*` in `lab.css`, Okabe-Ito, a set for dark and light).
 They are content, not interface; each approach also keeps one shape everywhere, so colour is never the only cue.
 
+Results can display roundtable timing from older saved experiments.
+
 ## Owns
 - `src/features/lab/**`
 

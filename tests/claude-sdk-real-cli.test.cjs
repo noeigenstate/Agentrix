@@ -403,7 +403,6 @@ test('under bypass a question still reaches the owner through canUseTool', { ski
 });
 
 for (const [label, name, input, spec, written] of [
-  ['roundtable', 'Write', { file_path: 'made.txt', content: 'x' }, { roundtable: true, allow: ['**'] }, false],
   ['read-only Bash', 'Bash', { command: 'echo x > made.txt' }, { readOnly: true, allow: ['**'] }, false],
   ['outside scope', 'Write', { file_path: 'made.txt', content: 'x' }, { allow: ['src/**'] }, false],
   ['inside scope', 'Write', { file_path: 'made.txt', content: 'x' }, { allow: ['made.txt'] }, true],

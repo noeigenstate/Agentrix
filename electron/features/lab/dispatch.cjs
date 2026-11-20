@@ -2,7 +2,8 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { aborted } = require('./process.cjs');
-const { MODELS, TASK_KINDS } = require('./values.cjs');
+const { MODELS } = require('./values.cjs');
+const { DISPATCH_TASK_KINDS } = require('../dashboard/records-routing.cjs');
 const { modelKey } = require('../dashboard/cost.cjs');
 
 const CLAUDE_LOGIN_ERROR = '无法登录 Claude';
@@ -30,22 +31,20 @@ async function claudeLoginFailed(result, out) {
 function workerArguments({ arm, cwd, brief, out, helper, kind = 'core', review = false }) {
   const codex = arm === 'sol' && !review;
   const mode = codex ? ['--fast'] : ['--permission', review ? 'plan' : 'acceptEdits'];
-  const scope = review ? [] : [
-    '--allow', '**', '--skip-meeting', 'Isolated lab baseline; the orchestrated lead holds its own worker roundtable.',
-  ];
+  const scope = review ? [] : ['--allow', '**'];
   return [
     helper, codex ? 'codex' : 'claude', '--role', review ? '审查' : '执行',
     '--title', review ? 'Blind change review' : 'Implement the requested change',
     '--model', review ? MODELS.opus : MODELS[arm], '--effort', codex ? 'max' : 'high', ...mode,
     '--cwd', cwd, '--brief', brief, '--out', out,
-    '--kind', review ? 'review' : TASK_KINDS.includes(kind) ? kind : 'core', ...scope,
+    '--kind', review ? 'review' : DISPATCH_TASK_KINDS.includes(kind) ? kind : 'core', ...scope,
   ];
 }
 
 function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirectory, 'control'), supplied) {
   const rules = [
     'Work only in the isolated project and its worktrees under ' + runDirectory + '.',
-    'Write all plans, minutes, ledgers, reviews and coordination notes under ' + control + ', outside the project.',
+    'Write all plans, ledgers, reviews and coordination notes under ' + control + ', outside the project.',
     'Never commit, push, release, run CI, edit SKILL.md or launch a desktop app.',
     'Do not inspect other experiments, reference material, grading files or hidden tests.',
     'Use clear names and simple control flow. Remove duplication and follow the project code standard.',
@@ -53,19 +52,19 @@ function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirec
     'Use Node and this dispatch entrypoint for every model invocation: ' + helper,
     'Quote paths for your shell. GPT: gpt-6.1-sol --effort max --fast.',
     'Claude: Opus/Sonnet 5.5 --effort high --permission acceptEdits; use plan for read-only reviews.',
-    'Every editing worker needs --allow for its disjoint module paths. Use real brief files and keep outputs under control.',
+    'Give each editing worker --allow for its assigned module paths. Use real brief files and keep outputs under control.',
     'Only the lead may dispatch the planned workers. Those workers must never delegate further.',
   ];
   const pipeline = [
     'You are the Opus 5.5 lead. Follow the system model-routing skill with this experiment taking precedence.',
-    'Run the full pipeline: an Opus module plan; a roundtable where every worker restates and confirms the plan;',
+    'Plan the module interfaces and scopes, then dispatch the builds with those decisions in their briefs;',
     'Sol builds complex code/debugging in worktree A; Sonnet handles routine/front-end/tests in worktree B;',
     'integrate diffs without commits and test; an independent Opus architecture review and fresh Sonnet acceptance;',
-    'fix confirmed findings, then consolidate the round journal. Pick a fresh meeting id.',
-    'Use the dispatch entrypoint above for all workers so their usage and phases are measured.',
+    'address confirmed findings and record the outcome in your final answer.',
+    'Use the dispatch entrypoint above for all workers so their usage and phases are measured. Launch workers directly with their assigned roles.',
     'Start workers with --detach, then run wait <run-id> --timeout 540. Start parallel workers separately and wait on all their ids together.',
     'Give every wait shell call at least 600000 ms. Exit 75 means still running: wait again; stop <run-id> cancels a worker.',
-    'Record review findings and fixed status in the consolidation findings JSON. Keep roles and kinds accurate.',
+    'Use a shared --ledger for review findings and follow-up results. Keep roles and kinds accurate.',
     'Do not wait for owner approval. Omit UI driving when there is no UI. Finish with changes in this starting worktree.',
   ];
   const single = [

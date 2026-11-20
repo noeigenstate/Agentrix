@@ -130,17 +130,16 @@ for (const kind of ['local', 'ssh']) {
   });
 }
 
-test('dispatched, roundtable and read-only sessions keep their own sandbox and approvals whatever the permissions say', async t => {
+test('dispatched and read-only sessions keep their own sandbox and approvals whatever the permissions say', async t => {
   // The dispatch helper's own policy (integration/dispatch.cjs) is the production worker spec.
   const helper = { owner: 'dispatch', policy: { approvalPolicy: 'never' } };
   for (const [spec, expected] of [
     [{ ...helper, permissions: 'full' }, { sandbox: 'workspace-write', approvalPolicy: 'never', approvalsReviewer: 'user' }],
-    [{ ...helper, roundtable: true, permissions: 'full' }, { sandbox: 'read-only', approvalPolicy: 'never', approvalsReviewer: 'user' }],
     [{ ...helper, readOnly: true, permissions: 'ask' }, { sandbox: 'read-only', approvalPolicy: 'never', approvalsReviewer: 'user' }],
     [{ owner: 'dispatch', permissions: 'full' }, { sandbox: 'workspace-write', approvalPolicy: undefined, approvalsReviewer: 'user' }],
     [{ owner: 'dispatch', readOnly: true, permissions: 'full' }, { sandbox: 'read-only', approvalPolicy: undefined, approvalsReviewer: 'user' }],
     [{ owner: 'gui', readOnly: true, permissions: 'full' }, { sandbox: 'read-only', approvalPolicy: undefined, approvalsReviewer: 'user' }],
-    [{ owner: 'gui', roundtable: true, permissions: 'ask' }, { sandbox: 'read-only', approvalPolicy: undefined, approvalsReviewer: 'user' }],
+    [{ owner: 'gui', readOnly: true, permissions: 'ask' }, { sandbox: 'read-only', approvalPolicy: undefined, approvalsReviewer: 'user' }],
   ]) {
     const { session, server } = runtime(t, { spec });
     await session.start();

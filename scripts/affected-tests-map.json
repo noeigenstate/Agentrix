@@ -388,7 +388,6 @@
         "electron/boundaries.cjs",
         "electron/features/team/team.cjs",
         "electron/features/team/inbox.cjs",
-        "electron/features/team/minutes-page.cjs",
         "electron/features/dashboard/records-routing.cjs",
         "electron/features/skills/worker-proposals.cjs",
         "electron/features/skills/agent-seat.cjs",

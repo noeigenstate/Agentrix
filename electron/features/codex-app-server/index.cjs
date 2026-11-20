@@ -184,14 +184,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       const windowsLocal = () => platform === 'win32' && spec.kind !== 'ssh';
       const place = () => windowsLocal() ? 'windows' : spec.kind === 'ssh' ? 'ssh' : null;
       const releaseThread = threadId => rpc?.request('thread/unsubscribe', { threadId }).catch(() => {});
-      // Only the owner's own writable session has a permissions choice; a worker, a roundtable and a read-only session never do.
-      const ownPermissions = () => spec.owner === 'gui' && !spec.readOnly && !spec.roundtable;
-      // A read-only or roundtable worker only reads, and a dispatched one writes its workspace; the owner's own session runs as its permissions
+      // Only the owner's own writable session has a permissions choice.
+      const ownPermissions = () => spec.owner === 'gui' && !spec.readOnly;
+      // A read-only worker only reads, and a writable worker writes its workspace; the owner's own session runs as its permissions
       // choice says. spec.policy is a caller's explicit policy and overrides that choice: the dispatch helper sends approvalPolicy 'never'
       // (integration/dispatch.cjs), the real-CLI tests a sandbox. Approval requests always go to the user.
       function threadPolicy() {
         const policy = spec.policy || (ownPermissions() ? PERMISSIONS[spec.permissions] : {});
-        const sandbox = spec.readOnly || spec.roundtable ? 'read-only' : policy.sandbox || (spec.owner === 'dispatch' ? 'workspace-write' : null);
+        const sandbox = spec.readOnly ? 'read-only' : policy.sandbox || (spec.owner === 'dispatch' ? 'workspace-write' : null);
         return { ...(sandbox ? { sandbox } : {}), ...(policy.approvalPolicy ? { approvalPolicy: policy.approvalPolicy } : {}) };
       }
       // Windows without a configured sandbox answers a writable request read-only: the same request is made once more with a request-scoped

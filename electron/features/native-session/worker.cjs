@@ -15,9 +15,9 @@ function registerClaudeWorker({ control, claude, settings, terminals = null, con
     const runtimeEnv = { ...env(run) };
     for (const name of Object.keys(runtimeEnv)) if (/^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|.*SESSION_KEY)|^CLAUDE_CODE_ENTRYPOINT$/i.test(name)) delete runtimeEnv[name];
     const spec = { agent: 'claude', owner: 'dispatch', runtimeSessionId, terminalId: run.runId, projectId: run.projectId, runId: run.runId,
-      cwd: run.cwd, worktree: run.worktree || run.cwd, allow: run.allow, readOnly: run.readOnly, roundtable: run.roundtable,
+      cwd: run.cwd, worktree: run.worktree || run.cwd, allow: run.allow, readOnly: run.readOnly,
       model: payload.model, effort: payload.effort, fast: payload.fast, context: context(run), env: runtimeEnv,
-      providerSessionId: payload.resume || null, permission: run.readOnly || run.roundtable ? 'plan' : payload.permission || 'acceptEdits' };
+      providerSessionId: payload.resume || null, permission: run.readOnly ? 'plan' : payload.permission || 'acceptEdits' };
     const pathEvent = reason => createEventStream(spec, event => stream.emit(event)).publish('path.changed', { previous: null, selected: 'terminal', reason });
     // Only a local terminal lead's worker is billed like its terminal; an SSH one keeps the CLI path.
     const terminal = run.leadMode === 'terminal' && run.local === true && terminals;

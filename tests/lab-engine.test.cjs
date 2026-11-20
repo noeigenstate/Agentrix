@@ -99,7 +99,7 @@ function fakeDispatchModule(settingsFile) {
       fs.writeFileSync(childBrief, 'Implement the requested change yourself.');
       const result = spawnSync(process.execPath, [entry, 'codex', '--role', '执行', '--title', 'Build fixture',
         '--model', 'gpt-6.1-sol', '--effort', 'max', '--fast', '--cwd', childCwd, '--brief', childBrief,
-        '--out', childOut, '--kind', 'core', '--allow', 'src/**', '--skip-meeting', 'fixture comparison'],
+        '--out', childOut, '--kind', 'core', '--allow', 'src/**'],
         { encoding: 'utf8', timeout: 15000 });
       if (result.status !== 0) throw new Error(result.stdout + result.stderr);
       tell({ kind: 'nested', output: result.stdout });
@@ -107,10 +107,8 @@ function fakeDispatchModule(settingsFile) {
       const journal = path.join(cwd, '.git/agentrix'); fs.mkdirSync(journal, { recursive: true });
       fs.writeFileSync(path.join(journal, 'journal.jsonl'), [
         { type: 'end', id: 'plan', kind: 'investigate', activeMs: 120 },
-        { type: 'end', id: 'meeting', role: '圆桌', activeMs: 50 },
         { type: 'end', id: childId, role: '执行', activeMs: 2000 },
         { type: 'end', id: 'review', role: '审查', activeMs: 200 },
-        { type: 'finding', fixed: true }, { type: 'consolidate' },
       ].map(entry => JSON.stringify(entry)).join('\n'));
     }
     const code = process.env.LAB_FAKE_EARLY_EXIT === 'yes' ? 'process.exit(0);\n'
@@ -353,10 +351,11 @@ isolatedTest('all four arms include nested usage, phase evidence and cleanup of 
   const experiment = (await f.engine.list())[0], orchestrated = experiment.runs[0];
   assert.deepEqual(experiment.runs.map(run => run.state), ['passed', 'failed', 'passed', 'failed']);
   assert.ok(Math.abs(orchestrated.costUsd - 0.12) < 1e-8); assert.equal(orchestrated.outputTokens, 150);
-  assert.equal(orchestrated.rework, 1);
-  assert.deepEqual(orchestrated.phases.map(phase => phase.name), ['plan', 'roundtable', 'build', 'review']);
+  assert.equal(orchestrated.rework, null);
+  assert.deepEqual(orchestrated.phases.map(phase => phase.name), ['plan', 'build', 'review']);
   const folder = path.join(f.userData, 'lab', id, 'runs', orchestrated.id);
-  assert.match(await fs.readFile(path.join(folder, 'artifacts/journal.jsonl'), 'utf8'), /consolidate/);
+  const journal = (await fs.readFile(path.join(folder, 'artifacts/journal.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
+  assert.ok(journal.every(entry => entry.type === 'end'));
   assert.equal(await fs.stat(path.join(folder, 'workers/a')).catch(() => null), null);
   assert.equal(await fs.stat(path.join(f.projectPath, 'node_modules')).then(stat => stat.isDirectory()), true);
 });
@@ -576,7 +575,7 @@ test('a failed recovery initialization preserves every lease and retries initial
 
 test('orchestrated prompts require the complete pipeline and single arms prohibit model delegation', () => {
   const task = { text: 'A difficult change' };
-  assert.match(taskBrief(task, 'orchestrated', '/helper', '/run'), /roundtable.*worker|worker.*roundtable/s);
+  assert.match(taskBrief(task, 'orchestrated', '/helper', '/run'), /Plan the module interfaces and scopes, then dispatch the builds/);
   assert.match(taskBrief(task, 'orchestrated', '/helper', '/run'), /independent Opus architecture review/);
   assert.match(taskBrief(task, 'sonnet', '/helper', '/run'), /Do not delegate/);
   const args = workerArguments({ arm: 'sol', cwd: '/run', brief: '/brief', out: '/out', helper: '/helper' });

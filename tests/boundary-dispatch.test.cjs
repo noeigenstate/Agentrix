@@ -71,7 +71,7 @@ test('dispatch tests start workers only through an injected fake CLI', () => {
         assert.match(call, /\b(?:launch|resolveExecutable)\s*:/, `${name}: ${call.slice(0, 120)}… runs the helper without an injected CLI`);
         // A launcher alone leaves the CLI search to the machine (a Codex in /usr/local/bin or /opt/homebrew/bin, a Claude Code in ~/.local/bin, is found whatever
         // PATH says, and CI has neither): such a call names its `locate` for Codex and its `locateClaude` for Claude Code.
-        // A launcher that only fails the test (help, stop, minutes and the like never start a worker) needs none.
+        // A launcher that only fails the test (help and stop never start a worker) needs none.
         if (!/\bresolveExecutable\s*:/.test(call) && !/\blaunch\s*:\s*\(\s*\)\s*=>\s*assert\.fail/.test(call)) {
           assert.match(call, /\blocate\s*:/, `${name}: ${call.slice(0, 120)}… injects a launcher but searches the machine for Codex`);
           assert.match(call, /\blocateClaude\s*:/, `${name}: ${call.slice(0, 120)}… injects a launcher but searches the machine for Claude Code`);

@@ -2,8 +2,9 @@
 const KIND_NAMES = Object.freeze({ core: '复杂代码', frontend: '前端', test: '测试', 'ui-check': '界面验收', docs: '文档', small: '小任务',
   review: '审查', investigate: '调查', roundtable: '圆桌' });
 const TASK_KINDS = Object.freeze(Object.keys(KIND_NAMES));
-const taskKind = (options, roundtable = false) => options.kind || (roundtable ? 'roundtable'
-  : ({ 审查: 'review', 调查: 'investigate', 圆桌: 'roundtable' }[options.role] || null));
+// Historical records still use the retired roundtable kind.
+const DISPATCH_TASK_KINDS = Object.freeze(TASK_KINDS.filter(kind => kind !== 'roundtable'));
+const taskKind = options => options.kind || ({ 审查: 'review', 调查: 'investigate', 圆桌: 'roundtable' }[options.role] || null);
 
 function routingVerdict(actual, declared) {
   const known = key => actual[key] != null;
@@ -11,4 +12,4 @@ function routingVerdict(actual, declared) {
   return known('model') ? 'ok' : 'unverified';
 }
 
-module.exports = { TASK_KINDS, KIND_NAMES, taskKind, routingVerdict };
+module.exports = { TASK_KINDS, DISPATCH_TASK_KINDS, KIND_NAMES, taskKind, routingVerdict };

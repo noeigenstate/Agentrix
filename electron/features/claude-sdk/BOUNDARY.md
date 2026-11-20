@@ -12,7 +12,7 @@ Owner and worker entrypoints remain the CLI default. Ownership is host-observed 
 Owner sessions currently keep tool and hook environment inheritance; dispatch workers enable the CLI's subprocess scrub. A2 is awaiting the owner's answer; the existing behavior is retained in the meantime, not an isolation guarantee. API routing is pinned in a private session settings file from host and user sources; repository env and helper settings cannot choose the destination. Routing secrets never enter argv. The saved key remains in the child environment, never the settings file or argv; project/local env overrides found at launch are refused. This does not attest effective key bytes against later config changes or active hooks. Project hooks still inherit it under the retained A2 behavior.
 
 Project hooks remain enabled for workers, matching the trusted project's CLI behavior. Owner questions still reach canUseTool under bypassPermissions.
-Worker scope policy constrains the model's requested inputs; it does not sandbox project hooks, which can execute commands
+Worker scope policy constrains the model's requested inputs and applies the bound read-only flag; it does not sandbox project hooks, which can execute commands
 and rewrite an allowed input to a path outside the worker scope. This is an explicit owner decision, not an isolation guarantee.
 
 ## Owns

@@ -114,14 +114,14 @@ for (const kind of ['failed to start', 'failed:']) test(`Lab wait preserves ${ki
   await rpc(session, root, ['claude', '--detach']);
   const [id] = session.dispatches.keys(), job = launched[0];
   const failure = kind === 'failed:' ? '[dispatch] failed: invalid --model argument'
-    : `[dispatch] failed to start ${id}: confirmed roundtable required`;
+    : `[dispatch] failed to start ${id}: worker runtime unavailable`;
   job.options.onLine(failure);
-  job.options.onLine('[dispatch] request: confirm the roundtable first');
+  job.options.onLine('[dispatch] request: permission is needed to continue');
   job.settle(1);
   const reply = await rpc(session, root, ['wait', id]);
   const lines = reply.filter(value => value.output).map(value => value.output.trim());
   assert.equal(lines[0], failure);
-  assert.match(lines[1], /request: confirm the roundtable/);
+  assert.match(lines[1], /request: permission is needed/);
   assert.ok(lines[2].startsWith(`[dispatch] ended ${id} `));
   assert.ok(lines[2].includes(failure), 'the fallback end retains the actionable refusal');
   assert.equal(reply.at(-1).exitCode, 0, 'wait reports completion; the worker exit code is in its end line');

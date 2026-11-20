@@ -51,7 +51,7 @@ for (const code of ['EPERM', 'EACCES', 'EBUSY']) {
 
   test(`Windows lock open ${code} stops at the existing 15 s deadline`, async t => {
     const f = fixture(t, { errorAt: () => code, advance: 5001 });
-    await assert.rejects(f.team.locked(f.action), /Team admission lock is busy; retry the dispatch/);
+    await assert.rejects(f.team.locked(f.action), /Team lock is busy/);
     assert.deepEqual(f.calls, { opens: 3, waits: 3, stats: 0, renames: 0, actions: 0 });
     assert.equal(fs.existsSync(f.lock), false);
   });

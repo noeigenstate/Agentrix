@@ -23,18 +23,17 @@ async function resolveRegistration({ sessions, store, locateTeam }, registration
     return auth ? { refused: auth } : { refused: code, leadMode: leadMode() };
   };
   if (typeof registration.cwd !== 'string' || !path.isAbsolute(registration.cwd) || !['claude', 'codex'].includes(registration.agent)
-    || !validScope(registration.allow) || typeof registration.readOnly !== 'boolean' || typeof registration.roundtable !== 'boolean') return refuse('dispatch.control_unbound');
+    || !validScope(registration.allow) || typeof registration.readOnly !== 'boolean') return refuse('dispatch.control_unbound');
   const [location, parent] = await Promise.all([locateTeam(registration.cwd, { details: true }), locateTeam(project.path, { details: true })]);
   refused = refusal();
   if (refused) return { refused };
   let worker;
   if (location?.status === 'outside_git') {
-    if (registration.roundtable === true) return refuse('dispatch.control_unbound');
     let cwd, projectRoot;
     try { [cwd, projectRoot] = await Promise.all([realpath(registration.cwd), realpath(project.path)]); }
     catch { return refuse('dispatch.project_mismatch'); }
     const relative = path.relative(cwd, projectRoot);
-    // A boardless ancestor would let a relative glob reach into the project without its admission lock.
+    // A boardless ancestor would let a relative glob reach into the project without a registered run in that project.
     if (!relative || !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith('..' + path.sep)) return refuse('dispatch.project_mismatch');
     worker = { id: registration.runId, agent: registration.agent, cwd: registration.cwd, allow: registration.allow,
       readOnly: registration.readOnly === true || registration.allow.length === 0 };
@@ -50,8 +49,8 @@ async function resolveRegistration({ sessions, store, locateTeam }, registration
   if (refused) return { refused };
   const local = project.kind !== 'ssh';
   return { run: { runId: worker.id, projectId: registration.projectId, agent: worker.agent, cwd: worker.cwd, worktree: worker.cwd,
-    allow: [...worker.allow], readOnly: worker.readOnly === true || worker.role === '调查' || worker.role === '审查' || registration.readOnly === true,
-    roundtable: worker.role === '圆桌' || registration.roundtable === true, local, leadMode: leadMode() } };
+    allow: [...worker.allow], readOnly: worker.readOnly === true || ['调查', '审查'].includes(worker.role) || registration.readOnly,
+    local, leadMode: leadMode() } };
 }
 
 module.exports = { resolveRegistration };

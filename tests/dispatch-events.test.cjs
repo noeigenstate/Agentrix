@@ -259,7 +259,7 @@ test('dispatch-end accepts optional skill proposal counts without breaking old h
   }
 });
 
-test('roundtable is an authenticated role and does not change parent completion', t => {
+test('legacy roundtable events remain readable without changing parent completion', t => {
   const f = session(t), launch = start(undefined, { role: '圆桌' });
   assert.equal(f.send(launch), true);
   assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null, id: `dispatch:${launch.id}`,

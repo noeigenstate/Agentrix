@@ -190,12 +190,12 @@ async function registrationOnBoard(deps, registration, refused) {
 
 test('a transient registration refusal preserves the admitted helper\'s final control-inbox check', async t => {
   const f = mainFixture(t, { native: false }), team = teamAt(f.root, f.root, true), id = randomUUID();
-  await team.admit({ agent: 'claude', role: '审查', title: 'Synthetic refusal', model: 'synthetic-model', cwd: f.root, allow: [] }, id);
+  team.register({ agent: 'claude', role: '审查', title: 'Synthetic refusal', model: 'synthetic-model', cwd: f.root, allow: [] }, id);
   const inbox = new RunInbox(team, id); await inbox.open();
   const deps = { sessions: f.sessions, store: f.context.store,
     locateTeam: async (_cwd, options) => options?.details ? { status: 'found', common: f.root, team } : team };
   const result = await registrationOnBoard(deps, { runId: id, projectId: 'terminal', sessionKey: f.session.sessionKey,
-    capability: f.session.controlCapability, cwd: f.root, agent: 'claude', allow: [], readOnly: true, roundtable: false }, true);
+    capability: f.session.controlCapability, cwd: f.root, agent: 'claude', allow: [], readOnly: true }, true);
   assert.deepEqual(result, { refused: 'dispatch.unknown_run', leadMode: 'terminal' });
   assert.deepEqual(await inbox.take(true), []);
   await inbox.close();

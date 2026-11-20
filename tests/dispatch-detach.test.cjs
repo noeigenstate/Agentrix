@@ -403,10 +403,10 @@ async function fixture(t) {
     }
     fs.rmSync(root, { recursive: true, force: true });
   });
-  async function start(scope, skip = true) {
+  async function start(scope) {
     const out = path.join(root, randomUUID() + '.md'), release = out + '.release';
-    const args = ['claude', '--detach', '--role', 'exec', '--title', 'Synthetic detached', '--model', 'sonnet', '--effort', 'high', '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', scope,
-      ...(skip ? ['--skip-meeting', 'Synthetic detach acceptance'] : [])];
+    const args = ['claude', '--detach', '--role', 'exec', '--title', 'Synthetic detached', '--model', 'sonnet', '--effort', 'high',
+      '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', scope];
     // The foreground launcher exits; its detached Node helper and stand-in must remain alive.
     const script = `const h=require(${JSON.stringify(helper)}),cp=require('node:child_process');h.startDetached(JSON.parse(process.argv[1]),{launch:(file,args,options)=>cp.spawn(file,['-e',${JSON.stringify(`require(${JSON.stringify(helper)}).runDetached(process.argv[1], {resolveExecutable:()=>({file:process.execPath,args:[${JSON.stringify(worker)}]}),locate:()=>null,locateClaude:()=>null}).then(code=>{process.exitCode=code;});`)},args.at(-1)],options)}).then(code=>{process.exitCode=code;});`;
     const child = spawn(process.execPath, ['-e', script, JSON.stringify(args)], { env: { ...env, SYNTHETIC_RELEASE: release, SYNTHETIC_SESSION: randomUUID() }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
@@ -434,9 +434,15 @@ test('detached stand-ins survive launcher exit; wait handles timeout, parallel c
   assert.match(text, /reason killed/);
 });
 
-test('detach still refuses overlapping scope and an execution without confirmed minutes', async t => {
-  const f = await fixture(t), first = await f.start('a.txt');
+test('detached workers with overlapping scopes both start and settle', async t => {
+  const f = await fixture(t), first = await f.start('a.txt'), second = await f.start('a.txt');
   assert.equal(first.code, 0, first.text + first.errors);
-  const overlap = await f.start('a.txt'); assert.equal(overlap.code, 1); assert.match(overlap.text, /overlap/i);
-  const unconfirmed = await f.start('b.txt', false); assert.equal(unconfirmed.code, 1); assert.match(unconfirmed.text, /roundtable|confirm/i);
+  assert.equal(second.code, 0, second.text + second.errors);
+  assert.equal(f.store.read(first.id).settled, undefined);
+  assert.equal(f.store.read(second.id).settled, undefined);
+  f.release(first.id); f.release(second.id);
+  let text = '';
+  assert.equal(await waitDetached({ ids: [first.id, second.id], timeout: 15 }, { store: f.store, stdout: { write: value => { text += value; } } }), 0);
+  assert.match(text, new RegExp(first.id + '.*exit 0 reason exit'));
+  assert.match(text, new RegExp(second.id + '.*exit 0 reason exit'));
 });

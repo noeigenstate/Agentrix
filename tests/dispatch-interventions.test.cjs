@@ -93,7 +93,7 @@ async function fixture(t, { agent = 'codex', descendant = false, badSession = fa
   const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: home, CODEX_HOME: path.join(home, 'codex'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTRIX_BOOTSTRAP: bootstrap, OWNER_FIXTURE: config };
   delete env.AGENTRIX_READING_NOTE; delete env.AGENTRIX_READING_NOTE_FILE;
   const args = [agent, '--role', 'exec', '--title', 'Synthetic worker', '--model', agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5',
-    '--effort', agent === 'codex' ? 'max' : 'high', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**', '--skip-meeting', 'Synthetic intervention fixture',
+    '--effort', agent === 'codex' ? 'max' : 'high', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**',
     ...(agent === 'codex' ? ['--fast', ...(readOnly ? ['--read-only'] : [])] : ['--permission', 'plan'])];
   let stdout = '', finished = false;
   const children = [];

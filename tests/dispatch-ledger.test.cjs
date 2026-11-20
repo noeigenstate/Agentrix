@@ -76,12 +76,10 @@ test('resumed Codex usage excludes old turns and cannot confirm a start from his
   assert.equal(output.effort, null); assert.equal(output.fast, null);
 });
 
-test('kind and consolidation options reject unknown repeated and missing values', () => {
+test('kind options reject unknown repeated and missing values', () => {
   const base = ['codex', '--role', 'review', '--model', 'm', '--effort', 'max', '--cwd', os.tmpdir(), '--title', 't', '--brief', 'b', '--out', 'o'];
   assert.equal(argumentsOf([...base, '--kind', 'ui-check']).kind, 'ui-check');
-  for (const suffix of [['--kind', 'other'], ['--kind'], ['--kind', 'core', '--kind', 'test']]) assert.throws(() => argumentsOf([...base, ...suffix]));
-  const options = argumentsOf(['consolidate', '--cwd', os.tmpdir(), '--meeting', 'r1', '--summary', 's.md', '--incidents', 'i.json', '--findings', 'f.json']);
-  assert.equal(options.incidents, path.join(os.tmpdir(), 'i.json')); assert.equal(options.findings, path.join(os.tmpdir(), 'f.json'));
+  for (const suffix of [['--kind', 'other'], ['--kind', 'roundtable'], ['--kind'], ['--kind', 'core', '--kind', 'test']]) assert.throws(() => argumentsOf([...base, ...suffix]));
 });
 
 async function rolloutLab(t, records = []) {
@@ -145,8 +143,8 @@ test('routing decisions and task kinds have one shared owner for helpers, admiss
   const { TASK_KINDS, taskKind, routingVerdict } = require('../electron/features/dashboard/records-routing.cjs');
   assert.ok(Object.isFrozen(TASK_KINDS));
   for (const [role, kind] of [['审查', 'review'], ['调查', 'investigate'], ['圆桌', 'roundtable'], ['执行', null]]) {
-    assert.equal(taskKind({ role }), kind); assert.equal(taskKind({ role }, true), 'roundtable');
-    assert.equal(taskKind({ role, kind: 'test' }, true), 'test');
+    assert.equal(taskKind({ role }), kind);
+    assert.equal(taskKind({ role, kind: 'test' }), 'test');
   }
   const declared = { model: 'gpt-6.1-sol', effort: 'max', fast: true };
   for (const [actual, expected] of [[declared, 'ok'], [{ model: null, effort: null, fast: null }, 'unverified'],

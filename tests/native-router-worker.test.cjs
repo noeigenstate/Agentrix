@@ -16,7 +16,7 @@ function setup(t, { auto = true, cli = true, key = true, claudePath = 'api-then-
   t.after(() => claude.close());
   registerClaudeWorker({ control: { onRequest(name, fn) { assert.equal(name, 'claude-sdk.run'); handler = fn; } }, claude,
     settings: () => ({ claudePath, monthlyBudgetUsd: 10 }), env: () => ({ PATH: '' }) });
-  const run = { runId: randomUUID(), projectId: 'project', cwd: dir, worktree: dir, allow: ['src/**'], readOnly: false, roundtable: false };
+  const run = { runId: randomUUID(), projectId: 'project', cwd: dir, worktree: dir, allow: ['src/**'], readOnly: false };
   const stream = { emit: event => events.push(event), onControl(fn) { onControl = fn; return () => { onControl = null; }; } };
   return { fake, events, claude, run, dir, start: payload => handler(run, { prompt: 'fake task', model: 'fake', effort: 'high', ...payload }, stream), control: value => onControl(value) };
 }

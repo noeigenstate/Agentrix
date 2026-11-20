@@ -1,6 +1,6 @@
 # Boundary: Dashboard
 
-Keeps private evaluation records, summarizes local model and collaboration evidence, and owns the dashboard window and owner-adopted routing weights. Incidents, findings and roundtable issues originate in Team journals.
+Keeps private evaluation records, summarizes local model and collaboration evidence, and owns the dashboard window and owner-adopted routing weights. Incidents, findings and roundtable issues from historical Team journals stay available in reports.
 
 ## Owns
 - `electron/features/dashboard/**` — bounded records and decisions, cost and summary functions, journal readers, suggestions, window, IPC and dedicated preload
@@ -8,8 +8,8 @@ Keeps private evaluation records, summarizes local model and collaboration evide
 ## Interface
 - `DashboardRecords` (`electron/features/dashboard/records.cjs`) — asynchronous append and bounded read(kind, { since }); run, grade and quota hooks, subscribe(listener), latestQuota() (the newest sanitized readings in memory, without more disk writes), busy and one capped waitForQuit()
 - `quotaScope` (`electron/features/dashboard/records.cjs`) — anonymized account-series key for a provider, project location and CLI home
-- `TASK_KINDS` (`electron/features/dashboard/records-routing.cjs`) — the shared task categories, carried with the dispatch runtime
-- `taskKind` (`electron/features/dashboard/records-routing.cjs`) — task kind from an explicit category, roundtable or role default
+- `TASK_KINDS` (`electron/features/dashboard/records-routing.cjs`) — historical task categories, with `DISPATCH_TASK_KINDS` for new launches
+- `taskKind` (`electron/features/dashboard/records-routing.cjs`) — task kind from an explicit category or role default, including historical calls
 - `routingVerdict` (`electron/features/dashboard/records-routing.cjs`) — the shared declared-versus-reported routing decision
 - `estimateCost` (`electron/features/dashboard/cost.cjs`) — pure public-price equivalent with standard and Fast rows
 - `models` (`electron/features/dashboard/prices.json`) — the public per-model price table, read by the dashboard and the Virtual Lab
