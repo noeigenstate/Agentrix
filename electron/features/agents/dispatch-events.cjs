@@ -91,6 +91,7 @@ function validDispatch(event) {
   if (!envelope(event)) return false;
   if (event.type === 'dispatch-declared') return ['codex', 'claude'].includes(event.agent) && ['执行', '调查', '审查', '圆桌'].includes(event.role)
     && line(event.title, 1024) && line(event.cwd, 4096) && line(event.worktree, 4096) && routing(event.requested)
+    && (event.expected == null || routing(event.expected) && event.expected.effort !== null && typeof event.expected.fast === 'boolean')
     && Number.isSafeInteger(event.helperPid) && event.helperPid > 0 && ['dispatch', 'intercepted'].includes(event.source)
     && (event.parentId == null) && (event.leadMode == null || ['native', 'terminal', 'codex'].includes(event.leadMode))
     && (event.resumed == null || typeof event.resumed === 'boolean') && number(event.at)

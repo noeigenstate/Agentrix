@@ -194,6 +194,13 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
     const snapshot = syncFs.readFileSync(launches[0].bootstrapFile + '.seats', 'utf8');
     assert.deepEqual(JSON.parse(snapshot), agentSeats);
     assert.equal(launches[0].env.AGENTRIX_SEATS, snapshot);
+    const { argumentsOf } = require('../integration/dispatch.cjs');
+    const { updateDispatchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+    const bootstrap = launches[0].bootstrapFile;
+    updateDispatchSeats(bootstrap, { developer: { model: 'gpt-6.2-astra', effort: 'medium', fast: false } });
+    const dispatch = argumentsOf(['codex', '--role', 'exec', '--title', 'Test', '--cwd', project.path, '--brief', 'brief.md',
+      '--out', 'out.md', '--seat', 'developer', '--model', 'gpt-6.2-sol', '--effort', 'high', '--fast'], { AGENTRIX_BOOTSTRAP: bootstrap });
+    assert.deepEqual([dispatch.model, dispatch.effort, dispatch.fast], ['gpt-6.2-astra', 'medium', false]);
   }
   assert.equal(context.startupErrors.size, 0); assert.equal(launches[0].providerSessionId, null, 'a fresh launch never inherits the old restore binding');
   const next = h.sessions.get(s.terminalId);

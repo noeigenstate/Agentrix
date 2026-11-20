@@ -65,15 +65,11 @@ function inputQueue(onTake = () => {}) {
   };
 }
 
-function routeAgentSeat(input, seats, onSeat, liveLookup, live) {
+function routeAgentSeat(input, seats, onSeat, liveLookup) {
   const report = observed => { try { onSeat(input, observed); } catch {} };
   try {
-    const output = seatHookOutput(input, seats, report, live);
+    const output = seatHookOutput(input, seats, report);
     if (output.systemMessage) report({ note: output.systemMessage });
-    else if (output.hookSpecificOutput?.permissionDecision === 'deny') {
-      report({ note: output.hookSpecificOutput.permissionDecisionReason });
-      return output;
-    }
     else if (Object.keys(output).length || /^\[/.test(input.tool_input?.description || '')) return output;
     else if (liveLookup && input.tool_input?.subagent_type === LOOKUP_AGENT_NAME) {
       const choice = liveLookup();
@@ -118,8 +114,7 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",
       // so the owner's rules get their say by the hook answering nothing.
       if (decision.behavior === 'defer' && ['Agent', 'Task'].includes(input.tool_name)) {
-        const live = liveSeatMap(bootstrap);
-        return routeAgentSeat(input, live ?? spec.seatsMap, onSeat, liveLookup, live !== null);
+        return routeAgentSeat(input, seatsNow(), onSeat, liveLookup);
       }
       if (decision.behavior === 'defer') return {};
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };

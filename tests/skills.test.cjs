@@ -214,6 +214,25 @@ test('worker seats go live while the running lead stays pinned', t => {
   assert.equal(store.dispatchSeats(id).designer.model, 'opus');
 });
 
+test('the lead restart marker uses the running family and supported launch effort', t => {
+  const { store, projects: [project] } = fixture(t), id = project.id;
+  store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
+  let efforts = ['low', 'high'];
+  store.getModels = () => [{ model: 'claude-sonnet-5-5', efforts, defaultEffort: 'low' }];
+  let sessionId = 'one';
+  store.seatSession = () => ({ projectId: id, sessionId });
+  store.delivery(project, false, sessionId, { agent: 'claude', started: true });
+  const info = () => store.seatsInfo(id, 'terminal');
+  const save = orchestrator => store.setRouting('project', id, routing({ orchestrator }), info().routing.digest ?? null);
+  assert.deepEqual(save(seat('gpt-6.2-sol')), { ok: true });
+  assert.equal(info().leadPending, null);
+  assert.deepEqual(save({ model: 'claude-sonnet-5-5', effort: 'high' }), { ok: true });
+  efforts = ['low'];
+  assert.deepEqual(info().leadPending, { model: 'claude-sonnet-5-5', effort: 'low', fast: false });
+  store.delivery(project, false, sessionId = 'two', { agent: 'claude', started: true });
+  assert.equal(info().leadPending, null);
+});
+
 test('the routing save IPC returns after active session updates settle', async t => {
   const { store, projects } = fixture(t), remote = projects.at(-1);
   const handlers = new Map(), update = Promise.withResolvers();

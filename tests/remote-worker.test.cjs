@@ -131,6 +131,7 @@ def invoke(case, globals=None):
     if event.called:
         observed = json.loads(event.call_args.args[0])
         result['observed'] = {key: observed[key] for key in ('toolUseId','sessionId','model','effort','phase')}
+        if 'expected' in observed: result['observed']['expected'] = observed['expected']
     return result
 cases = json.loads(${JSON.stringify(JSON.stringify(cases))})
 for case in cases:
@@ -152,11 +153,35 @@ with tempfile.TemporaryDirectory(prefix='live-ssh-seats-') as directory:
     coder = {'reviewer': {'model': 'gpt-6.2-sol', 'effort': 'high', 'fast': True}}
     channel.receive({'op': 'claude-lead', 'id': 2, 'claudeLead': {'seatsMap': coder}})
     assert messages[-1]['ok']
-    denied = invoke(old, hook_globals)['output']['hookSpecificOutput']
-    assert denied['permissionDecision'] == 'deny' and 'dispatch helper' in denied['permissionDecisionReason']
+    warning = invoke(old, hook_globals)
+    assert 'dispatch helper' in warning['output']['systemMessage']
+    assert warning['observed']['expected'] == coder['reviewer']
     sidecar.write_text('{"reviewer":{"model":"-bad","effort":"medium"}}')
     assert invoke(old, hook_globals) == old['expected']
     channel.close()
+
+with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
+    worker = module['Worker'](lambda event: None)
+    folder = pathlib.Path(directory)
+    worker.coding_root, worker.token = directory, 'fixture'
+    worker.claude_lead = {'seatsMap': new, 'launchSeatsMap': coder}
+    def install_note(note, native):
+        (folder / 'skill-key.txt').write_text('fixture')
+        (folder / 'dispatch.json').write_text('{}')
+        (folder / 'events.sock').touch()
+        return note
+    fixtures = (patch.object(worker, 'startup_note', install_note), patch.object(tempfile, 'mkdtemp', return_value=directory),
+                patch.object(socket, 'socket'), patch.object(socket, 'AF_UNIX', 1, create=True),
+                patch.object(module['threading'], 'Thread'), patch.dict(worker.agent_environment.__globals__, prune_skill_state=lambda *_: None))
+    with contextlib.ExitStack() as stack:
+        for fixture in fixtures: stack.enter_context(fixture)
+        env, _ = worker.agent_environment('', native=True)
+    bootstrap = pathlib.Path(env['AGENTRIX_BOOTSTRAP'])
+    assert json.loads(bootstrap.with_suffix('.json.seats').read_bytes()) == new
+    launch = bootstrap.with_suffix('.json.launch-seats')
+    assert json.loads(launch.read_bytes()) == coder
+    worker.write_claude_lead({'seatsMap': {}})
+    assert json.loads(launch.read_bytes()) == coder
 `);
 });
 
@@ -234,4 +259,30 @@ test('SSH open carries the background switch and Claude seat, and changes use se
     assert.equal(sent[2].op, 'claude-lead');
     assert.deepEqual(sent[2].claudeLead, nextLead);
   }
+});
+
+test('routing saves queue only the latest connecting-host update and bound ready-host requests', async () => {
+  const { refreshRemoteRouting } = require('../electron/features/ssh/routing.cjs');
+  const ready = Promise.withResolvers(), changed = Promise.withResolvers(), requests = [];
+  const remote = { connected: false, ready: ready.promise, request: async (...args) => requests.push(args) };
+  const callbacks = { bound: () => true, changed: changed.resolve, failed: () => assert.fail('unexpected routing failure') };
+  const old = { seatsMap: { designer: { model: 'opus' } } }, next = { seatsMap: { designer: { model: 'sonnet' } } };
+  const routing = { effective: next.seatsMap, roles: [] };
+  assert.equal(refreshRemoteRouting(remote, old, null, callbacks), null);
+  assert.equal(refreshRemoteRouting(remote, next, routing, callbacks), null);
+  assert.deepEqual(requests, []);
+  remote.connected = true;
+  ready.resolve();
+  await changed.promise;
+  assert.deepEqual(requests, [['claude-lead', { claudeLead: next }, { timeout: 3000 }]]);
+  assert.deepEqual(remote.appliedRouting, routing);
+
+  const receipt = Promise.withResolvers(), failed = [];
+  remote.request = () => receipt.promise;
+  const pending = refreshRemoteRouting(remote, old, null, { ...callbacks, failed: () => failed.push('failed') });
+  assert.ok(pending instanceof Promise);
+  receipt.reject(new Error('synthetic timeout'));
+  await pending;
+  assert.deepEqual(failed, ['failed']);
+  assert.deepEqual(remote.appliedRouting, routing);
 });

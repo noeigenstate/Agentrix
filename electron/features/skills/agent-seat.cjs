@@ -1,4 +1,4 @@
-const { agentDescription, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf, liveSeatMap } = require('../agents/call-seat.cjs');
+const { agentDescription, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf, liveSeatMap, seatExpectation } = require('../agents/call-seat.cjs');
 
 function agentSeat(input, seats) {
   if (!seats || !['Agent', 'Task'].includes(input?.tool_name)) return {};
@@ -6,25 +6,23 @@ function agentSeat(input, seats) {
   const { labels } = agentDescription(tool?.description, () => Object.keys(seats));
   if (!labels) return {};
   const { seat } = labels;
-  const { model, effort, agentModel: alias = model } = seats[seat] || {};
-  if (typeof model !== 'string' || !model || model.length > 160) return {};
-  if (familyOf(model) !== 'claude') return { note: `[${seat}] uses Codex. Launch this seat through the dispatch helper.` };
+  const choice = seats[seat], expected = seatExpectation(choice);
+  if (!expected) return {};
+  const { model, effort, agentModel: alias = model } = choice;
+  if (familyOf(model) !== 'claude') return { expected, note: `[${seat}] uses Codex. Launch this seat through the dispatch helper.` };
   if (typeof alias !== 'string' || !CLAUDE_ALIAS.test(alias) || typeof effort !== 'string' || !CLAUDE_EFFORT.test(effort) || tool.subagent_type === 'fork') {
-    return { note: `[${seat}] Claude Agent cannot apply this seat's model and effort.` };
+    return { expected, note: `[${seat}] Claude Agent cannot apply this seat's model and effort.` };
   }
-  return { model: alias, effort };
+  return { model: alias, effort, expected };
 }
 
-function seatHookOutput(input, seats, report = () => {}, live = false) {
+function seatHookOutput(input, seats, report = () => {}) {
   if (input?.hook_event_name !== 'PreToolUse') return {};
-  const { model, effort, note } = agentSeat(input, seats);
-  if (note) return live
-    ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: note } }
-    : { systemMessage: note };
-  if (!model) return {};
+  const { model, effort, note, expected } = agentSeat(input, seats);
+  if (!expected) return {};
   const observed = seatObservation(input, model, effort, 'pre');
-  if (observed) report(observed);
-  return seatToolOutput(input.tool_input, model, effort);
+  if (observed) report({ ...observed, expected });
+  return note ? { systemMessage: note } : seatToolOutput(input.tool_input, model, effort);
 }
 
 function seatToolOutput(tool, model, effort) {
@@ -34,7 +32,7 @@ function seatToolOutput(tool, model, effort) {
 }
 
 function observedAgentSeat(input, seats) {
-  if (input?.hook_event_name !== 'PostToolUse' || !agentSeat(input, seats).model) return null;
+  if (input?.hook_event_name !== 'PostToolUse' || !agentSeat(input, seats).expected) return null;
   const { model, effort } = input.tool_input;
   return seatObservation(input, model, effort, 'post');
 }

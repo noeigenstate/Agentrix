@@ -292,10 +292,6 @@ def live_seats():
                     return seat_map(source.read(8193).decode("utf-8"))
         except (OSError, UnicodeError): pass
     return None
-def seat_refusal(note, live):
-    if live:
-        return {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":note}}
-    return {"systemMessage":note}
 try:
     mode=sys.argv[1]
     event={"type":mode,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),"codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
@@ -326,15 +322,18 @@ try:
         phase=hook.get("hook_event_name")
         if phase=="PreToolUse":
             if not claude:
-                print(json.dumps(seat_refusal("["+seat+"] uses Codex. Launch this seat through the dispatch helper.", live is not None)))
+                print(json.dumps({"systemMessage":"["+seat+"] uses Codex. Launch this seat through the dispatch helper."}))
             elif not supported:
-                print(json.dumps(seat_refusal("["+seat+"] Claude Agent cannot apply this seat's model and effort.", live is not None)))
+                print(json.dumps({"systemMessage":"["+seat+"] Claude Agent cannot apply this seat's model and effort."}))
             elif tool.get("model")!=alias or tool.get("effort")!=effort:
                 updated=dict(tool, model=alias, effort=effort)
                 print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":updated}}))
         elif phase!="PostToolUse": sys.exit(0)
         tool_id=hook.get("tool_use_id", "")
-        if not supported or not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", tool_id): sys.exit(0)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", tool_id): sys.exit(0)
+        if phase=="PreToolUse":
+            event["expected"]={"model":model,"effort":effort,"fast":choice.get("fast") is True}
+            if not supported: alias, effort=None, None
         if phase=="PostToolUse":
             alias, effort=tool.get("model"), tool.get("effort")
             if alias not in ("sonnet","opus","haiku","fable") or effort not in ("low","medium","high","xhigh","max"):
@@ -1790,6 +1789,11 @@ class Worker:
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.write_background_choice()
         self.write_claude_lead(self.claude_lead)
+        lead = self.claude_lead or {}
+        seat_map = lead.get("launchSeatsMap", lead.get("seatsMap"))
+        encoded = json.dumps(seat_map, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 8192: encoded = "null"
+        self.write_routing_file("dispatch.json.launch-seats", encoded)
         self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
         reading_note = self.startup_note(reading_note, native=native)
         with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
@@ -1810,9 +1814,7 @@ class Worker:
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root, AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path, AGENTRIX_TOKEN=self.token, AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
         env["AGENTRIX_CLAUDE_BACKGROUND_FILE"] = os.path.join(self.temp, "claude-background")
         env["AGENTRIX_CLAUDE_LEAD_FILE"] = os.path.join(self.temp, "claude-lead")
-        seat_map = self.claude_lead.get("seatsMap") if native and isinstance(self.claude_lead, dict) else None
-        encoded = json.dumps(seat_map if isinstance(seat_map, dict) else None, separators=(",", ":"))
-        env["AGENTRIX_SEATS"] = encoded if len(encoded.encode("utf-8")) <= 8192 else "null"
+        env["AGENTRIX_SEATS"] = encoded if native else "null"
         if os.path.isfile(os.path.join(self.temp, "dispatch.json")): env["AGENTRIX_BOOTSTRAP"] = os.path.join(self.temp, "dispatch.json")
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
@@ -1842,7 +1844,7 @@ class Worker:
         if seat_map is not None and not isinstance(seat_map, dict): raise ValueError("Invalid routing seat snapshot.")
         encoded = json.dumps(seat_map, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > 8192: raise ValueError("Routing seat snapshot too large.")
-        if lead is not None and set(lead) != {"seatsMap"}:
+        if lead is not None and set(lead) - {"seatsMap", "launchSeatsMap"}:
             model, effort, fast = lead.get("model"), lead.get("effort"), lead.get("fast", False)
             model_pattern = r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}"
             if (not isinstance(model, str) or not re.fullmatch(model_pattern, model)

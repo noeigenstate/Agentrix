@@ -246,7 +246,7 @@ test('Claude groups keep the latest five tasks and inherit the current provider'
     if (i < 6) meter.apply(result(`a${i}`));
   }
   const items = Array.from({ length: 7 }, (_, i) => ({ id: `agent:a${6 - i}`, state: i ? 'reviewing' : 'running', role: '通用',
-    title: `Task ${6 - i}`, startedAt: null, endedAt: null, viewable: false, hidden: false, seat: 'developer', seatSource: 'inferred' }));
+    title: `Task ${6 - i}`, startedAt: null, endedAt: null, viewable: false, hidden: false, expected: null, seat: 'developer', seatSource: 'inferred' }));
   assert.deepEqual(meter.snapshot().calls[0], { agent: 'Claude Code', provider: 'relay.example', model: 'claude-sonnet-5-5', effort: null, fast: null,
     preparing: 0, running: 1, reviewing: 6, tasks: ['Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6'], items, rate: null });
   meter.provider = 'Anthropic';
@@ -311,7 +311,7 @@ test('subagent items keep every role and full description newest first, includin
   calls.apply(result('role-0'));
   assert.deepEqual(calls.snapshot()[0].items, roles.map(([, role], i) => ({ id: `agent:role-${i}`, state: i ? 'running' : 'reviewing', role,
     title: 'Inspect ' + 'the parser '.repeat(30).trim(), startedAt: null, endedAt: null, viewable: false, hidden: false,
-    seat: ['researcher', 'architect'][i] || 'developer', seatSource: 'inferred' })).reverse());
+    seat: ['researcher', 'architect'][i] || 'developer', seatSource: 'inferred', expected: null })).reverse());
   assert.equal(calls.snapshot()[0].tasks.length, 1, 'hover tasks still deduplicate while rows keep each call');
   assert.equal(calls.snapshot()[0].tasks[0].length, 240, 'existing hover task length stays bounded');
   calls.apply(stop());
@@ -364,7 +364,7 @@ test('calls retain the declared role name and membership across routing saves an
   calls.apply(use('legacy', 'Agent', { description: '[developer/backend] Check the server' }));
 
   const event = { id: 'frontend', agent: 'claude', seat: 'developer/frontend', cwd: '/worktree', title: 'Check the UI', at: 1000,
-    role: 'exec', requested: { model: 'sonnet' } };
+    role: 'exec', requested: { model: 'sonnet' }, expected: { model: 'sonnet', effort: 'high', fast: false } };
   assert.equal(calls.dispatch({ ...event, type: 'dispatch-declared' }), true);
   const start = { ...event, type: 'dispatch-start', model: 'sonnet', effort: 'high', startedAt: 1000, sessionId: 'provider' };
   roles = [{ id: 'frontend', name: 'Web', enabled: false }, { id: 'x-mobile', name: 'Client', enabled: true }];
@@ -374,7 +374,8 @@ test('calls retain the declared role name and membership across routing saves an
   roles = null;
 
   const labels = id => {
-    const { seat, seatName, seatSource, offTeam, specialty } = calls.snapshot().flatMap(group => group.items).find(row => row.id === id);
+    const { seat, seatName, seatSource, offTeam, specialty, expected } = calls.snapshot().flatMap(group => group.items).find(row => row.id === id);
+    assert.deepEqual(expected, id === 'dispatch:frontend' ? event.expected : null);
     return [seat, seatName, seatSource, offTeam, specialty];
   };
   assert.deepEqual(labels('agent:mobile'), ['x-mobile', 'Mobile', 'declared', undefined, undefined]);

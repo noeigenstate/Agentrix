@@ -21,12 +21,22 @@ function updateBootstrapLead(file, lead) {
   writeFileAtomic(file + '.lead', lines.join('\n'));
 }
 
-function updateDispatchSeats(file, seats) {
+function writeSeatSnapshot(file, seats) {
   const snapshot = JSON.stringify(seats ?? null);
   const bounded = Buffer.byteLength(snapshot) <= SEAT_BYTES ? snapshot : 'null';
-  writeFileAtomic(file + '.seats', bounded);
+  for (let attempt = 0; ; attempt++) {
+    try { writeFileAtomic(file, bounded); break; }
+    catch (error) {
+      if (process.platform !== 'win32' || !['EPERM', 'EBUSY'].includes(error.code) || attempt === 4) throw error;
+      // A command hook can briefly hold the old sidecar open on Windows.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5 * 2 ** attempt);
+    }
+  }
   return bounded;
 }
+
+const updateDispatchSeats = (file, seats) => writeSeatSnapshot(file + '.seats', seats);
+const updateDispatchLaunchSeats = (file, seats) => writeSeatSnapshot(file + '.launch-seats', seats);
 
 function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, dispatchSeats, ...terminal }) {
   fs.rmSync(file + '.background.json', { force: true });
@@ -41,16 +51,22 @@ function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey,
     shims, nodePath: process.execPath, claudeEnvFile: copy, ...terminal }), { mode: 0o600 });
   if (lead !== undefined) updateBootstrapLead(file, lead);
   else fs.rmSync(file + '.lead', { force: true });
+  try { fs.rmSync(file + '.launch-seats', { force: true }); } catch {}
   // Seat defaults are optional. A failed write should not leave an older launch's snapshot in use.
   if (dispatchSeats !== undefined) {
-    try { return updateDispatchSeats(file, dispatchSeats); } catch {}
+    try {
+      const bounded = updateDispatchSeats(file, dispatchSeats);
+      try { updateDispatchLaunchSeats(file, dispatchSeats); } catch {}
+      return bounded;
+    } catch {}
   }
   try { fs.rmSync(file + '.seats', { force: true }); } catch {}
 }
 
 // Removes a session's bootstrap file and the files written with it.
 function removeBootstrap(file) {
-  for (const name of [file, claudeEnvFile(file), file + '.background.json', file + '.lead', file + '.seats']) fs.rmSync(name, { force: true });
+  for (const suffix of ['', '.background.json', '.lead', '.seats', '.launch-seats']) fs.rmSync(file + suffix, { force: true });
+  fs.rmSync(claudeEnvFile(file), { force: true });
 }
 
 // Refresh only launch policy: keys, hook settings and the private startup hook remain unchanged.
@@ -78,4 +94,4 @@ async function updateBootstrapBackground(file, allow, { rename = fs.renameSync,
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats };
+module.exports = { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats, updateDispatchLaunchSeats };

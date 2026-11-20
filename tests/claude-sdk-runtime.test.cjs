@@ -51,9 +51,11 @@ test('a worker loads normal setting sources while blocking failed policy hooks',
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'node --version' }, {})).behavior, 'allow');
 });
 test('unsupported Agent seats publish one reading notice without making a reply', async t => {
-  const { runtime, spec, fake } = setup(t, { auto: false });
+  const { runtime, spec, fake, dir } = setup(t, { auto: false });
   const initialized = Promise.withResolvers(), events = [];
-  const session = runtime.create({ ...spec, seatsMap: { developer: { model: 'gpt-6.2-sol', effort: 'high' } } }, event => {
+  const bootstrapFile = path.join(dir, 'bootstrap.json');
+  fs.writeFileSync(bootstrapFile + '.seats', JSON.stringify({ developer: { model: 'gpt-6.2-sol', effort: 'high' } }));
+  const session = runtime.create({ ...spec, bootstrapFile }, event => {
     events.push(event);
     if (event.type === 'routing.updated') initialized.resolve();
   });

@@ -101,7 +101,7 @@ function seatRouting(input, snapshot, bootstrap) {
   let hook;
   try { hook = JSON.parse(input); } catch { return {}; }
   let pre;
-  const output = seatHookOutput(hook, seats, value => { pre = value; }, live !== null);
+  const output = seatHookOutput(hook, seats, value => { pre = value; });
   const observed = pre || observedAgentSeat(hook, seats);
   return { ...(Object.keys(output).length && { output }),
     ...(observed && typeof hook.session_id === 'string' && { observed: { ...observed, sessionId: hook.session_id } }) };

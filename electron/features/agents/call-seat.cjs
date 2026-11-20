@@ -22,11 +22,11 @@ function parseSeatMap(text) {
     && (choice.agentModel == null || typeof choice.agentModel === 'string' && CLAUDE_ALIAS.test(choice.agentModel))) ? seats : null;
 }
 
-function liveSeatMap(bootstrap) {
+function readSeatMap(bootstrap, suffix) {
   if (typeof bootstrap !== 'string' || !path.isAbsolute(bootstrap) || /^[\\/]{2}/.test(bootstrap)) return null;
   let descriptor;
   try {
-    const file = bootstrap + '.seats', named = fs.lstatSync(file, { bigint: true });
+    const file = bootstrap + suffix, named = fs.lstatSync(file, { bigint: true });
     if (!named.isFile() || named.size > BigInt(SEAT_BYTES)) return null;
     descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
     const opened = fs.fstatSync(descriptor, { bigint: true });
@@ -41,6 +41,16 @@ function liveSeatMap(bootstrap) {
       try { fs.closeSync(descriptor); } catch {}
     }
   }
+}
+
+const liveSeatMap = bootstrap => readSeatMap(bootstrap, '.seats');
+const launchSeatMap = bootstrap => readSeatMap(bootstrap, '.launch-seats');
+
+function seatExpectation(choice) {
+  const { model, effort, fast } = choice ?? {};
+  if (typeof model !== 'string' || !MODEL.test(model) || typeof effort !== 'string' || !EFFORT.test(effort)) return null;
+  if (fast != null && typeof fast !== 'boolean') return null;
+  return { model, effort, fast: fast === true };
 }
 
 function launchSeat(value, enabledIds) {
@@ -84,4 +94,5 @@ function callSeat(call, model) {
   return { seat, seatSource, ...(specialty ? { specialty } : {}), ...(seatName === undefined ? {} : { seatName }), ...(offTeam ? { offTeam } : {}) };
 }
 
-module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf, liveSeatMap, parseSeatMap, SEAT_BYTES };
+module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf,
+  liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation, SEAT_BYTES };

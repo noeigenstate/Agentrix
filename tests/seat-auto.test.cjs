@@ -86,7 +86,7 @@ test('unknown, untagged, disabled, and non-Agent calls leave their inputs untouc
 
 test('Codex and unsupported Agent settings show a note without changing tool input or policy', async t => {
   const notices = [];
-  const pre = sdkHooks(t, seats, deferred, (_input, result) => notices.push(result.note)).PreToolUse[0].hooks[0];
+  const pre = sdkHooks(t, seats, deferred, (_input, result) => { if (result.note) notices.push(result.note); }).PreToolUse[0].hooks[0];
   for (const seat of ['developer', 'qa', 'reviewer']) {
     const result = await pre(hook({ ...input, description: `[${seat}] Review` }));
     assert.deepEqual(result, {});
@@ -109,9 +109,13 @@ test('a foreground call shows its seat before PostToolUse and reconciles final i
   calls.apply({ type: 'assistant', timestamp: new Date().toISOString(),
     message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Agent', input: foreground }] } });
   assert.deepEqual([calls.snapshot()[0].model, calls.snapshot()[0].effort], ['sonnet', 'high']);
+  const expectedSeat = { model: seats.designer.model, effort: 'high', fast: false };
+  assert.deepEqual(calls.snapshot()[0].items[0].expected, expectedSeat);
   await post(hook({ ...foreground, model: 'opus', effort: 'low' }, 'Agent', 'PostToolUse'));
-  await pre(hook(foreground));
+  calls.observeSeatInput({ toolUseId: 'toolu_1', phase: 'pre', model: 'haiku', effort: 'low',
+    expected: { model: 'haiku', effort: 'low', fast: false } });
   assert.deepEqual([calls.snapshot()[0].model, calls.snapshot()[0].effort], ['opus', 'low']);
+  assert.deepEqual(calls.snapshot()[0].items[0].expected, expectedSeat);
   calls.remoteRecords({ child: { toolUseId: 'toolu_1', records: [{ type: 'assistant', timestamp: new Date().toISOString(),
     perTurnEffort: 'max', message: { model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Done' }] } }] } });
   assert.deepEqual([calls.snapshot()[0].model, calls.snapshot()[0].effort], ['claude-opus-5-5', 'max']);
@@ -166,7 +170,8 @@ test('terminal launch snapshots drive the command hook without reading profile s
   const launchSeats = fs.readFileSync(file + '.lead', 'utf8').split('\n')[5];
   updateBootstrapLead(file, { ...launch, seatsMap: { designer: { model: 'haiku', effort: 'low' } } });
   assert.deepEqual(seatRouting(JSON.stringify(hook()), launchSeats), {
-    output: expected, observed: { toolUseId: 'toolu_1', model: 'sonnet', effort: 'high', sessionId: 'fixture', phase: 'pre' },
+    output: expected, observed: { toolUseId: 'toolu_1', model: 'sonnet', effort: 'high', sessionId: 'fixture', phase: 'pre',
+      expected: { model: seats.designer.model, effort: 'high', fast: false } },
   });
   assert.deepEqual(seatRouting(JSON.stringify(hook()), 'null'), {});
   assert.deepEqual(seatRouting(JSON.stringify(hook(rewritten, 'Agent', 'PostToolUse')), launchSeats),
@@ -179,8 +184,9 @@ test('a running terminal and SDK query read new seats and fall back on malformed
   const bootstrapFile = path.join(dir, 'terminal.json'), sidecar = bootstrapFile + '.seats';
   const abort = new AbortController();
   t.after(() => abort.abort());
+  const notices = [];
   const { hooks } = queryOptions({ owner: 'gui', cwd: dir, env: {}, seatsMap: seats, bootstrapFile },
-    { key: 'synthetic', abort, policy: deferred });
+    { key: 'synthetic', abort, policy: deferred, onSeat: (_input, receipt) => { if (receipt.note) notices.push(receipt.note); } });
   const pre = hooks.PreToolUse[0].hooks[0], payload = hook();
   const terminal = () => seatRouting(JSON.stringify(payload), JSON.stringify(seats), bootstrapFile).output ?? {};
   const check = async choice => { assert.deepEqual(terminal(), choice); assert.deepEqual(await pre(payload), choice); };
@@ -189,11 +195,17 @@ test('a running terminal and SDK query read new seats and fall back on malformed
   const live = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...input, model: 'haiku', effort: 'low' } } };
   await check(live);
   assert.deepEqual(seatRouting(JSON.stringify(payload), 'null', bootstrapFile).output, live);
-  updateDispatchSeats(bootstrapFile, { designer: { model: 'gpt-6.2-sol', effort: 'high', fast: true } });
-  const denied = (await pre(payload)).hookSpecificOutput;
-  assert.equal(denied.permissionDecision, 'deny');
-  assert.match(denied.permissionDecisionReason, /dispatch helper/);
-  assert.deepEqual(terminal(), { hookSpecificOutput: denied });
+  for (const [choice, tool, message] of [
+    [seats.developer, input, /dispatch helper/], [seats.qa, input, /cannot apply/],
+    [seats.designer, { ...input, subagent_type: 'fork' }, /cannot apply/],
+  ]) {
+    updateDispatchSeats(bootstrapFile, { designer: choice });
+    const current = hook(tool);
+    assert.deepEqual(await pre(current), {});
+    assert.match(seatRouting(JSON.stringify(current), null, bootstrapFile).output.systemMessage, message);
+    assert.match(notices.at(-1), message);
+  }
+  assert.equal(notices.length, 3);
   if (process.platform !== 'win32') assert.equal(fs.statSync(sidecar).mode & 0o777, 0o600);
   for (const malformed of ['{', '{"designer":{"model":"-bad","effort":"low"}}', '{"bad/id":{"model":"haiku","effort":"low"}}',
     '{"designer":{"model":"haiku","effort":"HIGH"}}', JSON.stringify({ extra: '界'.repeat(3000) }), Buffer.from([0xff])]) {
@@ -233,13 +245,35 @@ test('Codex dispatch resolves its seat before admission through the private boot
   assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, 'gpt-6.2-astra');
   assert.equal(argumentsOf([...argv, '--model', 'gpt-explicit', '--effort', 'medium', '--fast'], env).model, 'gpt-explicit');
   const frozenEnv = { ...env, AGENTRIX_SEATS: JSON.stringify(seats) };
-  const stale = argumentsOf([...argv, '--model', launch.model, '--effort', launch.effort, '--fast'], frozenEnv);
-  assert.deepEqual([stale.model, stale.effort, stale.fast], ['gpt-6.2-astra', 'high', false]);
+  const oldFlags = [...argv, '--model', launch.model, '--effort', launch.effort, '--fast'];
+  for (const launchEnv of [env, frozenEnv]) {
+    const stale = argumentsOf(oldFlags, launchEnv);
+    assert.deepEqual([stale.model, stale.effort, stale.fast], ['gpt-6.2-astra', 'high', false]);
+  }
+  updateDispatchSeats(file, { developer });
+  assert.throws(() => argumentsOf(oldFlags, env), /uses claude/);
   assert.equal(updateDispatchSeats(file, { ...seats, padding: '\u754c'.repeat(3000) }), 'null');
-  assert.throws(() => argumentsOf(argv, env), /Missing --model/);
+  assert.equal(argumentsOf(argv, env).model, launch.model);
   assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, launch.model);
   removeBootstrap(file);
   assert.equal(fs.existsSync(file + '.seats'), false);
+  assert.equal(fs.existsSync(file + '.launch-seats'), false);
+});
+
+test('a Windows sharing violation retries the atomic seat write', { skip: process.platform !== 'win32' }, t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-seats-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'dispatch.json'), rename = fs.renameSync;
+  updateDispatchSeats(file, seats);
+  let attempts = 0;
+  t.mock.method(fs, 'renameSync', (from, to) => {
+    if (++attempts <= 2) throw Object.assign(new Error('busy'), { code: attempts === 1 ? 'EPERM' : 'EBUSY' });
+    return rename(from, to);
+  });
+  updateDispatchSeats(file, { developer });
+  assert.equal(attempts, 3);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file + '.seats', 'utf8')), { developer });
+  assert.deepEqual(fs.readdirSync(directory), ['dispatch.json.seats']);
 });
 
 test('a failed dispatch seat snapshot write leaves the required bootstrap usable', t => {

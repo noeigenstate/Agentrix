@@ -26,7 +26,7 @@ const { connectDispatchControl } = require(path.join(runtime, 'features/agents/d
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { dispatchDirectory, validSeat } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
-const { familyOf, launchSeat, liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
@@ -89,9 +89,11 @@ function seatChoice(seats, seat) {
 function applySeatDefaults(options, env, pinnedLive, explicitFast) {
   if (!options.seat) return;
   const live = pinnedLive === undefined ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : pinnedLive;
-  const launch = seatChoice(parseSeatMap(env.AGENTRIX_SEATS), options.seat);
+  const baseline = parseSeatMap(env.AGENTRIX_SEATS) ?? (pinnedLive === undefined ? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null);
+  const launch = seatChoice(baseline, options.seat);
   const choice = live ? seatChoice(live, options.seat) : launch;
   if (!choice) return;
+  options.expectedSeat = { model: choice.model, effort: choice.effort, fast: choice.fast === true };
   const agent = familyOf(choice.model);
   if (agent !== options.agent) {
     if (live && (!options.model || familyOf(options.model) !== options.agent || options.model === launch?.model)) {
@@ -621,7 +623,8 @@ function detachedRuns(cwd, create = false) {
 async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch' } = {}) {
   // Keep the admitted choices stable if routing changes before the detached child starts.
   const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
-  env = { ...env, AGENTRIX_DISPATCH_PINNED_SEATS: JSON.stringify(seatSnapshot) };
+  const launchSnapshot = argv.includes('--seat') ? parseSeatMap(env.AGENTRIX_SEATS) ?? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
+  env = { ...env, AGENTRIX_DISPATCH_PINNED_SEATS: JSON.stringify(seatSnapshot), AGENTRIX_SEATS: JSON.stringify(launchSnapshot) };
   const options = argumentsOf(argv, env, seatSnapshot);
   store ||= detachedRuns(options.cwd, true);
   const id = randomUUID(), file = store.file(id);
@@ -1075,6 +1078,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     if (team) admission = await team.admit(options, id, __filename);
     send({ type: 'dispatch-declared', id, helperPid: process.pid, agent: options.agent, role: roundtable ? '圆桌' : options.role, title: options.title,
       seat: options.seat ?? null, cwd: options.cwd, worktree: options.cwd, requested: declared(), source, parentId: null, resumed: !!options.resume,
+      ...(options.expectedSeat && { expected: options.expectedSeat }),
       kind: taskKind(options, roundtable), meeting: admission?.meeting || options.meeting || null, at: Date.now() });
     workerEnv = withShims(workerEnv, { depth: 1 + (Number(env.AGENTRIX_DISPATCH_DEPTH) || 0), runId: id,
       proof: createHmac('sha256', send.bootstrap?.sessionKey || randomBytes(32)).update(`agentrix-run:${id}`).digest('hex') });

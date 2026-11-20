@@ -9,7 +9,7 @@ const { EventEmitter, once } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
 const { argumentsOf, startDetached, waitDetached, run } = require('../integration/dispatch.cjs');
 const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
-const { updateDispatchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+const { updateDispatchSeats, updateDispatchLaunchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 
 test('receipt rename retries sharing errors with bounded backoff while a reader holds the file', async t => {
   const base = receipts(t), id = randomUUID(), delays = [], failures = ['EPERM', 'EACCES', 'EBUSY'];
@@ -86,13 +86,15 @@ test('a detached Codex helper keeps the seat it parsed if the bootstrap changes 
   const first = { developer: { model: 'gpt-6.2-sol', effort: 'high', fast: true } };
   updateDispatchSeats(bootstrap, first);
   const argv = ['codex', '--detach', '--role', 'review', '--title', 'Fixture', '--seat', 'developer',
-    '--cwd', store.directory, '--brief', 'brief.md', '--out', 'answer.md'];
+    '--cwd', store.directory, '--brief', 'brief.md', '--out', 'answer.md', '--model', 'gpt-6.1-sol', '--effort', 'medium'];
   let childOptions;
   const launchSnapshot = { developer: { model: 'gpt-6.1-sol', effort: 'medium', fast: false } };
-  const launchEnv = { AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SEATS: JSON.stringify(launchSnapshot) };
+  updateDispatchLaunchSeats(bootstrap, launchSnapshot);
+  const launchEnv = { AGENTRIX_BOOTSTRAP: bootstrap };
   const code = await startDetached(argv, { store, env: launchEnv, stdout: { write() {} },
     launch: (_file, args, { env }) => {
       updateDispatchSeats(bootstrap, { developer: { model: 'gpt-6.2-astra', effort: 'xhigh', fast: false } });
+      updateDispatchLaunchSeats(bootstrap, { developer: { model: 'gpt-6.2-astra', effort: 'xhigh', fast: false } });
       const { argv: saved } = store.read(path.basename(args.at(-1), '.json'));
       childOptions = argumentsOf(saved, env, JSON.parse(env.AGENTRIX_DISPATCH_PINNED_SEATS ?? 'null'));
       const child = new EventEmitter();

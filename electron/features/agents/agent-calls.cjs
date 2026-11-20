@@ -9,7 +9,7 @@ const { taskKind } = require('../dashboard/records-routing.cjs');
 const { containedFile } = require('../../session-files.cjs');
 const { SubagentFeeds, stateOf, shownModel, time, rootValue } = require('./subagent-feed.cjs');
 const { BackgroundTasks, attach } = require('./background-tasks.cjs');
-const { agentDescription, callSeat, declaredSeat, CLAUDE_ALIAS, CLAUDE_EFFORT } = require('./call-seat.cjs');
+const { agentDescription, callSeat, declaredSeat, seatExpectation, CLAUDE_ALIAS, CLAUDE_EFFORT } = require('./call-seat.cjs');
 const { LOST_WORK_TIMEOUT } = require('../../completion-work.cjs');
 // Host processes can restart while their terminal's dispatched workers keep running.
 const terminalCalls = new WeakMap();
@@ -173,17 +173,23 @@ class AgentCalls {
   }
   applySeatInput(call, settings) {
     const meta = this.meta.get(call.agentId);
+    call.expected ??= settings.expected;
     call.seatInput = settings.model === null ? null : { model: settings.model, effort: settings.effort };
     call.model = childModel(call, meta);
     call.effort = call.childEffort ?? (text(meta?.effort).trim() || call.seatInput?.effort || call.requested.effort);
   }
-  observeSeatInput({ toolUseId, model, effort, phase = 'post' }) {
+  observeSeatInput({ toolUseId, model, effort, phase = 'post', expected }) {
+    const expectation = phase === 'pre' ? seatExpectation(expected) : null;
     const validSettings = CLAUDE_ALIAS.test(text(model)) && CLAUDE_EFFORT.test(text(effort));
-    if (!TOOL_ID.test(text(toolUseId)) || !['pre', 'post'].includes(phase) || !(validSettings || phase === 'post' && model === null && effort === null)) return false;
+    const unobserved = model === null && effort === null && (phase === 'post' || expectation);
+    if (!TOOL_ID.test(text(toolUseId)) || !['pre', 'post'].includes(phase) || !(validSettings || unobserved)) return false;
     const prior = this.seatInputs.get(toolUseId);
-    if (prior?.phase === 'post' && phase === 'pre' || prior?.phase === phase && prior.model === model && prior.effort === effort) return false;
+    const firstExpectation = prior?.expected ?? expectation;
+    const keepPrior = prior?.phase === 'post' && phase === 'pre'
+      || prior?.phase === phase && (phase === 'pre' || prior.model === model && prior.effort === effort);
+    if (keepPrior && prior.expected === firstExpectation) return false;
     if (!prior && this.seatInputs.size >= 1024) this.seatInputs.delete(this.seatInputs.keys().next().value);
-    const settings = { phase, model, effort };
+    const settings = { ...(keepPrior ? prior : { phase, model, effort }), expected: firstExpectation };
     this.seatInputs.set(toolUseId, settings);
     const call = this.toolCall(toolUseId);
     if (!call || call.generation) return false;
@@ -204,6 +210,7 @@ class AgentCalls {
       const other = call === agent ? tool : agent, ids = [call.id, other.id];
       const recorded = call.recorded || other.recorded || ids.some(id => this.finishedIds.has(accountingId(call, id)));
       const entry = this.feeds.owned(call), retired = this.feeds.owned(other);
+      call.expected ??= other.expected;
       if (tool.title) Object.assign(call, { title: tool.title, task: tool.task, role: tool.role, planner: tool.planner, cwd: tool.cwd,
         requested: tool.requested, background: tool.background, agentType: tool.agentType,
         seat: tool.seat, specialty: tool.specialty, seatSource: tool.seatSource, seatName: tool.seatName, offTeam: tool.offTeam });
@@ -360,7 +367,7 @@ class AgentCalls {
       const state = retired ? 'done' : call.starting && !call.done ? 'starting' : stateOf(call);
       if (!retired && state !== 'done') group[state] = (group[state] || 0) + 1;
       group.items.push({ id: call.id, state, role: call.role, title: call.title,
-        startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: retired,
+        startedAt: time(call.startedAt), endedAt: time(call.finishedAt), viewable: !!call.viewable, hidden: retired, expected: call.expected ?? null,
         ...callSeat(call, route.model), ...(call.cwd ? { worktree: call.worktree || call.cwd } : {}),
         ...(call.dispatch ? { brief: !!call.artifacts?.brief, log: !!call.artifacts?.log } : {}),
         ...(call.dispatch || call.failure ? { failure: call.failure || null } : {}),
@@ -408,6 +415,7 @@ class AgentCalls {
         planner: event.planner || UNKNOWN_PLANNER, kind: taskKind(event), meeting: event.meeting ?? null,
         role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,
         declaredSpelling: event.seat, ...declaredSeat(event.seat, this.roles),
+        expected: event.seat ? seatExpectation(event.expected) : null,
         helperPid: event.helperPid, starting: true, unconfirmed: true, resumed: event.resumed === true, source: event.source,
         startedAt: time(event.at), done: false, rate: null, meter: new TokenRates(event.agent) };
       this.takeAwaiting(next, event.id); this.calls.set(event.id, next); this.feeds.track(next);

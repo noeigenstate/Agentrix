@@ -8,6 +8,7 @@ const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
+const { familyOf } = require('./seat-rules.mjs');
 const operationSlots = require('./operation-slots.cjs');
 const { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
 const { readRouting, writeRouting, routingState, reviewFile, routingWatch } = require('./project-routing.cjs');
@@ -77,6 +78,8 @@ function resolveOperations(info, remoteAgent) {
   const reviewer = info.roles.find(role => role.enabled && role.kind === 'reviewer')?.id;
   return operationSlots.levers(info.operations.effective, info.effective, info.catalog, installed, reviewer);
 }
+
+const leadModel = (model, operations) => model === 'haiku' && operations?.pinnedHaiku ? operations.pinnedHaiku : model;
 
 const routingFailure = (code, error = {}) => ({
   ok: false, code, message: error.message ?? code,
@@ -430,9 +433,8 @@ class SkillsStore {
   terminalLead(projectId, { remote = false } = {}) {
     const seat = this.leadOptions(projectId, 'claude', { remote });
     if (!seat) return null;
-    const { claude, pinnedHaiku } = this.operationLevers(projectId, null, remote ? 'claude' : null);
-    const model = seat.model === 'haiku' && pinnedHaiku ? pinnedHaiku : seat.model;
-    return { ...seat, model, env: claude.env, seatsMap: this.dispatchSeats(projectId) };
+    const operations = this.operationLevers(projectId, null, remote ? 'claude' : null);
+    return { ...seat, model: leadModel(seat.model, operations), env: operations.claude.env, seatsMap: this.dispatchSeats(projectId) };
   }
 
   dispatchSeats(projectId) {
@@ -552,15 +554,22 @@ class SkillsStore {
     const team = resolveTeam(entry, config ?? template, defaults), effective = team.effective;
     const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
     const roles = team.team.map(item => item.row);
-    const runningLead = snapshot?.seatsMap?.[lead], savedLead = effective[lead];
+    const leadConfig = modelSeats.leadConfiguration(effective, lead, installed, catalog);
+    const launchLead = snapshot?.seatsMap?.[lead];
+    const runningLead = launchLead && { ...launchLead, model: leadModel(launchLead.model, snapshot.operations) };
+    const agent = runningLead && familyOf(runningLead.model), remote = project?.kind === 'ssh';
+    const restartLead = agent && (remote && agent === 'claude'
+      ? modelSeats.leadOptions(effective, agent, { ...installed, claude: true }, catalog, lead) : leadConfig.leads[agent]);
     const applied = snapshot && binding.appliedRouting;
-    const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: structuredClone(runningLead) } : null;
-    const leadPending = runningLead && savedLead && (runningLead.model !== savedLead.model || runningLead.effort !== savedLead.effort
-      || Boolean(runningLead.fast) !== Boolean(savedLead.fast)) ? { ...savedLead, fast: savedLead.fast === true } : null;
+    const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: runningLead } : null;
     const operations = operationInfo(template, config, team, catalog, installed, snapshot?.operations, this.operationResults.get(projectId),
       snapshot && binding.nativeClaude);
+    const restartModel = restartLead?.model === 'haiku'
+      ? leadModel('haiku', resolveOperations({ effective, operations, installed, catalog, roles }, remote ? agent : null)) : restartLead?.model;
+    const leadPending = restartLead && (runningLead.model !== restartModel || runningLead.effort !== restartLead.effort
+      || Boolean(runningLead.fast) !== Boolean(restartLead.fast)) ? { ...restartLead, model: restartModel, fast: restartLead.fast === true } : null;
     return { skill: entry.id, seats: team.seats, roles, lead, authors: team.authors, fresh: team.fresh,
-      ...modelSeats.leadConfiguration(effective, lead, installed, catalog), defaults, template, config, routing: source,
+      ...leadConfig, defaults, template, config, routing: source,
       effective, operations, current, leadPending, currentRoles: current ? applied?.roles ?? roles : null,
       catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
@@ -755,7 +764,8 @@ class SkillsStore {
     const frozen = this.sessionSnapshot(project.id, sessionId), seats = this.seatsInfo(project.id);
     const roles = frozen && Object.hasOwn(frozen, 'roles') ? frozen.roles : seats?.roles.slice().sort((a, b) => Number(b.enabled) - Number(a.enabled)) ?? null;
     const leadAgent = agent || seats?.leadAgent;
-    const leadSeat = seats?.leads[leadAgent];
+    const leadSeat = seats && remote && leadAgent === 'claude'
+      ? modelSeats.leadOptions(seats.effective, leadAgent, { ...seats.installed, claude: true }, seats.catalog, seats.lead) : seats?.leads[leadAgent];
     const operations = frozen && Object.hasOwn(frozen, 'operations') ? frozen.operations : seats ? resolveOperations(seats, remote ? leadAgent : null) : null;
     const seatsMap = frozen && Object.hasOwn(frozen, 'seatsMap') ? frozen.seatsMap : seats
       ? { ...seats.effective, ...(leadSeat && { [seats.lead]: leadSeat }) } : null;

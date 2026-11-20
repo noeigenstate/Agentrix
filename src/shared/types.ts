@@ -38,6 +38,7 @@ export type TokenRate = { outputTokens: number; activeMs: number; samples: numbe
 export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | null; model: string | null; modelUnconfirmed?: boolean; effort: string | null; fast: boolean | null; preparing: number; starting?: number; running: number; reviewing: number; tasks: string[]; rate?: TokenRate | null; items: { id: string; state: 'starting' | 'preparing' | 'running' | 'reviewing' | 'done'; role: string; title: string; startedAt: number | null; endedAt: number | null; viewable: boolean; hidden: boolean;
   notice?: 'unconfirmed'; resumed?: boolean; controlFailure?: string;
   seat?: SeatId; specialty?: string; seatSource?: 'declared' | 'inferred'; seatName?: string; offTeam?: true; worktree?: string;
+  expected: { model: string; effort: string; fast: boolean } | null;
   // Availability of the call's artifacts. Main owns their paths.
   brief?: boolean; log?: boolean;
   // A dispatched worker that ended badly or never confirmed (skills/agent-dispatch): shown in words instead of a plain state.

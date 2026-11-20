@@ -7,9 +7,11 @@ Main delivers frozen Claude operation settings to its brokered workers. SSH-disp
 Local and SSH Claude terminal wrappers read the live lead file at launch, including the optional background and subagent model lines.
 The lead file's sixth line carries fallback choices. Terminal hooks and the helper read accepted seats from the private sidecar at invocation.
 The helper pins the admitted model, effort and fast settings.
+The Codex shell wrappers request native launch. The local and SSH native launches keep a separate baseline next to the live sidecar so the helper can identify flags copied from the original routing table even when the seat environment variable is absent.
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"
 Claude's terminal Agent and Task hooks report provisional and final input by tool-use ID.
+Unsupported Agent and Task seat choices produce a notice and leave the input untouched. The dispatch declaration and the Agent hook's first observation carry the seat expectation used by call history.
 SSH applies seat sidecar updates in channel order. A failed update leaves the previous sidecar available.
 
 ## Owns

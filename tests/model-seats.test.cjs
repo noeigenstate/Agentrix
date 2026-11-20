@@ -126,7 +126,7 @@ test('the other-family lead uses its family default and an uninstalled family ha
   assert.equal(leadOptions(map, 'claude', { codex: true }, models), null);
 });
 
-test('routing IPC forwards saves and review actions with the exact contract arguments', () => {
+test('routing IPC forwards saves and review actions with the exact contract arguments', async () => {
   const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
   const handlers = {}, calls = [], config = { roles: { researcher: seat('sonnet') }, operations: {} };
   const record = (...args) => { calls.push(args); return { ok: true }; };
@@ -135,7 +135,7 @@ test('routing IPC forwards saves and review actions with the exact contract argu
     setRouting: record, resolveRouting: record,
   } });
   assert.equal(handlers['skills:seats']('project', 'terminal').skill, 'declaring-skill');
-  assert.deepEqual(handlers['skills:setRouting']('project', 'p', config, null), { ok: true });
-  assert.deepEqual(handlers['skills:resolveRouting']('p', 'keep', 'digest'), { ok: true });
+  assert.deepEqual(await handlers['skills:setRouting']('project', 'p', config, null), { ok: true });
+  assert.deepEqual(await handlers['skills:resolveRouting']('p', 'keep', 'digest'), { ok: true });
   assert.deepEqual(calls, [['project', 'terminal', true], ['project', 'p', config, null], ['p', 'keep', 'digest']]);
 });

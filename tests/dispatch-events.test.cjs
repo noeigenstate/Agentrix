@@ -165,7 +165,7 @@ test('authenticated dispatch events populate groups, replace live totals, show d
   let group = f.calls.snapshot('Parent service')[0];
   assert.equal(group.agent, 'Codex'); assert.equal(group.provider, null); assert.equal(group.running, 1);
   assert.deepEqual(group.items, [{ state: 'running', role: '执行', title: launch.title, failure: null, id: `dispatch:${launch.id}`,
-    startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false, seat: 'developer', seatSource: 'inferred',
+    startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false, expected: null, seat: 'developer', seatSource: 'inferred',
     worktree: launch.cwd, brief: true, log: false }]);
   assert.equal(f.send(rate(launch.id)), true);
   assert.equal(f.send(rate(launch.id, { outputTokens: 20, activeMs: 500 })), false, 'stale totals cannot regress');
@@ -306,7 +306,7 @@ test('roundtable is an authenticated role and does not change parent completion'
   const f = session(t), launch = start(undefined, { role: '圆桌' });
   assert.equal(f.send(launch), true);
   assert.deepEqual(f.calls.snapshot()[0].items[0], { state: 'running', role: '圆桌', title: launch.title, failure: null, id: `dispatch:${launch.id}`,
-    startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false, seat: 'developer', seatSource: 'inferred',
+    startedAt: launch.startedAt, endedAt: null, viewable: false, hidden: false, expected: null, seat: 'developer', seatSource: 'inferred',
     worktree: launch.cwd, brief: true, log: false });
   assert.equal(f.send(start(undefined, { role: 'roundtable' })), false, 'only the explicit event role is accepted');
   f.send(end(launch.id));

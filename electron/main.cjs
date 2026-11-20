@@ -15,7 +15,8 @@ const { ApprovalGuard, approvalStamp } = require('./features/terminal/approval-g
 const { registerNativeIpc } = require('./features/terminal/native-ipc.cjs');
 const { createSwitchHost } = require('./features/terminal/switch-host.cjs');
 const { createClaudeActivity } = require('./features/terminal-events/claude-activity.cjs');
-const { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats } = require('./features/terminal-events/bootstrap-file.cjs');
+const { writeBootstrap, removeBootstrap, updateBootstrapBackground, updateBootstrapLead, updateDispatchSeats, updateDispatchLaunchSeats } = require('./features/terminal-events/bootstrap-file.cjs');
+const { refreshRemoteRouting } = require('./features/ssh/routing.cjs');
 const { claudeBackgroundEnvironment } = require('./shared/claude-background.cjs');
 const { createHookServer } = require('./features/terminal-events/hook-server.cjs');
 const { createHookIngest } = require('./features/terminal-events/hook-ingest.cjs');
@@ -556,17 +557,16 @@ function refreshSkillNotes() {
     if (!project) continue;
     if (project.kind === 'ssh') {
       const remote = s.remoteConnection || s.terminal;
-      if (remote?.setClaudeLead) {
+      if (remote?.request && !remote.closed) {
         const lead = s.nativeStructured ? null : skills.terminalLead(project.id, { remote: true });
         const refresh = lead ?? { seatsMap: skills.dispatchSeats(project.id) ?? {} };
         const routing = skills.seatsInfo(project.id);
-        remoteWrites.push(remote.setClaudeLead(refresh).then(() => {
-          remote.appliedRouting = { effective: routing?.effective ?? {}, roles: routing?.roles ?? [] };
-        }).catch(() => {
-          if (sessions.get(s.terminalId) === s && (s.remoteConnection || s.terminal) === remote) {
-            report(new Error('Could not update routing on the SSH host. The remote session may still be using its previous seats.'));
-          }
-        }));
+        const update = refreshRemoteRouting(remote, refresh, routing, {
+          bound: () => sessions.get(s.terminalId) === s && (s.remoteConnection || s.terminal) === remote,
+          changed: () => send('skills:changed', skills.infos()),
+          failed: () => report(new Error(t('远程请求失败。'))),
+        });
+        if (update) remoteWrites.push(update);
       }
       continue;
     }
@@ -1264,7 +1264,7 @@ async function initializeNativeSessions() {
       const routing = readOnly ? null : skills.seatsInfo(project.id);
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
         allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
-        claudeLead: readOnly ? null : { seatsMap: skills.dispatchSeats(project.id) ?? {} },
+        claudeLead: readOnly ? null : { seatsMap: skills.dispatchSeats(project.id) ?? {}, launchSeatsMap: delivery?.agentSeats ?? {} },
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
         skills: delivery?.bundle, readingNote: readOnly ? '' : startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
           path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
@@ -1332,6 +1332,7 @@ function wireNativeSessions(directory, codex, codexFactory) {
         delivery, path.join(integrationDir, 'dispatch.cjs'));
       return committed => {
         if (committed && spec.bootstrapFile) {
+          try { updateDispatchLaunchSeats(spec.bootstrapFile, delivery?.agentSeats); } catch (error) { report(error); }
           try { updateDispatchSeats(spec.bootstrapFile, skills.dispatchSeats?.(spec.projectId) ?? delivery?.agentSeats ?? {}); } catch (error) { report(error); }
         }
         skills.endSession(project.id, committed ? previous : skillSessionId);
@@ -1463,7 +1464,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
   const terminal = project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
     allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
-    claudeLead: skills.terminalLead?.(project.id, { remote: true }) ?? null,
+    claudeLead: skills.terminalLead?.(project.id, { remote: true }) ?? { seatsMap: skills.dispatchSeats?.(project.id) ?? {} },
     readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
@@ -1888,8 +1889,8 @@ if (!app.requestSingleInstanceLock()) {
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
       changed: (infos, { deliveryChanged }) => {
         const refreshed = deliveryChanged && refreshSkillNotes();
-        if (refreshed) return refreshed.then(() => send('skills:changed', skills.infos()));
         send('skills:changed', infos);
+        return refreshed;
       }, report,
       routingNote: () => routingNote(app.getPath('userData')) });
     skills.syncWatchers();
