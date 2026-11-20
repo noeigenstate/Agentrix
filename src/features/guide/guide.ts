@@ -3,10 +3,13 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "项目模型路由", text: "每个项目可单独设置模型路由，保存在项目文件夹的 .agentrix/routing.json 中，打开项目时一同读取。原来的全局设置已成为「我的默认模板」，供没有路由文件的项目使用。", group: "new" },
-  { title: "团队角色库", text: "可从角色库把前端、后端、桌面端、数据库、人工智能、文档、性能和无障碍这八个角色加入项目团队。", group: "new" },
-  { title: "自定义角色", text: "复制现有角色即可自定名称和职责。每个项目最多创建 8 个自定义角色，团队最多启用 16 个角色。", group: "new" },
-  { title: "确认外部更改", text: "克隆仓库、执行 git pull 或用编辑器修改带来的路由文件更改，会在应用前请你确认，并标出有风险的变化。", group: "new" },
+  { title: "路由保存即生效", text: "保存后，活动区的模型路由立即显示新设置。正在运行的对话里，之后启动的子代理会使用新的席位设置。", group: "new" },
+  { title: "总指挥重启提示", text: "团队席位中，只有总指挥自己的模型要重启对话才会切换。重启前，该行会显示「重启后生效」和保存的设置。", group: "new" },
+  { title: "操作模型生效提示", text: "需要重新启动才会应用的操作模型设置会标注「下次启动生效」。", group: "new" },
+  { title: "项目模型路由", text: "每个项目可单独设置模型路由，保存在项目文件夹的 .agentrix/routing.json 中，打开项目时一同读取。原来的全局设置已成为「我的默认模板」，供没有路由文件的项目使用。" },
+  { title: "团队角色库", text: "可从角色库把前端、后端、桌面端、数据库、人工智能、文档、性能和无障碍这八个角色加入项目团队。" },
+  { title: "自定义角色", text: "复制现有角色即可自定名称和职责。每个项目最多创建 8 个自定义角色，团队最多启用 16 个角色。" },
+  { title: "确认外部更改", text: "克隆仓库、执行 git pull 或用编辑器修改带来的路由文件更改，会在应用前请你确认，并标出有风险的变化。" },
   { title: "公式排版", text: "回复中的行内公式和独立公式会按数学格式显示。遇到不安全或不支持的公式时，会显示原始写法。" },
   { title: "自动应用席位设置", text: "从下一次对话起，为某个座位启动的子代理会自动使用该座位设置的模型和思考深度，无需总指挥手动填写。" },
   { title: "活动区布局", text: "右侧活动区的模型路由改为与相邻区块一致的平铺样式。主模型和它收到的提示移到左侧 Agent 标签页的「总指挥」下。" },

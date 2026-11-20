@@ -3694,5 +3694,14 @@
     "Copy an existing role and give it your own name and duties. Each project can have up to 8 custom roles, and a team can have up to 16 enabled roles.",
   "确认外部更改": "File review",
   "克隆仓库、执行 git pull 或用编辑器修改带来的路由文件更改，会在应用前请你确认，并标出有风险的变化。":
-    "Agentrix asks you to review routing files brought in by a clone or git pull, or changed in an editor. Risky changes are marked before you apply them."
+    "Agentrix asks you to review routing files brought in by a clone or git pull, or changed in an editor. Risky changes are marked before you apply them.",
+  "路由保存即生效": "Live model routing",
+  "保存后，活动区的模型路由立即显示新设置。正在运行的对话里，之后启动的子代理会使用新的席位设置。":
+    "Model routing in the activity pane shows saved settings immediately. Sub-agents started after the save use the new seat settings, even in a running conversation.",
+  "总指挥重启提示": "Orchestrator restart notice",
+  "团队席位中，只有总指挥自己的模型要重启对话才会切换。重启前，该行会显示「重启后生效」和保存的设置。":
+    "Of the team seats, only the Orchestrator needs a conversation restart to switch models. Until then, its row shows “After restart” with the saved settings.",
+  "操作模型生效提示": "Operation model timing",
+  "需要重新启动才会应用的操作模型设置会标注「下次启动生效」。":
+    "Operation model settings that require a new launch are marked “Takes effect on next launch.”"
 }
