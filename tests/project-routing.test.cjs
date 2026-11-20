@@ -39,6 +39,14 @@ test('canonical digests include ignored content and ignore LF, CRLF, and key ord
   write(JSON.stringify(input)); assert.notEqual(read().digest, first.digest);
 });
 
+test('the conductor switch is kept only when on and survives a round trip', t => {
+  const { write, read } = fixture(t);
+  write(JSON.stringify({ ...document(), conductor: true }));
+  assert.equal(read().config.conductor, true);
+  write(JSON.stringify({ ...document(), conductor: false }));
+  assert.equal(Object.hasOwn(read().config, 'conductor'), false);
+});
+
 test('routing rejects unknown keys, prototype keys, newer versions, depth, invalid bytes and unsafe teams', t => {
   const { write, read } = fixture(t);
   for (const [contents, code] of [
@@ -46,7 +54,7 @@ test('routing rejects unknown keys, prototype keys, newer versions, depth, inval
     [JSON.stringify(document({ qa: { path: 'outside' } })), 'unknown-key'],
     ['{"format":"agentrix-routing","version":1,"roles":{"__proto__":{}},"operations":{}}', 'unknown-key'],
     [JSON.stringify(document({ qa: { enabled: { extra: { a: {} } } } })), 'too-deep'],
-    [JSON.stringify(document({ reviewer: { enabled: false } })), 'reviewer-required'],
+    [JSON.stringify({ ...document(), conductor: 'yes' }), 'bad-format'],
     [Buffer.from([0xc0, 0xaf]), 'bad-utf8'], ['{', 'bad-json'], [Buffer.alloc(MAX_BYTES + 1, 0x20), 'too-large'],
   ]) {
     write(contents);
@@ -102,30 +110,6 @@ test('routing accepts BOM and absent operations and rejects duplicate keys and u
   assert.equal(read().config.roles.qa.model, undefined);
   assert.equal(read().ignored[0], 'roles.qa.seat');
   assert.equal(read().ignored.length, 16);
-});
-
-test('the reviewer cannot share Developer’s model when another author occupies the alternative', t => {
-  const { read, write } = fixture(t);
-  write(JSON.stringify(document({
-    developer: { model: 'opus', effort: 'high' }, frontend: { enabled: true, model: 'gpt-6.1-sol', effort: 'high' },
-  })));
-  assert.equal(read().error.code, 'reviewer-same-model');
-});
-
-test('review flags weakened verification roles and shared reviewer models', () => {
-  const original = { roles: { a11y: { enabled: true } } };
-  const config = { roles: {
-    reviewer: { enabled: false }, developer: { model: 'opus', effort: 'high' },
-    'x-audit': { from: 'reviewer', name: 'Audit', duty: 'Review changes', outputs: '' },
-    qa: { effort: 'low', model: 'sonnet' }, security: { model: 'sonnet', effort: 'high' },
-    a11y: { enabled: true, model: 'haiku', effort: 'high' },
-  } };
-  const before = resolveTeam(entry, original, context[2]);
-  const after = resolveTeam(entry, config, context[2]);
-  const flags = reviewFile({ config, ignored: [] }, 'changed', after, before, catalog).flags;
-  const weakened = flags.filter(flag => flag.code === 'verification-weakened').map(flag => flag.role);
-  assert.deepEqual(new Set(weakened), new Set(['reviewer', 'x-audit', 'qa', 'security', 'a11y']));
-  assert.ok(flags.filter(flag => flag.code === 'verification-weakened' && flag.role).every(flag => flag.text === undefined));
 });
 
 function reviewChanges(roles, priorRoles = {}) {

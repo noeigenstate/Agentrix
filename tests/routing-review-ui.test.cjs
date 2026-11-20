@@ -20,7 +20,7 @@ sourceModule._compile(ts.transpileModule(fs.readFileSync(filename, 'utf8'),
   { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, filename);
 const { RoutingReview, resolveRouting } = sourceModule.exports;
 const action = () => {};
-const flags = ['expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text'];
+const flags = ['expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'custom-text'];
 const writer = { name: 'Writer', duty: '<script>never execute</script>', outputs: '<b>Plain output</b>' };
 const active = { model: 'opus', effort: 'high', fast: true, fresh: false, enabled: true };
 const foreign = {
@@ -35,7 +35,7 @@ const foreign = {
       { role: 'developer', source: 'builtin', status: 'changed', before: active, after: { ...active, effort: 'max' } },
     ],
     flags: [...flags.map(code => ({ code, role: 'x-writer' })),
-      { code: 'verification-weakened', role: 'reviewer' }],
+      { code: 'high-effort', role: 'reviewer' }],
     ignored: ['roles.unknown', 'roles.frontend.seat'],
   },
 };
@@ -59,8 +59,8 @@ test('routing review shows every change, flag and custom text as plain text', ()
     assert.ok(html.includes(`data-routing-flag="${code}"`));
     assert.ok(html.includes('data-routing-risk-count="' + code + '"'));
   }
-  assert.match(html, /data-routing-risk-count="verification-weakened">验证减弱 × 2/);
-  assert.match(html, /seats-review-other-risks"[^]*?审查<\/span>[^]*?验证减弱/);
+  assert.match(html, /data-routing-risk-count="high-effort">[^<]* × 2/);
+  assert.match(html, /seats-review-other-risks"[^]*?审查<\/span>/);
   assert.match(html, /class="seats-review-ignored"><h4>忽略的条目<\/h4>.*roles\.unknown.*roles\.frontend\.seat/);
   assert.match(html, /&lt;script&gt;never execute&lt;\/script&gt;/);
   assert.match(html, /&lt;b&gt;Plain output&lt;\/b&gt;/);

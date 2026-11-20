@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
   MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, validRoleId, validCustomRoleId, nextRoleId,
-  roleKind, roleLocks, normalizeRoleText, validateCustomRole, checkTeamRules, authorIdentityConflict,
+  roleKind, roleLocks, normalizeRoleText, validateCustomRole, checkTeamRules,
 } = require('../electron/features/skills/role-rules.mjs');
 
 test('custom IDs reserve x-, obey length and use the smallest free suffix', () => {
@@ -48,8 +48,8 @@ test('kind and locks distinguish the lead, reviewers, authors and other roles', 
   assert.equal(roleKind('frontend', authors), 'author');
   assert.equal(roleKind('docs', authors), 'member');
   assert.deepEqual(roleLocks('lead', 'builtin'), ['enabled', 'text', 'copy']);
-  assert.deepEqual(roleLocks('reviewer', 'builtin'), ['fresh', 'text']);
-  assert.deepEqual(roleLocks('reviewer', 'custom'), ['fresh']);
+  assert.deepEqual(roleLocks('reviewer', 'builtin'), ['text']);
+  assert.deepEqual(roleLocks('reviewer', 'custom'), []);
   assert.deepEqual(roleLocks('author', 'library'), ['text']);
   assert.deepEqual(roleLocks('author', 'custom'), []);
 });
@@ -57,12 +57,10 @@ test('kind and locks distinguish the lead, reviewers, authors and other roles', 
 const role = (id, kind, overrides = {}) => ({ id, name: id, enabled: true, kind, source: 'builtin', ...overrides });
 const lead = role('orchestrator', 'lead'), reviewer = role('reviewer', 'reviewer');
 
-test('a team requires its enabled lead and at least one enabled reviewer', () => {
+test('a team requires its enabled lead and leaves reviewers to the conductor', () => {
   assert.equal(checkTeamRules([lead, reviewer]), null);
   assert.deepEqual(checkTeamRules([{ ...lead, enabled: false }, reviewer]), { code: 'lead-locked', role: 'orchestrator' });
-  const disabled = { ...reviewer, enabled: false };
-  assert.deepEqual(checkTeamRules([lead, disabled]), { code: 'reviewer-required' });
-  assert.equal(checkTeamRules([lead, disabled, role('x-reviewer', 'reviewer', { source: 'custom' })]), null);
+  assert.equal(checkTeamRules([lead, { ...reviewer, enabled: false }]), null);
 });
 
 test('enabled names compare after normalization and case folding', () => {
@@ -81,26 +79,6 @@ test('team limits count all custom roles and only enabled roles', () => {
   assert.equal(checkTeamRules([...roles, ...customs]), null);
   assert.deepEqual(checkTeamRules([...roles, ...customs, role('x-extra', 'member', { enabled: false, source: 'custom' })]), { code: 'role-limit' });
   assert.deepEqual(checkTeamRules([...roles, { ...customs[0], enabled: true }]), { code: 'role-limit' });
-});
-
-test('only non-Developer author conflicts require a peer unused by all authors', () => {
-  const catalog = [
-    { model: 'opus', rank: 3, available: true },
-    { model: 'claude-opus-5', rank: 3, available: true },
-    { model: 'gpt-author', rank: 3, available: true },
-    { model: 'sonnet', rank: 2, available: true },
-    { model: 'gpt-offline', rank: 3, available: false },
-    { model: 'gpt-free', rank: 3, available: true },
-    { model: 'gpt-free-alias', rank: 3, available: true },
-  ];
-  const identity = model => ({ opus: 'claude-opus-5', 'gpt-free-alias': 'gpt-free' })[model] ?? model;
-  const authors = { developer: 'opus', frontend: 'gpt-author', 'x-author': 'claude-opus-5' };
-  assert.deepEqual(authorIdentityConflict('claude-opus-5', authors, catalog, identity), {
-    hit: ['developer', 'x-author'], alternatives: [catalog[2], catalog[5]],
-  });
-  assert.ok(authorIdentityConflict('opus', authors, catalog.slice(0, 5), identity));
-  assert.equal(authorIdentityConflict('opus', { frontend: 'gpt-author', 'x-author': 'opus' }, catalog.slice(0, 5), identity), null);
-  assert.equal(authorIdentityConflict('opus', { frontend: 'gpt-author' }, catalog, identity), null);
 });
 
 test('reserved names use compatibility folding and role text accepts at most two combining marks', () => {

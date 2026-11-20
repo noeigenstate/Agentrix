@@ -3433,7 +3433,7 @@
   "仅显示文件的前 256 KB": "Showing the first 256 KB",
   "没有可打开的工作会话": "No worker session is available",
   "打开工作会话": "Open worker session",
-  "总指挥按席位把任务分给产品、架构、设计、开发、审查、测试、研究、运维和安全角色，能并行的尽量并行。审查和测试由全新实例独立完成。": "The Orchestrator assigns tasks to Product, Architect, Designer, Developer, Reviewer, QA, Researcher, DevOps and Security. Independent work runs in parallel where possible. Fresh instances review and test independently.",
+  "指挥家模式下，总指挥只规划和调度，任务交给产品、架构、设计、开发、审查、测试、研究、运维和安全角色完成。角色执行期间，总指挥随时回答你并汇报各角色进度。": "In conductor mode the orchestrator only plans and schedules: product, architecture, design, development, review, testing, research, DevOps and security roles do the tasks. While they work, it answers you and reports every role's progress.",
   "总指挥": "Orchestrator Agent",
   "任务调度": "Task coordination",
   "任务调度、依赖管理、状态追踪、冲突协调": "Task assignment, dependency management, status tracking and conflict resolution",

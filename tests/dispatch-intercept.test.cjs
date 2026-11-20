@@ -35,71 +35,13 @@ function shellFor(kind) {
 }
 const bootstraps = () => require('../electron/features/terminal-events/bootstrap-file.cjs');
 // A session's bootstrap as main writes it, with the session's private copy of the Claude Code start-up hook.
-function sessionBootstrap(folder) {
+function sessionBootstrap(folder, mode = {}) {
   const file = path.join(folder, 'bootstrap.json');
   bootstraps().writeBootstrap({ file, eventServer: { name: 'agentrix-test-unused', address: path.join(folder, 'unused.sock') }, projectId: 't',
-    projectPath: folder, sessionKey: 'k' });
+    projectPath: folder, sessionKey: 'k', ...mode });
   return { file, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
 }
 const posix = file => process.platform === 'win32' ? file.replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase()).replace(/\\/g, '/') : file;
-
-test('interception maps the supported Codex options without flattening prompt or image arguments', () => {
-  const options = shim().mapCommand('codex', ['exec', '-m', 'test-model', '-c', 'model_reasoning_effort="max"', '-c', 'service_tier=fast',
-    '-C', 'a folder', '--image', 'a b.png', '-i=second.png', '--sandbox', 'read-only', '-o', 'answer.txt', '--', 'Keep "quotes"\nand Unicode 中文'], root);
-  assert.equal(options.model, 'test-model'); assert.equal(options.effort, 'max'); assert.equal(options.fast, true);
-  assert.equal(options.cwd, path.resolve(root, 'a folder')); assert.equal(options.out, path.resolve(root, 'a folder/answer.txt'));
-  assert.deepEqual(options.images, [path.resolve(root, 'a folder/a b.png'), path.resolve(root, 'a folder/second.png')]);
-  assert.equal(options.readOnly, true); assert.equal(options.prompt, 'Keep "quotes"\nand Unicode 中文');
-  assert.equal(shim().mapCommand('codex', ['e', 'the alias'], root).prompt, 'the alias', 'codex e is codex exec');
-});
-
-test('interception maps Claude print mode and distinguishes a positional prompt from stdin', () => {
-  const options = shim().mapCommand('claude', ['--print', '--model=sonnet', '--effort', 'high', '--permission-mode', 'acceptEdits', '--output-format=text', '-'], root);
-  assert.equal(options.model, 'sonnet'); assert.equal(options.readOnly, false); assert.equal(options.prompt, null);
-  assert.equal(shim().mapCommand('claude', ['-p', 'a prompt'], root).prompt, 'a prompt');
-});
-
-test("a call keeps its CLI's default read-only permission and writes only through the explicit write flags", async () => {
-  for (const args of [['exec', 'analyse'], ['exec', '--sandbox', 'read-only', 'analyse'], ['exec', '-s=read-only', 'analyse']]) {
-    const { argv, value } = await dispatched('codex', args);
-    assert.equal(value('--role'), 'investigate', args.join(' ')); assert.ok(argv.includes('--read-only'), args.join(' '));
-  }
-  for (const args of [['exec', '--sandbox', 'workspace-write', 'build'], ['exec', '-s', 'workspace-write', 'build'], ['exec', '--full-auto', 'build']]) {
-    const { argv, value } = await dispatched('codex', args);
-    assert.equal(value('--role'), 'exec', args.join(' ')); assert.equal(argv.includes('--read-only'), false, args.join(' '));
-  }
-  for (const [args, permission, role] of [[['-p', 'analyse'], 'plan', 'investigate'], [['-p', '--permission-mode', 'default', 'analyse'], 'plan', 'investigate'],
-    [['-p', '--permission-mode', 'plan', 'analyse'], 'plan', 'investigate'], [['-p', '--permission-mode=acceptEdits', 'build'], 'acceptEdits', 'exec']]) {
-    const { value } = await dispatched('claude', args);
-    assert.equal(value('--permission'), permission, args.join(' ')); assert.equal(value('--role'), role, args.join(' '));
-  }
-  for (const [agent, args] of [['codex', ['exec', '--sandbox', 'danger-full-access', 'x']], ['codex', ['exec', '--dangerously-bypass-approvals-and-sandbox', 'x']],
-    ['codex', ['exec', '--full-auto', '--sandbox', 'read-only', 'x']], ['claude', ['-p', '--permission-mode', 'bypassPermissions', 'x']],
-    ['claude', ['-p', '--permission-mode', '__proto__', 'x']], ['claude', ['-p', '--dangerously-skip-permissions', 'x']]]) {
-    const { code, argv } = await dispatched(agent, args);
-    assert.equal(code, 2, args.join(' ')); assert.equal(argv, null, `${args.join(' ')} is wider than the helper allows`);
-  }
-});
-
-test('an unsupported option is refused by name with the equivalent command and exit code 2', async () => {
-  for (const [agent, args, option] of [['codex', ['exec', '-m', 'test', '--json', 'prompt'], '--json'],
-    ['claude', ['-p', '--output-format', 'stream-json', 'prompt'], '--output-format'],
-    ['codex', ['exec', '--sandbox', 'danger-full-access', 'prompt'], '--sandbox'],
-    ['codex', ['exec', '-m', 'one', '--model=two', 'prompt'], '--model'],
-    ['codex', ['exec', '-c', 'approval_policy="never"', 'prompt'], '-c'],
-    ['codex', ['-m', 'test', 'exec', 'prompt'], '-m before exec'],
-    ['codex', ['exec', 'resume', '--last'], 'exec resume']]) {
-    const stdout = output(), stderr = output();
-    const code = await shim().intercept([agent, '--', ...args], { env: planner, stdout, stderr, dispatch: () => assert.fail('refused call ran') });
-    assert.equal(code, 2); assert.equal(stdout.text, ''); assert.ok(stderr.text.includes(`not run: ${option} is not supported`), stderr.text);
-    assert.match(stderr.text, /\[dispatch\] not run:.*not supported through the Agentrix dispatcher/);
-    if (['--json', '-m before exec'].includes(option)) assert.match(stderr.text, /\[dispatch\] equivalent: node .*dispatch\.cjs.*codex.*"--model" "test"/);
-  }
-  const stderr = output();
-  assert.equal(await shim().intercept(['codex', '--', 'exec', '--json', '--ephemeral', 'prompt'], { env: planner, stdout: output(), stderr,
-    dispatch: () => assert.fail('unsupported options ran') }), 2);
-  assert.doesNotMatch(stderr.text, /equivalent:/, 'more than one unmappable option has no equivalent command');
-});
 
 test("a call without a planner's depth zero and bootstrap, or with a worker identity, is refused as nested before stdin or dispatch", async () => {
   const cases = [{}, { AGENTRIX_DISPATCH_DEPTH: '0' }, { AGENTRIX_BOOTSTRAP: 'b.json' }, ...['1', '2', '-1', '', ' 0', 'invalid'].map(depth => ({ ...planner, AGENTRIX_DISPATCH_DEPTH: depth })),
@@ -108,7 +50,7 @@ test("a call without a planner's depth zero and bootstrap, or with a worker iden
     const stderr = output();
     assert.equal(await shim().intercept([agent, '--', ...args], { env, stdout: output(), stderr, readInput: () => assert.fail('nested call read stdin'),
       dispatch: () => assert.fail('nested call ran'), locate: () => assert.fail('nested call looked for a CLI') }), 2, JSON.stringify(env));
-    assert.match(stderr.text, /dispatch\.intercept_nested/); assert.match(stderr.text, new RegExp(`delegate ${agent}`));
+    assert.match(stderr.text, /a role cannot start another role/);
   }
 });
 
@@ -145,54 +87,38 @@ test("at depth zero a call that is not a delegation runs the real CLI with this 
     stdout: output(), stderr: output(), locate: async () => process.execPath }), 5);
 });
 
-test('piped input joins a prompt argument as each CLI joins it', async () => {
-  const brief = async (agent, args, piped) => {
-    let text = null, asked;
-    await shim().intercept([agent, '--', ...args], { env: planner, stdout: output(), stderr: output(), readInput: async options => { asked = options; return piped; },
-      dispatch: async argv => { text = fs.readFileSync(argv[argv.indexOf('--brief') + 1], 'utf8'); return 1; } });
-    return { text, asked };
+test('native mode runs a delegation on the real CLI; conductor mode refuses it and gives an interactive lead the role tools', async t => {
+  const runs = [], launch = (file, args, options) => {
+    const child = new EventEmitter(); runs.push({ file, args, options });
+    queueMicrotask(() => child.emit('exit', 0, null));
+    return child;
   };
-  assert.equal((await brief('codex', ['exec', 'analyse this'], 'log line\n')).text, 'analyse this\n\n<stdin>\nlog line\n</stdin>');
-  assert.equal((await brief('codex', ['exec', 'analyse this'], 'no newline')).text, 'analyse this\n\n<stdin>\nno newline\n</stdin>');
-  assert.equal((await brief('codex', ['exec', 'analyse this'], '')).text, 'analyse this');
-  assert.equal((await brief('codex', ['exec', '-'], 'the whole brief')).text, 'the whole brief');
-  const claude = await brief('claude', ['-p', 'analyse this'], 'log line\n');
-  assert.equal(claude.text, 'analyse this\nlog line\n'); assert.deepEqual(claude.asked, { wait: 3000 }, 'Claude Code waits 3 s for a first piped byte');
-  assert.equal((await brief('claude', ['-p', 'analyse this'], '')).text, 'analyse this');
-  assert.deepEqual((await brief('claude', ['-p'], 'only piped')).asked, {});
-});
-
-test('a rerouted stdin call uses the helper, declares intercepted, and prints only its final message', async t => {
-  const cwd = temporary(t), stdout = output(), stderr = output(); let called = 0;
-  const code = await shim().intercept(['codex', '--', 'exec', '-m', 'test', '-o', 'answer.txt', '-'], {
-    cwd, env: { ...planner, AGENTRIX_LEAD_MODE: 'forged' }, stdout, stderr, readInput: async () => 'line one\nline two',
-    dispatch: async (argv, deps) => {
-      called++; assert.equal(deps.source, 'intercepted'); assert.equal(deps.stdout, stderr);
-      assert.equal(argv[0], 'codex'); const value = flag => argv[argv.indexOf(flag) + 1];
-      assert.equal(fs.readFileSync(value('--brief'), 'utf8'), 'line one\nline two');
-      assert.equal(value('--cwd'), cwd); assert.equal(argv.includes('--allow'), false);
-      deps.stdout.write('[dispatch] started synthetic\n'); fs.writeFileSync(value('--out'), 'Only the final answer.\n'); return 0;
-    },
-  });
-  assert.equal(code, 0); assert.equal(called, 1); assert.equal(stdout.text, 'Only the final answer.\n');
-  assert.equal(fs.readFileSync(path.join(cwd, 'answer.txt'), 'utf8'), stdout.text);
-  assert.match(stderr.text, /started synthetic/);
-  assert.deepEqual(fs.readdirSync(cwd), ['answer.txt'], 'private brief, log and result files are cleaned');
-});
-
-test("helper failures become exit one and cannot mix dispatch reports into stdout; a failed cleanup keeps a printed answer's exit zero", async t => {
-  const stdout = output(), stderr = output();
-  assert.equal(await shim().intercept(['claude', '--', '-p', 'prompt'], { cwd: temporary(t), env: planner, stdout, stderr, readInput: async () => '',
-    dispatch: async (_argv, deps) => { deps.stdout.write('[dispatch] failed to start synthetic\n'); return 37; } }), 1);
-  assert.equal(stdout.text, ''); assert.match(stderr.text, /failed to start/);
-  const answered = output(), reports = output(), remove = fs.rmSync;
-  t.mock.method(fs, 'rmSync', (folder, options) => {
-    if (path.basename(folder).startsWith('agentrix-intercept-')) { remove(folder, options); throw Object.assign(new Error('busy'), { code: 'EBUSY' }); }
-    return remove(folder, options);
-  });
-  assert.equal(await shim().intercept(['claude', '--', '-p', 'prompt'], { env: planner, stdout: answered, stderr: reports, readInput: async () => '',
-    dispatch: async argv => { fs.writeFileSync(argv[argv.indexOf('--out') + 1], 'The answer.\n'); return 0; } }), 0);
-  assert.equal(answered.text, 'The answer.\n'); assert.match(reports.text, /intercept cleanup failed/);
+  const locate = async agent => `real-${agent}`, folder = temporary(t);
+  const env = mode => ({ ...planner, AGENTRIX_BOOTSTRAP: sessionBootstrap(folder, { conductor: mode === 'conductor' }).file, AGENTRIX_SHIM_NODE: 'node' });
+  for (const [agent, args] of [['codex', ['exec', 'analyse']], ['claude', ['-p', 'analyse']]]) {
+    runs.length = 0;
+    assert.equal(await shim().intercept([agent, '--', ...args], { env: env('native'), cwd: root, stderr: output(), locate, launch }), 0);
+    assert.deepEqual(runs.map(run => [run.file, run.args]), [[`real-${agent}`, args]], 'native mode is the plain CLI');
+    runs.length = 0;
+    const stderr = output();
+    assert.equal(await shim().intercept([agent, '--', ...args], { env: env('conductor'), cwd: root, stderr, locate, launch }), 2);
+    assert.equal(runs.length, 0); assert.match(stderr.text, /not run: in conductor mode a role starts with the start_role tool/);
+  }
+  runs.length = 0;
+  await shim().intercept(['claude', '--', '--resume'], { env: env('conductor'), cwd: root, stderr: output(), locate, launch });
+  const [flag, config, ...rest] = runs[0].args;
+  assert.equal(flag, '--mcp-config'); assert.deepEqual(rest, ['--resume']);
+  const server = JSON.parse(config).mcpServers.agentrix;
+  assert.deepEqual([server.command, server.args.at(-1), server.env.ELECTRON_RUN_AS_NODE], ['node', 'mcp', '1']);
+  assert.ok(server.env.AGENTRIX_BOOTSTRAP, 'the tool server reads the session');
+  runs.length = 0;
+  await shim().intercept(['codex', '--', 'resume', '--last'], { env: env('conductor'), cwd: root, stderr: output(), locate, launch });
+  assert.deepEqual(runs[0].args.filter((_, index) => index % 2 === 0).slice(0, 3), ['-c', '-c', '-c']);
+  assert.match(runs[0].args[1], /^mcp_servers\.agentrix\.command="node"$/);
+  assert.deepEqual(runs[0].args.slice(-2), ['resume', '--last']);
+  runs.length = 0;
+  await shim().intercept(['codex', '--', 'resume', '--last'], { env: env('native'), cwd: root, stderr: output(), locate, launch });
+  assert.deepEqual(runs[0].args, ['resume', '--last'], 'native mode adds no tools');
 });
 
 test('withShims preserves the caller environment and sets one PATH, depth and opaque run identity', () => {
@@ -234,7 +160,7 @@ for (const kind of ['bash', 'zsh']) test(`G13: through a real ${kind} login shel
   fs.mkdirSync(home); fs.mkdirSync(standin);
   for (const agent of ['codex', 'claude']) fs.writeFileSync(path.join(standin, agent), `#!/bin/sh\necho "STAND-IN ${agent} $*"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(home, kind === 'bash' ? '.bash_profile' : '.zprofile'), `export PATH="${posix(standin)}:$PATH"\n`);
-  const owner = isolatedEnvironment(home), bootstrap = sessionBootstrap(folder).file;
+  const owner = isolatedEnvironment(home), bootstrap = sessionBootstrap(folder, { conductor: true }).file;
   for (const name of Object.keys(owner)) if (name.toUpperCase() === 'PATH') delete owner[name];
   owner.PATH = systemPath(standin);
   const plannerEnv = shim().withShims({ ...owner, AGENTRIX_BOOTSTRAP: bootstrap }, { depth: 0 });
@@ -245,13 +171,13 @@ for (const kind of ['bash', 'zsh']) test(`G13: through a real ${kind} login shel
     assert.ok(inStandIn(where(owner), folder), where(owner)); assert.ok(inShims(where(plannerEnv)), where(plannerEnv));
     const inside = run(plannerEnv, call);
     assert.equal(inside.status, 2, `${agent}: ${inside.stdout}${inside.stderr}`); assert.equal(inside.stdout, '');
-    assert.match(inside.stderr, new RegExp(`not run: ${option} is not supported through the Agentrix dispatcher`));
+    assert.match(inside.stderr, /not run: in conductor mode a role starts with the start_role tool/, option);
     const outside = run(owner, call);
     assert.equal(outside.status, 0, outside.stderr); assert.match(outside.stdout, new RegExp(`^STAND-IN ${agent} `));
   }
   // Claude Code's Bash tool: the snapshot's PATH, then CLAUDE_ENV_FILE's text, then the command.
   const tool = run(plannerEnv, `export PATH="${posix(standin)}:$PATH" && ${fs.readFileSync(plannerEnv.CLAUDE_ENV_FILE, 'utf8').trim()}\n: && claude -p --output-format json "x"`, false);
-  assert.equal(tool.status, 2, tool.stdout + tool.stderr); assert.match(tool.stderr, /not run: --output-format is not supported/);
+  assert.equal(tool.status, 2, tool.stdout + tool.stderr); assert.match(tool.stderr, /not run: in conductor mode a role starts with the start_role tool/);
 });
 
 test('bootstrap names the executable shim folder for terminal and native owner sessions', t => {
@@ -437,7 +363,7 @@ test("an owner's ! command in a native Codex session runs the real CLI: the line
   const owner = isolatedEnvironment(home);
   for (const name of Object.keys(owner)) if (name.toUpperCase() === 'PATH') delete owner[name];
   owner.PATH = systemPath(standin); owner.BASH_ENV = posix(user);
-  const planner = shim().withShims({ ...owner, AGENTRIX_BOOTSTRAP: sessionBootstrap(folder).file }, { depth: 0 });
+  const planner = shim().withShims({ ...owner, AGENTRIX_BOOTSTRAP: sessionBootstrap(folder, { conductor: true }).file }, { depth: 0 });
   assert.ok(shells().length, 'a shell to run the owner command in');
   for (const shell of shells()) {
     const powershell = shell.kind === 'powershell', kind = powershell ? 'powershell' : 'posix';
@@ -459,7 +385,7 @@ test("an owner's ! command in a native Codex session runs the real CLI: the line
     }
     const planned = shell.run(typed, planner, folder);
     // Without the line the same text is a planner's call: the shim refuses it and no stand-in runs.
-    assert.doesNotMatch(planned.stdout, /STAND-IN/, shell.kind); assert.match(planned.stderr, /not run: --output-format is not supported/, shell.kind);
+    assert.doesNotMatch(planned.stdout, /STAND-IN/, shell.kind); assert.match(planned.stderr, /not run: in conductor mode a role starts with the start_role tool/, shell.kind);
   }
   assert.equal(ownerShellCommand('claude -p x', { PATH: 'tools' }, 'posix'), 'claude -p x', 'a session without shims runs the text as typed');
 });

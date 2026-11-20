@@ -5,7 +5,7 @@ trigger: always
 when: 每个任务开始前
 requires: any-agent
 title: 模型路由
-summary: 指挥家模式下，总指挥只规划和调度，把任务交给产品、架构、设计、开发、审查、测试、研究、运维和安全角色完成，执行期间随时回答你并汇报各角色进度。
+summary: 指挥家模式下，总指挥只规划和调度，任务交给产品、架构、设计、开发、审查、测试、研究、运维和安全角色完成。角色执行期间，总指挥随时回答你并汇报各角色进度。
 seats: orchestrator, product, architect, designer, developer, reviewer, qa, researcher, devops, security
 library: frontend, backend, desktop, database, ai, docs, performance, a11y
 authors: developer, frontend, backend, desktop, database, ai, performance
@@ -47,11 +47,11 @@ settings; a table delivered when the session started can be older than the file,
 | product | Product | Requirements and planning: requirement analysis, feature definition, priorities | PRD, acceptance criteria | opus · high | start_role seat product, or Agent call, model "opus", effort "high", description starts with [product] |
 | architect | Architect | System architecture: architecture design, technology choices, module split | Design document, interface specification | opus · high | start_role seat architect, or Agent call, model "opus", effort "high", description starts with [architect] |
 | designer | Designer | Interaction and visuals: user experience, interaction, visual design | Interface specification, page mockups | sonnet · high | start_role seat designer, or Agent call, model "sonnet", effort "high", description starts with [designer] |
-| developer | Developer | Coding and implementation: code, features, bug fixes | Code changes, modules | gpt-6.1-sol · high · fast | start_role seat developer; specialties: seat developer/<frontend or backend or desktop or database or ai> |
+| developer | Developer | Coding and implementation: code, features, bug fixes | Code changes, modules | gpt-6.2-sol · high · fast | start_role seat developer; specialties: seat developer/<frontend or backend or desktop or database or ai> |
 | reviewer | Reviewer | Independent review: code and quality review | Review findings, risk report | opus · high | start_role seat reviewer, or Agent call, model "opus", effort "high", description starts with [reviewer] |
 | qa | QA / Tester | Testing and verification: test cases, automation, regression, screenshot acceptance | Test report | sonnet · high | start_role seat qa, or Agent call, model "sonnet", effort "high", description starts with [qa] |
 | researcher | Researcher | Technical research: investigation, option comparison, lookups | Research report | sonnet · high | start_role seat researcher, or Agent call, model "sonnet", effort "high", description starts with [researcher] |
-| devops | DevOps | Build and delivery: build, environments, deployment, rollback | Build artifacts, deployment report | gpt-6.1-sol · high · fast | start_role seat devops |
+| devops | DevOps | Build and delivery: build, environments, deployment, rollback | Build artifacts, deployment report | gpt-6.2-sol · high · fast | start_role seat devops |
 | security | Security | Security and permissions: permissions, dependency vulnerabilities, security audit | Security report | opus · high | start_role seat security, or Agent call, model "opus", effort "high", description starts with [security] |
 <!-- /agentrix:team -->
 

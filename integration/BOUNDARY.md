@@ -17,6 +17,7 @@ SSH applies seat sidecar updates in channel order. A failed update leaves the pr
 ## Owns
 - `integration/dispatch.cjs`
 - `integration/dispatch-outbox.cjs`
+- `integration/role-tools.cjs`
 - `integration/agent-event.cjs`
 - `electron/features/agents/dispatch-events.cjs`
 - `electron/features/agents/dispatch-intake.cjs`

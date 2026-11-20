@@ -378,7 +378,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "a2a397a1ccc19d0d4fda9f4f020d51306deeb00c8b9d9411d476cf8ede75eec6",
+      "digest": "73bdea47fa7456cc2f84667c340c7c7942fcea2f841fcec13e44b32d9b42cc81",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -423,7 +423,7 @@
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "electron/features/lab/session.cjs": {
-      "digest": "9f8d0a9780d4e702eb417ab3850305296ad934afa4e87bcf266efa2b37dc802d",
+      "digest": "33836be80376c230063a1a1c7c0d43acffdc147b9810b1d373b763eefb9d7cd8",
       "targets": [
         "integration/shims/intercept.cjs",
         "integration/dispatch.cjs"
@@ -431,7 +431,7 @@
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "042fdd2eea95fa458226e0ef768f5a2959899336ae2f845afc95147225aad7bd",
+      "digest": "dab06ddf55f20dffc8e9035abb388370383523d481f0efef095a807cda5e2976",
       "targets": [
         "integration/dispatch.cjs"
       ],
@@ -443,6 +443,13 @@
         "integration/shims/intercept.cjs"
       ],
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
+    },
+    "integration/role-tools.cjs": {
+      "digest": "910bb072f0740653ddf94e6b25965a22fa3ee4ce9fcd1bf7a564b427403448ea",
+      "targets": [
+        "electron/features/agents/call-seat.cjs"
+      ],
+      "reason": "The role tools load the carried call-seat module beside the source or packaged engine, as dispatch.cjs does."
     }
   },
   "unresolvedImports": {

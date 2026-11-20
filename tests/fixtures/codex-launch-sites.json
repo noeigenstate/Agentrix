@@ -412,10 +412,6 @@
     "id": "integration/dispatch.cjs:e344f5c4081416c1f948c63d"
   },
   {
-    "text": "run(args, { ...deps, launch, resolveExecutable, locate, locateClaude: findClaude, startTimeout, rateInterval, requestTimeout })",
-    "id": "integration/dispatch.cjs:3a415e86a410071d1b452c5f"
-  },
-  {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",
     "id": "integration/dispatch.cjs:53d0f87c7ad1d1759cf0cb2c"
   },
@@ -520,12 +516,8 @@
     "id": "integration/shims/intercept.cjs:ed652fa68a572023f96c2fe3"
   },
   {
-    "text": "stderr.write(`[dispatch] not run: dispatch.intercept_nested\\n[dispatch] request: node ${JSON.stringify(helperPath())} delegate ${agent === 'claude' ? 'claude' : 'codex'} --title <one-line> --model <model> --brief <file> --out <file>\\n`)",
-    "id": "integration/shims/intercept.cjs:09bd1b90ba05c509362d2654"
-  },
-  {
-    "text": "run(helperArguments(options, brief, out), { env, stdout: stderr, source: 'intercepted' })",
-    "id": "integration/shims/intercept.cjs:b91b23fdbaf04e42a3317869"
+    "text": "stderr.write('[agentrix] not run: in conductor mode a role starts with the start_role tool, not with codex or claude from the shell\\n')",
+    "id": "integration/shims/intercept.cjs:95cbe4e67d000ee4c67a4da6"
   },
   {
     "text": "run()",

@@ -37,7 +37,8 @@ function writeSeatSnapshot(file, seats) {
 const updateDispatchSeats = (file, seats) => writeSeatSnapshot(file + '.seats', seats);
 const updateDispatchLaunchSeats = (file, seats) => writeSeatSnapshot(file + '.launch-seats', seats);
 
-function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, dispatchSeats, ...terminal }) {
+function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey, controlAddress, controlCapability, lead, dispatchSeats, conductor = false, ...terminal }) {
+  updateBootstrapMode(file, conductor);
   fs.rmSync(file + '.background.json', { force: true });
   const pipeName = process.platform === 'win32' ? eventServer.name : eventServer.address;
   const packaged = process.resourcesPath && path.join(process.resourcesPath, 'integration');

@@ -30,39 +30,39 @@
         ],
         "product": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [product]"
+          "start_role seat product, or Agent call, model \"opus\", effort \"high\", description starts with [product]"
         ],
         "architect": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [architect]"
+          "start_role seat architect, or Agent call, model \"opus\", effort \"high\", description starts with [architect]"
         ],
         "designer": [
           "sonnet · high",
-          "Agent call, model \"sonnet\", effort \"high\", description starts with [designer]"
+          "start_role seat designer, or Agent call, model \"sonnet\", effort \"high\", description starts with [designer]"
         ],
         "developer": [
           "gpt-6.2-sol · high · fast",
-          "helper codex --seat developer --model gpt-6.2-sol --effort high --fast --detach, then wait; specialties: --seat developer/<frontend or backend or desktop or database or ai>"
+          "start_role seat developer; specialties: seat developer/<frontend or backend or desktop or database or ai>"
         ],
         "reviewer": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [reviewer]"
+          "start_role seat reviewer, or Agent call, model \"opus\", effort \"high\", description starts with [reviewer]"
         ],
         "qa": [
           "sonnet · high",
-          "Agent call, model \"sonnet\", effort \"high\", description starts with [qa]"
+          "start_role seat qa, or Agent call, model \"sonnet\", effort \"high\", description starts with [qa]"
         ],
         "researcher": [
           "haiku · high",
-          "Agent call, model \"haiku\", effort \"high\", description starts with [researcher]"
+          "start_role seat researcher, or Agent call, model \"haiku\", effort \"high\", description starts with [researcher]"
         ],
         "devops": [
           "gpt-6.2-sol · high · fast",
-          "helper codex --seat devops --model gpt-6.2-sol --effort high --fast --detach, then wait"
+          "start_role seat devops"
         ],
         "security": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [security]"
+          "start_role seat security, or Agent call, model \"opus\", effort \"high\", description starts with [security]"
         ]
       }
     },
@@ -86,39 +86,39 @@
         ],
         "product": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [product]"
+          "start_role seat product, or Agent call, model \"opus\", effort \"high\", description starts with [product]"
         ],
         "architect": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [architect]"
+          "start_role seat architect, or Agent call, model \"opus\", effort \"high\", description starts with [architect]"
         ],
         "designer": [
           "opus · medium",
-          "Agent call, model \"opus\", effort \"medium\", description starts with [designer]"
+          "start_role seat designer, or Agent call, model \"opus\", effort \"medium\", description starts with [designer]"
         ],
         "developer": [
           "gpt-6.2-sol · high · fast",
-          "helper codex --seat developer --model gpt-6.2-sol --effort high --fast --detach, then wait; specialties: --seat developer/<frontend or backend or desktop or database or ai>"
+          "start_role seat developer; specialties: seat developer/<frontend or backend or desktop or database or ai>"
         ],
         "reviewer": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [reviewer]"
+          "start_role seat reviewer, or Agent call, model \"opus\", effort \"high\", description starts with [reviewer]"
         ],
         "qa": [
           "sonnet · high",
-          "Agent call, model \"sonnet\", effort \"high\", description starts with [qa]"
+          "start_role seat qa, or Agent call, model \"sonnet\", effort \"high\", description starts with [qa]"
         ],
         "researcher": [
           "haiku · high",
-          "Agent call, model \"haiku\", effort \"high\", description starts with [researcher]"
+          "start_role seat researcher, or Agent call, model \"haiku\", effort \"high\", description starts with [researcher]"
         ],
         "devops": [
           "gpt-6.2-sol · high · fast",
-          "helper codex --seat devops --model gpt-6.2-sol --effort high --fast --detach, then wait"
+          "start_role seat devops"
         ],
         "security": [
           "opus · high",
-          "Agent call, model \"opus\", effort \"high\", description starts with [security]"
+          "start_role seat security, or Agent call, model \"opus\", effort \"high\", description starts with [security]"
         ]
       }
     },
@@ -143,39 +143,39 @@
         ],
         "product": [
           "opus · high",
-          "helper claude --seat product --model opus --effort high --detach, then wait"
+          "start_role seat product"
         ],
         "architect": [
           "opus · high",
-          "helper claude --seat architect --model opus --effort high --detach, then wait"
+          "start_role seat architect"
         ],
         "designer": [
           "sonnet · high",
-          "helper claude --seat designer --model sonnet --effort high --detach, then wait"
+          "start_role seat designer"
         ],
         "developer": [
           "gpt-6.2-sol · high · fast",
-          "helper codex --seat developer --model gpt-6.2-sol --effort high --fast --detach, then wait; specialties: --seat developer/<frontend or backend or desktop or database or ai>"
+          "start_role seat developer; specialties: seat developer/<frontend or backend or desktop or database or ai>"
         ],
         "reviewer": [
           "opus · high",
-          "helper claude --seat reviewer --model opus --effort high --detach, then wait"
+          "start_role seat reviewer"
         ],
         "qa": [
           "sonnet · high",
-          "helper claude --seat qa --model sonnet --effort high --detach, then wait"
+          "start_role seat qa"
         ],
         "researcher": [
           "haiku · high",
-          "helper claude --seat researcher --model haiku --effort high --detach, then wait"
+          "start_role seat researcher"
         ],
         "devops": [
           "gpt-6.2-sol · high · fast",
-          "helper codex --seat devops --model gpt-6.2-sol --effort high --fast --detach, then wait"
+          "start_role seat devops"
         ],
         "security": [
           "opus · high",
-          "helper claude --seat security --model opus --effort high --detach, then wait"
+          "start_role seat security"
         ]
       }
     }

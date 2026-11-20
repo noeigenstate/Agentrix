@@ -72,9 +72,9 @@ test('newest numeric Sol defaults do not rewrite choices; rendering degrades uns
   const text = '<!-- agentrix:team -->\n| developer | Developer | Implementation | Code | Opus | Agent |\n<!-- /agentrix:team -->';
   const roles = [{ id: 'orchestrator' }, { id: 'developer' }], installed = { claude: true };
   const render = (model, fast = false) => renderRoutingSkill(text, { roles, map: { developer: { model, effort: 'high', fast } }, leadAgent: 'claude', installed, catalog: models });
-  assert.match(render('claude-opus-5-5', true), /helper claude --seat developer --model claude-opus-5-5 --effort high --fast --detach, then wait/);
+  assert.match(render('claude-opus-5-5', true), /\| claude-opus-5-5 · high · fast \| start_role seat developer;/);
   assert.match(render('claude-opus-5-5'), /Agent call, model "opus", effort "high"/);
-  assert.match(render('claude-opus-5-4'), /helper claude --seat developer --model claude-opus-5-4 /);
+  assert.match(render('claude-opus-5-4'), /\| claude-opus-5-4 · high \| start_role seat developer/);
 });
 
 test('the shared seat rank rule matches the model rank fixture', () => {

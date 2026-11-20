@@ -80,7 +80,7 @@ test('routing saves validate atomically and project files are independent of the
     [{ unknown: seat('opus') }, 'invalid-role'], [{ developer: seat('bad;id') }, 'invalid-model'],
     [{ developer: { model: 'gpt-6.1-sol', effort: 'max' } }, 'invalid-effort'],
     [{ designer: { ...seat('sonnet'), fast: true } }, 'fast-not-allowed'],
-    [{ orchestrator: { enabled: false } }, 'lead-locked'], [{ reviewer: seat('gpt-6.1-sol') }, 'reviewer-same-model'],
+    [{ orchestrator: { enabled: false } }, 'lead-locked'],
   ]) {
     const result = store.setRouting('template', null, routing(roles), null);
     assert.equal(result.ok, false); assert.equal(result.code, code); assert.deepEqual(store.seatsInfo().template, routing());
@@ -191,18 +191,17 @@ test('pending routing retains accepted settings and freezes launched roles throu
   assert.equal(store.seatsInfo(id).routing.layer, 'template');
 });
 
-test('worker seats go live while the running lead stays pinned', t => {
+test('worker and lead seats go live in the running conversation', t => {
   const { store, projects } = fixture(t), [project] = projects, id = project.id;
   store.seatSession = () => ({ projectId: id, sessionId: 'running' });
   const first = store.delivery(project, false, 'running', { agent: 'claude', started: true });
   const before = store.seatsInfo(id, 'terminal');
   const live = routing({ orchestrator: { model: 'sonnet', effort: 'medium' }, designer: { model: 'haiku', effort: 'low' },
     'x-mobile': { from: 'frontend', name: 'Mobile', duty: 'Build the app' } });
-  assert.equal(before.leadPending, null);
   assert.deepEqual(store.setRouting('project', id, live, null), { ok: true });
   const saved = store.seatsInfo(id, 'terminal');
-  assert.deepEqual(saved.current.orchestrator, before.current.orchestrator);
-  assert.deepEqual(saved.leadPending, { model: 'sonnet', effort: 'medium', fast: false });
+  assert.notDeepEqual(saved.current.orchestrator, before.current.orchestrator);
+  assert.deepEqual([saved.current.orchestrator.model, saved.current.orchestrator.effort], ['sonnet', 'medium']);
   assert.deepEqual(saved.current.designer, saved.effective.designer);
   assert.equal(saved.currentRoles.find(role => role.id === 'x-mobile')?.name, 'Mobile');
   assert.deepEqual(store.delivery(project, false, 'running', { agent: 'claude', started: true }).rendered, first.rendered);
@@ -213,13 +212,12 @@ test('worker seats go live while the running lead stays pinned', t => {
   assert.equal(store.dispatchSeats(id).designer.model, 'haiku');
   assert.deepEqual(store.resolveRouting(id, 'apply', pending.routing.digest), { ok: true });
   assert.equal(store.dispatchSeats(id).designer.model, 'opus');
-  assert.equal(store.seatsInfo(id, 'terminal').leadPending, null);
   fs.writeFileSync(routeFile(project), '{broken');
   assert.equal(store.seatsInfo(id, 'terminal').routing.state, 'invalid');
   assert.equal(store.dispatchSeats(id).designer.model, 'opus');
 });
 
-test('the lead restart marker uses the running family and supported launch effort', t => {
+test('the running lead takes the saved seat in its own family with a supported effort', t => {
   const { store, projects: [project] } = fixture(t), id = project.id;
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
   let efforts = ['low', 'high'];
@@ -229,13 +227,14 @@ test('the lead restart marker uses the running family and supported launch effor
   store.delivery(project, false, sessionId, { agent: 'claude', started: true });
   const info = () => store.seatsInfo(id, 'terminal');
   const save = orchestrator => store.setRouting('project', id, routing({ orchestrator }), info().routing.digest ?? null);
+  const lead = () => { const { model, effort } = info().current.orchestrator; return [model, effort]; };
   assert.deepEqual(save(seat('gpt-6.2-sol')), { ok: true });
-  assert.equal(info().leadPending, null);
+  assert.notEqual(lead()[0], 'gpt-6.2-sol', 'a Claude conversation keeps a Claude lead');
   assert.deepEqual(save({ model: 'claude-sonnet-5-5', effort: 'high' }), { ok: true });
   efforts = ['low'];
-  assert.deepEqual(info().leadPending, { model: 'claude-sonnet-5-5', effort: 'low', fast: false });
+  assert.deepEqual(lead(), ['claude-sonnet-5-5', 'low']);
   store.delivery(project, false, sessionId = 'two', { agent: 'claude', started: true });
-  assert.equal(info().leadPending, null);
+  assert.deepEqual(lead(), ['claude-sonnet-5-5', 'low']);
 });
 
 test('the routing save IPC returns after active session updates settle', async t => {
@@ -324,7 +323,7 @@ test('a hostile fixture reports every review flag and full role text without app
   const { routing: source, roles } = store.seatsInfo(project.id, null, true);
   assert.equal(source.state, 'pending');
   assert.deepEqual(new Set(source.review.flags.map(flag => flag.code)), new Set([
-    'expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'verification-weakened', 'custom-text',
+    'expensive-model', 'fast-on', 'high-effort', 'unlisted-model', 'custom-text',
   ]));
   assert.equal(source.review.config.roles['x-worker'].duty, duty);
   assert.equal(source.review.config.roles['x-worker'].outputs, 'Complete report');
@@ -480,7 +479,8 @@ for (const selected of [false, true]) test(`seat delivery stays frozen through c
   const { sessionContext } = require('../electron/features/skills/session.cjs');
   const skill = 'builtin:model-routing';
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
-  if (selected) assert.deepEqual(store.setRouting('template', null, routing({ researcher: seat('haiku') }), null), { ok: true });
+  const conductor = roles => ({ ...routing(roles), conductor: true });
+  assert.deepEqual(store.setRouting('template', null, conductor(selected ? { researcher: seat('haiku') } : {}), null), { ok: true });
   const choices = structuredClone(store.seatsInfo(project.id).template);
   const launch = store.delivery(project, false, 'frozen-catalog-session', { agent: 'claude', started: true });
   const note = startupNote('Read.', null, null, launch), original = launch.rendered[skill];
@@ -689,8 +689,11 @@ test('SSH bundle contains only enabled built-in/global files, never project skil
   await store.save(null, draft('global')); await store.save(null, draft('local-only', 'project', 'p1'));
   await store.save(null, draft('off')); store.setOptions('user:off', { enabled: false });
   put(path.join(path.dirname(store.entry('user:global').path), 'templates/example.md'), 'Remote template.');
+  assert.deepEqual(store.delivery(projects[2], true).bundle.files.map(s => s.id), ['user:global'], 'native mode sends no routing');
+  assert.deepEqual(store.setRouting('template', null, { roles: {}, conductor: true }, null), { ok: true });
   const delivery = store.delivery(projects[2], true), note = startupNote('Read.', '{AGENTRIX_HANDOFF}', null, delivery);
   assert.deepEqual(delivery.bundle.files.map(s => s.id), ['builtin:model-routing', 'user:global']);
+  assert.match(note, /conductor mode/);
   assert.ok(delivery.bundle.files.every(file => !('assets' in file)));
   assert.match(note, /read-only reference copies/);
   assert.doesNotMatch(note, /may update it in place|propose edits only/);

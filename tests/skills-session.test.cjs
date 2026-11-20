@@ -84,13 +84,14 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   f.store.getModels = () => shared.catalog; f.store.refresh();
   f.store.seatSession = id => ['terminal', 'next-terminal'].includes(id) ? { projectId: f.project.id, sessionId: id === 'terminal' ? 'running' : 'next' } : null;
   const choice = model => ({ model, effort: 'high' });
+  assert.deepEqual(f.store.setRouting('template', null, { roles: {}, conductor: true }, null), { ok: true });
   const original = f.note('running'), launch = f.delivery('running'), launchBytes = fs.readFileSync(launch.sessionManifest, 'utf8');
   assert.equal(launch.rendered[skill].path, file, 'the default fixture reproduces shipped bytes and path');
   assert.equal(launch.rendered[skill].text, fs.readFileSync(file, 'utf8'));
   const instructions = fs.readFileSync(launch.sessionManifest, 'utf8');
   const allText = launch.skills.filter(item => item.enabled).map(item => [item.id, f.store.entry(item.id).text]);
   assert.equal(launch.fingerprint, digest(JSON.stringify([instructions, allText])));
-  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('haiku') } }, null), { ok: true });
+  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, conductor: true }, null), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.researcher.model, 'haiku');
   assert.equal(f.store.seatsInfo(null, 'terminal').current.researcher.model, 'haiku');
   assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
@@ -102,7 +103,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   const nextNote = f.note('next'), next = f.delivery('next');
   const rendered = next.rendered[skill];
   assert.match(rendered.path.replace(/\\/g, '/'), /skill-delivery\/rendered\/[a-f0-9]{32}\/model-routing\/SKILL\.md$/);
-  assert.match(fs.readFileSync(rendered.path, 'utf8'), /\| researcher \|.*\| haiku · high \| Agent call/);
+  assert.match(fs.readFileSync(rendered.path, 'utf8'), /\| researcher \|.*\| haiku · high \| start_role seat researcher, or Agent call/);
   const expired = new Date(Date.now() - 31 * 86400000);
   fs.utimesSync(rendered.path, expired, expired);
   assert.equal(f.delivery('reuse').rendered[skill].path, rendered.path);
@@ -110,7 +111,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   assert.ok(fs.statSync(rendered.path).mtimeMs > expired.getTime(), 'reusing a rendered skill renews its retention');
   assert.notEqual(next.fingerprint, launch.fingerprint);
   const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
-  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') } }, null), { ok: true });
+  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') }, conductor: true }, null), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'opus');
   for (const source of ['compact', 'clear']) {
     const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
@@ -124,7 +125,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   const remoteFirst = bundle('remote-first');
   assert.match(remoteFirst.files.find(item => item.id === skill).text, /\| researcher \|.*\| opus · high \|/);
   assert.match(remoteFirst.instructions, /\{AGENTRIX_SKILLS\}\/builtin\/model-routing\/SKILL\.md/);
-  f.store.setRouting('template', null, { roles: { researcher: choice('haiku') } }, null);
+  f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, conductor: true }, null);
   assert.notEqual(bundle('remote-next').key, remoteFirst.key);
 
   const reopened = new SkillsStore({ dataDir: f.root, builtinDir: f.store.builtinDir, getProjects: () => [f.project], getAgents: f.store.getAgents });
@@ -298,8 +299,7 @@ test('routing discards first-run claims while other built-ins keep them through 
       store.endSession(current.id, `${launchId}-shell`);
       const launch = store.delivery(current, false, launchId, { agent: 'claude', started: true });
       for (const id of [code, ui]) assert.equal(launch.skills.find(skill => skill.id === id).firstRun, false, id);
-      const skill = launch.skills.find(skill => skill.id === routing);
-      assert.deepEqual([skill.enabled, skill.trigger, skill.firstRun], [true, 'always', undefined]);
+      assert.equal(launch.skills.some(skill => skill.id === routing), false, 'native mode sends no routing, so it claims no first run');
       const note = startupNote('Read.', null, null, launch);
       assert.doesNotMatch(note, /this is its first run in this project/);
       const instructions = readDelivery(note).instructions;

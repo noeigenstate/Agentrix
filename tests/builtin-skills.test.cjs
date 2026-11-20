@@ -62,7 +62,7 @@ test('routing renderer moves enabled library roles into the team and frames cust
   const table = rendered.split('<!-- agentrix:team -->')[1].split('<!-- /agentrix:team -->')[0];
   const library = rendered.split('<!-- agentrix:library -->')[1].split('<!-- /agentrix:library -->')[0];
   assert.match(table, /Rows marked \(project role\) were written in this project\./);
-  assert.match(table, /specialties: --seat frontend/);
+  assert.match(table, /specialties: seat frontend/);
   assert.match(table, /\| frontend \| Frontend .+\r?\n\| x-mobile \| Mobile \(project role, based on Frontend\) \| Verify builds \| Build notes \|/);
   assert.doesNotMatch(table, /\| qa \|/);
   assert.doesNotMatch(library, /\| frontend \|/);
@@ -483,12 +483,11 @@ for (const trigger of ['always', 'first-open']) test(`simultaneous launches clai
   assert.doesNotMatch(fs.readFileSync(first.skillNoteFile, 'utf8'), /this is its first run/);
 });
 
-test('built-in routing runs before every task without claiming a first run', t => {
+test('built-in routing stays out of a native-mode session and never claims a first run', t => {
   const { store, projects } = fixture(t), id = 'builtin:model-routing';
   const first = start(store, projects[0], 'first');
-  const routing = first.skills.find(skill => skill.id === id);
-  assert.equal(routing.trigger, 'always');
-  assert.ok(note(first).includes(alwaysInstruction(routing.path)));
+  assert.equal(first.skills.some(skill => skill.id === id), false);
+  assert.match(note(first), /native mode/);
   assert.equal(store.options[id]?.firstOpenedProjects, undefined);
 });
 

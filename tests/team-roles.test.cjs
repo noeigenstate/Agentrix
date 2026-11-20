@@ -27,27 +27,16 @@ test('the default library is disabled and inherits the intended seats', () => {
   assert.deepEqual(changed.fresh, ['a11y', 'reviewer', 'qa']);
 });
 
-test('copies inherit roles and reviewer freshness and sit next to their source', () => {
+test('copies inherit roles and freshness and sit next to their source', () => {
   const roles = { reviewer: { enabled: false }, 'x-review': copy('reviewer', 'Review Lead', { fresh: false, ...seat('gpt-peer') }),
     frontend: { enabled: true }, 'x-app': copy('frontend', 'Application'), qa: { enabled: false } };
   const value = config(roles), team = resolve(value);
   assert.ok(team.seats.indexOf('x-app') === team.seats.indexOf('frontend') + 1);
   assert.deepEqual(team.reviewers, ['x-review']);
-  assert.ok(team.fresh.includes('x-review'));
+  assert.ok(!team.fresh.includes('x-review'), 'a reviewer copy may turn fresh instances off');
   assert.deepEqual(team.authors, ['developer', 'frontend', 'x-app']);
-  assert.equal(validateTeam(team, catalog), null);
-  assert.equal(validateTeam(resolve(config({ reviewer: { enabled: false } })), catalog).code, 'reviewer-required');
-});
-
-test('reviewer independence considers enabled authors and unused peers', () => {
-  const value = config({ frontend: { enabled: true, ...seat('gpt-peer') }, reviewer: seat('gpt-peer') });
-  assert.equal(validateTeam(resolve(value), catalog).code, 'reviewer-same-model');
-  value.roles['x-author'] = copy('developer', 'Author', seat('opus'));
-  value.roles.reviewer = seat('opus');
-  assert.equal(validateTeam(resolve(value), catalog), null);
-  value.roles.frontend.enabled = false;
-  assert.equal(validateTeam(resolve(value), catalog).code, 'reviewer-same-model');
-  value.roles.reviewer = seat('sonnet');
+  assert.equal(validateTeam(team), null);
+  assert.equal(validateTeam(resolve(config({ reviewer: { enabled: false } }))), null, 'a team without a reviewer is the conductor\'s choice');
 });
 
 test('stored partial seats are ignored and saved overrides omit inherited values', () => {
@@ -58,7 +47,7 @@ test('stored partial seats are ignored and saved overrides omit inherited values
   assert.deepEqual(compactConfig(entry, clean, team), config({ frontend: { enabled: true }, docs: { enabled: true } }));
   assert.throws(() => cleanConfig(config({ reviewer: { name: 'Review' } }), entry, catalog), { code: 'invalid-role' });
   const tooMany = config(Object.fromEntries(Array.from({ length: 9 }, (_, index) => ['x-extra-' + index, copy('developer', 'Role ' + index, { enabled: false })])));
-  assert.equal(validateTeam(resolve(tooMany), catalog).code, 'role-limit');
+  assert.equal(validateTeam(resolve(tooMany)).code, 'role-limit');
 });
 
 test('Codex-only library seats expose their seed and portable files retain the explicit override', () => {
