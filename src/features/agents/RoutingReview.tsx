@@ -184,7 +184,7 @@ export function RoutingReview({ source, roles = [], operations = [], busy, refre
       </div>
     </div>
     <aside className="seats-review-control">
-      <h4>{t('配置来源')}</h4><code>{source.path}</code>
+      <h3>{t('配置来源')}</h3><code>{source.path}</code>
       <p>{t('当前使用：{layer}', { layer: routingLayer(source) })}</p>
       {refreshed && <p role="status" data-review-refreshed>{t('文件已更改，已刷新')}</p>}
       {source.actions.map(action => <button type="button" data-routing-action={action} key={action}

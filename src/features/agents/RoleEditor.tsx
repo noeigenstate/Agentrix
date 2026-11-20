@@ -1,3 +1,4 @@
+import { X } from '@phosphor-icons/react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { RoleConfig, Seat, SeatMap, SeatModel, TeamRole } from '../../shared/types';
 import { t } from '../../shared/i18n';
@@ -148,9 +149,12 @@ export function RoleEditor(props: EditorProps) {
     const { model, effort, fast, ...rest } = value;
     setValue({ ...rest, ...next });
   };
-  return <div className="seats-role-scrim">
+  return <div className="seats-role-scrim" onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="seats-role-editor" ref={fieldset} role="dialog" aria-modal="true" aria-labelledby="role-editor-title" onKeyDown={keys}>
-      <header><h3 id="role-editor-title">{t(existing ? '角色设置' : '新建角色')}</h3></header>
+      <header>
+        <h3 id="role-editor-title">{existing ? t('角色设置 · {role}', { role: roleName(existing) }) : t('新建角色')}</h3>
+        <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} onClick={close}><X size={16} aria-hidden="true" /></button>
+      </header>
       <div className="seats-role-editor-body">
         <div className="seats-role-fields">
           {!locked && <>

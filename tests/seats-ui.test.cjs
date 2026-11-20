@@ -170,8 +170,8 @@ function mount(t, file, name, props, stubs) {
 }
 const inlineComponents = new Set([
   'RoutingTabs', 'MenuHeader', 'OperationRows', 'OperationTitle', 'OperationCard', 'CurrentOperations', 'OperationSummary', 'Status',
-  'DialogHeader', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu', 'ReviewOperationBanner',
-  'RoleLibrary', 'RoleActions', 'RoutingReview', 'RoleTextFields', 'RoleModel',
+  'DialogHeader', 'DialogToolbar', 'RoutingStatus', 'DialogStrip', 'ConversationChoices', 'TeamChart', 'ModelPalette', 'DialogMenu', 'ReviewOperationBanner',
+  'TeamCard', 'SeatPicker', 'PickerSettings', 'TeamModelOptions', 'RoleLibrary', 'RoleActions', 'RoutingReview', 'RoleTextFields', 'RoleModel',
 ]);
 const childrenOf = node => inlineComponents.has(node.type?.name) ? node.type(node.props) : node.props.children;
 const walk = (node, visit) => {
@@ -393,7 +393,7 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
   byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
   byAttr(operationMenu(h, 'lookup', 'data-op-effort'), 'data-pop-effort', 'max').props.onClick();
   let tree = h.render();
-  assert.match(textOf(tree), /Unsaved draft · 2 changes/);
+  assert.match(textOf(tree), /2 unsaved changes/);
   find(tree, node => node.props.role === 'dialog').props.onKeyDown(keyEvent('Escape'));
   assert.match(textOf(find(h.render(), node => node.props.role === 'alertdialog')), /2 unsaved changes/);
   byAttr(h.render(), 'data-keep').props.onClick();
@@ -411,7 +411,7 @@ test('operation changes layer with seat changes, save both diffs, reset a scope,
   tree = h.render();
   assert.match(textOf(byAttr(tree, 'data-operation', 'lookup')), /Takes effect on next launch/);
   assert.doesNotMatch(textOf(byAttr(tree, 'data-operation', 'memory')), /next launch/);
-  assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /Saved.*take effect on next launch/);
+  assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /take effect on next launch/);
   byAttr(h.render(), 'data-now').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'lookup')), /Haiku · high/);
   assert.match(textOf(byAttr(h.render(), 'data-now-operation', 'memory')), /Codex default/);
@@ -462,6 +462,7 @@ test('the dialog saves the chosen scope and the edited map; the keyboard 更换 
   let tree = h.render();
   assert.ok(byAttr(tree, 'data-save').props.disabled, '保存 waits for a change');
   assert.equal(textOf(byAttr(tree, 'data-save')), 'Save routing');
+  assert.doesNotMatch(byAttr(tree, 'data-save').props.className, /is-primary/);
   // 更换 on the architect seat opens a menu holding every model; picking one assigns it.
   byAttr(tree, 'data-pick', 'architect').props.onClick(pickButton('architect'));
   tree = h.render();
@@ -475,16 +476,16 @@ test('the dialog saves the chosen scope and the edited map; the keyboard 更换 
   assert.equal(byAttr(tree, 'data-fast', 'architect').props['aria-checked'], true, 'a GPT seat offers fast, on from the start');
   byAttr(tree, 'data-fast', 'architect').props.onClick();
   tree = h.render();
-  byAttr(tree, 'data-effort', 'architect').props.onChange({ target: { value: 'xhigh' } });
+  byAttr(tree, 'data-pop-effort', 'xhigh').props.onClick();
   tree = h.render();
-  assert.match(textOf(tree), /Unsaved draft · 1 seats changed/);
+  assert.match(textOf(tree), /1 unsaved change/);
   const save = byAttr(tree, 'data-save');
   assert.equal(save.props.disabled, false);
   save.props.onClick();
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: { architect: { model: 'gpt-6.2-sol', effort: 'xhigh' } }, operations: {} }, 'at-open']], 'only the changed seat');
   tree = h.render();
-  assert.match(textOf(find(tree, node => node.props.role === 'status')), /^Saved\. Takes effect immediately\.$/);
+  assert.match(textOf(byAttr(tree, 'data-routing-status')), /^✓Saved\. Takes effect immediately\.$/);
 });
 
 test('the scope select sends the project id, and 恢复默认 saves an empty map that clears the scope', async t => {
@@ -517,7 +518,7 @@ test('a blocked reviewer is framed, named 已阻止, explained with a one-click 
   const banner = find(tree, node => node.props.role === 'alert');
   assert.match(textOf(banner), /Review \(GPT-6\.2-Sol\) uses the same model as Developer, and Opus is also available/);
   assert.equal(byAttr(tree, 'data-save').props.disabled, true, '保存 is disabled');
-  assert.match(textOf(tree), /A seat is blocked, so this cannot be saved/);
+  assert.match(textOf(tree), /The review seat is blocked/);
   const fix = byAttr(tree, 'data-fix');
   assert.equal(textOf(fix), 'Use Opus for review');
   fix.props.onClick();
@@ -531,7 +532,7 @@ test('a blocked reviewer is framed, named 已阻止, explained with a one-click 
   byAttr(find(refused.render(), node => node.props.role === 'menu'), 'data-assign', 'haiku').props.onClick();
   byAttr(refused.render(), 'data-save').props.onClick();
   await settle();
-  assert.match(textOf(find(refused.render(), node => node.props.role === 'status')), /Not saved: Expected a valid model id\./);
+  assert.match(textOf(byAttr(refused.render(), 'className', 'seats-notice')), /Not saved: Expected a valid model id\./);
 });
 
 test('unavailable models are greyed with their reason, cannot be picked, and this conversation’s seats are shown read-only', t => {
@@ -571,7 +572,7 @@ test('dragging a seat’s model onto another seat swaps them, and a tray model r
   listeners.pointermove({ clientX: 40, clientY: 40 });
   listeners.pointerup({ clientX: 40, clientY: 40 });
   tree = h.render();
-  const modelOf = slot => textOf(find(byAttr(tree, 'data-slot', slot), node => node.props.className?.startsWith('seats-gem')));
+  const modelOf = slot => textOf(find(byAttr(tree, 'data-slot', slot), node => node.props.className === 'seats-gem-name'));
   assert.equal(modelOf('developer'), 'Sonnet');
   assert.equal(modelOf('designer'), 'GPT-6.2-Sol');
   const haiku = byAttr(tree, 'data-chip', 'haiku');
@@ -581,7 +582,7 @@ test('dragging a seat’s model onto another seat swaps them, and a tray model r
   listeners.pointerup({ clientX: 80, clientY: 80 });
   tree = h.render();
   assert.equal(modelOf('qa'), 'Haiku');
-  assert.match(textOf(find(tree, node => node.props.role === 'status')), /QA \/ Tester now uses Haiku/);
+  assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /QA \/ Tester now uses Haiku/);
   // A click that never travels 5px is not a drag.
   haiku.props.onPointerDown({ button: 0, clientX: 0, clientY: 0 });
   target = 'architect';
@@ -606,13 +607,14 @@ test('Escape closes the open menu first and then the dialog; the X closes it too
   assert.equal(h.closed.length, 2);
 });
 
-test('the chart places connector drops at the columns and collapses the palette in the two-column layout', () => {
+test('the chart places connector drops at the columns and moves the palette into a drawer below 1400 px', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  const compact = css.slice(css.indexOf('@media (max-width: 1280px)'), css.indexOf('@media (max-width: 700px)'));
-  assert.match(css, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(3,/);
+  const compact = css.slice(css.indexOf('@media (max-width: 940px)'), css.indexOf('@media (max-width: 700px)'));
+  assert.match(css, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(4,/);
   assert.match(compact, /\.seats-team-grid \{[^}]*grid-template-columns: repeat\(2,/);
-  assert.match(compact, /\.seats-palette \{ display: none; \}/);
-  assert.match(compact, /\.seats-palette\.is-open \{[^}]*display: flex/);
+  assert.match(css, /\.seats-palette \{ display: none; \}/);
+  assert.match(css, /\.seats-palette\.is-open \{[^}]*display: flex/);
+  assert.match(css, /@media \(width >= 1400px\) \{[^]*?\.seats-palette:not\(\.is-operation-drawer\) \{[^}]*display: flex/);
   assert.match(css, /\.seats-chart-bus::after \{[^}]*inset: 8px var\(--bus-inset\) 0/);
   assert.match(css, /\.seats-chart-link, \.seats-chart-bus \{[^}]*pointer-events: none/);
   assert.doesNotMatch(css, /@keyframes|animation:/);
@@ -685,7 +687,7 @@ for (const dismissal of ['Escape', 'Keep editing']) test(`${dismissal} preserves
   const after = h.render();
   assert.equal(byAttr(after, 'role', 'alertdialog'), undefined);
   assert.equal(document.activeElement, dismissal === 'Escape' ? previous : first);
-  assert.match(textOf(after), /Unsaved draft · 1 seats changed/);
+  assert.match(textOf(after), /1 unsaved change/);
   panel(after).props.onKeyDown(keyEvent('Escape'));
   assert.ok(byAttr(h.render(), 'role', 'alertdialog'), 'the next Escape still reaches the dialog');
   assert.deepEqual(h.closed, []);
@@ -731,7 +733,8 @@ test('the 更换 menu lists the row’s own efforts, switches fast only where th
   const rows = catalog({ 'gpt-6.2-sol': { efforts: ['low', 'high', 'ultra'] }, opus: { fast: true }, sonnet: { fastReason: 'unsupported' }, haiku: { fastReason: 'agent-tool' } });
   const h = dialogHarness(t, seatsInfo({ catalog: rows }));
   let menu = openMenu(h, 'developer');
-  assert.deepEqual(optionValues(byAttr(menu, 'data-effort', 'developer')), ['low', 'high', 'ultra'], 'the effort menu is the row’s list');
+  const choices = findAll(byAttr(menu, 'data-effort', 'developer'), node => node.props['data-pop-effort']);
+  assert.deepEqual(choices.map(node => node.props['data-pop-effort']), ['low', 'high', 'ultra'], 'the effort menu is the row’s list');
   assert.equal(byAttr(menu, 'data-fast', 'developer').props.disabled, false);
   assert.equal(findAll(menu, node => node.props['data-fast-note'] !== undefined).length, 0, 'a GPT fast row has no billing note');
   menu = openMenu(h, 'architect');
@@ -757,7 +760,7 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   typeCustom(h, 'gpt-6.3-sol'); applyCustom(h);
   assert.equal(liveMenu(h), undefined, 'the menu closes after an accepted id');
   const tree = h.render();
-  assert.match(textOf(find(tree, node => node.props.role === 'status')), /gpt-6\.3-sol/);
+  assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /gpt-6\.3-sol/);
   byAttr(tree, 'data-save').props.onClick();
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: { developer: { model: 'gpt-6.3-sol', effort: 'high', fast: true } }, operations: {} }, 'at-open']]);
@@ -773,24 +776,24 @@ test('the refresh button asks main for the seats, shows the new catalog and when
   const refreshed = seatsInfo({ catalog: [...catalog(), row('gpt-6.2-sol', 'GPT-6.2-Sol', 'codex', 3)], catalogAt: { claude: now, codex: now - 120000 } });
   const h = dialogHarness(t, seatsInfo({ catalogAt: at }), { refreshed });
   let tree = h.render();
-  assert.match(textOf(byAttr(tree, 'data-catalog-at')), /Claude 3 h ago · Codex not refreshed$/);
+  assert.match(byAttr(tree, 'data-catalog-at').props.title, /Claude 3 h ago · Codex not refreshed$/);
   byAttr(tree, 'data-refresh').props.onClick();
   await settle();
   assert.deepEqual(h.refreshes, [['p1', 't1', 'dialog'], ['p1', 't1', 'manual']], 'once when the dialog opens (throttled in main), once for the button (always)');
   tree = h.render();
-  assert.match(textOf(byAttr(tree, 'data-catalog-at')), /Claude just now · Codex 2 min ago$/);
-  assert.match(textOf(find(tree, node => node.props.role === 'status')), /Model lists refreshed/);
+  assert.match(byAttr(tree, 'data-catalog-at').props.title, /Claude just now · Codex 2 min ago$/);
+  assert.match(textOf(byAttr(tree, 'className', 'seats-notice')), /Model lists refreshed/);
   assert.ok(assignable(openMenu(h, 'architect')).includes('gpt-6.2-sol'), 'the new model is offered');
   const failing = dialogHarness(t, seatsInfo(), { refreshError: 'probe timed out' });
   byAttr(failing.render(), 'data-refresh').props.onClick();
   await settle();
   const after = failing.render();
-  assert.match(textOf(find(after, node => node.props.role === 'status')), /Not refreshed: probe timed out/);
+  assert.match(textOf(byAttr(after, 'className', 'seats-notice')), /Not refreshed: probe timed out/);
   assert.equal(byAttr(after, 'data-refresh').props.disabled, false, 'the button is usable again');
   const none = dialogHarness(t, seatsInfo());
   byAttr(none.render(), 'data-refresh').props.onClick();
   await settle();
-  assert.match(textOf(find(none.render(), node => node.props.role === 'status')), /Not refreshed: no seats information/);
+  assert.match(textOf(byAttr(none.render(), 'className', 'seats-notice')), /Not refreshed: no seats information/);
   assert.deepEqual([ageOf(null, now), ageOf(now - 30000, now), ageOf(now - 90 * 60000, now), ageOf(now - 3 * 86400000, now)].map(age => `${age.unit}:${age.count}`), ['never:0', 'now:0', 'hour:1', 'day:3']);
 });
 
@@ -807,10 +810,10 @@ test('issues show on their seat until it is edited, a moved default is said, and
   assert.ok(findAll(tree, node => node.props['data-unlisted'] !== undefined).length >= 1, 'Sonnet is marked as no longer listed');
   assert.match(textOf(byAttr(openMenu(h, 'designer'), 'data-assign', 'sonnet')), /Not in the latest list/);
   // Editing the seat makes its saved issue stale: the mark goes.
-  byAttr(liveMenu(h), 'data-effort', 'designer').props.onChange({ target: { value: 'low' } });
+  byAttr(liveMenu(h), 'data-pop-effort', 'low').props.onClick();
   assert.equal(findAll(h.render(), node => node.props.className?.startsWith('seats-state')).length, 2);
   // A record without the new fields still renders (an older main).
-  assert.match(textOf(byAttr(dialogHarness(t, seatsInfo()).render(), 'data-catalog-at')), /Claude not refreshed · Codex not refreshed/);
+  assert.match(byAttr(dialogHarness(t, seatsInfo()).render(), 'data-catalog-at').props.title, /Claude not refreshed · Codex not refreshed/);
 });
 
 test('the dialog reads once when it opens, keeps the opened info until the answer, and shows a moved default from any answer', async t => {
@@ -819,12 +822,12 @@ test('the dialog reads once when it opens, keeps the opened info until the answe
   let tree = h.render();
   assert.deepEqual(h.refreshes, [['p1', 't1', 'dialog']], 'one read on open');
   assert.equal(byAttr(tree, 'data-moved'), undefined, 'the note waits for the answer');
-  assert.equal(findAll(tree, node => node.props.role === 'status' && textOf(node)).length, 0, 'an opening read says nothing while it works');
+  assert.equal(findAll(tree, node => node.props.className === 'seats-notice' && textOf(node)).length, 0, 'an opening read says nothing while it works');
   await settle();
   assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Developer：GPT-6\.2-Sol → gpt-6\.3-sol/);
   const quiet = dialogHarness(t, seatsInfo(), { refreshError: 'offline' });
   quiet.render(); await settle();
-  assert.match(textOf(find(quiet.render(), node => node.props.role === 'status')), /Not refreshed: offline/, 'a failed opening read keeps the info and says so');
+  assert.match(textOf(byAttr(quiet.render(), 'className', 'seats-notice')), /Not refreshed: offline/, 'a failed opening read keeps the info and says so');
   assert.ok(byAttr(quiet.render(), 'data-save'), 'the dialog still shows the info it opened with');
 });
 
@@ -910,7 +913,7 @@ test('a default-move receipt survives a newer read and the first edit without co
   byAttr(operationMenu(h, 'lookup'), 'data-assign', 'opus').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'data-moved')), /Defaults moved to Developer/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  assert.match(css, /\.seats-strip:has\(\[data-moved\]\) \.seats-notice:empty \{ display: flex; \}/);
+  assert.match(css, /\.seats-strip:not\(:has\(p:not\(:empty\), \.seats-banner, button\)\)/);
 });
 
 // ---- second acceptance round: no tile overlaps another, small-tile chips shorten and ellipsize, the one-click fix is chosen by rule ----
@@ -924,13 +927,13 @@ test('the card, banner and palette use the same short alias label and the menu k
   const slot = byAttr(tree, 'data-slot', 'architect');
   const gem = find(slot, node => node.props.className?.startsWith('seats-gem'));
   assert.equal(textOf(find(gem, node => node.props.className === 'seats-gem-name')), 'Opus (latest)');
-  assert.equal(gem.props.title, 'Opus (latest)');
+  assert.equal(gem.props.title, 'Opus (latest) · high');
   assert.equal(textOf(byAttr(tree, 'data-chip', 'opus')), 'Opus (latest)');
   assert.match(byAttr(tree, 'data-chip', 'opus').props.title, /Opus \(latest\)/);
   assert.match(textOf(byAttr(tree, 'data-moved')), /Opus \(latest\)/);
   assert.match(textOf(openMenu(h, 'architect')), /Opus \(follows latest\)/, 'the menu keeps the full name');
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
-  assert.match(css, /\.seats-gem-name \{[^}]*text-overflow: ellipsis/);
+  assert.match(css, /\.seats-gem-name, \.seats-gem-summary \{[^}]*text-overflow: ellipsis/);
 });
 
 test('the one-click fix is the reviewer’s default if it is a candidate, else the strongest model another seat runs, else the strongest; never list order', () => {
@@ -994,27 +997,31 @@ test('the search in the 模型盘 keeps only matching models, in their lines, an
   const chips = () => findAll(h.render(), node => node.props['data-chip'] !== undefined).map(node => node.props['data-chip']);
   assert.equal(chips().length, 16, 'the 12 older versions are folded away');
   byAttr(tree, 'data-palette-search').props.onChange({ target: { value: 'sol' } });
-  assert.deepEqual(chips(), ['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol'], 'a search opens the folds of the lines it matches in');
+  assert.deepEqual(chips(), ['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol'], 'search includes matching older versions');
   byAttr(h.render(), 'data-palette-search').props.onChange({ target: { value: 'zzz' } });
   assert.match(textOf(h.render()), /No matching models/);
 });
 
-test('the palette shows the newest of each line, folds the rest under 更早版本 (N), and a fold opens and closes', t => {
+test('the palette shows the newest of each line, folds earlier versions once per provider', t => {
   const h = dialogHarness(t, seatsInfo({ catalog: REAL }));
   let tree = h.render();
   const shown = () => findAll(h.render(), node => node.props['data-chip'] !== undefined).map(node => node.props['data-chip']);
   assert.ok(shown().includes('claude-opus-5') && !shown().includes('claude-opus-4-8'));
-  const fold = byAttr(tree, 'data-fold', 'claudeOpus');
-  assert.equal(textOf(fold), 'Earlier versions (4)');
+  const fold = byAttr(tree, 'data-fold', 'claude');
+  assert.equal(textOf(fold), 'Earlier versions (6)');
   assert.equal(fold.props['aria-expanded'], false);
   fold.props.onClick();
-  assert.ok(shown().includes('claude-opus-4-8') && shown().includes('claude-opus-4-5-20251101'), 'the fold shows the four older versions');
-  assert.equal(byAttr(h.render(), 'data-fold', 'claudeOpus').props['aria-expanded'], true);
-  byAttr(h.render(), 'data-fold', 'claudeOpus').props.onClick();
+  assert.ok(shown().includes('claude-opus-4-8') && shown().includes('claude-opus-4-5-20251101'), 'the Claude fold shows earlier Opus versions');
+  assert.equal(byAttr(h.render(), 'data-fold', 'claude').props['aria-expanded'], true);
+  byAttr(h.render(), 'data-fold', 'claude').props.onClick();
   assert.ok(!shown().includes('claude-opus-4-8'), 'and closes again');
-  assert.equal(byAttr(h.render(), 'data-fold', 'claudeHaiku'), undefined, 'a line with nothing older has no fold');
+  assert.equal(findAll(h.render(), node => node.props['data-fold'] !== undefined).length, 2, 'one fold per provider');
   const groups = findAll(h.render(), node => node.props['data-group'] !== undefined).map(node => node.props['data-group']);
   assert.deepEqual(groups, ['claude', 'codex']);
+  const picker = openMenu(h, 'architect');
+  assert.equal(byAttr(picker, 'data-assign', 'claude-opus-4-8'), undefined);
+  byAttr(picker, 'data-picker-fold', 'claude').props.onClick();
+  assert.ok(byAttr(liveMenu(h), 'data-assign', 'claude-opus-4-8'));
 });
 
 test('dragging a model from the 模型盘 onto a seat assigns it, and a model the agent cannot run is greyed there', t => {
@@ -1039,45 +1046,41 @@ test('dragging a model from the 模型盘 onto a seat assigns it, and a model th
   assert.equal(Object.keys(listeners).length, 0, 'a greyed chip cannot be dragged');
 });
 
-test('the effort button on every tile opens a popover with the model’s own levels and the fast switch, and a pick changes the seat', async t => {
+test('the picker footer changes effort and fast and explains unsupported fast mode', async t => {
   const rows = catalog({ opus: { fast: true, efforts: ['low', 'high', 'ultra'] }, 'gpt-6.2-sol': { efforts: ['low', 'high'] }, sonnet: { fastReason: 'unsupported' } });
   const h = dialogHarness(t, seatsInfo({ catalog: rows }));
-  let tree = h.render();
-  const slotsWithButtons = findAll(tree, node => node.props['data-tile-effort'] !== undefined).map(node => node.props['data-tile-effort']);
-  assert.deepEqual(slotsWithButtons, SEATS, 'every team card, including the orchestrator');
-  assert.equal(textOf(byAttr(tree, 'data-tile-effort', 'architect')), 'high');
-  byAttr(tree, 'data-tile-effort', 'architect').props.onClick(pickButton('architect'));
-  const pop = liveMenu(h);
-  assert.match(pop.props.className, /is-effort/);
-  assert.deepEqual(findAll(pop, node => node.props['data-pop-effort'] !== undefined).map(node => node.props['data-pop-effort']), ['low', 'high', 'ultra'], 'the model’s own levels');
-  assert.equal(byAttr(pop, 'data-pop-fast', 'architect').props.disabled, false, 'Opus lists fast');
+  const efforts = menu => findAll(menu, node => node.props['data-pop-effort']).map(node => node.props['data-pop-effort']);
+  const pop = openMenu(h, 'architect');
+  assert.deepEqual(efforts(pop), ['low', 'high', 'ultra']);
+  assert.equal(byAttr(pop, 'data-tile-fast', 'architect').props.disabled, false);
   assert.match(textOf(byAttr(pop, 'data-fast-note')), /billed at a different price \(for example Opus fast\)/);
   byAttr(pop, 'data-pop-effort', 'ultra').props.onClick();
-  assert.equal(liveMenu(h), undefined, 'a pick closes the popover');
-  tree = h.render();
-  assert.equal(textOf(byAttr(tree, 'data-tile-effort', 'architect')), 'ultra');
-  assert.match(textOf(tree), /Unsaved draft · 1 seats changed/);
-  byAttr(tree, 'data-tile-effort', 'developer').props.onClick(pickButton('developer'));
-  assert.deepEqual(findAll(liveMenu(h), node => node.props['data-pop-effort'] !== undefined).map(node => node.props['data-pop-effort']), ['low', 'high']);
-  byAttr(liveMenu(h), 'data-pop-fast', 'developer').props.onClick();
-  assert.equal(byAttr(liveMenu(h), 'data-pop-fast', 'developer').props['aria-checked'], false, 'fast turned off in the popover');
+  assert.equal(byAttr(liveMenu(h), 'data-pop-effort', 'ultra').props['aria-pressed'], true);
+  assert.match(textOf(byAttr(h.render(), 'data-pick', 'architect')), /ultra/);
+  assert.match(textOf(h.render()), /1 unsaved change/);
+  assert.match(byAttr(h.render(), 'data-save').props.className, /is-primary/);
+  assert.deepEqual(efforts(openMenu(h, 'developer')), ['low', 'high']);
+  byAttr(liveMenu(h), 'data-tile-fast', 'developer').props.onClick();
+  assert.equal(byAttr(liveMenu(h), 'data-tile-fast', 'developer').props['aria-checked'], false);
+  const designer = openMenu(h, 'designer');
+  const fresh = byAttr(designer, 'data-fresh', 'designer');
+  assert.equal(fresh.props['aria-checked'], false);
+  fresh.props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'data-pick', 'designer')), /Fresh instance/);
+  const fast = byAttr(designer, 'data-tile-fast', 'designer');
+  assert.equal(fast.props.disabled, true);
+  assert.match(fast.props.title, /does not support fast mode/);
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: {
-    architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high' },
-  }, operations: {} }, 'at-open']], 'the tile controls are saved like the menu’s');
-  // The fast switch on the tile is the same switch: on where the row lists fast, disabled with its reason where not.
-  const tile = h.render();
-  assert.equal(byAttr(tile, 'data-tile-fast', 'designer').props.disabled, true);
-  assert.match(byAttr(tile, 'data-tile-fast', 'designer').props.title, /does not support fast mode/);
-  byAttr(tile, 'data-tile-fast', 'developer').props.onClick();
-  assert.equal(byAttr(h.render(), 'data-tile-fast', 'developer').props['aria-checked'], true);
+    architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high' }, designer: { fresh: true },
+  }, operations: {} }, 'at-open']]);
 });
 
-test('the 更换 menu and the effort popover close on an outside click, on a second click of their button, on ✕ and on Escape', t => {
+test('the model and role menus close on an outside click, on a second click of their button, on ✕ and on Escape', t => {
   const h = dialogHarness(t, seatsInfo());
   const closes = [];
-  for (const [kind, attr, open] of [['model', 'data-pick', 'developer'], ['effort', 'data-tile-effort', 'developer']]) {
+  for (const [kind, attr, open] of [['model', 'data-pick', 'developer'], ['role', 'data-role-more', 'developer']]) {
     byAttr(h.render(), attr, open).props.onClick(pickButton(open));
     assert.ok(liveMenu(h), `${kind} menu opens`);
     h.outsideMouseDown({ outside: true });
@@ -1096,8 +1099,8 @@ test('the 更换 menu and the effort popover close on an outside click, on a sec
   assert.deepEqual(closes.filter(line => !line.endsWith('true')), [], closes.join('; '));
   // Another button moves the menu instead of closing it.
   byAttr(h.render(), 'data-pick', 'developer').props.onClick(pickButton('developer'));
-  byAttr(h.render(), 'data-tile-effort', 'architect').props.onClick(pickButton('architect'));
-  assert.match(liveMenu(h).props.className, /is-effort/);
+  byAttr(h.render(), 'data-role-more', 'architect').props.onClick(pickButton('architect'));
+  assert.match(liveMenu(h).props.className, /is-role/);
 });
 
 // ---- second acceptance of layout A: controls must be clickable, nothing that holds a control moves, tile text is 14px, the banner names what the fix prefers ----
@@ -1129,9 +1132,13 @@ test('org chart uses fixture order and gives each seat its own model, effort and
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
   for (const id of SEATS) {
     const card = byAttr(tree, 'data-seat', id);
-    for (const attr of ['data-pick', 'data-tile-effort', 'data-tile-fast']) {
-      assert.equal(byAttr(card, attr, id).type, 'button');
-    }
+    assert.equal(byAttr(card, 'data-pick', id).type, 'button');
+    assert.equal(byAttr(card, 'data-role-more', id).type, 'button');
+    assert.equal(byAttr(card, 'data-tile-effort', id), undefined);
+    const picker = openMenu(h, id);
+    assert.ok(byAttr(picker, 'data-tile-effort', id));
+    assert.equal(byAttr(picker, 'data-tile-fast', id).type, 'button');
+    byAttr(picker, 'data-menu-close').props.onClick();
   }
 });
 
@@ -1325,7 +1332,7 @@ test('the first project file is an explicit save with a null base and frozen cho
     current: DEFAULTS, currentRoles: team.roles.map(role => shipped(role)),
   });
   const h = dialogHarness(t, info);
-  assert.match(textOf(h.render()), /Creates \.agentrix\/routing\.json/);
+  assert.match(byAttr(h.render(), 'data-save').props.title, /Creates \.agentrix\/routing\.json/);
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
   assert.deepEqual(h.calls, [['project', 'p1', { roles: {}, operations: {} }, null]]);
@@ -1400,10 +1407,12 @@ test('the conversation box uses accepted settings across drafts and limits resta
   assert.match(textOf(byAttr(choices, 'data-current-seat', 'architect')), /Sonnet · medium/);
   assert.doesNotMatch(textOf(choices), /Haiku|→/);
   assert.match(textOf(byAttr(choices, 'data-current-seat', 'orchestrator')), /Opus · high重启后生效：GPT-6\.2-Sol · medium · 快速/);
+  const lead = byAttr(h.render(), 'data-seat', 'orchestrator');
+  assert.match(byAttr(lead, 'data-lead-pending').props.title, /Opus · high/);
   byAttr(h.render(), 'data-save').props.onClick();
   await settle();
-  const notice = find(h.render(), node => node.props.className === 'seats-notice');
-  assert.equal(textOf(notice), '已保存，立即生效；总指挥重启后生效');
+  const notice = byAttr(h.render(), 'data-routing-status');
+  assert.equal(textOf(notice), '✓已保存，立即生效· 总指挥重启后生效');
 });
 
 test('the role library and Developer specialties use the supplied labels and duties', t => {
@@ -1413,7 +1422,7 @@ test('the role library and Developer specialties use the supplied labels and dut
   ];
   const h = dialogHarness(t, seatsInfo({ roles }), { language: 'zh' });
   const developer = byAttr(h.render(), 'data-seat', 'developer');
-  assert.match(textOf(developer), /人工智能/);
+  assert.match(byAttr(developer, 'className', 'seats-tag').props.title, /人工智能/);
   assert.doesNotMatch(textOf(developer), /\bAI\b/);
   byAttr(h.render(), 'data-routing-tab', 'library').props.onClick();
   const library = h.render();
@@ -1441,8 +1450,8 @@ test('the library displays both limits and the reviewer locks beside their contr
   const info = seatsInfo({ roles: [...team.roles.map(role => shipped(role)), libraryRole], config: { roles: custom, operations: {} } });
   const h = dialogHarness(t, info, { language: 'zh' });
   const teamChart = h.render();
-  assert.match(textOf(byAttr(byAttr(teamChart, 'data-seat', 'reviewer'), 'data-role-lock', 'fresh')), /始终使用新实例/);
-  assert.match(textOf(byAttr(teamChart, 'data-scope', 'project')), /本项目 · 保存在 \.agentrix\/routing\.json/);
+  assert.match(textOf(byAttr(openMenu(h, 'reviewer'), 'data-role-lock', 'fresh')), /始终使用新实例/);
+  assert.match(textOf(byAttr(teamChart, 'data-scope', 'project')), /本项目 \.agentrix\/routing\.json/);
   byAttr(teamChart, 'data-routing-tab', 'library').props.onClick();
   const library = h.render();
   assert.match(textOf(byAttr(library, 'data-role-limit', 'enabled')), /已启用 16 个角色（上限 16）；停用一个后才能再启用/);
@@ -1460,7 +1469,7 @@ test('the library displays both limits and the reviewer locks beside their contr
       .flatMap(node => node.type === React.Fragment ? React.Children.toArray(node.props.children) : node);
     assert.ok(children.some(node => node.props['data-edit-role'] === id));
     assert.equal(children.find(node => node.props['data-toggle-role'] === id).props.disabled, true);
-    assert.match(textOf(children.at(-1)), reason);
+    assert.match(textOf(byAttr(card, 'data-role-lock', 'membership')), reason);
   }
   assert.match(textOf(byAttr(library, 'data-library-role', 'x-dev-0')), /项目角色/);
 });
@@ -1519,11 +1528,11 @@ test('invalid editor fields override the normal border and keep the visible focu
   assert.match(css, /\.seats-dialog :focus-visible \{ outline: 2px solid var\(--focus-ring\); outline-offset: 2px; \}/);
 });
 
-test('pending and invalid project files replace the green application status and show the template label once', async t => {
+test('pending and invalid project files replace the saved status and show the template label once', async t => {
   const info = seatsInfo({ routing: source({ layer: 'template', state: 'pending', actions: ['apply', 'keep'] }) });
   const h = dialogHarness(t, info, { language: 'zh' });
   const check = (tree, status) => {
-    const row = find(tree, node => node.props.className === 'seats-strip-row');
+    const row = find(tree, node => node.props.className === 'seats-head');
     assert.equal(textOf(find(row, node => node.props.className === 'seats-effective')), status);
     assert.doesNotMatch(textOf(row), /下一次对话生效|没有改动/);
     assert.equal(find(row, node => node.props.className?.includes('seats-dot')), undefined);
@@ -1565,8 +1574,8 @@ test('a changed review digest temporarily disables every action and sends only t
   await settle();
   assert.deepEqual(calls, [['p1', 'apply', 'new']]);
   assert.equal(byAttr(h.render(), 'data-routing-review'), undefined);
-  const notice = find(h.render(), node => node.props.className === 'seats-notice');
-  assert.equal(textOf(notice), 'Saved. Takes effect immediately.');
+  const notice = byAttr(h.render(), 'data-routing-status');
+  assert.equal(textOf(notice), '✓Saved. Takes effect immediately.');
   byAttr(h.render(), 'data-now').props.onClick();
   assert.match(textOf(byAttr(h.render(), 'data-current-seat', 'architect')), /Sonnet · medium/);
 });

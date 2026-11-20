@@ -124,10 +124,10 @@ function OperationCard(props: OperationRowsProps & { row: Editable }) {
     <div className="seats-op-settings">
       <button type="button" className="seats-gem" data-op-model={id} aria-haspopup="menu" aria-expanded={expanded('model')}
         title={model} aria-label={t('{seat}：选择模型', { seat: name })} onClick={event => open(id, event.currentTarget, 'model')}>
-        {family && <i className="seats-mk" data-family={family} aria-hidden="true" />}
+        <i className="seats-mk" data-family={family ?? 'none'} aria-hidden="true" />
         <span className="seats-gem-name">{operationLabel(row, value, label)}</span><CaretDown size={14} aria-hidden="true" />
       </button>
-      {value && value !== 'follow' && family && operationUsesEffort(row, family) && <button type="button" className="seats-effort"
+      {value && value !== 'follow' && family && operationUsesEffort(row, family) && <button type="button" className="seats-btn seats-effort"
         data-op-effort={id} aria-haspopup="menu" aria-expanded={expanded('effort')} aria-label={t('{seat}：选择强度', { seat: name })}
         onClick={event => open(id, event.currentTarget, 'effort')}>{value.effort ?? '—'}<CaretDown size={12} aria-hidden="true" /></button>}
       {suggestion && <button type="button" className="seats-btn is-small" data-op-suggestion={suggestion}

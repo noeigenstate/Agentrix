@@ -2,8 +2,8 @@ import { routingRoleName } from '../../shared/routing-command.ts';
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  ArrowCounterClockwise, ArrowsClockwise, BookOpen, Browser, CaretDown, CheckCircle, ClipboardText, Code, Cpu, Database, Desktop, FileText, Flask, Gauge, GitBranch,
-  HardDrives, Infinity as InfinityIcon, MagnifyingGlass, PencilSimple, Person, Prohibit, ShieldCheck, Stack, User, Warning, X,
+  ArrowCounterClockwise, ArrowsClockwise, BookOpen, Browser, CaretDown, CheckCircle, ClipboardText, DotsThree, Code, Cpu, Database, Desktop, FileText, Flask, Gauge, GitBranch,
+  HardDrives, Infinity as InfinityIcon, LockSimple, MagnifyingGlass, PencilSimple, Person, Plus, Prohibit, ShieldCheck, SidebarSimple, Stack, User, Warning, X,
 } from '@phosphor-icons/react';
 import type { OperationMap, OperationRow, OperationValue, RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
@@ -30,7 +30,11 @@ function RoleIcon({ id }: { id: string }) {
   const Icon = ROLE_ICONS[id as keyof typeof ROLE_ICONS] ?? User;
   return <span className="seats-role-icon"><Icon size={18} aria-hidden="true" /></span>;
 }
-const ROLE_NAMES: Record<string, string> = { orchestrator: 'Orchestrator Agent', product: 'Product', architect: 'Architect', designer: 'Designer', developer: 'Developer', reviewer: 'Reviewer', qa: 'QA / Tester', researcher: 'Researcher', devops: 'DevOps', security: 'Security' };
+const ROLE_NAMES: Record<string, string> = {
+  orchestrator: 'Orchestrator', product: 'Product', architect: 'Architect', designer: 'Designer', developer: 'Developer',
+  reviewer: 'Reviewer', qa: 'QA / Tester', researcher: 'Researcher', devops: 'DevOps', security: 'Security',
+  frontend: 'Frontend', backend: 'Backend', desktop: 'Desktop', database: 'Database', ai: 'AI', docs: 'Docs', performance: 'Performance', a11y: 'Accessibility',
+};
 const REFUSALS = {
   'unknown-model': '没有这个模型', unavailable: '不可用', same: '', effort: '这个模型不支持该强度', fast: '这个模型不能开快速',
   'invalid-id': '模型名只能含字母、数字和 . : @ + / [ ] - _，以字母或数字开头，最多 160 个字符',
@@ -51,7 +55,7 @@ const ageText = (at: number | null) => {
 };
 
 type Notice = { kind: 'info' | 'ok' | 'error'; text: string } | { kind: 'saved' };
-type Menu = { kind: 'model' | 'effort' | 'claude' | 'codex'; slot: SlotId } & ReturnType<typeof menuPlacement>;
+type Menu = { kind: 'model' | 'effort' | 'role' | 'claude' | 'codex'; slot: SlotId } & ReturnType<typeof menuPlacement>;
 type Custom = { text: string; error: string };
 const operationSlot = (id: string) => `operation:${id}`;
 const inside = (node: unknown, target: unknown) => !!node && typeof (node as Node).contains === 'function' && (node as Node).contains(target as Node);
@@ -75,8 +79,8 @@ function modelMenuItems(catalog: SeatModel[], selected: string | undefined, pick
 
 type Tab = 'team' | 'library' | 'operations';
 
-function RoutingTabs({ tab, choose, operations }: { tab: Tab; choose: (tab: Tab) => void; operations: boolean }) {
-  const tabs: Tab[] = operations ? ['team', 'library', 'operations'] : ['team', 'library'];
+function RoutingTabs({ tab, choose, counts }: { tab: Tab; choose: (tab: Tab) => void; counts: Record<Tab, number> }) {
+  const tabs: Tab[] = counts.operations ? ['team', 'library', 'operations'] : ['team', 'library'];
   const labels = { team: '团队', library: '角色库', operations: '操作模型' };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -89,7 +93,7 @@ function RoutingTabs({ tab, choose, operations }: { tab: Tab; choose: (tab: Tab)
   return <div className="seats-tabs" role="tablist" aria-label={t('模型路由')} onKeyDown={onKeyDown}>
     {tabs.map(id => <button key={id} type="button" className="seats-btn"
       id={`seats-${id}-tab`} data-routing-tab={id} role="tab" aria-selected={tab === id} tabIndex={tab === id ? 0 : -1}
-      aria-controls={`seats-${id}-panel`} onClick={() => choose(id)}>{t(labels[id])}</button>)}
+      aria-controls={`seats-${id}-panel`} onClick={() => choose(id)}>{t(labels[id])}<span className="seats-tab-count">{counts[id]}</span></button>)}
   </div>;
 }
 
@@ -298,11 +302,16 @@ function useMenu(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof
   const { catalog, opAt } = source, { working, opValues } = draft;
   const [menu, setMenu] = useState<Menu | null>(null);
   const [custom, setCustom] = useState<Custom | null>(null);
+  const [modelFolds, setModelFolds] = useState<Record<string, boolean>>({});
   const menuBox = useRef<HTMLDivElement>(null), opener = useRef<HTMLElement | null>(null);
+  const itemSelector = '[role="menuitemradio"]:not(:disabled), .is-role [role="menuitem"]:not(:disabled)';
   useEffect(() => {
-    const items = menuBox.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not(:disabled)');
-    if (menu && items?.length) (Array.from(items).find(item => item.getAttribute('aria-checked') === 'true') ?? items[0]).focus({ preventScroll: true });
-    else if (menu) menuBox.current?.querySelector<HTMLElement>('[data-menu-close]')?.focus({ preventScroll: true });
+    if (!menu) return;
+    const items = Array.from(menuBox.current?.querySelectorAll<HTMLElement>(itemSelector) ?? []);
+    const first = items.find(item => item.getAttribute('aria-checked') === 'true') ?? items[0];
+    const target = first ?? menuBox.current?.querySelector<HTMLElement>('[data-menu-close]');
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: 'nearest' });
   }, [menu?.slot, menu?.kind]);
   // A click anywhere outside the open menu (and not on the button that opened it, which toggles it) closes it.
   useEffect(() => {
@@ -321,21 +330,23 @@ function useMenu(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof
     const box = button.getBoundingClientRect();
     opener.current = button;
     setCustom(null);
+    setModelFolds({});
     const operation = opAt(slot), value = operation ? opValues[operation.id] : getSlot(working, slot);
     const rows = kind === 'model' ? catalog.length + Number(!!operation?.follow) : kind === 'effort' && value && value !== 'follow'
-      ? rowFor(catalog, value.model)?.efforts.length ?? 4 : 1;
+      ? rowFor(catalog, value.model)?.efforts.length ?? 4 : kind === 'role' ? 6 : 1;
     setNowOpen(false);
     setMenu({ kind, slot, ...menuPlacement({ left: box.left, top: box.top, bottom: box.bottom }, { width: window.innerWidth, height: window.innerHeight }, rows) });
   };
   const closeMenu = () => { setMenu(null); setCustom(null); opener.current?.focus({ preventScroll: true }); };
   const menuKeys = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-    const items = Array.from(menuBox.current?.querySelectorAll<HTMLElement>('[role="menuitemradio"]:not(:disabled)') ?? []), index = items.indexOf(document.activeElement as HTMLElement);
+    const items = Array.from(menuBox.current?.querySelectorAll<HTMLElement>(itemSelector) ?? []);
+    const index = items.indexOf(document.activeElement as HTMLElement);
     if (index < 0) return;
     event.preventDefault();
     items[(index + (event.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
   };
-  return { menu, setMenu, custom, setCustom, menuBox, openMenu, closeMenu, menuKeys };
+  return { menu, setMenu, custom, setCustom, menuBox, openMenu, closeMenu, menuKeys, modelFolds, setModelFolds };
 }
 
 function choiceActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<typeof useDraft>, popup: ReturnType<typeof useMenu>) {
@@ -534,7 +545,7 @@ function useDialogState(props: SeatsDialogProps) {
   useEffect(() => { if (review.visible) popup.setMenu(null); }, [review.visible]);
   const edits = choiceActions(source, draft, popup), drag = useModelDrag(source.catalog, edits.drop);
   const [tab, setTab] = useState<Tab>('team');
-  const switchTab = (next: Tab) => { popup.setMenu(null); setTab(next); };
+  const switchTab = (next: Tab) => { popup.setMenu(null); panels.setPaletteOpen(false); setTab(next); };
   const { dialog, nowOpen, nowButton, paletteOpen, paletteButton, setNowOpen, setPaletteOpen, close } = panels;
   const { menu, closeMenu } = popup;
   const { discardShown, setDiscarding } = draft;
@@ -575,9 +586,7 @@ function reviewerMessage({ source, draft }: DialogState) {
 }
 
 function seatControls(state: DialogState) {
-  const { info, catalog, label, slotName } = state.source, { working, baseline, block, enabled, reviewRoles } = state.draft;
-  const { startDrag, dragged } = state.drag, { menu, openMenu } = state.popup;
-  const { edit } = state.edits;
+  const { info, catalog, label } = state.source, { working, baseline, block, enabled, reviewRoles } = state.draft;
   // What the seat says under its model: why it is not what the owner chose.
   const slotState = (slot: SlotId) => {
     const seat = getSlot(working, slot);
@@ -596,28 +605,23 @@ function seatControls(state: DialogState) {
   const stateMark = (state: NonNullable<ReturnType<typeof slotState>>) => <span className={`seats-state is-${state.kind}`} title={state.title}>
     {state.kind === 'bad' ? <Prohibit size={14} aria-hidden="true" /> : <Warning size={14} aria-hidden="true" />}<span>{state.short}</span></span>;
 
-  const modelButton = (slot: SlotId, model?: string) => <button type="button" className="seats-gem" data-pick={slot} aria-haspopup="menu"
-    aria-expanded={menu?.slot === slot && menu.kind === 'model'} title={model ? label(model) : undefined}
-    aria-label={t('{seat}：选择模型', { seat: slotName(slot) })}
+  return { slotState, stateMark };
+}
+
+function SeatPicker({ state, role }: DialogPart & { role: TeamRole }) {
+  const { catalog, label, slotName } = state.source, { working } = state.draft, { menu, openMenu } = state.popup;
+  const { startDrag, dragged } = state.drag;
+  const slot = role.id, seat = getSlot(working, slot), model = seat?.model;
+  const name = model ? label(model) : t('未设置');
+  const summary = seat ? [seat.effort, seat.fast && t('快速'), role.fresh && t('新实例')].filter(Boolean).join(' · ') : '';
+  return <button type="button" className="seats-gem" data-pick={slot} aria-haspopup="menu"
+    aria-expanded={menu?.slot === slot && menu.kind === 'model'} title={[name, summary].filter(Boolean).join(' · ')}
+    aria-label={t('{seat}：选择模型（{model}）', { seat: slotName(slot), model: [name, summary].filter(Boolean).join(' · ') })}
     onPointerDown={event => { if (model) startDrag(event, model, slot); }}
     onClick={event => { if (!dragged.current || event.detail === 0) openMenu(slot, event.currentTarget); }}>
-    {model && <i className="seats-mk" data-family={rowFor(catalog, model)?.family} aria-hidden="true" />}
-    <span className="seats-gem-name">{model ? label(model) : t('未设置')}</span><CaretDown size={14} aria-hidden="true" />
+    {model && <i className="seats-mk" data-family={rowFor(catalog, model)?.family ?? familyOf(model)} aria-hidden="true" />}
+    <span className="seats-gem-name">{name}</span><span className="seats-gem-summary">{summary}</span><CaretDown size={14} aria-hidden="true" />
   </button>;
-  const effortButton = (slot: SlotId) => {
-    const seat = getSlot(working, slot);
-    return seat && <button type="button" className="seats-effort" data-tile-effort={slot} aria-haspopup="menu" aria-expanded={menu?.slot === slot && menu.kind === 'effort'}
-      aria-label={t('{seat}的强度：{effort}', { seat: slotName(slot), effort: seat.effort })} onClick={event => openMenu(slot, event.currentTarget, 'effort')}>{seat.effort}<CaretDown size={12} aria-hidden="true" /></button>;
-  };
-  const fastSwitch = (slot: SlotId) => {
-    const seat = getSlot(working, slot), row = seat && rowFor(catalog, seat.model);
-    if (!seat) return null;
-    const off = !row?.fast && !seat.fast;
-    return <button type="button" className="seats-fast" role="switch" aria-checked={!!seat.fast} data-tile-fast={slot} disabled={off} aria-label={t('{seat}快速模式', { seat: slotName(slot) })}
-      title={off ? t(FAST_REASONS[row?.fastReason ?? 'unsupported']) : row?.family === 'claude' ? t(FAST_BILLING) : undefined}
-      onClick={() => edit(setFast(working, slot, !seat.fast, catalog))}>{t('快速')}<i /></button>;
-  };
-  return { slotState, stateMark, modelButton, effortButton, fastSwitch };
 }
 
 function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; library?: boolean }) {
@@ -625,30 +629,25 @@ function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; li
   const lastReviewer = role.enabled && role.kind === 'reviewer' && state.draft.reviewRoles.reviewers.length === 1;
   const lock = role.locked.includes('enabled') || lastReviewer;
   const full = enabled.length >= MAX_ENABLED_ROLES, copiesFull = roles.filter(role => role.source === 'custom').length >= MAX_CUSTOM_ROLES;
-  const toggleReason = lock ? t(lastReviewer ? '至少保留一个审查角色。' : '总指挥必须保留。') : undefined;
-  const freshReason = role.locked.includes('fresh') ? t('审查角色始终使用新实例。') : undefined;
-  return <div className="seats-role-actions">
-    {!library && role.kind !== 'lead' && <div className="seats-role-toggle">
-      <label className="seats-check" title={freshReason}>
-        <input type="checkbox" aria-label={t('新实例')} checked={role.fresh} disabled={saving || !!freshReason}
-          onChange={event => change(role, { fresh: event.target.checked })} />{t('新实例')}
-      </label>
-      {freshReason && <span className="seats-role-reason" data-role-lock="fresh">{freshReason}</span>}
-    </div>}
-    <button type="button" className="seats-btn is-small" data-edit-role={role.id} disabled={saving} onClick={() => edit(role)}>{t('角色设置')}</button>
-    {library && <>
-      <button type="button" className="seats-btn is-small" data-toggle-role={role.id} disabled={saving || lock || !role.enabled && full}
-        title={toggleReason ?? (!role.enabled && full ? enabledLimit() : undefined)}
-        onClick={() => change(role, { enabled: !role.enabled })}>{t(role.enabled ? '移出团队' : '加入团队')}</button>
-      {role.source !== 'custom' && !role.locked.includes('copy') && <>
-        <button type="button" className="seats-btn is-small" disabled={saving || copiesFull} onClick={() => create(role)}>{t('复制后自定义')}</button>
-        {role.enabled && <button type="button" className="seats-btn is-small" data-replace-role={role.id}
-          disabled={saving || copiesFull} onClick={() => create(role, role.id)}>{t('复制并替换')}</button>}
-      </>}
-      {role.source === 'custom' && <button type="button" className="seats-btn is-small" disabled={saving || lock}
-        title={toggleReason} onClick={() => remove(role)}>{t('删除角色')}</button>}
-      {toggleReason && <span className="seats-role-reason" data-role-lock="membership">{toggleReason}</span>}
+  const custom = role.source === 'custom', canCopy = !custom && !role.locked.includes('copy');
+  const toggleReason = lock ? t(lastReviewer ? '至少保留一个审查角色。' : '总指挥必须保留。') : !role.enabled && full ? enabledLimit() : undefined;
+  const run = (action: () => void) => { if (!library) state.popup.closeMenu(); action(); };
+  const cls = library ? 'seats-btn' : 'seats-menu-item', itemRole = library ? undefined : 'menuitem';
+  return <div className={library ? 'seats-role-actions' : 'seats-menu-list'}>
+    <button type="button" className={cls} role={itemRole} data-edit-role={role.id} disabled={saving} onClick={() => run(() => edit(role))}>{t('角色设置')}</button>
+    <button type="button" className={cls} role={itemRole} data-toggle-role={role.id} disabled={saving || !!toggleReason}
+      title={toggleReason} onClick={() => run(() => change(role, { enabled: !role.enabled }))}>
+      {t(role.enabled ? library ? '移出团队' : '停用' : '加入团队')}
+    </button>
+    {toggleReason && <span className="seats-role-reason" data-role-lock="membership">{toggleReason}</span>}
+    {canCopy && <>
+      <button type="button" className={cls} role={itemRole} disabled={saving || copiesFull} onClick={() => run(() => create(role))}>{t('复制后自定义')}</button>
+      {role.enabled && <button type="button" className={cls} role={itemRole} data-replace-role={role.id} disabled={saving || copiesFull}
+        onClick={() => run(() => create(role, role.id))}>{t('复制并替换')}</button>}
+      {!library && copiesFull && <span className="seats-role-reason">{customLimit()}</span>}
     </>}
+    {custom && <button type="button" className={cls} role={itemRole} disabled={saving || lock} title={toggleReason}
+      onClick={() => run(() => remove(role))}>{t('删除角色')}</button>}
   </div>;
 }
 
@@ -662,10 +661,10 @@ function RoleLibrary({ state, query, setQuery, filter, setFilter }: DialogPart &
     && [roleName(role), role.id, role.duty, role.detail].some(value => value.toLocaleLowerCase().includes(search)));
   return <section className="seats-library" id="seats-library-panel" role="tabpanel" aria-labelledby="seats-library-tab">
     <div className="seats-library-tools">
-      <select aria-label={t('筛选角色')} value={filter} onChange={event => setFilter(event.target.value)}>
-        <option value="">{t('所有角色')}</option><option value="builtin">{t('内置角色')}</option><option value="library">{t('专业方向')}</option>
-        <option value="custom">{t('自定义')}</option><option value="enabled">{t('已启用')}</option>
-      </select>
+      <div className="seats-library-filters" role="group" aria-label={t('筛选角色')}>
+        {Object.entries({ '': '所有角色', builtin: '内置角色', library: '专业方向', custom: '自定义', enabled: '已启用' }).map(([id, title]) =>
+          <button key={id} type="button" className="seats-btn" aria-pressed={filter === id} onClick={() => setFilter(id)}>{t(title)}</button>)}
+      </div>
       <label className="seats-search"><input type="search" aria-label={t('搜索角色')} placeholder={t('搜索角色')}
         value={query} onChange={event => setQuery(event.target.value)} /></label>
       <span className="seats-grow" />
@@ -680,112 +679,195 @@ function RoleLibrary({ state, query, setQuery, filter, setFilter }: DialogPart &
       </div>}
     </div>
     <div className="seats-library-grid">{visible.map(role => <article className="seats-library-card" data-library-role={role.id} data-enabled={role.enabled} key={role.id}>
-      <div className="seats-team-name"><RoleIcon id={role.id} /><h3>{roleName(role)}</h3>
-        {role.source === 'custom' && <span className="seats-tag">{t('项目角色')}</span>}</div>
-      <p>{role.source === 'custom' ? role.duty : t(role.detail || role.duty)}</p>
+      <div className="seats-team-name"><RoleIcon id={role.id} /><h3 title={roleName(role)}>{roleName(role)}</h3>
+        {currentLanguage() === 'zh' && ROLE_NAMES[role.id] && <span className="seats-role-english" lang="en">{ROLE_NAMES[role.id]}</span>}
+        {role.source === 'custom' && <span className="seats-tag">{t('项目角色')}</span>}
+        {role.enabled && <span className="seats-tag seats-library-joined">✓ {t('已加入')}</span>}
+      </div>
+      <p title={role.source === 'custom' ? role.duty : t(role.detail || role.duty)}>{role.source === 'custom' ? role.duty : t(role.detail || role.duty)}</p>
       <RoleActions state={state} role={role} library />
     </article>)}</div>
     {!visible.length && <p>{t('没有匹配的角色')}</p>}
   </section>;
 }
 
-function TeamChart({ state }: DialogPart) {
-  const { info } = state.source, { enabled, working, baseline, block } = state.draft, { over } = state.drag;
-  const { slotState, stateMark, modelButton, effortButton, fastSwitch } = seatControls(state);
-  const lead = enabled.find(role => role.id === info.lead), team = enabled.filter(role => role.id !== info.lead);
-  const seats = enabled.map(role => role.id);
-  const changed = changedSeats(seats, working, baseline);
-  const specialties = state.draft.roles.filter(role => role.source === 'library' && role.kind === 'author');
-  const stateOuter = state;
-  const card = (role: TeamRole, isLead = false) => {
-    const id = role.id, seat = getSlot(working, id), state = slotState(id);
-    return <article key={id} className={['seats-team-card', isLead && 'is-lead', over === id && 'is-over', id === block?.reviewer && 'is-blocked'].filter(Boolean).join(' ')}
-      data-seat={id} data-slot={id}>
-      <div className="seats-team-info">
-        <div className="seats-team-name"><RoleIcon id={id} />
-          <h3>{roleName(role)}</h3>{currentLanguage() === 'zh' && ROLE_NAMES[id] && <span lang="en">{ROLE_NAMES[id]}</span>}
-          {role.source === 'custom' && <span className="seats-tag">{t('项目角色')}</span>}
-          {role.fresh !== role.defaultFresh && <span className="seats-tag" data-fresh-override>{t(role.fresh ? '改为新实例' : '改为复用实例')}</span>}
-          {changed.includes(id) && <span className="seats-chg">{t('已改')}</span>}</div>
-        <p title={t(role.detail)}>{role.source === 'custom' ? role.duty : t(role.duty)}{role.detail && role.detail !== role.duty && <> · {t(role.detail)}</>}</p>
-        {role.outputs && <p className="seats-team-output">{t('产出：{outputs}', { outputs: role.source === 'custom' ? role.outputs : t(role.outputs) })}</p>}
-        {id === 'developer' && specialties.length > 0 && <div className="seats-specialties">
-          {specialties.map(role => <span key={role.id}>{roleName(role)}</span>)}
-        </div>}
-        {state && stateMark(state)}
+function TeamCard({ state, role, lead, changed }: DialogPart & { role: TeamRole; lead?: boolean; changed: boolean }) {
+  const { info, label } = state.source, { block } = state.draft, { over } = state.drag;
+  const { menu, openMenu } = state.popup;
+  const { slotState, stateMark } = seatControls(state);
+  const id = role.id, mark = slotState(id), custom = role.source === 'custom';
+  const duty = custom ? role.duty : t(role.detail || role.duty);
+  const output = role.outputs && t('产出：{outputs}', { outputs: custom ? role.outputs : t(role.outputs) });
+  const specialties = id === 'developer' ? state.draft.roles.filter(item => item.source === 'library' && item.kind === 'author').map(roleName) : [];
+  const running = lead && info.leadPending ? info.current?.[id] : undefined;
+  const restartTitle = running ? t('本次对话仍使用 {settings}', { settings: seatSettingText(running, label(running.model), t('快速')) }) : undefined;
+  const classes = ['seats-team-card', lead && 'is-lead', over === id && 'is-over', id === block?.reviewer && 'is-blocked'].filter(Boolean).join(' ');
+  const moreTitle = t('{seat}：角色操作', { seat: roleName(role) });
+  return <article className={classes} data-seat={id} data-slot={id} aria-label={roleName(role)}>
+    <div className="seats-team-info">
+      <div className="seats-team-name"><RoleIcon id={id} />
+        <h3 title={roleName(role)}>{roleName(role)}</h3>
+        {currentLanguage() === 'zh' && ROLE_NAMES[id] && <span className="seats-role-english" lang="en" title={ROLE_NAMES[id]}>{ROLE_NAMES[id]}</span>}
+        {specialties.length > 0 && <span className="seats-tag" title={specialties.join('、')}>{t('专长 {count}', { count: specialties.length })}</span>}
+        {custom && <span className="seats-tag">{t('项目角色')}</span>}
+        {lead && <span className="seats-tag seats-lead-lock" title={t('总指挥必须保留。')}><LockSimple size={14} aria-hidden="true" /></span>}
+        {lead && info.leadPending && <span className="seats-tag seats-lead-restart" data-lead-pending title={restartTitle}>{t('重启后生效')}</span>}
+        {changed && <span className="seats-chg" title={t('已改')}>●<span className="seats-sr-only">{t('已改')}</span></span>}
       </div>
-      <div className="seats-team-settings">{modelButton(id, seat?.model)}{effortButton(id)}{fastSwitch(id)}
-        <RoleActions state={stateOuter} role={role} /></div>
-    </article>;
-  };
+      {lead
+        ? <div className="seats-team-output"><p title={[duty, output].filter(Boolean).join(' · ')}>
+          {duty}{output && <span> · {output}</span>}</p>{mark && stateMark(mark)}</div>
+        : <><p title={duty}>{duty}</p>
+          <div className="seats-team-output"><p title={output || undefined}>{output}</p>{mark && stateMark(mark)}</div></>}
+    </div>
+    {role.fresh !== role.defaultFresh && <span className="seats-sr-only" data-fresh-override>{t(role.fresh ? '改为新实例' : '改为复用实例')}</span>}
+    <SeatPicker state={state} role={role} />
+    <button type="button" className="seats-btn is-icon seats-role-more" data-role-more={id}
+      aria-haspopup="menu" aria-expanded={menu?.slot === id && menu.kind === 'role'} title={moreTitle} aria-label={moreTitle}
+      onClick={event => openMenu(id, event.currentTarget, 'role')}><DotsThree size={20} weight="bold" aria-hidden="true" /></button>
+  </article>;
+}
+
+function TeamChart({ state }: DialogPart) {
+  const { info } = state.source, { enabled, working, baseline } = state.draft;
+  const lead = enabled.find(role => role.id === info.lead), team = enabled.filter(role => role.id !== info.lead);
+  const changed = changedSeats(enabled.map(role => role.id), working, baseline);
   return <div className="seats-chart" id="seats-team-panel" role="tabpanel" aria-labelledby="seats-team-tab">
     <div className="seats-owner" data-owner>
       <span className="seats-role-icon"><User size={18} aria-hidden="true" /></span>
-      <div><h3>Human / Owner</h3><p>{t('目标、预算、重大决策、最终授权')}</p></div>
+      <h3>Human / Owner</h3><p>{t('目标、预算、重大决策、最终授权')}</p>
     </div>
-    {lead && <><div className="seats-chart-link" aria-hidden="true" />{card(lead, true)}<div className="seats-chart-bus" aria-hidden="true" /></>}
-    <div className="seats-team-grid">{team.map(role => card(role))}
-      <button type="button" className="seats-btn seats-add-role" onClick={() => state.switchTab('library')}>{t('添加角色')}</button>
+    {lead && <><div className="seats-chart-link" aria-hidden="true" />
+      <TeamCard state={state} role={lead} lead changed={changed.includes(lead.id)} /><div className="seats-chart-bus" aria-hidden="true" /></>}
+    <div className="seats-team-grid">
+      {team.map(role => <TeamCard key={role.id} state={state} role={role} changed={changed.includes(role.id)} />)}
+      {enabled.length < MAX_ENABLED_ROLES && <button type="button" className="seats-btn seats-add-role" onClick={() => state.switchTab('library')}>
+        <Plus size={16} aria-hidden="true" />{t('添加角色')}<span>{t('{count}/{limit}，从角色库选', { count: enabled.length, limit: MAX_ENABLED_ROLES })}</span>
+      </button>}
     </div>
   </div>;
 }
 
 function ModelPalette({ state }: DialogPart) {
-  const { catalog } = state.source, { paletteBox, paletteOpen, setPaletteOpen } = state.panels, { startDrag } = state.drag;
+  const { catalog } = state.source, { paletteBox, paletteButton, paletteOpen, setPaletteOpen } = state.panels;
+  const { startDrag, ghost } = state.drag;
   const { query, setQuery, folds, setFolds } = state.panels;
-  // 模型盘: grouped by family and model line (Opus, Sonnet… / Sol, Astra…), the newest of each line first, older versions folded.
-  const searching = query.trim() !== '';
+  const searching = query.trim() !== '', groups = paletteGroups(catalog, query);
   const chip = (row: SeatModel, old = false) => {
     const off = !row.available, name = shortLabel(row.label);
-    return <span key={row.model} className={`seats-chip${old ? ' is-old' : ''}${off ? ' is-off' : ''}`} data-chip={row.model} data-family={row.family} aria-disabled={off || undefined}
-      title={off ? t('{model}（{reason}）不能放入座位', { model: name, reason: row.reason ?? '' }) : t('{model} · 拖到座位上', { model: name })} onPointerDown={event => startDrag(event, row.model, null)}>
-      <i className="seats-mk" data-family={row.family} /><span className="seats-chip-name">{name}</span>{row.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}</span>;
+    const hint = off ? t('{model}（{reason}）不能放入座位', { model: name, reason: row.reason ?? '' }) : t('{model} · 拖到座位上', { model: name });
+    return <span key={row.model} className={`seats-chip${old ? ' is-old' : ''}${off ? ' is-off' : ''}`}
+      data-chip={row.model} data-family={row.family} aria-disabled={off || undefined} title={hint}
+      onPointerDown={event => startDrag(event, row.model, null)}>
+      <i className="seats-mk" data-family={row.family} /><span className="seats-chip-name">{name}</span>
+      {row.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}
+    </span>;
   };
-  return <aside ref={paletteBox} className={paletteOpen ? "seats-palette is-open" : "seats-palette"} aria-label={t('模型盘')}>
-    <header className="seats-palette-head"><h3>{t('模型盘')}</h3>
-      <button type="button" className="seats-btn is-icon seats-palette-close" aria-label={t('关闭')} onClick={() => setPaletteOpen(false)}><X size={16} aria-hidden="true" /></button></header>
-    <label className="seats-search"><MagnifyingGlass size={14} aria-hidden="true" /><input type="search" data-palette-search spellCheck={false} aria-label={t('搜索模型')} placeholder={t('搜索模型')} value={query} onChange={event => setQuery(event.target.value)} /></label>
-    <div className="seats-groups">{paletteGroups(catalog, query).map(group => <section key={group.family} className="seats-group" data-group={group.family}>
-      <h4><i className="seats-mk" data-family={group.family} />{group.family === 'claude' ? 'Claude' : 'Codex'} · {group.total}</h4>
-      {group.lines.map(line => { const key = group.family + line.name, open = searching || folds[key];
-        return <div key={key} className="seats-line" data-line={line.name || 'other'}><span className="seats-line-name">{line.name || t('其他')}</span>
-          {line.shown.map(row => chip(row))}
-          {line.older.length > 0 && !searching && <button type="button" className="seats-fold" data-fold={key} aria-expanded={!!open} onClick={() => setFolds({ ...folds, [key]: !open })}>{t('更早版本 ({count})', { count: line.older.length })}</button>}
-          {open && line.older.map(row => chip(row, true))}</div>; })}
-    </section>)}{searching && !paletteGroups(catalog, query).length && <p className="seats-none">{t('没有匹配的模型')}</p>}</div>
+  const close = () => { setPaletteOpen(false); paletteButton.current?.focus(); };
+  const classes = ['seats-palette', state.tab === 'operations' && 'is-operation-drawer', paletteOpen && 'is-open', ghost && 'is-dragging'];
+  return <aside id="seats-model-tray" ref={paletteBox} className={classes.filter(Boolean).join(' ')} aria-label={t('模型盘')}>
+    <header className="seats-palette-head">
+      <h3>{t('模型盘')}</h3><span>{t('拖到座位上')}</span><span className="seats-grow" />
+      <button type="button" className="seats-btn is-icon seats-palette-close" aria-label={t('关闭')} onClick={close}><X size={16} aria-hidden="true" /></button>
+    </header>
+    <label className="seats-search"><MagnifyingGlass size={16} aria-hidden="true" />
+      <input type="search" data-palette-search spellCheck={false} aria-label={t('搜索模型')} placeholder={t('搜索模型')}
+        value={query} onChange={event => setQuery(event.target.value)} />
+    </label>
+    <div className="seats-groups">{groups.map(group => {
+      const key = group.family, older = group.lines.flatMap(line => line.older);
+      const open = searching || !!folds[key];
+      return <section key={key} className="seats-group" data-group={key}>
+        <h4><i className="seats-mk" data-family={key} />{key === 'claude' ? 'Claude' : 'Codex'} · {group.total}</h4>
+        {group.lines.filter(line => line.shown.length > 0).map(line =>
+          <div key={line.name} className="seats-line" data-line={line.name || 'other'}>{line.shown.map(row => chip(row))}</div>)}
+        {older.length > 0 && <div className="seats-line">
+          {open && older.map(row => chip(row, true))}
+          {!searching && <button type="button" className="seats-fold" data-fold={key} aria-expanded={open}
+            onClick={() => setFolds(previous => ({ ...previous, [key]: !open }))}>
+            {open ? t('收起更早版本') : t('更早版本 ({count})', { count: older.length })}
+          </button>}
+        </div>}
+      </section>;
+    })}{!groups.length && <p className="seats-none">{t('没有匹配的模型')}</p>}</div>
   </aside>;
 }
 
+function RoutingStatus({ state }: DialogPart) {
+  const { info } = state.source, { scope, dirty, count } = state.draft;
+  const reviewStatus = state.review.visible && (info.routing.state === 'pending' ? '等你确认' : info.routing.state === 'invalid' ? '文件未应用' : null);
+  const templateProjects = info.routing.templateProjects;
+  return <span className="seats-effective" data-routing-status role="status">
+    {reviewStatus ? t(reviewStatus) : dirty ? <>
+      <span aria-hidden="true">●</span>{count === 1 ? t('1 处改动未保存') : t('{count} 处改动未保存', { count })}
+    </> : <>
+      <span aria-hidden="true">✓</span>{t(scope === 'project' ? '已保存，立即生效' : '已保存')}
+      {scope === 'template' && templateProjects !== undefined && <span>· {t('{count} 个项目使用此模板', { count: templateProjects })}</span>}
+      {scope === 'project' && info.leadPending && <span>· {t('总指挥重启后生效')}</span>}
+    </>}
+  </span>;
+}
+
 function DialogHeader({ state }: DialogPart) {
-  const { info, refresh, refreshing } = state.source, { close } = state.panels;
-  const { scope, changeScope, saving } = state.draft, { projectId } = state.props;
-  const routing = info.routing;
+  const { info } = state.source, { close } = state.panels;
+  const { scope, changeScope, saving, dirty, canReset, createFile, mayOverwrite, refusal, reviewBlock, teamError, block, save } = state.draft;
+  const { projectId } = state.props;
+  const { routing } = info;
   const switchScope = (scope: Scope) => { state.switchTab('team'); changeScope(scope); };
-  return (
-  <header className="seats-head">
-    <div><h2 id="seats-title">{t('模型路由')}</h2></div>
+  const busy = saving || state.review.busy;
+  const saveLabel = createFile && !dirty ? '为本项目创建配置' : scope === 'template' ? '保存模板' : '保存路由';
+  const saveHint = block ? reviewerMessage(state) : createFile ? t('创建后保存到 .agentrix/routing.json，可随项目提交。') : undefined;
+  const projectScope = t(routing.remote ? '本项目' : '本项目 .agentrix/routing.json');
+  return <header className="seats-head">
+    <h2 id="seats-title">{t('模型路由')}</h2>
     <div className="seats-sources" role="group" aria-label={t('设置范围')}>
       {projectId && <button type="button" className="seats-btn" data-scope="project" aria-pressed={scope === 'project'}
-        disabled={saving || state.review.busy} onClick={() => switchScope('project')}>
-        {t(routing.remote ? '本项目' : '本项目 · 保存在 .agentrix/routing.json')}
+        data-routing-source={scope === 'project' ? routing.layer : undefined}
+        title={routing.remote ? t('SSH（本机设置）') : routingLayer(routing)} disabled={busy} onClick={() => switchScope('project')}>
+        {projectScope}
       </button>}
       <button type="button" className="seats-btn" data-scope="template" aria-pressed={scope === 'template'}
-        disabled={saving || state.review.busy} onClick={() => switchScope('template')}>{t('我的默认模板')}</button>
+        disabled={busy} onClick={() => switchScope('template')}>{t('我的默认模板')}</button>
     </div>
-    {scope === 'project' && (routing.remote || routing.layer !== 'template') && <span className="seats-source" data-routing-source={routing.layer}>
-      {routing.remote ? t('SSH（本机设置）') : routingLayer(routing)}
-    </span>}
-    {scope === 'template' && routing.templateProjects !== undefined &&
-      <span className="seats-source">{t('{count} 个项目使用此模板', { count: routing.templateProjects })}</span>}
-    <span className="seats-age" data-catalog-at>{`${t('模型列表更新于')} Claude ${ageText(info.catalogAt?.claude ?? null)} · Codex ${ageText(info.catalogAt?.codex ?? null)}`}</span>
     <span className="seats-grow" />
-    <div className="seats-head-actions">
-      <button type="button" className="seats-btn" data-refresh disabled={refreshing === 'manual'} aria-label={t('刷新模型列表')}
-        onClick={() => { void refresh(); }}><ArrowsClockwise size={14} aria-hidden="true" />{t('刷新')}</button>
-      <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} disabled={state.review.busy || saving} onClick={close}><X size={14} aria-hidden="true" /></button>
-    </div>
-  </header>
-  );
+    <RoutingStatus state={state} />
+    <button type="button" className="seats-btn" data-reset disabled={busy || !canReset || state.review.visible}
+      onClick={() => { state.popup.setMenu(null); state.draft.reset(); }}>
+      <ArrowCounterClockwise size={16} aria-hidden="true" />{t('恢复默认')}
+    </button>
+    <button type="button" className={`seats-btn${dirty && !state.review.visible ? ' is-primary' : ''}`} data-save
+      disabled={(!dirty && !createFile) || !!refusal || !!reviewBlock || !!teamError || busy || !mayOverwrite || state.review.visible}
+      title={saveHint} onClick={() => { void save(); }}>{t(saveLabel)}</button>
+    <button type="button" className="seats-btn is-icon" aria-label={t('关闭')} disabled={busy} onClick={close}><X size={16} aria-hidden="true" /></button>
+  </header>;
+}
+
+function DialogToolbar({ state }: DialogPart) {
+  const { info, opRows, refresh, refreshing } = state.source;
+  const { nowButton, nowOpen, setNowOpen, paletteButton, paletteOpen, setPaletteOpen } = state.panels;
+  const { tab, switchTab } = state;
+  const { claude = null, codex = null } = info.catalogAt ?? {};
+  const latest = Math.max(claude ?? 0, codex ?? 0) || null;
+  const counts = { team: state.draft.enabled.length, library: state.draft.roles.length, operations: opRows.length };
+  return <div className="seats-toolbar">
+    {!state.review.visible && <RoutingTabs tab={tab} choose={switchTab} counts={counts} />}
+    <span className="seats-grow" />
+    <button type="button" ref={nowButton} className="seats-btn" data-now aria-expanded={nowOpen}
+      onClick={() => setNowOpen(!nowOpen)}>{t('本次对话')}<CaretDown size={16} aria-hidden="true" /></button>
+    <span className="seats-age" data-catalog-at title={`Claude ${ageText(claude)} · Codex ${ageText(codex)}`}>
+      {t('模型列表 {age}', { age: ageText(latest) })}
+    </span>
+    <button type="button" className="seats-btn is-icon" data-refresh disabled={refreshing === 'manual'}
+      title={t('刷新模型列表')} aria-label={t('刷新模型列表')} onClick={() => { void refresh(); }}>
+      <ArrowsClockwise size={16} aria-hidden="true" />
+    </button>
+    {!state.review.visible && tab !== 'library' && <button type="button" ref={paletteButton} className="seats-btn"
+      data-palette-toggle data-operation-drawer={tab === 'operations' || undefined} aria-expanded={paletteOpen} aria-pressed={paletteOpen}
+      aria-controls="seats-model-tray" onClick={() => setPaletteOpen(!paletteOpen)}>
+      <SidebarSimple size={16} aria-hidden="true" />{t('模型盘')}
+    </button>}
+    {nowOpen && <ConversationChoices state={state} />}
+  </div>;
 }
 
 function ConversationChoices({ state }: DialogPart) {
@@ -828,41 +910,16 @@ function ReviewOperationBanner({ state }: DialogPart) {
 
 function DialogStrip({ state }: DialogPart) {
   const { moved, label, seatName, notice, info, operations } = state.source;
-  const { block, reviewBlock, dirty, count, scope, saving, refusal, canReset, discardShown, setDiscarding, save, createFile, mayOverwrite, teamError, stale, reload } = state.draft;
-  const { nowButton, nowOpen, setNowOpen, paletteButton, paletteOpen, setPaletteOpen, keepButton } = state.panels;
+  const { block, count, scope, saving, refusal, discardShown, setDiscarding, teamError, stale, reload } = state.draft;
+  const { keepButton } = state.panels;
   const { migration, onDismissMigration, onClose } = state.props;
-  const { fix } = state.edits, { setMenu } = state.popup;
-  const reset = () => { setMenu(null); state.draft.reset(); };
-  const blockMessage = () => reviewerMessage(state);
-  const routingStatus = state.review.visible
-    ? info.routing.state === 'pending' ? '等你确认' : info.routing.state === 'invalid' ? '文件未应用' : null
-    : null;
-  const timing = t(info.leadPending ? '保存后立即生效；总指挥重启后生效' : '保存后立即生效');
+  const { fix } = state.edits;
   const noticeKind = notice?.kind === 'saved' ? 'ok' : notice?.kind;
   const noticeText = notice?.kind === 'saved'
-    ? (operations?.pending.length
-      ? [t('已保存'), info.leadPending && t('总指挥重启后生效'), t('部分操作模型下次启动生效')].filter(Boolean).join(' · ')
-      : t(info.leadPending ? '已保存，立即生效；总指挥重启后生效' : '已保存，立即生效'))
+    ? operations?.pending.length ? t('部分操作模型下次启动生效') : undefined
     : notice?.text;
   return (
-    <section className="seats-strip" aria-label={routingStatus ? t(routingStatus) : t('模型路由')}>
-      <div className="seats-strip-row">
-        {routingStatus ? <span className="seats-effective" role="status">{t(routingStatus)}</span> : <>
-          <span className="seats-effective"><i className={`seats-dot ${block || reviewBlock ? 'is-bad' : dirty ? 'is-on' : 'is-ok'}`} />{timing}</span>
-          <span>{block ? t('有座位被阻止，不能保存') : reviewBlock ? t('审查模型被阻止，不能保存') : dirty
-            ? t(operations ? '草稿未保存 · 已改 {count} 项' : '草稿未保存 · 已改 {count} 个座位', { count }) : t('没有改动')}</span>
-        </>}
-        <span className="seats-grow" />
-        <button type="button" ref={nowButton} className="seats-btn is-small" data-now aria-expanded={nowOpen}
-          onClick={() => setNowOpen(!nowOpen)}>{t('本次对话')}<CaretDown size={12} aria-hidden="true" /></button>
-        {!state.review.visible && state.tab !== 'library' && <button type="button" ref={paletteButton} className="seats-btn is-small"
-          data-palette-toggle aria-pressed={paletteOpen} onClick={() => setPaletteOpen(!paletteOpen)}>{t('模型盘')}</button>}
-        <button type="button" className="seats-btn" data-reset disabled={saving || !canReset}
-          onClick={reset}><ArrowCounterClockwise size={14} aria-hidden="true" />{t('恢复默认')}</button>
-        <button type="button" className="seats-btn is-primary" data-save disabled={(!dirty && !createFile) || !!refusal || !!reviewBlock || !!teamError || saving || !mayOverwrite}
-          title={block ? blockMessage() : undefined} onClick={() => { void save(); }}>{t(createFile ? '为本项目创建配置' : scope === 'template' ? '保存模板' : '保存路由')}</button>
-      </div>
-      {createFile && <p>{t('创建后保存到 .agentrix/routing.json，可随项目提交。')}</p>}
+    <section className="seats-strip" aria-label={t('模型路由')}>
       {scope === 'project' && info.routing.notice === 'file-deleted' && <p role="status">{t('路由文件已删除。')}</p>}
       {scope === 'project' && info.routing.state === 'rejected' && <div className="seats-banner">
         <span>{t('已保留当前配置')}{info.routing.error && <> · {routingError(info.routing.error)}</>}</span>
@@ -872,7 +929,6 @@ function DialogStrip({ state }: DialogPart) {
       {stale && scope === 'project' && <button type="button" className="seats-btn" data-reload-routing disabled={saving}
         onClick={() => { void reload(); }}>{t('重新载入配置')}</button>}
       {teamError && <div className="seats-banner is-bad" role="alert">{routingError(teamError)}</div>}
-      {nowOpen && <ConversationChoices state={state} />}
       <ReviewOperationBanner state={state} />
       {moved.length > 0 && <div className="seats-banner" role="status" data-moved><CheckCircle size={14} aria-hidden="true" />
         <span>{t('默认已更新为 {changes}', { changes: moved.map(item => `${seatName(item.seat)}：${label(item.from)} → ${label(item.to)}`).join('；') })}</span></div>}
@@ -881,7 +937,7 @@ function DialogStrip({ state }: DialogPart) {
         <button type="button" className="seats-btn" onClick={onDismissMigration}>{t('知道了')}</button>
       </div>}
       {block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" />
-        <span><b>{t('审查座位被阻止。')}</b>{blockMessage()}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join('、') })}`}</span>
+        <span><b>{t('审查座位被阻止。')}</b>{reviewerMessage(state)}{!block.fix && ` ${t('请先改动{seats}的模型。', { seats: block.hit.map(seatName).join('、') })}`}</span>
         {block.fix && <button type="button" className="seats-btn" data-fix={block.fix.model} onClick={fix}>{t('审查改用 {model}', { model: label(block.fix.model) })}</button>}</div>}
       {refusal && !block && <div className="seats-banner is-bad" role="alert"><Prohibit size={14} aria-hidden="true" /><span>{refusal.message}</span></div>}
       {discardShown && <div className="seats-banner is-warn" role="alertdialog" aria-label={t('放弃未保存的修改？')}><Warning size={14} aria-hidden="true" />
@@ -890,9 +946,55 @@ function DialogStrip({ state }: DialogPart) {
         <button ref={keepButton} type="button" className="seats-btn" data-keep onClick={() => setDiscarding(false)}>{t('继续编辑')}</button>
         <button type="button" className="seats-btn" data-discard onClick={onClose}>{t('放弃修改')}</button></div>}
       <p className="seats-notice" role="status" aria-live="polite" data-kind={noticeKind}>
-        {noticeKind === 'ok' && <CheckCircle size={14} aria-hidden="true" />}{noticeText}</p>
+        {noticeText && noticeKind === 'ok' && <CheckCircle size={14} aria-hidden="true" />}{noticeText}</p>
     </section>
   );
+}
+
+function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
+  const { catalog, slotName } = state.source, { working, saving } = state.draft;
+  const { edit } = state.edits;
+  const slot = role.id, seat = getSlot(working, slot);
+  if (!seat) return null;
+  const model = rowFor(catalog, seat.model);
+  const fastNote = !model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported']) : model.family === 'claude' ? t(FAST_BILLING) : undefined;
+  const locked = role.locked.includes('fresh');
+  return <div className="seats-menu-settings">
+    <div className="seats-picker-efforts" data-effort={slot} data-tile-effort={slot} role="group" aria-label={t('{seat}的推理强度', { seat: slotName(slot) })}>
+      <span>{t('强度')}</span>
+      {(model?.efforts ?? [seat.effort]).map(effort => <button key={effort} type="button" className="seats-btn is-small"
+        data-pop-effort={effort} aria-pressed={effort === seat.effort} disabled={saving}
+        onClick={() => edit(setEffort(working, slot, effort, catalog))}>{effort}</button>)}
+    </div>
+    <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.fast} data-fast={slot} data-tile-fast={slot}
+      disabled={saving || !model?.fast && !seat.fast} aria-label={t('{seat}快速模式', { seat: slotName(slot) })} title={fastNote}
+      onClick={() => edit(setFast(working, slot, !seat.fast, catalog))}>{t('快速')}<i /></button>
+    {role.kind !== 'lead' && (locked ? <span className="seats-role-reason" data-role-lock="fresh">
+      <LockSimple size={14} aria-hidden="true" /> {t('审查角色始终使用新实例。')}
+    </span> : <button type="button" className="seats-switch" role="switch" aria-checked={role.fresh} data-fresh={slot}
+      disabled={saving} onClick={() => state.roles.change(role, { fresh: !role.fresh })}>{t('新实例')}<i /></button>)}
+    {fastNote && <small className="seats-menu-note" data-fast-note>{fastNote}</small>}
+  </div>;
+}
+
+function TeamModelOptions({ state, selected, pick }: DialogPart & { selected?: string; pick: (model: string) => void }) {
+  const { catalog } = state.source, { modelFolds, setModelFolds } = state.popup;
+  return paletteGroups(catalog).filter(group => group.lines.length > 0).map(({ family, lines }) => {
+    const current = lines.flatMap(line => [...line.shown, ...line.older.filter(row => row.model === selected)]);
+    const older = lines.flatMap(line => line.older.filter(row => row.model !== selected));
+    const open = !!modelFolds[family];
+    return <div key={family} className="seats-picker-family" role="group" aria-label={family === 'claude' ? 'Claude' : 'Codex'}>
+      <span aria-hidden="true">{family === 'claude' ? 'Claude' : 'Codex'}</span>
+      {modelMenuItems(current, selected, pick)}
+      {older.length > 0 && <>
+        <button type="button" className="seats-menu-item seats-menu-fold" role="menuitem" data-picker-fold={family} aria-expanded={open}
+          onClick={() => setModelFolds(previous => ({ ...previous, [family]: !open }))}>
+          {open ? t('收起更早版本') : t('更早版本 ({count})', { count: older.length })}
+        </button>
+        {open && modelMenuItems(older, selected, pick)}
+      </>}
+    </div>;
+  });
 }
 
 function DialogMenu({ state }: DialogPart) {
@@ -903,7 +1005,7 @@ function DialogMenu({ state }: DialogPart) {
   const pick = (slot: SlotId, model: string) => { assign(slot, model); closeMenu(); };
   const menuOp = opAt(menu.slot), menuValue = menuOp ? opValues[menuOp.id] : undefined;
   const menuSeat = menu && !menuOp ? getSlot(working, menu.slot) : undefined;
-  const menuModel = menuSeat ? rowFor(catalog, menuSeat.model) : undefined;
+  const role = state.draft.enabled.find(item => item.id === menu.slot);
   const selected = menuValue === 'follow' ? undefined : menuValue?.model ?? menuSeat?.model;
   const menuEffort = menuValue === 'follow' ? undefined : menuValue?.effort ?? menuSeat?.effort;
   const efforts = selected ? rowFor(catalog, selected)?.efforts ?? [] : [];
@@ -915,15 +1017,20 @@ function DialogMenu({ state }: DialogPart) {
   };
   const menuAgent = menu?.kind === 'claude' || menu?.kind === 'codex' ? menu.kind : null;
   const menuStyle = { left: menu.left, top: menu.top, bottom: menu.bottom, width: menu.width, maxHeight: menu.maxHeight };
-  const fastNote = menuModel && (!menuModel.fast ? t(FAST_REASONS[menuModel.fastReason ?? 'unsupported']) : menuModel.family === 'claude' ? t(FAST_BILLING) : null);
   return <>
+  {menu.kind === 'role' && role && <div ref={menuBox} className="seats-menu is-role" role="menu"
+    aria-label={t('{seat}：角色操作', { seat: slotName(menu.slot) })} style={menuStyle} onKeyDown={menuKeys}>
+    <MenuHeader title={slotName(menu.slot)} close={closeMenu} />
+    <RoleActions state={state} role={role} />
+  </div>}
   {menu && menu.kind === 'model' && <div key={menu.slot} ref={menuBox} className={menuOp ? 'seats-menu is-operation' : 'seats-menu'} role="menu"
     aria-label={t('{seat}：选择模型', { seat: slotName(menu.slot) })} style={menuStyle} onKeyDown={menuKeys}>
     <MenuHeader title={t('{seat}：选择模型', { seat: slotName(menu.slot) })} close={closeMenu} />
     <div className="seats-menu-list">
     {menuOp?.follow && <button type="button" role="menuitemradio" className="seats-menu-item" data-op-follow
       aria-checked={menuValue === 'follow'} onClick={() => { updateOperation(menuOp, 'follow'); closeMenu(); }}>{operationLabel(menuOp, 'follow', label)}</button>}
-    {modelMenuItems(catalog, selected, model => pick(menu.slot, model), menuOp || undefined)}
+    {menuOp ? modelMenuItems(catalog, selected, model => pick(menu.slot, model), menuOp)
+      : <TeamModelOptions state={state} selected={selected} pick={model => pick(menu.slot, model)} />}
     {custom ? <div className="seats-menu-custom">
       <input type="text" data-custom-input maxLength={160} autoFocus spellCheck={false} aria-label={t('模型名')} placeholder={t('模型名，例如 gpt-6.3-sol')} value={custom.text}
         onChange={event => setCustom({ text: event.target.value, error: '' })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submitCustom(menu.slot); } }} />
@@ -931,15 +1038,7 @@ function DialogMenu({ state }: DialogPart) {
       {custom.error && <small className="seats-menu-error" role="alert" data-custom-error>{custom.error}</small>}
     </div> : <button type="button" role="menuitem" className="seats-menu-item" data-custom onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
     </div>
-    {menuSeat && <div className="seats-menu-settings">
-      <select data-effort={menu.slot} aria-label={t('{seat}的推理强度', { seat: slotName(menu.slot) })} value={menuSeat.effort}
-        onChange={event => edit(setEffort(working, menu.slot, event.target.value, catalog))}>
-        {(menuModel?.efforts ?? [menuSeat.effort]).map(effort => <option key={effort} value={effort}>{t('强度 {effort}', { effort })}</option>)}</select>
-      <button type="button" className="seats-switch" role="switch" aria-checked={!!menuSeat.fast} data-fast={menu.slot}
-        disabled={!menuModel?.fast && !menuSeat.fast} aria-label={t('{seat}快速模式', { seat: slotName(menu.slot) })}
-        onClick={() => edit(setFast(working, menu.slot, !menuSeat.fast, catalog))}>{t('快速')}<i /></button>
-      {fastNote && <small className="seats-menu-note" data-fast-note>{fastNote}</small>}
-    </div>}
+    {role && <PickerSettings state={state} role={role} />}
   </div>}
   {menu?.kind === 'effort' && <div ref={menuBox} className="seats-menu is-effort" role="menu"
     aria-label={t('{seat}：选择强度', { seat: slotName(menu.slot) })} style={menuStyle} onKeyDown={menuKeys}>
@@ -947,12 +1046,6 @@ function DialogMenu({ state }: DialogPart) {
     <div className="seats-menu-list">{efforts.map(effort => <button key={effort} type="button" role="menuitemradio" className="seats-menu-item"
       aria-checked={effort === menuEffort} data-pop-effort={effort}
       onClick={() => changeMenuEffort(effort)}>{effort}{effort === menuEffort && <small>{t('当前')}</small>}</button>)}</div>
-    {menuSeat && <div className="seats-menu-settings">
-      <button type="button" className="seats-switch" role="switch" aria-checked={!!menuSeat.fast} data-pop-fast={menu.slot}
-        disabled={!menuModel?.fast && !menuSeat.fast} aria-label={t('{seat}快速模式', { seat: slotName(menu.slot) })}
-        onClick={() => edit(setFast(working, menu.slot, !menuSeat.fast, catalog))}>{t('快速')}<i /></button>
-      <small className="seats-menu-note" data-fast-note>{fastNote ?? t('开启后更快，用量与计费可能不同')}</small>
-    </div>}
   </div>}
   {menuOp && menuAgent && <div ref={menuBox} className="seats-menu" role="region" aria-label={t('未生效')} style={menuStyle}>
     <MenuHeader title={`${operationName(menuOp)} · ${menuAgent === 'claude' ? 'Claude' : 'Codex'} · ${t('未生效')}`} close={closeMenu} />
@@ -967,20 +1060,20 @@ export function SeatsDialog(props: SeatsDialogProps) {
   const { dialog, nowOpen, paletteOpen, close } = state.panels, { menu, openMenu } = state.popup;
   const [query, setQuery] = useState(''), [filter, setFilter] = useState('');
   const { editor } = state.roles, { review } = state;
-  const { over, ghost } = state.drag, { tab, switchTab, keys } = state;
+  const { over, ghost } = state.drag, { tab, keys } = state;
   const menuOp = menu ? opAt(menu.slot) : undefined;
-  const control = menuOp && menu ? { id: menuOp.id, kind: menu.kind } : undefined;
+  const control = menuOp && menu && menu.kind !== 'role' ? { id: menuOp.id, kind: menu.kind } : undefined;
   return createPortal(
     <div className="seats-overlay" onMouseDown={event => { if (event.target === event.currentTarget && !menu && !nowOpen && !paletteOpen && !editor && !review.busy) close(); }}>
       <div ref={dialog} className="seats-dialog" role="dialog" aria-modal="true" aria-labelledby="seats-title" tabIndex={-1} onKeyDown={keys}>
         <div className="seats-dialog-content" inert={!!editor}>
         <DialogHeader state={state} />
+        <DialogToolbar state={state} />
         <div className="seats-body">
           <DialogStrip state={state} />
           {review.visible ? <RoutingReview source={state.source.info.routing} roles={state.source.info.roles} operations={operations?.rows}
             busy={review.busy} refreshed={review.refreshed} act={review.act}
             close={state.source.info.routing.state === 'rejected' ? review.close : undefined} rawOpen={review.raw} toggleRaw={review.toggle} /> : <>
-          <RoutingTabs tab={tab} choose={switchTab} operations={!!operations} />
           <div className="seats-work">
             {tab === 'operations' && operations ? <OperationRows info={operations} values={opValues} baseline={ops.baseline} catalog={catalog} label={label}
               reviewBlocked={!!reviewBlock} reviewerModel={working[state.draft.reviewRoles.reviewers[0]]?.model}

@@ -622,22 +622,39 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
   await shot('claude-toast-light');
   await toast.waitFor({ state: 'detached', timeout: 4000 });
   await box.fill('/fast'); await box.press('Enter'); await seats.waitFor({ timeout: 4000 });
-  const controls = await seats.locator('[data-pick], [data-tile-effort], [data-tile-fast]').all();
-  assert.equal(controls.length, team.seats.length * 3);
-  for (const control of controls) {
-    await control.scrollIntoViewIfNeeded();
-    assert.equal(await control.evaluate(node => {
-      const { left, top, width, height } = node.getBoundingClientRect();
-      const hit = document.elementFromPoint(left + width / 2, top + height / 2);
-      return node.contains(hit) && parseFloat(getComputedStyle(node).fontSize) >= 14;
-    }), true, 'a card control is reachable at its centre and at least 14 px');
-  }
+  await checkRoutingCardControls(seats, team.seats.length);
   await page.keyboard.press('Escape'); await seats.waitFor({ state: 'detached', timeout: 4000 });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'mono'; });
 
   }
   await fs.writeFile(path.join(output, `panel-measures-${agent}.json`), JSON.stringify(measures, null, 2));
   checks.push('result panel: every command, loading, failure, toast, light and narrow captured and measured');
+}
+
+async function checkRoutingCardControls(dialog, count) {
+  const cards = await dialog.locator('[data-seat]').all();
+  assert.equal(cards.length, count);
+  assert.equal(await dialog.locator('[data-pick]').count(), count);
+  const check = async control => {
+    await control.scrollIntoViewIfNeeded();
+    assert.equal(await control.evaluate(node => {
+      const { left, top, width, height } = node.getBoundingClientRect();
+      const hit = document.elementFromPoint(left + width / 2, top + height / 2);
+      return node.contains(hit) && width >= 32 && height >= 32 && parseFloat(getComputedStyle(node).fontSize) >= 14;
+    }), true, 'a routing control is reachable at its centre, at least 32×32, and uses at least 14 px text');
+  };
+  for (const card of cards) {
+    const picker = card.locator('[data-pick]');
+    await check(picker);
+    await check(card.locator('[data-role-more]'));
+    await picker.click();
+    const menu = dialog.getByRole('menu');
+    const efforts = await menu.locator('[data-tile-effort] [data-pop-effort]').all();
+    assert.ok(efforts.length, 'the opened picker contains effort choices');
+    for (const effort of efforts) await check(effort);
+    await check(menu.locator('[data-tile-fast]'));
+    await menu.locator('[data-menu-close]').click();
+  }
 }
 
 // The Codex pass of the result panel runs in its own isolated application: a terminal's native identity is fixed by its first event.
