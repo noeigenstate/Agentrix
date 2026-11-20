@@ -258,9 +258,9 @@ and its failed-start/end pair remain separate from the 15-second visibility noti
 - Start every command-line Codex or Claude worker through the helper with `--detach`, followed by `wait`; never `codex` or
   `claude -p` directly.
 - Give every worker that changes files `--allow` for its module, and every task with owner decisions a `--ledger`.
-- In a git repository, hold the roundtable (`--meeting`) before the build, resume the confirmed session with the same
-  `--allow`, and consolidate the round (`consolidate`) before the next round's roundtable; `--skip-meeting <reason>` only
-  for a task too small for one.
+- A roundtable (`--meeting`) and a round summary (`consolidate`) are the orchestrator's choice, never required. A build with
+  `--allow` and no roundtable passes `--skip-meeting <reason>`; after a roundtable, resume the confirmed session with the
+  same `--allow`.
 - A Claude worker (`claude -p`) can read only inside its `--cwd`: paste anything else it needs (a review report, a
   plan in the scratch folder) into the brief, or copy it into its worktree. A Codex worker can read outside it.
 - Right after launching, read the helper's start line. On `routing unverified`, establish the model before relying on

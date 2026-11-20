@@ -1,6 +1,6 @@
 ---
 name: model-routing
-description: Use before any task that changes the project, however small (a new feature or a change to one, a bug fix or debugging, a UI tweak, tests, a refactor, a review or a release), before doing any of it yourself; route the task across the seats of the project's team (by default orchestrator, product, architect, designer, developer, reviewer, QA, researcher, DevOps and security, plus any library or project roles the owner adds), each with fixed model settings, run independent work in parallel and have fresh instances review and test it.
+description: Use before any task that changes the project; the lead session is the orchestrator and decides by its own judgment who does the work, itself or any seats of the project's team (by default orchestrator, product, architect, designer, developer, reviewer, QA, researcher, DevOps and security, plus any library or project roles the owner adds), each with fixed model settings; the seats are a toolbox and no stage or seat is mandatory.
 trigger: always
 when: 每个任务开始前
 requires: any-agent
@@ -13,38 +13,32 @@ fresh: reviewer, qa, a11y
 duties: orchestrator=总指挥|任务调度|任务调度、依赖管理、状态追踪、冲突协调|任务图、执行状态; product=产品|需求与规划|需求分析、功能定义、优先级|PRD、验收标准; architect=架构师|系统架构|架构设计、技术选型、模块拆分|设计文档、接口规范; designer=设计师|交互与视觉|用户体验、交互、视觉|界面规范、页面原型; developer=开发|编码与实现|编码、功能、缺陷修复|提交、模块; reviewer=审查|独立审查|代码与质量审查|审查意见、风险报告; qa=测试|测试验证|测试用例、自动化、回归、截图验收|测试报告; researcher=研究|技术研究|调研、方案比较、检索|研究报告; devops=运维|构建与交付|构建、环境、部署、回滚|构建产物、部署报告; security=安全|安全与权限|权限、依赖漏洞、安全审计|安全报告; frontend=前端|前端开发|界面组件、状态、样式与交互|界面改动、截图; backend=后端|后端开发|接口、服务、数据流与稳定性|接口改动、测试; desktop=桌面端|桌面开发|窗口、系统集成、打包与更新|代码改动、打包验证; database=数据库|数据与存储|表结构、迁移、查询与索引|迁移脚本、查询改动; ai=人工智能|模型接入|提示词、模型接入、评测与成本|提示词改动、评测报告; docs=文档|文档编写|说明、变更记录、使用指南|文档改动; performance=性能|性能优化|性能剖析、瓶颈、启动与内存|剖析报告、优化改动; a11y=无障碍|无障碍验证|键盘、对比度、读屏与焦点|无障碍报告
 ---
 
-# Routing work across the team
+# Orchestrating the team
 
 ## When this applies
 
-Read and follow this skill before any task that changes the project, however small, before planning or doing the work:
-a new feature or a change to one, debugging or a bug fix, a UI tweak, tests, a refactor, a review or a release. Every
-such change goes to a worker and the orchestrator never builds it alone. A task too small for a roundtable (one worker
-and a one-line fix, for example) skips the roundtable with a stated reason, but is still routed. A plain question that
-changes nothing needs no routing.
+Read this skill before any task that changes the project. The lead session is the orchestrator, and the orchestration is
+its own judgment: who does the work, in what order, and how it is checked. The team's seats are a toolbox. No seat, stage
+or meeting is mandatory, and nothing here is a process to walk through. A plain question that changes nothing needs no
+orchestration.
 This skill is the single home of routing. To add project-specific routing rules, extend it with a skill named
 model-routing-<id>; follow this skill first, and where the two conflict this skill wins.
 
 ## What to do
 
-1. Check the installed agents, the team table below and the lead's run mode (native or terminal). Launch only seats in the team table. Decide which of them the task needs and record the reason for every one you skip.
-2. Discover: Product writes the requirement and its acceptance criteria while Researcher compares options and gathers the facts the plan needs, in parallel.
-3. Design: Architect plans the work by module, with separate file scopes and the shared contracts, while Designer specifies the interaction and visuals, in parallel.
-4. Hold a roundtable: every worker restates its task from the whole plan, the orchestrator checks the restatement against the plan and corrects misreadings, everyone confirms, and the owner sees the minutes as tables.
-5. Build: Developer workers in parallel worktrees with disjoint `--allow` scopes, one per specialty the plan needs, each on its specialty's seat when the team table has one, else on the developer seat's model; Performance and Docs build here too.
-6. Verify: every reviewer seat, QA, Security and Accessibility, each a fresh instance, in parallel on the integrated result; send every confirmed finding back to the worker that owns the file.
-7. Integrate and deliver: the orchestrator merges in dependency order and runs the project's checks; DevOps builds, deploys or rolls back only when a release is requested. Then consolidate the round into the shared project memory and report the result.
+1. Read the task and decide how to staff it: do it yourself, or call the seats that will make the result better or faster. Pick what the task needs, for example an Architect when the split across modules is unclear, a Designer when the look or interaction is open, a Developer for the build, a Reviewer or QA when an independent check is worth its cost.
+2. Tell the owner in one or two lines who you chose and why, then start. The owner can change it at any time.
+3. Launch the seats you chose with the settings in the team table, in parallel where their work is independent.
+4. Check the result yourself to the depth the risk calls for, and report what was done, by whom, and what was verified.
 
 ### The team
 
-The lead session is the **orchestrator**: it splits the task, manages context, routes each part to a seat, schedules by
-dependency, runs independent work in parallel and holds the permissions (commits, pushes, releases, secrets). It takes a
-task over only when its worker failed. Workers get only what their brief grants and do their task themselves; a worker
-never hands it on to another.
-
-Each seat is a role with a fixed model, effort and fast setting. Agentrix writes the table from the project's routing
-(the roles on its team and their models) and the installed agents when it delivers this skill; the table as shipped
-shows the defaults with both agents installed and a Claude lead.
+The lead session is the **orchestrator**: it reads the task, decides the staffing, briefs the workers it calls, integrates
+their work and holds the permissions (commits, pushes, releases, secrets). It may do any part of the work itself. Each
+seat is a role with a fixed model, effort and fast setting. Agentrix writes the table from the project's routing (the
+roles on its team and their models) and the installed agents when it delivers this skill; the table as shipped shows
+the defaults with both agents installed and a Claude lead. The project's `.agentrix/routing.json` holds the current
+settings; a table delivered when the session started can be older than the file, so read the file when they may differ.
 
 <!-- agentrix:team -->
 | Seat | Role | Duty | Outputs | Model | Launch |
@@ -63,22 +57,19 @@ shows the defaults with both agents installed and a Claude lead.
 
 - "Agent call" is the lead's own subagent; "helper" is the dispatch helper (see Launching workers), started detached
   and then collected with `wait`. A Codex lead launches Claude seats through `helper claude`.
-- Launch only seats in the team table. A seat named elsewhere in this skill (the stages, the role library, an example)
-  but missing from the table is not on this project's team: skip it without a reason and give its work to the seat
-  that covers it (a specialty to Developer, documentation to the worker that made the change, accessibility to QA).
-- The Developer seat may split into specialty workers (frontend, backend, desktop, database, ai) when the plan has
-  independent parts, each in its own worktree. A specialty with its own row in the team table launches as that seat,
-  as its row says; any other runs on the developer seat's model with `--seat developer/<specialty>`.
+- A seat has model settings only when it is in the team table. Work that would suit a role outside it goes to whichever
+  seat the orchestrator sees fit, or the orchestrator does it.
+- The Developer seat may split into specialty workers (frontend, backend, desktop, database, ai), each in its own
+  worktree. A specialty with its own row in the team table launches as that seat, as its row says; any other runs on
+  the developer seat's model with `--seat developer/<specialty>`.
 - Every helper worker call passes `--seat <id>`; every Agent call's `description` starts with `[<seat>]`, for example
   `[designer] Mockup of the settings page`. Agentrix shows each worker under its seat in the Agent tab.
-- Every reviewer seat (Reviewer and any project role that reviews), QA and Accessibility are always fresh instances
-  that neither planned nor wrote the work. Every reviewer seat uses a model that no author seat (Developer, its
-  specialty seats, Performance) runs, wherever the account has an available model at least as strong.
+- A worker does its own task and does not start another worker.
 
 ### Role library
 
-These roles are not on this project's team, so they are never launched. The owner adds one in Agentrix's model
-routing; it then moves into the team table with its own model. When one would clearly help a task, say so in the plan.
+These roles are not on this project's team and have no model settings. The owner adds one in Agentrix's model routing;
+it then moves into the team table with its own model. When one would clearly help a task, say so.
 
 <!-- agentrix:library -->
 | Seat | Role | Duty | Outputs |
@@ -105,26 +96,6 @@ Seats decide. An explicit instruction from the owner in the conversation wins fo
 - GPT models default to high effort with fast on; Claude models default to high effort.
 - A model missing from the account: use the next one down in the same family for that seat (Opus to Sonnet) and say so
   in the plan.
-
-### Stages
-
-Run independent work in parallel as much as possible: start every worker whose inputs are ready in the same turn.
-
-| Stage | Seats | What happens | Output |
-| --- | --- | --- | --- |
-| 1 Discover | Product, Researcher, in parallel | Product writes the requirement, its priorities and the acceptance criteria first; Researcher compares options and checks facts | PRD with acceptance criteria, research report |
-| 2 Design | Architect, Designer, in parallel | Architect splits the work by module, sets constraints and writes the cross-module contract; Designer specifies interaction and visuals, with mockups where the change is visible | Written plan, interface specification |
-| 3 Roundtable | Every worker of the round | Every worker gets the whole plan, changes nothing and restates its task; the orchestrator checks and corrects misreadings; all confirm | Minutes, shown to the owner as tables |
-| 4 Build | Developer and its specialty seats, Performance, Docs, in parallel | One worktree and a disjoint `--allow` scope per worker; a specialty without its own seat runs on the developer seat's model; Performance measures before it changes code; Docs writes the documentation the change needs | Code changes and tests per module; measurements; documentation |
-| 5 Verify | Every reviewer seat, QA, Security, Accessibility, in parallel, fresh | Independent review, testing and UI acceptance, security audit and accessibility check of the integrated result | Findings with file, line and failure; test report; security report; accessibility report |
-| 6 Integrate and deliver | Orchestrator, then DevOps | The orchestrator merges in dependency order and runs the checks; DevOps builds, deploys or rolls back only when a release is requested | A green merged tree; build artifacts and deployment report when released |
-| 7 Consolidate | Orchestrator | Writes the round's results and architecture changes into the shared project memory and adjusts the module boundaries | The next round starts from them |
-| Final acceptance | Orchestrator | Checks pass, every finding is fixed or dismissed with a reason, the owner has seen the key changes | Done |
-
-Skip any seat a task does not need and record the reason in the plan: a back-end-only fix has no Designer and no
-screenshot pass, a change that adds no permission, file-read, process or dependency surface has no Security pass, and
-DevOps runs only for a requested release. Verification runs on what was integrated, so stage 6's merge and checks come
-before stage 5's verdicts are final; findings loop back to stage 4.
 
 ### Language and reports
 
@@ -243,33 +214,31 @@ Detached starts return after the start receipt (up to about 60 seconds); if the 
 - Every worker starts with the project memory, the list of what the others are working on now and the repository's
   state, put before its brief by the helper.
 
-### 1-2. Discover and design
+### Tools the orchestrator may use
 
-Write the plan before any build starts. Product and Researcher work first and in parallel, then Architect and Designer
-in parallel, each given what the earlier seats produced:
-- Product: the requirement, its priorities and checkable acceptance criteria (test names, measured numbers, the
-  screenshots and states to see), written before the design.
-- Researcher: the options compared with their trade-offs and the facts the plan depends on, with sources.
-- Architect: the requirement split into tasks by module, each with an owner seat and an exact file scope; no file
-  appears in two tasks. A good split lets each worker stay inside its own module without touching the others. Each
-  task's module and its boundary file, if the project keeps one: the task's file scope is that module's owned files, or
-  a part of them; a task that needs another module is split, or the architect changes the boundary first. The interface
-  contract between tasks (shared types, payloads, names, test hooks), written first so every worker builds against the
-  same shape. Back-end modules get their design (data, interfaces, IPC, storage, failure handling) in the plan.
-- Designer: the interaction and visual specification of every visible change, with mockups the owner can compare.
-- The orchestrator: the seats the task uses, the reason for each skipped seat, any deviation from a seat the owner
-  asked for, and a ledger for the task (the owner's words that decide the work, the plan's decisions and known
-  pitfalls), given to every worker with `--ledger` so no brief re-states them from memory.
+None of these is required. Use one when it earns its cost.
 
-### 3. Roundtable
+**A written plan.** For work across several modules, a plan with one task per worker, an exact file scope each and the
+shared contract (types, payloads, names) lets workers build in parallel without colliding. The orchestrator writes it,
+or asks the Architect.
 
-Before anyone builds, the roundtable lets the planner check that its brief reached each worker as meant. The planner is
-the orchestrator, who holds the architect's plan; the steps below are addressed to it. Every worker
-gets the whole plan plus its own task, changes nothing and restates its own task. Do not propose alternatives or reopen
-decisions: design debate is outside the roundtable and the planner decides. `--meeting` needs a git repository. Pick a
-**new meeting id every round** (`<topic>-r1`, `<topic>-r2`, `[\w.-]{1,64}`) and keep it through that round's understanding, confirmation, minutes and consolidation;
-reusing an earlier round's id is refused, and once a round is consolidated its meeting is closed, so its confirmations
-no longer open builds.
+**A ledger.** `--ledger <file>` carries the owner's words, decisions and known pitfalls to every worker of a task.
+
+**Worktrees.** One branch and worktree per parallel worker that changes files, from the current HEAD, with dependencies
+shared (a link to the main `node_modules`). A single worker may run in the project itself.
+
+```
+git worktree add <scratch>/wt-frontend -b work/<topic>-frontend
+```
+
+**A brief.** A worker knows only its brief: the goal, what was wrong before, the files it may change, the behaviour it
+must keep, the project's code standard, and what to report. A Codex run has no approvals, so its scope comes from the
+prompt alone. A non-interactive Claude Code worker (the helper's terminal path) under `--permission acceptEdits` can
+edit files but every shell command is refused, so the orchestrator runs its tests.
+
+**A roundtable.** When several workers share an interface, a roundtable lets the orchestrator check that each brief was
+read as meant before anyone builds. `--meeting` needs a git repository and a new id per round (`<topic>-r1`,
+`[\w.-]{1,64}`).
 
 1. **Understanding.** One run per worker, in parallel, each in its own worktree, with the seat, role and `--allow` it
    will have at work plus `--meeting <id>` (never `--read-only`: the same session builds later; the helper checks that
@@ -312,107 +281,29 @@ call has no helper session: give it the whole plan, ask it to change nothing and
 restated beside the minutes. A read-only seat (Product, Architect, Designer, Researcher, any reviewer seat, QA, Security, Accessibility) may take
 part with `--meeting` too; the gates apply only to execution runs.
 
-### 4. Build in worktrees
+**An independent check.** A reviewer, QA, Security or Accessibility worker that neither planned nor wrote the work,
+given the diff range and the requirement, not the orchestrator's conclusions. Each confirmed finding goes back to the
+worker that owns the file, or the orchestrator fixes it.
 
-One branch and worktree per parallel build worker (Developer, a specialty seat, Performance or Docs), from the current
-HEAD, with dependencies shared (a link to the main `node_modules`):
+**A round summary.** `node "<helper>" consolidate --cwd <repo> --meeting <id> --summary <summary.md>` appends a summary
+(headings `### Results` and `### Architecture changes`) to the shared project memory, which every later helper worker
+reads first, and closes the meeting.
 
-```
-git worktree add <scratch>/wt-frontend -b work/<topic>-frontend
-git worktree add <scratch>/wt-backend -b work/<topic>-backend
-```
-
-A task with one worker may run in the project itself. Every brief holds:
-- The seat, the goal, what was wrong before, the files the worker may change, the behaviour it must keep, the contract
-  from the plan and Product's acceptance criteria.
-- The `code-standard` skill's rules and the project's own conventions and code standards, pasted in.
-- Never: commit, push, release, touch secrets, or touch anything outside its worktree.
-- Its report: files changed, the checks it ran with results, what it left open; for debugging, the root cause with evidence.
-
-Debugging starts on the developer seat, front end included: the worker finds the root cause with evidence before it
-changes code. A Codex run has no approvals, so its scope comes from the prompt alone. An "at capacity" error at the end
-of a run can come after the work is done: check the outputs before rerunning.
-
-Performance measures first (profile, timings, memory), changes only what the measurements point to and reports both
-before and after. Docs writes or updates the documentation the change needs, from the plan's contract.
-
-A non-interactive Claude Code worker (the helper's terminal path) under `--permission acceptEdits` can edit files, but every shell command is refused and it
-cannot commit. Its brief says so: it writes the code and the tests, then you run them in its worktree, send failures back
-by resuming the same session, and commit on its branch once they pass.
-
-### 5. Verify
-
-Run every verifier on the team on the integrated result, in parallel, each a fresh instance that neither planned nor
-wrote the work, given the diff range, the contract and the acceptance criteria, not your conclusions:
-- **Every reviewer seat:** independent code and quality review, read-only. It checks module boundaries, data flow, duplication,
-  consistency and the code standard. Findings: file:line, the failure, severity.
-- **QA:** the tests the acceptance criteria name, regression of what the change touches, and UI acceptance where the
-  change is visible: screenshots of each state with a realistic data set, the state each one shows, and a click test on
-  every control against the project's own interaction rules. Findings: what is wrong, where, which rule or criterion.
-- **Security:** permissions, every new file-read, process or network surface, input that reaches a shell or a path, and
-  new or updated dependencies. Findings: file:line, the exposure, severity.
-- **Accessibility:** keyboard paths, focus order and visibility, contrast, and the screen-reader names and roles of every
-  changed control, checked in the running UI. Findings: where, which rule, severity.
-
-Each confirmed finding goes back to the worker that owns the file (a command-line worker through `--resume`), then the
-merge and checks of stage 6 run again and the affected verifier checks the fix.
-
-### 6. Integrate and deliver
-
-- Read every diff against the project's conventions and the contract before accepting it; send a diff that breaks them back with the specific lines.
-- Commit each worktree on its branch, merge in dependency order (the side that defines data first), resolve conflicts against the contract, not by taking one side.
-- Validate a resolved file that has a format (parse a JSON file, for example) before committing, and never chain the
-  commit after a resolving script on a separate line, where it runs even when the script fails.
-- Run the project's type check, tests and build. When a test fails, run it on the last commit to tell a regression from an old failure.
-- Before anything reaches the main branch, run the project's full CI-equivalent locally, including desktop or end-to-end
-  suites where it has them, and get its remote CI green on a pushed branch. Move the main branch only to a commit that
-  is green there, so it never needs "fix CI" commits; unit tests alone can miss regressions only those suites catch.
-- DevOps runs only when the owner requested a release: it builds the artifacts, prepares the environment, deploys and
-  rolls back on failure, and reports what it built and where it went. The orchestrator keeps the permission to release.
-- Remove the worktrees and branches when done, removing any dependency link inside a worktree first.
-
-### 7. Consolidate
-
-When the round is integrated and verified, write down what it produced so the next round starts from it: a file with the
-headings `### Results` (what each module now does, the checks that passed, the findings and how each was settled)
-and `### Architecture changes` (module boundaries moved, files that changed owner, new invariants; "none" with the reason
-when nothing changed). Then:
-
-```
-node "<helper>" consolidate --cwd <repo> --meeting <id> --summary <summary.md>
-```
-
-The helper appends it to the project memory under `## Round <n> · <meeting id> · <date time>`, where every later worker
-reads it first and the meeting is closed. `consolidate` is refused while a worker of that meeting still runs, so let the
-round's builds and review fixes end first. Adjust the module-boundary files the round touched in the same round; the
-project memory itself is not committed. The next round's roundtable (a new meeting id) is refused until this is done.
+**Without a roundtable.** The helper refuses a build with `--allow` that has no confirmed roundtable; pass
+`--skip-meeting <reason>` and it starts.
 
 ## Rules
 
-- The lead is the Orchestrator and holds permissions; workers stay within their brief and never delegate further.
-- Seats decide every worker's model, effort and fast setting. An explicit instruction from the owner in the conversation wins for that task only; the Orchestrator states the deviation in its plan.
+- The orchestrator decides the staffing, the order and the checks of every task by its own judgment; no seat, stage or meeting is required.
+- The orchestrator holds the permissions: commits, pushes, releases and secrets follow the owner's authorization, and a release happens only when requested.
+- A seat's model, effort and fast setting come from the team table; an explicit instruction from the owner in the conversation wins for that task.
 - Every helper worker call passes `--seat`; every Agent call's description starts with `[<seat>]`.
-- Run independent work in parallel: Product with Researcher, Architect with Designer, Developer and its specialty seats with Performance and Docs, and every reviewer seat with QA, Security and Accessibility.
-- Launch only seats in the team table; a seat missing from it is skipped without a reason.
-- Skip a seat of the team only when the task does not need it, and record the reason in the plan.
-- Route every change to a worker, however small; the lead never builds alone. A task too small for a roundtable skips it with a stated reason.
-- Product writes the acceptance criteria before the design; every later seat checks against them.
-- Every reviewer seat, QA and Accessibility are fresh instances that neither planned nor wrote the work; every reviewer seat uses a model no author seat runs wherever an available model is at least as strong.
-- QA accepts visible changes from screenshots of each state with a realistic data set and a click test on every control.
-- Security reviews permissions, new file-read or process surfaces and dependencies whenever a change adds them.
-- DevOps builds, deploys or rolls back only when a release is requested.
-- Codex always runs in native mode. Claude workers follow the lead's run mode and never cross: native-mode lead, native subagents, API billing; terminal-mode lead, terminal subagents, subscription billing. Dispatch and billing are separate questions.
-- Use separate worktrees for parallel builds, with no overlapping file ownership.
-- Paste the project's code-standard rules into every worker brief and review every diff against them before accepting it.
-- Start command-line workers only through the dispatch helper with `--detach`, then collect results with `wait`; read the start line to confirm the launch and routing, and act on `failed to start` or `routing MISMATCH`.
-- Give a worker that changes files `--allow` for its scope and reject any `OUT OF SCOPE` result.
-- Hold the roundtable before the build and consolidate the round after verification; show the owner the minutes as tables.
-- State unavailable-model substitutions in the plan.
-- Follow the owner's authorization for commits, builds, app launches and releases; release only when requested.
+- Start command-line workers only through the dispatch helper with `--detach`, then collect results with `wait`; read the start line and act on `failed to start` or `routing MISMATCH`.
+- Give a worker that changes files `--allow` for its scope, and deal with any `OUT OF SCOPE` result before accepting the work.
+- A worker does not start another worker.
+- Codex always runs in native mode. Claude workers follow the lead's run mode and never cross: native-mode lead, native subagents, API billing; terminal-mode lead, terminal subagents, subscription billing.
 
 ## Done when
 
-- The relevant checks pass and every verifier's finding (reviewer seats, QA, Security, Accessibility) is fixed or explicitly dismissed with a reason.
-- The owner has seen the key behavior changes and, for UI work, the verified screens.
-- Report the seats used and skipped with reasons, any deviation from a seat, the files changed, checks and results,
-  model substitutions and any remaining limitations.
+- The task is done and checked to the depth its risk calls for.
+- The owner has been told who did the work and why, the files changed, what was verified and what was not, and any remaining limits.
