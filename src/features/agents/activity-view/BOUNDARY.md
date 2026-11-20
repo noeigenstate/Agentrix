@@ -28,11 +28,7 @@ Shows the expanded project's usage and quota in the Activity pane. The routing d
 ## Invariants
 - The only CLI action is `/usage` after a cancellable ten-second countdown — test: `tests/boundary-activity-pane.test.cjs` › "the pane never acts on its own"
 - The API usage card only reads usage — test: `tests/boundary-activity-pane.test.cjs` › "the API usage card only reads the main process"
-<<<<<<< HEAD
 - Claude Code's own input hints and placeholders count as empty input, with or without its queue row on screen — test: `tests/cli-panel.test.cjs` › "Claude fallback recognizes only complete input placeholders, independently of queue controls"
-=======
-- Complete Claude queue hints leave the input empty — test: `tests/cli-panel.test.cjs` › "Claude fallback recognizes only complete input placeholders, independently of queue controls"
->>>>>>> work/next-route-exec
 - A quota update refreshes only that project's card — test: `tests/native-session-ui.test.cjs` › "a quota change reported for one project makes only that project’s usage card read again"
 - Unknown reset counts stay unknown — test: `tests/reset-count.test.cjs` › "unknown is never zero"
 - The pane fits without scrolling — test: `scripts/completion-smoke.mjs` › "the live pane and the full 340px fixture fit without scrolling or overlap"
