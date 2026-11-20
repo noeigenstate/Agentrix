@@ -3718,5 +3718,17 @@
     "Of the team seats, only the Orchestrator needs a conversation restart to switch models. Until then, its row shows “After restart” with the saved settings.",
   "操作模型生效提示": "Operation model timing",
   "需要重新启动才会应用的操作模型设置会标注「下次启动生效」。":
-    "Operation model settings that require a new launch are marked “Takes effect on next launch.”"
+    "Operation model settings that require a new launch are marked “Takes effect on next launch.”",
+  "模型路由更清楚": "Clearer model routing",
+  "弹窗顶部精简为两行，十个默认角色用等高卡片平铺，一屏可见。每张卡片用一个模型选择器设置模型、强度、快速和新实例。状态栏提示未保存的改动和生效时机，有改动待保存时才突出显示「保存路由」。":
+    "Two header rows and flat, even cards fit ten roles. Set model, Effort, Fast and Fresh instance in one picker. See unsaved changes and when they apply. Save routing lights up when needed.",
+  "模型盘按系列折叠": "Older models grouped by family",
+  "模型盘默认收起旧版本，每个系列只留一个展开入口，常用模型更好找。":
+    "The model palette keeps older versions collapsed behind one control per family, making commonly used models easier to find.",
+  "阅读视图正常发送": "Sending from the reading view",
+  "Claude Code 输入行出现灰色提示建议时，在阅读视图里仍可正常发送消息。":
+    "You can send messages from the reading view as usual when Claude Code shows a grey prompt suggestion in its input line.",
+  "活动区路由对齐": "Aligned routing rows",
+  "右侧活动区的「模型路由」行距统一，各列对齐。":
+    "Model routing in the right activity pane has evenly spaced rows and aligned columns."
 }
