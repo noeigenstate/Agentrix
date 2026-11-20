@@ -4,6 +4,7 @@ const { Buffer } = require('node:buffer');
 const { randomUUID } = require('node:crypto');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
 const { validModel, EFFORT, operationEnv, BACKGROUND_MODEL_ENV, SUBAGENT_MODEL_ENV } = require('../skills/seat-rules.mjs');
+const { SEAT_BYTES } = require('../agents/call-seat.cjs');
 
 // The file a terminal's shell integration and the dispatch helper read to reach main: the session's key, the event
 // pipe and the control channel, and for a terminal also its hook channel and settings (hook-channel.cjs) and the paths
@@ -22,7 +23,7 @@ function updateBootstrapLead(file, lead) {
 
 function updateDispatchSeats(file, seats) {
   const snapshot = JSON.stringify(seats ?? null);
-  const bounded = Buffer.byteLength(snapshot) <= 8192 ? snapshot : 'null';
+  const bounded = Buffer.byteLength(snapshot) <= SEAT_BYTES ? snapshot : 'null';
   writeFileAtomic(file + '.seats', bounded);
   return bounded;
 }

@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 
 if ($Kind -eq 'seat-routing') {
     try {
-        if (-not $NodePath -or -not $env:AGENTRIX_SEATS -or $env:AGENTRIX_SEATS -eq 'null') { exit 0 }
+        if (-not $NodePath) { exit 0 }
         $start = [Diagnostics.ProcessStartInfo]::new($NodePath)
         $start.UseShellExecute = $false
         $start.CreateNoWindow = $true

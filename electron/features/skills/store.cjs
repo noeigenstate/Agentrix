@@ -37,15 +37,31 @@ function operationScope(stored, projectId) {
   return { global, project };
 }
 
-function operationInfo(template, config, team, catalog, installed, frozen, recent) {
+function operationInfo(template, config, team, catalog, installed, frozen, recent, nativeClaude) {
   const operation = operationSlots.levers(config?.operations ?? template.operations, team.effective, catalog, installed, team.reviewers[0]);
   if (recent) {
     const refused = Object.fromEntries([...recent].flatMap(([key, { value, reason }]) => operation.codex.config[key] === value ? [[key, reason]] : []));
     operation.agents = operationSlots.applyRefusals(operation.agents, refused);
   }
-  return { rows: operationSlots.makeRows(operation, catalog), defaults: operationSlots.resolve(),
+  const liveLookup = nativeClaude && frozen?.claude?.lookupAgent && lookupSeat(operation, catalog);
+  const pending = frozen ? Object.keys(operation.values).filter(id => !(id === 'lookup' && liveLookup)
+    && (JSON.stringify(operation.values[id]) !== JSON.stringify(frozen.values[id])
+    || JSON.stringify(operation.choices[id]) !== JSON.stringify(frozen.choices?.[id]))) : [];
+  const current = frozen ? structuredClone({ values: frozen.values, agents: frozen.agents }) : null;
+  if (liveLookup) {
+    current.values.lookup = operation.values.lookup;
+    current.agents.lookup = operation.agents.lookup;
+  }
+  return { rows: operationSlots.makeRows(operation, catalog), defaults: operationSlots.resolve(), pending,
     template: template.operations, config: config?.operations ?? null, effective: operation.values,
-    current: frozen ? structuredClone({ values: frozen.values, agents: frozen.agents }) : null };
+    current };
+}
+
+function lookupSeat(operation, catalog) {
+  const choice = operation.claude.lookupAgent;
+  if (!choice || choice.model.includes('[')) return null;
+  const model = modelSeats.agentAlias(choice.model, catalog);
+  return model ? { model, effort: choice.effort, configuredModel: choice.model } : null;
 }
 
 function launchSeatMap(map, catalog) {
@@ -313,7 +329,13 @@ class SkillsStore {
   }
 
   infos() { return [...this.entries.values()].map(entry => this.info(entry)); }
-  publish(deliveryChanged = true) { const infos = this.infos(); this.published = JSON.stringify(infos); this.changed(infos, { deliveryChanged }); return infos; }
+  publish(deliveryChanged = true) {
+    const infos = this.infos();
+    this.published = JSON.stringify(infos);
+    const refreshed = this.changed(infos, { deliveryChanged });
+    if (deliveryChanged) this.deliveryRefresh = refreshed;
+    return infos;
+  }
   list() { const infos = this.refresh(); this.syncWatchers(); return infos; }
   entry(id, writable = false) {
     if (typeof id !== 'string') throw new Error('无效的技能。');
@@ -418,6 +440,11 @@ class SkillsStore {
     return launchSeatMap(info?.effective, info?.catalog);
   }
 
+  liveLookup(projectId) {
+    const info = this.seatsInfo(projectId);
+    return info && lookupSeat(resolveOperations(info), info.catalog);
+  }
+
   operationLevers(projectId, sessionId, remoteAgent = null) {
     const snapshot = this.sessionSnapshot(projectId, sessionId);
     if (snapshot && Object.hasOwn(snapshot, 'operations')) return snapshot.operations ?? { claude: { env: {} }, codex: { config: {} } };
@@ -517,18 +544,25 @@ class SkillsStore {
     const context = this.routingContext();
     if (!context) return null;
     const { entry, installed, catalog, defaults, template } = context, lead = entry.seats[0];
-    const projects = this.getProjects(), project = projects.find(item => item.id === projectId);
+    const binding = terminalId ? this.seatSession(terminalId) : null;
+    const projects = this.getProjects(), project = projects.find(item => item.id === (projectId ?? binding?.projectId));
     const { config, source } = this.routingSelection(context, project, includeTemplateCount);
     if (includeTemplateCount) source.templateProjects = projects.filter(item =>
       (item === project ? source : this.routingSelection(context, item).source).layer === 'template').length;
     const team = resolveTeam(entry, config ?? template, defaults), effective = team.effective;
-    const binding = terminalId ? this.seatSession(terminalId) : null;
     const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
-    const operations = operationInfo(template, config, team, catalog, installed, snapshot?.operations, this.operationResults.get(projectId));
-    return { skill: entry.id, seats: team.seats, roles: team.team.map(item => item.row), lead, authors: team.authors, fresh: team.fresh,
+    const roles = team.team.map(item => item.row);
+    const runningLead = snapshot?.seatsMap?.[lead], savedLead = effective[lead];
+    const applied = snapshot && binding.appliedRouting;
+    const current = runningLead ? { ...(applied?.effective ?? effective), [lead]: structuredClone(runningLead) } : null;
+    const leadPending = runningLead && savedLead && (runningLead.model !== savedLead.model || runningLead.effort !== savedLead.effort
+      || Boolean(runningLead.fast) !== Boolean(savedLead.fast)) ? { ...savedLead, fast: savedLead.fast === true } : null;
+    const operations = operationInfo(template, config, team, catalog, installed, snapshot?.operations, this.operationResults.get(projectId),
+      snapshot && binding.nativeClaude);
+    return { skill: entry.id, seats: team.seats, roles, lead, authors: team.authors, fresh: team.fresh,
       ...modelSeats.leadConfiguration(effective, lead, installed, catalog), defaults, template, config, routing: source,
-      effective, operations, current: snapshot?.seatsMap ? structuredClone(snapshot.seatsMap) : null,
-      currentRoles: snapshot?.roles ? structuredClone(snapshot.roles) : null, catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
+      effective, operations, current, leadPending, currentRoles: current ? applied?.roles ?? roles : null,
+      catalog, installed, issues: modelSeats.seatIssues(effective, catalog),
       catalogAt: this.modelCatalog?.timestamps() || { claude: null, codex: null } };
   }
 

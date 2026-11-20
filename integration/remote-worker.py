@@ -265,6 +265,37 @@ def deliver_skills(hook, identity):
         os.close(descriptor)
     except FileExistsError: return
     print(json.dumps({"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Agentrix skill instructions:\n"+instructions}}))
+def seat_map(raw):
+    try:
+        if not raw or len(raw.encode("utf-8")) > 8192: return None
+        data = json.loads(raw)
+    except (UnicodeError, ValueError, RecursionError): return None
+    if not isinstance(data, dict): return None
+    for name, choice in data.items():
+        if not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", name) or not isinstance(choice, dict): return None
+        if not isinstance(choice.get("model"), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}", choice["model"]): return None
+        if not isinstance(choice.get("effort"), str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,31}", choice["effort"]): return None
+        if "fast" in choice and type(choice["fast"]) is not bool: return None
+        if choice.get("agentModel") not in (None, "sonnet", "opus", "haiku", "fable"): return None
+    return data
+def live_seats():
+    filename = os.path.join(os.path.dirname(globals().get("__file__", "")), "dispatch.json.seats")
+    if os.path.isabs(filename):
+        try:
+            named = os.lstat(filename)
+            if not stat.S_ISREG(named.st_mode) or named.st_size > 8192: return None
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(filename, flags)
+            with os.fdopen(descriptor, "rb", buffering=0) as source:
+                info = os.fstat(source.fileno())
+                if stat.S_ISREG(info.st_mode) and (info.st_dev, info.st_ino) == (named.st_dev, named.st_ino):
+                    return seat_map(source.read(8193).decode("utf-8"))
+        except (OSError, UnicodeError): pass
+    return None
+def seat_refusal(note, live):
+    if live:
+        return {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":note}}
+    return {"systemMessage":note}
 try:
     mode=sys.argv[1]
     event={"type":mode,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),"codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
@@ -276,14 +307,14 @@ try:
         event.update(type="turn-complete",eventId=hashlib.sha256(identity.encode()).hexdigest(),threadId=payload.get("thread-id"),turnId=payload.get("turn-id"))
     elif mode=="claude-seat":
         raw=sys.stdin.read(4194305)
-        snapshot=os.environ.get("AGENTRIX_SEATS", "")
-        if len(raw)>4194304 or not snapshot or len(snapshot)>8192: sys.exit(0)
+        live=live_seats()
+        seats=live if live is not None else seat_map(os.environ.get("AGENTRIX_SEATS", ""))
+        if len(raw)>4194304 or not seats: sys.exit(0)
         hook=json.loads(raw)
         tool=hook.get("tool_input")
         if hook.get("tool_name") not in ("Agent", "Task") or not isinstance(tool, dict): sys.exit(0)
         prefix=re.match(r"^\[([a-z][a-z0-9-]{0,31})(?:/([a-z][a-z0-9-]{0,23}))?\]", str(tool.get("description", "")))
-        seats=json.loads(snapshot)
-        if not prefix or not isinstance(seats, dict): sys.exit(0)
+        if not prefix: sys.exit(0)
         seat,specialty=prefix.groups()
         if seat=="developer" and specialty in seats: seat=specialty
         choice=seats.get(seat, {})
@@ -295,9 +326,9 @@ try:
         phase=hook.get("hook_event_name")
         if phase=="PreToolUse":
             if not claude:
-                print(json.dumps({"systemMessage":"["+seat+"] uses Codex. Launch this seat through the dispatch helper."}))
+                print(json.dumps(seat_refusal("["+seat+"] uses Codex. Launch this seat through the dispatch helper.", live is not None)))
             elif not supported:
-                print(json.dumps({"systemMessage":"["+seat+"] Claude Agent cannot apply this seat's model and effort."}))
+                print(json.dumps(seat_refusal("["+seat+"] Claude Agent cannot apply this seat's model and effort.", live is not None)))
             elif tool.get("model")!=alias or tool.get("effort")!=effort:
                 updated=dict(tool, model=alias, effort=effort)
                 print(json.dumps({"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":updated}}))
@@ -1758,7 +1789,7 @@ class Worker:
     def agent_environment(self, reading_note, native=False):
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.write_background_choice()
-        if not native: self.write_claude_lead(self.claude_lead)
+        self.write_claude_lead(self.claude_lead)
         self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
         reading_note = self.startup_note(reading_note, native=native)
         with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
@@ -1781,7 +1812,7 @@ class Worker:
         env["AGENTRIX_CLAUDE_LEAD_FILE"] = os.path.join(self.temp, "claude-lead")
         seat_map = self.claude_lead.get("seatsMap") if native and isinstance(self.claude_lead, dict) else None
         encoded = json.dumps(seat_map if isinstance(seat_map, dict) else None, separators=(",", ":"))
-        env["AGENTRIX_SEATS"] = encoded if len(encoded) <= 8192 else "null"
+        env["AGENTRIX_SEATS"] = encoded if len(encoded.encode("utf-8")) <= 8192 else "null"
         if os.path.isfile(os.path.join(self.temp, "dispatch.json")): env["AGENTRIX_BOOTSTRAP"] = os.path.join(self.temp, "dispatch.json")
         # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
@@ -1806,8 +1837,12 @@ class Worker:
 
     def write_claude_lead(self, lead):
         text = ""
-        if lead is not None:
-            if not isinstance(lead, dict): raise ValueError("Invalid Claude lead seat.")
+        if lead is not None and not isinstance(lead, dict): raise ValueError("Invalid Claude lead seat.")
+        seat_map = lead.get("seatsMap") if lead is not None else None
+        if seat_map is not None and not isinstance(seat_map, dict): raise ValueError("Invalid routing seat snapshot.")
+        encoded = json.dumps(seat_map, separators=(",", ":"))
+        if len(encoded.encode("utf-8")) > 8192: raise ValueError("Routing seat snapshot too large.")
+        if lead is not None and set(lead) != {"seatsMap"}:
             model, effort, fast = lead.get("model"), lead.get("effort"), lead.get("fast", False)
             model_pattern = r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}"
             if (not isinstance(model, str) or not re.fullmatch(model_pattern, model)
@@ -1821,12 +1856,12 @@ class Worker:
                 if not isinstance(value, str) or (value and not re.fullmatch(model_pattern, value)):
                     raise ValueError("Invalid Claude operation model.")
                 operation_models.append(value)
-            seat_map = lead.get("seatsMap")
-            if seat_map is not None and not isinstance(seat_map, dict): raise ValueError("Invalid routing seat snapshot.")
-            encoded = json.dumps(seat_map, separators=(",", ":")) if seat_map is not None else ""
-            if len(encoded) > 8192: encoded = ""
-            text = "\n".join([model, effort, "1" if fast else "0", *operation_models, *([encoded] if encoded else []), ""])
-        filename = os.path.join(self.temp, "claude-lead")
+            text = "\n".join([model, effort, "1" if fast else "0", *operation_models, *([encoded] if seat_map is not None else []), ""])
+        self.write_routing_file("claude-lead", text)
+        self.write_routing_file("dispatch.json.seats", encoded)
+
+    def write_routing_file(self, name, text):
+        filename = os.path.join(self.temp, name)
         descriptor, temporary = tempfile.mkstemp(prefix=".claude-lead-", dir=self.temp)
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as target: target.write(text)
@@ -1988,7 +2023,7 @@ class Channel:
                 worker.write_claude_lead(message["claudeLead"])
                 worker.emit({"type": "response", "id": message.get("id"), "ok": True, "value": True})
             except (KeyError, OSError, ValueError):
-                worker.emit({"type": "response", "id": message.get("id"), "ok": False, "error": "Could not update the Claude lead seat."})
+                worker.emit({"type": "response", "id": message.get("id"), "ok": False, "error": "Could not update routing seats."})
         elif op == "resize": worker.resize(message["cols"], message["rows"])
         elif op == "input": self.typing.submit(worker.input, message["data"])
         else: self.requests.submit(self.dispatch, message)

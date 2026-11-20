@@ -2,7 +2,7 @@ const { apiEnvironment } = require('./credentials.cjs');
 const { billingIdentityError } = require('./identity.cjs');
 const { routeSettings } = require('./routing.cjs');
 const { LOOKUP_AGENT_NAME, LOOKUP_AGENT, lookupDecision } = require('./lookup-agent.cjs');
-const { seatHookOutput, observedAgentSeat } = require('../skills/agent-seat.cjs');
+const { seatHookOutput, observedAgentSeat, seatToolOutput, liveSeatMap } = require('../skills/agent-seat.cjs');
 const { EFFORT, familyOf, validModel } = require('../skills/seat-rules.mjs');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -65,18 +65,32 @@ function inputQueue(onTake = () => {}) {
   };
 }
 
-function routeAgentSeat(input, seats, onSeat) {
+function routeAgentSeat(input, seats, onSeat, liveLookup, live) {
   const report = observed => { try { onSeat(input, observed); } catch {} };
   try {
-    const output = seatHookOutput(input, seats, report);
-    if (!output.systemMessage) return output;
-    report({ note: output.systemMessage });
+    const output = seatHookOutput(input, seats, report, live);
+    if (output.systemMessage) report({ note: output.systemMessage });
+    else if (output.hookSpecificOutput?.permissionDecision === 'deny') {
+      report({ note: output.hookSpecificOutput.permissionDecisionReason });
+      return output;
+    }
+    else if (Object.keys(output).length || /^\[/.test(input.tool_input?.description || '')) return output;
+    else if (liveLookup && input.tool_input?.subagent_type === LOOKUP_AGENT_NAME) {
+      const choice = liveLookup();
+      if (choice) return seatToolOutput(input.tool_input, choice.model, choice.effort);
+    }
   } catch {}
   return {};
 }
 
 function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {}, onSeat = () => {} }) {
   const lookupAgent = spec.owner === 'gui' ? lookupOptions(spec.operations?.lookupAgent) : null;
+  const bootstrap = spec.owner === 'gui' ? spec.bootstrapFile : null;
+  const seatsNow = () => liveSeatMap(bootstrap) ?? spec.seatsMap;
+  const liveLookup = lookupAgent && spec.liveLookup && (() => {
+    const choice = spec.liveLookup();
+    return choice && (choice.configuredModel !== lookupAgent.model || choice.effort !== lookupAgent.effort) ? choice : null;
+  });
   const reportSubagent = kind => async (input, toolUseId) => {
     // Visibility must never block the CLI or add context to either conversation.
     try { void Promise.resolve(onSubagent(kind, input, toolUseId)).catch(() => {}); } catch { }
@@ -103,12 +117,16 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
       const decision = policy(input.tool_name, input.tool_input);
       // The policy's 'defer' means "not ours to decide". To the CLI a hook's 'defer' means "pause this tool and end the turn",
       // so the owner's rules get their say by the hook answering nothing.
-      if (decision.behavior === 'defer') return routeAgentSeat(input, spec.seatsMap, onSeat);
+      if (decision.behavior === 'defer' && ['Agent', 'Task'].includes(input.tool_name)) {
+        const live = liveSeatMap(bootstrap);
+        return routeAgentSeat(input, live ?? spec.seatsMap, onSeat, liveLookup, live !== null);
+      }
+      if (decision.behavior === 'defer') return {};
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
     }] }],
-    ...(spec.seatsMap && { PostToolUse: [{ matcher: 'Agent|Task', hooks: [async input => {
+    ...((bootstrap || spec.seatsMap) && { PostToolUse: [{ matcher: 'Agent|Task', hooks: [async input => {
       try {
-        const observed = observedAgentSeat(input, spec.seatsMap);
+        const observed = observedAgentSeat(input, seatsNow());
         if (observed) onSeat(input, observed);
       } catch {}
       return {};

@@ -173,6 +173,53 @@ test('terminal launch snapshots drive the command hook without reading profile s
     { observed: { toolUseId: 'toolu_1', model: 'sonnet', effort: 'high', sessionId: 'fixture', phase: 'post' } });
 });
 
+test('a running terminal and SDK query read new seats and fall back on malformed or missing data', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'seat-live-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bootstrapFile = path.join(dir, 'terminal.json'), sidecar = bootstrapFile + '.seats';
+  const abort = new AbortController();
+  t.after(() => abort.abort());
+  const { hooks } = queryOptions({ owner: 'gui', cwd: dir, env: {}, seatsMap: seats, bootstrapFile },
+    { key: 'synthetic', abort, policy: deferred });
+  const pre = hooks.PreToolUse[0].hooks[0], payload = hook();
+  const terminal = () => seatRouting(JSON.stringify(payload), JSON.stringify(seats), bootstrapFile).output ?? {};
+  const check = async choice => { assert.deepEqual(terminal(), choice); assert.deepEqual(await pre(payload), choice); };
+  await check(expected);
+  updateDispatchSeats(bootstrapFile, { designer: { model: 'haiku', effort: 'low' } });
+  const live = { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...input, model: 'haiku', effort: 'low' } } };
+  await check(live);
+  assert.deepEqual(seatRouting(JSON.stringify(payload), 'null', bootstrapFile).output, live);
+  updateDispatchSeats(bootstrapFile, { designer: { model: 'gpt-6.2-sol', effort: 'high', fast: true } });
+  const denied = (await pre(payload)).hookSpecificOutput;
+  assert.equal(denied.permissionDecision, 'deny');
+  assert.match(denied.permissionDecisionReason, /dispatch helper/);
+  assert.deepEqual(terminal(), { hookSpecificOutput: denied });
+  if (process.platform !== 'win32') assert.equal(fs.statSync(sidecar).mode & 0o777, 0o600);
+  for (const malformed of ['{', '{"designer":{"model":"-bad","effort":"low"}}', '{"bad/id":{"model":"haiku","effort":"low"}}',
+    '{"designer":{"model":"haiku","effort":"HIGH"}}', JSON.stringify({ extra: '界'.repeat(3000) }), Buffer.from([0xff])]) {
+    fs.writeFileSync(sidecar, malformed);
+    await check(expected);
+  }
+  updateDispatchSeats(bootstrapFile, {});
+  await check({});
+  fs.unlinkSync(sidecar);
+  await check(expected);
+});
+
+test('an existing native lookup definition applies a compatible operation change on its next call', async t => {
+  const abort = new AbortController();
+  t.after(() => abort.abort());
+  let choice = { configuredModel: 'haiku', model: 'haiku', effort: 'high' };
+  const { hooks } = queryOptions({ owner: 'gui', cwd: process.cwd(), env: {}, liveLookup: () => choice },
+    { key: 'synthetic', abort, policy: deferred });
+  const lookup = { description: 'List files', subagent_type: 'agentrix-lookup' }, pre = hooks.PreToolUse[0].hooks[0];
+  assert.deepEqual(await pre(hook(lookup)), {});
+  choice = { configuredModel: 'sonnet', model: 'sonnet', effort: 'medium' };
+  assert.deepEqual((await pre(hook(lookup))).hookSpecificOutput.updatedInput, { ...lookup, model: 'sonnet', effort: 'medium' });
+  choice = null;
+  assert.deepEqual(await pre(hook(lookup)), {});
+});
+
 test('Codex dispatch resolves its seat before admission through the private bootstrap snapshot', t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-seats-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -183,10 +230,14 @@ test('Codex dispatch resolves its seat before admission through the private boot
   assert.deepEqual([launch.model, launch.effort, launch.fast], ['gpt-6.2-sol', 'xhigh', true]);
   updateDispatchSeats(file, { developer: { model: 'gpt-6.2-astra', effort: 'high', fast: false } });
   assert.equal(argumentsOf(argv, env).model, 'gpt-6.2-astra');
-  assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, launch.model);
+  assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, 'gpt-6.2-astra');
   assert.equal(argumentsOf([...argv, '--model', 'gpt-explicit', '--effort', 'medium', '--fast'], env).model, 'gpt-explicit');
+  const frozenEnv = { ...env, AGENTRIX_SEATS: JSON.stringify(seats) };
+  const stale = argumentsOf([...argv, '--model', launch.model, '--effort', launch.effort, '--fast'], frozenEnv);
+  assert.deepEqual([stale.model, stale.effort, stale.fast], ['gpt-6.2-astra', 'high', false]);
   assert.equal(updateDispatchSeats(file, { ...seats, padding: '\u754c'.repeat(3000) }), 'null');
   assert.throws(() => argumentsOf(argv, env), /Missing --model/);
+  assert.equal(argumentsOf(argv, { ...env, AGENTRIX_SEATS: JSON.stringify(seats) }).model, launch.model);
   removeBootstrap(file);
   assert.equal(fs.existsSync(file + '.seats'), false);
 });

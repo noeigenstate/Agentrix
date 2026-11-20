@@ -26,7 +26,7 @@ const { connectDispatchControl } = require(path.join(runtime, 'features/agents/d
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { dispatchDirectory, validSeat } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
-const { familyOf, launchSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { familyOf, launchSeat, liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
@@ -50,6 +50,7 @@ const runtimeFiles = () => {
 
 const START_TIMEOUT = 30000;
 const RATE_INTERVAL = 5000;
+const PINNED_SEATS = Symbol('pinned dispatch seats');
 // How long a Codex worker's blocking request (a question, a form, an approval) waits for an answer before it is declined.
 const REQUEST_TIMEOUT = 600000;
 // How often a Codex worker's session file is read until its start is confirmed, and how long a worker's last output may
@@ -79,73 +80,76 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   node dispatch.cjs wait <run id> [<run id> ...] [--timeout <seconds>] [--cwd <dir>]
 `;
 
-function bootstrapSeats(file) {
-  if (typeof file !== 'string' || !path.isAbsolute(file)) return null;
-  let descriptor;
-  try {
-    const filename = file + '.seats';
-    const named = fs.lstatSync(filename, { bigint: true });
-    if (!named.isFile()) return null;
-    descriptor = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
-    const opened = fs.fstatSync(descriptor, { bigint: true });
-    if (!opened.isFile() || opened.dev !== named.dev || opened.ino !== named.ino) return null;
-    const data = Buffer.alloc(8193), count = fs.readSync(descriptor, data, 0, data.length, null);
-    return count <= 8192 ? data.toString('utf8', 0, count) : null;
-  } catch { return null; }
-  finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
-}
-
-function seatDefaults(env, seat, agent) {
-  if (!validSeat(seat)) return null;
-  const snapshot = env.AGENTRIX_SEATS ?? bootstrapSeats(env.AGENTRIX_BOOTSTRAP);
-  if (typeof snapshot !== 'string' || Buffer.byteLength(snapshot) > 8192) return null;
-  let seats;
-  try { seats = JSON.parse(snapshot); } catch { return null; }
-  if (!seats || typeof seats !== 'object' || Array.isArray(seats)) return null;
+function seatChoice(seats, seat) {
+  if (!seats || !validSeat(seat)) return null;
   const id = launchSeat(seat, Object.keys(seats));
-  if (!id) return null;
-  const choice = seats[id];
-  if (typeof choice?.model !== 'string' || familyOf(choice.model) !== agent) return null;
-  return choice;
+  return id ? seats[id] : null;
 }
 
-function argumentsOf(argv, env = process.env) {
+function applySeatDefaults(options, env, pinnedLive, explicitFast) {
+  if (!options.seat) return;
+  const live = pinnedLive === undefined ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : pinnedLive;
+  const launch = seatChoice(parseSeatMap(env.AGENTRIX_SEATS), options.seat);
+  const choice = live ? seatChoice(live, options.seat) : launch;
+  if (!choice) return;
+  const agent = familyOf(choice.model);
+  if (agent !== options.agent) {
+    if (live && (!options.model || familyOf(options.model) !== options.agent || options.model === launch?.model)) {
+      throw new Error(`[${options.seat}] uses ${agent}. Run the dispatch helper with ${agent}.`);
+    }
+    return;
+  }
+  // A delivered routing table can still include flags copied from the launch configuration.
+  const stale = live && launch && (options.model == null || options.model === launch.model);
+  if (options.model == null || stale) options.model = choice.model;
+  if (options.effort == null || stale && options.effort === launch.effort) options.effort = choice.effort;
+  if ((!explicitFast || stale && launch.fast === true) && typeof choice.fast === 'boolean') {
+    options.fast = choice.fast;
+    options.fastFromSeat = true;
+  }
+}
+
+function waitOptions(flags) {
+  const options = { agent: 'wait', ids: [], timeout: 540, cwd: process.cwd() }, seen = new Set();
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i];
+    if (runId(flag)) { if (options.ids.includes(flag)) throw new Error('Repeated run id'); options.ids.push(flag); continue; }
+    if (!['--timeout', '--cwd'].includes(flag) || seen.has(flag)) throw new Error(`Unknown or repeated option ${flag}`);
+    seen.add(flag);
+    const value = flags[++i];
+    if (!value || value.startsWith('--') || !validText(value)) throw new Error(`Expected a value for ${flag}`);
+    if (flag === '--cwd') options.cwd = value;
+    else {
+      if (!/^\d+(?:\.\d+)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > 570) throw new Error('--timeout must be between 0 and 570 seconds');
+      options.timeout = Number(value);
+    }
+  }
+  if (!options.ids.length) throw new Error('Expected at least one run id for wait');
+  options.cwd = path.resolve(options.cwd);
+  return options;
+}
+
+function stopOptions([id, ...flags]) {
+  const options = { agent: 'stop', id, cwd: process.cwd(), noResume: false };
+  if (!runId(id)) throw new Error('Expected a run id for stop');
+  const seen = new Set();
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i];
+    if (!['--reason', '--no-resume', '--cwd'].includes(flag) || seen.has(flag)) throw new Error(`Unknown or repeated option ${flag}`);
+    seen.add(flag);
+    if (flag === '--no-resume') { options.noResume = true; continue; }
+    const value = flags[++i];
+    if (!value || value.startsWith('--') || !validText(value)) throw new Error(`Expected a value for ${flag}`);
+    options[flag === '--reason' ? 'reason' : 'cwd'] = value;
+  }
+  options.cwd = path.resolve(options.cwd);
+  return options;
+}
+
+function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) {
   const [agent, ...flags] = argv;
-  if (agent === 'wait') {
-    const options = { agent, ids: [], timeout: 540, cwd: process.cwd() }, seen = new Set();
-    for (let i = 0; i < flags.length; i++) {
-      const flag = flags[i];
-      if (runId(flag)) { if (options.ids.includes(flag)) throw new Error('Repeated run id'); options.ids.push(flag); continue; }
-      if (!['--timeout', '--cwd'].includes(flag) || seen.has(flag)) throw new Error(`Unknown or repeated option ${flag}`);
-      seen.add(flag);
-      const value = flags[++i];
-      if (!value || value.startsWith('--') || !validText(value)) throw new Error(`Expected a value for ${flag}`);
-      if (flag === '--cwd') options.cwd = value;
-      else {
-        if (!/^\d+(?:\.\d+)?$/.test(value) || !Number.isFinite(Number(value)) || Number(value) > 570) throw new Error('--timeout must be between 0 and 570 seconds');
-        options.timeout = Number(value);
-      }
-    }
-    if (!options.ids.length) throw new Error('Expected at least one run id for wait');
-    options.cwd = path.resolve(options.cwd);
-    return options;
-  }
-  if (agent === 'stop') {
-    const [id, ...rest] = flags, options = { agent, id, cwd: process.cwd(), noResume: false };
-    if (!runId(id)) throw new Error('Expected a run id for stop');
-    const seen = new Set();
-    for (let i = 0; i < rest.length; i++) {
-      const flag = rest[i];
-      if (!['--reason', '--no-resume', '--cwd'].includes(flag) || seen.has(flag)) throw new Error(`Unknown or repeated option ${flag}`);
-      seen.add(flag);
-      if (flag === '--no-resume') { options.noResume = true; continue; }
-      const value = rest[++i];
-      if (!value || value.startsWith('--') || !validText(value)) throw new Error(`Expected a value for ${flag}`);
-      options[flag === '--reason' ? 'reason' : 'cwd'] = value;
-    }
-    options.cwd = path.resolve(options.cwd);
-    return options;
-  }
+  if (agent === 'wait') return waitOptions(flags);
+  if (agent === 'stop') return stopOptions(flags);
   const command = ['minutes', 'consolidate'].includes(agent);
   if (!command && !['codex', 'claude'].includes(agent)) throw new Error('Expected codex, claude, minutes or consolidate');
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
@@ -174,15 +178,7 @@ function argumentsOf(argv, env = process.env) {
       options[names.get(flag)] = value;
     }
   }
-  const seat = command ? null : seatDefaults(env, options.seat, agent);
-  if (seat) {
-    options.model ??= seat.model;
-    if (typeof seat.effort === 'string') options.effort ??= seat.effort;
-    if (!seen.has('--fast') && typeof seat.fast === 'boolean') {
-      options.fast = seat.fast;
-      options.fastFromSeat = true;
-    }
-  }
+  if (!command) applySeatDefaults(options, env, seatSnapshot, seen.has('--fast'));
   const required = command ? ['cwd', 'meeting', agent === 'minutes' ? 'out' : 'summary'] : ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out'];
   for (const key of required) if (!options[key]) throw new Error(`Missing --${key}`);
   if (options.meeting && !/^[\w.-]{1,64}$/.test(options.meeting)) throw new Error('Expected --meeting id with 1–64 letters, digits, _, . or -');
@@ -623,11 +619,10 @@ function detachedRuns(cwd, create = false) {
 }
 
 async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch' } = {}) {
-  if (argv.includes('--seat') && env.AGENTRIX_SEATS == null) {
-    // Keep the parsed launch choices stable across a bootstrap update before the child starts.
-    env = { ...env, AGENTRIX_SEATS: bootstrapSeats(env.AGENTRIX_BOOTSTRAP) ?? 'null' };
-  }
-  const options = argumentsOf(argv, env);
+  // Keep the admitted choices stable if routing changes before the detached child starts.
+  const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
+  env = { ...env, AGENTRIX_DISPATCH_PINNED_SEATS: JSON.stringify(seatSnapshot) };
+  const options = argumentsOf(argv, env, seatSnapshot);
   store ||= detachedRuns(options.cwd, true);
   const id = randomUUID(), file = store.file(id);
   const saved = argv.filter(arg => arg !== '--detach');
@@ -639,7 +634,8 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
   const exited = new Promise(resolve => { exit = resolve; }), controller = new AbortController();
   try {
     // The child repeats the complete normal admission path; no model starts before its gates pass.
-    const script = 'require(process.argv[1]).runDetached(process.argv[2]).then(code => { process.exitCode = code; }).catch(error => { console.error(error.message); process.exitCode = 1; });';
+    const script = 'require(process.argv[1]).runDetached(process.argv[2], { pinnedSeats: true }).then(code => { process.exitCode = code; })'
+      + '.catch(error => { console.error(error.message); process.exitCode = 1; });';
     child = launch(process.execPath, ['-e', script, __filename, file], {
       cwd: options.cwd, env, detached: true, windowsHide: true, stdio: ['ignore', descriptor, descriptor],
     });
@@ -685,6 +681,9 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
 async function runDetached(file, deps = {}) {
   const store = new DetachedRuns(path.dirname(file)), id = path.basename(file, '.json'), entry = store.read(id);
   if (entry.helperPid || entry.settled || !Array.isArray(entry.argv) || entry.argv.includes('--detach')) throw new Error('Invalid detached launch');
+  const env = { ...(deps.env || process.env) };
+  if (deps.pinnedSeats) Object.defineProperty(env, PINNED_SEATS, { value: parseSeatMap(env.AGENTRIX_DISPATCH_PINNED_SEATS) });
+  delete env.AGENTRIX_DISPATCH_PINNED_SEATS;
   // A per-run socket answers with a nonce: PID existence alone cannot distinguish a reused PID.
   const token = randomUUID(), server = net.createServer(socket => {
     socket.on('error', () => {}); socket.setTimeout(1000, () => socket.destroy()); socket.end(token);
@@ -708,7 +707,7 @@ async function runDetached(file, deps = {}) {
   } };
   let code = 1;
   try {
-    code = await run(entry.argv, { ...deps, stdout, source: entry.source, detached: { id, admitted: () => receipt({ admitted: true }) }, startTimeout: 60000 });
+    code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached: { id, admitted: () => receipt({ admitted: true }) }, startTimeout: 60000 });
     return code;
   } finally {
     await receipt({ settled: true, exitCode: code, activityAt: Date.now() }); await pending;

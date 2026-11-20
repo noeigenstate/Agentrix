@@ -13,6 +13,7 @@ const { createHash } = require('node:crypto');
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { sessionContext } = require(path.join(runtime, 'features/skills/session.cjs'));
 const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'features/skills/agent-seat.cjs'));
+const { liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 
 function send(socket, event) {
   return new Promise(resolve => {
@@ -93,12 +94,14 @@ function shellEvent([type, sequence, exitCode, agent, codex, claude, codexHome, 
   };
 }
 
-function seatRouting(input, snapshot) {
-  if (typeof snapshot !== 'string' || snapshot.length > 8192) return {};
-  let seats, hook;
-  try { seats = JSON.parse(snapshot); hook = JSON.parse(input); } catch { return {}; }
+function seatRouting(input, snapshot, bootstrap) {
+  const live = liveSeatMap(bootstrap);
+  const seats = live ?? parseSeatMap(snapshot);
+  if (!seats) return {};
+  let hook;
+  try { hook = JSON.parse(input); } catch { return {}; }
   let pre;
-  const output = seatHookOutput(hook, seats, value => { pre = value; });
+  const output = seatHookOutput(hook, seats, value => { pre = value; }, live !== null);
   const observed = pre || observedAgentSeat(hook, seats);
   return { ...(Object.keys(output).length && { output }),
     ...(observed && typeof hook.session_id === 'string' && { observed: { ...observed, sessionId: hook.session_id } }) };
@@ -108,7 +111,7 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
   if (!socket || !projectId || !sessionKey) return;
   const input = action === 'claude-hook' ? await readInput() : null;
   if (action === 'claude-hook' && argument === 'seat-routing') {
-    const { output, observed } = seatRouting(input, process.env.AGENTRIX_SEATS);
+    const { output, observed } = seatRouting(input, process.env.AGENTRIX_SEATS, process.env.AGENTRIX_BOOTSTRAP);
     if (output) process.stdout.write(JSON.stringify(output) + '\n');
     if (observed) await send(socket, { type: 'claude-seat-input', projectId, sessionKey, ...observed });
     return;

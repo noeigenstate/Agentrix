@@ -5,11 +5,12 @@ The dispatch helper that every command-line Codex or Claude worker is started th
 Codex workers registered through local dispatch control use the lead conversation's frozen operation config and report refused keys on a routing line.
 Main delivers frozen Claude operation settings to its brokered workers. SSH-dispatched workers and direct Claude helper launches use agent defaults.
 Local and SSH Claude terminal wrappers read the live lead file at launch, including the optional background and subagent model lines.
-The sixth line carries the launch's seat choices. The helper uses a matching seat from that launch map for omitted model, effort and fast flags.
+The lead file's sixth line carries fallback choices. Terminal hooks and the helper read accepted seats from the private sidecar at invocation.
+The helper pins the admitted model, effort and fast settings.
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"
 Claude's terminal Agent and Task hooks report provisional and final input by tool-use ID.
-The local Codex helper can fill omitted seat flags from the private bootstrap's seat snapshot before dispatch registration.
+SSH applies seat sidecar updates in channel order. A failed update leaves the previous sidecar available.
 
 ## Owns
 - `integration/dispatch.cjs`

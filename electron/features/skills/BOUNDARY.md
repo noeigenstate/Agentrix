@@ -2,7 +2,7 @@
 
 The skills library: built-in, global and project skills, their options, history and proposals, session instruction delivery, and the settings page that edits them.
 
-Routing saves roles and operation choices together. A conversation freezes role metadata, seats, operation choices and rendered instructions when it starts.
+Routing saves roles and operation choices together. Accepted worker seats update running conversations. The launch snapshot retains the lead seat, launch-only operations and rendered instructions.
 A project file can contain short custom duty and output text. Its author can write misleading prose within those limits, so applying an external edit requires owner confirmation.
 The same snapshot carries a launch map with Claude Agent aliases resolved against the catalog at launch time.
 Built-in defaults, timing and requirements come from front matter. Shipped files refuse save, delete, revert, proposal acceptance and optimization options.
@@ -47,7 +47,7 @@ Delivery reuses instructions already in context and preserves owner prompts verb
 
 ## Invariants
 - Built-ins refuse save, delete, revert, proposals and optimization. — test: `tests/skills.test.cjs` › "skill defaults, exact public shape, read-only built-ins and local-only project scopes"
-- Routing applies only confirmed files and freezes launch choices. — test: `tests/skills.test.cjs` › "pending routing retains accepted settings and freezes launched roles through edits"
+- Confirmed worker settings apply live while launch-only settings stay pinned — test: `tests/skills.test.cjs` › "worker seats go live while the running lead stays pinned"
 - Skill folders never escape managed storage; invalid names and symlinks are refused on read, save, import and delete — agents and imports supply these paths — test: `tests/skills.test.cjs` › "invalid names, imports and symlinked skill folders cannot escape managed storage"
 - SSH receives only enabled built-in/global text and optional adopted routing weights, never project skills or local paths — remote copies stay private to the remote session and weights stay outside committed files — test: `tests/skills.test.cjs` › "SSH bundle contains only enabled built-in/global files, never project skills or local paths"; test: `tests/skills-session.test.cjs` › "routing note is optional, current on a new delivery and included in bounded SSH manifests"
 - User-confirmed proposals wait in skill-pending; workers need a literal allowed SKILL.md path to apply an edit, and broad globs preserve proposals then restore pre-run bytes only in an isolated worker worktree; managed and shared changes remain live with unknown authorship — the user and lead retain their respective approval controls — test: `tests/skills.test.cjs` › "pending proposals do not change the active file; accept, reject and agent-created review"; test: `tests/dispatch-skill-proposals.test.cjs` › "broad scope restores edited/new/deleted skills and preserves worker versions beside the answer"; test: `tests/dispatch-skill-proposals.test.cjs` › "concurrent owner edits to global and built-in skills are report-only, unrelated inherited deliveries are ignored"

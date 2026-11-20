@@ -94,8 +94,8 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
         assert file.read_bytes() == b'sonnet\nmedium\n0\n\nhaiku\n'
     update(current, True)
     assert file.read_bytes() == b'sonnet\nmedium\n0\n\n\n'
-    update(dict(first, seatsMap={'padding':'x'*8192}), True)
-    assert file.read_bytes() == b'claude-opus-5-5[1m]\nhigh\n1\nclaude-sonnet-5-5\nclaude-opus-5-5[1m]\n'
+    update(dict(first, seatsMap={'padding':'x'*8192}), False)
+    assert file.read_bytes() == b'sonnet\nmedium\n0\n\n\n'
     update(None, True)
     assert file.read_bytes() == b''
 `);
@@ -115,14 +115,15 @@ test('the SSH command hook matches the local Agent tool routing rules and observ
     return { snapshot, hook, expected: seatRouting(JSON.stringify(hook), snapshot) };
   }));
   pythonProbe(t, String.raw`
-import contextlib, io, json, os, runpy, socket, sys
+import contextlib, io, json, os, pathlib, runpy, socket, sys, tempfile
 from unittest.mock import patch
-source = runpy.run_path(sys.argv[1])['NOTIFY_SOURCE']
-for case in json.loads(${JSON.stringify(JSON.stringify(cases))}):
+module = runpy.run_path(sys.argv[1])
+source = module['NOTIFY_SOURCE']
+def invoke(case, globals=None):
     with patch.object(socket, 'socket') as connect, patch.object(socket, 'AF_UNIX', 1, create=True), patch.object(sys, 'argv', ['notify', 'claude-seat']), \
          patch.object(sys, 'stdin', io.StringIO(json.dumps(case['hook']))), contextlib.redirect_stdout(io.StringIO()) as out, \
          patch.dict(os.environ, AGENTRIX_TOKEN='fixture', AGENTRIX_SOCKET='fixture', AGENTRIX_SEATS=case['snapshot']):
-        try: exec(source, {})
+        try: exec(source, globals or {})
         except SystemExit as e: assert e.code == 0
     event = connect.return_value.__enter__.return_value.sendall
     result = {}
@@ -130,7 +131,32 @@ for case in json.loads(${JSON.stringify(JSON.stringify(cases))}):
     if event.called:
         observed = json.loads(event.call_args.args[0])
         result['observed'] = {key: observed[key] for key in ('toolUseId','sessionId','model','effort','phase')}
-    assert result == case['expected'], (result, case)
+    return result
+cases = json.loads(${JSON.stringify(JSON.stringify(cases))})
+for case in cases:
+    assert invoke(case) == case['expected'], case
+with tempfile.TemporaryDirectory(prefix='live-ssh-seats-') as directory:
+    messages = []
+    channel = module['Channel'](1, messages.append)
+    channel.worker.temp = directory
+    folder = pathlib.Path(directory)
+    hook_globals = {'__file__': str(folder / 'notify.py')}
+    sidecar = folder / 'dispatch.json.seats'
+    old = cases[0]
+    new = {'reviewer': {'model': 'sonnet', 'effort': 'medium'}}
+    channel.receive({'op': 'claude-lead', 'id': 1, 'claudeLead': {'seatsMap': new}})
+    assert messages[-1]['ok']
+    assert json.loads(sidecar.read_bytes()) == new
+    if os.name != 'nt': assert sidecar.stat().st_mode & 0o777 == 0o600
+    assert invoke(old, hook_globals) == cases[2]['expected']
+    coder = {'reviewer': {'model': 'gpt-6.2-sol', 'effort': 'high', 'fast': True}}
+    channel.receive({'op': 'claude-lead', 'id': 2, 'claudeLead': {'seatsMap': coder}})
+    assert messages[-1]['ok']
+    denied = invoke(old, hook_globals)['output']['hookSpecificOutput']
+    assert denied['permissionDecision'] == 'deny' and 'dispatch helper' in denied['permissionDecisionReason']
+    sidecar.write_text('{"reviewer":{"model":"-bad","effort":"medium"}}')
+    assert invoke(old, hook_globals) == old['expected']
+    channel.close()
 `);
 });
 

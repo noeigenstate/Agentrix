@@ -3,7 +3,7 @@
 How a terminal's CLI reports to main: the Claude Code hook events (over HTTP to main's loopback hook server, or as commands through the event pipe) and transcript, and the Codex and Claude turn snapshots, turned into the terminal's CLI state, lights and completion alert; which hook channel a terminal uses and the settings its claude wrapper passes; and the bootstrap file a terminal's hooks and the dispatch helper read to reach main.
 
 Agent and Task have separate synchronous command hooks for seat routing in both local channels.
-The Claude wrapper reads the seat map once from the launch file and passes it with that CLI launch.
+The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook checks the private sidecar for accepted worker seats.
 
 ## Owns
 - `electron/features/terminal-events/**`
@@ -14,7 +14,7 @@ The Claude wrapper reads the seat map once from the launch file and passes it wi
 - `writeBootstrap` (`electron/features/terminal-events/bootstrap-file.cjs`) — writes the private session bootstrap and returns the optional bounded seat JSON when written, otherwise undefined
 - `updateBootstrapBackground` (`electron/features/terminal-events/bootstrap-file.cjs`) — refresh launch policy without replacing its private startup hook; busy renames retry with bounded backoff, and a separate policy file is re-read by launchers even after refresh fails
 - `updateBootstrapLead` (`electron/features/terminal-events/bootstrap-file.cjs`) — atomically writes model, effort, fast, background model and subagent model to the terminal's Claude lead file.
-- `updateDispatchSeats` (`electron/features/terminal-events/bootstrap-file.cjs`) — atomically writes the bounded Codex dispatch seat snapshot beside its private bootstrap. Bootstrap cleanup removes both.
+- `updateDispatchSeats` (`electron/features/terminal-events/bootstrap-file.cjs`) — atomically writes the bounded live worker seats beside the private bootstrap. Bootstrap cleanup removes both.
 - `createHookServer` (`electron/features/terminal-events/hook-server.cjs`) — `(ingest, { limit }) → { port, close }`: Claude Code's HTTP hooks, POST `/h/<terminalId>/<EventName>` with `X-Agentrix-Key` on 127.0.0.1, bodies up to 4 MB
 - `createHookIngest` (`electron/features/terminal-events/hook-ingest.cjs`) — `({ keyOf, deliver, now }) → { admit, take, abort, stats }`: requests become C-2 TerminalHookEvents `{ seq, terminalId, event, at, sessionId, transcriptPath, promptId, toolUseId, agentId, payload }`; stats() counts received, refused (path, terminal, key), oversize, unparsable, failed and aborted, for pipeline health
 - `terminalHooks` (`electron/features/terminal-events/hook-channel.cjs`) — a local terminal's `hooks` (C-2): `{ url, port, key, channel, fallback, channelReason, settings: { http, fallback } }`, the one generator of the --settings every claude wrapper passes; downgradeHooks applies a wrapper's hook-channel report
@@ -24,6 +24,7 @@ The Claude wrapper reads the seat map once from the launch file and passes it wi
 - `electron/shared/reason.cjs` (the term.* Reasons of a hook channel)
 - `electron/atomic-write.cjs` (atomic replacement of the lead file)
 - `electron/features/agents/agent-calls.cjs` (AgentCalls.forTerminal without a factory observes an existing run board during publication)
+- `electron/features/agents/call-seat.cjs` (shared worker seat byte limit)
 
 ## Invariants
 - A failed optional seat write keeps the bootstrap usable — test: `tests/seat-auto.test.cjs` › "a failed dispatch seat snapshot write leaves the required bootstrap usable"

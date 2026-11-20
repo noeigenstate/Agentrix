@@ -225,7 +225,7 @@ export type SkillVersion = { version: number; at: number; by: 'agent' | 'user' |
 export type SkillDetail = { text: string; versions: SkillVersion[]; pending: string | null };
 export type SkillDraft = { name: string; description: string; scope: 'global' | 'project'; projectId: string | null; text: string };
 export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'firstOpenRun' | 'autoOptimize' | 'confirmChanges'>>;
-// The model-routing skill declares its roles. Seat changes take effect from the next session Agentrix starts.
+// Worker seats follow accepted routing. The lead uses its launch seat.
 export type SeatId = string;
 export type Seat = {
   model: string; effort: string; fast?: boolean;
@@ -312,6 +312,7 @@ export type SeatsInfo = {
   effective: SeatMap;
   current: SeatMap | null;
   currentRoles: TeamRole[] | null;
+  leadPending: { model: string; effort: string; fast: boolean } | null;
   routing: RoutingSource;
   catalog: SeatModel[];
   installed: { claude: boolean; codex: boolean };
@@ -327,6 +328,7 @@ export type SeatsInfo = {
     template: OperationMap;
     config: OperationMap | null;
     effective: OperationMap;
+    pending: OperationId[];
     current: {
       values: OperationMap;
       agents: Partial<Record<OperationId, { claude: OperationAgentState; codex: OperationAgentState }>>;

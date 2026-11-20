@@ -88,11 +88,13 @@ test('a detached Codex helper keeps the seat it parsed if the bootstrap changes 
   const argv = ['codex', '--detach', '--role', 'review', '--title', 'Fixture', '--seat', 'developer',
     '--cwd', store.directory, '--brief', 'brief.md', '--out', 'answer.md'];
   let childOptions;
-  const code = await startDetached(argv, { store, env: { AGENTRIX_BOOTSTRAP: bootstrap }, stdout: { write() {} },
+  const launchSnapshot = { developer: { model: 'gpt-6.1-sol', effort: 'medium', fast: false } };
+  const launchEnv = { AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SEATS: JSON.stringify(launchSnapshot) };
+  const code = await startDetached(argv, { store, env: launchEnv, stdout: { write() {} },
     launch: (_file, args, { env }) => {
       updateDispatchSeats(bootstrap, { developer: { model: 'gpt-6.2-astra', effort: 'xhigh', fast: false } });
       const { argv: saved } = store.read(path.basename(args.at(-1), '.json'));
-      childOptions = argumentsOf(saved, env);
+      childOptions = argumentsOf(saved, env, JSON.parse(env.AGENTRIX_DISPATCH_PINNED_SEATS ?? 'null'));
       const child = new EventEmitter();
       child.unref = () => {};
       queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 1, null); });

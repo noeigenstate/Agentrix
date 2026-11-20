@@ -1,4 +1,4 @@
-const { agentDescription, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf } = require('../agents/call-seat.cjs');
+const { agentDescription, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf, liveSeatMap } = require('../agents/call-seat.cjs');
 
 function agentSeat(input, seats) {
   if (!seats || !['Agent', 'Task'].includes(input?.tool_name)) return {};
@@ -15,18 +15,22 @@ function agentSeat(input, seats) {
   return { model: alias, effort };
 }
 
-function seatHookOutput(input, seats, report = () => {}) {
+function seatHookOutput(input, seats, report = () => {}, live = false) {
   if (input?.hook_event_name !== 'PreToolUse') return {};
   const { model, effort, note } = agentSeat(input, seats);
-  if (note) return { systemMessage: note };
+  if (note) return live
+    ? { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: note } }
+    : { systemMessage: note };
   if (!model) return {};
-  const tool = input.tool_input;
-  // updatedInput replaces the whole tool input.
-  const output = tool.model === model && tool.effort === effort ? {}
-    : { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...tool, model, effort } } };
   const observed = seatObservation(input, model, effort, 'pre');
   if (observed) report(observed);
-  return output;
+  return seatToolOutput(input.tool_input, model, effort);
+}
+
+function seatToolOutput(tool, model, effort) {
+  // updatedInput replaces the whole tool input.
+  return tool.model === model && tool.effort === effort ? {}
+    : { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...tool, model, effort } } };
 }
 
 function observedAgentSeat(input, seats) {
@@ -42,4 +46,4 @@ function seatObservation(input, model, effort, phase) {
   return { toolUseId, model: supported ? model : null, effort: supported ? effort : null, phase };
 }
 
-module.exports = { seatHookOutput, observedAgentSeat };
+module.exports = { seatHookOutput, observedAgentSeat, seatToolOutput, liveSeatMap };

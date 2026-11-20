@@ -109,7 +109,7 @@ test('routing note is optional, current on a new delivery and included in bounde
   assert.equal(instructions, `remote. ${remote.bundle.instructions}`);
 });
 
-test('seat changes reach the next launch while Claude launch/current snapshots stay frozen through compact and clear', async t => {
+test('worker seat changes reach running sessions while Claude instructions stay frozen through compact and clear', async t => {
   const f = await fixture(t), file = path.join(f.store.builtinDir, 'model-routing', 'SKILL.md');
   const shared = require('./fixtures/team-seats.json'), skill = 'builtin:model-routing';
   assert.equal(f.store.seatsInfo(f.project.id), null, 'no declaring skill means no chooser');
@@ -126,8 +126,8 @@ test('seat changes reach the next launch while Claude launch/current snapshots s
   const allText = launch.skills.filter(item => item.enabled).map(item => [item.id, f.store.entry(item.id).text]);
   assert.equal(launch.fingerprint, digest(JSON.stringify([instructions, allText])));
   assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, operations: {} }, null), { ok: true });
-  assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.researcher.model, 'sonnet');
-  assert.equal(f.store.seatsInfo(null, 'terminal').current.researcher.model, 'sonnet');
+  assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.researcher.model, 'haiku');
+  assert.equal(f.store.seatsInfo(null, 'terminal').current.researcher.model, 'haiku');
   assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
   assert.equal(fs.readFileSync(launch.sessionManifest, 'utf8'), launchBytes);
   for (const source of ['compact', 'clear']) {
@@ -146,7 +146,7 @@ test('seat changes reach the next launch while Claude launch/current snapshots s
   assert.notEqual(next.fingerprint, launch.fingerprint);
   const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
   assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') }, operations: {} }, null), { ok: true });
-  assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'haiku');
+  assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'opus');
   for (const source of ['compact', 'clear']) {
     const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
     assert.ok(context.includes(rendered.path.replace(/\\/g, '/')));

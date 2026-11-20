@@ -549,25 +549,39 @@ function endSkillSession(s) {
 
 // Wrappers reread idle shells' notes. Running agents keep the note actually delivered at their launch.
 function refreshSkillNotes() {
+  const remoteWrites = [];
   for (const s of sessions.values()) {
     if (s.status === 'exited') continue;
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
     if (project.kind === 'ssh') {
-      if (s.terminal?.setClaudeLead) {
-        void s.terminal.setClaudeLead(skills.terminalLead(project.id, { remote: true })).catch(report);
+      const remote = s.remoteConnection || s.terminal;
+      if (remote?.setClaudeLead) {
+        const lead = s.nativeStructured ? null : skills.terminalLead(project.id, { remote: true });
+        const refresh = lead ?? { seatsMap: skills.dispatchSeats(project.id) ?? {} };
+        const routing = skills.seatsInfo(project.id);
+        remoteWrites.push(remote.setClaudeLead(refresh).then(() => {
+          remote.appliedRouting = { effective: routing?.effective ?? {}, roles: routing?.roles ?? [] };
+        }).catch(() => {
+          if (sessions.get(s.terminalId) === s && (s.remoteConnection || s.terminal) === remote) {
+            report(new Error('Could not update routing on the SSH host. The remote session may still be using its previous seats.'));
+          }
+        }));
       }
       continue;
     }
-    if (!s.skillNoteFile) continue;
     if (s.bootstrapFile) {
-      try { updateBootstrapLead(s.bootstrapFile, skills.terminalLead(project.id)); } catch (error) { report(error); }
+      try { updateDispatchSeats(s.bootstrapFile, skills.dispatchSeats(project.id) ?? {}); } catch (error) { report(error); }
+      if (s.skillNoteFile) {
+        try { updateBootstrapLead(s.bootstrapFile, skills.terminalLead(project.id)); } catch (error) { report(error); }
+      }
     }
-    if (s.codexActive) continue;
+    if (!s.skillNoteFile || s.codexActive) continue;
     const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'),
       skills.delivery(project, false, s.sessionId, { agent: 'claude' }), path.join(integrationDir, 'dispatch.cjs'));
     if (note !== s.skillNote) { writeFileAtomic(s.skillNoteFile, note); s.skillNote = note; }
   }
+  return remoteWrites.length ? Promise.allSettled(remoteWrites) : null;
 }
 // Workspace broadcasts can happen while history is still reading: hold a clean snapshot until it finishes.
 function usageHistory(s, ready) {
@@ -588,7 +602,7 @@ function callsOf(s, project) {
   const calls = s.calls || AgentCalls.forTerminal(sessions, id, () => {
     const helperPids = new WeakMap(), current = () => sessions.get(id);
     return new AgentCalls({ terminalId: id, changed: () => scheduleState(), finished: s.recordRun, local: project.kind !== 'ssh',
-      roles: () => skills?.sessionRoles?.(project.id, skills.seatSession?.(id)?.sessionId ?? null) ?? null,
+      roles: () => (current()?.remoteConnection || current()?.terminal)?.appliedRouting?.roles ?? skills?.sessionRoles?.(project.id) ?? null,
       dispatchAlive: async call => {
         if (project.kind === 'ssh') return null;
         let pid = call.helperPid || helperPids.get(call);
@@ -1122,7 +1136,7 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const bootstrapFile = path.join(runtimeDir, `${id}.json`);
   const delivery = library?.delivery?.(project, false, sessionId, { agent, started: true });
   const dispatchSnapshot = writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability,
-    claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, ...(agent === 'codex' && { dispatchSeats: delivery?.agentSeats ?? null }) });
+    claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, dispatchSeats: delivery?.agentSeats ?? null });
   // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
   const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery, path.join(integrationDir, 'dispatch.cjs'));
@@ -1130,6 +1144,7 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
     sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, operations: delivery?.operations?.[agent], seatsMap: delivery?.agentSeats, providerSessionId };
   env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
+  if (agent === 'claude' && library?.liveLookup) spec.liveLookup = () => library.liveLookup(project.id);
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
   if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
@@ -1246,13 +1261,15 @@ async function initializeNativeSessions() {
     launchRemote: async (spec, { signal, readOnly = false }) => {
       const project = findProject(spec.terminalId);
       const delivery = readOnly ? null : skills.delivery(project, true, spec.skillSessionId || spec.sessionId, { agent: 'codex', started: true });
+      const routing = readOnly ? null : skills.seatsInfo(project.id);
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
         allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
-        claudeLead: delivery?.agentSeats ? { seatsMap: delivery.agentSeats } : null,
+        claudeLead: readOnly ? null : { seatsMap: skills.dispatchSeats(project.id) ?? {} },
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
         skills: delivery?.bundle, readingNote: readOnly ? '' : startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
           path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
       const cancel = () => remote.close();
+      if (routing) remote.appliedRouting = { effective: routing.effective, roles: routing.roles };
       signal.addEventListener('abort', cancel, { once: true });
       if (signal.aborted) cancel();
       const host = sessions.get(spec.terminalId); if (host && !readOnly) host.remoteConnection = remote;
@@ -1314,8 +1331,8 @@ function wireNativeSessions(directory, codex, codexFactory) {
       if (project.kind !== 'ssh') spec.context = startupNote(READING_NOTE, handoffFile(spec.terminalId), path.join(project.path, 'skills'),
         delivery, path.join(integrationDir, 'dispatch.cjs'));
       return committed => {
-        if (committed && spec.agent === 'codex' && spec.bootstrapFile) {
-          try { updateDispatchSeats(spec.bootstrapFile, delivery?.agentSeats); } catch (error) { report(error); }
+        if (committed && spec.bootstrapFile) {
+          try { updateDispatchSeats(spec.bootstrapFile, skills.dispatchSeats?.(spec.projectId) ?? delivery?.agentSeats ?? {}); } catch (error) { report(error); }
         }
         skills.endSession(project.id, committed ? previous : skillSessionId);
       };
@@ -1455,6 +1472,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions);
   const s = createTerminalSession({ id, project, terminal, env, transfer, sessionId, sessionKey, controlCapability,
     bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind });
+  if (remoteSkills) terminal.appliedRouting = { effective: remoteSkills.seatsMap, roles: remoteSkills.roles };
   registerTerminalSession(s, project);
   bindTerminalEvents(s, project, env);
 }
@@ -1863,10 +1881,16 @@ if (!app.requestSingleInstanceLock()) {
       seatSession: id => {
         const session = sessions.get(id), spec = nativeSpecs.get(id);
         return session && session.status !== 'exited' && session.codexActive
-          ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId } : null;
+          ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId,
+            nativeClaude: session.nativeStructured && session.agent === 'claude',
+            appliedRouting: (session.remoteConnection || session.terminal)?.appliedRouting } : null;
       },
       getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
-      changed: (infos, { deliveryChanged }) => { send('skills:changed', infos); if (deliveryChanged) refreshSkillNotes(); }, report,
+      changed: (infos, { deliveryChanged }) => {
+        const refreshed = deliveryChanged && refreshSkillNotes();
+        if (refreshed) return refreshed.then(() => send('skills:changed', skills.infos()));
+        send('skills:changed', infos);
+      }, report,
       routingNote: () => routingNote(app.getPath('userData')) });
     skills.syncWatchers();
     codexFirst.then(() => skills.modelCatalog.refresh('startup')).catch(report);

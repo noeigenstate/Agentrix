@@ -3,7 +3,8 @@
 Owns the host's Claude Agent SDK sessions, protected credentials, worker tool decisions and local API accounting.
 
 GUI lookup and the two operation environment overrides come from the host's launch snapshot.
-The GUI launch snapshot also supplies declared Agent and Task seats. PreToolUse preserves all input fields except the supported model and effort it applies.
+GUI Agent and Task hooks read accepted seats from the private sidecar at call time, with the launch snapshot as fallback.
+PreToolUse preserves all input fields except the supported model and effort it applies.
 PreToolUse reports the provisional values by tool-use ID. PostToolUse reconciles the final input. A rewrite failure leaves worker policy in force.
 Unsupported choices use the reading view's existing alert once per tool-use ID.
 

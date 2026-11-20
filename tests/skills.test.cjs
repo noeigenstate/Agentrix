@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { SkillsStore, MAX_SSH_BUNDLE_BYTES } = require('../electron/features/skills/store.cjs');
+const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
 const { metadata, draftText, importFiles, MAX_IMPORT_BYTES, MAX_IMPORT_FILES } = require('../electron/features/skills/files.cjs');
 const { safeId, MAX_VERSIONS, TEXT_VERSIONS } = require('../electron/features/skills/history.cjs');
 const { startupNote } = require('../electron/features/agents/handoff.cjs');
@@ -179,6 +180,53 @@ test('pending routing retains accepted settings and freezes launched roles throu
   fs.rmSync(file);
   assert.equal(store.seatsInfo(id).routing.notice, 'file-deleted');
   assert.equal(store.seatsInfo(id).routing.layer, 'template');
+});
+
+test('worker seats go live while the running lead stays pinned', t => {
+  const { store, projects } = fixture(t), [project] = projects, id = project.id;
+  store.seatSession = () => ({ projectId: id, sessionId: 'running', nativeClaude: true });
+  const first = store.delivery(project, false, 'running', { agent: 'claude', started: true });
+  const before = store.seatsInfo(id, 'terminal');
+  const live = routing({ orchestrator: { model: 'sonnet', effort: 'medium' }, designer: { model: 'haiku', effort: 'low' },
+    'x-mobile': { from: 'frontend', name: 'Mobile', duty: 'Build the app' } },
+  { lookup: { model: 'sonnet', effort: 'medium' }, subagent: { model: 'sonnet' } });
+  assert.equal(before.leadPending, null);
+  assert.deepEqual(store.setRouting('project', id, live, null), { ok: true });
+  const saved = store.seatsInfo(id, 'terminal');
+  assert.deepEqual(saved.current.orchestrator, before.current.orchestrator);
+  assert.deepEqual(saved.leadPending, { model: 'sonnet', effort: 'medium', fast: false });
+  assert.deepEqual(saved.current.designer, saved.effective.designer);
+  assert.equal(saved.currentRoles.find(role => role.id === 'x-mobile')?.name, 'Mobile');
+  assert.deepEqual(saved.operations.pending, ['subagent']);
+  assert.deepEqual(saved.operations.current.values.lookup, live.operations.lookup);
+  assert.deepEqual(saved.operations.current.values.subagent, before.operations.current.values.subagent);
+  assert.deepEqual(store.delivery(project, false, 'running', { agent: 'claude', started: true }).rendered, first.rendered);
+
+  fs.writeFileSync(routeFile(project), routeDocument({ designer: { model: 'opus', effort: 'medium' } }));
+  const pending = store.seatsInfo(id, 'terminal', true);
+  assert.equal(pending.routing.state, 'pending');
+  assert.equal(store.dispatchSeats(id).designer.model, 'haiku');
+  assert.deepEqual(store.resolveRouting(id, 'apply', pending.routing.digest), { ok: true });
+  assert.equal(store.dispatchSeats(id).designer.model, 'opus');
+  assert.equal(store.seatsInfo(id, 'terminal').leadPending, null);
+  fs.writeFileSync(routeFile(project), '{broken');
+  assert.equal(store.seatsInfo(id, 'terminal').routing.state, 'invalid');
+  assert.equal(store.dispatchSeats(id).designer.model, 'opus');
+});
+
+test('the routing save IPC returns after active session updates settle', async t => {
+  const { store, projects } = fixture(t), remote = projects.at(-1);
+  const handlers = new Map(), update = Promise.withResolvers();
+  store.changed = () => update.promise;
+  registerSkillsIpc({ skills: store, handle: (channel, handler) => handlers.set(channel, handler) });
+  let done = false;
+  const saved = Promise.resolve(handlers.get('skills:setRouting')('project', remote.id, routing({ designer: seat('opus') }), null))
+    .then(result => { done = true; return result; });
+  await Promise.resolve();
+  assert.equal(done, false);
+  assert.equal(store.dispatchSeats(remote.id).designer.model, 'opus');
+  update.resolve();
+  assert.deepEqual(await saved, { ok: true });
 });
 
 test('routing file watches publish a debounced change for local projects only', async t => {

@@ -1,7 +1,47 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const { TextDecoder } = require('node:util');
+
 const DESCRIPTION_PREFIX = /^\[([a-z][a-z0-9-]{0,31}(?:\/[a-z][a-z0-9-]{0,23})?)\]\s*/;
 const CLAUDE_ALIAS = /^(sonnet|opus|haiku|fable)$/;
 const CLAUDE_EFFORT = /^(low|medium|high|xhigh|max)$/;
 const familyOf = model => /^(opus|sonnet|haiku|fable|claude-)/.test(model) ? 'claude' : 'codex';
+const SEAT_BYTES = 8192;
+const SEAT_ID = /^[a-z][a-z0-9-]{0,31}$/;
+const MODEL = /^[A-Za-z0-9][\w.:@+/[\]-]{0,159}$/;
+const EFFORT = /^[a-z][a-z0-9-]{0,31}$/;
+
+function parseSeatMap(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text) > SEAT_BYTES) return null;
+  let seats;
+  try { seats = JSON.parse(text); } catch { return null; }
+  if (!seats || typeof seats !== 'object' || Array.isArray(seats)) return null;
+  return Object.entries(seats).every(([id, choice]) => SEAT_ID.test(id) && choice && typeof choice === 'object'
+    && typeof choice.model === 'string' && MODEL.test(choice.model) && typeof choice.effort === 'string' && EFFORT.test(choice.effort)
+    && (!Object.hasOwn(choice, 'fast') || typeof choice.fast === 'boolean')
+    && (choice.agentModel == null || typeof choice.agentModel === 'string' && CLAUDE_ALIAS.test(choice.agentModel))) ? seats : null;
+}
+
+function liveSeatMap(bootstrap) {
+  if (typeof bootstrap !== 'string' || !path.isAbsolute(bootstrap) || /^[\\/]{2}/.test(bootstrap)) return null;
+  let descriptor;
+  try {
+    const file = bootstrap + '.seats', named = fs.lstatSync(file, { bigint: true });
+    if (!named.isFile() || named.size > BigInt(SEAT_BYTES)) return null;
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOFOLLOW ?? 0));
+    const opened = fs.fstatSync(descriptor, { bigint: true });
+    if (!opened.isFile() || opened.dev !== named.dev || opened.ino !== named.ino) return null;
+    const data = Buffer.alloc(SEAT_BYTES + 1);
+    const count = fs.readSync(descriptor, data, 0, data.length, null);
+    if (count > SEAT_BYTES) return null;
+    return parseSeatMap(new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(0, count)));
+  } catch { return null; }
+  finally {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch {}
+    }
+  }
+}
 
 function launchSeat(value, enabledIds) {
   if (typeof value !== 'string' || !value) return null;
@@ -44,4 +84,4 @@ function callSeat(call, model) {
   return { seat, seatSource, ...(specialty ? { specialty } : {}), ...(seatName === undefined ? {} : { seatName }), ...(offTeam ? { offTeam } : {}) };
 }
 
-module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf };
+module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf, liveSeatMap, parseSeatMap, SEAT_BYTES };
