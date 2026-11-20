@@ -707,7 +707,8 @@ class SkillsStore {
     const agentSeats = frozen && Object.hasOwn(frozen, 'agentSeats') ? frozen.agentSeats : launchSeatMap(seatsMap, seats?.catalog);
     const rendered = frozen?.rendered || (seats && seatsMap ? { [seats.skill]: this.renderedSkill(seats, seatsMap, leadAgent, remote) } : {});
     const names = this.builtinNames();
-    const entries = [...this.entries.values()].filter(entry => (entry.scope !== 'project' || !remote && entry.projectId === project.id)
+    // Routing is not delivered as an instruction: the lead works its own way and the seats stay an app-side toolbox.
+    const entries = [...this.entries.values()].filter(entry => entry.id !== ROUTING_ID && (entry.scope !== 'project' || !remote && entry.projectId === project.id)
       && (entry.source === 'builtin' || !names.includes(entry.name) && !names.includes(entry.folder)));
     const remotePath = entry => `{AGENTRIX_SKILLS}/${entry.scope === 'builtin' ? 'builtin' : 'global'}/${entry.folder}/SKILL.md`;
     const infos = entries.map(entry => this.info(entry));
