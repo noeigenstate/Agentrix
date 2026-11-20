@@ -1377,7 +1377,15 @@ test('the library displays both limits and the reviewer locks beside their contr
   assert.equal(join.props.disabled, true);
   assert.match(join.props.title, /停用一个后才能再启用/);
   assert.equal(textOf(byAttr(library, 'data-toggle-role', 'developer')), '移出团队');
-  assert.match(textOf(byAttr(byAttr(library, 'data-library-role', 'reviewer'), 'data-role-lock', 'membership')), /至少保留一个审查角色/);
+  for (const [id, reason] of [['orchestrator', /总指挥必须保留/], ['reviewer', /至少保留一个审查角色/]]) {
+    const card = byAttr(library, 'data-library-role', id);
+    const actions = find(card, node => node.props.className === 'seats-role-actions');
+    const children = React.Children.toArray(actions.props.children)
+      .flatMap(node => node.type === React.Fragment ? React.Children.toArray(node.props.children) : node);
+    assert.ok(children.some(node => node.props['data-edit-role'] === id));
+    assert.equal(children.find(node => node.props['data-toggle-role'] === id).props.disabled, true);
+    assert.match(textOf(children.at(-1)), reason);
+  }
   assert.match(textOf(byAttr(library, 'data-library-role', 'x-dev-0')), /项目角色/);
 });
 
@@ -1427,6 +1435,30 @@ test('drafts use the main process role defaults and preserve its library order',
   const chart = h.render();
   assert.equal(find(byAttr(chart, 'data-seat', 'orchestrator'), node => node.props.type === 'checkbox'), undefined);
   assert.match(textOf(byAttr(byAttr(chart, 'data-seat', 'a11y'), 'data-fresh-override')), /Changed to reuse an instance/);
+});
+
+test('invalid editor fields override the normal border and keep the visible focus outline', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
+  assert.match(css, /\.seats-role-fields :is\(input, textarea, select\)\[aria-invalid="true"\] \{ border-color: var\(--danger\); \}/);
+  assert.match(css, /\.seats-dialog :focus-visible \{ outline: 2px solid var\(--focus-ring\); outline-offset: 2px; \}/);
+});
+
+test('pending and invalid project files replace the green application status and show the template label once', async t => {
+  const info = seatsInfo({ routing: source({ layer: 'template', state: 'pending', actions: ['apply', 'keep'] }) });
+  const h = dialogHarness(t, info, { language: 'zh' });
+  const check = (tree, status) => {
+    const row = find(tree, node => node.props.className === 'seats-strip-row');
+    assert.equal(textOf(find(row, node => node.props.className === 'seats-effective')), status);
+    assert.doesNotMatch(textOf(row), /下一次对话生效|没有改动/);
+    assert.equal(find(row, node => node.props.className?.includes('seats-dot')), undefined);
+  };
+  const pending = h.render();
+  check(pending, '等你确认');
+  const header = find(pending, node => node.props.className === 'seats-head');
+  assert.equal((textOf(header).match(/我的默认模板/g) ?? []).length, 1);
+  h.deliver({ ...info, routing: { ...info.routing, state: 'invalid', actions: ['keep'], error: { code: 'bad-json' } } });
+  await settle();
+  check(h.render(), '文件未应用');
 });
 
 test('a changed review digest temporarily disables every action and sends only the latest digest', async t => {

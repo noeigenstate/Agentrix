@@ -38,7 +38,7 @@ const foreign = {
     roleChanges: [
       { role: 'x-writer', source: 'custom', status: 'added', before: null, after: { ...active, custom: writer } },
       { role: 'x-old', source: 'custom', status: 'removed', before: { ...active, custom: { ...writer, name: 'Retired' } }, after: null },
-      { role: 'developer', source: 'builtin', status: 'changed', before: { ...active, model: 'sonnet' }, after: active },
+      { role: 'developer', source: 'builtin', status: 'changed', before: active, after: { ...active, effort: 'max' } },
     ],
     flags: [...flags.map(code => code === 'operation-cost' ? { code, operation: 'lookup' } : { code, role: 'x-writer' }),
       { code: 'verification-weakened', role: 'reviewer' }],
@@ -57,9 +57,9 @@ test('routing review shows every change, flag and custom text as plain text', ()
   assert.match(html, /当前使用：本机项目设置/);
   assert.match(html, /新增角色.*移除或停用的角色.*修改的角色.*操作模型/s);
   assert.equal((html.match(/data-review-role=/g) ?? []).length, 3);
-  assert.match(html, /<tr data-review-role="x-writer" data-risk="true">[^]*?Writer[^]*?&lt;b&gt;Plain output&lt;\/b&gt;[^]*?<\/tr>/);
+  assert.match(html, /<tr data-review-role="x-writer" data-risk="true">[^]*?<dt>名称<\/dt><dd>Writer<\/dd>[^]*?&lt;b&gt;Plain output&lt;\/b&gt;[^]*?<\/tr>/);
   assert.match(html, /<tr data-review-role="x-old">[^]*?Retired[^]*?&lt;b&gt;Plain output&lt;\/b&gt;[^]*?<\/tr>/);
-  assert.match(html, /开发<\/span>.*developer.*sonnet · high · 快速 · 复用实例 · 已启用.*opus · high/s);
+  assert.match(html, /<tr data-review-role="developer">[^]*?开发<\/span>[^]*?developer[^]*?<div class="seats-review-settings"><span>强度 <span>high<\/span> → <span>max<\/span><\/span><\/div>/);
   assert.match(html, /data-review-operation="lookup" data-risk="true"[^]*?检索[^]*?haiku · low.*opus · high/);
   for (const code of flags) {
     assert.ok(html.includes(`data-routing-flag="${code}"`));
@@ -67,7 +67,7 @@ test('routing review shows every change, flag and custom text as plain text', ()
   }
   assert.match(html, /data-routing-risk-count="verification-weakened">验证减弱 × 2/);
   assert.match(html, /seats-review-other-risks"[^]*?审查<\/span>[^]*?验证减弱/);
-  assert.match(html, /roles\.unknown.*roles\.frontend\.seat/);
+  assert.match(html, /class="seats-review-ignored"><h4>忽略的条目<\/h4>.*roles\.unknown.*roles\.frontend\.seat/);
   assert.match(html, /&lt;script&gt;never execute&lt;\/script&gt;/);
   assert.match(html, /&lt;b&gt;Plain output&lt;\/b&gt;/);
   assert.match(html, /<pre[^>]*id="routing-raw"/);

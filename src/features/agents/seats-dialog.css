@@ -279,6 +279,7 @@ button.seats-op-chip:hover { background: var(--bg-hover); }
 .seats-dialog .seats-check { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; white-space: nowrap; }
 .seats-role-toggle { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
 .seats-role-reason, .seats-library-limits { color: var(--text-2); font-size: 14px; }
+.seats-role-actions > .seats-role-reason { flex-basis: 100%; }
 .seats-library-limits { flex: 1 0 100%; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 16px; }
 .seats-role-actions input { accent-color: var(--button-primary); }
 .seats-team-settings { flex-wrap: wrap; }
@@ -303,7 +304,7 @@ button.seats-op-chip:hover { background: var(--bg-hover); }
 .seats-role-fields textarea { resize: vertical; }
 .seats-role-counter { color: var(--text-2); font-size: 14px; text-align: end; }
 .seats-role-error { grid-column: 1 / -1; color: var(--danger); font-size: 14px; }
-.seats-role-fields [aria-invalid="true"] { border-color: var(--danger); }
+.seats-role-fields :is(input, textarea, select)[aria-invalid="true"] { border-color: var(--danger); }
 .seats-role-model { display: flex; flex-wrap: wrap; gap: 12px; }
 .seats-role-model label { display: inline-flex; align-items: center; gap: 8px; }
 .seats-routing-review {
@@ -323,9 +324,15 @@ button.seats-op-chip:hover { background: var(--bg-hover); }
 .seats-review-role-col { width: 24%; }
 .seats-review-risk-col { width: 24%; }
 .seats-review-id { color: var(--text-2); font-weight: 400; }
-.seats-review-text { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; padding-block-start: 8px; }
+.seats-review-settings { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.seats-review-settings > span { min-width: 0; }
+.seats-review-settings > span > span { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+.seats-review-text { padding-block-start: 8px; }
+.seats-review-text dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 8px; }
 .seats-review-text dt { color: var(--text-2); }
-.seats-review-other-risks { list-style: none; padding: 8px 12px; }
+.seats-review-other-risks, .seats-review-ignored { padding: 8px 12px; }
+.seats-review-other-risks { list-style: none; }
+.seats-review-ignored ul { padding-inline-start: 20px; }
 .seats-review-other-risks li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: 4px; }
 .seats-routing-review :is(code, pre) { font-size: 14px; }
 .seats-routing-review :is(h4, ul, dl, dd) { margin: 0; }

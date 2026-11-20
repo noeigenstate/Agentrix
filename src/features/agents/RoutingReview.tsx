@@ -68,10 +68,13 @@ export function resolveRouting(api: Pick<Window['agentrix'], 'resolveSkillRoutin
 
 const groups = { added: '新增角色', removed: '移除或停用的角色', changed: '修改的角色' } as const;
 
-function roleSettings(state: RoutingRoleState | null) {
-  if (!state) return '—';
-  return [state.model ?? '—', state.effort ?? '—', t(state.fast ? '快速' : '普通'),
-    t(state.fresh ? '新实例' : '复用实例'), t(state.enabled ? '已启用' : '已停用')].join(' · ');
+const roleFields = ['model', 'effort', 'fast', 'fresh', 'enabled', 'from'] as const;
+
+function RoleSettingsDiff({ before, after }: Pick<RoutingRoleChange, 'before' | 'after'>) {
+  return <div className="seats-review-settings">
+    {roleFields.filter(field => before?.[field] !== after?.[field]).map(field =>
+      <span key={field}>{t(fields[field])} <span>{valueText(before?.[field])}</span> → <span>{valueText(after?.[field])}</span></span>)}
+  </div>;
 }
 
 function roleTitle(change: RoutingRoleChange, roles: readonly SeatRole[]) {
@@ -94,23 +97,24 @@ function RiskSummary({ flags }: { flags: RoutingFlag[] }) {
   </div>;
 }
 
-function CustomSnapshot({ state, label }: { state: RoutingRoleState | null; label: string }) {
+function CustomSnapshot({ state, heading }: { state: RoutingRoleState | null; heading?: string }) {
   if (!state?.custom) return null;
   const { name, duty, outputs } = state.custom;
-  return <dl className="seats-review-text">
-    <dt>{label}</dt><dd>{name}</dd><dt>{t('职责')}</dt><dd>{duty}</dd><dt>{t('产出')}</dt><dd>{outputs || '—'}</dd>
-  </dl>;
+  return <div className="seats-review-text">
+    {heading && <b>{heading}</b>}
+    <dl><dt>{t('名称')}</dt><dd>{name}</dd><dt>{t('职责')}</dt><dd>{duty}</dd><dt>{t('产出')}</dt><dd>{outputs || '—'}</dd></dl>
+  </div>;
 }
 
 function ReviewRoleRow({ change, roles, flags }: { change: RoutingRoleChange; roles: readonly SeatRole[]; flags: RoutingFlag[] }) {
   const { before, after, role, source } = change;
-  const customChanged = JSON.stringify(before?.custom) !== JSON.stringify(after?.custom);
+  const compareCustom = before?.custom && after?.custom && JSON.stringify(before.custom) !== JSON.stringify(after.custom);
   return <tr data-review-role={role} data-risk={flags.length > 0 || undefined}>
     <th scope="row"><span>{roleTitle(change, roles)}</span><span className="seats-review-id">{role}</span></th>
-    <td><span>{roleSettings(before)} → {roleSettings(after)}</span>
-      {source === 'custom' && (customChanged ? <>
-        <CustomSnapshot state={before} label={t('当前')} /><CustomSnapshot state={after} label={t('文件')} />
-      </> : <CustomSnapshot state={after ?? before} label={t('名称')} />)}
+    <td><RoleSettingsDiff before={before} after={after} />
+      {source === 'custom' && (compareCustom ? <>
+        <CustomSnapshot state={before} heading={t('当前')} /><CustomSnapshot state={after} heading={t('应用后')} />
+      </> : <CustomSnapshot state={after ?? before} />)}
     </td>
     <td>{flags.length > 0 && <RiskPills flags={flags} />}</td>
   </tr>;
@@ -173,7 +177,9 @@ export function RoutingReview({ source, roles = [], operations = [], busy, refre
       <div className="seats-review-scroll" role="region" aria-label={t('与当前配置的差异')} tabIndex={0}>
         {review && <ReviewTable review={review} roles={roles} operations={operations} />}
         {review && <OtherRisks review={review} roles={roles} operations={operations} />}
-        {!!review?.ignored.length && <div><h4>{t('忽略的条目')}</h4><ul>{review.ignored.map(entry => <li key={entry}>{entry}</li>)}</ul></div>}
+        {!!review?.ignored.length && <div className="seats-review-ignored"><h4>{t('忽略的条目')}</h4>
+          <ul>{review.ignored.map(entry => <li key={entry}>{entry}</li>)}</ul>
+        </div>}
         {rawOpen && source.raw !== undefined && <pre id="routing-raw" tabIndex={0}>{escapeRoutingText(source.raw)}</pre>}
       </div>
     </div>

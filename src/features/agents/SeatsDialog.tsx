@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent as R
 import { createPortal } from 'react-dom';
 import {
   ArrowCounterClockwise, ArrowsClockwise, BookOpen, Browser, CaretDown, CheckCircle, ClipboardText, Code, Cpu, Database, Desktop, FileText, Flask, Gauge, GitBranch,
-  Infinity as InfinityIcon, MagnifyingGlass, PencilSimple, Person, Prohibit, ShieldCheck, Stack, User, Warning, X,
+  HardDrives, Infinity as InfinityIcon, MagnifyingGlass, PencilSimple, Person, Prohibit, ShieldCheck, Stack, User, Warning, X,
 } from '@phosphor-icons/react';
 import type { OperationMap, OperationRow, OperationValue, RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
@@ -22,7 +22,7 @@ import './seats-dialog.css';
 
 const ROLE_ICONS = { orchestrator: GitBranch, product: ClipboardText, architect: Stack, designer: PencilSimple, developer: Code,
   reviewer: MagnifyingGlass, qa: Flask, researcher: BookOpen, devops: InfinityIcon, security: ShieldCheck,
-  frontend: Browser, backend: Stack, desktop: Desktop, database: Database, ai: Cpu, docs: FileText, performance: Gauge, a11y: Person };
+  frontend: Browser, backend: HardDrives, desktop: Desktop, database: Database, ai: Cpu, docs: FileText, performance: Gauge, a11y: Person };
 const enabledLimit = () => t('已启用 {limit} 个角色（上限 {limit}）；停用一个后才能再启用', { limit: MAX_ENABLED_ROLES });
 const customLimit = () => t('已创建 {limit} 个项目角色（上限 {limit}）；删除一个后才能新建', { limit: MAX_CUSTOM_ROLES });
 
@@ -637,12 +637,9 @@ function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; li
     </div>}
     <button type="button" className="seats-btn is-small" data-edit-role={role.id} disabled={saving} onClick={() => edit(role)}>{t('角色设置')}</button>
     {library && <>
-      <div className="seats-role-toggle">
-        <button type="button" className="seats-btn is-small" data-toggle-role={role.id} disabled={saving || lock || !role.enabled && full}
-          title={toggleReason ?? (!role.enabled && full ? enabledLimit() : undefined)}
-          onClick={() => change(role, { enabled: !role.enabled })}>{t(role.enabled ? '移出团队' : '加入团队')}</button>
-        {toggleReason && <span className="seats-role-reason" data-role-lock="membership">{toggleReason}</span>}
-      </div>
+      <button type="button" className="seats-btn is-small" data-toggle-role={role.id} disabled={saving || lock || !role.enabled && full}
+        title={toggleReason ?? (!role.enabled && full ? enabledLimit() : undefined)}
+        onClick={() => change(role, { enabled: !role.enabled })}>{t(role.enabled ? '移出团队' : '加入团队')}</button>
       {role.source !== 'custom' && !role.locked.includes('copy') && <>
         <button type="button" className="seats-btn is-small" disabled={saving || copiesFull} onClick={() => create(role)}>{t('复制后自定义')}</button>
         {role.enabled && <button type="button" className="seats-btn is-small" data-replace-role={role.id}
@@ -650,6 +647,7 @@ function RoleActions({ state, role, library }: DialogPart & { role: TeamRole; li
       </>}
       {role.source === 'custom' && <button type="button" className="seats-btn is-small" disabled={saving || lock}
         title={toggleReason} onClick={() => remove(role)}>{t('删除角色')}</button>}
+      {toggleReason && <span className="seats-role-reason" data-role-lock="membership">{toggleReason}</span>}
     </>}
   </div>;
 }
@@ -774,7 +772,7 @@ function DialogHeader({ state }: DialogPart) {
       <button type="button" className="seats-btn" data-scope="template" aria-pressed={scope === 'template'}
         disabled={saving || state.review.busy} onClick={() => switchScope('template')}>{t('我的默认模板')}</button>
     </div>
-    {scope === 'project' && <span className="seats-source" data-routing-source={routing.layer}>
+    {scope === 'project' && (routing.remote || routing.layer !== 'template') && <span className="seats-source" data-routing-source={routing.layer}>
       {routing.remote ? t('SSH（本机设置）') : routingLayer(routing)}
     </span>}
     {scope === 'template' && routing.templateProjects !== undefined &&
@@ -837,12 +835,17 @@ function DialogStrip({ state }: DialogPart) {
   const { fix } = state.edits, { setMenu } = state.popup;
   const reset = () => { setMenu(null); state.draft.reset(); };
   const blockMessage = () => reviewerMessage(state);
+  const routingStatus = state.review.visible
+    ? info.routing.state === 'pending' ? '等你确认' : info.routing.state === 'invalid' ? '文件未应用' : null
+    : null;
   return (
-    <section className="seats-strip" aria-label={t('下一次对话生效')}>
+    <section className="seats-strip" aria-label={t(routingStatus || '下一次对话生效')}>
       <div className="seats-strip-row">
-        <span className="seats-effective"><i className={`seats-dot ${block || reviewBlock ? 'is-bad' : dirty ? 'is-on' : 'is-ok'}`} />{t('下一次对话生效')}</span>
-        <span>{block ? t('有座位被阻止，不能保存') : reviewBlock ? t('审查模型被阻止，不能保存') : dirty
-          ? t(operations ? '草稿未保存 · 已改 {count} 项' : '草稿未保存 · 已改 {count} 个座位', { count }) : t('没有改动')}</span>
+        {routingStatus ? <span className="seats-effective" role="status">{t(routingStatus)}</span> : <>
+          <span className="seats-effective"><i className={`seats-dot ${block || reviewBlock ? 'is-bad' : dirty ? 'is-on' : 'is-ok'}`} />{t('下一次对话生效')}</span>
+          <span>{block ? t('有座位被阻止，不能保存') : reviewBlock ? t('审查模型被阻止，不能保存') : dirty
+            ? t(operations ? '草稿未保存 · 已改 {count} 项' : '草稿未保存 · 已改 {count} 个座位', { count }) : t('没有改动')}</span>
+        </>}
         <span className="seats-grow" />
         <button type="button" ref={nowButton} className="seats-btn is-small" data-now aria-expanded={nowOpen}
           onClick={() => setNowOpen(!nowOpen)}>{t('本次对话')}<CaretDown size={12} aria-hidden="true" /></button>
