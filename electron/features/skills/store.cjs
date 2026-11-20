@@ -74,6 +74,7 @@ class SkillsStore {
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.routingWatchers = new Map(); this.routingSeen = new Set(); this.routingReviews = new Map();
+    this.routingSeedTried = new Set();
     this.projectSkills = new Map(); this.replacementFailures = new Set();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
     this.pruneDeliveryFiles();
@@ -186,6 +187,7 @@ class SkillsStore {
       } catch (error) { if (error.code === 'ENOENT') this.deliveryProjects = retained; else this.report(error); }
     }
     let modified = false;
+    for (const id of this.routingSeedTried) if (!projects.has(id)) this.routingSeedTried.delete(id);
     for (const id of this.routingSeen) if (!projects.has(id)) this.routingSeen.delete(id);
     for (const id of this.routingReviews.keys()) if (!projects.has(id)) this.routingReviews.delete(id);
     for (const options of Object.values(this.options)) {
@@ -483,15 +485,13 @@ class SkillsStore {
     return structuredClone(review);
   }
 
-  seatsInfo(projectId = null, terminalId = null, includeTemplateCount = false) {
+  seatsInfo(projectId = null, terminalId = null, review = false) {
     const context = this.routingContext();
     if (!context) return null;
     const { entry, installed, catalog, defaults, template } = context, lead = entry.seats[0];
     const binding = terminalId ? this.seatSession(terminalId) : null;
-    const projects = this.getProjects(), project = projects.find(item => item.id === (projectId ?? binding?.projectId));
-    const { config, source } = this.routingSelection(context, project, includeTemplateCount);
-    if (includeTemplateCount) source.templateProjects = projects.filter(item =>
-      (item === project ? source : this.routingSelection(context, item).source).layer === 'template').length;
+    const project = this.getProjects().find(item => item.id === (projectId ?? binding?.projectId));
+    const { config, source } = this.routingSelection(context, project, review);
     const team = resolveTeam(entry, config ?? template, defaults), effective = team.effective;
     const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
     const roles = team.team.map(item => item.row);
@@ -550,6 +550,19 @@ class SkillsStore {
     if (!result.ok) return result;
     this.routingWatchers.get(project.path)?.accept(routingWatch(project.path).signature);
     return this.routingChanged();
+  }
+
+  seedProjectRouting(project, context) {
+    if (!project || project.kind === 'ssh' || this.routingSeedTried.has(project.id)) return false;
+    try {
+      if (context === undefined) context = this.routingContext();
+      if (!context || context.invalidTemplate || Object.hasOwn(context.stored.trust || {}, project.id)) return false;
+      const { entry, catalog, defaults, stored, restore, template } = context;
+      this.routingSeedTried.add(project.id);
+      const file = readRouting(project.path, entry, catalog, defaults);
+      if (file.digest !== null || file.error) return false;
+      return this.writeProjectRouting(context, project, compactConfig(entry, restore(stored.local?.[project.id]) ?? template), null).ok;
+    } catch { return false; }
   }
 
   setRouting(scope, projectId, raw, base) {
@@ -728,8 +741,12 @@ class SkillsStore {
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
     // A newly added or moved project can launch before its first watcher scan.
-    if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
-      && this.refreshProjectSkills(new Set())) { this.invalidateDelivery(); this.persistOptions(); }
+    if (!remote && project.kind !== 'ssh') {
+      if (this.projectSkills.get(project.id)?.path !== project.path && this.refreshProjectSkills(new Set())) {
+        this.invalidateDelivery(); this.persistOptions();
+      }
+      this.seedProjectRouting(this.getProjects().find(item => item.id === project.id && item.path === project.path));
+    }
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
     const signature = remote || project.kind === 'ssh' ? '' : routingWatch(project.path).signature;
     const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote, signature]);
@@ -832,11 +849,14 @@ class SkillsStore {
   }
 
   syncRoutingWatchers() {
-    const roots = new Set(this.getProjects().filter(project => project.kind !== 'ssh').map(project => project.path));
+    const roots = new Map(this.getProjects().filter(project => project.kind !== 'ssh').map(project => [project.path, project]));
     for (const [root, watcher] of this.routingWatchers) if (!roots.has(root)) {
       watcher.stop(); this.routingWatchers.delete(root);
     }
-    for (const root of roots) if (!this.routingWatchers.has(root)) {
+    for (const [root, project] of roots) if (!this.routingWatchers.has(root)) {
+      this.seedProjectRouting(project);
+      // Publishing a seed can synchronously re-enter this scan and install the watcher.
+      if (this.routingWatchers.has(root)) continue;
       let signature = routingWatch(root).signature, timer;
       const watcher = monitorActivity(() => routingWatch(root), state => {
         if (signature === state.signature) return;

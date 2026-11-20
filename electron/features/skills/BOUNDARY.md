@@ -4,6 +4,8 @@ The skills library: built-in, global and project skills, their options, history 
 
 Routing saves roles. Accepted worker seats update running conversations. The launch snapshot retains the lead seat and rendered instructions.
 Legacy routing documents keep their complete digest and only their roles affect routing.
+The first scan or launch seeds missing local `.agentrix/routing.json` files from the default template or a migrated local configuration and trusts the new file immediately.
+A deleted trusted file stays deleted. Later template edits leave trusted project settings intact.
 A project file can contain short custom duty and output text. Its author can write misleading prose within those limits, so applying an external edit requires owner confirmation.
 The same snapshot carries a launch map with Claude Agent aliases resolved against the catalog at launch time.
 Built-in defaults, timing and requirements come from front matter. Shipped files refuse save, delete, revert, proposal acceptance and optimization options.

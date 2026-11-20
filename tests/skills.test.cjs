@@ -73,6 +73,156 @@ const routeFile = project => path.join(project.path, '.agentrix', 'routing.json'
 const routeDocument = roles => JSON.stringify({ format: 'agentrix-routing', version: 1, ...routing(roles) });
 const seat = model => ({ model, effort: 'high' });
 
+test('a project without a routing file gets the template on first scan, trusted at once', t => {
+  const { store, projects } = fixture(t), [project] = projects;
+  projects.splice(1);
+  const roles = { researcher: seat('haiku') };
+  assert.deepEqual(store.setRouting('template', null, routing(roles), null), { ok: true });
+  let publications = 0, watcher;
+  store.changed = () => {
+    publications++;
+    store.syncWatchers();
+    watcher = store.routingWatchers.get(project.path);
+  };
+  store.syncWatchers();
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')), JSON.parse(routeDocument(roles)));
+  const { routing: source, effective } = store.seatsInfo(project.id, null, true);
+  assert.deepEqual([source.state, source.layer, source.review, source.actions], ['trusted', 'file', undefined, []]);
+  assert.equal(effective.researcher.model, 'haiku');
+  assert.equal(Object.hasOwn(source, 'templateProjects'), false);
+  assert.equal(publications, 1);
+  assert.ok(watcher);
+  assert.equal(store.routingWatchers.get(project.path), watcher);
+});
+
+test('a launch before the first scan seeds before the table is rendered', t => {
+  const { store, projects } = fixture(t), [project] = projects;
+  assert.deepEqual(store.setRouting('template', null, routing({ researcher: seat('haiku') }), null), { ok: true });
+  let publications = 0, during;
+  store.changed = () => {
+    publications++;
+    during = store.delivery(project, false, 'next', { agent: 'claude' });
+  };
+  const launch = store.delivery(project, false, 'first', { agent: 'claude', started: true });
+  assert.equal(publications, 1);
+  assert.equal(store.routingWatchers.size, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')).roles, { researcher: seat('haiku') });
+  assert.equal(store.seatsInfo(project.id).routing.layer, 'file');
+  assert.deepEqual(store.sessionRoles(project.id, 'first'), during.roles);
+  assert.match(launch.rendered['builtin:model-routing'].text, /^\| researcher \|.*\| haiku · high \|/m);
+});
+
+test('delivery does not seed a worker worktree outside the registered project roots', t => {
+  const { root, store, projects } = fixture(t);
+  const worktree = { ...projects[0], path: path.join(root, 'worker') };
+  fs.mkdirSync(worktree.path);
+  store.delivery(worktree, false, 'worker', { agent: 'claude', started: true });
+  assert.equal(fs.existsSync(routeFile(worktree)), false);
+  assert.equal(fs.existsSync(routeFile(projects[0])), false);
+});
+
+test('an existing routing file is never overwritten by the seed', t => {
+  const { store, projects } = fixture(t), [project] = projects, file = routeFile(project);
+  const original = ' ' + routeDocument({ researcher: seat('haiku') }) + '\n';
+  put(file, original);
+  store.syncWatchers();
+  store.delivery(project);
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+  const { routing: source, effective } = store.seatsInfo(project.id, null, true);
+  assert.deepEqual([source.state, source.layer, effective.researcher.model], ['pending', 'template', 'sonnet']);
+  assert.equal(source.review.config.roles.researcher.model, 'haiku');
+});
+
+test('SSH projects get no routing file', t => {
+  const { root, store, projects } = fixture(t), remote = projects[2];
+  remote.path = path.join(root, 'remote');
+  fs.mkdirSync(remote.path);
+  store.syncWatchers();
+  store.delivery(remote, true);
+  assert.equal(fs.existsSync(routeFile(remote)), false);
+  assert.equal(store.seatsInfo(remote.id).routing.layer, 'template');
+  assert.deepEqual(store.setRouting('project', remote.id, routing({ researcher: seat('haiku') }), null), { ok: true });
+  store.delivery(remote, true);
+  assert.equal(store.seatsInfo(remote.id).routing.layer, 'local');
+  assert.equal(fs.existsSync(routeFile(remote)), false);
+});
+
+test('an unwritable or linked folder falls back to the template without throwing', t => {
+  const { root, store, projects, errors } = fixture(t), [blocked, linked] = projects;
+  const missing = { id: 'missing', path: path.join(root, 'missing') };
+  projects.push(missing);
+  const target = path.join(root, 'link-target');
+  fs.mkdirSync(target);
+  put(path.dirname(routeFile(blocked)), 'keep this file');
+  fs.symlinkSync(target, path.dirname(routeFile(linked)), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.deepEqual(store.setRouting('template', null, routing({ researcher: seat('haiku') }), null), { ok: true });
+  const write = t.mock.method(store, 'writeProjectRouting');
+  store.syncWatchers();
+  store.syncWatchers();
+  for (const [project, state, error] of [[blocked, 'invalid', 'not-file'], [linked, 'invalid', 'link'], [missing, 'absent', undefined]]) {
+    store.delivery(project);
+    assert.equal(fs.existsSync(routeFile(project)), false);
+    const { routing: source, effective } = store.seatsInfo(project.id);
+    assert.deepEqual([source.state, source.error?.code, source.layer, effective.researcher.model], [state, error, 'template', 'haiku']);
+  }
+  assert.equal(write.mock.callCount(), 1);
+  assert.equal(write.mock.calls[0].arguments[1], missing);
+  assert.equal(fs.readFileSync(path.dirname(routeFile(blocked)), 'utf8'), 'keep this file');
+  assert.deepEqual(fs.readdirSync(target), []);
+  assert.equal(fs.existsSync(missing.path), false);
+  assert.deepEqual(errors, []);
+});
+
+test('changing the template leaves a seeded project alone', t => {
+  const { root, store, projects } = fixture(t), [project] = projects;
+  assert.deepEqual(store.setRouting('template', null, routing({ researcher: seat('haiku') }), null), { ok: true });
+  store.syncWatchers();
+  const original = fs.readFileSync(routeFile(project)), { effective } = store.seatsInfo(project.id);
+  assert.deepEqual(store.setRouting('template', null, routing(), null), { ok: true });
+  const added = { id: 'added', path: path.join(root, 'added') };
+  fs.mkdirSync(added.path);
+  projects.push(added);
+  store.syncWatchers();
+  assert.deepEqual(fs.readFileSync(routeFile(project)), original);
+  assert.deepEqual(store.seatsInfo(project.id).effective, effective);
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(added), 'utf8')).roles, {});
+  assert.equal(store.seatsInfo(added.id).effective.researcher.model, 'sonnet');
+});
+
+test('a deleted routing file is not seeded again', t => {
+  const { store, projects, options } = fixture(t), [project] = projects;
+  store.syncWatchers();
+  fs.unlinkSync(routeFile(project));
+  store.syncWatchers();
+  store.delivery(project);
+  assert.equal(fs.existsSync(routeFile(project)), false);
+  assert.equal(store.seatsInfo(project.id).routing.notice, 'file-deleted');
+  store.close();
+  const reopened = new SkillsStore(options);
+  t.after(() => reopened.close());
+  reopened.syncWatchers();
+  reopened.delivery(project);
+  assert.equal(fs.existsSync(routeFile(project)), false);
+  assert.equal(reopened.seatsInfo(project.id).routing.notice, 'file-deleted');
+});
+
+test('a migrated local layer seeds the file and is cleared', t => {
+  const id = 'builtin:model-routing';
+  const template = routing({ researcher: seat('haiku') }), local = routing({ researcher: seat('opus') });
+  const { store, projects } = fixture(t, ({ dataDir }) => {
+    put(path.join(dataDir, 'skills.json'), JSON.stringify({ [id]: { routing: { template, local: { p1: local }, trust: {} } } }));
+  });
+  assert.equal(store.seatsInfo('p1').routing.layer, 'local');
+  store.syncWatchers();
+  const [project] = projects;
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')).roles, local.roles);
+  const { routing: source, effective } = store.seatsInfo(project.id);
+  assert.deepEqual([source.layer, source.state, effective.researcher.model], ['file', 'trusted', 'opus']);
+  const saved = JSON.parse(fs.readFileSync(store.optionsFile, 'utf8'))[id].routing;
+  assert.deepEqual(saved.local, {});
+  assert.equal(saved.trust[project.id].digest, source.digest);
+});
+
 test('routing saves validate atomically and project files are independent of the template', async t => {
   const f = fixture(t), { store, projects } = f, before = store.read('builtin:model-routing').text;
   store.getAgents = () => ({ claude: { installed: true }, codex: { installed: true } });
@@ -199,7 +349,7 @@ test('worker seats go live while the running lead stays pinned', t => {
   const live = routing({ orchestrator: { model: 'sonnet', effort: 'medium' }, designer: { model: 'haiku', effort: 'low' },
     'x-mobile': { from: 'frontend', name: 'Mobile', duty: 'Build the app' } });
   assert.equal(before.leadPending, null);
-  assert.deepEqual(store.setRouting('project', id, live, null), { ok: true });
+  assert.deepEqual(store.setRouting('project', id, live, before.routing.digest), { ok: true });
   const saved = store.seatsInfo(id, 'terminal');
   assert.deepEqual(saved.current.orchestrator, before.current.orchestrator);
   assert.deepEqual(saved.leadPending, { model: 'sonnet', effort: 'medium', fast: false });
@@ -268,7 +418,8 @@ test('routing file watches publish a debounced change for local projects only', 
   assert.equal(changes.length, before);
   t.mock.timers.tick(300);
   assert.deepEqual(changes.slice(before), [{ deliveryChanged: true }]);
-  assert.equal(store.seatsInfo(project.id).routing.state, 'pending');
+  const { routing: source } = store.seatsInfo(project.id);
+  assert.deepEqual([source.state, source.layer], ['pending', 'accepted']);
 });
 
 test('Agentrix saves publish once and cache review details only for UI reads', async t => {
@@ -278,7 +429,7 @@ test('Agentrix saves publish once and cache review details only for UI reads', a
   const watcher = store.routingWatchers.get(project.path);
   await watcher.poll();
   const before = changes.length;
-  assert.deepEqual(store.setRouting('project', project.id, routing(), null), { ok: true });
+  assert.deepEqual(store.setRouting('project', project.id, routing(), store.seatsInfo(project.id).routing.digest), { ok: true });
   await watcher.poll(); t.mock.timers.tick(300);
   assert.equal(changes.length, before + 1);
   fs.writeFileSync(routeFile(project), routeDocument({ qa: { enabled: false } }));
@@ -291,9 +442,12 @@ test('Agentrix saves publish once and cache review details only for UI reads', a
 });
 
 test('invalid stored templates and local routing explicitly report their fallback', t => {
-  const { store } = fixture(t);
+  const { store, projects } = fixture(t);
   const id = 'builtin:model-routing';
   store.options[id] = { routing: { template: { roles: null }, local: { p1: routing({ orchestrator: { enabled: false } }) } } };
+  store.syncWatchers();
+  store.delivery(projects[0]);
+  assert.ok(projects.slice(0, 2).every(project => !fs.existsSync(routeFile(project))));
   assert.equal(store.seatsInfo('p1').routing.notice, 'invalid-local');
   assert.equal(store.seatsInfo('p2').routing.notice, 'invalid-template');
   assert.equal(store.seatsInfo('p1').routing.layer, 'template');
