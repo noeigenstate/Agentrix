@@ -12,8 +12,6 @@ type Control = 'model' | 'effort' | keyof typeof AGENTS;
 
 export const editableOperation = (row: OperationRow): row is Editable => row.editable && row.id !== 'compaction' && row.id !== 'titles';
 export const operationName = (row: OperationRow) => currentLanguage() === 'en' ? row.nameEn : row.name;
-// Lookup is invoked per call. The other editable operations use Claude env or Codex thread config.
-export const operationNeedsLaunch = (id: OperationId) => id !== 'lookup';
 
 const OPERATION_WORDS: Record<string, string> = {
   'Searching, listing and reading files, log excerpts': '检索、列出和读取文件、摘录日志',
@@ -107,7 +105,7 @@ function OperationCard(props: OperationRowsProps & { row: Editable }) {
   const reported = sameOperation(value, info.effective[id]) && (!followReviewer || model === row.effective?.model);
   const suggestion = id === 'memory' && row.suggestion !== model && row.suggestion && isAvailable(catalog, row.suggestion) ? row.suggestion : null;
   const blocked = id === 'review' && reviewBlocked, note = operationNote(row.note);
-  const nextLaunch = operationNeedsLaunch(id) && (!reported || info.current && !sameOperation(value, info.current.values[id]));
+  const nextLaunch = info.pending.includes(id);
   return <article className={`seats-op-card${over === id ? ' is-over' : ''}${blocked ? ' is-blocked' : ''}`} data-operation={id} data-op-slot={id} aria-label={name}>
     <OperationTitle row={row} changed={changed} />
     <div className="seats-op-info">
@@ -166,7 +164,7 @@ export function CurrentOperations({ info, label }: { info: SeatsInfo['operations
       return <div key={row.id} className="seats-now-op" data-now-operation={row.id}>
         <span className="seats-now"><b>{operationName(row)}</b>{setting(value)}</span>
         {agents && <><Status family="claude" value={agents.claude} /><Status family="codex" value={agents.codex} /></>}
-        {operationNeedsLaunch(row.id) && !sameOperation(value, saved) &&
+        {info.pending.includes(row.id) &&
           <span className="seats-now-restart">{t('下次启动生效：{settings}', { settings: setting(saved) })}</span>}
       </div>;
     })}</div>

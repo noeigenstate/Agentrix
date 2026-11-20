@@ -12,9 +12,9 @@ import {
   changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, reviewerBlock, rowFor, reviewerSameButAllowed,
   sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, familyOf,
   operationAssignment, operationDiff, operationFamilyReason, operationLayers, operationReviewerBlock,
-  displayedSeat, seatSettingText, type Edit, type LiveSeatsInfo, type Scope, type SlotId,
+  displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
 } from './skill-seats';
-import { CurrentOperations, OperationRows, editableOperation, operationLabel, operationName, operationNeedsLaunch, operationWords } from './OperationRows';
+import { CurrentOperations, OperationRows, editableOperation, operationLabel, operationName, operationWords } from './OperationRows';
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
 import { copyRole, roleName, RoleEditor } from './RoleEditor';
 import { resolveRouting, RoutingReview, routingError, routingLayer } from './RoutingReview';
@@ -108,13 +108,13 @@ function migrationLine(line: string) {
 }
 
 type SeatsDialogProps = {
-  info: LiveSeatsInfo; projectId?: string; terminalId?: string; migration?: string;
+  info: SeatsInfo; projectId?: string; terminalId?: string; migration?: string;
   onMigration: (text: string) => void; onDismissMigration: () => void; onClose: () => void;
 };
 
 function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDialogProps) {
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [refreshed, setRefreshed] = useState<LiveSeatsInfo | null>(null);
+  const [refreshed, setRefreshed] = useState<SeatsInfo | null>(null);
   const [refreshing, setRefreshing] = useState<'dialog' | 'manual' | null>(null);
   const reading = useRef<'dialog' | 'manual' | null>(null), queued = useRef(false), alive = useRef(true);
   const [moved, setMoved] = useState(() => given.defaultsMoved ?? []);
@@ -358,7 +358,7 @@ function choiceActions(source: ReturnType<typeof useCatalog>, draft: ReturnType<
     setOperationsDraft({ ...opValues, [row.id]: value });
     setDiscarding(false);
     const text = t('草稿 · {seat} 换成 {model}', { seat: operationName(row), model: operationLabel(row, value, label) });
-    setNotice({ kind: 'info', text: operationNeedsLaunch(row.id) ? `${text} · ${t('下次启动生效')}` : text });
+    setNotice({ kind: 'info', text });
   };
   const assign = (slot: SlotId, model: string) => {
     const row = opAt(slot);
@@ -840,7 +840,10 @@ function DialogStrip({ state }: DialogPart) {
   const timing = t(info.leadPending ? '保存后立即生效；总指挥重启后生效' : '保存后立即生效');
   const noticeKind = notice?.kind === 'saved' ? 'ok' : notice?.kind;
   const noticeText = notice?.kind === 'saved'
-    ? t(info.leadPending ? '已保存，立即生效；总指挥重启后生效' : '已保存，立即生效') : notice?.text;
+    ? (operations?.pending.length
+      ? [t('已保存'), info.leadPending && t('总指挥重启后生效'), t('部分操作模型下次启动生效')].filter(Boolean).join(' · ')
+      : t(info.leadPending ? '已保存，立即生效；总指挥重启后生效' : '已保存，立即生效'))
+    : notice?.text;
   return (
     <section className="seats-strip" aria-label={routingStatus ? t(routingStatus) : t('模型路由')}>
       <div className="seats-strip-row">

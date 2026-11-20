@@ -17,12 +17,16 @@ test('the Agent tab groups only occupied roles in chart order and keeps develope
     [['product', ['product']], ['developer', ['frontend', 'backend']], ['reviewer', ['review']]]);
 });
 
-test('the routing verdict uses owning-session seats and actual model facts', () => {
-  const info = { ...fixture, current: fixture.defaults, effective: { developer: { model: 'sonnet' } } };
-  const declared = { seatSource: 'declared' };
-  assert.equal(routeVerdict(row('dev', 'developer', 'gpt-6.2-sol', { ...declared, specialty: 'frontend' }), info), 'match');
+test('the routing verdict uses the call snapshot even after the live seat changes', () => {
+  const info = { ...fixture, current: { ...fixture.defaults, developer: { model: 'sonnet' } } };
+  const expected = { model: 'gpt-6.2-sol', effort: 'high', fast: false };
+  const declared = { seatSource: 'declared', specialty: 'frontend', expected };
+  assert.equal(routeVerdict(row('dev', 'developer', expected.model, declared), info), 'match');
   assert.equal(routeVerdict(row('dev', 'developer', 'sonnet', declared), info), 'mismatch');
+  assert.equal(routeVerdict(row('dev', 'developer', expected.model, declared, { effort: 'low' }), info), 'mismatch');
+  assert.equal(routeVerdict(row('dev', 'developer', expected.model, declared, { fast: true }), info), 'mismatch');
   assert.equal(routeVerdict(row('dev', 'developer', 'sonnet', declared, { modelUnconfirmed: true }), info), 'unknown');
+  assert.equal(routeVerdict(row('dev', 'developer', 'sonnet', { ...declared, expected: null }), info), 'unknown');
   assert.equal(routeVerdict(row('dev', 'developer', 'gpt-6.2-sol', { declared: { model: 'gpt-6.2-sol', effort: 'high', fast: true } }), info), 'mismatch');
 });
 

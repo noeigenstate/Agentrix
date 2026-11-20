@@ -1,31 +1,37 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CaretRight, Lightning } from '@phosphor-icons/react';
 import type { SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { openSeats, routingRoleName, routingModelName } from '../../shared/routing-command.ts';
 import { editableOperation, operationLabel, operationName } from './OperationRows';
-import { displayedSeat, operationDiff, seatSettingText, type LiveSeatsInfo } from './skill-seats';
+import { displayedSeat, operationDiff, seatSettingText } from './skill-seats';
 
 const SUMMARY_NAMES = { background: '后台小任务', subagent: '子代理', review: '审查' } as const;
 
 function OperationSummary({ operations }: { operations: NonNullable<SeatsInfo['operations']> }) {
   const values = operations.current?.values ?? operations.effective;
   const changes = operationDiff(values, operations.defaults);
-  const rows = operations.rows.filter(editableOperation).filter(row => changes[row.id] !== undefined);
+  const { pending } = operations;
+  const rows = operations.rows.filter(editableOperation).filter(row => changes[row.id] !== undefined || pending.includes(row.id));
   const title = t('操作模型');
   const names = rows.map(row => row.id in SUMMARY_NAMES ? t(SUMMARY_NAMES[row.id as keyof typeof SUMMARY_NAMES]) : operationName(row));
   const details = rows.map(row => {
-    const value = changes[row.id];
+    const nextLaunch = pending.includes(row.id);
+    const value = nextLaunch ? operations.effective[row.id] : values[row.id];
     const label = operationLabel(row, value, routingModelName);
-    return [`${operationName(row)} · ${label}`, value !== 'follow' && value?.effort].filter(Boolean).join(' · ');
+    return [operationName(row), label, value !== 'follow' && value?.effort, nextLaunch && t('下次启动生效')].filter(Boolean).join(' · ');
   });
   return <span className="activity-routing-operations" title={[title, ...details].join('\n')}>
-    {names.length ? <strong>{names.join(' · ')}</strong> : <><span>{title} · </span><strong>{t('默认')}</strong></>}
+    <span className="activity-routing-operation-names">
+      {names.length ? <strong>{names.join(' · ')}</strong> : <>{title} · <strong>{t('默认')}</strong></>}
+    </span>
+    {pending.length > 0 && <span className="activity-routing-operation-pending">{t('下次启动生效')}</span>}
   </span>;
 }
 
 export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId?: string; terminalId: string; sessionId: string | null }) {
-  const [info, setInfo] = useState<LiveSeatsInfo | null>(null);
+  const [info, setInfo] = useState<SeatsInfo | null>(null);
+  const rowsRef = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     const api = window.agentrix;
     if (!api?.skillSeats) return;
@@ -41,6 +47,26 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
     const off = api.onSkills?.(load);
     return () => { active = false; off?.(); };
   }, [projectId, terminalId, sessionId]);
+  useLayoutEffect(() => {
+    const rows = rowsRef.current, pane = rows?.closest('.activity-pane');
+    if (!rows || !pane) return;
+    const fit = () => {
+      // Measure the single column first, including any measured usage rows above the card.
+      rows.removeAttribute('data-compact');
+      rows.toggleAttribute('data-compact', pane.scrollHeight > pane.clientHeight);
+    };
+    const resize = new ResizeObserver(fit);
+    const observe = () => {
+      resize.disconnect();
+      resize.observe(pane);
+      for (const child of pane.children) resize.observe(child);
+      fit();
+    };
+    const mutation = new MutationObserver(observe);
+    mutation.observe(pane, { childList: true });
+    observe();
+    return () => { mutation.disconnect(); resize.disconnect(); };
+  }, [info]);
   if (!info?.roles?.length) return null;
   const roles = info.roles.filter(role => role.enabled !== false);
   const pending = info.routing?.state === 'pending' || info.routing?.state === 'invalid';
@@ -53,7 +79,7 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
     aria-description={restart ?? undefined}
     onClick={() => openSeats({ projectId, terminalId })}>
     <span className="activity-card-title activity-routing-title">{title}{badge && <span data-routing-pending>{badge}</span>}<CaretRight size={14} aria-hidden="true" /></span>
-    <span className="activity-routing-rows" data-compact={roles.length > 10 || undefined}>{roles.map(role => {
+    <span ref={rowsRef} className="activity-routing-rows">{roles.map(role => {
       const seat = displayedSeat(info, role.id), leadRestart = role.id === info.lead ? restart : null;
       return <span key={role.id} className="activity-routing-row" data-seat={role.id} data-lead-pending={leadRestart ? true : undefined}>
         <span title={titleOf(role)}>{titleOf(role)}</span><strong title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>

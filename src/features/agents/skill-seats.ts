@@ -9,9 +9,6 @@ import { authorIdentityConflict, roleLocks } from '../../../electron/features/sk
 
 export { familyOf };
 
-// The renderer can run on a main process without the live routing payload.
-export type LiveSeatsInfo = SeatsInfo & { leadPending?: { model: string; effort: string; fast: boolean } | null };
-
 export function displayedSeat(info: SeatsInfo, id: SeatId) {
   return id === info.lead ? info.current?.[id] ?? info.effective[id] : info.effective[id];
 }
@@ -382,14 +379,14 @@ export function roleGroups(roles: readonly CallRole[], rows: CallRow[], selected
 
 export function routeVerdict(row: CallRow, info?: SeatsInfo | null) {
   const { call, item } = row, declared = item.declared;
-  const expected = item.seatSource === 'declared' && item.seat ? info?.current?.[item.seat] : undefined;
+  // Main supplies this snapshot for new calls. Older call items have no seat verdict.
+  const { expected } = item as typeof item & { expected?: Required<Seat> | null };
   if (item.offTeam || !call.model || call.modelUnconfirmed) return 'unknown';
   const matches = (model: string) => sameModel(info?.catalog ?? [], model, call.model!);
-  if (expected && !matches(expected.model)) return 'mismatch';
-  if (declared) {
-    if (!matches(declared.model) || declared.effort != null && call.effort != null && declared.effort !== call.effort
-      || declared.fast != null && call.fast != null && declared.fast !== call.fast) return 'mismatch';
-    if (declared.effort != null && call.effort == null || declared.fast != null && call.fast == null) return 'unknown';
-  }
+  const differs = (settings: NonNullable<typeof declared>) => !matches(settings.model)
+    || settings.effort != null && call.effort != null && settings.effort !== call.effort
+    || settings.fast != null && call.fast != null && settings.fast !== call.fast;
+  if (expected && differs(expected) || declared && differs(declared)) return 'mismatch';
+  if (declared && (declared.effort != null && call.effort == null || declared.fast != null && call.fast == null)) return 'unknown';
   return expected || declared ? 'match' : 'unknown';
 }
