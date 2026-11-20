@@ -155,7 +155,7 @@ test('Claude Task feeds reuse the parent parser in a separate log, update increm
   assert.deepEqual(first.entries, log.snapshot().map(entry => entry.role === 'user' ? { ...entry, sender: { kind: 'planner', agent: 'claude', model: null } } : entry));
   assert.ok(first.entries.some(entry => entry.role === 'tool' && entry.tool.done));
   assert.deepEqual(f.calls.snapshot()[0].items[0], { id: 'agent:worker', state: 'running', title: 'Synthetic task worker', role: '通用',
-    startedAt: BASE, endedAt: null, viewable: true, hidden: false, seat: 'developer', seatSource: 'inferred', worktree: f.cwd });
+    startedAt: BASE, endedAt: null, viewable: true, hidden: false, seat: 'developer', seatSource: 'inferred', expected: null, worktree: f.cwd });
   await fs.appendFile(filename, lines([{ type: 'assistant', uuid: 'later', timestamp: iso(5), isSidechain: true,
     message: { model: 'claude-sonnet-5-5', content: [{ type: 'text', text: 'Later synthetic step.' }] } }]));
   const next = await f.calls.feed('agent:worker');
