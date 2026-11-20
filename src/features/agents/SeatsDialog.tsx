@@ -778,13 +778,12 @@ function ModelPalette({ state }: DialogPart) {
 function RoutingStatus({ state }: DialogPart) {
   const { info } = state.source, { scope, dirty, count } = state.draft;
   const reviewStatus = state.review.visible && (info.routing.state === 'pending' ? '等你确认' : info.routing.state === 'invalid' ? '文件未应用' : null);
-  const templateProjects = info.routing.templateProjects;
   return <span className="seats-effective" data-routing-status role="status">
     {reviewStatus ? t(reviewStatus) : dirty ? <>
       <span aria-hidden="true">●</span>{count === 1 ? t('1 处改动未保存') : t('{count} 处改动未保存', { count })}
     </> : <>
       <span aria-hidden="true">✓</span>{t(scope === 'project' ? '已保存，立即生效' : '已保存')}
-      {scope === 'template' && templateProjects !== undefined && <span>· {t('{count} 个项目使用此模板', { count: templateProjects })}</span>}
+      {scope === 'template' && <span>· {t('新项目从此模板创建配置')}</span>}
       {scope === 'project' && info.leadPending && <span>· {t('总指挥重启后生效')}</span>}
     </>}
   </span>;
