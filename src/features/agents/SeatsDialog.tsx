@@ -899,7 +899,6 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
   if (!seat) return null;
   const model = rowFor(catalog, seat.model);
   const fastNote = !model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported']) : model.family === 'claude' ? t(FAST_BILLING) : undefined;
-  const locked = role.locked.includes('fresh');
   return <div className="seats-menu-settings">
     <div className="seats-picker-efforts" data-effort={slot} data-tile-effort={slot} role="group" aria-label={t('{seat}的推理强度', { seat: seatName(slot) })}>
       <span>{t('强度')}</span>
@@ -910,10 +909,8 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
     <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.fast} data-fast={slot} data-tile-fast={slot}
       disabled={saving || !model?.fast && !seat.fast} aria-label={t('{seat}快速模式', { seat: seatName(slot) })} title={fastNote}
       onClick={() => edit(setFast(working, slot, !seat.fast, catalog))}>{t('快速')}<i /></button>
-    {role.kind !== 'lead' && (locked ? <span className="seats-role-reason" data-role-lock="fresh">
-      <LockSimple size={14} aria-hidden="true" /> {t('审查角色始终使用新实例。')}
-    </span> : <button type="button" className="seats-switch" role="switch" aria-checked={role.fresh} data-fresh={slot}
-      disabled={saving} onClick={() => state.roles.change(role, { fresh: !role.fresh })}>{t('新实例')}<i /></button>)}
+    {role.kind !== 'lead' && <button type="button" className="seats-switch" role="switch" aria-checked={role.fresh} data-fresh={slot}
+      disabled={saving} onClick={() => state.roles.change(role, { fresh: !role.fresh })}>{t('新实例')}<i /></button>}
     {fastNote && <small className="seats-menu-note" data-fast-note>{fastNote}</small>}
   </div>;
 }

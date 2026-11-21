@@ -161,12 +161,10 @@ function useEditorClose(dirty: boolean, close: () => void) {
 }
 
 export function RoleEditor(props: EditorProps) {
-  const { existing, idLocked, catalog, models, roles, close, copy, replace } = props;
+  const { existing, idLocked, catalog, models, close, copy, replace } = props;
   const form = useEditor(props);
   const { roleId, value, setValue, setForm, locked, sources, from, error, changeFrom, submit } = form;
   const { requestClose, discard, keep, keys, fieldset, prompt } = useEditorClose(roleId !== props.id || !sameRoleConfig(value, props.initial), close);
-  const lastReviewer = existing?.enabled && existing.kind === 'reviewer' &&
-    roles.filter(role => role.enabled && role.kind === 'reviewer').length === 1;
   const seat = value.model && value.effort ? { model: value.model, effort: value.effort, fast: value.fast } : undefined;
   const updateSeat = (next: Seat | undefined) => {
     const { model, effort, fast, ...rest } = value;
@@ -191,16 +189,14 @@ export function RoleEditor(props: EditorProps) {
           {!locked && <RoleModel seat={seat} catalog={catalog} inherited={from && models[from.id]} update={updateSeat} />}
           {!locked && <div className="seats-role-model">
             <div className="seats-role-toggle">
-              <label className="seats-check"><input type="checkbox" checked={value.enabled !== false} disabled={!!replace || lastReviewer}
+              <label className="seats-check"><input type="checkbox" checked={value.enabled !== false} disabled={!!replace}
                 onChange={event => setValue({ ...value, enabled: event.target.checked })} />{t('启用')}</label>
-              {lastReviewer && <span className="seats-role-reason">{t('至少保留一个审查角色。')}</span>}
             </div>
             <div className="seats-role-toggle">
               <label className="seats-check">
-                <input type="checkbox" disabled={from?.kind === 'reviewer'} checked={from?.kind === 'reviewer' || (value.fresh ?? !!from?.fresh)}
+                <input type="checkbox" checked={value.fresh ?? !!from?.fresh}
                   onChange={event => setValue({ ...value, fresh: event.target.checked })} />{t('新实例')}
               </label>
-              {from?.kind === 'reviewer' && <span className="seats-role-reason">{t('审查角色始终使用新实例。')}</span>}
             </div>
           </div>}
           {!locked && error && <p role="status">{routingError(error)}</p>}

@@ -3552,7 +3552,6 @@
   "复制并替换": "Copy and replace",
   "复制后自定义": "Copy and customize",
   "删除角色": "Delete role",
-  "审查角色始终使用新实例。": "Reviewers always use a fresh instance.",
   "职责": "Duty",
   "产出": "Outputs",
   "基于": "Based on",
@@ -3686,5 +3685,15 @@
     "Lookups, background tasks, subagent defaults, memory and review use the defaults of Claude Code or Codex. Search follows Claude Code's default behavior.",
   "内置模型路由": "Routing",
   "每个任务都启用模型路由。请在活动区的「模型路由」中配置，设置里的「技能」页已移除此入口。":
-    "Model routing runs on every task. Configure it in Model routing in the activity pane. Its entry under Settings → Skills has been removed."
+    "Model routing runs on every task. Configure it in Model routing in the activity pane. Its entry under Settings → Skills has been removed.",
+  "两种模式": "Two modes",
+  "总指挥卡片上的开关切换出生模式和指挥家模式：关闭时总指挥像原来的命令行一样自己完成任务，其余角色变灰不可用；打开时它只规划和调度角色，并随时回答你、汇报进度。": "A switch on the orchestrator card chooses native or conductor mode: off, the orchestrator does every task itself like the plain command line and the other roles are greyed out; on, it only plans and calls roles, while answering you and reporting their progress.",
+  "后台调用角色": "Roles run in the background",
+  "指挥家模式下，总指挥用工具在后台启动角色，不再停下来等结果；原生对话里角色完成时会自动收到通知。": "In conductor mode the orchestrator starts roles with tools that run them in the background, so it never stops to wait; a native conversation is told when a role finishes.",
+  "指挥即时切换": "Orchestrator switches at once",
+  "在活动区改总指挥的模型、思考深度或快速模式，正在运行的原生对话从下一条回复起就使用新设置，不用重启。": "Changing the orchestrator's model, effort or fast mode in the activity pane takes effect in the running native conversation from its next reply, with no restart.",
+  "角色不再受限": "No role restrictions",
+  "去掉了必须保留审查、审查不能与开发同模型、审查必须用新实例等限制，用哪些角色、怎么用由总指挥决定。": "The rules that a reviewer is required, may not share the developer's model and must be a fresh instance are gone; the orchestrator decides which roles to use and how.",
+  "新项目带路由": "New projects get routing",
+  "打开没有路由文件的项目时，会按默认模板自动创建 .agentrix/routing.json；之后修改模板不影响已有项目。": "Opening a project without a routing file creates .agentrix/routing.json from the default template; later template changes leave existing projects alone."
 }

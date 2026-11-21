@@ -3,15 +3,18 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
+  { title: "两种模式", text: "总指挥卡片上的开关切换出生模式和指挥家模式：关闭时总指挥像原来的命令行一样自己完成任务，其余角色变灰不可用；打开时它只规划和调度角色，并随时回答你、汇报进度。" },
+  { title: "后台调用角色", text: "指挥家模式下，总指挥用工具在后台启动角色，不再停下来等结果；原生对话里角色完成时会自动收到通知。" },
+  { title: "指挥即时切换", text: "在活动区改总指挥的模型、思考深度或快速模式，正在运行的原生对话从下一条回复起就使用新设置，不用重启。" },
+  { title: "角色不再受限", text: "去掉了必须保留审查、审查不能与开发同模型、审查必须用新实例等限制，用哪些角色、怎么用由总指挥决定。" },
+  { title: "新项目带路由", text: "打开没有路由文件的项目时，会按默认模板自动创建 .agentrix/routing.json；之后修改模板不影响已有项目。" },
   { title: "阅读发送更稳", text: "Claude Code 的输入提示和建议不会被当成未发送的草稿。粘贴失败会自动重试，已提交的消息不会重复发送。", group: "new" },
   { title: "移除操作模型", text: "检索、后台任务、子代理默认模型、记忆整理和审查改用 Claude Code 或 Codex 各自的默认设置。搜索遵循 Claude Code 的默认行为。", group: "new" },
-  { title: "内置模型路由", text: "每个任务都启用模型路由。请在活动区的「模型路由」中配置，设置里的「技能」页已移除此入口。", group: "new" },
   { title: "模型路由更清楚", text: "弹窗顶部精简为两行，十个默认角色用等高卡片平铺，一屏可见。每张卡片用一个模型选择器设置模型、强度、快速和新实例。状态栏提示未保存的改动和生效时机，有改动待保存时才突出显示「保存路由」。" },
   { title: "模型盘按系列折叠", text: "模型盘默认收起旧版本，每个系列只留一个展开入口，常用模型更好找。" },
   { title: "阅读视图正常发送", text: "Claude Code 输入行出现灰色提示建议时，在阅读视图里仍可正常发送消息。" },
   { title: "活动区路由对齐", text: "右侧活动区的「模型路由」行距统一，各列对齐。" },
   { title: "路由保存即生效", text: "保存后，活动区的模型路由立即显示新设置。正在运行的对话里，之后启动的子代理会使用新的席位设置。" },
-  { title: "总指挥重启提示", text: "团队席位中，只有总指挥自己的模型要重启对话才会切换。重启前，该行会显示「重启后生效」和保存的设置。" },
   { title: "项目模型路由", text: "每个项目可单独设置模型路由，保存在项目文件夹的 .agentrix/routing.json 中，打开项目时一同读取。原来的全局设置已成为「我的默认模板」，供没有路由文件的项目使用。" },
   { title: "团队角色库", text: "可从角色库把前端、后端、桌面端、数据库、人工智能、文档、性能和无障碍这八个角色加入项目团队。" },
   { title: "自定义角色", text: "复制现有角色即可自定名称和职责。每个项目最多创建 8 个自定义角色，团队最多启用 16 个角色。" },

@@ -1098,7 +1098,8 @@ test('the role editor validates text, regenerates a new ID and clears the seat w
   change(find(tree, node => node.type === 'select' && node.props.required), 'reviewer');
   tree = handle.render();
   assert.ok(find(tree, node => node.type === 'input' && node.props.value === 'x-reviewer-2'));
-  assert.equal(find(tree, node => node.type === 'input' && node.props.type === 'checkbox' && node.props.checked && node.props.disabled)?.props.checked, true);
+  const fresh = find(tree, node => node.type === 'input' && node.props.type === 'checkbox' && !node.props.disabled && node.props.checked && node !== find(tree, item => item.type === 'input' && item.props.type === 'checkbox'));
+  assert.ok(fresh, 'a reviewer copy starts as a fresh instance and the choice stays editable');
   change(byAttr(tree, 'data-role-text', 'duty'), 'Review code');
   tree = handle.render();
   assert.equal(byAttr(tree, 'data-save-role').props.disabled, false);
