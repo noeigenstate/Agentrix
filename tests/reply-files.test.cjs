@@ -3,9 +3,9 @@ const assert = require('node:assert/strict');
 const { replyFiles } = require('../src/features/reading/reply-files.ts');
 
 test('a reply naming a local image shows it: backticks, Markdown images and links, bare paths', () => {
-  assert.deepEqual(replyFiles('我用 Codex 生成了这张照片，已经保存到 `C:\\Users\\ylc\\Desktop\\生图\\img\\dog_on_lawn.png`（1536×1024，约 2.6 MB）。'),
-    ['C:\\Users\\ylc\\Desktop\\生图\\img\\dog_on_lawn.png']);
-  assert.deepEqual(replyFiles('保存到C:\\Users\\ylc\\生图\\dog.png（1536×1024）。'), ['C:\\Users\\ylc\\生图\\dog.png']);
+  assert.deepEqual(replyFiles('我用 Codex 生成了这张照片，已经保存到 `C:\\Users\\fixture\\Desktop\\生图\\img\\dog_on_lawn.png`（1536×1024，约 2.6 MB）。'),
+    ['C:\\Users\\fixture\\Desktop\\生图\\img\\dog_on_lawn.png']);
+  assert.deepEqual(replyFiles('保存到C:\\Users\\fixture\\生图\\dog.png（1536×1024）。'), ['C:\\Users\\fixture\\生图\\dog.png']);
   assert.deepEqual(replyFiles('![dog](C:/out/my%20dog.png) and ![x](<C:/a b/c.jpg>)'), ['C:/out/my dog.png', 'C:/a b/c.jpg']);
   assert.deepEqual(replyFiles('relative ./img/a.png, img/b.jpeg and c.gif.'), ['./img/a.png', 'img/b.jpeg', 'c.gif']);
   assert.deepEqual(replyFiles('/home/me/pics/cat.webp'), ['/home/me/pics/cat.webp']);

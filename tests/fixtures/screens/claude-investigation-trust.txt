@@ -16,7 +16,7 @@ t'
 
 Resume this session with:                                         claude --model claude-sonnet-4-5 --strict-mcp-conf
 ig --mcp-config '<repo-root>\.test-output\choice-investigation\runs\1793372204282\mcp.json' 'CHOIC
-E_PROBE mcp'ylc\Desktop\agentrix\.test-output\slash-live-project> c
+E_PROBE mcp'usr\Desktop\agentrix\.test-output\slash-live-project> c
 Error: Invalid MCP configuration:
 MCP config file not found: <project-root>\CHOICE_PROBE mcp
 PS <project-root>> ^C

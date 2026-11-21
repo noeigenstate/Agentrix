@@ -34,7 +34,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-dispatch-e2e-'));
   const project = { id: 'project', kind: 'local', path: root }, sessions = new Map(), nativeSpecs = new Map(), errors = [], warnings = [];
   let binds = 0;
-  const context = vm.createContext({ path, fs, os, randomUUID, sameDirectory, sessions, nativeSpecs, quitting: false, errors,
+  const context = vm.createContext({ path, fs, os, process, randomUUID, sameDirectory, sessions, nativeSpecs, quitting: false, errors,
     Date: class extends Date { static now() { return now(); } },
     AgentCalls: class extends AgentCalls { constructor(options) { super({ ...options, now }); } },
     store: { projects: [project], findTerminal: () => ({ project, record: { restore: {} } }), setRestore() {} },
@@ -52,7 +52,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
       if (name === './features/team/team-locate.cjs') return { locateTeam };
       throw new Error(`Unexpected main dependency: ${name}`);
     } });
-  vm.runInContext(functions(['callsOf', 'nativeSpec', 'structuredEvent', 'onEvent', 'disposeTerminal', 'cleanupTerminalFiles', 'dispatchedOnly']), context);
+  vm.runInContext(functions(['callsOf', 'nativeSpec', 'roleServer', 'structuredEvent', 'onEvent', 'disposeTerminal', 'cleanupTerminalFiles', 'dispatchedOnly']), context);
   Object.assign(context, createDispatchIntake(context));
   const bind = context.bindDispatchInbox;
   context.bindDispatchInbox = (...args) => { binds++; return bind(...args); };

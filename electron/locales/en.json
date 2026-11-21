@@ -3695,5 +3695,7 @@
   "角色不再受限": "No role restrictions",
   "去掉了必须保留审查、审查不能与开发同模型、审查必须用新实例等限制，用哪些角色、怎么用由总指挥决定。": "The rules that a reviewer is required, may not share the developer's model and must be a fresh instance are gone; the orchestrator decides which roles to use and how.",
   "新项目带路由": "New projects get routing",
-  "打开没有路由文件的项目时，会按默认模板自动创建 .agentrix/routing.json；之后修改模板不影响已有项目。": "Opening a project without a routing file creates .agentrix/routing.json from the default template; later template changes leave existing projects alone."
+  "打开没有路由文件的项目时，会按默认模板自动创建 .agentrix/routing.json；之后修改模板不影响已有项目。": "Opening a project without a routing file creates .agentrix/routing.json from the default template; later template changes leave existing projects alone.",
+  "模式即时生效": "Mode switches at once",
+  "在活动区切换出生模式和指挥家模式后，正在运行的对话不用重开：从你的下一条消息起就按新模式工作，角色工具随时可用。": "After you switch between native and conductor mode in the activity pane, a running conversation needs no restart: it works in the new mode from your next message, with the role tools ready."
 }

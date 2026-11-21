@@ -101,6 +101,14 @@ function delegates(agent, argv) {
   return (end < 0 ? argv : argv.slice(0, end)).some(token => token === '-p' || token === '--print');
 }
 
+// A call that opens the conversation itself: no version or help word, and no subcommand but Codex's resume and fork. A
+// first word with spaces is the prompt; any other bare first word is taken as a subcommand, whatever the CLI version.
+function converses(agent, argv) {
+  if (argv.some(token => HARMLESS[agent].includes(token))) return false;
+  const first = agent === 'codex' ? codexCommand(argv).command : argv[0];
+  return first === undefined || /\s/.test(first) || (agent === 'codex' ? ['resume', 'fork'].includes(first) : first.startsWith('-'));
+}
+
 function helperPath() {
   // Local source/packaged shims are beside dispatch.cjs; a carried shim module is under electron/shims.
   return path.resolve(__dirname, fs.existsSync(path.join(__dirname, '../dispatch.cjs')) ? '../dispatch.cjs' : '../../dispatch.cjs');
@@ -112,7 +120,8 @@ const planner = env => env.AGENTRIX_DISPATCH_DEPTH === '0' && !env.AGENTRIX_RUN_
 const locateCli = (agent, env) => require(helperPath())[agent === 'codex' ? 'locateCodex' : 'locateClaude'](env);
 const sessionMode = env => { try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'utf8').trim(); } catch { return 'native'; } };
 
-// In conductor mode the lead session gets the role tools: the worker engine serves them over MCP stdio.
+// The lead session gets the role tools, which the worker engine serves over MCP stdio and refuses in native mode: a
+// session started in native mode has them when the owner switches it to conductor mode.
 function roleToolArgs(agent, env) {
   const command = env.AGENTRIX_SHIM_NODE || process.execPath, args = [helperPath(), 'mcp'];
   const serverEnv = { ELECTRON_RUN_AS_NODE: '1', ...Object.fromEntries(Object.entries(env)
@@ -152,8 +161,8 @@ async function intercept(argv, { env = process.env, cwd = process.cwd(), stderr 
     stderr.write('[agentrix] not run: in conductor mode a role starts with the start_role tool, not with codex or claude from the shell\n');
     return 2;
   }
-  // Native mode runs the real CLI, as it was before Agentrix; an interactive lead in conductor mode also gets the role tools.
-  return passThrough(agent, conductor && !delegates(agent, args) ? [...roleToolArgs(agent, env), ...args] : args, { env, cwd, stderr, locate, launch });
+  // Native mode runs a delegation on the real CLI, as it was before Agentrix; a lead's conversation gets the role tools in both modes.
+  return passThrough(agent, converses(agent, args) && !delegates(agent, args) ? [...roleToolArgs(agent, env), ...args] : args, { env, cwd, stderr, locate, launch });
 }
 
 if (require.main === module && process.argv[2] === '--shim-env') {

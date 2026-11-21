@@ -84,12 +84,12 @@ test('IPv4 addresses validate octets and preserve punctuation and ports', () => 
 });
 
 test('automatic home paths keep the suffix and slash style', () => {
-  check(String.raw`Use C:\Users\ylc\Desktop\projectgrid and D:/Users/Lisa/code, /home/lisa/piv_lab and /Users/alex/src.`,
+  check(String.raw`Use C:\Users\fixture\Desktop\projectgrid and D:/Users/Lisa/code, /home/lisa/piv_lab and /Users/alex/src.`,
     String.raw`Use <home>\Desktop\projectgrid and <home>/code, <home>/piv_lab and <home>/src.`, { home: 4 });
 });
 
 test('home paths in JSON strings and Windows names with spaces are hidden', () => {
-  check(String.raw`{"cwd":"C:\\Users\\ylc\\Desktop\\projectgrid"}; C:\Users\Jane Doe\code`,
+  check(String.raw`{"cwd":"C:\\Users\\fixture\\Desktop\\projectgrid"}; C:\Users\Jane Doe\code`,
     String.raw`{"cwd":"<home>\\Desktop\\projectgrid"}; <home>\code`, { home: 2 });
 });
 
@@ -164,7 +164,7 @@ test('scrubSkills rewrites only changed text files and preserves BOM, CRLF, and 
   const folder = await temporaryFolder(t);
   await fs.mkdir(path.join(folder, 'helpers'));
   const dirty = path.join(folder, 'SKILL.md'), helper = path.join(folder, 'helpers', 'check.PS1'), clean = path.join(folder, 'clean.md');
-  await fs.writeFile(dirty, '\uFEFF# 本地调试\r\n密码是 fg@xxxx\r\n路径 C:\\Users\\ylc\\Desktop\\projectgrid\r\n');
+  await fs.writeFile(dirty, '\uFEFF# 本地调试\r\n密码是 fg@xxxx\r\n路径 C:\\Users\\fixture\\Desktop\\projectgrid\r\n');
   await fs.writeFile(helper, '$env:API_KEY="sk-proj-Abc123def456Ghi789"\n');
   const cleanBytes = Buffer.from('# Build\r\nRun `npm test` at localhost:3000.\r\n');
   await fs.writeFile(clean, cleanBytes);
@@ -262,7 +262,7 @@ test('a missing skills folder returns an empty list', async t => {
 
 test('an agent-written projectgrid SKILL.md leaves none of the original private values', async t => {
   const folder = await temporaryFolder(t);
-  const sensitive = ['C:\\Users\\ylc\\Desktop\\projectgrid', 'root@192.168.122.2', 'fg@xxxx', 'ylc.personal@example.com', '13800138000'];
+  const sensitive = ['C:\\Users\\fixture\\Desktop\\projectgrid', 'root@192.168.122.2', 'fg@xxxx', 'fixture.personal@example.com', '13800138000'];
   const skill = '# Project Grid 调试步骤\n\n'
     + `在 ${sensitive[0]} 运行 npm test。\n远程排查：ssh ${sensitive[1]}\n密码是 ${sensitive[2]}\n`
     + `如需联系作者：${sensitive[3]}，电话 ${sensitive[4]}。\n记录 git version 1.8.3.1，保持 CRLF。\n`;

@@ -402,7 +402,7 @@ async function runtimeSmoke(output, stages) {
 async function panelStage({ app, page, view, box, emit, event, output, checks, agent }) {
   const measures = {}, shot = async name => { await page.waitForTimeout(400); await page.screenshot({ path: path.join(output, `panel-${name}.png`) }); };
   const now = Date.now(), DAY = 86400000, HOUR = 3600000;
-  const codexFacts = (command, week = 100) => ({ command, session: { model: 'gpt-6.1-terra', effort: 'high', fast: true, approval: 'never', sandbox: 'dangerFullAccess', cwd: 'C:\\Users\\ylc\\Desktop\\a-rather-long-project-folder-name\\packages\\native-session-workbench' },
+  const codexFacts = (command, week = 100) => ({ command, session: { model: 'gpt-6.1-terra', effort: 'high', fast: true, approval: 'never', sandbox: 'dangerFullAccess', cwd: 'C:\\Users\\fixture\\Desktop\\a-rather-long-project-folder-name\\packages\\native-session-workbench' },
     account: { provider: 'openai', kind: 'subscription' }, tokens: { total: 208228, input: 207377, output: 851, cachedInput: 141056, reasoning: 47, context: 32803, window: 475000 },
     limits: [{ id: '5h', usedPercent: 0, resetsAtMs: now + 5 * HOUR }, { id: 'week', usedPercent: week, resetsAtMs: now + 3 * DAY }], errors: [] });
   const claudeContext = { command: 'context', context: { model: 'claude-opus-5-5', tokens: 58400, window: 1000000, autoCompact: true, autoCompactThreshold: 830000,

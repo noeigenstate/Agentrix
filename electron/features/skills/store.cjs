@@ -4,7 +4,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
-const { skillInstructions } = require('./delivery.cjs');
+const { skillInstructions, modeNote } = require('./delivery.cjs');
 const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
@@ -754,6 +754,12 @@ class SkillsStore {
     return { skills, remote, agents, globalFolder: remote ? '{AGENTRIX_SKILLS}/global' : this.globalFolder,
       pendingPath: skill => remote ? `{AGENTRIX_SKILLS}/pending/${this.entry(skill.id).folder}/SKILL.md` : this.pendingPath(this.entry(skill.id)),
       manifest, routingNote, seatsMap, agentSeats, rendered, roles, conductor };
+  }
+
+  // The note for a running session whose mode the owner switched (delivery.cjs).
+  modeNote(project, sessionId, agent) {
+    const delivery = this.deliveryInfo(project, false, sessionId, agent);
+    return modeNote(delivery.conductor, delivery.skills.find(skill => skill.id === ROUTING_ID && skill.enabled)?.path);
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {

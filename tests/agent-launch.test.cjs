@@ -43,7 +43,7 @@ function nativeSeatStart(skills) {
     skills: { ...skills, delivery: () => ({}) },
     randomUUID: () => 'isolated-session', path, runtimeDir: '/isolated/runtime', integrationDir: '/isolated/integration',
     writeBootstrap() {}, nativeEnvironment: () => ({}), startupNote: () => '', handoffFile: () => '', READING_NOTE: '',
-    eventServer: {}, controlAddress: '', nativeSubagent() {},
+    eventServer: {}, controlAddress: '', nativeSubagent() {}, process,
   });
   vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('\nfunction nativeSubagent(')), context);
   return (agent, resume = false, launch = null) => context.nativeSpec('terminal', agent, resume, false, launch);

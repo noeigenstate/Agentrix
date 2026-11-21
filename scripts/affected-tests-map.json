@@ -431,7 +431,7 @@
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "dab06ddf55f20dffc8e9035abb388370383523d481f0efef095a807cda5e2976",
+      "digest": "eec497c43baaf22b91428d12db29269b26df05b05ca43274641ae87715575d38",
       "targets": [
         "integration/dispatch.cjs"
       ],

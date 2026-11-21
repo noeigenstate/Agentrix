@@ -63,9 +63,17 @@ function writeBootstrap({ file, eventServer, projectId, projectPath, sessionKey,
   try { fs.rmSync(file + '.seats', { force: true }); } catch {}
 }
 
-// Removes a session's bootstrap file and the files written with it.
-function updateBootstrapMode(file, conductor) { writeFileAtomic(file + '.mode', conductor ? 'conductor\n' : 'native\n'); }
+// Writes the session's mode for its shims and role tools. True when it replaced the other mode: the owner switched.
+function updateBootstrapMode(file, conductor) {
+  const mode = conductor ? 'conductor\n' : 'native\n';
+  let previous = null;
+  try { previous = fs.readFileSync(file + '.mode', 'utf8'); } catch {}
+  if (previous === mode) return false;
+  writeFileAtomic(file + '.mode', mode);
+  return previous !== null;
+}
 
+// Removes a session's bootstrap file and the files written with it.
 function removeBootstrap(file) {
   for (const suffix of ['', '.background.json', '.lead', '.seats', '.launch-seats', '.mode']) fs.rmSync(file + suffix, { force: true });
   fs.rmSync(claudeEnvFile(file), { force: true });

@@ -21,8 +21,8 @@ function sameKey(expected, given) {
 
 // The hook server's requests become TerminalHookEvents (C-2) for `deliver`, numbered in arrival order. `keyOf(terminalId)`
 // is the key a live terminal's hooks carry. Every refused request and every event that lost its payload is counted, for
-// pipeline health; nothing is dropped silently.
-function createHookIngest({ keyOf, deliver, now = Date.now }) {
+// pipeline health; nothing is dropped silently. `noteOf(terminalId)` hands over, once, what main tells that session next.
+function createHookIngest({ keyOf, deliver, noteOf = () => null, now = Date.now }) {
   let seq = 0, lastEventAt = null;
   const counts = { received: 0, oversize: 0, unparsable: 0, failed: 0, aborted: 0, refused: { path: 0, terminal: 0, key: 0 }, events: Object.create(null) };
 
@@ -50,7 +50,10 @@ function createHookIngest({ keyOf, deliver, now = Date.now }) {
     try { Promise.resolve(deliver(hookEvent)).catch(() => { counts.failed++; }); } catch { counts.failed++; }
   }
 
-  return { admit, take, abort: () => { counts.aborted++; }, stats: () => ({ ...structuredClone(counts), lastEventAt }) };
+  // What main has to tell the session with the owner's next prompt (a mode switch), taken once; null for every other event.
+  const note = (terminalId, event) => event === 'UserPromptSubmit' ? noteOf(terminalId) ?? null : null;
+
+  return { admit, take, note, abort: () => { counts.aborted++; }, stats: () => ({ ...structuredClone(counts), lastEventAt }) };
 }
 
 module.exports = { createHookIngest };

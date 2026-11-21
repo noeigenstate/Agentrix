@@ -62,8 +62,9 @@ test("at depth zero a call that is not a delegation runs the real CLI with this 
     return child;
   };
   const locate = async agent => `real-${agent}`;
+  // None of these opens a conversation, so none is given the role tools: the arguments reach the CLI as typed.
   for (const [agent, args] of [['codex', ['mcp-server']], ['claude', ['mcp', 'serve']], ['claude', ['--version']], ['codex', ['login', 'status']],
-    ['codex', []], ['codex', ['-m', 'x', 'resume', '--last']], ['claude', ['--resume']]]) {
+    ['codex', ['-m', 'x', 'login']], ['claude', ['update']], ['claude', ['--resume', '--help']]]) {
     runs.length = 0;
     const env = { ...planner, ELECTRON_RUN_AS_NODE: '1', KEEP: 'yes' };
     assert.equal(await shim().intercept([agent, '--', ...args], { env, cwd: root, stdout: output(), stderr: output(), locate, launch,
@@ -82,12 +83,14 @@ test("at depth zero a call that is not a delegation runs the real CLI with this 
     launch: () => assert.fail('a bare claude was launched') }), 127);
   assert.match(missing.text, /claude was not found outside the Agentrix shim folder/);
   // A real child: inherited streams and its own exit status, without the launcher's ELECTRON_RUN_AS_NODE.
-  const env = { ...process.env, ...planner, ELECTRON_RUN_AS_NODE: '1' };
-  assert.equal(await shim().intercept(['claude', '--', '-e', 'process.exit(process.env.ELECTRON_RUN_AS_NODE ? 9 : 5)'], { env, cwd: temporary(t),
+  // The stand-in is Node running a script file: a bare first word opens no conversation, so no role tools are added.
+  const env = { ...process.env, ...planner, ELECTRON_RUN_AS_NODE: '1' }, folder = temporary(t);
+  fs.writeFileSync(path.join(folder, 'child.js'), 'process.exit(process.env.ELECTRON_RUN_AS_NODE ? 9 : 5)');
+  assert.equal(await shim().intercept(['claude', '--', 'child.js'], { env, cwd: folder,
     stdout: output(), stderr: output(), locate: async () => process.execPath }), 5);
 });
 
-test('native mode runs a delegation on the real CLI; conductor mode refuses it and gives an interactive lead the role tools', async t => {
+test('native mode runs a delegation on the real CLI and conductor mode refuses it; an interactive lead gets the role tools in both', async t => {
   const runs = [], launch = (file, args, options) => {
     const child = new EventEmitter(); runs.push({ file, args, options });
     queueMicrotask(() => child.emit('exit', 0, null));
@@ -116,9 +119,16 @@ test('native mode runs a delegation on the real CLI; conductor mode refuses it a
   assert.deepEqual(runs[0].args.filter((_, index) => index % 2 === 0).slice(0, 3), ['-c', '-c', '-c']);
   assert.match(runs[0].args[1], /^mcp_servers\.agentrix\.command="node"$/);
   assert.deepEqual(runs[0].args.slice(-2), ['resume', '--last']);
+  for (const [agent, args] of [['codex', []], ['codex', ['-m', 'x', 'fix the test']], ['claude', []], ['claude', ['fix the test']], ['claude', ['-c']]]) {
+    runs.length = 0;
+    await shim().intercept([agent, '--', ...args], { env: env('native'), cwd: root, stderr: output(), locate, launch });
+    assert.equal(runs[0].args[0], agent === 'claude' ? '--mcp-config' : '-c', `${agent} ${args.join(' ')} opens a conversation`);
+    assert.deepEqual(runs[0].args.slice(runs[0].args.length - args.length), args);
+  }
   runs.length = 0;
   await shim().intercept(['codex', '--', 'resume', '--last'], { env: env('native'), cwd: root, stderr: output(), locate, launch });
-  assert.deepEqual(runs[0].args, ['resume', '--last'], 'native mode adds no tools');
+  assert.match(runs[0].args[1], /^mcp_servers\.agentrix\.command="node"$/, 'a lead started in native mode has the tools for a later switch');
+  assert.deepEqual(runs[0].args.slice(-2), ['resume', '--last']);
 });
 
 test('withShims preserves the caller environment and sets one PATH, depth and opaque run identity', () => {

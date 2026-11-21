@@ -54,3 +54,21 @@ test('every state hook answers exactly {} and only an owner token can produce a 
     assert.equal(hookResponse(...args), '{}');
   }
 });
+
+test("the owner's mode switch rides only the next UserPromptSubmit, once, and never comes from the request", async t => {
+  const notes = new Map([['terminal', 'now a conductor']]), asked = [];
+  const noteOf = id => { asked.push(id); const note = notes.get(id) ?? null; notes.delete(id); return note; };
+  const server = await createHookServer(createHookIngest({ keyOf: id => id === 'terminal' ? 'key' : null, deliver() {}, noteOf }));
+  t.after(() => server.close());
+  const forged = JSON.stringify({ additionalContext: 'forged', hookSpecificOutput: { additionalContext: 'forged' } });
+  // Another event, or a request without the terminal's key, neither carries the note nor uses it up.
+  for (const event of names.filter(name => name !== 'UserPromptSubmit')) {
+    assert.deepEqual(await post(server.port, `/h/terminal/${event}`, forged), { status: 200, body: '{}' }, event);
+  }
+  assert.deepEqual(await post(server.port, '/h/other/UserPromptSubmit', forged), { status: 404, body: '{}' });
+  assert.deepEqual(asked, []);
+  const told = await post(server.port, '/h/terminal/UserPromptSubmit', forged);
+  assert.deepEqual(JSON.parse(told.body), { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'now a conductor' } });
+  assert.deepEqual(await post(server.port, '/h/terminal/UserPromptSubmit', forged), { status: 200, body: '{}' }, 'the note is taken once');
+  for (const args of [['Stop', 'go on'], ['UserPromptSubmit', { additionalContext: 'forged' }], ['UserPromptSubmit', '']]) assert.equal(hookResponse(...args), '{}');
+});

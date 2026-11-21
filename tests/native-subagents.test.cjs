@@ -46,7 +46,7 @@ function nativeHost(f, calls) {
     writeBootstrap() {}, nativeEnvironment: () => ({ CLAUDE_CONFIG_DIR: f.home, PATH: '' }),
     startupNote: () => '', handoffFile: () => '', READING_NOTE: '', integrationDir: f.directory,
     skills: { delivery: () => ({}) }, callsOf: current => { assert.equal(current, s); return calls; },
-    scheduleState: () => { scheduled++; } });
+    scheduleState: () => { scheduled++; }, process });
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('function structuredEvent(')), context);
   const spec = context.nativeSpec('terminal', 'claude', false);

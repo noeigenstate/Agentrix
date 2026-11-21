@@ -25,7 +25,7 @@ async function createHookServer(ingest, { limit = BODY_LIMIT } = {}) {
     request.on('close', () => { if (!request.complete) ingest.abort(); });
     request.on('end', () => {
       response.writeHead(admitted ? 200 : 404, { 'content-type': 'application/json' });
-      response.end(hookResponse(target?.event), () => {
+      response.end(hookResponse(target?.event, admitted ? ingest.note?.(target.terminalId, target.event) : null), () => {
         if (admitted) ingest.take(target.terminalId, target.event, size > limit ? null : Buffer.concat(chunks).toString('utf8'));
       });
     });

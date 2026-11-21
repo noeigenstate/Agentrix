@@ -574,7 +574,10 @@ function refreshSkillNotes() {
       continue;
     }
     if (s.bootstrapFile) {
-      try { updateDispatchSeats(s.bootstrapFile, skills.dispatchSeats(project.id) ?? {}); updateBootstrapMode(s.bootstrapFile, skills.seatsInfo(project.id)?.conductor); } catch (error) { report(error); }
+      try {
+        updateDispatchSeats(s.bootstrapFile, skills.dispatchSeats(project.id) ?? {});
+        if (updateBootstrapMode(s.bootstrapFile, skills.seatsInfo(project.id)?.conductor) && s.codexActive) tellMode(s, project);
+      } catch (error) { report(error); }
       if (s.skillNoteFile) {
         try { updateBootstrapLead(s.bootstrapFile, skills.terminalLead(project.id)); } catch (error) { report(error); }
       }
@@ -1146,7 +1149,7 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery);
   const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
     sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId,
-    ...(conductor && { roleServer: roleServer(env) }) };
+    roleServer: roleServer(env) };
   env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
   if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
   if (agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
@@ -1154,7 +1157,8 @@ function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
   nativeSpecs.set(id, spec); return spec;
 }
 
-// The conductor's role tools, served by the worker engine over MCP stdio.
+// The conductor's role tools, served by the worker engine over MCP stdio. Every lead has them and they refuse in native
+// mode, so a session started in native mode can call roles once the owner switches it.
 function roleServer(env) {
   return { command: process.execPath, args: [path.join(integrationDir, 'dispatch.cjs'), 'mcp'], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
 }
@@ -1164,6 +1168,20 @@ function roleEnded(s, project, event) {
   if (!s?.nativeStructured || !s.nativeRuntimeSessionId || !skills?.seatsInfo(project.id)?.conductor) return;
   const text = `[Agentrix] Role run ${event.id} has ended (${event.reason}${event.exitCode == null ? '' : `, exit ${event.exitCode}`}). Read it with role_result and report to the owner.`;
   nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: randomUUID(), text }).catch(report);
+}
+
+// The owner switched a running session's mode. A native session hears it as its next message; Claude Code in a terminal
+// with the owner's next prompt (hook-response.cjs), and a switch back before that prompt leaves nothing to tell.
+function tellMode(s, project) {
+  const text = skills.modeNote(project, s.sessionId, s.agent);
+  if (!s.nativeStructured) { s.modeNote = s.agent === 'claude' && !s.modeNote ? text : null; return; }
+  if (s.nativeRuntimeSessionId) nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: randomUUID(), text }).catch(report);
+}
+// The note a terminal's next prompt carries, handed over once.
+function takeModeNote(terminalId) {
+  const s = sessions.get(terminalId), note = s?.modeNote ?? null;
+  if (note) s.modeNote = null;
+  return note;
 }
 
 function nativeSubagent(spec, signal, { runtimeSessionId, providerSessionId, folder }) {
@@ -1925,7 +1943,7 @@ if (!app.requestSingleInstanceLock()) {
     eventServer = await createEventServer(event => workerTerminals.event(event) || onEvent(event));
     // Claude Code's HTTP hooks (C-2). Without the server, terminals keep command hooks and say why.
     hookServer = await createHookServer(createHookIngest({ keyOf: id => workerTerminals.keyOf(id) ?? sessions.get(id)?.hooks?.key,
-      deliver: event => workerTerminals.hook(event) || claudeHook(event) })).catch(() => null);
+      deliver: event => workerTerminals.hook(event) || claudeHook(event), noteOf: takeModeNote })).catch(() => null);
     try { await initializeNativeSessions(); }
     catch {
       try { dispatchControl?.close(); } catch { }

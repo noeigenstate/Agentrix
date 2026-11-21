@@ -5,6 +5,12 @@ const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'"
 const NATIVE_MODE = 'Agentrix runs this session in native mode: you are the plain CLI conversation you were born as and do what you always did, the tasks yourself. Conductor mode is off, so the team roles are unavailable: do not dispatch them.';
 const CONDUCTOR_MODE = 'Agentrix runs this session in conductor mode: forget how you used to work. You are this project\'s conductor, with a team of roles to call, and your aim is to get every task done fast and well through them; the model-routing skill says how.';
 
+// What a running session is told when the owner switches its mode: the mode itself and, for a conductor, its instructions.
+function modeNote(conductor, routingSkill) {
+  const roles = conductor && routingSkill ? ` Before your next step, read and follow ${routingSkill}; start roles with the start_role tool.` : '';
+  return plain(`Agentrix: the owner has just switched this conversation's mode, which replaces the mode you were told before. ${conductor ? CONDUCTOR_MODE : NATIVE_MODE}${roles}`);
+}
+
 function skillInstructions({ skills, globalFolder, agents, pendingPath, remote = false, skippedNote = '', routingNote = '', conductor = false }) {
   const enabled = skills.filter(skill => skill.enabled), parts = [];
   parts.push(conductor ? CONDUCTOR_MODE : NATIVE_MODE);
@@ -32,4 +38,4 @@ function skillInstructions({ skills, globalFolder, agents, pendingPath, remote =
   return plain(parts.join(' '));
 }
 
-module.exports = { MAX_NOTE, SSH_REFERENCE_NOTE, plain, skillInstructions };
+module.exports = { MAX_NOTE, SSH_REFERENCE_NOTE, plain, skillInstructions, modeNote };
