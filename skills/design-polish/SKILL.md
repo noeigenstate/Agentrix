@@ -22,15 +22,9 @@ Write the prompt to a scratch file:
 - Output: `.test-output/<topic>/<n>-<slug>.png`, copied from where the image tool saves them. No other file changes,
   no commit, no app or test run.
 
-Start it with `--detach` through Agentrix's dispatch helper (`skills/agent-dispatch`), with the prompt as the brief and each reference given with `--image`:
-
-```
-node "<helper>" codex --detach --role 执行 --title "<element> concepts" --model gpt-6.1-sol --effort high --fast --cwd <repo> --allow ".test-output/**" --image <reference.png> --brief <scratch>/prompt.md --out <scratch>/out.md
-```
-
-Collect the result with `node "<helper>" wait <run id> --cwd <repo>`. It takes about two minutes per image. Keep working on other things meanwhile.
-
-Detached starts return after the start receipt (up to about 60 seconds); if the session is still unknown, the receipt says it follows in `wait`. Start parallel workers with several detached calls, then one `node "<helper>" wait <id-a> <id-b> --cwd <dir>`. `wait` defaults to 540 seconds and refuses timeouts above 570 seconds. Exit 75 means runs remain active: read their last-activity lines and call `wait` again. Exit 0 means all named runs ended; inspect each end line for its worker exit code. `stop <id>` also works for detached runs. Run `wait` with the Bash tool timeout set to `600000` ms, or pass a `--timeout` below the shell's command limit (Claude Bash otherwise stops at 120 seconds). Keep calling `wait` in the same turn; do not end the turn while detached runs remain active. For `wait`, `--cwd` is the worker's folder or any folder in the same Git repository; standalone runs require the worker's folder. `stop` requires Git. Main's signed dispatch events are authoritative; local receipts only report progress to the lead.
+Have Codex draw them, with the prompt as the brief and every reference picture attached: in conductor mode start a
+Codex role with the `start_role` tool; in native mode run `codex exec` yourself in the repository, each reference
+given with `--image <reference.png>`. It takes about two minutes per image. Keep working on other things meanwhile.
 
 ## 3. Let the user choose
 
