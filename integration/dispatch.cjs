@@ -338,11 +338,12 @@ function eventSink(filename) {
   return send;
 }
 
-// Settings are read only from worker records/headers. A missing value remains unreported.
+// Claude's effort comes from launch. Other settings come from worker records; missing values stay unreported.
 class WorkerOutput {
-  constructor(agent, changed = () => {}) {
+  constructor(agent, changed = () => {}, launchEffort = null) {
     this.agent = agent; this.changed = changed; this.meter = new TokenRates(agent);
-    this.model = null; this.effort = null; this.fast = null; this.sessionId = null;
+    this.launchEffort = launchEffort;
+    this.model = null; this.effort = launchEffort; this.fast = null; this.sessionId = null;
     this.outputTokens = null; this.activeMs = null; this.failed = false; this.capacity = false; this.confirmed = false;
     this.stdoutUsage = null; this.rolloutUsage = null; this.reportedCostUsd = null;
     this.baseline = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
@@ -350,7 +351,7 @@ class WorkerOutput {
   }
   settings(value) {
     this.model = word(value.model) || this.model;
-    this.effort = word(value.perTurnEffort ?? value.reasoning_effort ?? value.reasoningEffort ?? value.effort ?? value.reasoning?.effort) || this.effort;
+    this.effort = this.launchEffort ?? (word(value.perTurnEffort ?? value.reasoning_effort ?? value.reasoningEffort ?? value.effort ?? value.reasoning?.effort) || this.effort);
     const tier = value.service_tier ?? value.serviceTier ?? value.speed ?? value.usage?.speed;
     if (typeof value.fast === 'boolean') this.fast = value.fast;
     else if (typeof value.fast_mode === 'boolean') this.fast = value.fast_mode;
@@ -943,9 +944,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     });
   }
   const changed = () => { confirm(); reroute(); };
-  let output = new WorkerOutput(argv[0], changed);
-  output.onInput = cliInput;
-  let rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
+  const workerOutput = () => {
+    const segment = new WorkerOutput(options.agent, changed, options.agent === 'claude' ? options.effort : null);
+    segment.onInput = cliInput;
+    return segment;
+  };
+  let output, rollout;
   const stop = (kind, requested = true) => {
     if (requested) killed = true;
     if (activeRuntime) {
@@ -1021,6 +1025,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
     options = argumentsOf(argv, env);
+    output = workerOutput();
+    rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
     if (!['dispatch', 'intercepted'].includes(source)) throw new Error('Unknown dispatch source');
     process.on('SIGINT', onInterrupt); process.on('SIGTERM', onTerminate); process.on('SIGHUP', onHangup);
     team = projectTeam(options.cwd, true);
@@ -1304,8 +1310,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     for (;;) {
       const effective = resumeSession ? { ...options, resume: resumeSession } : options;
       if (resumeSession) {
-        const nextOutput = new WorkerOutput(options.agent, changed);
-        nextOutput.onInput = cliInput;
+        const nextOutput = workerOutput();
         const nextRollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), nextOutput);
         if (options.agent === 'codex') await nextRollout.prepare(resumeSession);
         await readInbox();
@@ -1505,7 +1510,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     await inboxRead; await treeStop;
     await rejectDeferredControls().catch(() => { signal('deferred control receipts unavailable'); });
     await receiptTail; clearTimeout(forceTimer);
-    await rollout.pending;
+    await rollout?.pending;
     await activeRuntime?.close(); controlClient?.close();
     team?.release(id);
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
