@@ -7,8 +7,12 @@ const os = require('node:os');
 const vm = require('node:vm');
 const ts = require('typescript');
 const { randomUUID } = require('node:crypto');
+const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const { spawn, execFileSync } = require('node:child_process');
-const { argumentsOf, run } = require('../integration/dispatch.cjs');
+const { argumentsOf, run, runDetached, startDetached } = require('../integration/dispatch.cjs');
+const { createRoleTools } = require('../integration/role-tools.cjs');
+const { intercept } = require('../integration/shims/intercept.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
 const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
@@ -18,10 +22,120 @@ const { locateTeam } = require('../electron/features/team/team-locate.cjs');
 const { sameDirectory } = require('../electron/session-files.cjs');
 const { teamAt } = require('../electron/features/team/team.cjs');
 const { RunInbox } = require('../electron/features/team/inbox.cjs');
-const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
+const { DetachedRuns, DispatchOutbox } = require('../integration/dispatch-outbox.cjs');
+const { writeBootstrap } = require('../electron/features/terminal-events/bootstrap-file.cjs');
+const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
+const { DashboardRecords } = require('../electron/features/dashboard/records.cjs');
 const { dispatchDirectory } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs');
+
+function fakeClaudeWorker(records, finished) {
+  const child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, remote: true,
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+  child.stdin.once('finish', () => child.stdout.write(records[0] + '\n'));
+  void finished.then(() => {
+    child.exitCode = 0;
+    child.stdout.end(records.slice(1).join('\n') + '\n');
+    child.stderr.end();
+    child.emit('exit', 0);
+    child.emit('close', 0);
+  });
+  return child;
+}
+
+async function terminalRoleEnvironment(bootstrapFile) {
+  let mcpEnv;
+  await intercept(['claude'], { env: { AGENTRIX_BOOTSTRAP: bootstrapFile, AGENTRIX_DISPATCH_DEPTH: '0' },
+    locate: () => 'fake-claude', launch: (_file, [config]) => {
+      mcpEnv = JSON.parse(config.slice('--mcp-config='.length)).mcpServers.agentrix.env;
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 0));
+      return child;
+    } });
+  return mcpEnv;
+}
+
+test('roles from a Windows terminal bootstrap appear under the lead project and reach the run history', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-roles-'));
+  const project = { id: randomUUID(), path: path.join(root, 'project'), kind: 'local' };
+  const outside = path.join(root, 'outside-worktree');
+  for (const folder of [project.path, outside]) fs.mkdirSync(folder);
+  const session = { terminalId: randomUUID(), sessionKey: randomUUID(), bootstrapFile: path.join(root, 'terminal.json'), agent: 'claude' };
+  const dashboard = new DashboardRecords(root);
+  const calls = new AgentCalls({ terminalId: session.terminalId, finished: (call, event) => dashboard.run(project, call, event), dispatchAlive: () => true });
+  const intake = createDispatchIntake({ callsOf: () => calls, broadcast() {}, rememberClaudeSource() {} });
+  const server = await createEventServer(event => {
+    if (event.projectId === session.terminalId) intake.acceptDispatchEvent(session, project, event);
+  });
+  const inbox = intake.bindDispatchInbox(session, project);
+  t.after(async () => {
+    await server.close();
+    await inbox.work;
+    intake.disposeDispatchInbox(session.terminalId);
+    calls.dispose();
+    await dashboard.flush();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const script = path.resolve(__dirname, '../integration/claude-hook.ps1');
+  const hooks = terminalHooks({ platform: 'win32', port: 12345, terminalId: session.terminalId, sessionKey: session.sessionKey,
+    eventServer: server, env: {}, cwd: project.path, seatRouting: true, read: () => '{}',
+    shell: { powershellPath: 'C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe', script,
+      node: process.execPath, noteFile: path.join(root, 'terminal-skills.txt') } });
+  hooks.fastSettings = Object.fromEntries(Object.entries(hooks.settings).map(([channel, settings]) =>
+    [channel, JSON.stringify({ ...JSON.parse(settings), fastMode: true })]));
+  writeBootstrap({ file: session.bootstrapFile, eventServer: server, projectId: session.terminalId, projectPath: project.path,
+    sessionKey: session.sessionKey, claudeHookPath: script, hooks, conductor: true,
+    dispatchSeats: { reviewer: { model: 'sonnet', effort: 'high', fast: false } } });
+  assert.ok(fs.statSync(session.bootstrapFile).size > 16 * 1024);
+
+  const mcpEnv = await terminalRoleEnvironment(session.bootstrapFile);
+  assert.equal(mcpEnv.AGENTRIX_BOOTSTRAP, session.bootstrapFile);
+
+  const records = fs.readFileSync(path.join(__dirname, 'fixtures/claude-dispatch-stream.jsonl'), 'utf8').trimEnd().split('\n');
+  for (const cwd of [project.path, outside]) {
+    const store = new DetachedRuns(path.join(cwd, 'receipts'));
+    const finish = Promise.withResolvers();
+    let settled;
+    const roles = createRoleTools({ env: mcpEnv, cwd: project.path, engine: (argv, options) => startDetached(argv, {
+      ...options, store, timeout: 5000, launch: (_file, args, { env }) => {
+        const { argv: saved } = store.read(path.basename(args.at(-1), '.json'));
+        const artifacts = path.dirname(saved[saved.indexOf('--out') + 1]);
+        t.after(() => fs.rmSync(artifacts, { recursive: true, force: true }));
+        const helper = Object.assign(new EventEmitter(), { unref() {} });
+        queueMicrotask(() => helper.emit('spawn'));
+        settled = runDetached(args.at(-1), { env, pinnedSeats: true,
+          resolveExecutable: () => ({ file: 'fake-worker', args: [] }),
+          launch: () => fakeClaudeWorker(records, finish.promise) });
+        settled.then(code => helper.emit('exit', code), () => helper.emit('exit', 1));
+        return helper;
+      } }) });
+    let id;
+    try {
+      const started = await roles.tools.start_role({ cwd, seat: 'reviewer', title: 'Terminal review', brief: 'Review the fixture.', readOnly: true });
+      id = started.id;
+      assert.match(started.started, /routing ok/);
+      await inbox.sweep();
+      const group = calls.snapshot().find(value => value.items.some(item => item.id === `dispatch:${id}`));
+      const item = group?.items.find(value => value.id === `dispatch:${id}`);
+      assert.ok(item, 'the confirmed role must reach the lead terminal inbox');
+      assert.equal(item.seat, 'reviewer');
+      assert.equal(group.model, 'claude-sonnet-5-5');
+      assert.notEqual(item.state, 'done');
+      assert.equal(item.controlFailure, 'bootstrap/missing_address');
+      assert.equal(calls.byId(`dispatch:${id}`).cwd, cwd);
+    } finally {
+      finish.resolve();
+      await settled;
+    }
+    await inbox.sweep();
+    const item = calls.snapshot().flatMap(group => group.items).find(value => value.id === `dispatch:${id}`);
+    assert.deepEqual([item?.state, item?.seat], ['done', 'reviewer']);
+    await dashboard.flush();
+    const logged = fs.readFileSync(dashboard.file('runs'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(row => row.id === id);
+    assert.deepEqual(logged.map(row => [row.projectId, row.agent, row.verdict]), [[project.id, 'claude', 'ok']]);
+  }
+});
 
 const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 const ast = ts.createSourceFile('main.cjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);

@@ -282,6 +282,9 @@ async function stopWorker(argv, stdout) {
   }
 }
 
+// Local terminal bootstraps include HTTP and command hook settings, plus their fast-mode copies.
+const BOOTSTRAP_LIMIT = 256 * 1024;
+
 // The planner is told once per helper process, on run()'s output, that Agentrix did not receive its events: the worker
 // runs on regardless.
 let undeliveredNoted = false, plannerOutput = process.stdout;
@@ -313,7 +316,7 @@ function eventSink(filename) {
   const send = event => {
     try {
       if (!outbox) {
-        if (!filename || fs.statSync(filename).size > 16384) return;
+        if (!filename || fs.statSync(filename).size > BOOTSTRAP_LIMIT) return;
         const value = JSON.parse(fs.readFileSync(filename, 'utf8').replace(/^\uFEFF/, ''));
         if (![value.pipeName, value.projectId, value.sessionKey].every(word)) return;
         // First event is the admitted declaration; later bootstrap replacements cannot change its signing identity.
@@ -1194,7 +1197,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       controlOpening = true; controlAttemptAt = Date.now();
       try {
         if (!env.AGENTRIX_BOOTSTRAP) { controlFailure = 'bootstrap/missing_environment'; return; }
-        if (fs.statSync(env.AGENTRIX_BOOTSTRAP).size > 16384) { controlFailure = 'bootstrap/size_limit'; return; }
+        if (fs.statSync(env.AGENTRIX_BOOTSTRAP).size > BOOTSTRAP_LIMIT) { controlFailure = 'bootstrap/size_limit'; return; }
         bootstrap = send.bootstrap || JSON.parse(fs.readFileSync(env.AGENTRIX_BOOTSTRAP, 'utf8').replace(/^\uFEFF/, ''));
         if (!bootstrap?.controlAddress) { controlFailure = 'bootstrap/missing_address'; return; }
         if (!bootstrap.controlCapability) { controlFailure = 'bootstrap/missing_capability'; return; }
