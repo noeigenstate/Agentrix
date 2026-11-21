@@ -241,23 +241,47 @@ class AgentCalls {
         const settings = this.seatInputs.get(toolUseId);
         if (settings && !call.generation) this.applySeatInput(call, settings);
       }
+      if (call.toolUseId) this.admit(call);
     }
     return call || null;
   }
-  subagent(signal) {
+  // A tool call of the conversation named a held call: it becomes a row, and a run that already ended is recorded now.
+  admit(call) {
+    if (!call.held) return;
+    delete call.held;
+    if (call.drained) this.settle(call);
+    this.changed();
+  }
+  // A held call that ended and was never named was an internal helper's: past the 「最近完成」 age it is forgotten.
+  forgetHeld() {
+    for (const call of [...this.calls.values()]) {
+      if (!call.held || !call.done || this.now() - call.completedAt <= RECENT_AGE_MS) continue;
+      clearTimeout(call.expiry);
+      this.calls.delete(call.key); this.pending.delete(call.key);
+      const entry = this.feeds.owned(call);
+      if (entry) this.feeds.retire(entry, false);
+    }
+  }
+  // `hookOnly`: the signal is a terminal's lifecycle hook, which Claude Code also sends for its internal helper agents.
+  // Alone it proves no sub-agent the conversation started, so the call it opens is held: followed and metered, but
+  // not listed, counted or recorded until an Agent/Task tool call or a SendMessage of the conversation names it.
+  subagent(signal, hookOnly = false) {
     if (!signal || !['start', 'stop', 'continue'].includes(signal.kind) || !REMOTE_ID.test(text(signal.agentId))
       || time(signal.at) === null || this.terminalId != null && signal.terminalId !== this.terminalId
       || signal.toolUseId != null && !TOOL_ID.test(text(signal.toolUseId))) return false;
     const toolUseId = signal.kind === 'continue' ? null : signal.toolUseId;
     let call = this.bindSubagent(signal.agentId, toolUseId);
+    if (signal.kind === 'continue' && call) this.admit(call);
     if (signal.kind === 'continue' && signal.toolUseId && call?.continuations?.has(signal.toolUseId)) return false;
     if (call && (signal.at < (call.signalAt ?? -Infinity)
       || signal.at === call.signalAt && (signal.kind === call.signalKind || call.signalKind === 'stop' && signal.kind === 'start'))) return false;
     if (!call) {
       if (signal.kind === 'continue') return false;
+      this.forgetHeld();
       if (this.calls.size >= 1024) return false;
       const key = toolUseId && !this.calls.has(toolUseId) ? toolUseId : `subagent:${signal.agentId}`;
       call = this.addSubagent({ key, agentId: signal.agentId, toolUseId, startedAt: signal.at, agentType: signal.agentType });
+      if (hookOnly && !toolUseId) call.held = true;
     }
     if (signal.kind === 'continue' && !call.done) {
       this.noteContinuation(call, signal.toolUseId);
@@ -332,7 +356,7 @@ class AgentCalls {
     return value || entries.length ? attach(value || { provider: null, context: null, round: null, total: null, limits: [], calls: [] }, entries) : null;
   }
   running() {
-    return [...this.calls.values()].filter(call => !call.done && !call.reviewed).map(call => ({
+    return [...this.calls.values()].filter(call => !call.done && !call.reviewed && !call.held).map(call => ({
       id: call.id, agent: call.agent, ...shownModel(call), title: call.title, role: call.role,
       startedAt: time(call.startedAt), rate: call.rate ? { ...call.rate } : null,
     }));
@@ -341,7 +365,7 @@ class AgentCalls {
   // each snapshot (nothing is polled; an older call drops out at the next publish, as the renderer also filters by age).
   recent() {
     const end = call => call.finishedAt ?? call.completedAt ?? -Infinity, now = this.now();
-    return new Set([...this.calls.values()].filter(call => call.done && now - end(call) <= RECENT_AGE_MS)
+    return new Set([...this.calls.values()].filter(call => call.done && !call.held && now - end(call) <= RECENT_AGE_MS)
       .sort((a, b) => end(b) - end(a)).slice(0, RECENT_KEEP));
   }
   snapshot(provider) {
@@ -349,6 +373,7 @@ class AgentCalls {
     // the group has no rate.
     const groups = new Map(), rated = new Set(), unrated = new Set(), recent = this.recent();
     for (const call of this.calls.values()) {
+      if (call.held) continue;
       // A call retired from the live list (hidden after its end, or reviewed by the lead) is still sent as a hidden
       // `done` row while it is one of the last finished, for 「最近完成」; it adds nothing to the counts or the rate.
       const retired = !!(call.reviewed || call.hidden);
@@ -655,7 +680,12 @@ class AgentCalls {
     this.schedule();
     return changed;
   }
-  drain(call) { call.drained = true; this.recordSubagent(call); this.feeds.finish(call); }
+  drain(call) { call.drained = true; this.settle(call); }
+  // An ended run whose records are all in joins the run log and its feed is final; a held call's wait for its tool call.
+  settle(call) {
+    if (call.held) return;
+    this.recordSubagent(call); this.feeds.finish(call);
+  }
   // Over SSH the host reads the sub-agents' records (integration/remote-worker.py, which takes the same id form and
   // count): those whose launch named their id, running or ended with records still to come, until they are all in.
   remoteFollows(call) { return !this.local && !call.dispatch && !call.drained && (call.done || !call.reviewed) && REMOTE_ID.test(call.agentId || ''); }
@@ -727,7 +757,7 @@ class AgentCalls {
           if (!call) continue;
           if (call.dispatch) continue;
           if (call.done && (!call.rate || call.reader?.offset >= call.reader?.fileSize)) call.drained = true;
-          if (call.done && call.drained) { this.recordSubagent(call); this.feeds.finish(call); }
+          if (call.done && call.drained) this.settle(call);
         }
         if ([...ids].some(id => !calls.get(id)?.reviewed && before.get(id) !== this.signature(calls.get(id)))) this.changed();
       }

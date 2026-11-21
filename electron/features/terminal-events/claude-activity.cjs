@@ -408,7 +408,8 @@ function createClaudeActivity(deps) {
       const signal = { kind, terminalId: s.terminalId, agentId, agentType: payload.agent_type || '',
         transcriptPath: typeof payload.agent_transcript_path === 'string' ? payload.agent_transcript_path : null,
         toolUseId: hookEvent.toolUseId || null, at: hookEvent.at };
-      for (const effect of feed(s, { type: 'subagent', at: hookEvent.at, claudeSession: sessionId, signal }) || []) callsOf(s, project).subagent(effect.signal);
+      // Claude Code runs these hooks for its internal helper agents too: the run board holds a call no tool call names.
+      for (const effect of feed(s, { type: 'subagent', at: hookEvent.at, claudeSession: sessionId, signal }) || []) callsOf(s, project).subagent(effect.signal, true);
     }
     if (current && hookEvent.event === 'SessionEnd') { feed(s, { type: 'end', at: hookEvent.at, claudeSession: sessionId }); return; }
     if (!state || hookEvent.event === 'Notification' && !ATTENTION_NOTICES.includes(payload.notification_type)) return;
