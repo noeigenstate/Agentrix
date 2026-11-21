@@ -378,7 +378,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "3a82e7428a87d52f31a2e5e6f5c5ce53d44fb62eae486bffa79a5678090230dc",
+      "digest": "0885d612f39981e82e7fc24914a24da332fd09c469e4240e0cae727bc55f379a",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -445,7 +445,7 @@
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "264bb4842ec91e9ec02119b25ec5b81947c01e0951edcb944d717c814709e067",
+      "digest": "bffcf81d2fc7f63f90c9277493aa8ccbee24822450665eef63f2bd18780b04d8",
       "targets": [
         "electron/features/agents/call-seat.cjs"
       ],

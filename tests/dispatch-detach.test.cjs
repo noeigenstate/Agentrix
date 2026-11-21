@@ -188,7 +188,10 @@ test('receipt write failures cannot prevent the signed start and end events', as
   });
   assert.equal(code, 0); assert.equal(events.filter(event => event.type === 'dispatch-start').length, 1);
   assert.equal(events.filter(event => event.type === 'dispatch-end').length, 1); assert.equal(attempts.length, 2);
-  assert.equal(store.read(id).settled, true);
+  const { settled, endedAt } = store.read(id);
+  const { startedAt, confirmedAt } = attempts[0];
+  assert.equal(settled, true);
+  assert.ok(startedAt <= confirmedAt && confirmedAt <= endedAt && endedAt <= Date.now());
 });
 
 function receipts(t) {
@@ -332,20 +335,24 @@ test('receipt replacement wakes wait and each ended line is printed only once', 
 test('detached helper uses an independent process group, file stdio and the original start receipt', async t => {
   const store = receipts(t), brief = path.join(store.directory, 'brief.md');
   fs.writeFileSync(brief, 'Synthetic brief');
-  let text = '', launched;
+  let text = '', launched, timing;
   const args = ['claude', '--detach', '--role', 'review', '--title', 'Synthetic', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', store.directory, '--brief', brief, '--out', path.join(store.directory, 'answer.md')];
-  const result = await startDetached(args, { store, stdout: { write: value => { text += value; } }, launch: (file, argv, options) => {
+  const result = await startDetached(args, { store, stdout: { write: value => { text += value; } }, onTiming: status => { timing = status; }, launch: (file, argv, options) => {
     assert.equal(file, process.execPath); assert.equal(options.detached, true); assert.equal(options.windowsHide, true);
     assert.equal(options.stdio[0], 'ignore'); assert.equal(typeof options.stdio[1], 'number');
     assert.equal(options.stdio[1], options.stdio[2]);
     const id = path.basename(argv.at(-1), '.json'), child = new EventEmitter();
     launched = store.read(id); assert.ok(!launched.argv.includes('--detach'));
     child.unref = () => {}; child.kill = () => assert.fail('A confirmed detached helper must survive');
-    queueMicrotask(() => { child.emit('spawn'); void store.update(id, { admitted: true, startedLine: `[dispatch] started ${id} claude model synthetic · pid 123 session synthetic` }); });
+    queueMicrotask(() => {
+      child.emit('spawn');
+      void store.update(id, { admitted: true, startedAt: 1000, confirmedAt: 2000, startedLine: `[dispatch] started ${id} claude model synthetic · pid 123 session synthetic` });
+    });
     return child;
   } });
   assert.equal(result, 0); assert.match(text, new RegExp(`started ${launched.id} .*session synthetic`));
   assert.equal(store.read(launched.id).settled, undefined);
+  assert.deepEqual(timing, { id: launched.id, startedAt: 1000, confirmedAt: 2000, endedAt: undefined });
 });
 
 test('without detach the helper waits for the worker and preserves its exit code', async t => {

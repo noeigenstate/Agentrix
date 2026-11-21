@@ -8,7 +8,8 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
-const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, RATE_INTERVAL } = require('../integration/dispatch.cjs');
+const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runDetached, waitDetached, RATE_INTERVAL } = require('../integration/dispatch.cjs');
+const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
 const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
@@ -604,6 +605,50 @@ test('a worker that exits right after its records is confirmed from them; withou
   const f = await fixture(t, [codex[0], { rollout: rollout[0] }], { hold: 0 }), result = await f.finished;
   assert.notEqual(result.code, 0); assert.match(result.stdout, /failed to start \S+: native_input_unknown/);
   assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[1].reason, 'unconfirmed');
+});
+
+test('detached Codex and Claude write engine timing and expose it to wait without changing the end line', async t => {
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const { createRequire } = require('node:module'), { runInNewContext } = require('node:vm');
+  const peer = path.join(__dirname, 'fixtures/codex-app-server.cjs'), peerSource = await fs.readFile(peer, 'utf8');
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-timing-'));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const store = new DetachedRuns(cwd), brief = path.join(cwd, 'brief.md');
+  await fs.writeFile(brief, 'Synthetic role task');
+  for (const [agent, model] of [['codex', 'gpt-6.1-sol'], ['claude', 'claude-sonnet-5-5']]) {
+    const id = randomUUID(), out = path.join(cwd, agent + '.md');
+    store.create({ id, cwd, out, createdAt: Date.now(), argv: [agent, '--role', 'review', '--title', 'Timed role',
+      '--model', model, '--effort', 'high', '--cwd', cwd, '--brief', brief, '--out', out, ...(agent === 'claude' ? ['--permission', 'plan'] : ['--read-only'])] });
+    assert.equal(await runDetached(store.file(id), {
+      env: { CODEX_HOME: cwd }, resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
+      launch: () => {
+        const child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, remote: true,
+          stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+        child.kill = () => {
+          child.exitCode = 0; child.stdout.end(); child.stderr.end(); child.emit('exit', 0); child.emit('close', 0);
+        };
+        if (agent === 'codex') {
+          runInNewContext(peerSource, { require: createRequire(peer), setTimeout, clearTimeout, process: {
+            argv: ['node', peer, 'app-server'], env: {}, cwd: () => cwd, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exit: child.kill,
+          } });
+        } else child.stdin.once('finish', () => queueMicrotask(() => {
+          for (const record of claude) child.stdout.write(JSON.stringify(record) + '\n');
+          child.kill();
+        }));
+        return child;
+      },
+    }), 0, agent);
+    const { createdAt, startedAt, confirmedAt, endedAt, settled, endedLine } = store.read(id);
+    assert.equal(settled, true);
+    assert.ok(createdAt <= startedAt && startedAt <= confirmedAt && confirmedAt <= endedAt && endedAt <= Date.now(), agent);
+    const timing = [];
+    let output = '';
+    assert.equal(await waitDetached({ ids: [id], timeout: 0 }, {
+      store, onTiming: status => timing.push(status), stdout: { write: value => { output += value; } },
+    }), 0);
+    assert.deepEqual(timing, [{ id, startedAt, confirmedAt, endedAt }]);
+    assert.equal(output.trimEnd().split('\n').at(-1), endedLine);
+  }
 });
 
 test('a running worker is confirmed within a second of writing its turn context', async t => {
