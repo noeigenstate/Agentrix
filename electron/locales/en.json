@@ -3697,5 +3697,11 @@
   "新项目带路由": "New projects get routing",
   "打开没有路由文件的项目时，会按默认模板自动创建 .agentrix/routing.json；之后修改模板不影响已有项目。": "Opening a project without a routing file creates .agentrix/routing.json from the default template; later template changes leave existing projects alone.",
   "模式即时生效": "Mode switches at once",
-  "在活动区切换出生模式和指挥家模式后，正在运行的对话不用重开：从你的下一条消息起就按新模式工作，角色工具随时可用。": "After you switch between native and conductor mode in the activity pane, a running conversation needs no restart: it works in the new mode from your next message, with the role tools ready."
+  "在活动区切换出生模式和指挥家模式后，正在运行的对话不用重开：从你的下一条消息起就按新模式工作，角色工具随时可用。": "After you switch between native and conductor mode in the activity pane, a running conversation needs no restart: it works in the new mode from your next message, with the role tools ready.",
+  "终端可调角色": "Roles from a terminal",
+  "在终端里启动的 Claude 对话，指挥家模式下也能直接调用团队角色，不用绕路。": "A Claude conversation started in a terminal can call the team roles directly in conductor mode, with no detour.",
+  "角色启动更快": "Roles start sooner",
+  "调用角色时，固定的工作规则由 Agentrix 自动附上，任务交代更短，角色更快开工。": "When a role is called, Agentrix adds the standing work rules itself, so the task brief is shorter and the role starts sooner.",
+  "子代理列表": "Sub-agent list",
+  "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。": "The Agent tab lists only the sub-agents the conversation started; rows of unknown origin no longer appear."
 }

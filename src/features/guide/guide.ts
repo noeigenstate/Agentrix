@@ -3,7 +3,10 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "模式即时生效", text: "在活动区切换出生模式和指挥家模式后，正在运行的对话不用重开：从你的下一条消息起就按新模式工作，角色工具随时可用。", group: "new" },
+  { title: "终端可调角色", text: "在终端里启动的 Claude 对话，指挥家模式下也能直接调用团队角色，不用绕路。", group: "new" },
+  { title: "角色启动更快", text: "调用角色时，固定的工作规则由 Agentrix 自动附上，任务交代更短，角色更快开工。", group: "new" },
+  { title: "子代理列表", text: "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。", group: "new" },
+  { title: "模式即时生效", text: "在活动区切换出生模式和指挥家模式后，正在运行的对话不用重开：从你的下一条消息起就按新模式工作，角色工具随时可用。" },
   { title: "两种模式", text: "总指挥卡片上的开关切换出生模式和指挥家模式：关闭时总指挥像原来的命令行一样自己完成任务，其余角色变灰不可用；打开时它只规划和调度角色，并随时回答你、汇报进度。" },
   { title: "后台调用角色", text: "指挥家模式下，总指挥用工具在后台启动角色，不再停下来等结果；原生对话里角色完成时会自动收到通知。" },
   { title: "指挥即时切换", text: "在活动区改总指挥的模型、思考深度或快速模式，正在运行的原生对话从下一条回复起就使用新设置，不用重启。" },
