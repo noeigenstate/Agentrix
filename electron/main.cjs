@@ -241,17 +241,19 @@ const host = {
   startTerminal, disposeTerminal, launchCommand, callsOf, prepareReading, usageHistory, noteSettings, describeActions, notifyCompletion,
   refreshClaudeAccounts, localClaudeMeters, checkClaude, codexExecutable, memoryFolder, memoryDir, scrubProjectSkills, remember, roundsOf,
   summarizeTask, promptText, isLocalAgentCommand, rememberClaudeSource, claudeConfigDir, findClaudeSession, TranscriptTail, claudeRecord,
-  claudeConversation, monitorActivity, createTerminalEnvironment, withoutAppImage, writeBootstrap,
+  claudeConversation, monitorActivity, createTerminalEnvironment, withoutAppImage, writeBootstrap, nativeSubagent, startupNote, READING_NOTE,
+  handoffFile, integrationDir,
   dispatchRefused: ({ code, id }) => console.warn('Dispatch event refused:', code, id || ''),
   get store() { return store; }, get quitting() { return quitting; }, get eventServer() { return eventServer; },
   get controlAddress() { return controlAddress; }, get claudeRuntime() { return claudeRuntime; }, get terminalInput() { return terminalInput; },
   get shellPathReady() { return shellPathReady; }, get readEvery() { return readEvery; }, get launchPlans() { return launchPlans; },
+  get runtimeDir() { return runtimeDir; }, get skills() { return skills; },
 };
 Object.assign(host, createClaudeActivity(host), createSwitchHost(host), createHostInputs(host), createDispatchIntake(host));
 host.roleEnded = roleEnded;
 const { followClaudeSession, publishCliState, applyActivity, claudeActivity, claudeHook, acceptDispatchEvent, clearDispatchAccount, bindDispatchInbox, disposeDispatchInbox } = host;
 const { localSwitchSessions, observeSwitchTerminal, retainAgentState, prepareSwitchTerminal, retireTerminal, activateNative } = host;
-const { readNativeConnections, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment } = host;
+const { readNativeConnections, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment, nativeSpec } = host;
 const clipboardWrites = new ClipboardWrites();
 const powershellPath = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const cmdPath = process.env.ComSpec || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
@@ -1114,53 +1116,6 @@ function localShell(fresh = false) {
     localShells = { ...choose(store.settings.shell), choice: store.settings.shell };
   }
   return localShells;
-}
-
-function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
-  const project = findProject(id), old = sessions.get(id);
-  if (project.kind === 'ssh' && agent !== 'codex') throw new Error('SSH 原生会话目前仅支持 Codex。');
-  if (validateOnly) return;
-  if (old?.nativeStructured && old.status !== 'exited') return old.nativeSpec;
-  if (old?.codexActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
-  if (old) disposeTerminal(id, { preserveNative: !!old.nativeStructured, preserveCalls: true });
-  const saved = store.findTerminal(id).record.restore;
-  const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
-  const providerSessionId = launch?.latest ? null : launch?.providerSessionId || (resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null);
-  // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
-  const library = typeof skills === 'undefined' ? null : skills;
-  const lead = library?.leadOptions?.(project.id, agent);
-  const runOptions = { model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
-    ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
-  const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
-  if (project.kind === 'ssh') {
-    library?.delivery?.(project, true, sessionId, { agent, started: true });
-    const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
-      sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
-    nativeSpecs.set(id, spec); return spec;
-  }
-  // The outbox is beside this file and outlives a host process restart.
-  const bootstrapFile = path.join(runtimeDir, `${id}.json`);
-  const conductor = !!library?.seatsInfo?.(project.id)?.conductor;
-  const delivery = library?.delivery?.(project, false, sessionId, { agent, started: true });
-  const dispatchSnapshot = writeBootstrap({ file: bootstrapFile, eventServer, projectId: id, projectPath: project.path, sessionKey, controlAddress, controlCapability,
-    claudeBackgroundTasks: store.settings?.claudeBackgroundTasks, dispatchSeats: delivery?.agentSeats ?? null, conductor });
-  // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
-  const env = nativeEnvironment(bootstrapFile, launch?.codexHome), shellEnv = nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
-  const context = startupNote(READING_NOTE, handoffFile(id), path.join(project.path, 'skills'), delivery);
-  const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
-    sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId,
-    roleServer: roleServer(env) };
-  env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
-  if (agent === 'claude') spec.onSubagent = (signal, binding) => nativeSubagent(spec, signal, binding);
-  if (agent === 'claude') spec.onSeat = (observed, binding) => nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
-  if (spec.providerSessionId && [...sessions.values()].some(s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId))) throw new Error('该会话正在其他终端运行。');
-  nativeSpecs.set(id, spec); return spec;
-}
-
-// The conductor's role tools, served by the worker engine over MCP stdio. Every lead has them and they refuse in native
-// mode, so a session started in native mode can call roles once the owner switches it.
-function roleServer(env) {
-  return { command: process.execPath, args: [path.join(integrationDir, 'dispatch.cjs'), 'mcp'], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
 }
 
 // A role the conductor started has ended: a native conductor hears it as its next message, so it can report without polling.

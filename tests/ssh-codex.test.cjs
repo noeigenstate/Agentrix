@@ -5,6 +5,7 @@ const { EventEmitter, once } = require('node:events');
 const { spawn } = require('node:child_process');
 const { createRemoteCodexProcess } = require('../electron/features/ssh/codex-process.cjs');
 const { createCodexRuntime } = require('../electron/features/codex-app-server/index.cjs');
+const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
 const vm = require('node:vm');
 
 function transport(t, root) {
@@ -80,15 +81,13 @@ test('remote process IDs isolate output; a lost SSH channel fails once without l
 });
 
 test('main SSH specification preserves the remote resume folder without local files, credentials or terminal input', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const specs = new Map(), forbidden = () => assert.fail('SSH used local session setup');
-  const context = vm.createContext({ findProject: () => ({ id: 'remote', kind: 'ssh', path: '/srv/project' }), sessions: new Map(), nativeSpecs: specs,
+  const { nativeSpec } = createHostInputs({ findProject: () => ({ id: 'remote', kind: 'ssh', path: '/srv/project' }), sessions: new Map(), nativeSpecs: specs,
     store: { settings: { codexPermissions: 'full' }, findTerminal: () => ({ record: { restore: { agent: 'codex', threadId: 'remote-thread', cwd: '/srv/project/subfolder' } } }) },
-    randomUUID: require('node:crypto').randomUUID, fs: { writeFileSync: forbidden }, createTerminalEnvironment: forbidden, disposeTerminal: forbidden });
-  vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('function structuredEvent(')), context);
-  const spec = context.nativeSpec('terminal', 'codex', true);
+    randomUUID: require('node:crypto').randomUUID, writeBootstrap: forbidden, nativeEnvironment: forbidden, createTerminalEnvironment: forbidden, disposeTerminal: forbidden });
+  const spec = nativeSpec('terminal', 'codex', true);
   assert.equal(spec.kind, 'ssh'); assert.equal(spec.cwd, '/srv/project/subfolder'); assert.equal(spec.providerSessionId, 'remote-thread');
-  assert.deepEqual(Object.keys(spec.env), []); assert.throws(() => context.nativeSpec('terminal', 'claude', false), /SSH/);
+  assert.deepEqual(Object.keys(spec.env), []); assert.throws(() => nativeSpec('terminal', 'claude', false), /SSH/);
 });
 
 test('SSH usage holds remote native limits without consulting local usage inputs', async t => {

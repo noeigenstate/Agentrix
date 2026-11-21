@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { folderHistory, latestCodexSession, launchCommand } = require('../electron/features/agents/launch.cjs');
+const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
 
 test('a new project starts each agent fresh, or resumes the conversation found for its folder', () => {
   assert.equal(launchCommand('claude', null), 'claude\r');
@@ -37,16 +38,14 @@ test('bootstrap writes and refreshes four lead lines for fresh and resumed termi
 });
 
 function nativeSeatStart(skills) {
-  const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  const context = vm.createContext({ sessions: new Map(), nativeSpecs: new Map(), findProject: () => ({ id: 'p', path: '/isolated' }),
+  const { nativeSpec } = createHostInputs({ sessions: new Map(), nativeSpecs: new Map(), findProject: () => ({ id: 'p', path: '/isolated' }),
     store: { settings: {}, findTerminal: () => ({ record: { restore: { agent: 'codex', threadId: 'saved' } } }) },
     skills: { ...skills, delivery: () => ({}) },
-    randomUUID: () => 'isolated-session', path, runtimeDir: '/isolated/runtime', integrationDir: '/isolated/integration',
+    randomUUID: () => 'isolated-session', runtimeDir: '/isolated/runtime', integrationDir: '/isolated/integration',
     writeBootstrap() {}, nativeEnvironment: () => ({}), startupNote: () => '', handoffFile: () => '', READING_NOTE: '',
-    eventServer: {}, controlAddress: '', nativeSubagent() {}, process,
+    eventServer: {}, controlAddress: '', nativeSubagent() {},
   });
-  vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('\nfunction nativeSubagent(')), context);
-  return (agent, resume = false, launch = null) => context.nativeSpec('terminal', agent, resume, false, launch);
+  return (agent, resume = false, launch = null) => nativeSpec('terminal', agent, resume, false, launch);
 }
 
 test('native starts and resumes take the selected family lead and ignore obsolete launch choices', () => {
