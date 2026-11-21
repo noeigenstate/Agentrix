@@ -1,5 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { isDeepStrictEqual } = require('node:util');
 const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
@@ -74,6 +75,7 @@ class SkillsStore {
     this.history = new SkillHistory(dataDir, report);
     this.entries = new Map(); this.watchers = new Map(); this.writers = new Map();
     this.routingWatchers = new Map(); this.routingSeen = new Set(); this.routingReviews = new Map();
+    this.routingSeedTried = new Set();
     this.projectSkills = new Map(); this.replacementFailures = new Set();
     this.knownRoots = new Set(); this.baselines = new Set(); this.dirtyRoots = new Set(); this.deliveries = new Map();
     this.pruneDeliveryFiles();
@@ -186,6 +188,7 @@ class SkillsStore {
       } catch (error) { if (error.code === 'ENOENT') this.deliveryProjects = retained; else this.report(error); }
     }
     let modified = false;
+    for (const id of this.routingSeedTried) if (!projects.has(id)) this.routingSeedTried.delete(id);
     for (const id of this.routingSeen) if (!projects.has(id)) this.routingSeen.delete(id);
     for (const id of this.routingReviews.keys()) if (!projects.has(id)) this.routingReviews.delete(id);
     for (const options of Object.values(this.options)) {
@@ -483,15 +486,13 @@ class SkillsStore {
     return structuredClone(review);
   }
 
-  seatsInfo(projectId = null, terminalId = null, includeTemplateCount = false) {
+  seatsInfo(projectId = null, terminalId = null, review = false) {
     const context = this.routingContext();
     if (!context) return null;
     const { entry, installed, catalog, defaults, template } = context, lead = entry.seats[0];
     const binding = terminalId ? this.seatSession(terminalId) : null;
-    const projects = this.getProjects(), project = projects.find(item => item.id === (projectId ?? binding?.projectId));
-    const { config, source } = this.routingSelection(context, project, includeTemplateCount);
-    if (includeTemplateCount) source.templateProjects = projects.filter(item =>
-      (item === project ? source : this.routingSelection(context, item).source).layer === 'template').length;
+    const project = this.getProjects().find(item => item.id === (projectId ?? binding?.projectId));
+    const { config, source } = this.routingSelection(context, project, review);
     const team = resolveTeam(entry, config ?? template, defaults), effective = team.effective;
     const snapshot = binding && (!projectId || binding.projectId === projectId) ? this.sessionSnapshot(binding.projectId, binding.sessionId) : null;
     const roles = team.team.map(item => item.row);
@@ -550,6 +551,36 @@ class SkillsStore {
     return this.routingChanged();
   }
 
+  acceptProjectRouting(context, id, { digest, config }) {
+    const { stored } = context;
+    const local = { ...stored.local }; delete local[id];
+    return this.saveRoutingOptions(context, { trust: { ...stored.trust, [id]: { digest, config, at: this.now() } }, local });
+  }
+
+  seedProjectRouting(project) {
+    if (!project || project.kind === 'ssh' || this.routingSeedTried.has(project.id)) return false;
+    const { id } = project;
+    try {
+      const context = this.routingContext();
+      if (!context) return false;
+      const { entry, catalog, defaults, stored, restore, template } = context;
+      const hasTrust = Object.hasOwn(stored.trust || {}, id);
+      if (!hasTrust && context.invalidTemplate) return false;
+      this.routingSeedTried.add(id);
+      if (hasTrust) return false;
+      const raw = Object.hasOwn(stored.local || {}, id) ? stored.local[id] : null, local = restore(raw);
+      if (raw != null && !local) return false;
+      const file = readRouting(project.path, entry, catalog, defaults);
+      if (file.error) return false;
+      const config = compactConfig(entry, local ?? template);
+      if (file.digest === null) return this.writeProjectRouting(context, project, config, null).ok;
+      // Compare in the parsed form used by the writer's trust record.
+      const parsed = cleanConfig(config, entry, catalog, true, true);
+      if (parsed.ignored.length || !isDeepStrictEqual(file.config, parsed.config)) return false;
+      return this.acceptProjectRouting(context, id, file).ok;
+    } catch (error) { this.report(error); return false; }
+  }
+
   setRouting(scope, projectId, raw, base) {
     const project = this.getProjects().find(item => item.id === projectId);
     if (scope !== 'template' && (scope !== 'project' || !project)) throw new Error('Invalid routing scope or project.');
@@ -586,13 +617,12 @@ class SkillsStore {
     if (action === 'overwrite') {
       return this.writeProjectRouting(context, project, compactConfig(entry, config ?? template), digest);
     }
-    const trust = stored.trust || {};
     if (action === 'keep') {
+      const trust = stored.trust || {};
       const previous = Object.hasOwn(trust, projectId) ? trust[projectId] : {};
       return this.saveRoutingOptions(context, { trust: { ...trust, [projectId]: { ...previous, rejected: digest, at: this.now() } } });
     }
-    const local = { ...stored.local }; delete local[projectId];
-    return this.saveRoutingOptions(context, { trust: { ...trust, [projectId]: { digest, config: file.config, at: this.now() } }, local });
+    return this.acceptProjectRouting(context, projectId, file);
   }
 
   replace(entry, text, by, project) {
@@ -728,8 +758,12 @@ class SkillsStore {
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {
     // A newly added or moved project can launch before its first watcher scan.
-    if (!remote && project.kind !== 'ssh' && this.projectSkills.get(project.id)?.path !== project.path
-      && this.refreshProjectSkills(new Set())) { this.invalidateDelivery(); this.persistOptions(); }
+    if (!remote && project.kind !== 'ssh') {
+      if (this.projectSkills.get(project.id)?.path !== project.path && this.refreshProjectSkills(new Set())) {
+        this.invalidateDelivery(); this.persistOptions();
+      }
+      this.seedProjectRouting(this.getProjects().find(item => item.id === project.id && item.path === project.path));
+    }
     const agents = this.getAgents(), routingNote = String(this.routingNote() || '').slice(0, 8192);
     const signature = remote || project.kind === 'ssh' ? '' : routingWatch(project.path).signature;
     const key = JSON.stringify([project.id, remote, sessionId, agent, started, !!agents.claude?.installed, !!agents.codex?.installed, routingNote, signature]);
@@ -832,11 +866,14 @@ class SkillsStore {
   }
 
   syncRoutingWatchers() {
-    const roots = new Set(this.getProjects().filter(project => project.kind !== 'ssh').map(project => project.path));
+    const roots = new Map(this.getProjects().filter(project => project.kind !== 'ssh').map(project => [project.path, project]));
     for (const [root, watcher] of this.routingWatchers) if (!roots.has(root)) {
       watcher.stop(); this.routingWatchers.delete(root);
     }
-    for (const root of roots) if (!this.routingWatchers.has(root)) {
+    for (const [root, project] of roots) if (!this.routingWatchers.has(root)) {
+      this.seedProjectRouting(project);
+      // Publishing a seed can synchronously re-enter this scan and install the watcher.
+      if (this.routingWatchers.has(root)) continue;
       let signature = routingWatch(root).signature, timer;
       const watcher = monitorActivity(() => routingWatch(root), state => {
         if (signature === state.signature) return;

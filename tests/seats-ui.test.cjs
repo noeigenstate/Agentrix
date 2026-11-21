@@ -357,6 +357,15 @@ test('the project and template retain independent unsaved drafts', async t => {
   assert.match(textOf(byAttr(h.render(), 'data-pick', 'researcher')), /Haiku/);
 });
 
+test('the template scope says new projects start from it', t => {
+  const h = dialogHarness(t, seatsInfo());
+  const project = h.render();
+  const message = /New projects start from this template/;
+  assert.doesNotMatch(textOf(byAttr(project, 'data-routing-status')), message);
+  byAttr(project, 'data-scope', 'template').props.onClick();
+  assert.match(textOf(byAttr(h.render(), 'data-routing-status')), message);
+});
+
 test('closing with an unsaved draft asks once, inline, before discarding', t => {
   const h = dialogHarness(t, seatsInfo());
   let tree = h.render();

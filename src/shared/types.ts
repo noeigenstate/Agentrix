@@ -271,7 +271,7 @@ export type RoutingReview = {
 export type RoutingSource = {
   layer: 'file' | 'accepted' | 'local' | 'template'; state: 'trusted' | 'pending' | 'rejected' | 'invalid' | 'absent';
   remote: boolean; path: '.agentrix/routing.json' | null; digest: string | null;
-  raw?: string; actions: RoutingAction[]; notice?: 'file-deleted' | 'invalid-template' | 'invalid-local'; templateProjects?: number;
+  raw?: string; actions: RoutingAction[]; notice?: 'file-deleted' | 'invalid-template' | 'invalid-local';
   error?: {
     code: 'too-large' | 'too-deep' | 'bad-utf8' | 'bad-json' | 'unknown-key' | 'newer-version' | 'link' | 'not-file' | 'bad-format'
       | RoleRuleCode;

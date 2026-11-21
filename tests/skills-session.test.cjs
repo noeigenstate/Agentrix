@@ -84,14 +84,16 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   f.store.getModels = () => shared.catalog; f.store.refresh();
   f.store.seatSession = id => ['terminal', 'next-terminal'].includes(id) ? { projectId: f.project.id, sessionId: id === 'terminal' ? 'running' : 'next' } : null;
   const choice = model => ({ model, effort: 'high' });
-  assert.deepEqual(f.store.setRouting('template', null, { roles: {}, conductor: true }, null), { ok: true });
+  const saveResearcher = model => f.store.setRouting('project', f.project.id, { roles: model ? { researcher: choice(model) } : {}, conductor: true },
+    f.store.seatsInfo(f.project.id).routing.digest);
+  assert.deepEqual(saveResearcher(null), { ok: true });
   const original = f.note('running'), launch = f.delivery('running'), launchBytes = fs.readFileSync(launch.sessionManifest, 'utf8');
   assert.equal(launch.rendered[skill].path, file, 'the default fixture reproduces shipped bytes and path');
   assert.equal(launch.rendered[skill].text, fs.readFileSync(file, 'utf8'));
   const instructions = fs.readFileSync(launch.sessionManifest, 'utf8');
   const allText = launch.skills.filter(item => item.enabled).map(item => [item.id, f.store.entry(item.id).text]);
   assert.equal(launch.fingerprint, digest(JSON.stringify([instructions, allText])));
-  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('haiku') }, conductor: true }, null), { ok: true });
+  assert.deepEqual(saveResearcher('haiku'), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'terminal').current.researcher.model, 'haiku');
   assert.equal(f.store.seatsInfo(null, 'terminal').current.researcher.model, 'haiku');
   assert.equal(f.store.seatsInfo(f.project.id, 'other').current, null);
@@ -111,7 +113,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   assert.ok(fs.statSync(rendered.path).mtimeMs > expired.getTime(), 'reusing a rendered skill renews its retention');
   assert.notEqual(next.fingerprint, launch.fingerprint);
   const selectedBytes = fs.readFileSync(next.sessionManifest, 'utf8');
-  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') }, conductor: true }, null), { ok: true });
+  assert.deepEqual(saveResearcher('opus'), { ok: true });
   assert.equal(f.store.seatsInfo(f.project.id, 'next-terminal').current.researcher.model, 'opus');
   for (const source of ['compact', 'clear']) {
     const context = sessionContext({ session_id: 'next-cli', source }, nextNote).hookSpecificOutput.additionalContext;
@@ -122,6 +124,7 @@ test('worker seat changes reach running sessions while Claude instructions stay 
   assert.match(f.delivery('later').rendered[skill].text, /\| researcher \|.*\| opus · high \|/);
   const remote = { id: 'ssh', path: '/remote/project', kind: 'ssh' };
   const bundle = id => f.store.delivery(remote, true, id, { agent: 'claude', started: true }).bundle;
+  assert.deepEqual(f.store.setRouting('template', null, { roles: { researcher: choice('opus') }, conductor: true }, null), { ok: true });
   const remoteFirst = bundle('remote-first');
   assert.match(remoteFirst.files.find(item => item.id === skill).text, /\| researcher \|.*\| opus · high \|/);
   assert.match(remoteFirst.instructions, /\{AGENTRIX_SKILLS\}\/builtin\/model-routing\/SKILL\.md/);
@@ -250,7 +253,9 @@ test('routing discards first-run claims while other built-ins keep them through 
   const workspaceFile = path.join(root, 'workspace.json'), skillsFile = path.join(root, 'skills.json');
   const code = 'builtin:code-standard', ui = 'builtin:ui-standard', routing = 'builtin:model-routing';
   const claims = { [code]: { [project.id]: 'old-code-launch' }, [ui]: { [project.id]: 'old-ui-launch' } };
-  const seats = { global: { lookup: { model: 'haiku', effort: 'high' } }, projects: { [project.id]: { visual: { model: 'sonnet', effort: 'high' } } } };
+  const visual = { model: 'opus', effort: 'high' };
+  const seats = { global: { lookup: { model: 'haiku', effort: 'high' } }, projects: { [project.id]: { visual } } };
+  const migratedRoles = { designer: visual, qa: visual, researcher: seats.global.lookup };
   fs.mkdirSync(project.path);
   fs.writeFileSync(workspaceFile, JSON.stringify({ version: 2, projects: [project] }));
   fs.writeFileSync(skillsFile, JSON.stringify({
@@ -285,7 +290,13 @@ test('routing discards first-run claims while other built-ins keep them through 
     const options = saved();
     assert.deepEqual(options[routing].seats, seats);
     assert.equal(options[routing].team, undefined);
-    assert.deepEqual(options[routing].routing.local[project.id].roles.designer, seats.projects[project.id].visual);
+    const { local, trust } = options[routing].routing;
+    const { routing: source } = store.seatsInfo(project.id);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(current.path, '.agentrix', 'routing.json'), 'utf8')).roles, migratedRoles);
+    assert.equal(local[project.id], undefined);
+    assert.deepEqual([source.layer, source.state], ['file', 'trusted']);
+    assert.equal(trust[project.id].digest, source.digest);
+    assert.deepEqual(trust[project.id].config.roles, migratedRoles);
     assert.equal(options[ui].trigger, 'auto');
     assert.equal(options[ui].firstOpenRun, true);
     for (const key of ['enabled', 'trigger', 'firstOpenRun', 'firstOpenedProjects']) assert.equal(Object.hasOwn(options[routing], key), false);
