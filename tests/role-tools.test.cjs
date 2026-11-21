@@ -22,7 +22,7 @@ function session(t, mode, seats = { developer: { model: 'gpt-6.2-sol', effort: '
 // The engine stand-in records each call and answers as the real one prints.
 function engine(answers) {
   const calls = [];
-  const run = async (args, { stdout }) => { calls.push(args); stdout.write(answers(args)); return 0; };
+  const run = async (args, { stdout, onTiming }) => { calls.push(args); stdout.write(answers(args, onTiming)); return 0; };
   return { calls, run };
 }
 
@@ -148,6 +148,49 @@ test('status, result and stop follow the engine and read the answer once the rol
     await assert.rejects(tools[tool]({ id: 'other' }), { message: 'No role run other in this conversation.' });
   }
   assert.equal(fake.calls.length, callCount);
+});
+
+test('role timing follows the engine across delayed queries, running roles, stops and legacy receipts', async t => {
+  const startedAt = Date.UTC(2026, 0, 1), confirmedAt = startedAt + 5000;
+  for (const state of ['ended', 'running', 'stopped', 'legacy']) {
+    await t.test(state, async t => {
+      const { env, folder } = session(t, 'conductor');
+      let now = startedAt - 2000, stopQueued = false;
+      t.mock.method(Date, 'now', () => now);
+      const endedAt = startedAt + 31000, id = 'run-1';
+      const fake = engine((args, onTiming) => {
+        if (args.includes('--detach')) {
+          if (state !== 'legacy') onTiming({ id, startedAt, confirmedAt });
+          now = confirmedAt + 3000;
+          return `[dispatch] started ${id} ${args[0]}\n`;
+        }
+        if (args[0] === 'stop') {
+          stopQueued = true;
+          now = startedAt + 40000;
+          return `[dispatch] stop queued ${id}\n`;
+        }
+        const settled = state === 'ended' || state === 'legacy' || stopQueued;
+        if (state !== 'legacy') onTiming({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined });
+        return settled ? `[dispatch] ended ${id} exit 0 reason ${stopQueued ? 'killed' : 'exit'}\n` : `[dispatch] still running ${id} · last activity now\n`;
+      });
+      const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+      await tools.start_role({ seat: state === 'stopped' ? 'reviewer' : 'developer', title: 'Inspect', brief: 'Read the code', readOnly: true });
+      const args = fake.calls[0], answer = args[args.indexOf('--out') + 1];
+      t.after(() => fs.rmSync(path.dirname(answer), { recursive: true, force: true }));
+      fs.writeFileSync(answer, 'Final answer');
+
+      now = startedAt + (state === 'running' ? 16000 : state === 'stopped' ? 30000 : 97000);
+      const result = state === 'stopped' ? await tools.stop_role({ id }) : (await tools.roles_status())[0];
+      assert.equal(result.startSeconds, state === 'legacy' ? 10 : 7);
+      assert.equal(result.seconds, state === 'running' ? 16 : state === 'legacy' ? 89 : 31);
+      assert.equal(result.endedAt, state === 'running' ? null : new Date(state === 'legacy' ? now : endedAt).toISOString());
+      if (state === 'stopped') assert.equal(result.stop, `[dispatch] stop queued ${id}`);
+      const final = await tools.role_result({ id });
+      assert.equal(final.seconds, result.seconds);
+      assert.equal(final.endedAt, result.endedAt);
+      assert.equal(final.answer, state === 'running' ? null : 'Final answer');
+    });
+  }
 });
 
 test('the MCP server lists the four tools and answers a call as an error result', async t => {

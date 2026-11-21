@@ -10,6 +10,7 @@ const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electro
 const { familyOf, launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const REVIEWING = /^(reviewer|qa|security|a11y)(\/|$)/;
 const PROTOCOL = '2025-06-18';
+const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 ? value : undefined;
 
 const text = description => ({ type: 'string', description });
 const TOOLS = [
@@ -34,8 +35,9 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
   const runs = new Map();
   const call = async args => {
     let output = '';
-    const code = await engine(args, { env, stdout: { write: chunk => { output += chunk; return true; } } });
-    return { code, lines: output.split('\n') };
+    const timing = new Map();
+    await engine(args, { env, stdout: { write: chunk => { output += chunk; return true; } }, onTiming: status => timing.set(status.id, status) });
+    return { lines: output.split('\n'), timing };
   };
   const conductor = () => {
     try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'utf8').trim() === 'conductor'; } catch { return false; }
@@ -45,22 +47,33 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
     if (!run) throw new Error(`No role run ${id} in this conversation.`);
     return run;
   };
-  const describe = run => ({ id: run.id, seat: run.seat, title: run.title, state: run.end ? 'ended' : 'running',
-    seconds: Math.round(((run.endedAt ?? Date.now()) - run.startedAt) / 1000), ...(run.end ? { end: run.end } : { activity: run.activity ?? null }) });
+  const describe = run => {
+    const end = run.endedAt ?? run.observedEndAt;
+    const measured = run.startedAt !== undefined && (!run.end || run.endedAt !== undefined);
+    const elapsed = measured ? (end ?? Date.now()) - run.startedAt : (run.observedEndAt ?? Date.now()) - run.observedStartAt;
+    return { id: run.id, seat: run.seat, title: run.title, state: run.end ? 'ended' : 'running',
+      seconds: Math.max(0, Math.round(elapsed / 1000)),
+      startSeconds: Math.max(0, ((run.confirmedAt ?? run.observedStartAt) - run.calledAt) / 1000),
+      endedAt: end === undefined ? null : new Date(end).toISOString(),
+      ...(run.end ? { end: run.end } : { activity: run.activity ?? null }) };
+  };
 
-  async function refresh() {
-    const open = [...runs.values()].filter(run => !run.end);
+  async function refresh(open = [...runs.values()].filter(run => !run.end), timeout = '1') {
     if (!open.length) return;
-    const { lines } = await call(['wait', ...open.map(run => run.id), '--cwd', open[0].cwd, '--timeout', '1']);
+    const { lines, timing } = await call(['wait', ...open.map(run => run.id), '--cwd', open[0].cwd, '--timeout', timeout]);
     for (const run of open) {
+      const status = timing.get(run.id);
+      run.startedAt = timestamp(status?.startedAt) ?? run.startedAt;
+      run.confirmedAt = timestamp(status?.confirmedAt) ?? run.confirmedAt;
       const end = lines.find(line => line.startsWith(`[dispatch] ended ${run.id} `));
-      if (end) Object.assign(run, { end, endedAt: Date.now() });
+      if (end) Object.assign(run, { end, endedAt: timestamp(status?.endedAt), observedEndAt: Date.now() });
       else run.activity = lines.find(line => line.startsWith(`[dispatch] still running ${run.id} `)) ?? run.activity;
     }
   }
 
   const tools = {
     async start_role({ seat, title, brief, readOnly = false, allow = [], cwd: folder }) {
+      const calledAt = Date.now();
       if (!conductor()) throw new Error('Conductor mode is off: the team roles are unavailable.');
       const seats = liveSeatMap(env.AGENTRIX_BOOTSTRAP) ?? {}, id = launchSeat(seat, Object.keys(seats));
       if (!id || id === 'orchestrator') throw new Error(`Seat ${seat} is not an enabled role on this team.`);
@@ -72,12 +85,14 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
       const briefFile = path.join(files, 'brief.md'), out = path.join(files, 'answer.md');
       fs.writeFileSync(briefFile, brief, { mode: 0o600 });
       const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
-      const { lines } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
+      const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
         ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
         '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])]);
       const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
       if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
-      runs.set(started[1], { id: started[1], seat, title, out, cwd: work, startedAt: Date.now() });
+      const status = timing.get(started[1]);
+      runs.set(started[1], { id: started[1], seat, title, out, cwd: work, calledAt, observedStartAt: Date.now(),
+        startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt) });
       return { id: started[1], seat, started: started[2] };
     },
     async roles_status() { await refresh(); return [...runs.values()].map(describe); },
@@ -90,6 +105,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
       const run = own(id);
       if (run.end) return describe(run);
       const { lines } = await call(['stop', id, '--cwd', run.cwd]);
+      await refresh([run], '0');
       return { ...describe(run), stop: lines.filter(Boolean).pop() ?? null };
     },
   };

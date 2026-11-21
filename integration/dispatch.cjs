@@ -615,7 +615,11 @@ function detachedRuns(cwd, create = false) {
   return new DetachedRuns(path.join(temporary, ...parents));
 }
 
-async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch' } = {}) {
+function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt }) {
+  onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined });
+}
+
+async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch', onTiming } = {}) {
   // Keep the admitted choices stable if routing changes before the detached child starts.
   const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   const launchSnapshot = argv.includes('--seat') ? parseSeatMap(env.AGENTRIX_SEATS) ?? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
@@ -660,7 +664,11 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
     current = await store.update(id, { settled: true, exitCode: failure.code || 1 }, { unlessEnded: true }).catch(() => null)
       || store.read(id, { fresh: true }) || current;
   }
-  if (current?.startedLine) { if (store.claimStart(id)) stdout.write(current.startedLine + '\n'); return 0; }
+  if (current?.startedLine) {
+    reportDetachedTiming(onTiming, current);
+    if (store.claimStart(id)) stdout.write(current.startedLine + '\n');
+    return 0;
+  }
   if (current?.settled || failure) {
     stdout.write((current.failedLine || `[dispatch] failed to start ${id}: helper ended before confirmation`) + '\n');
     if (current.endedLine) stdout.write(current.endedLine + '\n');
@@ -695,20 +703,23 @@ async function runDetached(file, deps = {}) {
     return pending;
   };
   await receipt({ helperPid: process.pid, helperStartedAt: Date.now() - Math.floor(process.uptime() * 1000), lease: { port: server.address().port, token } });
+  let startTiming;
   const stdout = { write(text) {
     try { process.stdout.write(text); } catch { /* Planner receipts cannot interrupt signed events or worker cleanup. */ }
     const line = String(text).trimEnd(), changes = { activityAt: Date.now() };
-    if (line.startsWith(`[dispatch] started ${id} `)) changes.startedLine = line;
+    if (line.startsWith(`[dispatch] started ${id} `)) Object.assign(changes, startTiming, { startedLine: line });
     if (line.startsWith(`[dispatch] failed to start ${id}:`)) changes.failedLine = line;
     if (line.startsWith(`[dispatch] ended ${id} `)) changes.endedLine = line;
     void receipt(changes);
   } };
+  const detached = { id, admitted: () => receipt({ admitted: true }), confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
   let code = 1;
   try {
-    code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached: { id, admitted: () => receipt({ admitted: true }) }, startTimeout: 60000 });
+    code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000 });
     return code;
   } finally {
-    await receipt({ settled: true, exitCode: code, activityAt: Date.now() }); await pending;
+    const endedAt = Date.now();
+    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
 }
@@ -726,7 +737,7 @@ function helperAlive(pid, entry) {
   });
 }
 
-async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe,
+async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe, onTiming,
   alive = helperAlive } = {}) {
   const pending = new Set(options.ids); let unknown = false;
   const check = async () => {
@@ -737,6 +748,7 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
       if (entry.startedLine && store.claimStart(id)) stdout.write(entry.startedLine + '\n');
       const lost = !entry.settled && Number.isSafeInteger(entry.helperPid) && entry.helperPid > 0 && await alive(entry.helperPid, entry) === false;
       if (entry.settled || lost) {
+        reportDetachedTiming(onTiming, entry);
         if (entry.failedLine && !entry.startedLine) stdout.write(entry.failedLine + '\n');
         stdout.write((entry.endedLine || `[dispatch] ended ${id} · exit ${entry.exitCode ?? 1} reason error${lost ? ' (helper exited without a final receipt)' : ''}`) + '\n');
         pending.delete(id);
@@ -750,6 +762,7 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
   for (const id of pending) {
     const entry = store.read(id);
     if (!entry) { stdout.write(`[dispatch] still running ${id} · receipt temporarily unavailable\n`); continue; }
+    reportDetachedTiming(onTiming, entry);
     let activity = entry.activityAt || entry.createdAt;
     try { activity = Math.max(activity, fs.statSync(entry.out + '.log').mtimeMs); } catch {}
     stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}\n`);
@@ -757,7 +770,9 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
   return 75;
 }
 
-async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable, locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL, requestTimeout = REQUEST_TIMEOUT, detached = null } = {}) {
+async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
+  locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
+  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
@@ -770,8 +785,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   if (argv[0] === 'stop') return stopWorker(argv, stdout);
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
-      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout });
-      return await startDetached(argv, { env, stdout, launch, source });
+      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming });
+      return await startDetached(argv, { env, stdout, launch, source, onTiming });
     } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
   }
   plannerOutput = stdout;
@@ -781,6 +796,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   for (const name of Object.keys(workerEnv)) if (name.toUpperCase() === 'AGENTRIX_SEATS') delete workerEnv[name];
   let finalize, options, child, log, startTimer, forceTimer, pollTimer, rateTimer, lastRate, sentRoute, endSent = false;
   let started = false, unconfirmed = false, killed = false, exited = false, spawnError = null, before = null, drain;
+  let workerStartedAt;
   let team = null, registered = false, teamFinished = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
   let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
   let interventions = 0, stops = 0, completedUsage = null, resumeSession = null, segmentConfirmed = false;
@@ -907,6 +923,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     const routing = verdict + (unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '');
     if (!started) {
       started = true;
+      detached?.confirmed?.(workerStartedAt, Date.now());
       sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
       signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}`);
       for (const fact of inputFacts.values()) send(fact);
@@ -1338,7 +1355,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           // A bare `codex` would find the shim folder again: no Codex outside it is a start failure.
           const found = async () => { if (resolveExecutable === executable && !codex) throw Object.assign(new Error('Codex was not found outside the Agentrix shim folder'), { code: 'ENOENT' }); return 'codex'; };
           activeRuntime = createCodexRuntime({ accountKey: codexAccountKey || undefined, resolveExecutable: found, spawnProcess: (_file, _args, spawnOptions) => {
-            const command = resolveExecutable('codex', commandOf(effective), env, codex); return launch(command.file, command.args, spawnOptions);
+            const command = resolveExecutable('codex', commandOf(effective), env, codex);
+            if (!started) workerStartedAt = Date.now();
+            return launch(command.file, command.args, spawnOptions);
           } }).create(spec, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
@@ -1369,6 +1388,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
             interrupt: () => controlClient.request('control.deliver', { messageId: randomUUID(), type: 'stop' }), close() {} };
           // Main's broker owns this process. It supplies execution evidence in the streamed events.
           child = { pid: 'broker', exitCode: null };
+          if (!started) workerStartedAt = Date.now();
           const remote = controlClient.request('claude-sdk.run', { prompt: brief.toString('utf8'), model: options.model, effort: options.effort,
             fast: options.fast, resume: effective.resume || null, out: options.out, permission: options.permission }).then(value => {
             nativeRunning = false;
@@ -1426,6 +1446,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       const command = resolveExecutable(options.agent, commandOf(effective), env, claudeFile);
 
       if (killed) throw new Error('Dispatch interrupted before launch');
+      if (!started) workerStartedAt = Date.now();
       child = launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
         detached: process.platform !== 'win32' });
       if (killed) stop('SIGTERM');
