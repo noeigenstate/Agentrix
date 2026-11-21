@@ -738,41 +738,49 @@ function helperAlive(pid, entry) {
 }
 
 async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe, onTiming,
-  alive = helperAlive } = {}) {
+  alive = helperAlive, untilAny = false, signal } = {}) {
   const pending = new Set(options.ids); let unknown = false;
-  const check = async () => {
-    for (const id of pending) {
-      const entry = store.read(id);
-      if (entry === null) { stdout.write(`[dispatch] unknown run ${id}\n`); pending.delete(id); unknown = true; continue; }
-      if (!entry) continue;
-      if (entry.startedLine && store.claimStart(id)) stdout.write(entry.startedLine + '\n');
-      const lost = !entry.settled && Number.isSafeInteger(entry.helperPid) && entry.helperPid > 0 && await alive(entry.helperPid, entry) === false;
-      if (entry.settled || lost) {
-        reportDetachedTiming(onTiming, entry);
-        if (entry.failedLine && !entry.startedLine) stdout.write(entry.failedLine + '\n');
-        stdout.write((entry.endedLine || `[dispatch] ended ${id} · exit ${entry.exitCode ?? 1} reason error${lost ? ' (helper exited without a final receipt)' : ''}`) + '\n');
-        pending.delete(id);
-      }
-    }
-    return pending.size ? undefined : true;
+  let completed = false, observing = true;
+  const done = () => !pending.size || (untilAny && (completed || unknown));
+  const finish = (id, entry, lost = false) => {
+    reportDetachedTiming(onTiming, entry);
+    if (entry.failedLine && !entry.startedLine) stdout.write(entry.failedLine + '\n');
+    const detail = lost ? ' (helper exited without a final receipt)' : '';
+    stdout.write((entry.endedLine || `[dispatch] ended ${id} · exit ${entry.exitCode ?? 1} reason error${detail}`) + '\n');
+    pending.delete(id);
+    completed = true;
   };
-  if (await check()) return unknown ? 1 : 0;
-  await (observe || store.observe.bind(store))(check, options.timeout * 1000);
-  if (!pending.size) return unknown ? 1 : 0;
+  const check = async () => {
+    const entries = [...pending].map(id => [id, store.read(id)]);
+    const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled);
+    await Promise.all(entries.map(async ([id, entry]) => {
+      if (entry === null) { stdout.write(`[dispatch] unknown run ${id}\n`); pending.delete(id); unknown = true; }
+      if (!entry) return;
+      if (entry.startedLine && store.claimStart(id)) stdout.write(entry.startedLine + '\n');
+      if (entry.settled) { finish(id, entry); return; }
+      if (hasResult || signal?.aborted || !Number.isSafeInteger(entry.helperPid) || entry.helperPid < 1) return;
+      if (await alive(entry.helperPid, entry) === false && observing) finish(id, entry, true);
+    }));
+    return done() ? true : undefined;
+  };
+  const ready = await check();
+  if (!ready && !signal?.aborted && options.timeout > 0) await (observe || store.observe.bind(store))(check, options.timeout * 1000, { signal });
+  observing = false;
   for (const id of pending) {
     const entry = store.read(id);
     if (!entry) { stdout.write(`[dispatch] still running ${id} · receipt temporarily unavailable\n`); continue; }
+    if (entry.settled) { finish(id, entry); continue; }
     reportDetachedTiming(onTiming, entry);
     let activity = entry.activityAt || entry.createdAt;
     try { activity = Math.max(activity, fs.statSync(entry.out + '.log').mtimeMs); } catch {}
     stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}\n`);
   }
-  return 75;
+  return done() ? (unknown ? 1 : 0) : 75;
 }
 
 async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming } = {}) {
+  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
@@ -785,7 +793,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   if (argv[0] === 'stop') return stopWorker(argv, stdout);
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
-      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming });
+      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, signal: waitSignal });
       return await startDetached(argv, { env, stdout, launch, source, onTiming });
     } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
   }

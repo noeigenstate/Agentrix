@@ -57,6 +57,22 @@ test('wait reports an unknown id and still collects a known run, printing its st
   assert.equal(text.split(`[dispatch] started ${id}`).length, 2);
 });
 
+test('wait for any returns on a missing receipt while ordinary wait keeps observing the other runs', async t => {
+  const store = receipts(t), id = randomUUID(), unknown = randomUUID();
+  store.create({ id, createdAt: Date.now() });
+  for (const untilAny of [true, false]) {
+    let text = '', observed = false;
+    const status = await waitDetached({ ids: [unknown, id], timeout: 240 }, {
+      store, untilAny, stdout: { write: value => { text += value; } },
+      observe: async () => { observed = true; },
+    });
+    assert.equal(observed, !untilAny);
+    assert.equal(status, untilAny ? 1 : 75);
+    assert.ok(text.includes(`[dispatch] unknown run ${unknown}\n`));
+    assert.ok(text.includes(`[dispatch] still running ${id} `));
+  }
+});
+
 test('detached launcher saves absolute cwd and notices a helper load failure immediately', async t => {
   const store = receipts(t); let saved, text = '';
   const result = await startDetached(['claude', '--detach', '--role', 'review', '--title', 'Synthetic crash', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', path.relative(process.cwd(), store.directory), '--brief', 'brief.md', '--out', 'answer.md'], {
@@ -330,6 +346,25 @@ test('receipt replacement wakes wait and each ended line is printed only once', 
   assert.equal(await waiting, 0);
   assert.equal(text.split('[dispatch] ended ').length, 3);
   assert.ok(text.indexOf(ids[1]) < text.indexOf(ids[0]));
+});
+
+test('wait for any detached run returns when the first settles and reports the others as running', { timeout: 5000 }, async t => {
+  const store = receipts(t), ids = [randomUUID(), randomUUID()];
+  for (const id of ids) store.create({ id, createdAt: Date.now() });
+  const watching = Promise.withResolvers(), controller = new AbortController();
+  t.after(() => controller.abort());
+  let text = '';
+  const waiting = waitDetached({ ids, timeout: 240 }, { store, untilAny: true, signal: controller.signal, stdout: { write: value => { text += value; } },
+    observe: (check, timeout, options) => {
+      const observed = store.observe(check, timeout, options);
+      watching.resolve();
+      return observed;
+    } });
+  await watching.promise;
+  await store.update(ids[1], { settled: true, endedLine: `[dispatch] ended ${ids[1]} · exit 0` });
+  assert.equal(await waiting, 0);
+  assert.ok(text.includes(`[dispatch] ended ${ids[1]} `));
+  assert.ok(text.includes(`[dispatch] still running ${ids[0]} `));
 });
 
 test('detached helper uses an independent process group, file stdio and the original start receipt', async t => {
