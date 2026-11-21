@@ -20,8 +20,8 @@ function tracker(t, options = {}) {
   t.after(() => calls.dispose());
   return calls;
 }
-function hooks(t, { local = false } = {}) {
-  const calls = tracker(t, { local }), stateEvents = [], s = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true,
+function hooks(t, { local = false, ...options } = {}) {
+  const calls = tracker(t, { local, ...options }), stateEvents = [], s = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true,
     claudeSessionId: 'parent', activitySince: at(0), activityMonitor: { poll: async () => {} } };
   const project = { id: 'p', kind: local ? 'local' : 'ssh', path: '/project' };
   const deps = { sessions: new Map([['t', s]]), store: { projects: [project] }, callsOf: () => calls,
@@ -37,10 +37,12 @@ function hooks(t, { local = false } = {}) {
 test('a SubagentStart gives the row before the sub-agent transcript exists; SubagentStop ends it', async t => {
   const f = hooks(t);
   f.take('SubagentStart', { agent_id: 'child', agent_type: 'Explore', transcript_path: '/parent.jsonl' });
+  f.calls.apply(use());
+  f.calls.remoteRecords({ child: { toolUseId: 'toolu_child' } });
   assert.equal(items(f.calls).length, 1);
   assert.equal(f.calls.running().length, 1);
   assert.equal(items(f.calls)[0].viewable, false);
-  assert.equal(f.calls.calls.values().next().value.filename, undefined, 'the parent transcript is not the child transcript');
+  assert.equal(f.calls.toolCall('toolu_child').filename, undefined, 'the parent transcript is not the child transcript');
   f.take('SubagentStop', { agent_id: 'child', agent_type: 'Explore', agent_transcript_path: '/subagents/agent-child.jsonl' }, 5);
   assert.equal(f.calls.running().length, 0);
   assert.equal(items(f.calls)[0].endedAt, at(5));
@@ -50,6 +52,7 @@ test('a SubagentStart gives the row before the sub-agent transcript exists; Suba
 test('SendMessage keeps only bounded target fields and revives the finished row, marked resumed', t => {
   const f = hooks(t);
   f.take('SubagentStart', { agent_id: 'child' });
+  f.calls.apply(use('toolu_child', { run_in_background: true })); f.calls.apply(result(0));
   f.take('SubagentStop', { agent_id: 'child' }, 2);
   assert.equal(items(f.calls).length, 1);
   const id = items(f.calls)[0].id;
@@ -419,4 +422,59 @@ test('an existing transcript monitor sends remote records and clock updates to t
   assert.equal(second.clockOffset, 90000);
   assert.equal(first.clockOffset, 60000);
   assert.equal(first.snapshot()[0].rate.outputTokens, 45);
+});
+
+// Claude Code 2.1.330 runs SubagentStart and SubagentStop for its internal helper agents: an agent id, no agent type,
+// and no Agent or Task call in the conversation.
+test("an internal helper's hook pair makes no row, no live entry and no run record, and is forgotten", async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = at(30);
+  const finished = [], f = hooks(t, { finished: (_call, event) => finished.push(event), now: () => now });
+  f.take('SubagentStart', { agent_id: 'a2665b99ece0b671d', transcript_path: '/parent.jsonl' });
+  assert.deepEqual([f.calls.snapshot(), f.calls.running()], [[], []], 'a running helper is not listed');
+  f.take('SubagentStop', { agent_id: 'a2665b99ece0b671d', agent_transcript_path: '/subagents/agent-a2665b99ece0b671d.jsonl' });
+  f.take('SubagentStart', { agent_id: 'typed-helper', agent_type: 'general-purpose' }, 2);
+  f.take('SubagentStop', { agent_id: 'typed-helper', agent_type: 'general-purpose' }, 3);
+  f.calls.review(at(4), true); t.mock.timers.tick(30000);
+  assert.deepEqual([f.calls.snapshot(), f.calls.running(), finished], [[], [], []]);
+  assert.equal(f.calls.usage(null), null);
+  assert.deepEqual(f.stateEvents, []);
+  assert.equal(f.calls.calls.size, 2, 'an ended helper is kept a while: its tool call may only be read later');
+  now = at(31 * 60);
+  f.take('SubagentStart', { agent_id: 'next-helper' }, 31 * 60);
+  assert.deepEqual([...f.calls.calls.keys()], ['subagent:next-helper']);
+
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-helper-'));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const local = tracker(t, { local: true, finished: (_call, event) => finished.push(event) });
+  local.setFolder(folder);
+  await fs.copyFile(path.join(__dirname, 'fixtures/claude-subagent-ssh.jsonl'), path.join(folder, 'agent-helper.jsonl'));
+  await fs.writeFile(path.join(folder, 'agent-helper.meta.json'), JSON.stringify({ agentType: '' }));
+  local.subagent(signal('start', 'helper', 0, { agentType: '' }), true); await local.work;
+  local.subagent(signal('stop', 'helper', 9, { agentType: '' }), true); await local.work;
+  assert.equal(local.calls.get('subagent:helper').rate.outputTokens, 75, 'the helper was read, so a late tool call would lose nothing');
+  assert.deepEqual([local.snapshot(), local.running(), finished], [[], [], []]);
+});
+
+test('an Agent-tool sub-agent has its row and one run record whichever of its hooks and its tool call is seen first', t => {
+  const launch = f => { f.calls.apply(use('toolu_child', { run_in_background: true })); f.calls.apply(result(0)); };
+  for (const first of ['hook', 'tool call', 'hook pair']) {
+    const finished = [], f = hooks(t, { finished: (call, event) => finished.push([call.title, event.source, event.id]) });
+    if (first === 'tool call') launch(f);
+    f.take('SubagentStart', { agent_id: 'child', agent_type: 'general-purpose' });
+    assert.equal(items(f.calls).length, first === 'tool call' ? 1 : 0, first);
+    if (first === 'hook') launch(f);
+    if (first !== 'hook pair') assert.deepEqual([items(f.calls).length, f.calls.running().length, finished.length], [1, 1, 0], first);
+    f.take('SubagentStop', { agent_id: 'child', agent_type: 'general-purpose' }, 5);
+    if (first === 'hook pair') {
+      assert.deepEqual([items(f.calls), finished], [[], []], 'held until its tool call is read');
+      launch(f);
+    }
+    assert.deepEqual(items(f.calls).map(item => [item.title, item.endedAt]), [['Inspect parser', at(5)]], first);
+    assert.equal(f.calls.running().length, 0, first);
+    assert.equal(finished.length, 1, first);
+    assert.deepEqual(finished[0].slice(0, 2), ['Inspect parser', 'subagent'], first);
+    f.take('SubagentStop', { agent_id: 'child', agent_type: 'general-purpose' }, 5); launch(f);
+    assert.equal(finished.length, 1, 'a repeated hook or record adds no second run');
+  }
 });
