@@ -127,19 +127,22 @@ Agentrix decides how each role runs and is billed; billing follows the run mode 
 
 ### Calling roles
 
-Four tools call the team; they are yours alone, and a role cannot call them.
+Five tools call the team; they are yours alone, and a role cannot call them.
 
 | Tool | What it does |
 | --- | --- |
-| `start_role` | Starts a role on a task in the background and returns its run id at once. Give `seat` (from the team table, or `developer/<specialty>`), a one-line `title` and the `brief`; `readOnly: true` for a role that only reads, otherwise `allow` with the globs of the files it may change; `cwd` for a git worktree. |
-| `roles_status` | Every role you started: running or ended, for how long, its last activity. |
-| `role_result` | The final answer of a role that has ended. |
+| `start_role` | Starts a role in the background and returns its run id after launch is confirmed. Give `seat` (from the team table, or `developer/<specialty>`), a one-line `title` and the `brief`. Use `readOnly: true` for a role that only reads and `allow` with the editable file globs for a role that writes. Use `cwd` for an existing worktree. |
+| `roles_status` | Returns `{ roles, earlierEnded }` with running roles, endings first observed in the last 10 minutes, and a count of older endings. |
+| `wait_roles` | Returns the selected role statuses as soon as any selected role ends or the timeout elapses. `ids` defaults to all running roles. `seconds` defaults to 240 and allows up to 540. |
+| `role_result` | Reads the final answer by run id, including for older runs. |
 | `stop_role` | Stops a running role. |
 
 - Agentrix applies the seat's model, effort, fast setting and billing; you choose the seat, not the model.
-- Start independent roles one after another without waiting; each runs on its own.
-- In a native session Agentrix tells you when a role ends with a message that starts with `[Agentrix] Role run`; in a
-  terminal session, check `roles_status`. Never sit waiting while the owner may want you.
+- You can issue multiple `start_role` calls in the same message. For roles editing files in parallel, give each a unique
+  `worktree` suffix, such as `frontend`. Agentrix creates `work/frontend` from the project's current HEAD, links
+  `node_modules` if present, and returns `cwd` and `branch`. Use `worktree` only for writable roles and omit `cwd`.
+- In a native session Agentrix tells you when a role ends with a message that starts with `[Agentrix] Role run`.
+  In a terminal session, use `wait_roles` when you need a role's result to proceed. Do not use `sleep`.
 - Keep a brief short and task-only: the goal, what was wrong before, the behaviour it must keep, and done-when.
   Agentrix puts before it the project memory, the roles working now, the repository's state, the boundaries of the
   modules in `allow`, the paths in `allow`, and the standing rules every role follows: the project's code standard,

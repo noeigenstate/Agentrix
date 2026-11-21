@@ -5,16 +5,20 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const readline = require('node:readline');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { familyOf, launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const REVIEWING = /^(reviewer|qa|security|a11y)(\/|$)/;
 const PROTOCOL = '2025-06-18';
+const RECENT_END_MS = 10 * 60 * 1000;
+const exec = promisify(execFile);
 const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 ? value : undefined;
 
 const text = description => ({ type: 'string', description });
 const TOOLS = [
-  { name: 'start_role', description: 'Start a role of the team on a task in the background and return its run id at once. The role uses its seat\'s model, effort and fast setting.',
+  { name: 'start_role', description: 'Start a background role and return its run id once confirmed. The role uses its seat\'s model, effort and fast setting.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
       title: text('One line: what the role does'),
@@ -22,21 +26,98 @@ const TOOLS = [
       readOnly: { type: 'boolean', description: 'True for a role that only reads, such as a review or research' },
       allow: { type: 'array', items: { type: 'string' }, description: 'Globs of the files the role may change; required unless readOnly' },
       cwd: text('Folder to work in, such as a git worktree; the project folder by default'),
+      worktree: text('Branch suffix for a new work/<suffix> worktree from HEAD; for writable roles without cwd'),
     } } },
-  { name: 'roles_status', description: 'Show every role this conversation started: running or ended, for how long, and its last activity.',
+  { name: 'roles_status', description: 'Show running roles and endings first observed in the last 10 minutes, plus the number of earlier endings.',
+    annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {} } },
+  { name: 'wait_roles', description: 'Wait until any selected role ends or the timeout elapses, then show the selected roles.',
+    annotations: { readOnlyHint: true },
+    inputSchema: { type: 'object', properties: {
+      ids: { type: 'array', items: { type: 'string' }, description: 'Run ids; defaults to all running roles in this conversation' },
+      seconds: { type: 'integer', minimum: 0, maximum: 540, default: 240 },
+    } } },
   { name: 'role_result', description: 'Read the final answer of a role that has ended.',
+    annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', required: ['id'], properties: { id: text('The run id start_role returned') } } },
   { name: 'stop_role', description: 'Stop a running role.',
     inputSchema: { type: 'object', required: ['id'], properties: { id: text('The run id start_role returned') } } },
 ];
 
+function excludeDependencies(exclude) {
+  let contents = '';
+  try { contents = fs.readFileSync(exclude, 'utf8'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (contents.split(/\r?\n/).some(line => line === 'node_modules' || line === '/node_modules')) return;
+  fs.mkdirSync(path.dirname(exclude), { recursive: true });
+  fs.appendFileSync(exclude, (contents && !contents.endsWith('\n') ? '\n' : '') + 'node_modules\n');
+}
+
+async function createWorktree(cwd, suffix) {
+  if (typeof suffix !== 'string' || !suffix.trim()) throw new Error('worktree must be a non-empty branch suffix.');
+  const branch = `work/${suffix}`;
+  const ref = `refs/heads/${branch}`;
+  const git = (args, folder = cwd) => exec('git', args, { cwd: folder, windowsHide: true, env: { ...process.env, LC_ALL: 'C' } });
+  let root;
+  try { root = (await git(['rev-parse', '--show-toplevel'])).stdout.trim(); }
+  catch (error) {
+    if (error.stderr?.includes('not a git repository')) throw new Error('The project is not a Git repository.');
+    throw new Error('Could not determine the project Git root.');
+  }
+  const branchExists = () => git(['show-ref', '--verify', '--quiet', ref], root).then(() => true, error => {
+    if (error.code === 1) return false;
+    throw new Error('Could not check whether the worktree branch already exists.');
+  });
+  const duplicate = `Branch ${branch} already exists.`;
+  if (await branchExists()) throw new Error(duplicate);
+
+  const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agentrix-role-worktree-'));
+  // Reserve the ref separately so a failed checkout can only roll back its own branch.
+  try { await git(['branch', '--', branch, 'HEAD'], root); }
+  catch (error) {
+    await fs.promises.rmdir(work).catch(() => {});
+    const stderr = error.stderr ?? '';
+    // Git can report the duplicate during its initial check or during the ref update.
+    if (stderr.includes(`a branch named '${branch}' already exists`)
+      || stderr.includes(`cannot lock ref '${ref}': reference already exists`)
+      || (stderr.includes(`cannot lock ref '${ref}':`) && await branchExists())) {
+      throw new Error(duplicate);
+    }
+    if (stderr.includes('is not a valid branch name')) throw new Error('The worktree suffix is not a valid Git branch name.');
+    if (stderr.includes("not a valid object name: 'HEAD'")) throw new Error('Git could not resolve HEAD to create the worktree.');
+    throw new Error('Git could not create a worktree from HEAD.');
+  }
+  const modules = path.join(root, 'node_modules');
+  const link = path.join(work, 'node_modules');
+  let linked = false;
+  const rollback = async () => {
+    if (linked) await fs.promises.unlink(link).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    await git(['worktree', 'remove', '--force', work], root).catch(() => fs.promises.rmdir(work).catch(() => {}));
+    await git(['branch', '-D', '--', branch], root);
+  };
+  try {
+    await git(['worktree', 'add', '--quiet', work, branch], root).catch(cause => {
+      throw new Error('Git could not create a worktree from HEAD.', { cause });
+    });
+    if ((await fs.promises.stat(modules).catch(error => { if (error.code !== 'ENOENT') throw error; }))?.isDirectory()) {
+      const { stdout } = await git(['rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'], work);
+      excludeDependencies(stdout.trim());
+      await fs.promises.symlink(modules, link, process.platform === 'win32' ? 'junction' : 'dir');
+      linked = true;
+    }
+  } catch (error) {
+    await rollback().catch(() => {});
+    throw error;
+  }
+  return { cwd: work, branch, rollback };
+}
+
 function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
   const runs = new Map();
-  const call = async args => {
+  const call = async (args, options) => {
     let output = '';
     const timing = new Map();
-    await engine(args, { env, stdout: { write: chunk => { output += chunk; return true; } }, onTiming: status => timing.set(status.id, status) });
+    await engine(args, { ...options, env, stdout: { write: chunk => { output += chunk; return true; } }, onTiming: status => timing.set(status.id, status) });
     return { lines: output.split('\n'), timing };
   };
   const conductor = () => {
@@ -58,54 +139,98 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
       ...(run.end ? { end: run.end } : { activity: run.activity ?? null }) };
   };
 
-  async function refresh(open = [...runs.values()].filter(run => !run.end), timeout = '1') {
-    if (!open.length) return;
-    const { lines, timing } = await call(['wait', ...open.map(run => run.id), '--cwd', open[0].cwd, '--timeout', timeout]);
+  async function refreshGroup(folder, open, seconds, untilAny, signal) {
+    const args = ['wait', ...open.map(run => run.id), '--cwd', folder, '--timeout', String(seconds)];
+    const { lines, timing } = await call(args, { untilAny, signal });
+    const failure = lines.find(line => line.startsWith('[dispatch] failed:'))?.slice('[dispatch] failed:'.length).trim();
     for (const run of open) {
+      if (run.end) continue;
       const status = timing.get(run.id);
-      run.startedAt = timestamp(status?.startedAt) ?? run.startedAt;
-      run.confirmedAt = timestamp(status?.confirmedAt) ?? run.confirmedAt;
+      run.startedAt ??= timestamp(status?.startedAt);
+      run.confirmedAt ??= timestamp(status?.confirmedAt);
       const end = lines.find(line => line.startsWith(`[dispatch] ended ${run.id} `));
+      const loss = lines.includes(`[dispatch] unknown run ${run.id}`) ? `unknown run ${run.id}` : failure;
       if (end) Object.assign(run, { end, endedAt: timestamp(status?.endedAt), observedEndAt: Date.now() });
-      else run.activity = lines.find(line => line.startsWith(`[dispatch] still running ${run.id} `)) ?? run.activity;
+      else if (loss) Object.assign(run, { end: `lost: ${loss}`, observedEndAt: Date.now(), lost: true });
+      else {
+        const activity = lines.find(line => line.startsWith(`[dispatch] still running ${run.id} `));
+        if (activity) run.activity = activity;
+      }
     }
   }
 
+  async function refresh(selected, seconds = 0, untilAny = false, cancellation) {
+    const groups = new Map();
+    for (const run of selected) {
+      if (run.end) continue;
+      if (!groups.has(run.cwd)) groups.set(run.cwd, []);
+      groups.get(run.cwd).push(run);
+    }
+    const controller = untilAny && groups.size > 1 ? new AbortController() : undefined;
+    const signal = cancellation && controller ? AbortSignal.any([cancellation, controller.signal]) : cancellation ?? controller?.signal;
+    try {
+      await Promise.all([...groups].map(async ([folder, open]) => {
+        await refreshGroup(folder, open, seconds, untilAny, signal);
+        if (open.some(run => run.end)) controller?.abort();
+      }));
+    } finally { controller?.abort(); }
+  }
+
   const tools = {
-    async start_role({ seat, title, brief, readOnly = false, allow = [], cwd: folder }) {
+    async start_role({ seat, title, brief, readOnly = false, allow = [], cwd: folder, worktree }) {
       const calledAt = Date.now();
       if (!conductor()) throw new Error('Conductor mode is off: the team roles are unavailable.');
       const seats = liveSeatMap(env.AGENTRIX_BOOTSTRAP) ?? {}, id = launchSeat(seat, Object.keys(seats));
       if (!id || id === 'orchestrator') throw new Error(`Seat ${seat} is not an enabled role on this team.`);
+      if (worktree !== undefined && readOnly) throw new Error('A read-only role cannot create a worktree.');
+      if (worktree !== undefined && folder !== undefined) throw new Error('Specify either cwd or worktree.');
       if (!readOnly && !allow.length) throw new Error('A role that changes files needs allow: the file globs it may change.');
       if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
       if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
-      const agent = familyOf(seats[id].model), work = folder || cwd;
-      const files = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-role-'));
-      const briefFile = path.join(files, 'brief.md'), out = path.join(files, 'answer.md');
-      fs.writeFileSync(briefFile, brief, { mode: 0o600 });
-      const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
-      const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
-        ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
-        '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])]);
-      const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
-      if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
-      const status = timing.get(started[1]);
-      runs.set(started[1], { id: started[1], seat, title, out, cwd: work, calledAt, observedStartAt: Date.now(),
-        startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt) });
-      return { id: started[1], seat, started: started[2] };
+      const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree);
+      try {
+        const agent = familyOf(seats[id].model), work = checkout?.cwd ?? (folder || cwd);
+        const files = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-role-'));
+        const briefFile = path.join(files, 'brief.md'), out = path.join(files, 'answer.md');
+        fs.writeFileSync(briefFile, brief, { mode: 0o600 });
+        const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
+        const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
+          ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
+          '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])]);
+        const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
+        if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
+        const status = timing.get(started[1]);
+        runs.set(started[1], { id: started[1], seat, title, out, cwd: work, calledAt, observedStartAt: Date.now(),
+          startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt) });
+        return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch }) };
+      } catch (error) {
+        await checkout?.rollback().catch(() => {});
+        throw error;
+      }
     },
-    async roles_status() { await refresh(); return [...runs.values()].map(describe); },
+    async roles_status() {
+      await refresh([...runs.values()]);
+      const cutoff = Date.now() - RECENT_END_MS;
+      const roles = [...runs.values()].filter(run => !run.end || run.observedEndAt >= cutoff).map(describe);
+      return { roles, earlierEnded: runs.size - roles.length };
+    },
+    async wait_roles({ ids, seconds = 240 } = {}, signal) {
+      if (!Number.isInteger(seconds) || seconds < 0 || seconds > 540) throw new Error('seconds must be an integer between 0 and 540.');
+      if (ids !== undefined && (!Array.isArray(ids) || ids.some(id => typeof id !== 'string'))) throw new Error('ids must be an array of run ids.');
+      const selected = ids === undefined ? [...runs.values()].filter(run => !run.end) : [...new Set(ids)].map(own);
+      await refresh(selected, selected.some(run => run.end) ? 0 : seconds, true, signal);
+      return selected.map(describe);
+    },
     async role_result({ id }) {
       const run = own(id);
-      await refresh();
-      return { ...describe(run), answer: run.end && fs.existsSync(run.out) ? fs.readFileSync(run.out, 'utf8') : null };
+      await refresh([run], 1);
+      return { ...describe(run), answer: run.end && !run.lost && fs.existsSync(run.out) ? fs.readFileSync(run.out, 'utf8') : null };
     },
     async stop_role({ id }) {
       const run = own(id);
       if (run.end) return describe(run);
       const { lines } = await call(['stop', id, '--cwd', run.cwd]);
-      await refresh([run], '0');
+      await refresh([run]);
       return { ...describe(run), stop: lines.filter(Boolean).pop() ?? null };
     },
   };
@@ -114,23 +239,39 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
 
 // MCP over stdio: one JSON-RPC message per line.
 async function serve({ roles, input = process.stdin, output = process.stdout }) {
-  const reply = (id, result) => output.write(JSON.stringify({ jsonrpc: '2.0', id, ...result }) + '\n');
+  const reply = (id, result) => {
+    try { output.write(JSON.stringify({ jsonrpc: '2.0', id, ...result }) + '\n'); } catch {}
+  };
+  const controller = new AbortController();
+  const pending = new Set();
+  const callTool = async (id, params) => {
+    try {
+      const result = await roles.tools[params.name](params.arguments || {}, controller.signal);
+      reply(id, { result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } });
+    }
+    catch (error) { reply(id, { result: { content: [{ type: 'text', text: String(error?.message || error) }], isError: true } }); }
+  };
   const lines = readline.createInterface({ input, crlfDelay: Infinity });
-  for await (const line of lines) {
-    let message;
-    try { message = JSON.parse(line); } catch { continue; }
-    const { id, method, params } = message;
-    if (id === undefined) continue;
-    if (method === 'initialize') reply(id, { result: { protocolVersion: params?.protocolVersion || PROTOCOL, capabilities: { tools: {} }, serverInfo: { name: 'agentrix', version: '1.0.0' } } });
-    else if (method === 'ping') reply(id, { result: {} });
-    else if (method === 'tools/list') reply(id, { result: { tools: roles.list() } });
-    else if (method === 'tools/call') {
-      const tool = roles.tools[params?.name];
-      if (!tool) { reply(id, { error: { code: -32602, message: `Unknown tool ${params?.name}` } }); continue; }
-      // Calls run one after another, so status and results never race a start.
-      try { reply(id, { result: { content: [{ type: 'text', text: JSON.stringify(await tool(params.arguments || {}), null, 2) }] } }); }
-      catch (error) { reply(id, { result: { content: [{ type: 'text', text: String(error?.message || error) }], isError: true } }); }
-    } else reply(id, { error: { code: -32601, message: `Unknown method ${method}` } });
+  try {
+    for await (const line of lines) {
+      let message;
+      try { message = JSON.parse(line); } catch { continue; }
+      const { id, method, params } = message;
+      if (id === undefined) continue;
+      if (method === 'initialize') {
+        reply(id, { result: { protocolVersion: params?.protocolVersion || PROTOCOL, capabilities: { tools: {} },
+          serverInfo: { name: 'agentrix', version: '1.0.0' } } });
+      } else if (method === 'ping') reply(id, { result: {} });
+      else if (method === 'tools/list') reply(id, { result: { tools: roles.list() } });
+      else if (method === 'tools/call') {
+        if (!Object.hasOwn(roles.tools, params?.name)) { reply(id, { error: { code: -32602, message: `Unknown tool ${params?.name}` } }); continue; }
+        const request = callTool(id, params).finally(() => pending.delete(request));
+        pending.add(request);
+      } else reply(id, { error: { code: -32601, message: `Unknown method ${method}` } });
+    }
+  } finally {
+    controller.abort();
+    await Promise.all(pending);
   }
 }
 
