@@ -435,19 +435,24 @@ test('N4: an alias resolving to its full model does not trigger the lab routing 
   }
 });
 
-test('unreported Claude fields are unverified even alongside a reported mismatch', async t => {
+test('Claude reports the launched effort while verifying model and fast mode from runtime records', async t => {
   const matching = await fixture(t, [{ record: { ...claude[0], effort: undefined } }, { record: claude.at(-1) }], { agent: 'claude' });
   const matchingResult = await matching.finished;
-  assert.match(matchingResult.stdout, /model claude-sonnet-5-5 effort unreported fast off · routing ok \(effort unverified\)/);
-  assert.equal(matching.events[0].effort, null); assert.equal(matching.events[0].fast, false);
+  assert.match(matchingResult.stdout, /model claude-sonnet-5-5 effort high fast off · routing ok ·/);
+  assert.equal(matching.events[0].effort, 'high'); assert.equal(matching.events[0].fast, false);
   assert.equal(matching.events[0].declared, undefined);
+  const end = matching.events.find(event => event.type === 'dispatch-end');
+  assert.equal(end.effort, 'high'); assert.equal(end.verdict, 'ok');
 
-  const init = { ...claude[0], model: 'claude-haiku-5-5', effort: undefined, fast_mode_state: undefined };
+  const init = { ...claude[0], model: 'claude-haiku-5-5', effort: 'low', fast_mode_state: undefined };
   const mixed = await fixture(t, [{ record: init }, { record: claude.at(-1) }], { agent: 'claude' });
   const mixedResult = await mixed.finished;
-  assert.match(mixedResult.stdout, /model claude-haiku-5-5 effort unreported fast unreported · routing MISMATCH \(declared claude-sonnet-5-5 high fast off\) \(effort, fast unverified\)/);
+  assert.match(mixedResult.stdout, /model claude-haiku-5-5 effort high fast unreported · routing MISMATCH \(declared claude-sonnet-5-5 high fast off\) \(fast unverified\)/);
   assert.deepEqual(mixed.events[0].declared, { model: 'claude-sonnet-5-5', effort: 'high', fast: false });
-  assert.equal(mixed.events[0].effort, null); assert.equal(mixed.events[0].fast, null);
+  assert.equal(mixed.events[0].effort, 'high'); assert.equal(mixed.events[0].fast, null);
+
+  const missingModel = await fixture(t, [{ record: { ...claude[0], model: undefined } }, { record: claude.at(-1) }], { agent: 'claude' });
+  assert.match((await missingModel.finished).stdout, /model unreported effort high fast off · routing unverified \(model\)/);
 
   const literal = await fixture(t, [{ record: { ...claude[0], model: 'unreported' } }, { record: claude.at(-1) }], { agent: 'claude' });
   const literalResult = await literal.finished;
@@ -481,12 +486,12 @@ test('Claude per-message timestamps and usage give a live rate before the final 
   assert.deepEqual([rate.outputTokens, rate.activeMs], [150, 4000]);
 });
 
-test('Claude final-only JSON sends available totals and leaves absent routing fields unreported', async t => {
+test('Claude final-only JSON sends available totals and leaves fast mode unreported', async t => {
   const final = { ...claude.at(-1), modelUsage: { 'claude-sonnet-5-5': { outputTokens: 150 } } };
   const f = await fixture(t, [{ record: final }], { agent: 'claude' });
   const result = await f.finished;
   assert.equal(result.code, 0);
-  assert.match(result.stdout, /model claude-sonnet-5-5 effort unreported fast unreported · routing ok \(effort, fast unverified\)/);
+  assert.match(result.stdout, /model claude-sonnet-5-5 effort high fast unreported · routing ok \(fast unverified\)/);
   assert.deepEqual([f.events.at(-1).outputTokens, f.events.at(-1).activeMs], [150, 4000]);
   const output = new WorkerOutput('claude');
   output.record({ ...claude[0], effort: undefined, fast_mode_state: undefined });

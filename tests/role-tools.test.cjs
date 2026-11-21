@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { createRoleTools, serve, TOOLS } = require('../integration/role-tools.cjs');
+const { argumentsOf, run } = require('../integration/dispatch.cjs');
 
 // A bootstrap with a mode file and live seats, as main writes them beside a session's bootstrap.
 function session(t, mode, seats = { developer: { model: 'gpt-6.2-sol', effort: 'high', fast: true }, reviewer: { model: 'opus', effort: 'high' } }) {
@@ -32,19 +34,58 @@ test('native mode refuses every role and names conductor mode', async t => {
 });
 
 test('start_role launches the seat on its own agent in the background and checks scope', async t => {
-  const { env } = session(t, 'conductor');
+  const { env, folder } = session(t, 'conductor');
   const fake = engine(args => args.includes('--detach') ? '[dispatch] started run-1 codex model gpt-6.2-sol effort high fast on · routing ok\n' : '');
   const { tools } = createRoleTools({ env, cwd: os.tmpdir(), engine: fake.run });
   await assert.rejects(tools.start_role({ seat: 'developer', title: 'x', brief: 'y' }), /needs allow/);
-  await assert.rejects(tools.start_role({ seat: 'orchestrator', title: 'x', brief: 'y', readOnly: true }), /not an enabled role/);
-  await assert.rejects(tools.start_role({ seat: 'designer', title: 'x', brief: 'y', readOnly: true }), /not an enabled role/);
-  const started = await tools.start_role({ seat: 'developer', title: 'Fix it', brief: 'Do the fix', allow: ['src/**'] });
+  for (const seat of ['nonexistent', 'frontend', 'orchestrator']) {
+    await assert.rejects(tools.start_role({ seat, title: 'x', brief: 'y', readOnly: true }), {
+      message: `Seat ${seat} is not an enabled role on this team.`,
+    });
+  }
+  assert.equal(fake.calls.length, 0);
+  const started = await tools.start_role({ seat: 'developer', title: 'Fix it', brief: 'Do the fix', allow: ['src/**'], cwd: folder });
   assert.equal(started.id, 'run-1');
   const args = fake.calls.at(-1);
   assert.deepEqual(args.slice(0, 6), ['codex', '--detach', '--seat', 'developer', '--role', 'exec']);
   assert.ok(!args.includes('--model'), 'the engine takes the model from the seat');
   assert.deepEqual(args.slice(args.indexOf('--allow'), args.indexOf('--allow') + 2), ['--allow', 'src/**']);
+  assert.equal(args[args.indexOf('--cwd') + 1], folder);
   assert.equal(fs.readFileSync(args[args.indexOf('--brief') + 1], 'utf8'), 'Do the fix');
+});
+
+test('start_role refuses empty or whitespace-only briefs and titles before calling the engine', async t => {
+  const { env } = session(t, 'conductor'), fake = engine(() => '[dispatch] started run-1 codex\n');
+  const { tools } = createRoleTools({ env, engine: fake.run });
+  const request = { seat: 'developer', title: 'Build', brief: 'Make the change', allow: ['src/**'] };
+  for (const field of ['brief', 'title']) {
+    for (const value of ['', ' \t\n']) {
+      await t.test(`${field} ${JSON.stringify(value)}`, async () => {
+        await assert.rejects(tools.start_role({ ...request, [field]: value }), { message: `A role needs a non-empty ${field}.` });
+      });
+    }
+  }
+  assert.equal(fake.calls.length, 0);
+});
+
+test('start_role resolves a developer specialty through its enabled base seat', async t => {
+  const { env, folder } = session(t, 'conductor');
+  const fake = engine(args => {
+    const { agent, model, effort } = argumentsOf(args, env);
+    return `[dispatch] started run-1 ${agent} model ${model} effort ${effort}\n`;
+  });
+  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+  const started = await tools.start_role({ seat: 'developer/frontend', title: 'Inspect', brief: 'Read the code', readOnly: true });
+  assert.deepEqual(started, { id: 'run-1', seat: 'developer/frontend', started: 'codex model gpt-6.2-sol effort high' });
+});
+
+test('start_role returns the engine error for a missing working directory', async t => {
+  const { env, folder } = session(t, 'conductor'), missing = path.join(folder, 'missing');
+  const { tools } = createRoleTools({ env, cwd: folder, engine: (args, context) => run(args, {
+    ...context, launch: () => assert.fail('A missing working directory must fail before launch'),
+  }) });
+  await assert.rejects(tools.start_role({ seat: 'developer', title: 'Build', brief: 'Make the change', allow: ['src/**'], cwd: missing }), /^Error: \[dispatch\] failed: ENOENT/);
+  assert.deepEqual(await tools.roles_status(), []);
 });
 
 test('a read-only Claude reviewer runs in plan mode as a review', async t => {
@@ -57,27 +98,56 @@ test('a read-only Claude reviewer runs in plan mode as a review', async t => {
   assert.deepEqual(args.slice(args.indexOf('--permission'), args.indexOf('--permission') + 2), ['--permission', 'plan']);
 });
 
+test('a Claude role reports the effort passed to its fake CLI when the CLI leaves it out', async t => {
+  const { env, folder } = session(t, 'conductor', { reviewer: { model: 'sonnet', effort: 'medium' } });
+  const { tools } = createRoleTools({ env, cwd: folder, engine: (args, { stdout }) => run(args.filter(arg => arg !== '--detach'), {
+    env: { AGENTRIX_SEATS: fs.readFileSync(env.AGENTRIX_BOOTSTRAP + '.seats', 'utf8') }, stdout,
+    resolveExecutable: (_agent, argv) => ({ file: 'fake-claude', args: argv }),
+    launch: (_file, argv) => {
+      assert.deepEqual(argv.slice(argv.indexOf('--effort'), argv.indexOf('--effort') + 2), ['--effort', 'medium']);
+      const child = Object.assign(new EventEmitter(), { pid: 12345, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+      queueMicrotask(() => {
+        child.stdout.end(JSON.stringify({ type: 'system', subtype: 'init', session_id: 'fake-session', model: 'claude-sonnet-5-5', fast_mode_state: 'off' }) + '\n');
+        child.stderr.end(); child.exitCode = 0; child.emit('exit', 0, null); child.emit('close', 0, null);
+      });
+      return child;
+    },
+  }) });
+  const started = await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Read the diff', readOnly: true });
+  assert.match(started.started, /model claude-sonnet-5-5 effort medium fast off · routing ok ·/);
+});
+
 test('status, result and stop follow the engine and read the answer once the role ends', async t => {
   const { env } = session(t, 'conductor');
   let ended = false;
   const fake = engine(args => {
     if (args.includes('--detach')) return '[dispatch] started run-3 codex model gpt-6.2-sol effort high fast on · routing ok\n';
     if (args[0] === 'wait') return ended ? '[dispatch] ended run-3 codex · exit 0 reason exit\n' : '[dispatch] still running run-3 · 4 s · last activity now\n';
-    return '[dispatch] stopped run-3\n';
+    return '[dispatch] stop queued run-3\n';
   });
   const { tools } = createRoleTools({ env, cwd: os.tmpdir(), engine: fake.run });
   await tools.start_role({ seat: 'developer', title: 'Build', brief: 'b', allow: ['a/**'] });
   const [running] = await tools.roles_status();
   assert.equal(running.state, 'running');
   assert.match(running.activity, /still running run-3/);
-  assert.equal((await tools.stop_role({ id: 'run-3' })).stop, '[dispatch] stopped run-3');
+  const pending = await tools.role_result({ id: 'run-3' });
+  assert.equal(pending.state, 'running');
+  assert.equal(pending.answer, null);
+  assert.equal((await tools.stop_role({ id: 'run-3' })).stop, '[dispatch] stop queued run-3');
   const out = fake.calls[0][fake.calls[0].indexOf('--out') + 1];
   fs.writeFileSync(out, 'All done');
   ended = true;
   const result = await tools.role_result({ id: 'run-3' });
   assert.equal(result.state, 'ended');
   assert.equal(result.answer, 'All done');
-  await assert.rejects(tools.role_result({ id: 'other' }), /No role run other/);
+  const callCount = fake.calls.length;
+  const stopped = await tools.stop_role({ id: 'run-3' });
+  assert.equal(stopped.state, 'ended');
+  assert.equal(stopped.end, result.end);
+  for (const tool of ['role_result', 'stop_role']) {
+    await assert.rejects(tools[tool]({ id: 'other' }), { message: 'No role run other in this conversation.' });
+  }
+  assert.equal(fake.calls.length, callCount);
 });
 
 test('the MCP server lists the four tools and answers a call as an error result', async t => {

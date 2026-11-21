@@ -65,6 +65,8 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
       const seats = liveSeatMap(env.AGENTRIX_BOOTSTRAP) ?? {}, id = launchSeat(seat, Object.keys(seats));
       if (!id || id === 'orchestrator') throw new Error(`Seat ${seat} is not an enabled role on this team.`);
       if (!readOnly && !allow.length) throw new Error('A role that changes files needs allow: the file globs it may change.');
+      if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
+      if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
       const agent = familyOf(seats[id].model), work = folder || cwd;
       const files = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-role-'));
       const briefFile = path.join(files, 'brief.md'), out = path.join(files, 'answer.md');
