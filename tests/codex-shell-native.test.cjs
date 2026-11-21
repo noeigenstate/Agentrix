@@ -100,8 +100,7 @@ for (const kind of ['local', 'ssh']) test(`${kind} native spec applies only the 
     writeBootstrap() {}, createTerminalEnvironment: () => ({ codex_home: 'old-home' }), withoutAppImage: value => value,
     startupNote: () => 'context', READING_NOTE: 'reading', handoffFile: () => 'handoff',
     skills: { delivery() {}, leadOptions: () => ({ model: 'fixture-seat', effort: 'high', fast: true }) }, integrationDir: 'integration', controlAddress: 'control' });
-  vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('\nfunction structuredEvent(')), context);
-  defineMain(context, 'nativeEnvironment');
+  defineMain(context, 'nativeEnvironment', 'nativeSpec');
   const cwd = kind === 'ssh' ? '/remote/project/sub' : path.resolve('project/sub');
   const spec = context.nativeSpec('t', 'codex', true, false, { cwd, providerSessionId: thread, model: 'fixture', effort: 'max', fast: false, codexHome: '/private/codex' });
   assert.equal(disposed, 1); assert.equal(spec.cwd, cwd); assert.equal(spec.providerSessionId, thread);

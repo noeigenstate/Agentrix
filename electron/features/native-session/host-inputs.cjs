@@ -4,7 +4,7 @@ const path = require('node:path');
 
 // What the native sessions read from the app shell: each agent's connection and subscription limits as the running
 // sessions and the account reads give them, the CLI checks, the spec a connection test runs with, and a native
-// session's environment. `deps` is the app shell (main.cjs), read on every call so its late values are current; these
+// session's environment and spec. `deps` is the app shell (main.cjs), read on every call so its late values are current; these
 // functions are among its members and reach each other through it too.
 function createHostInputs(deps) {
   async function readNativeConnections(projectId) {
@@ -92,7 +92,60 @@ function createHostInputs(deps) {
     return env;
   }
 
-  return { readNativeConnections, liveHost, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment };
+  // The spec a native session starts with, the router's resolveSpec: it clears the terminal's ended host, asks the
+  // skills library for the session's delivery, writes the bootstrap file and keeps the spec in nativeSpecs.
+  function nativeSpec(id, agent, resume, validateOnly = false, launch = null) {
+    const { findProject, sessions, nativeSpecs, store, randomUUID, skills } = deps;
+    const project = findProject(id), old = sessions.get(id);
+    if (project.kind === 'ssh' && agent !== 'codex') throw new Error('SSH 原生会话目前仅支持 Codex。');
+    if (validateOnly) return;
+    if (old?.nativeStructured && old.status !== 'exited') return old.nativeSpec;
+    if (old?.codexActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
+    if (old) deps.disposeTerminal(id, { preserveNative: !!old.nativeStructured, preserveCalls: true });
+    const saved = store.findTerminal(id).record.restore;
+    const cwd = launch?.cwd || (resume ? saved?.cwd || project.path : project.path);
+    const savedThread = resume && (saved?.agent || 'codex') === agent ? saved?.threadId || null : null;
+    const providerSessionId = launch?.latest ? null : launch?.providerSessionId || savedThread;
+    // A Codex session runs with the permissions Settings say when it is made; /permissions changes only that session afterwards.
+    const lead = skills?.leadOptions?.(project.id, agent);
+    const runOptions = { model: lead?.model ?? null, effort: lead?.effort ?? null, fast: lead ? lead.fast === true : null,
+      ...(agent === 'codex' ? { permissions: store.settings.codexPermissions } : {}) };
+    const sessionId = randomUUID(), sessionKey = randomUUID(), controlCapability = randomUUID();
+    if (project.kind === 'ssh') {
+      skills?.delivery?.(project, true, sessionId, { agent, started: true });
+      const spec = { agent, owner: 'gui', kind: 'ssh', projectId: project.id, terminalId: id,
+        sessionId, sessionKey, cwd, env: {}, ...runOptions, providerSessionId };
+      nativeSpecs.set(id, spec); return spec;
+    }
+    // The outbox is beside this file and outlives a host process restart.
+    const bootstrapFile = path.join(deps.runtimeDir, `${id}.json`);
+    const conductor = !!skills?.seatsInfo?.(project.id)?.conductor;
+    const delivery = skills?.delivery?.(project, false, sessionId, { agent, started: true });
+    const dispatchSnapshot = deps.writeBootstrap({ file: bootstrapFile, eventServer: deps.eventServer, projectId: id, projectPath: project.path,
+      sessionKey, controlAddress: deps.controlAddress, controlCapability, claudeBackgroundTasks: store.settings?.claudeBackgroundTasks,
+      dispatchSeats: delivery?.agentSeats ?? null, conductor });
+    // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
+    const env = deps.nativeEnvironment(bootstrapFile, launch?.codexHome);
+    const shellEnv = deps.nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
+    const context = deps.startupNote(deps.READING_NOTE, deps.handoffFile(id), path.join(project.path, 'skills'), delivery);
+    const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
+      sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId,
+      roleServer: roleServer(env) };
+    env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
+    if (agent === 'claude') spec.onSubagent = (signal, binding) => deps.nativeSubagent(spec, signal, binding);
+    if (agent === 'claude') spec.onSeat = (observed, binding) => deps.nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
+    const running = s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId);
+    if (spec.providerSessionId && [...sessions.values()].some(running)) throw new Error('该会话正在其他终端运行。');
+    nativeSpecs.set(id, spec); return spec;
+  }
+
+  // The conductor's role tools, served by the worker engine over MCP stdio. Every lead has them and they refuse in native
+  // mode, so a session started in native mode can call roles once the owner switches it.
+  function roleServer(env) {
+    return { command: process.execPath, args: [path.join(deps.integrationDir, 'dispatch.cjs'), 'mcp'], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
+  }
+
+  return { readNativeConnections, liveHost, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment, nativeSpec };
 }
 
 module.exports = { createHostInputs };

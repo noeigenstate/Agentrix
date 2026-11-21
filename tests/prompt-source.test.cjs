@@ -33,10 +33,10 @@ function activityHarness(mode = 'codex') {
   });
   const start = main.indexOf('  s.conversation = new ConversationLog(');
   vm.runInContext(main.slice(start, main.indexOf('\n  sessions.set(id, s);', start)), context);
-  defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'acceptDispatchEvent', 'writeBootstrap', 'nativeEnvironment', 'retainAgentState');
+  defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity', 'acceptDispatchEvent', 'writeBootstrap', 'nativeEnvironment', 'nativeSpec', 'retainAgentState');
   vm.runInContext(main.slice(main.indexOf('async function openCodexFromShell('), main.indexOf('function onEvent(')), context);
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('// The agent chosen on a new project')), context);
-  vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('function startTerminal(')), context);
+  vm.runInContext(main.slice(main.indexOf('function roleEnded('), main.indexOf('function startTerminal(')), context);
   const listeners = {};
   registerTerminalIpc({ handle() {}, listen: (name, fn) => { listeners[name] = fn; }, getSession: id => sessions.get(id), getProjectById: () => project,
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState() {}, pollAfterSubmission() {},

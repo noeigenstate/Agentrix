@@ -50,8 +50,8 @@ async function harness(t, kind = 'local', agent = 'codex') {
   defineMain(context, 'publishCliState', 'applyActivity', 'claudeActivity');
   Object.assign(context, { findProject: () => project, scheduleState() {}, randomUUID: require('node:crypto').randomUUID,
     s, project, id: s.terminalId, PromptQueue, CompletionWork, queueMicrotask });
-  vm.runInContext(main.slice(main.indexOf('function nativeSpec('), main.indexOf('function startTerminal(')), context);
-  defineMain(context, 'writeBootstrap', 'nativeEnvironment');
+  vm.runInContext(main.slice(main.indexOf('function roleEnded('), main.indexOf('function startTerminal(')), context);
+  defineMain(context, 'writeBootstrap', 'nativeEnvironment', 'nativeSpec');
   const setup = main.indexOf('  const refreshCompletion = () => {');
   vm.runInContext(main.slice(setup, main.indexOf('  // A prompt the agent', setup)), context);
   s.completionWork.now = s.promptQueue.now = () => now;

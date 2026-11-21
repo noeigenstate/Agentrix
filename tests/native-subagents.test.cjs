@@ -12,6 +12,7 @@ const { encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { sameDirectory } = require('../electron/session-files.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
+const { defineMain } = require('./helpers/main-modules.cjs');
 
 const at = seconds => Date.UTC(2026, 0, 1) + seconds * 1000;
 // A retired or closed run judges a late callback with no I/O, so its report chain settles within microtasks; there is no event to await.
@@ -48,8 +49,8 @@ function nativeHost(f, calls) {
     skills: { delivery: () => ({}) }, callsOf: current => { assert.equal(current, s); return calls; },
     scheduleState: () => { scheduled++; }, process });
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
-  vm.runInContext(source.slice(source.indexOf('function nativeSpec('), source.indexOf('function structuredEvent(')), context);
-  const spec = context.nativeSpec('terminal', 'claude', false);
+  vm.runInContext(source.slice(source.indexOf('function roleEnded('), source.indexOf('function structuredEvent(')), context);
+  const spec = defineMain(context, 'nativeSpec').nativeSpec('terminal', 'claude', false);
   s.nativeSpec = spec; sessions.set('terminal', s);
   return { spec, s, context, sessions, nativeSpecs, scheduled: () => scheduled };
 }

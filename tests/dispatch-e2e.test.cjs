@@ -11,6 +11,7 @@ const { spawn, execFileSync } = require('node:child_process');
 const { argumentsOf, run } = require('../integration/dispatch.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
 const { createDispatchIntake } = require('../electron/features/agents/dispatch-intake.cjs');
+const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { resolveRegistration } = require('../electron/features/agents/dispatch-registration.cjs');
 const { locateTeam } = require('../electron/features/team/team-locate.cjs');
@@ -52,8 +53,8 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
       if (name === './features/team/team-locate.cjs') return { locateTeam };
       throw new Error(`Unexpected main dependency: ${name}`);
     } });
-  vm.runInContext(functions(['callsOf', 'nativeSpec', 'roleServer', 'structuredEvent', 'onEvent', 'disposeTerminal', 'cleanupTerminalFiles', 'dispatchedOnly']), context);
-  Object.assign(context, createDispatchIntake(context));
+  vm.runInContext(functions(['callsOf', 'structuredEvent', 'onEvent', 'disposeTerminal', 'cleanupTerminalFiles', 'dispatchedOnly']), context);
+  Object.assign(context, createDispatchIntake(context), { nativeSpec: createHostInputs(context).nativeSpec });
   const bind = context.bindDispatchInbox;
   context.bindDispatchInbox = (...args) => { binds++; return bind(...args); };
   const host = ast.statements.find(node => ts.isVariableStatement(node) && node.declarationList.declarations.some(value => value.name.getText(ast) === 'host'));
