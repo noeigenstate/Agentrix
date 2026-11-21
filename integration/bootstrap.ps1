@@ -78,27 +78,32 @@ function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
 }
 
 # Makes the Claude Code started next a planner: intercept.cjs (withShims) names what to set, with the shims first on PATH
-# at depth zero. Returns what Restore-AgentrixEnvironment puts back once it exits.
-function global:Set-AgentrixPlanner([hashtable]$LaunchEnvironment) {
-    $previous = @{}
-    if ($global:AgentrixSession.shims) {
-        $electron = $env:ELECTRON_RUN_AS_NODE
-        try {
-            $env:ELECTRON_RUN_AS_NODE = '1'
-            $words = & $global:AgentrixSession.nodePath (Join-Path $global:AgentrixSession.shims 'intercept.cjs') --shim-env json | ConvertFrom-Json
-        } catch { $words = @() } finally { $env:ELECTRON_RUN_AS_NODE = $electron }
-        $words = @($words)
-        for ($index = 0; $index -lt $words.Count; $index++) {
-            if ($words[$index] -ceq '-u') { $name = $words[++$index]; $value = $null } else { $name, $value = $words[$index] -split '=', 2 }
-            $previous[$name] = [Environment]::GetEnvironmentVariable($name)
-            [Environment]::SetEnvironmentVariable($name, $value)
-        }
-    }
+# at depth zero, and after a "--" word the arguments that give its conversation the role tools (none for a print or
+# utility call). It reads the user's arguments from AGENTRIX_INTERCEPT_ARGV, as Windows PowerShell cannot hand a quoted
+# word to Node intact. Returns those arguments and what Restore-AgentrixEnvironment puts back once it exits; when
+# intercept.cjs cannot be asked, the launch goes on as a plain one.
+function global:Set-AgentrixPlanner([hashtable]$LaunchEnvironment, [string[]]$Arguments) {
+    $planner = @{ Previous = @{}; RoleTools = @() }
+    # Set first: the tool server runs with the environment intercept.cjs is asked in, seats included.
     foreach ($name in $LaunchEnvironment.Keys) {
-        $previous[$name] = [Environment]::GetEnvironmentVariable($name)
+        $planner.Previous[$name] = [Environment]::GetEnvironmentVariable($name)
         [Environment]::SetEnvironmentVariable($name, $LaunchEnvironment[$name])
     }
-    return $previous
+    if (-not $global:AgentrixSession.shims) { return $planner }
+    $electron = $env:ELECTRON_RUN_AS_NODE
+    try {
+        $env:ELECTRON_RUN_AS_NODE = '1'
+        $env:AGENTRIX_INTERCEPT_ARGV = ConvertTo-Json -InputObject (@('--shim-env', 'json', '--role-tools', 'claude') + $Arguments) -Compress
+        $words = & $global:AgentrixSession.nodePath (Join-Path $global:AgentrixSession.shims 'intercept.cjs') 2>$null | ConvertFrom-Json
+    } catch { $words = @() } finally { $env:ELECTRON_RUN_AS_NODE = $electron; $env:AGENTRIX_INTERCEPT_ARGV = $null }
+    $words = @($words)
+    for ($index = 0; $index -lt $words.Count; $index++) {
+        if ($words[$index] -ceq '--') { $planner.RoleTools = @($words | Select-Object -Skip ($index + 1)); break }
+        if ($words[$index] -ceq '-u') { $name = $words[++$index]; $value = $null } else { $name, $value = $words[$index] -split '=', 2 }
+        $planner.Previous[$name] = [Environment]::GetEnvironmentVariable($name)
+        [Environment]::SetEnvironmentVariable($name, $value)
+    }
+    return $planner
 }
 
 function global:Restore-AgentrixEnvironment([hashtable]$Previous) {
@@ -256,11 +261,11 @@ function global:claude {
         [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
         $settingsArgs = @("--settings", $settingsFile)
     }
-    $planner = Set-AgentrixPlanner $launch.Env
+    $planner = Set-AgentrixPlanner $launch.Env @($args)
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
         try { & $global:AgentrixClaudeCommand @settingsArgs @readingNote @leadArgs @args }
         finally {
-            Restore-AgentrixEnvironment $planner
+            Restore-AgentrixEnvironment $planner.Previous
             if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
             Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent 'claude'
         }
@@ -268,13 +273,15 @@ function global:claude {
     }
     $claudeExit = 0
     try {
+        # Only an executable gets the role tools: their config is a JSON string, which Windows PowerShell cannot hand to a
+        # .cmd or .ps1 CLI intact.
         # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
-        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($settingsArgs + $readingNote + $leadArgs + @($args))
+        $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($planner.RoleTools + $settingsArgs + $readingNote + $leadArgs + @($args))
     } catch {
         Write-Error $_
         $claudeExit = 1
     } finally {
-        Restore-AgentrixEnvironment $planner
+        Restore-AgentrixEnvironment $planner.Previous
         if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
         Send-AgentrixEvent 'codex-exited' $claudeExit -Agent 'claude'
         $global:LASTEXITCODE = $claudeExit

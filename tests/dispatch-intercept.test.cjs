@@ -42,6 +42,11 @@ function sessionBootstrap(folder, mode = {}) {
   return { file, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
 }
 const posix = file => process.platform === 'win32' ? file.replace(/^([A-Za-z]):/, (_, drive) => '/' + drive.toLowerCase()).replace(/\\/g, '/') : file;
+// The tool server a lead's Claude Code is told to start, read back from the one word that gives it the role tools.
+function toolServer(word) {
+  assert.match(word, /^--mcp-config=\{/, 'the config is part of the option word, so no word after it is taken for a config');
+  return JSON.parse(word.slice('--mcp-config='.length)).mcpServers.agentrix;
+}
 
 test("a call without a planner's depth zero and bootstrap, or with a worker identity, is refused as nested before stdin or dispatch", async () => {
   const cases = [{}, { AGENTRIX_DISPATCH_DEPTH: '0' }, { AGENTRIX_BOOTSTRAP: 'b.json' }, ...['1', '2', '-1', '', ' 0', 'invalid'].map(depth => ({ ...planner, AGENTRIX_DISPATCH_DEPTH: depth })),
@@ -109,9 +114,9 @@ test('native mode runs a delegation on the real CLI and conductor mode refuses i
   }
   runs.length = 0;
   await shim().intercept(['claude', '--', '--resume'], { env: env('conductor'), cwd: root, stderr: output(), locate, launch });
-  const [flag, config, ...rest] = runs[0].args;
-  assert.equal(flag, '--mcp-config'); assert.deepEqual(rest, ['--resume']);
-  const server = JSON.parse(config).mcpServers.agentrix;
+  const [config, ...rest] = runs[0].args;
+  assert.deepEqual(rest, ['--resume']);
+  const server = toolServer(config);
   assert.deepEqual([server.command, server.args.at(-1), server.env.ELECTRON_RUN_AS_NODE], ['node', 'mcp', '1']);
   assert.ok(server.env.AGENTRIX_BOOTSTRAP, 'the tool server reads the session');
   runs.length = 0;
@@ -122,13 +127,43 @@ test('native mode runs a delegation on the real CLI and conductor mode refuses i
   for (const [agent, args] of [['codex', []], ['codex', ['-m', 'x', 'fix the test']], ['claude', []], ['claude', ['fix the test']], ['claude', ['-c']]]) {
     runs.length = 0;
     await shim().intercept([agent, '--', ...args], { env: env('native'), cwd: root, stderr: output(), locate, launch });
-    assert.equal(runs[0].args[0], agent === 'claude' ? '--mcp-config' : '-c', `${agent} ${args.join(' ')} opens a conversation`);
-    assert.deepEqual(runs[0].args.slice(runs[0].args.length - args.length), args);
+    assert.match(runs[0].args[0], agent === 'claude' ? /^--mcp-config=\{/ : /^-c$/, `${agent} ${args.join(' ')} opens a conversation`);
+    // Claude Code's tools are one word, so a prompt right after them (claude "fix the test") stays the prompt.
+    assert.deepEqual(runs[0].args.slice(agent === 'claude' ? 1 : 6), args);
   }
   runs.length = 0;
   await shim().intercept(['codex', '--', 'resume', '--last'], { env: env('native'), cwd: root, stderr: output(), locate, launch });
   assert.match(runs[0].args[1], /^mcp_servers\.agentrix\.command="node"$/, 'a lead started in native mode has the tools for a later switch');
   assert.deepEqual(runs[0].args.slice(-2), ['resume', '--last']);
+});
+
+test("one request answers a wrapper with the planner's words and, after a -- word, the role tools for a conversation; a print or utility call gets none", t => {
+  const folder = temporary(t), { file } = sessionBootstrap(folder), seats = '{"developer":{"model":"m"}}';
+  const owner = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: file, AGENTRIX_SEATS: seats, UNRELATED: 'stays out' };
+  const ask = (words, source = owner) => {
+    const result = spawnSync(process.execPath, [path.join(shims, 'intercept.cjs'), ...words], { cwd: folder, env: source, encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  const planner = shim().shimWords(owner, { depth: 0 }), request = ['--shim-env', 'json', '--role-tools'];
+  const answer = JSON.parse(ask([...request, 'claude', 'fix the test'])), [tools, ...none] = answer.slice(planner.length + 1);
+  assert.deepEqual(answer.slice(0, planner.length + 1), [...planner, '--']);
+  assert.deepEqual(none, [], 'one word, so the prompt after it stays the prompt');
+  assert.deepEqual(toolServer(tools), { type: 'stdio', command: process.execPath, args: [path.join(root, 'integration/dispatch.cjs'), 'mcp'],
+    env: { ELECTRON_RUN_AS_NODE: '1', AGENTRIX_BOOTSTRAP: file, AGENTRIX_SEATS: seats, AGENTRIX_DISPATCH_DEPTH: '0', AGENTRIX_SHIMS: posix(shims),
+      AGENTRIX_SHIM_NODE: process.execPath, CODEX_HOME: owner.CODEX_HOME } });
+  assert.deepEqual(ask(['--shim-env', '--role-tools', 'claude']).split('\0'), [...planner, '--', tools, ''], 'each word ends with NUL, so no shell splits the JSON');
+  // PowerShell hands the request over in the environment, where a quoted word stays whole.
+  const quoted = ask([], { ...owner, AGENTRIX_INTERCEPT_ARGV: JSON.stringify([...request, 'claude', 'say "hi" -p \\']) });
+  assert.deepEqual(JSON.parse(quoted), [...planner, '--', tools]);
+  const codex = JSON.parse(ask([...request, 'codex', 'resume', '--last'])).slice(planner.length + 1);
+  assert.deepEqual(codex.filter((_, index) => index % 2 === 0), ['-c', '-c', '-c']);
+  assert.equal(codex[1], `mcp_servers.agentrix.command=${JSON.stringify(process.execPath)}`);
+  for (const words of [['claude', '-p', 'x'], ['claude', '--print', 'x'], ['claude', '--version'], ['claude', 'mcp', 'list'], ['claude', 'update'],
+    ['codex', 'exec', 'x'], ['other']]) assert.deepEqual(JSON.parse(ask([...request, ...words])), [...planner, '--'], words.join(' '));
+  const { AGENTRIX_BOOTSTRAP: _, ...unbound } = owner;
+  assert.equal(JSON.parse(ask([...request, 'claude'], unbound)).at(-1), '--', 'without a session there is no planner to serve');
+  assert.deepEqual(JSON.parse(ask(['--shim-env', 'json'])), planner, 'a terminal opened before an update is answered as before');
 });
 
 test('withShims preserves the caller environment and sets one PATH, depth and opaque run identity', () => {
@@ -225,25 +260,36 @@ test('interactive wrappers read bootstrap shims, keep real CLI lookup outside th
 });
 
 // The terminal's own PATH stays clean; only the Claude Code its wrapper starts is a planner.
-const probe = `const p=require('path');process.stdout.write('PLANNER='+JSON.stringify({first:(process.env.PATH||process.env.Path).split(p.delimiter)[0],depth:process.env.AGENTRIX_DISPATCH_DEPTH,hook:process.env.CLAUDE_ENV_FILE})+'\\n')`;
+const probe = `const p=require('path');process.stdout.write('PLANNER='+JSON.stringify({first:(process.env.PATH||process.env.Path).split(p.delimiter)[0],`
+  + `depth:process.env.AGENTRIX_DISPATCH_DEPTH,hook:process.env.CLAUDE_ENV_FILE})+'\\nARGV='+JSON.stringify(process.argv.slice(2))+'\\n')`;
 for (const kind of ['bash', 'zsh']) test(`the ${kind} terminal's PATH has no shims and the claude it starts has them first at depth zero`, {
   skip: process.platform === 'win32' ? `${kind}-integration runs in Linux and macOS terminals only` : !findShell(kind) && `${kind} is not installed here`, timeout: 60000,
 }, t => {
   const folder = temporary(t), home = path.join(folder, 'home'), claude = path.join(folder, 'claude');
   fs.mkdirSync(home);
   fs.writeFileSync(path.join(folder, 'probe.cjs'), probe);
-  fs.writeFileSync(claude, `#!/bin/sh\nexec "${process.execPath}" "${path.join(folder, 'probe.cjs')}"\n`, { mode: 0o755 });
+  fs.writeFileSync(claude, `#!/bin/sh\nexec "${process.execPath}" "${path.join(folder, 'probe.cjs')}" "$@"\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(folder, 'event.cjs'), '');
   const { claudeEnvFile } = sessionBootstrap(folder);
   const env = { ...isolatedEnvironment(home), AGENTRIX_BOOTSTRAP: path.join(folder, 'bootstrap.json'), AGENTRIX_NODE: process.execPath,
     AGENTRIX_EVENT_HELPER: path.join(folder, 'event.cjs'), AGENTRIX_CLAUDE_EXECUTABLE: claude, AGENTRIX_DISPATCH_DEPTH: '0' };
-  const script = `${kind === 'zsh' ? 'source "$1" zshrc' : 'source "$1"'}\nprintf 'SHELL=%s|%s\\n' "\${PATH%%:*}" "\${AGENTRIX_DISPATCH_DEPTH-unset}"\nclaude -p x\n`;
+  const script = `${kind === 'zsh' ? 'source "$1" zshrc' : 'source "$1"'}\nprintf 'SHELL=%s|%s\\n' "\${PATH%%:*}" "\${AGENTRIX_DISPATCH_DEPTH-unset}"\n`
+    + `claude 'fix the test'\nclaude -p 'say "hi" \\'\nclaude --version\n__pg_node=/missing/node\nclaude 'fix it'\n`;
   const result = spawnSync(findShell(kind), [...(kind === 'bash' ? ['--noprofile', '--norc'] : ['-f']), '-c', script, kind, path.join(root, `integration/${kind}-integration.${kind}`)],
     { cwd: folder, env, encoding: 'utf8', timeout: 30000 });
   assert.equal(result.status, 0, result.stderr);
   const [first, depth] = /SHELL=(.*)\|(.*)/.exec(result.stdout).slice(1);
   assert.notEqual(first, shims); assert.equal(depth, 'unset');
   assert.deepEqual(JSON.parse(/PLANNER=(.*)/.exec(result.stdout)[1]), { first: shims, depth: '0', hook: claudeEnvFile });
+  // A conversation gets the role tools as one word, so with no settings, note or lead arguments between them the prompt is
+  // still the prompt; their server gets the planner's environment. A print or utility call gets none, and when the helper
+  // cannot run the CLI starts with the user's words alone.
+  const [[tools, ...words], ...others] = [...result.stdout.matchAll(/ARGV=(.*)/g)].map(match => JSON.parse(match[1]));
+  assert.deepEqual(words, ['fix the test']);
+  const server = toolServer(tools).env;
+  assert.deepEqual([server.AGENTRIX_BOOTSTRAP, server.AGENTRIX_DISPATCH_DEPTH, server.AGENTRIX_SHIMS, server.AGENTRIX_SHIM_NODE, server.AGENTRIX_SEATS],
+    [env.AGENTRIX_BOOTSTRAP, '0', shims, process.execPath, 'null']);
+  assert.deepEqual(others, [['-p', 'say "hi" \\'], ['--version'], ['fix it']]);
 });
 
 test("the PowerShell terminal's PATH has no shims and the claude it starts has them first at depth zero, put back once it exits", { skip: process.platform !== 'win32' && 'bootstrap.ps1 runs in Windows terminals only', timeout: 60000 }, t => {
@@ -253,10 +299,11 @@ test("the PowerShell terminal's PATH has no shims and the claude it starts has t
   // A stand-in refresh-path.ps1, so this computer's stored PATH is never read.
   fs.writeFileSync(path.join(copied, 'refresh-path.ps1'), '');
   fs.writeFileSync(path.join(folder, 'probe.cjs'), probe);
-  fs.writeFileSync(claude, `@"${process.execPath}" "${path.join(folder, 'probe.cjs')}"\r\n`);
+  fs.writeFileSync(claude, `@"${process.execPath}" "${path.join(folder, 'probe.cjs')}" %*\r\n`);
   const { claudeEnvFile } = sessionBootstrap(folder);
   const script = path.join(folder, 'probe.ps1');
-  fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. ${quoted(path.join(copied, 'bootstrap.ps1'))}\nfunction Show { Write-Output ("SHELL=" + ($env:Path -split ';')[0] + "|" + $(if ($env:AGENTRIX_DISPATCH_DEPTH) { $env:AGENTRIX_DISPATCH_DEPTH } else { 'unset' })) }\nShow\nclaude -p x\nShow\n`);
+  fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. ${quoted(path.join(copied, 'bootstrap.ps1'))}\n`
+    + `function Show { Write-Output ("SHELL=" + ($env:Path -split ';')[0] + "|" + $(if ($env:AGENTRIX_DISPATCH_DEPTH) { $env:AGENTRIX_DISPATCH_DEPTH } else { 'unset' })) }\nShow\nclaude --continue\nShow\n`);
   const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: path.join(folder, 'bootstrap.json'), AGENTRIX_CLAUDE_EXECUTABLE: claude,
     AGENTRIX_DISPATCH_DEPTH: '0', PSModuleAnalysisCachePath: path.join(folder, 'module-cache') };
   const result = spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
@@ -267,6 +314,48 @@ test("the PowerShell terminal's PATH has no shims and the claude it starts has t
   for (const [first, depth] of shells) { assert.notEqual(first.toLowerCase(), shims.toLowerCase()); assert.equal(depth, 'unset'); }
   const planned = JSON.parse(/PLANNER=(.*)/.exec(result.stdout)[1]);
   assert.equal(planned.first.toLowerCase(), shims.toLowerCase()); assert.equal(planned.depth, '0'); assert.equal(planned.hook, claudeEnvFile);
+  assert.deepEqual(JSON.parse(/ARGV=(.*)/.exec(result.stdout)[1]), ['--continue'], 'a .cmd CLI is started as before, without the role tools');
+});
+
+// A stand-in claude.exe, which Windows PowerShell compiles: only an executable is started with exact arguments. Each run
+// adds a line to the log beside it: its depth, then each argument in Base64.
+const standInSource = `using System; using System.IO; using System.Text;
+static class StandIn { static int Main(string[] args) {
+  var line = new StringBuilder(Environment.GetEnvironmentVariable("AGENTRIX_DISPATCH_DEPTH"));
+  foreach (var arg in args) line.Append(' ').Append(Convert.ToBase64String(Encoding.UTF8.GetBytes(arg)));
+  File.AppendAllText(System.Reflection.Assembly.GetExecutingAssembly().Location + ".log", line + "\\n");
+  return 0; } }`;
+test('the claude.exe the PowerShell wrapper starts for a conversation gets the role tools; a print or utility call gets none, and a helper that cannot run still launches', {
+  skip: process.platform !== 'win32' && 'bootstrap.ps1 runs in Windows terminals only', timeout: 90000 }, t => {
+  const folder = temporary(t), copied = path.join(folder, 'integration'), claude = path.join(folder, 'claude.exe'), script = path.join(folder, 'probe.ps1');
+  const quoted = file => `'${file.replace(/'/g, "''")}'`;
+  fs.mkdirSync(copied); fs.copyFileSync(path.join(root, 'integration/bootstrap.ps1'), path.join(copied, 'bootstrap.ps1'));
+  // A stand-in refresh-path.ps1, so this computer's stored PATH is never read.
+  fs.writeFileSync(path.join(copied, 'refresh-path.ps1'), '');
+  fs.writeFileSync(path.join(folder, 'stand-in.cs'), standInSource);
+  const { file: bootstrap } = sessionBootstrap(folder), seats = '{"developer":{"model":"m"}}';
+  fs.writeFileSync(script, '﻿' + [`$env:AGENTRIX_AGENT_ONLY='1'`,
+    `Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath ${quoted(path.join(folder, 'stand-in.cs'))}) -OutputAssembly ${quoted(claude)} -OutputType ConsoleApplication`,
+    `. ${quoted(path.join(copied, 'bootstrap.ps1'))}`, 'function global:Send-AgentrixEvent {}',
+    // Before the lead file: no settings, note or lead arguments stand between the role tools and the prompt.
+    `claude 'fix the test'`, `[IO.File]::WriteAllLines($env:AGENTRIX_BOOTSTRAP + '.lead', @('sonnet', 'high', '0', '${seats}'))`,
+    `claude 'say "hi" \\' --mcp-config own.json`, `claude -p 'say "hi"'`, 'claude --version', 'claude mcp list',
+    `$global:AgentrixSession.nodePath = 'missing-node.exe'`, 'claude again', ''].join('\n'));
+  const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_CLAUDE_EXECUTABLE: claude, PSModuleAnalysisCachePath: path.join(folder, 'module-cache') };
+  const result = spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
+    { cwd: folder, env, encoding: 'utf8', timeout: 60000, windowsHide: true });
+  assert.equal(result.status, 0, result.stderr);
+  const runs = fs.readFileSync(claude + '.log', 'utf8').trimEnd().split('\n').map(line => line.split(' ').map((word, index) => index ? Buffer.from(word, 'base64').toString() : word));
+  assert.equal(runs.length, 6, result.stdout + result.stderr);
+  const [[first, bare, ...prompt], [depth, tools, ...words], ...others] = runs, lead = ['--model', 'sonnet', '--effort', 'high'];
+  // One word, so the prompt right after it is still the prompt; the user's own --mcp-config stays where it was typed.
+  assert.deepEqual([first, toolServer(bare).env.AGENTRIX_SEATS, prompt], ['0', 'null', ['fix the test']]);
+  assert.deepEqual([depth, words], ['0', [...lead, 'say "hi" \\', '--mcp-config', 'own.json']]);
+  const server = toolServer(tools);
+  assert.deepEqual([server.command, server.args], [process.execPath, [path.join(root, 'integration/dispatch.cjs'), 'mcp']]);
+  assert.deepEqual(server.env, { ELECTRON_RUN_AS_NODE: '1', AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SEATS: seats, AGENTRIX_DISPATCH_DEPTH: '0', AGENTRIX_SHIMS: posix(shims),
+    AGENTRIX_SHIM_NODE: process.execPath, CODEX_HOME: env.CODEX_HOME });
+  assert.deepEqual(others, [['0', ...lead, '-p', 'say "hi"'], ['0', '--version'], ['0', 'mcp', 'list'], ['', ...lead, 'again']]);
 });
 
 // Two Agentrix installs: copies of the shim folder, as beta beside stable or a GUI check that a worker launches has.

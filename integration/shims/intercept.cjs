@@ -70,8 +70,8 @@ function bootstrapField(file, name) {
 }
 
 // What withShims changes, as words for env(1): -u NAME or NAME=VALUE. A shell wrapper starts one planner with them.
-function shimWords(source, options) {
-  const next = withShims(claudeLaunchEnvironment(source), options);
+const shimWords = (source, options) => envWords(source, withShims(claudeLaunchEnvironment(source), options));
+function envWords(source, next) {
   return [...Object.keys(source).filter(name => !(name in next)).flatMap(name => ['-u', name]),
     ...Object.entries(next).filter(([name, value]) => source[name] !== value).map(([name, value]) => `${name}=${value}`)];
 }
@@ -126,7 +126,8 @@ function roleToolArgs(agent, env) {
   const command = env.AGENTRIX_SHIM_NODE || process.execPath, args = [helperPath(), 'mcp'];
   const serverEnv = { ELECTRON_RUN_AS_NODE: '1', ...Object.fromEntries(Object.entries(env)
     .filter(([name]) => /^(AGENTRIX_(BOOTSTRAP|SEATS|DISPATCH_DEPTH|SHIMS|SHIM_NODE)|CODEX_HOME)$/.test(name))) };
-  if (agent === 'claude') return ['--mcp-config', JSON.stringify({ mcpServers: { agentrix: { type: 'stdio', command, args, env: serverEnv } } })];
+  // One word: --mcp-config takes several values, and as a word of its own it would take the user's prompt for another.
+  if (agent === 'claude') return ['--mcp-config=' + JSON.stringify({ mcpServers: { agentrix: { type: 'stdio', command, args, env: serverEnv } } })];
   const toml = value => JSON.stringify(value);
   return ['-c', `mcp_servers.agentrix.command=${toml(command)}`, '-c', `mcp_servers.agentrix.args=${toml(args)}`,
     '-c', `mcp_servers.agentrix.env={${Object.entries(serverEnv).map(([name, value]) => `${name}=${toml(value)}`).join(', ')}}`];
@@ -165,16 +166,28 @@ async function intercept(argv, { env = process.env, cwd = process.cwd(), stderr 
   return passThrough(agent, converses(agent, args) && !delegates(agent, args) ? [...roleToolArgs(agent, env), ...args] : args, { env, cwd, stderr, locate, launch });
 }
 
-if (require.main === module && process.argv[2] === '--shim-env') {
-  // An owner's wrapper asks for the words that make the Claude Code it starts a planner: NUL-terminated, or JSON.
-  const words = shimWords(process.env, { depth: 0 });
-  process.stdout.write(process.argv[3] === 'json' ? JSON.stringify(words) : words.map(word => word + '\0').join(''));
-} else if (require.main === module) {
+// What an owner's wrapper starts its CLI with, from one request: the planner's env(1) words, a "--" word, then the arguments
+// that give the planner's conversation the role tools, whose server runs with that same environment. A delegation and a
+// call that opens no conversation get none, by the rule intercept follows.
+function launchWords(source, agent, args) {
+  const next = withShims(claudeLaunchEnvironment(source), { depth: 0 });
+  const tools = planner(next) && Object.hasOwn(HARMLESS, agent) && converses(agent, args) && !delegates(agent, args);
+  return [...envWords(source, next), '--', ...(tools ? roleToolArgs(agent, next) : [])];
+}
+
+if (require.main === module) {
   let argv = process.argv.slice(2);
   if (!argv.length && process.env.AGENTRIX_INTERCEPT_ARGV) {
     try { argv = JSON.parse(process.env.AGENTRIX_INTERCEPT_ARGV); } catch { argv = []; }
   }
   delete process.env.AGENTRIX_INTERCEPT_ARGV;
-  intercept(Array.isArray(argv) && argv.every(word => typeof word === 'string') ? argv : []).then(code => { process.exitCode = code; });
+  if (!Array.isArray(argv) || !argv.every(word => typeof word === 'string')) argv = [];
+  if (argv[0] === '--shim-env') {
+    // --shim-env [json] [--role-tools <agent> <the user's arguments>]: NUL-terminated words, or JSON. A terminal opened
+    // before an update still asks without --role-tools, for the planner's words alone.
+    const json = argv[1] === 'json', [flag, agent, ...args] = argv.slice(json ? 2 : 1);
+    const words = flag === '--role-tools' ? launchWords(process.env, agent, args) : shimWords(process.env, { depth: 0 });
+    process.stdout.write(json ? JSON.stringify(words) : words.map(word => word + '\0').join(''));
+  } else intercept(argv).then(code => { process.exitCode = code; });
 }
 module.exports = { intercept, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };

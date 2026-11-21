@@ -7,6 +7,7 @@ Scoped builds register alongside overlapping runs. Removed roundtable commands f
 Legacy events retain their role and meeting metadata for call history.
 The Codex shell wrappers request native launch. The local and SSH native launches keep a separate baseline next to the live sidecar so the helper can identify flags copied from the original routing table even when the seat environment variable is absent.
 Local and SSH Claude wrappers read the lead file at launch. It carries model, effort, fast flag and seat-map JSON.
+The local Claude wrappers give the conversation they start the role tools (the Intercept boundary's `--role-tools`); the SSH wrapper does not yet.
 Readers also accept the legacy three-line and six-line forms. Hooks and the helper read accepted seats from the private sidecar at invocation.
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"

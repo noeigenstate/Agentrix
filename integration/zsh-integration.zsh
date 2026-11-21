@@ -240,10 +240,17 @@ claude() {
     settings_args=(--settings "$settings_file")
   fi
   # This Claude Code is a planner: the shims come first on its PATH, at depth zero (shims/BOUNDARY.md).
-  local -a planner=()
-  [[ -n $__pg_shims ]] && planner=(${(0)"$(ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env 2>/dev/null)"})
+  # The same answer carries, after a "--" word, the arguments that give its conversation the role tools (none for a print
+  # or utility call); their server runs with the environment intercept.cjs is asked in, hence the seats.
+  local -a planner=() role_tools=()
+  local tools=
+  if [[ -n $__pg_shims ]]; then
+    for word in ${(0)"$(AGENTRIX_SEATS="$seat_map" ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_shims/intercept.cjs" --shim-env --role-tools claude "$@" 2>/dev/null)"}; do
+      if [[ -n $tools ]]; then role_tools+=("$word"); elif [[ $word == -- ]]; then tools=1; else planner+=("$word"); fi
+    done
+  fi
   command env "${planner[@]}" AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
-    "${program[@]}" "${settings_args[@]}" "${note[@]}" "${lead_args[@]}" "$@"
+    "${program[@]}" "${role_tools[@]}" "${settings_args[@]}" "${note[@]}" "${lead_args[@]}" "$@"
   local code=$?
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
   __pg_send codex-exited $code claude
