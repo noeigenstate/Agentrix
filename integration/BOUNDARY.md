@@ -9,6 +9,7 @@ The Codex shell wrappers request native launch. The local and SSH native launche
 Local and SSH Claude wrappers read the lead file at launch. It carries model, effort, fast flag and seat-map JSON.
 The local Claude wrappers give the conversation they start the role tools (the Intercept boundary's `--role-tools`); the SSH wrapper does not yet.
 Readers also accept the legacy three-line and six-line forms. Hooks and the helper read accepted seats from the private sidecar at invocation.
+The helper puts one standing-rules section (code standard by path, scope, no commit or push, no other workers, tests, report, language) before every brief (`standingRules`).
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"
 Claude's terminal Agent and Task hooks report provisional and final input by tool-use ID.

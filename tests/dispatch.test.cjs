@@ -829,6 +829,31 @@ test('the worker reads the ledger, the boundaries of the modules it may change, 
   assert.match(await fs.readFile(options.ledger, 'utf8'), /### now · T\n\n- `src\/a\.js:1` parses cents\./);
 });
 
+test('every worker reads one short standing section before its task: scoped, read-only, and the code standard by path', async t => {
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-standing-')));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const section = options => /# Standing rules\n[\s\S]*?(?=\n\n# Skill changes)/.exec(briefOf({ cwd: directory, allow: [], ...options }, Buffer.from('任务。')).toString())[0];
+  const scoped = section({ allow: ['src/**'] });
+  for (const rule of [/code-standard skill this session was given/, /Change only the paths under "Files you may change"/, /Do not commit or push/,
+    /do not start another worker/, /no GUI smoke test/, /system clipboard/, /only the tests the task touches/, /Report what you changed/,
+    /language the task is written in/]) assert.match(scoped, rule);
+  for (const readOnly of [section({ readOnly: true }), section({ permission: 'plan' })]) {
+    assert.match(readOnly, /read-only: change, create and delete no file/);
+    assert.match(readOnly, /Report what you found/);
+    assert.doesNotMatch(readOnly, /Files you may change|what you changed/);
+  }
+  assert.match(section({ permission: 'acceptEdits' }), /Scope: Change only what the task needs\./);
+  for (const file of ['resources/skills/code-standard/SKILL.md', 'skills/code-standard-team/SKILL.md', 'skills/other/SKILL.md']) {
+    await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true });
+    await fs.writeFile(path.join(directory, file), '# Skill\n');
+  }
+  await fs.mkdir(path.join(directory, '.claude/skills/code-standard-empty'), { recursive: true });
+  const named = section({ allow: ['src/**'] });
+  assert.match(named, /read `resources\/skills\/code-standard\/SKILL\.md` and `skills\/code-standard-team\/SKILL\.md` and follow them in any code/);
+  assert.doesNotMatch(named, /skills\/other|code-standard-empty|session was given/);
+  assert.ok(named.length < 1200, `the standing section stays short (${named.length})`);
+});
+
 test('a worker that changes files outside --allow ends out of scope, with the files, and its findings reach the ledger', async t => {
   const answer = 'Done.\n\n## Findings for the ledger\n\n- Shortcut taken through other/b.js.\n';
   const lines = [...codex, { write: 'src/a.js', text: 'allowed change' }, { write: 'other/b.js', text: 'outside change' }, { write: 'answer.md', text: answer }];

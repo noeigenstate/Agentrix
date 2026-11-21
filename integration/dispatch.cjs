@@ -216,8 +216,38 @@ function commandOf(options) {
   return ['app-server', '--listen', 'stdio://'];
 }
 
+// The code-standard skill files in the worker's folder: the system skill's source and the project's extensions of it.
+function codeStandardFiles(cwd) {
+  const skillIn = (root, name) => fs.existsSync(path.join(cwd, root, name, 'SKILL.md')) ? [`${root}/${name}/SKILL.md`] : [];
+  const extensions = root => {
+    try { return fs.readdirSync(path.join(cwd, root)).filter(name => name.startsWith('code-standard-')).sort().flatMap(name => skillIn(root, name)); }
+    catch { return []; }
+  };
+  return [...skillIn('resources/skills', 'code-standard'), ...['skills', '.claude/skills', '.codex/skills'].flatMap(extensions)];
+}
+
+// The rules every worker follows whatever its task, so a brief holds only the task. A read-only worker (Codex
+// --read-only, Claude plan permission) changes nothing; one with --allow changes only those paths.
+function standingRules(options) {
+  const readOnly = options.readOnly || options.permission === 'plan', files = codeStandardFiles(options.cwd).map(file => `\`${file}\``);
+  const scope = readOnly ? 'This task is read-only: change, create and delete no file.'
+    : options.allow.length ? 'Change only the paths under "Files you may change"; stay inside the task.'
+      : 'Change only what the task needs.';
+  const standard = files.length ? `read ${files.join(' and ')} and follow them`
+    : 'follow the code-standard skill this session was given and the project\'s conventions';
+  return ['# Standing rules\n\nAgentrix gives these to every worker. They hold unless the task below states an exception.\n',
+    `Code standard: ${standard} in any code you write or review.`,
+    `Scope: ${scope}`,
+    'Do not commit or push, and do not start another worker or agent.',
+    'Run no GUI smoke test and never read or write the system clipboard.',
+    'Run only the tests the task touches, never the whole suite.',
+    `Report ${readOnly ? 'what you found, with the evidence (file:line)' : 'what you changed'}, what you ran with its result, and what stays unverified.`,
+    'Write your messages and report in the language the task is written in; code, identifiers and comments follow the project\'s convention.',
+  ].map((line, index) => index ? `- ${line}` : line).join('\n');
+}
+
 // What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
-// paths it may change, and how to hand its findings back.
+// paths it may change, the standing rules, and how to hand its findings back.
 function briefOf(options, brief, team, { id, repo, before } = {}) {
   const parts = [];
   if (options.ledger) {
@@ -231,6 +261,7 @@ function briefOf(options, brief, team, { id, repo, before } = {}) {
     parts.push(`# Files you may change\n\n${options.allow.map(glob => `- \`${glob}\``).join('\n')}\n\nChange nothing else. Any other changed file is `
       + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
   }
+  parts.push(standingRules(options));
   parts.push('# Skill changes\n\nDo not edit, add or delete any SKILL.md unless --allow names that exact file without wildcards: that is the lead\'s approval. '
     + 'Put suggested skill changes under ## Skill proposals in your answer. Unapproved changes are preserved beside your answer; only an isolated worker worktree is restored. Shared or managed files are report-only because their author is unknown.');
   if (options.ledger || team) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `

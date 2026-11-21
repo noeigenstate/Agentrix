@@ -100,8 +100,8 @@ Seats decide. An explicit instruction from the owner in the conversation wins fo
 ### Language and reports
 
 - Every worker writes its visible messages, restatements and reports in the owner's language: the language the owner
-  writes to the orchestrator in. Code, identifiers and commit messages follow the project's own convention. Say this in
-  every brief.
+  writes to the orchestrator in. Code, identifiers and commit messages follow the project's own convention. Agentrix
+  tells every role to report in its brief's language, so write the brief in the owner's language.
 - The orchestrator reports to the owner in that language. It states the execution logic, then for each problem the
   cause, the fix and the result, with the evidence (tests, CI, review verdicts). A problem still open says so and says
   what comes next.
@@ -140,9 +140,12 @@ Four tools call the team; they are yours alone, and a role cannot call them.
 - Start independent roles one after another without waiting; each runs on its own.
 - In a native session Agentrix tells you when a role ends with a message that starts with `[Agentrix] Role run`; in a
   terminal session, check `roles_status`. Never sit waiting while the owner may want you.
-- A role's brief is all it knows: the goal, what was wrong before, the files it may change, the behaviour it must keep,
-  the project's code standard, and what to report. Agentrix puts the project memory, the roles working now and the
-  repository's state before it.
+- Keep a brief short and task-only: the goal, what was wrong before, the behaviour it must keep, and done-when.
+  Agentrix puts before it the project memory, the roles working now, the repository's state, the boundaries of the
+  modules in `allow`, the paths in `allow`, and the standing rules every role follows: the project's code standard,
+  stay in scope (no file changes for a read-only role), no commit or push, no other workers, no GUI smoke tests or
+  clipboard, only the tests the task touches, what to report, and the brief's language. Do not repeat any of these;
+  state only an exception the task needs.
 - A role that changes files reports what it changed and checked; an end with `OUT OF SCOPE` means it changed files
   outside `allow`: have them reverted and the work redone, or split the task.
 - Running `codex exec` or `claude -p` from the shell is refused in conductor mode; roles start only through
@@ -164,9 +167,10 @@ shared (a link to the main `node_modules`). A single worker may run in the proje
 git worktree add <scratch>/wt-frontend -b work/<topic>-frontend
 ```
 
-**A brief.** A worker knows only its brief: the goal, what was wrong before, the files it may change, the behaviour it
-must keep, the project's code standard, and what to report. A Codex run has no approvals, so its scope comes from the
-prompt alone.
+**A brief.** A worker knows only its brief and what Agentrix adds to it (see Calling roles), so the brief is the task
+alone: the goal, what was wrong before, the behaviour it must keep, and done-when. Short briefs start roles sooner. A
+Codex run has no approvals, so its scope comes from `allow` and the prompt alone. An Agent call gets none of the
+additions: its prompt carries the standing rules itself.
 
 **An independent check.** A reviewer, QA, Security or Accessibility worker that neither planned nor wrote the work,
 given the diff range and the requirement, not your conclusions. Each confirmed finding goes back to the worker that owns

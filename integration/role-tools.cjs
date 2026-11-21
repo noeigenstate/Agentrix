@@ -17,7 +17,7 @@ const TOOLS = [
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
       title: text('One line: what the role does'),
-      brief: text('Everything the role needs: the goal, the files, the behaviour to keep, what to report'),
+      brief: text('The task only, kept short: the goal, what was wrong, what must keep working, done-when. Agentrix adds the standing rules'),
       readOnly: { type: 'boolean', description: 'True for a role that only reads, such as a review or research' },
       allow: { type: 'array', items: { type: 'string' }, description: 'Globs of the files the role may change; required unless readOnly' },
       cwd: text('Folder to work in, such as a git worktree; the project folder by default'),
