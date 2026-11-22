@@ -3,7 +3,11 @@
 // app.evaluate, so it uses nothing from this file's scope.
 function stubModelListNet(electron) {
   const { EventEmitter } = process.getBuiltinModule('events'), { PassThrough } = process.getBuiltinModule('stream');
-  electron.net.request = ({ url }) => {
+  const originalRequest = electron.net.request.bind(electron.net);
+  electron.net.request = (options, ...args) => {
+    const url = typeof options === 'string' ? options : options?.url;
+    // Electron net.fetch also uses net.request for packaged agentrix:// assets resolved to file URLs.
+    if (typeof url === 'string' && url.startsWith('file:')) return originalRequest(options, ...args);
     if (url !== 'https://api.anthropic.com/v1/models?limit=100') throw new Error('Unexpected offline connection request');
     const request = new EventEmitter();
     request.abort = () => {};
