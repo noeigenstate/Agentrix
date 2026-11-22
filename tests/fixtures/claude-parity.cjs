@@ -1,6 +1,10 @@
 const assert = require('node:assert/strict');
 const { createHash } = require('node:crypto');
-const { NATIVE_CONTEXT, IDENTITY_CONTEXT } = require('../../electron/features/claude-sdk/query.cjs');
+
+// The fixtures leave background work enabled. Pin the entire GUI append, including the separator before the fork sentence.
+const guiAppend = "\n\nYou are Claude Code, Anthropic's official CLI for Claude.\n"
+  + 'If you need the user to run a shell command themselves, suggest they type `! <command>` in the prompt; its output becomes context in this conversation.\n\n\n'
+  + 'The fork subagent runs in the background, so you can keep chatting with the user while it works.';
 
 // CLI 2.1.317 and 2.1.318, paired requests from one offline server. Pin BOTH bytes at each
 // transport-dependent leaf: a new change in a known field must also fail.
@@ -42,18 +46,18 @@ function compareAgents(sdk, tui) {
   assert.deepEqual([...sdk].sort(), tui.filter(name => name !== 'claude-code-guide').sort(),
     'new agent-name differences need a real paired investigation');
 }
-function compareSystem(sdk, tui, { sdkOwner = 'gui', tuiOwner = null } = {}) {
-  const version = billingVersion(sdk);
-  assert.equal(version, billingVersion(tui), 'paired requests must use the same CLI version');
-  const append = owner => owner === 'gui' ? NATIVE_CONTEXT : owner === 'dispatch' ? IDENTITY_CONTEXT : null;
-  const normalize = (blocks, owner) => blocks.map((block, index) => {
+function compareSystem(left, right, { gui } = {}) {
+  const version = billingVersion(left);
+  assert.equal(version, billingVersion(right), 'paired requests must use the same CLI version');
+  const normalize = (blocks, isGui) => blocks.map((block, index) => {
     let text = block.text;
     if (index === 0) {
       text = 'BILLING_HEADER'; // CLI-generated entrypoint and prompt fingerprint, never an agent instruction.
     } else {
-      // Only the exact owner-specific append is admitted. Workers have no
-      // interactive owner shell or concurrent user chat; GUI capabilities do.
-      if (append(owner)) text = text.replace('\n\n' + append(owner), '');
+      if (isGui && index === blocks.length - 1) {
+        assert.ok(text.endsWith(guiAppend), 'unexpected system-prompt GUI capability append');
+        text = text.slice(0, -guiAppend.length);
+      }
       text = text.replace("You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.", "You are Claude Code, Anthropic's official CLI for Claude.")
         .replace('If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt — the `!` prefix runs the command in this session so its output lands directly in the conversation.\n - ', '')
         .replace(', runs in the background,', '')
@@ -62,7 +66,7 @@ function compareSystem(sdk, tui, { sdkOwner = 'gui', tuiOwner = null } = {}) {
     return { ...block, text };
   });
   // Hashes keep a failure readable and prevent printing the entire preset into CI logs.
-  assert.equal(hash(normalize(sdk, sdkOwner)), hash(normalize(tui, tuiOwner)), 'unexpected system-prompt difference');
+  assert.equal(hash(normalize(left, gui === 'left')), hash(normalize(right, gui === 'right')), 'unexpected system-prompt difference');
   return version;
 }
 module.exports = { compareTools, compareSystem, compareAgents, billingVersion };

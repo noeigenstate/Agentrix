@@ -138,7 +138,7 @@ for (const [command, expected, marker] of [
   };
   await session.send({ clientMessageId: 'warmup', text: 'Warm up' }); await wait(1);
   const listed = await session.commands(fallback);
-  assert.equal(listed.some(row => row.name === command.split(' ')[0]), true);
+  assert.equal(listed.some(row => row.name === command.split(' ')[0]), !command.startsWith('/model'));
   assert.ok(!listed.some(row => ['/doctor', '/color', '/focus', '/reload-plugins'].includes(row.name)));
   const start = events.length, previousRequests = bodies.length;
   if (command.startsWith('/model')) {

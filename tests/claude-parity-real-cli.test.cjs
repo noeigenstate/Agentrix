@@ -53,7 +53,7 @@ test('real worker context differs from GUI only by the admitted owner capability
   const f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'ACK'), ...finish('end_turn')]; });
   await f.run({}, () => {}, { owner: 'dispatch' });
   await f.run({}, () => {}, { owner: 'gui' });
-  require('./fixtures/claude-parity.cjs').compareSystem(requests[0].system, requests[1].system, { sdkOwner: 'dispatch', tuiOwner: 'gui' });
+  require('./fixtures/claude-parity.cjs').compareSystem(requests[0].system, requests[1].system, { gui: 'right' });
 });
 
 test('real Claude SDK receives fast mode from the launch seat and refuses live changes', { skip, timeout: 60000 }, async t => {
@@ -110,7 +110,9 @@ test('real host shell keeps keys out and preserves CLI context wrappers and the 
   await until(() => session.snapshot().state === 'idle' && requests.length > 0);
   assert.equal(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length, 1);
   const catalog = await session.commands(['clear', 'reset', 'new', 'model', 'effort', 'fast'].map(name => ({ name, builtin: true, view: 'reading' })));
-  for (const name of ['clear', 'reset', 'new', 'model', 'effort', 'fast']) assert.ok(catalog.some(row => row.name === '/' + name), name);
+  const names = catalog.map(row => row.name);
+  for (const name of ['/clear', '/reset', '/new']) assert.ok(names.includes(name), name);
+  for (const name of ['/model', '/effort', '/fast']) assert.ok(!names.includes(name), `${name} belongs to model routing`);
   await session.send({ clientMessageId: 'shell-owner', text: 'AFTER_SHELL' });
   await until(() => session.snapshot().state === 'idle' && requests.length > 1);
   assert.match(JSON.stringify(requests[0].messages), /<bash-stdout>SHELL_SAFE:unset:unset:unset<\/bash-stdout>/);
@@ -293,7 +295,7 @@ test('real terminal shell context and SDK request parity have an exact differenc
   assert.ok(terminalAgents.includes('claude-code-guide'));
   const { compareTools, compareSystem, compareAgents } = require('./fixtures/claude-parity.cjs');
   compareAgents(sdkAgents, terminalAgents);
-  const version = compareSystem(sdk.system, tui.system);
+  const version = compareSystem(sdk.system, tui.system, { gui: 'left' });
   compareTools(sdk.tools, tui.tools, version);
   for (const key of ['model', 'thinking', 'context_management', 'max_tokens']) assert.deepEqual(sdk[key], tui[key], key);
   const terminalMessages = JSON.stringify(tui.messages);
