@@ -393,7 +393,7 @@ class RemoteFilesTest(unittest.TestCase):
         python, notify = "/opt/python's tools/python3", "/tmp/agent's path/notify.py"
         source = remote.BASH_SOURCE.split("import json,shlex,sys\n", 1)[1].split("\nPY\n", 1)[0]
         output = io.StringIO()
-        with mock.patch("sys.executable", python), mock.patch("sys.argv", ["-", notify]), contextlib.redirect_stdout(output):
+        with mock.patch("sys.executable", python), mock.patch("sys.argv", ["-", notify, "0"]), contextlib.redirect_stdout(output):
             exec("import json,shlex,sys\n" + source, {})
         hooks = json.loads(output.getvalue())["hooks"]
         for name, kind in (("UserPromptSubmit", "start"), ("Stop", "stop"), ("Notification", "notify"), ("SessionStart", "session")):

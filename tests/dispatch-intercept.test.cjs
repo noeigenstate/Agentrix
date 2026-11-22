@@ -378,7 +378,10 @@ test("a planner inside another Agentrix's planner keeps the user's own hooks: ba
   assert.equal(inner.BASH_ENV, `${posix(b.folder)}/hooks/bash-env.sh`);
   assert.equal(inner.AGENTRIX_SHIM_USER_BASH_ENV, posix(user), "the other folder's hook is not saved as the user's");
   assert.equal(inner.AGENTRIX_SHIM_USER_ZDOTDIR, 'user-zdotdir');
-  const run = env => spawnSync(shellFor('bash'), ['-c', 'printf "%s" "${PATH%%:*}"'], { cwd: folder, env, encoding: 'utf8', timeout: 30000 });
+  // A Unix socket on stdin can make Bash take its remote-shell startup path and skip BASH_ENV.
+  const run = env => spawnSync(shellFor('bash'), ['-c', 'printf "%s" "${PATH%%:*}"'], {
+    cwd: folder, env, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 30000,
+  });
   const result = run(inner);
   assert.equal(result.status, 0, result.stderr); assert.equal(result.stdout, posix(b.folder));
   assert.equal(fs.readFileSync(log, 'utf8'), 'user\n');

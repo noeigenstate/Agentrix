@@ -226,6 +226,7 @@ test('start_role rolls back a failed worktree checkout or launch and allows a re
     if (failure === 'checkout') {
       fs.mkdirSync(path.dirname(attributes), { recursive: true });
       git(['config', 'filter.fixture.required', 'true']);
+      git(['config', 'filter.fixture.smudge', 'exit 1']);
       fs.writeFileSync(attributes, 'source filter=fixture\n');
     }
     const write = fs.writeFileSync;
@@ -579,7 +580,6 @@ test('MCP contains a synchronous tool reply failure while input stays open', { t
   const done = serve({ roles: { tools: { roles_status: async () => ({ roles: [] }) } }, input, output });
   input.write('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"roles_status"}}\n');
   await attempted.promise;
-  await new Promise(resolve => setImmediate(resolve));
   input.write('{"jsonrpc":"2.0","id":2,"method":"ping"}\n');
   await ping.promise;
   input.end();
