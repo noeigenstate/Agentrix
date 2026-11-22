@@ -28,9 +28,11 @@ test('a routing file in a Lab worktree leaves the worker specs unchanged', t => 
 
 function sessionFixture(t) {
   // This fixture bypasses LabSession.start(), which normally resolves the workspace root.
-  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'lab-detach-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lab-detach-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const session = new LabSession({ labRoot: root, workspaceRoot: root, runId: 'fixture', allowDelegation: true });
+  // Match fs/promises.realpath in LabSession.start(); RPCs still use the original spelling.
+  const canonicalRoot = fs.realpathSync.native(root);
+  const session = new LabSession({ labRoot: canonicalRoot, workspaceRoot: canonicalRoot, runId: 'fixture', allowDelegation: true });
   session.active = true;
   const launched = [];
   session.launchJob = (id, args, options) => new Promise(resolve => {

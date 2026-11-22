@@ -179,7 +179,7 @@ test('start_role creates local worktrees from HEAD, shares dependencies and reje
   assert.equal(git(['branch', '--show-current'], cwd), branch);
   assert.equal(git(['rev-parse', 'HEAD'], cwd), head);
   assert.equal(fs.readFileSync(path.join(cwd, 'source'), 'utf8'), 'committed');
-  assert.equal(fs.realpathSync(path.join(cwd, 'node_modules')), fs.realpathSync(modules));
+  assert.equal(fs.realpathSync.native(path.join(cwd, 'node_modules')), fs.realpathSync.native(modules));
   assert.equal(fake.calls[0][fake.calls[0].indexOf('--cwd') + 1], cwd);
   assert.equal(git(['status', '--porcelain'], cwd), '');
 

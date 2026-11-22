@@ -20,7 +20,11 @@ const CONFIGURED = { sandbox: { type: 'readOnly', networkAccess: false }, approv
 // `apply(params)` is the sandbox the stand-in really applies to a thread request; `settle(params)` what it reports after a settings update (null
 // sends no notice), `reviewer` the approver it reports, `noise` notices it sends before its confirmation, `silentProbe` an ephemeral start it
 // announces but never answers, `reject` a method it refuses with that JSON-RPC code. As 0.167 does, it announces every thread it starts.
-function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox, settle, reviewer, initialReviewer = 'user', noise = [], silentProbe = false, announceProbe = true, reject = {}, readiness = 'ready', version = '0.167.0', onWrite = () => {}, threadId = 'owner-thread' } = {}) {
+function codexServer({
+  apply = params => params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox,
+  settle, reviewer, initialReviewer = 'user', noise = [], silentProbe = false, announceProbe = true,
+  reject = {}, readiness = 'ready', version = '0.167.0', onWrite = () => {}, threadId = 'owner-thread', commandCwd = cwd => cwd,
+} = {}) {
   const child = new EventEmitter(), wire = [], waits = [];
   let probes = 0, starts = 0;
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
@@ -40,7 +44,7 @@ function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.s
         let result = {};
         if (request.method === 'initialize') result = { userAgent: 'codex/' + version };
         else if (request.method === 'windowsSandbox/readiness') result = { status: readiness };
-        else if (request.method === 'command/exec') result = { exitCode: 0, stdout: p.cwd };
+        else if (request.method === 'command/exec') result = { exitCode: 0, stdout: commandCwd(p.cwd) };
         else if (['thread/start', 'thread/resume'].includes(request.method)) {
           const id = p.threadId || (p.ephemeral ? `probe-${++probes}` : ++starts === 1 ? threadId : `${threadId}-${starts}`), configured = !p.sandbox && !p.approvalPolicy;
           const thread = { id, turns: [], status: { type: 'idle' }, ephemeral: p.ephemeral === true };
@@ -202,7 +206,9 @@ test('local Windows dispatch asks the user to update Codex when the readiness me
 test('every local elevated Windows role verifies the sandbox cwd before sending its brief', async t => {
   for (const readOnly of [true, false]) for (const pending of [true, false]) {
     const stages = [];
-    const { session, server, root } = runtime(t, { platform: 'win32', spec: { owner: 'dispatch', readOnly, onSandboxWait: line => stages.push(line) } });
+    // The sandbox can report the original 8.3 spelling and a different drive-letter case.
+    const server = codexServer({ commandCwd: () => root.replace(/^[A-Z](?=:)/, drive => drive.toLowerCase()) });
+    const { session, root } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly, onSandboxWait: line => stages.push(line) } });
     if (pending) {
       fs.mkdirSync(path.join(root, '.sandbox'));
       fs.writeFileSync(path.join(root, '.sandbox', 'setup_marker.json'), '{}');
@@ -213,7 +219,7 @@ test('every local elevated Windows role verifies the sandbox cwd before sending 
     const probe = server.wire.findIndex(row => row.method === 'command/exec');
     assert.ok(probe > server.wire.findIndex(row => row.method === 'thread/start'));
     assert.ok(probe < server.wire.findIndex(row => row.method === 'turn/start' && row.params.threadId));
-    assert.equal(server.wire[probe].params.cwd, root);
+    assert.equal(fs.realpathSync.native(server.wire[probe].params.cwd), fs.realpathSync.native(root));
     assert.deepEqual(server.wire[probe].params.sandboxPolicy, { type: readOnly ? 'readOnly' : 'workspaceWrite', networkAccess: false });
   }
 });
