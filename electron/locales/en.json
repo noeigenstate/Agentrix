@@ -3732,5 +3732,21 @@
   "Codex 沙箱授权仍在进行，通常需要几分钟。请稍后重试。": "Codex is still granting sandbox permissions. This usually takes a few minutes. Try again later.",
   "Codex 沙箱尚未确认角色的工作目录。预期：{expected}。实际：{actual}。请稍后重试。": "Codex could not confirm the role’s working folder. Expected {expected}. Actual {actual}. Try again shortly.",
   "管理员批准已取消，Agentrix 下次启动时会再次询问。": "Administrator approval was canceled. Agentrix will ask again the next time it starts.",
-  "未能完成 Codex 沙箱设置，Agentrix 下次启动时会再次询问。": "Codex sandbox setup could not be completed. Agentrix will ask again the next time it starts."
+  "未能完成 Codex 沙箱设置，Agentrix 下次启动时会再次询问。": "Codex sandbox setup could not be completed. Agentrix will ask again the next time it starts.",
+  "指挥家模式": "Conductor mode",
+  "打开模型路由里的「指挥家模式」后，总指挥只负责规划，用角色工具在后台同时调用多个团队角色，角色一结束就通知它；关闭时总指挥像原来的命令行一样自己完成任务。切换模式或更换总指挥的模型、思考深度和快速模式，正在运行的对话从下一条消息起生效，终端里的 Claude 对话也能调用角色。": "With Conductor mode on in Model routing, the orchestrator only plans and uses the role tools to run several team roles at once in the background, and hears as soon as each one finishes; with it off, the orchestrator does the work itself like the plain command line. A change to the mode or to the orchestrator's model, effort or fast mode reaches a running conversation from your next message, and Claude conversations in a terminal can call roles too.",
+  "团队路由": "Team routing",
+  "模型路由把团队排成总指挥和九个角色，每个角色可单独设置模型、思考深度和快速模式，保存后立即生效。还可从角色库加入前端、后端等八个角色，或复制现有角色自定名称和职责，团队最多启用 16 个角色。": "Model routing lays out the team as the Orchestrator and nine roles, each with its own model, effort and fast mode, and a save applies at once. You can add eight more roles such as Frontend and Backend from the role library, or copy a role and give it your own name and duties, with up to 16 roles active in a team.",
+  "项目路由": "Project routing",
+  "每个项目的团队设置保存在项目文件夹的 .agentrix/routing.json 中，可随仓库共享；没有这个文件的项目打开时会按「我的默认模板」自动创建一份。克隆、git pull 或编辑器带来的改动会先请你确认，并标出有风险的变化。": "Each project keeps its team settings in .agentrix/routing.json in the project folder, so they can travel with the repository; a project without the file gets one from My default template when it opens. Changes that arrive from a clone, a git pull or an editor ask for your confirmation first, with risky changes marked.",
+  "角色一览": "Roles at a glance",
+  "左侧 Agent 标签页按角色列出总指挥调用的角色和 Claude Code 启动的子代理，显示模型、任务、状态和真实用时；点一条即可打开它的工作会话，主模型和它收到的提示显示在「总指挥」下。": "The Agent tab on the left lists the roles the orchestrator called and the sub-agents Claude Code started, grouped by role, with model, task, state and real run time; click one to open its work session. The main model and the prompts it receives sit under Orchestrator.",
+  "角色沙箱": "Role sandbox",
+  "在 Windows 上，Codex 角色在提权沙箱里运行，可以直接跑测试。Agentrix 启动后会提示一次性设置：需要管理员批准，并会修改你的 Codex 配置，让所有 Codex 会话默认使用这一沙箱；也可以选「以后再说」或「不再提示」。": "On Windows, Codex roles run in the elevated sandbox, so they can run tests directly. After Agentrix starts, it offers a one-time setup that needs administrator approval and changes your Codex configuration so all your Codex sessions use this sandbox by default; you can also choose Later or Don’t ask again.",
+  "阅读视图": "Reading view",
+  "回复中的行内公式和独立公式按数学格式显示，不支持的公式显示原文。发送也更可靠：输入行的灰色提示和建议不再被当成草稿，粘贴失败会自动重试，已发出的消息不会重复发送，每个确认提示只弹出一次。": "Inline and display formulas in replies render as math, and a formula that cannot be rendered shows its source. Sending is more reliable too: dim hints and suggestions in the input line no longer count as a draft, a failed paste retries by itself, a sent message is never sent twice, and each confirmation prompt opens only once.",
+  "模型选择": "Model choice",
+  "模型列表跟随 Codex 和 Claude 的新版本自动更新，旧版本按系列折叠，可以搜索，也能直接输入模型 ID。对话的模型、思考深度和快速模式都由模型路由决定，输入 /model、/effort 或 /fast 会提示你并打开模型路由。": "Model lists follow new Codex and Claude releases, fold older versions under each family and can be searched, or you can type a model ID. Model routing sets every conversation's model, effort and fast mode; typing /model, /effort or /fast shows a notice and opens model routing.",
+  "运行更稳": "Steadier sessions",
+  "迟到或重复的事件不再让 Claude 终端的状态倒退，排队的消息也不再让「✓ 完成」提前出现。Agentrix 启动的 Claude Code 默认不使用后台任务，需要时可在设置里打开；连接测试和新会话总是用同一种方式和计费启动 Claude。": "Late or repeated events no longer set a Claude terminal's status back, and queued messages no longer bring on ✓ Done early. Claude Code sessions that Agentrix starts run without background tasks by default, and you can turn them on in Settings; the connection test and new sessions always start Claude the same way, with the same billing."
 }

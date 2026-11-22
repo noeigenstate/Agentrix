@@ -277,20 +277,20 @@ curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/
 
 可以在管道后的 `bash` 前设置这些变量；以下指定版本示例需等对应 Release 发布后再使用：
 
-- `AGENTRIX_VERSION=1.4.1`：安装指定版本。
+- `AGENTRIX_VERSION=1.6.0`：安装指定版本。
 - `AGENTRIX_INSTALL_DIR=~/Applications`：指定安装目录。
 - `AGENTRIX_OPEN=0`：安装后不打开应用。
 
-例如，安装 1.4.1：
+例如，安装 1.6.0：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | AGENTRIX_VERSION=1.4.1 bash
+curl -fsSL https://raw.githubusercontent.com/noeigenstate/Agentrix/main/scripts/install-macos.sh | AGENTRIX_VERSION=1.6.0 bash
 ```
 
 如果已经下载了 ZIP，也可以用本地的安装脚本安装：
 
 ```bash
-bash install-macos.sh ~/Downloads/Agentrix-1.4.1-mac-arm64.zip
+bash install-macos.sh ~/Downloads/Agentrix-1.6.0-mac-arm64.zip
 ```
 
 应用使用临时签名（ad-hoc），没有 Apple Developer ID，也未经过 Apple 公证。如果用浏览器下载 DMG，再将应用拖到「应用程序」，首次打开时 macOS 会提示「无法验证开发者」。在「系统设置 › 隐私与安全性」中点一次「仍要打开」，或运行：
@@ -320,7 +320,7 @@ chmod +x Agentrix-*.AppImage
 ./Agentrix-*.AppImage
 ```
 
-也可以用 `tar -xJf` 解压 `.tar.xz`，运行其中的 `./agentrix`。Ubuntu 23.10 及更新版本默认禁止未登记的程序使用 Chromium 沙箱所需的用户命名空间，这时运行压缩包里的程序要加上 `--no-sandbox`；AppImage 会自动检测并处理。**Linux 版不会自动更新**：从 1.4.1 起 AppImage 内嵌了更新信息，可以用 AppImageUpdate 等 AppImage 更新工具更新；压缩包下载新版本替换即可。
+也可以用 `tar -xJf` 解压 `.tar.xz`，运行其中的 `./agentrix`。Ubuntu 23.10 及更新版本默认禁止未登记的程序使用 Chromium 沙箱所需的用户命名空间，这时运行压缩包里的程序要加上 `--no-sandbox`；AppImage 会自动检测并处理。**Linux 版不会自动更新**：从 1.6.0 起 AppImage 内嵌了更新信息，可以用 AppImageUpdate 等 AppImage 更新工具更新；压缩包下载新版本替换即可。
 
 ### Linux 终端与快捷键
 
