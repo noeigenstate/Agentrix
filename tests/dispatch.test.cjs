@@ -1,4 +1,4 @@
-require('./fixtures/team-isolation.cjs');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -170,7 +170,8 @@ const codex = [
 ];
 
 async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0,
-  hold, timeout = 30000, requestTimeout, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread } = {}) {
+  hold, timeout = 30000, requestTimeout, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread,
+  captureWakes = false } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -178,10 +179,12 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
     execFileSync('git', ['worktree', 'add', '-qb', 'worker', directory], { cwd: main, stdio: 'ignore', windowsHide: true });
   } else if (setup) await setup(directory);
   // A Codex worker's account reports have their own tests (dispatch-codex-usage); these follow a call's start, routing and end.
-  const events = [], visibility = [], server = await createEventServer(event => {
-    if (['dispatch-declared', 'dispatch-notice'].includes(event.type)) visibility.push({ ...event, receivedAt: Date.now() });
-    else if (event.type !== 'dispatch-account') events.push({ ...event, receivedAt: Date.now() });
-  });
+  const events = [], visibility = [];
+  const receive = (event, receivedAt = Date.now()) => {
+    if (['dispatch-declared', 'dispatch-notice'].includes(event.type)) visibility.push({ ...event, receivedAt });
+    else if (event.type !== 'dispatch-account') events.push({ ...event, receivedAt });
+  };
+  const server = await createEventServer(receive);
   const brief = path.join(directory, 'brief.md'), out = path.join(directory, 'answer.md'), runner = path.join(directory, 'runner.cjs');
   const input = path.join(directory, 'fixture.json'), capture = path.join(directory, 'capture.json'), config = path.join(directory, 'bootstrap.json');
   await fs.writeFile(brief, '# A worker brief\nKeep Unicode: 执行.\n');
@@ -193,7 +196,10 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
   await fs.mkdir(path.join(directory, 'codex'));
   await fs.writeFile(path.join(directory, 'codex/config.toml'), 'service_tier = "flex"\n');
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
-  await fs.writeFile(runner, `const {run}=require(${JSON.stringify(helper)});
+  const wakeLog = path.join(root, 'wakes.jsonl'), wakeFixture = path.join(__dirname, 'fixtures', 'dispatch-wake.cjs');
+  const captureWakeScript = captureWakes
+    ? `require(${JSON.stringify(wakeFixture)}).captureDispatchWakes(${JSON.stringify(server.address)}, ${JSON.stringify(wakeLog)});\n` : '';
+  await fs.writeFile(runner, `${captureWakeScript}const {run}=require(${JSON.stringify(helper)});
 process.on('message', signal => process.emit(signal));
 run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTimeout},
   ${detached ? 'detached: { id: require("node:crypto").randomUUID(), admitted() {} },' : ''}
@@ -202,9 +208,7 @@ run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTim
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', declaredModel || (agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5'), '--effort', agent === 'codex' ? 'max' : 'high',
     '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan']),
     ...extra];
-  const env = { ...process.env, CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
-  delete env.AGENTRIX_BOOTSTRAP;
-  delete env.AGENTRIX_READING_NOTE_FILE; delete env.AGENTRIX_READING_NOTE;
+  const env = { ...dispatchEnvironment(), CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
   Object.assign(env, await environment(directory));
   if (bootstrap) env.AGENTRIX_BOOTSTRAP = config;
   const child = spawn(process.execPath, [runner, ...args], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
@@ -212,7 +216,11 @@ run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTim
   // A test that runs the helper again on this fixture passes that run's output here too, so its worker waits the same way.
   const releaseOn = text => { if (release && /\[dispatch\] (started|failed to start) /.test(text)) require('node:fs').writeFileSync(release, ''); };
   child.stdout.on('data', chunk => { stdout += chunk.toString(); releaseOn(stdout); }); child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-  const finished = once(child, 'close').then(async ([code]) => { if (release) await fs.rm(release, { force: true }); return { code, stdout, stderr }; });
+  const finished = once(child, 'close').then(async ([code]) => {
+    if (release) await fs.rm(release, { force: true });
+    if (captureWakes) for (const line of (await fs.readFile(wakeLog, 'utf8')).trim().split('\n')) receive(...JSON.parse(line));
+    return { code, stdout, stderr };
+  });
   t.after(async () => {
     if (child.exitCode === null) { child.send('SIGTERM'); await finished; }
     server.close(); await fs.rm(root, { recursive: true, force: true }); if (release) await fs.rm(release, { force: true });
@@ -292,10 +300,10 @@ test('dispatch emits kind and provider token and cost totals for the ledger', as
 });
 
 test('Codex receives stdin/argv/cwd and reads its rollout for routing and final rate', async t => {
-  const f = await fixture(t), result = await f.finished;
+  const f = await fixture(t, codex, { captureWakes: true }), result = await f.finished;
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
   const diagnostics = result.stdout.trim().split('\n');
-  assert.equal(diagnostics.length, 3);
+  assert.equal(diagnostics.length, 3, result.stdout);
   assert.match(diagnostics[0], /app-server: Agentrix control unavailable \(bootstrap\/missing_address\)/);
   const signals = diagnostics.slice(1); assert.equal(signals.length, 2);
   assert.match(signals[0], /\[dispatch\] started [\w-]+ codex model gpt-6\.1-sol effort max fast on · routing ok · pid \d+ session /);
@@ -757,7 +765,7 @@ test('without bootstrap or with a stalled pipe the worker still runs and finishe
   const bootstrap = path.join(f.directory, 'stalled.json');
   await fs.writeFile(bootstrap, JSON.stringify({ pipeName: address, sessionKey: 'test', projectId: 'project' }));
   const began = Date.now();
-  assert.equal(await run(f.args, { env: { ...process.env, CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap, DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture },
+  assert.equal(await run(f.args, { env: { ...dispatchEnvironment(), CODEX_HOME: path.join(f.directory, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap, DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture },
     stdout: { write: f.releaseOn }, resolveExecutable: (_, args) => ({ file: process.execPath, args: [worker, ...args] }) }), 0);
   assert.ok(Date.now() - began < 2000, 'the worker never awaits pipe acknowledgments');
 });
@@ -825,7 +833,7 @@ test('a stand-in Codex answers --version with the version alone: no capture, no 
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
   const capture = path.join(folder, 'capture.json');
   const { stdout } = await require('node:util').promisify(require('node:child_process').execFile)(process.execPath, [worker, '--version'],
-    { cwd: folder, env: { ...process.env, DISPATCH_CAPTURE: capture, DISPATCH_FIXTURE: path.join(folder, 'missing.json') }, windowsHide: true, timeout: 20000 });
+    { cwd: folder, env: { ...dispatchEnvironment(), DISPATCH_CAPTURE: capture, DISPATCH_FIXTURE: path.join(folder, 'missing.json') }, windowsHide: true, timeout: 20000 });
   assert.equal(stdout, 'codex-cli 0.166.0\n');
   assert.deepEqual(await fs.readdir(folder), []);
 });
@@ -846,11 +854,10 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
   }
   // The helper's Codex search reads the profile's install folders too: they are the fixture's, and no terminal told it a Codex.
   const profile = path.join(f.directory, 'profile');
-  const env = { ...process.env, CODEX_HOME: path.join(f.directory, 'codex'), DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture,
+  const env = { ...dispatchEnvironment(), CODEX_HOME: path.join(f.directory, 'codex'), DISPATCH_FIXTURE: path.join(f.directory, 'fixture.json'), DISPATCH_CAPTURE: f.capture,
     AGENTRIX_FAKE_NODE: process.execPath, AGENTRIX_GUI_CODEX_RPC: worker };
   for (const key of Object.keys(env)) if (/^(?:AGENTRIX_CODEX_EXECUTABLE|NPM_CONFIG_PREFIX|NPM_CONFIG_USERCONFIG|USERPROFILE|HOME|APPDATA|LOCALAPPDATA|PROGRAMFILES)$/i.test(key)) delete env[key];
   Object.assign(env, { USERPROFILE: profile, HOME: profile, APPDATA: profile, LOCALAPPDATA: profile });
-  delete env.AGENTRIX_BOOTSTRAP;
   const pathKey = Object.keys(env).find(key => key.toLowerCase() === 'path') || 'PATH'; env[pathKey] = bin;
   const installed = path.join(f.directory, 'installed/integration/dispatch.cjs');
   await fs.mkdir(path.dirname(installed), { recursive: true });

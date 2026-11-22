@@ -1,4 +1,4 @@
-require('./fixtures/team-isolation.cjs');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -76,7 +76,7 @@ async function start(f, { cwd = f.repo, role = 'exec', resume, allow = ['src/a.j
     ...(agent === 'codex' ? ['--fast'] : ['--permission', 'acceptEdits']),
     ...allow.flatMap(glob => ['--allow', glob]), ...(resume ? ['--resume', resume] : []),
     ...(ledger ? ['--ledger', ledger] : []), ...extra];
-  const env = { ...process.env, CODEX_HOME: home, AGENTRIX_BOOTSTRAP: f.bootstrap, DISPATCH_FIXTURE: fixture, DISPATCH_CAPTURE: capture };
+  const env = { ...dispatchEnvironment(), CODEX_HOME: home, AGENTRIX_BOOTSTRAP: f.bootstrap, DISPATCH_FIXTURE: fixture, DISPATCH_CAPTURE: capture };
   if (missing) env.DISPATCH_MISSING = path.join(f.runtime, 'no-such-cli');
   else delete env.DISPATCH_MISSING;
   const child = spawn(process.execPath, [f.runner, ...args], { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });

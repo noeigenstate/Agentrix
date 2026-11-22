@@ -19,6 +19,7 @@ const { queryOptions, inputQueue } = require('../electron/features/claude-sdk/qu
 const { createPolicy } = require('../electron/features/claude-sdk/policy.cjs');
 const { spawn } = require('node:child_process');
 const { harness, opening, textBlock, finish, stream, toolThenDone, thinkingThenText } = require('./fixtures/claude-real.cjs');
+const { observeShellChild, windowsTreeStopError } = require('./fixtures/shell-child.cjs');
 
 test('SDK requests retain the default CLI entrypoint even with an inherited owner marker', { skip, timeout: 60000 }, async t => {
   const requests = [], f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'DEFAULT ENTRYPOINT'), ...finish('end_turn')]; });
@@ -690,38 +691,51 @@ test('B7 project key replacements fail before the real CLI contacts any endpoint
 });
 
 test('B4 B8 real running-turn mode changes ask about background tasks and full retirement stops them', { skip, timeout: 60000 }, async t => {
-  let change;
-  const command = '"' + process.execPath.split(path.sep).join('/') + '" -e "require(\'fs\').writeFileSync(\'bg.pid\',String(process.pid));setTimeout(()=>{},120000)"';
+  let change, writer;
   const f = await harness(t, data => {
     if (JSON.stringify(data.messages).includes('tool_result')) { change(); return [opening(data), ...textBlock(0, 'TURN ENDS'), ...finish('end_turn')]; }
     return [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_bg', name: 'Bash', input: {} } },
-      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ command, description: 'Owned background wait', run_in_background: true }) } }, { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta',
+        partial_json: JSON.stringify({ command: writer.command, description: 'Owned background wait', run_in_background: true }) } },
+      { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
   });
+  const pidFile = path.join(f.cwd, 'bg.pid');
+  writer = await observeShellChild(t, f.cwd, pidFile);
   const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs'), { createNativeSessions } = require('../electron/features/native-session/index.cjs');
-  const directory = path.join(f.cwd, 'state'), events = [], handlers = new Map();
+  const directory = path.join(f.cwd, 'state'), events = [], handlers = new Map(), choice = Promise.withResolvers();
   const claude = createClaudeRuntime({ directory, loadSdk: async () => f.sdk, resolveExecutable: async () => cli,
     safeStorage: { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: value => value.toString() } });
   claude.credentials.save('sk-ant-offline-real-background-key');
   const facade = createNativeSessions({ directory, claude, resolveSpec: id => ({ owner: 'gui', agent: 'claude', projectId: 'p', terminalId: id, cwd: f.cwd, env: f.env }),
-    emit: event => events.push(event), prepareTerminal: () => assert.fail('the coordinator must ask before preparing a target') });
+    emit: event => {
+      events.push(event);
+      if (event.type === 'switch.updated' && event.payload.phase === 'awaiting-choice') choice.resolve();
+    }, prepareTerminal: () => assert.fail('the coordinator must ask before preparing a target') });
   facade.register((name, fn) => handlers.set(name, fn));
   handlers.get('native:settings-set')({ claudePath: 'api-only' });
   change = () => handlers.get('native:settings-set')({ claudePath: 'terminal-only' });
-  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const alive = pid => {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { if (error.code !== 'ESRCH') throw error; return false; }
+  };
   let ownedPid;
   f.cleanup(async () => { await facade.close(); await claude.close(); if (ownedPid && alive(ownedPid)) process.kill(ownedPid); });
   const { runtimeSessionId } = await facade.start('t', { agent: 'claude' });
   await facade.send('t', runtimeSessionId, { clientMessageId: 'first', text: 'go' });
-  const deadline = Date.now() + 30000;
-  while (facade.switchState('t')?.phase !== 'awaiting-choice' && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
+  await choice.promise;
   const state = facade.switchState('t');
-  const pidFile = path.join(f.cwd, 'bg.pid'), startedBy = Date.now() + 5000;
-  while (!fs.existsSync(pidFile) && Date.now() < startedBy) await new Promise(resolve => setTimeout(resolve, 25));
-  if (fs.existsSync(pidFile)) ownedPid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.equal(state.phase, 'awaiting-choice', JSON.stringify({ state, events: events.map(event => [event.type, event.payload.state, event.payload.reason]) }));
+  const child = await writer.ready;
+  ownedPid = Number(fs.readFileSync(pidFile, 'utf8'));
   assert.equal(state.background.count, 1); assert.ok(ownedPid && alive(ownedPid), 'owned background pid was written and remains alive');
   assert.equal(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length, 1);
-  await facade.close(); await new Promise(resolve => setTimeout(resolve, 200)); assert.equal(alive(ownedPid), false);
+  await facade.close();
+  if (alive(ownedPid)) {
+    const stopError = await windowsTreeStopError();
+    if (stopError) assert.equal(alive(ownedPid), false, stopError);
+  }
+  await child.exited;
+  assert.equal(alive(ownedPid), false);
 });
 
 // Lead-run only (spawns the real CLI against the local stub with a fake key and a throwaway profile).

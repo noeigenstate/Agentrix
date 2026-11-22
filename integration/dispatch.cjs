@@ -1411,9 +1411,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       const route = output.routing();
       let reason = 'exit';
       if (unconfirmed) reason = 'unconfirmed';
-      else if (killed) reason = 'killed';
+      else if (killed || segmentStopped || noResume) reason = 'killed';
       else if (spawnError) reason = 'error';
-      else if (segmentStopped || noResume) reason = 'killed';
       else if (output.capacity) reason = 'capacity';
       else if (result.killedBy) reason = 'killed';
       else if (output.failed || result.code !== 0) reason = 'error';

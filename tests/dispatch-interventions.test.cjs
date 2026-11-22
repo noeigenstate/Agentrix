@@ -1,4 +1,4 @@
-require('./fixtures/team-isolation.cjs');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -92,8 +92,7 @@ async function fixture(t, { agent = 'codex', descendant = false, badSession = fa
     rollout: fs.readFileSync(path.join(__dirname, 'fixtures/codex-dispatch-rollout.jsonl'), 'utf8').trim().split('\n').map(JSON.parse) }));
   fs.writeFileSync(bootstrap, JSON.stringify({pipeName:server.address,projectId:'synthetic-terminal',sessionKey:'synthetic-owner-fixture'}));
   const home = path.join(root, 'home'); fs.mkdirSync(home);
-  const env = { ...process.env, HOME: home, USERPROFILE: home, APPDATA: home, CODEX_HOME: path.join(home, 'codex'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTRIX_BOOTSTRAP: bootstrap, OWNER_FIXTURE: config };
-  delete env.AGENTRIX_READING_NOTE; delete env.AGENTRIX_READING_NOTE_FILE;
+  const env = { ...dispatchEnvironment(), HOME: home, USERPROFILE: home, APPDATA: home, CODEX_HOME: path.join(home, 'codex'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTRIX_BOOTSTRAP: bootstrap, OWNER_FIXTURE: config };
   const args = [agent, '--role', 'exec', '--title', 'Synthetic worker', '--model', agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5',
     '--effort', agent === 'codex' ? 'max' : 'high', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**',
     ...(agent === 'codex' ? ['--fast', ...(readOnly ? ['--read-only'] : [])] : ['--permission', 'plan'])];

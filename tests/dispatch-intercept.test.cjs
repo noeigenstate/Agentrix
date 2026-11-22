@@ -1,4 +1,4 @@
-require('./fixtures/team-isolation.cjs');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -117,7 +117,7 @@ test("at depth zero a call that is not a delegation runs the real CLI with this 
   assert.match(missing.text, /claude was not found outside the Agentrix shim folder/);
   // A real child: inherited streams and its own exit status, without the launcher's ELECTRON_RUN_AS_NODE.
   // The stand-in is Node running a script file: a bare first word opens no conversation, so no role tools are added.
-  const env = { ...process.env, ...planner, ELECTRON_RUN_AS_NODE: '1' }, folder = temporary(t);
+  const env = { ...dispatchEnvironment(), ...planner, ELECTRON_RUN_AS_NODE: '1' }, folder = temporary(t);
   fs.writeFileSync(path.join(folder, 'child.js'), 'process.exit(process.env.ELECTRON_RUN_AS_NODE ? 9 : 5)');
   assert.equal(await shim().intercept(['claude', '--', 'child.js'], { env, cwd: folder,
     stdout: output(), stderr: output(), locate: async () => process.execPath }), 5);

@@ -1,4 +1,4 @@
-require('./fixtures/team-isolation.cjs');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -488,8 +488,8 @@ async function fixture(t) {
     (async()=>{for await(const chunk of process.stdin){};
     const watcher=fs.watch(require('node:path').dirname(release),()=>{if(fs.existsSync(release)){watcher.close();process.stdout.write(JSON.stringify({type:'result',subtype:'success',session_id:process.env.SYNTHETIC_SESSION,result:'done'})+'\\n');}});
     process.stdout.write(JSON.stringify({type:'system',subtype:'init',session_id:process.env.SYNTHETIC_SESSION,model:'claude-sonnet-5-5',effort:'high',fast_mode:false})+'\\n');})();`);
-  const env = { ...process.env, HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root, CLAUDE_CONFIG_DIR: path.join(root, 'claude'), CODEX_HOME: path.join(root, 'codex') };
-  for (const key of Object.keys(env)) if (/^AGENTRIX_|^CLAUDECODE$|^ANTHROPIC_/.test(key)) delete env[key];
+  const env = { ...dispatchEnvironment(), HOME: root, USERPROFILE: root, APPDATA: root, LOCALAPPDATA: root, CLAUDE_CONFIG_DIR: path.join(root, 'claude'), CODEX_HOME: path.join(root, 'codex') };
+  for (const key of Object.keys(env)) if (/^CLAUDECODE$|^ANTHROPIC_/.test(key)) delete env[key];
   const store = new DetachedRuns(path.join(repo, '.git/agentrix/detached')), ids = [], releases = new Map();
   t.after(async () => {
     for (const id of ids) if (!store.read(id).settled) {
@@ -526,7 +526,7 @@ test('detached stand-ins survive launcher exit; wait handles timeout, parallel c
   const third = await f.start('a.txt'); assert.equal(third.code, 0, third.text + third.errors);
   assert.equal(await run(['stop', third.id, '--no-resume', '--cwd', f.repo], { env: f.env, launch: () => assert.fail('stop launches no CLI') }), 0);
   assert.equal(await waitDetached({ ids: [third.id], timeout: 15 }, { store: f.store, stdout: { write: value => { text += value; } } }), 0);
-  assert.match(text, /reason killed/);
+  assert.match(text.split('\n').find(line => line.startsWith(`[dispatch] ended ${third.id} `)) || '', /reason killed/, text);
 });
 
 test('detached workers with overlapping scopes both start and settle', async t => {

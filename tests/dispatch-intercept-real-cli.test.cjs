@@ -1,4 +1,4 @@
-require('./fixtures/team-isolation.cjs');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -18,8 +18,7 @@ const chunks=[];process.stdin.on('data',part=>chunks.push(part));process.stdin.o
   for (const agent of ['codex', 'claude']) for (const suffix of suffixes) for (const input of inputs) {
     const file = path.join(folder, agent + suffix);
     fs.copyFileSync(path.join(path.dirname(entry), agent + suffix), file);
-    const env = { ...process.env, AGENTRIX_SHIM_NODE: process.execPath, AGENTRIX_TEST_LAUNCHER_WORDS: JSON.stringify(words) };
-    delete env.AGENTRIX_INTERCEPT_ARGV;
+    const env = { ...dispatchEnvironment(), AGENTRIX_SHIM_NODE: process.execPath, AGENTRIX_TEST_LAUNCHER_WORDS: JSON.stringify(words) };
     let command, args, windowsVerbatimArguments = false;
     if (suffix === '.ps1') {
       command = path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
@@ -44,7 +43,7 @@ const chunks=[];process.stdin.on('data',part=>chunks.push(part));process.stdin.o
   for (const agent of ['codex', 'claude']) {
     const child = scope.spawn(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(folder, 'pipe.ps1'), path.join(folder, `${agent}.ps1`)],
-      { cwd: folder, env: { ...process.env, AGENTRIX_SHIM_NODE: process.execPath }, stdio: ['ignore', 'pipe', 'pipe'] });
+      { cwd: folder, env: { ...dispatchEnvironment(), AGENTRIX_SHIM_NODE: process.execPath }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     assert.equal(await scope.wait(new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }), `${agent}.ps1 pipeline`), 0, stderr);
@@ -60,8 +59,7 @@ for (const agent of ['codex', 'claude']) test(`real ${agent} interception preser
 }, async t => {
   assert.ok(process.env[agent === 'codex' ? 'CODEX_HOME' : 'CLAUDE_CONFIG_DIR'], 'CI must supply its isolated authenticated profile');
   const scope = fixtureProcesses(t, 'agx-intercept-real-'), cwd = scope.directory;
-  const env = { ...process.env, AGENTRIX_DISPATCH_DEPTH: '0', ELECTRON_RUN_AS_NODE: '1' };
-  for (const name of ['AGENTRIX_BOOTSTRAP', 'AGENTRIX_RUN_ID', 'AGENTRIX_RUN_PROOF', 'AGENTRIX_INTERCEPT_ARGV']) delete env[name];
+  const env = { ...dispatchEnvironment(), AGENTRIX_DISPATCH_DEPTH: '0', ELECTRON_RUN_AS_NODE: '1' };
   const args = agent === 'codex' ? ['exec', '-m', process.env.AGENTRIX_INTERCEPT_MODEL || 'gpt-6.1-sol', '--sandbox', 'read-only', '-o', 'answer.txt', '-']
     : ['-p', '--model', process.env.AGENTRIX_INTERCEPT_MODEL || 'sonnet', '--output-format', 'text', '-'];
   const child = scope.spawn(process.execPath, [entry, agent, '--', ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'] });

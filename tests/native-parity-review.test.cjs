@@ -10,6 +10,7 @@ const { createNativeSessions } = require('../electron/features/native-session/in
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const { createClaudeRuntime } = require('../electron/features/claude-sdk/index.cjs');
 const { bashEnvironment, missingTmpWarning } = require('./fixtures/bash-environment.cjs');
+const { observeShellChild, windowsTreeStopError } = require('./fixtures/shell-child.cjs');
 const disposers = new Map();
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function directory(t) {
@@ -187,15 +188,27 @@ test('S8 escaped image property names cannot retain pixels', () => {
   assert.deepEqual(messages.map(value => Object.hasOwn(value, 'result')), [false, false]);
 });
 test('S3 cancellation stops background writes and timeout stops foreground writes before closing', { timeout: 10000 }, async t => {
-  for (const mode of ['abort', 'timeout']) {
-    const root = directory(t), abort = new AbortController();
-    const result = await require('../electron/features/claude-sdk/shell.cjs').runShell({ cwd: root, env: bashEnvironment(root),
-      command: 'while true; do printf x >> heartbeat; sleep 0.05; done' + (mode === 'abort' ? ' & echo started' : ''), signal: abort.signal, timeout: mode === 'timeout' ? 1500 : 5000, output() {} });
-    if (mode === 'abort') abort.abort();
-    await result.closed;
-    const heartbeat = path.join(root, 'heartbeat'), before = fs.readFileSync(heartbeat, 'utf8');
-    await pause(200); assert.equal(fs.readFileSync(heartbeat, 'utf8'), before, mode + ' must stop the descendant writer');
-  }
+  const stopError = await windowsTreeStopError();
+  if (stopError) assert.fail(stopError);
+  const { runShell } = require('../electron/features/claude-sdk/shell.cjs');
+  for (const mode of ['abort', 'timeout']) await t.test(mode, async check => {
+    const root = directory(check), abort = new AbortController(), heartbeat = path.join(root, 'heartbeat');
+    const writer = await observeShellChild(check, root, heartbeat), env = bashEnvironment(root);
+    disposers.get(root).push(writer.close);
+    if (mode === 'timeout') check.mock.timers.enable({ apis: ['setTimeout'] });
+    const running = runShell({ cwd: root, env, command: writer.command + (mode === 'abort' ? ' & echo started' : ''),
+      signal: abort.signal, timeout: mode === 'timeout' ? 1500 : 5000, output() {} });
+    void running.catch(() => {});
+    disposers.get(root).push(async () => { abort.abort(); await (await running).closed; });
+    const child = await writer.ready;
+    await child.write();
+    const before = fs.readFileSync(heartbeat, 'utf8');
+    if (mode === 'abort') { await running; abort.abort(); }
+    else check.mock.timers.tick(1500);
+    await (await running).closed;
+    await child.exited;
+    assert.equal(fs.readFileSync(heartbeat, 'utf8'), before, mode + ' must stop the descendant writer');
+  });
 });
 
 
