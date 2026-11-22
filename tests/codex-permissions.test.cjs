@@ -40,6 +40,7 @@ function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.s
         let result = {};
         if (request.method === 'initialize') result = { userAgent: 'codex/' + version };
         else if (request.method === 'windowsSandbox/readiness') result = { status: readiness };
+        else if (request.method === 'command/exec') result = { exitCode: 0, stdout: p.cwd };
         else if (['thread/start', 'thread/resume'].includes(request.method)) {
           const id = p.threadId || (p.ephemeral ? `probe-${++probes}` : ++starts === 1 ? threadId : `${threadId}-${starts}`), configured = !p.sandbox && !p.approvalPolicy;
           const thread = { id, turns: [], status: { type: 'idle' }, ephemeral: p.ephemeral === true };
@@ -196,6 +197,23 @@ test('local Windows dispatch asks the user to update Codex when the readiness me
   const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch' } });
   await assert.rejects(session.start(), { code: 'unsupported_codex_version', stage: 'sandbox_readiness', message: /Codex 版本过旧.*请更新 Codex/ });
   assert.equal(server.threadRequests('thread/start').length, 0);
+});
+
+test('a freshly provisioned Windows role verifies the sandbox cwd before sending its brief', async t => {
+  for (const readOnly of [true, false]) {
+    const stages = [];
+    const { session, server, root } = runtime(t, { platform: 'win32', spec: { owner: 'dispatch', readOnly, onSandboxWait: line => stages.push(line) } });
+    fs.mkdirSync(path.join(root, '.sandbox'));
+    fs.writeFileSync(path.join(root, '.sandbox', 'setup_marker.json'), '{}');
+    await session.start();
+    assert.equal(stages.length, 1);
+    assert.equal((await session.send({ clientMessageId: 'brief', text: 'Role brief' })).status, 'delivered');
+    const probe = server.wire.findIndex(row => row.method === 'command/exec');
+    assert.ok(probe > server.wire.findIndex(row => row.method === 'thread/start'));
+    assert.ok(probe < server.wire.findIndex(row => row.method === 'turn/start' && row.params.threadId));
+    assert.equal(server.wire[probe].params.cwd, root);
+    assert.deepEqual(server.wire[probe].params.sandboxPolicy, { type: readOnly ? 'readOnly' : 'workspaceWrite', networkAccess: false });
+  }
 });
 
 test('dispatch launched inside SSH on Windows does not probe elevated readiness', async t => {

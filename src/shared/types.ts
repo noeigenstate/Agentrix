@@ -543,6 +543,7 @@ type Bridge = {
   notifyDecision(projectId: string, title: string, kind: string): Promise<Result<boolean>>;
   onDecisionShow(callback: () => void): () => void;
   onError(callback: (message: string) => void): () => void;
+  onSandboxProgress(callback: (message: string | null) => void): () => void;
   minimize(): void; maximize(): void; toggleFullScreen(): void; isFullScreen(): Promise<Result<boolean>>; onFullScreen(callback: (fullScreen: boolean) => void): () => void; terminalActions(id: string): Promise<Result<AgentAction[]>>; terminalConversation(id: string): Promise<Result<ConversationEntry[]>>; onTerminalConversation(callback: (packet: ConversationPacket) => void): () => void; close(): void;
   quit(): Promise<Result<boolean>>;
   onMenuCommand(callback: (command: MenuCommand) => void): () => void;

@@ -3719,7 +3719,10 @@
   "设置（Codex 沙箱）": "Set up",
   "以后再说": "Later",
   "Codex 主目录必须是本机的绝对路径，沙箱设置已跳过。": "The Codex home must be an absolute local path. Sandbox setup was skipped.",
-  "Codex 沙箱已设置完成。": "Codex sandbox setup is complete.",
+  "正在完成 Codex 沙箱授权，约需几分钟。": "Codex is finishing sandbox permissions. This may take a few minutes.",
+  "Codex 沙箱授权已完成，可以启动角色了。": "Codex sandbox permissions are ready. You can start roles now.",
+  "Codex 沙箱授权仍在完成中，请稍后再试。": "Codex is still finishing sandbox permissions. Try again shortly.",
+  "Codex 沙箱尚未确认角色的工作目录。预期：{expected}。实际：{actual}。请稍后重试。": "Codex could not confirm the role’s working folder. Expected {expected}. Actual {actual}. Try again shortly.",
   "管理员批准已取消，Agentrix 下次启动时会再次询问。": "Administrator approval was canceled. Agentrix will ask again the next time it starts.",
   "未能完成 Codex 沙箱设置，Agentrix 下次启动时会再次询问。": "Codex sandbox setup could not be completed. Agentrix will ask again the next time it starts."
 }

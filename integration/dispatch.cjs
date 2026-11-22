@@ -37,6 +37,7 @@ const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-
   'features/skills/agent-seat.cjs', 'features/agents/call-seat.cjs',
   'features/agents/codex-account-usage.cjs', 'features/agents/usage-observation.cjs', 'features/codex-app-server/index.cjs', 'features/codex-app-server/rpc.cjs',
   'features/codex-app-server/events.cjs', 'features/codex-app-server/requests.cjs', 'features/codex-app-server/account.cjs', 'features/codex-app-server/compatibility.cjs', 'features/codex-app-server/environment.cjs', 'features/codex-app-server/status.cjs',
+  'features/codex-app-server/sandbox-refresh.cjs',
   'features/agents/start-failure.cjs', 'features/agents/skill-privacy.cjs', 'features/codex-runtime/locator.cjs', 'features/claude-runtime/locator.cjs', 'features/claude-runtime/path-env.cjs', 'features/claude-runtime/decide.cjs',
   'shared/reason.cjs', 'shared/reasons/claude.cjs', 'shared/reasons/dispatch.cjs', 'shared/reasons/term.cjs', 'shared/reasons/codex.cjs', 'shared/agentrix-shims.cjs'];
 const runtimeFiles = () => {
@@ -1387,15 +1388,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
               if (!started) workerStartedAt = Date.now();
               return launch(command.file, command.args, spawnOptions);
             },
-          }).create(spec, acceptNative);
+          }).create({ ...spec, onSandboxWait: message => { signal(`waiting ${id}: ${message}`); log.write(message + '\n'); } }, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient?.close(); controlClient = null;
             const localWindows = process.platform === 'win32' && !workerEnv.SSH_CONNECTION;
-            if (localWindows && (error.code === 'sandbox_mismatch' || error.code === 'elevated_sandbox_not_ready'
+            if (localWindows && (['sandbox_mismatch', 'elevated_sandbox_not_ready', 'sandbox_cwd_unverified'].includes(error.code)
               || error.stage === 'sandbox_readiness' && error.code === 'unsupported_codex_version')) throw new Error(error.message);
-            const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'sandbox_readiness', 'thread_start', 'thread_resume']
+            const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'sandbox_readiness', 'sandbox_cwd', 'thread_start', 'thread_resume']
               .includes(error.stage) ? error.stage : 'startup';
             const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
               : Number.isInteger(error.code) ? `rpc_${error.code}`
