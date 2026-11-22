@@ -27,6 +27,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   let result = {};
   if (request.method === 'initialize') result = { userAgent: mode === 'unknown-version' ? 'codex/9.99.0' : 'codex/0.166.0' };
   else if (request.method === 'windowsSandbox/readiness') result = { status: 'ready' };
+  else if (request.method === 'command/exec') result = { exitCode: 0, stdout: params.cwd };
   else if (request.method === 'thread/start' || request.method === 'thread/resume') {
     if (mode === 'empty-thread' && request.method === 'thread/resume') return send({ id: request.id,
       error: { code: -32600, message: 'no rollout found for thread id ' + params.threadId } });

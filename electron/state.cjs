@@ -114,6 +114,7 @@ function cleanSettings(input = {}) {
     shell: ['cmd', 'bash', 'zsh'].includes(input.shell) ? input.shell : 'powershell',
     // The app version whose usage guide was last shown; a newer version shows it again.
     guideVersion: typeof input.guideVersion === 'string' && /^\d+\.\d+\.\d+(-[\w.-]+)?$/.test(input.guideVersion) ? input.guideVersion : '',
+    codexSandboxPromptDismissed: input.codexSandboxPromptDismissed === true,
     // Spoken completion phrase; empty uses the built-in phrases. {项目} or {project} is the project name.
     ...Object.fromEntries(['notifications', 'sound', 'closeToTray', 'explorerCollapsed', 'hideTreeNoise', 'restoreSessions', 'autoSave', 'activityPane'].map(key => [key, typeof input[key] === 'boolean' ? input[key] : defaults[key]])),
   };
@@ -126,7 +127,7 @@ class WorkspaceStore {
     this.projects = [];
     this.history = [];
     this.sshHistory = [];
-    this.settings = { ...defaults };
+    this.settings = { ...defaults, codexSandboxPromptDismissed: false };
     this.warning = null;
     // Only a profile with no workspace file follows the system; an existing file keeps its saved theme, or the first.
     if (!fs.existsSync(filename)) {

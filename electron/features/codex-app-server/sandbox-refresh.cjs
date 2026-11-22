@@ -5,7 +5,8 @@ const { setTimeout: sleep } = require('node:timers/promises');
 const { sameDirectory } = require('../../session-files.cjs');
 
 const REFRESH_LIMIT = 15 * 60_000;
-const ROLE_LIMIT = 20_000;
+const ROLE_LIMIT = 8 * 60_000;
+const PROBE_LIMIT = 5000;
 const LOG_TAIL = 256 * 1024;
 const ELEVATED_SANDBOX_CONFIG = { 'windows.sandbox': 'elevated', 'features.prefer_mxc': false };
 const ELEVATED_SANDBOX_ARGS = Object.entries(ELEVATED_SANDBOX_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${value}`]);
@@ -36,7 +37,8 @@ async function readRefresh(home, since, now = Date.now()) {
   for (const log of logs) for (const [, time, message] of log.matchAll(READ_ACL)) {
     const at = Date.parse(time);
     if (!Number.isFinite(at) || at < since || at > now || at < (latest?.at ?? 0)) continue;
-    latest = { at, status: message.endsWith('applying read ACLs') ? 'running' : message.endsWith('errors') ? 'failed' : 'complete' };
+    if (message.endsWith('applying read ACLs')) latest = { at, status: 'running' };
+    else if (latest?.status === 'running') latest = { at, status: message.endsWith('errors') ? 'failed' : 'complete' };
   }
   return latest;
 }
@@ -47,42 +49,59 @@ async function roleRefreshPending(home, now = Date.now()) {
     readRefresh(home, now - 24 * 60 * 60_000, now), fs.stat(path.join(home, '.sandbox', 'setup_marker.json')).catch(() => null),
   ]);
   // A new marker covers the gap before the first command starts the background worker.
-  return latest?.status === 'running' || latest?.status === 'failed'
-    || !!(marker?.mtimeMs >= since && (latest?.status !== 'complete' || latest.at < Math.floor(marker.mtimeMs)));
+  const running = latest?.status === 'running' && latest.at >= since;
+  const hint = marker?.mtimeMs >= since && (latest?.status !== 'complete' || latest.at < Math.floor(marker.mtimeMs));
+  return { running, pending: running || hint };
 }
 
-function sandboxCwd(rpc, cwd, env, sandbox = { type: 'readOnly', networkAccess: false }, deadline = 5000) {
+function sandboxCwd(rpc, cwd, env, sandbox = { type: 'readOnly', networkAccess: false }, deadline = PROBE_LIMIT, requestOptions) {
   const powershell = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   return rpc.request('command/exec', { cwd, sandboxPolicy: sandbox, timeoutMs: deadline,
     command: [powershell, '-NoProfile', '-NonInteractive', '-Command',
       '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::Write([Environment]::CurrentDirectory)'],
-  }, deadline);
+  }, deadline, requestOptions);
 }
 
 async function verifyRoleCwd({ rpc, cwd, env, home, sandbox, onWait, assertOpen, translate }, {
-  now = Date.now, pause = sleep, pending = roleRefreshPending, matches = sameDirectory, limit = ROLE_LIMIT,
+  now = Date.now, pause = sleep, refresh = roleRefreshPending, matches = sameDirectory, limit = ROLE_LIMIT,
 } = {}) {
-  if (!await pending(home, now())) return;
-  assertOpen();
-  onWait?.(translate(WAIT_MESSAGE));
-  const until = now() + limit;
-  let actual;
+  const started = now(), until = started + limit;
+  let actual, evidence, announced = false, probed = false, sawGrant = false;
   while (now() < until) {
+    evidence = await refresh(home, now());
     assertOpen();
-    const result = await sandboxCwd(rpc, cwd, env, sandbox, Math.max(1, Math.min(5000, until - now()))).catch(error => ({ error }));
-    assertOpen();
-    // A timed-out request may still be running in Codex. Avoid starting a second copy.
-    if (result?.error?.uncertain || [-32601, -32602].includes(result?.error?.code)) break;
-    const reported = result?.exitCode === 0 && typeof result.stdout === 'string' ? result.stdout.trim() : '';
-    if (path.win32.isAbsolute(reported) && !/[\r\n]/.test(reported)) {
-      actual = reported;
-      if (matches(actual, cwd)) return;
+    if (evidence.pending && !announced) {
+      announced = true;
+      onWait?.(translate(WAIT_MESSAGE));
     }
-    if (now() < until) await pause(Math.min(2000, until - now()));
+    sawGrant ||= evidence.running;
+    const deadline = sawGrant ? until : Math.min(until, started + 20_000);
+    if (probed && now() >= deadline) break;
+    if (!probed || !evidence.running) {
+      const result = await sandboxCwd(rpc, cwd, env, sandbox, Math.max(1, Math.min(PROBE_LIMIT, deadline - now()))).catch(error => ({ error }));
+      assertOpen();
+      const code = result?.error?.code;
+      if ([-32601, -32602, 'closed', 'disconnected', 'process_exited'].includes(code)) break;
+      probed = true;
+      const reported = result?.exitCode === 0 && typeof result.stdout === 'string' ? result.stdout.trim() : '';
+      if (path.win32.isAbsolute(reported) && !/[\r\n]/.test(reported)) {
+        actual = reported;
+        if (!evidence.running && matches(actual, cwd)) {
+          evidence = await refresh(home, now());
+          assertOpen();
+          if (!evidence.running) return;
+          sawGrant = true;
+        }
+      }
+    }
+    const remaining = (sawGrant ? until : deadline) - now();
+    if (remaining <= 0) break;
+    await pause(Math.min(2000, remaining));
   }
+  if (evidence?.running) throw Object.assign(new Error(translate('Codex 沙箱授权仍在进行，通常需要几分钟。请稍后重试。')), { code: 'sandbox_refresh_pending' });
   const message = translate('Codex 沙箱尚未确认角色的工作目录。预期：{expected}。实际：{actual}。请稍后重试。')
     .replace(/\{(expected|actual)\}/g, (_, key) => key === 'expected' ? cwd : actual || translate('未知'));
   throw Object.assign(new Error(message), { code: 'sandbox_cwd_unverified' });
 }
 
-module.exports = { ELEVATED_SANDBOX_CONFIG, ELEVATED_SANDBOX_ARGS, REFRESH_LIMIT, WAIT_MESSAGE, readRefresh, sandboxHome, sandboxCwd, verifyRoleCwd };
+module.exports = { ELEVATED_SANDBOX_CONFIG, ELEVATED_SANDBOX_ARGS, REFRESH_LIMIT, ROLE_LIMIT, WAIT_MESSAGE, readRefresh, sandboxHome, sandboxCwd, verifyRoleCwd };

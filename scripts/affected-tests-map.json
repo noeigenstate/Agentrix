@@ -378,7 +378,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "dfa73aab18925f9489544ee0438c0b4e82d4dbcd359367a8d136287b7c538be8",
+      "digest": "330e5a5d07814a51b8ca163ac1e44a9694a223b9b6371783d635eb2b01143383",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -393,6 +393,7 @@
         "electron/features/skills/agent-seat.cjs",
         "electron/features/agents/call-seat.cjs",
         "electron/features/codex-app-server/index.cjs",
+        "electron/features/codex-app-server/sandbox-refresh.cjs",
         "electron/features/agents/dispatch-control.cjs",
         "electron/features/codex-runtime/locator.cjs",
         "electron/features/claude-runtime/locator.cjs",
@@ -445,7 +446,7 @@
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "bc80f84740514fa9545a5b89b58dbdbca4fa34bf339b459541352c855eb9ea8f",
+      "digest": "b3d3c7f0b2424718e02ba5a501901e13e806058e7dbe9140c1eb7e4d00dc38ce",
       "targets": [
         "electron/features/agents/call-seat.cjs"
       ],

@@ -1,27 +1,43 @@
 const { execFile } = require('node:child_process');
 const { win32: path } = require('node:path');
 
-const absoluteDrivePath = value => typeof value === 'string' && /^[a-z]:[\\/]/i.test(value) && !/["\x00-\x1f]/.test(value);
+const absoluteDrivePath = value => typeof value === 'string' && /^[a-z]:[\\/]/i.test(value) && !/[:"\x00-\x1f]/.test(value.slice(2));
 const encode = value => Buffer.from(value, 'utf16le').toString('base64');
 
 function localHome(value) {
   if (!absoluteDrivePath(value)) return null;
   const home = path.normalize(value).replace(/\\+$/, '');
-  // The backslash before a closing quote would escape that quote for a native CLI.
-  return home.length === 2 ? home + '\\.' : home;
+  return home.length > 2 && !/[. ](?:\\|$)/.test(home) ? home : null;
 }
 
 const setupCommand = String.raw`
 $ErrorActionPreference = 'Stop'
+function Test-SafeHome($homePath) {
+    try {
+        if ($homePath -eq [IO.Path]::GetPathRoot($homePath)) { return $false }
+        if ([IO.DriveInfo]::new($homePath.Substring(0, 3)).DriveType -eq [IO.DriveType]::Network) { return $false }
+        $paths = @()
+        for ($folder = [IO.DirectoryInfo]::new($homePath); $folder; $folder = $folder.Parent) {
+            $paths = @($folder.FullName) + $paths
+        }
+        $paths += [IO.Path]::Combine($homePath, '.sandbox')
+        foreach ($candidate in $paths) {
+            try { $attributes = [IO.File]::GetAttributes($candidate) }
+            catch [IO.FileNotFoundException], [IO.DirectoryNotFoundException] { continue }
+            if (!($attributes -band [IO.FileAttributes]::Directory) -or ($attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
 try {
     $cli = $env:AGENTRIX_SETUP_CLI
     $arguments = 'sandbox setup --elevated --user "{0}" --codex-home "{1}"' -f $env:AGENTRIX_SETUP_USER, $env:CODEX_HOME
-    if ($cli.EndsWith('.cmd', [StringComparison]::OrdinalIgnoreCase)) {
-        # Quoted variables expand once. Disable AutoRun and delayed expansion.
-        $cli = "$env:SystemRoot\System32\cmd.exe"
-        $arguments = '/d /v:off /s /c ""%AGENTRIX_SETUP_CLI%" sandbox setup --elevated --user "%AGENTRIX_SETUP_USER%" --codex-home "%CODEX_HOME%""'
-    }
+    try { $signature = Get-AuthenticodeSignature -LiteralPath $cli }
+    catch { exit 4 }
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*OpenAI OpCo, LLC*') { exit 4 }
+    if (!(Test-SafeHome $env:CODEX_HOME)) { exit 2 }
     $process = Start-Process -FilePath $cli -ArgumentList $arguments -WorkingDirectory $PSHOME -WindowStyle Hidden -PassThru
+    $null = $process.Handle
     if (!$process.WaitForExit(300000)) {
         # Stop the tree from the same elevation that started it.
         & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Null
@@ -35,7 +51,7 @@ try {
 `;
 
 function setupArgs(file, home) {
-  if (!absoluteDrivePath(file) || !/\.(exe|cmd)$/i.test(file)) throw new Error('invalid_codex_executable');
+  if (!absoluteDrivePath(file) || !/\.(exe|com)$/i.test(file)) throw new Error('invalid_codex_executable');
   const command = String.raw`
 $ErrorActionPreference = 'Stop'
 try {
@@ -56,6 +72,7 @@ try {
     $process = Start-Process -FilePath "$PSHOME\powershell.exe" -Verb RunAs -WorkingDirectory $PSHOME -WindowStyle Hidden -PassThru -ArgumentList (
         "-NoProfile -NonInteractive -EncodedCommand $encoded"
     )
+    $null = $process.Handle
     $process.WaitForExit()
     exit $process.ExitCode
 } catch {
@@ -74,8 +91,9 @@ function runSetup(file, value, env, launch = execFile) {
   const system = path.join(env.SystemRoot || 'C:\\Windows', 'System32');
   const powershell = path.join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   const args = setupArgs(file, home);
-  return new Promise(resolve => launch(powershell, args, { cwd: system, env, windowsHide: true }, error => {
-    resolve(!error ? 'succeeded' : ({ 2: 'invalidHome', 3: 'declined' })[error.code] || 'failed');
+  const options = { cwd: system, env, windowsHide: true, timeout: 360_000 };
+  return new Promise(resolve => launch(powershell, args, options, error => {
+    resolve(!error ? 'succeeded' : ({ 2: 'invalidHome', 3: 'declined', 4: 'unverified' })[error.code] || 'failed');
   }));
 }
 

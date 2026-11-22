@@ -1967,6 +1967,8 @@ if (!app.requestSingleInstanceLock()) {
         const { createSandboxSetup } = require('./features/codex-sandbox-setup/index.cjs');
         offerCodexSandboxSetup = createSandboxSetup({ find: async () => { await codexFirst; return codexExecutable(); },
           cwd: probeDirectory, show: options => dialog.showMessageBox(mainWindow, options), t,
+          dismissed: () => store.settings.codexSandboxPromptDismissed,
+          dismiss: () => store.updateSettings({ codexSandboxPromptDismissed: true }),
           progress: message => {
             mainWindow.setProgressBar(message ? 2 : -1, { mode: message ? 'indeterminate' : 'none' });
             mainWindow.webContents.send('app:sandbox-progress', message);

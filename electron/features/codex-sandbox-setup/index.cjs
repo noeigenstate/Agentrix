@@ -11,7 +11,7 @@ async function withServer(file, { cwd, env }, { launch = spawn, rpcFactory = cre
   let child, rpc;
   try {
     if (/\.cmd$/i.test(file)) {
-      // Use argv data through a single quoted variable expansion, as in the setup command.
+      // Pass the shim path through a single quoted variable expansion.
       const cmd = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
       options.env.AGENTRIX_SETUP_CLI = file;
       options.windowsVerbatimArguments = true;
@@ -36,19 +36,21 @@ async function readiness(file, context, deps) {
   return result?.status ?? null;
 }
 
-async function finishRefresh(file, { cwd, env, home, since, active }, { now = Date.now, pause = sleep, read = readRefresh, ...server } = {}) {
+async function finishRefresh(file, { cwd, env, home, active }, { now = Date.now, pause = sleep, read = readRefresh, ...server } = {}) {
   const until = now() + REFRESH_LIMIT;
   const timer = new AbortController();
   const timeout = sleep(REFRESH_LIMIT, false, { signal: timer.signal }).catch(() => false);
   const working = withServer(file, { cwd, env }, server, async rpc => {
-    let commandEnded = false;
+    let commandEnded = false, since;
     const remaining = until - now();
     const waiting = () => active() && !timer.signal.aborted && now() < until;
     if (remaining <= 0 || !waiting()) return false;
     // This fixed, offline command requests a refresh without creating a thread or model turn.
-    void sandboxCwd(rpc, cwd, env, undefined, remaining).catch(() => {}).finally(() => { commandEnded = true; });
+    void sandboxCwd(rpc, cwd, env, undefined, remaining, { onWritten: () => { since = now(); } })
+      .catch(() => {}).finally(() => { commandEnded = true; });
     while (waiting()) {
-      const latest = await read(home, since, now());
+      if (commandEnded && since === undefined) return false;
+      const latest = since === undefined ? null : await read(home, since, now());
       if (!waiting()) return false;
       if (commandEnded && latest?.status === 'complete') return true;
       await pause(Math.max(0, Math.min(1000, until - now())));
@@ -60,38 +62,46 @@ async function finishRefresh(file, { cwd, env, home, since, active }, { now = Da
 }
 
 function createSandboxSetup({ platform = process.platform, find, cwd, env = process.env, show, t, active,
-  progress = () => {}, check = readiness, setup = runSetup, finish = finishRefresh, now = Date.now }) {
+  dismissed = () => false, dismiss = () => {}, progress = () => {}, check = readiness, setup = runSetup, finish = finishRefresh }) {
   let checked = false;
   const title = () => t('Codex 角色沙箱');
   const tell = (type, message) => active() && show({ type, title: title(), message: t(message), buttons: [t('关闭')] });
   return async function offer() {
-    if (platform !== 'win32' || checked || !active()) return;
+    if (platform !== 'win32' || checked || dismissed() || !active()) return;
     try {
       const file = await find();
       if (!file || checked || !active()) return;
       checked = true;
       const status = await check(file, { cwd, env });
       if ((status !== 'notConfigured' && status !== 'updateRequired') || !active()) return;
-      // Settings uses the same Chinese label as a noun.
-      const setupLabel = t('设置（Codex 沙箱）').replace('（Codex 沙箱）', '');
+      const home = sandboxHome(env);
+      const locations = [t('Codex 程序：{file}', { file }), t('Codex 主目录：{home}', { home })].join('\n');
+      const detail = [
+        locations,
+        t('设置会修改你自己的 Codex 配置，让所有 Codex 会话默认使用 Windows 提权沙箱，并创建两个本地沙箱账户。'),
+        t('Windows 会请求批准运行「Windows PowerShell」。如果你没有管理员权限，需要请管理员批准。'),
+        t('完成设置前，这台电脑无法启动 Codex 角色。Claude 角色仍可启动。'),
+      ].join('\n\n');
       const { response } = await show({ type: 'question', title: title(),
         message: t('Agentrix 的 Codex 角色需要管理员批准，才能完成一次性的 Windows 沙箱设置。'),
-        buttons: [setupLabel, t('以后再说')], defaultId: 0, cancelId: 1 });
+        detail, buttons: [t('设置（Codex 沙箱）').replace('（Codex 沙箱）', ''), t('以后再说'), t('不再提示')], defaultId: 1, cancelId: 1 });
+      if (response === 2) { dismiss(); return; }
       if (response !== 0 || !active()) return;
-      const home = sandboxHome(env);
-      const since = now();
       const result = await Promise.resolve().then(() => setup(file, home, env)).catch(() => 'failed');
       if (result === 'invalidHome') {
-        await tell('info', 'Codex 主目录必须是本机的绝对路径，沙箱设置已跳过。');
+        await tell('info', 'Codex 主目录必须是本机的绝对路径，且不能是驱动器根目录或经过重解析点。沙箱设置已跳过。');
+        return;
+      }
+      if (result === 'unverified') {
+        await tell('warning', '无法验证 Codex 程序。请在管理员终端中运行 codex sandbox setup --elevated --current-user。');
         return;
       }
       if (!active()) return;
-      const ready = await Promise.resolve().then(() => check(file, { cwd, env })).catch(() => null) === 'ready';
-      if (result === 'succeeded' && ready) {
+      if (result === 'succeeded' && await Promise.resolve().then(() => check(file, { cwd, env })).catch(() => null) === 'ready') {
         if (!active()) return;
         progress(t(WAIT_MESSAGE));
         let finished;
-        try { finished = await finish(file, { cwd, env, home, since, active }); }
+        try { finished = await finish(file, { cwd, env, home, active }); }
         catch { finished = false; }
         finally { if (active()) progress(null); }
         await tell('info', finished ? 'Codex 沙箱授权已完成，可以启动角色了。' : 'Codex 沙箱授权仍在完成中，请稍后再试。');

@@ -120,6 +120,7 @@ export type Settings = {
     string
   >>;
   guideVersion: string;
+  codexSandboxPromptDismissed: boolean;
   shell: 'powershell' | 'cmd' | 'bash' | 'zsh';
   voiceModel: string;
   updateChannel: 'stable' | 'beta';

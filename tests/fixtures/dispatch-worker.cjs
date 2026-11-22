@@ -48,6 +48,7 @@ function appServer(fixture) {
     let result = {};
     if (request.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
     if (request.method === 'windowsSandbox/readiness') result = { status: 'ready' };
+    if (request.method === 'command/exec') result = { exitCode: 0, stdout: process.cwd() };
     // fixture.thread: what the response adds, such as the model the thread runs as.
     if (['thread/start', 'thread/resume'].includes(request.method)) result = { thread: { id: threadId, turns: [] }, cwd: process.cwd(),
       sandbox: { type: { 'read-only': 'readOnly', 'danger-full-access': 'dangerFullAccess' }[params.sandbox] || 'workspaceWrite' }, approvalPolicy: params.approvalPolicy || 'on-request', ...fixture.thread };

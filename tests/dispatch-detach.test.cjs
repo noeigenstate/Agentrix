@@ -73,6 +73,36 @@ test('wait for any returns on a missing receipt while ordinary wait keeps observ
   }
 });
 
+test('detached startup reports the sandbox wait while status can read it and claim the eventual start', async t => {
+  const store = receipts(t), statuses = [];
+  let id, text = '', status = '';
+  const launch = (_file, args) => {
+    id = path.basename(args.at(-1), '.json');
+    const child = new EventEmitter();
+    child.unref = () => {};
+    queueMicrotask(() => child.emit('spawn'));
+    return child;
+  };
+  store.observe = async (check, timeout) => {
+    assert.equal(timeout, process.platform === 'win32' ? 9 * 60_000 : 60_000);
+    await store.update(id, { admitted: true, waitingLine: `[dispatch] waiting ${id}: waiting for sandbox permissions` });
+    assert.equal(check(), undefined);
+    assert.equal(await waitDetached({ ids: [id], timeout: 0 }, { store, stdout: { write: line => { status += line; } } }), 75);
+    await store.update(id, { startedLine: `[dispatch] started ${id} session synthetic`, waitingLine: null });
+    assert.equal(store.claimStart(id), true);
+    return check();
+  };
+  const code = await startDetached(['codex', '--detach', '--role', 'review', '--title', 'Synthetic wait', '--model', 'gpt-6.1-sol', '--effort', 'high',
+    '--cwd', store.directory, '--brief', 'brief', '--out', 'out'], {
+    store, env: {}, launch, stdout: { write: line => { text += line; } }, onTiming: info => statuses.push(info),
+  });
+  assert.equal(code, 0);
+  assert.match(status, /still running.*waiting for sandbox permissions/);
+  assert.match(text, /waiting for sandbox permissions\n\[dispatch\] started/);
+  assert.match(statuses[0].waitingLine, /waiting for sandbox permissions/);
+  assert.equal(store.read(id).waitingLine, null);
+});
+
 test('detached launcher saves absolute cwd and notices a helper load failure immediately', async t => {
   const store = receipts(t); let saved, text = '';
   const result = await startDetached(['claude', '--detach', '--role', 'review', '--title', 'Synthetic crash', '--model', 'sonnet', '--effort', 'high', '--permission', 'plan', '--cwd', path.relative(process.cwd(), store.directory), '--brief', 'brief.md', '--out', 'answer.md'], {

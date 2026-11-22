@@ -185,7 +185,7 @@ test('local Windows dispatch stops before opening a thread when elevated setup i
     const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly, env } });
     await assert.rejects(session.start(), {
       code: 'elevated_sandbox_not_ready',
-      message: /重启 Agentrix.*「设置」.*管理员 PowerShell.*codex sandbox setup --elevated --user 'DOMAIN\\test-user' --codex-home 'C:\\Codex User''s Home'/,
+      message: /Agentrix 启动.*「设置」.*管理员 PowerShell.*codex sandbox setup --elevated --user 'DOMAIN\\test-user' --codex-home 'C:\\Codex User''s Home'/,
     });
     assert.equal(server.threadRequests('thread/start').length, 0);
     assert.equal(session.snapshot().state, 'failed');
@@ -199,14 +199,16 @@ test('local Windows dispatch asks the user to update Codex when the readiness me
   assert.equal(server.threadRequests('thread/start').length, 0);
 });
 
-test('a freshly provisioned Windows role verifies the sandbox cwd before sending its brief', async t => {
-  for (const readOnly of [true, false]) {
+test('every local elevated Windows role verifies the sandbox cwd before sending its brief', async t => {
+  for (const readOnly of [true, false]) for (const pending of [true, false]) {
     const stages = [];
     const { session, server, root } = runtime(t, { platform: 'win32', spec: { owner: 'dispatch', readOnly, onSandboxWait: line => stages.push(line) } });
-    fs.mkdirSync(path.join(root, '.sandbox'));
-    fs.writeFileSync(path.join(root, '.sandbox', 'setup_marker.json'), '{}');
+    if (pending) {
+      fs.mkdirSync(path.join(root, '.sandbox'));
+      fs.writeFileSync(path.join(root, '.sandbox', 'setup_marker.json'), '{}');
+    }
     await session.start();
-    assert.equal(stages.length, 1);
+    assert.equal(stages.length, Number(pending));
     assert.equal((await session.send({ clientMessageId: 'brief', text: 'Role brief' })).status, 'delivered');
     const probe = server.wire.findIndex(row => row.method === 'command/exec');
     assert.ok(probe > server.wire.findIndex(row => row.method === 'thread/start'));

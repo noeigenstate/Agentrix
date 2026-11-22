@@ -19,6 +19,8 @@ SSH applies seat sidecar updates in channel order. A failed update leaves the pr
 
 `wait_roles` returns when any selected role ends, its receipt is lost, or the timeout elapses.
 `roles_status` lists endings for ten minutes from first observation and reports engine timing when available.
+A local Windows Codex role reports its sandbox wait in the detached receipt and in role status during confirmation.
+Its detached launcher allows eight extra minutes for authorization.
 A writable `start_role` may create a local Git worktree and returns its branch and folder after confirmation.
 A failed checkout or launch rolls back the new worktree and branch.
 

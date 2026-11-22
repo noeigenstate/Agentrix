@@ -119,7 +119,10 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
   const call = async (args, options) => {
     let output = '';
     const timing = new Map();
-    await engine(args, { ...options, env, stdout: { write: chunk => { output += chunk; return true; } }, onTiming: status => timing.set(status.id, status) });
+    await engine(args, { ...options, env, stdout: { write: chunk => { output += chunk; return true; } }, onTiming: status => {
+      timing.set(status.id, status);
+      options?.onTiming?.(status);
+    } });
     return { lines: output.split('\n'), timing };
   };
   const conductor = () => {
@@ -192,6 +195,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
       if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
       if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
       const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree);
+      let waitingId;
       try {
         const agent = familyOf(seats[id].model), work = checkout?.cwd ?? (folder || cwd);
         const files = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-role-'));
@@ -201,14 +205,22 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
         const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
           ...(small ? ['--small'] : []),
           ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
-          '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])]);
+          '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
+          onTiming: status => {
+            if (!status.waitingLine || waitingId) return;
+            waitingId = status.id;
+            runs.set(waitingId, { id: waitingId, seat, title, out, cwd: work, calledAt, observedStartAt: Date.now(), activity: status.waitingLine });
+          },
+        });
         const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
         if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
         const status = timing.get(started[1]);
-        runs.set(started[1], { id: started[1], seat, title, out, cwd: work, calledAt, observedStartAt: Date.now(),
-          startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt) });
+        const run = runs.get(started[1]) || { id: started[1], seat, title, out, cwd: work, calledAt, observedStartAt: Date.now() };
+        Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: null });
+        runs.set(started[1], run);
         return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch }) };
       } catch (error) {
+        if (waitingId) runs.delete(waitingId);
         await checkout?.rollback().catch(() => {});
         throw error;
       }

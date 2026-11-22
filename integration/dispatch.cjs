@@ -21,6 +21,7 @@ const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team
 const { DISPATCH_TASK_KINDS, taskKind, routingVerdict: strictRoutingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
 const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
+const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/sandbox-refresh.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
@@ -49,6 +50,7 @@ const runtimeFiles = () => {
 };
 
 const START_TIMEOUT = 30000;
+const localWindowsCodex = (agent, env) => agent === 'codex' && process.platform === 'win32' && !env.SSH_CONNECTION;
 const RATE_INTERVAL = 5000;
 const PINNED_SEATS = Symbol('pinned dispatch seats');
 // How long a Codex worker's blocking request (a question, a form, an approval) waits for an answer before it is declined.
@@ -229,12 +231,13 @@ function commandOf(options) {
 
 // The code-standard skill files in the worker's folder: the system skill's source and the project's extensions of it.
 function codeStandardFiles(cwd) {
+  const extensionPrefix = 'code-standard-';
   const skillIn = (root, name) => fs.existsSync(path.join(cwd, root, name, 'SKILL.md')) ? [`${root}/${name}/SKILL.md`] : [];
   const extensions = root => {
-    try { return fs.readdirSync(path.join(cwd, root)).filter(name => name.startsWith('code-standard-')).sort().flatMap(name => skillIn(root, name)); }
+    try { return fs.readdirSync(path.join(cwd, root)).filter(name => name.startsWith(extensionPrefix)).sort().flatMap(name => skillIn(root, name)); }
     catch { return []; }
   };
-  return [...skillIn('resources/skills', 'code-standard'), ...['skills', '.claude/skills', '.codex/skills'].flatMap(extensions)];
+  return [...skillIn('resources/skills', extensionPrefix.slice(0, -1)), ...['skills', '.claude/skills', '.codex/skills'].flatMap(extensions)];
 }
 
 // The rules every worker follows whatever its task, so a brief holds only the task. A read-only worker (Codex
@@ -634,16 +637,17 @@ function detachedRuns(cwd, create = false) {
   return new DetachedRuns(path.join(temporary, ...parents));
 }
 
-function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt }) {
-  onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined });
+function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine }) {
+  onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }) });
 }
 
-async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout = 60000, source = 'dispatch', onTiming } = {}) {
+async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming } = {}) {
   // Keep the admitted choices stable if routing changes before the detached child starts.
   const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   const launchSnapshot = argv.includes('--seat') ? parseSeatMap(env.AGENTRIX_SEATS) ?? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   env = { ...env, AGENTRIX_DISPATCH_PINNED_SEATS: JSON.stringify(seatSnapshot), AGENTRIX_SEATS: JSON.stringify(launchSnapshot) };
   const options = argumentsOf(argv, env, seatSnapshot);
+  timeout ??= 60000 + (localWindowsCodex(options.agent, env) ? ROLE_LIMIT : 0);
   store ||= detachedRuns(options.cwd, true);
   const id = randomUUID(), file = store.file(id);
   const saved = argv.filter(arg => arg !== '--detach');
@@ -668,8 +672,14 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
     stdout.write(`[dispatch] failed to start ${id}: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`);
     return 1;
   } finally { fs.closeSync(descriptor); }
+  let announcedWait;
   const observed = store.observe(() => {
     const current = store.read(id);
+    if (current?.waitingLine && current.waitingLine !== announcedWait) {
+      announcedWait = current.waitingLine;
+      reportDetachedTiming(onTiming, current);
+      stdout.write(announcedWait + '\n');
+    }
     return current?.startedLine || current?.settled ? current : undefined;
   }, timeout, { signal: controller.signal });
   let failure;
@@ -685,7 +695,7 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
   }
   if (current?.startedLine) {
     reportDetachedTiming(onTiming, current);
-    if (store.claimStart(id)) stdout.write(current.startedLine + '\n');
+    if (store.claimStart(id) || announcedWait && onTiming) stdout.write(current.startedLine + '\n');
     return 0;
   }
   if (current?.settled || failure) {
@@ -726,19 +736,21 @@ async function runDetached(file, deps = {}) {
   const stdout = { write(text) {
     try { process.stdout.write(text); } catch { /* Planner receipts cannot interrupt signed events or worker cleanup. */ }
     const line = String(text).trimEnd(), changes = { activityAt: Date.now() };
-    if (line.startsWith(`[dispatch] started ${id} `)) Object.assign(changes, startTiming, { startedLine: line });
-    if (line.startsWith(`[dispatch] failed to start ${id}:`)) changes.failedLine = line;
+    if (line.startsWith(`[dispatch] waiting ${id}: `)) changes.waitingLine = line;
+    if (line.startsWith(`[dispatch] started ${id} `)) Object.assign(changes, startTiming, { startedLine: line, waitingLine: null });
+    if (line.startsWith(`[dispatch] failed to start ${id}:`)) Object.assign(changes, { failedLine: line, waitingLine: null });
     if (line.startsWith(`[dispatch] ended ${id} `)) changes.endedLine = line;
     void receipt(changes);
   } };
-  const detached = { id, admitted: () => receipt({ admitted: true }), confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
+  const detached = { id, admitted: () => receipt({ admitted: true }), sandboxReady: () => receipt({ waitingLine: null }),
+    confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
   let code = 1;
   try {
     code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000 });
     return code;
   } finally {
     const endedAt = Date.now();
-    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt }); await pending;
+    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
 }
@@ -792,7 +804,9 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
     reportDetachedTiming(onTiming, entry);
     let activity = entry.activityAt || entry.createdAt;
     try { activity = Math.max(activity, fs.statSync(entry.out + '.log').mtimeMs); } catch {}
-    stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}\n`);
+    const prefix = `[dispatch] waiting ${id}: `;
+    const waiting = typeof entry.waitingLine === 'string' && entry.waitingLine.startsWith(prefix) ? ' · ' + entry.waitingLine.slice(prefix.length) : '';
+    stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}${waiting}\n`);
   }
   return done() ? (unknown ? 1 : 0) : 75;
 }
@@ -1376,6 +1390,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });
         if (options.agent === 'codex') {
+          let sandboxWaitReported = false;
           codexAccountKey = controlClient?.accountKey || null;
           // The runtime launches synchronously, so the file is found before it is built; an injected resolver needs none (a test injecting only `launch` names its `locate`).
           const codex = resolveExecutable === executable ? await locate(env) : null;
@@ -1388,13 +1403,17 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
               if (!started) workerStartedAt = Date.now();
               return launch(command.file, command.args, spawnOptions);
             },
-          }).create({ ...spec, onSandboxWait: message => { signal(`waiting ${id}: ${message}`); log.write(message + '\n'); } }, acceptNative);
+          }).create({ ...spec, onSandboxWait: message => {
+            sandboxWaitReported = true;
+            signal(`waiting ${id}: ${message}`);
+            log.write(message + '\n');
+          } }, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient?.close(); controlClient = null;
-            const localWindows = process.platform === 'win32' && !workerEnv.SSH_CONNECTION;
-            if (localWindows && (['sandbox_mismatch', 'elevated_sandbox_not_ready', 'sandbox_cwd_unverified'].includes(error.code)
+            if (localWindowsCodex(options.agent, workerEnv)
+              && (['sandbox_mismatch', 'elevated_sandbox_not_ready', 'sandbox_cwd_unverified', 'sandbox_refresh_pending'].includes(error.code)
               || error.stage === 'sandbox_readiness' && error.code === 'unsupported_codex_version')) throw new Error(error.message);
             const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'sandbox_readiness', 'sandbox_cwd', 'thread_start', 'thread_resume']
               .includes(error.stage) ? error.stage : 'startup';
@@ -1406,6 +1425,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
               ? '：Codex 未应用只读沙箱，已停止启动。请检查 Codex 沙箱配置后重试。'
               : '：请在 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"，然后重试。' : ''}`);
           }
+          if (sandboxWaitReported) void detached?.sandboxReady?.();
           child = { pid: activeRuntime.pid, exitCode: null };
           // The read publishes limits.updated, which reports; an account without plan windows (an API key) reports without them.
           void activeRuntime.readLimits().catch(() => reportAccount(null));

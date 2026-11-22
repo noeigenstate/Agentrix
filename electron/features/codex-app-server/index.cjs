@@ -30,7 +30,7 @@ const PERMISSIONS = {
 };
 const permissionMode = value => typeof value === 'string' && Object.hasOwn(PERMISSIONS, value) ? value : 'full';
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
-const ELEVATED_SETUP_MESSAGE = '请重启 Agentrix，在提示时选择「设置」。也可在管理员 PowerShell 中运行以下命令后重试。 {command}';
+const ELEVATED_SETUP_MESSAGE = '如果 Agentrix 启动时显示沙箱设置提示，请选择「设置」。你也可以在管理员 PowerShell 中运行以下命令后重试。 {command}';
 const ELEVATED_VERSION_MESSAGE = '当前安装的 Codex 版本过旧，无法为角色启用 Windows 沙箱。请更新 Codex 后重试。';
 // Windows and an SSH host answer a writable request read-only when their Codex has no Windows sandbox configured.
 const REMOTE_WRITE = '远端 Codex 只给了只读沙箱，无法使用「先询问」。远端是 Windows 时，请在远端 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"（Agentrix 不会改远端的配置），或改用「全部放开」或「按 Codex 配置」。';

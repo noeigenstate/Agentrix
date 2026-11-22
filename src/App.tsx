@@ -411,7 +411,7 @@ export function App() {
     </div>
     {popup && <Suspense fallback={null}><FilePopup target={popup} onError={reportError} /></Suspense>}
     <SeatsHost />
-    {(error || sandboxProgress) && <div className="error-toast" role={error ? 'alert' : 'status'}><Info size={18} />
+    {(error || sandboxProgress) && <div className={error ? 'notice-toast error-toast' : 'notice-toast'} role={error ? 'alert' : 'status'}><Info size={18} />
       <span>{error || sandboxProgress}</span>
       <IconButton label={t('关闭提示')} onClick={() => error ? setError(null) : setSandboxProgress(null)}><X size={16} /></IconButton>
     </div>}

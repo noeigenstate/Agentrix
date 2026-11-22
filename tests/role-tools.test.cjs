@@ -83,6 +83,27 @@ test('start_role refuses empty or whitespace-only briefs and titles before calli
   assert.equal(fake.calls.length, 0);
 });
 
+test('roles_status shows sandbox progress during start_role confirmation', async t => {
+  const { env, folder } = session(t, 'conductor');
+  const waiting = Promise.withResolvers(), ready = Promise.withResolvers();
+  const fake = engine(async (args, onTiming) => {
+    if (!args.includes('--detach')) return '[dispatch] still running run-1 · waiting for sandbox permissions\n';
+    onTiming({ id: 'run-1', waitingLine: '[dispatch] waiting run-1: waiting for sandbox permissions' });
+    waiting.resolve();
+    await ready.promise;
+    return '[dispatch] started run-1 codex\n';
+  });
+  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+  const started = tools.start_role({ seat: 'developer', title: 'Inspect', brief: 'Read it', readOnly: true });
+  await waiting.promise;
+  try {
+    const { roles } = await tools.roles_status();
+    assert.equal(roles[0].id, 'run-1');
+    assert.match(roles[0].activity, /waiting for sandbox permissions/);
+  } finally { ready.resolve(); }
+  assert.equal((await started).id, 'run-1');
+});
+
 test('start_role passes small through to the engine and refuses wide writable scopes before checkout', async t => {
   const { env, folder } = session(t, 'conductor'), fake = engine(() => '[dispatch] started run-1 codex\n');
   const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });

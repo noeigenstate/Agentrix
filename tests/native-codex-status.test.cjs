@@ -26,6 +26,7 @@ function server(cwd, tier = 'fast') {
         let result;
         if (request.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
         else if (request.method === 'windowsSandbox/readiness') result = { status: 'ready' };
+        else if (request.method === 'command/exec') result = { exitCode: 0, stdout: request.params.cwd };
         else if (request.method === 'thread/start') result = { thread: { id: 'offline-thread', sessionId: 'offline-session', turns: [], cliVersion: '0.166.0', cwd, modelProvider: 'openai', source: 'vscode',
           preview: '', projectId: null, ephemeral: true, status: { type: 'idle' }, createdAt: 2000000000, updatedAt: 2000000000 },
         cwd, model: 'gpt-6.1-sol', modelProvider: 'openai', reasoningEffort: 'high', serviceTier: tier, approvalPolicy: p.approvalPolicy || 'on-request', approvalsReviewer: 'user',
