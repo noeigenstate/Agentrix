@@ -17,9 +17,10 @@ const cwd = 'C:\\agentrix-probe';
 const home = 'E:\\Codex home';
 
 function fixture({ platform = 'win32', found = file, statuses = ['notConfigured'], response = 0,
-  result = 'succeeded', env = { CODEX_HOME: home }, language = 'en', finished = true, store } = {}) {
+  result = 'succeeded', env = { CODEX_HOME: home }, language = 'en', finished = true, store, defer } = {}) {
   const calls = [];
   const offer = createSandboxSetup({ platform, cwd, env, active: () => true, t: (text, values) => translate(language, text, values),
+    defer,
     dismissed: () => store?.settings.codexSandboxPromptDismissed,
     dismiss: () => store?.updateSettings({ codexSandboxPromptDismissed: true }),
     find: async () => { calls.push(['locate']); return found; },
@@ -51,6 +52,31 @@ test('only a known unready Windows installation can prompt', async () => {
     const { offer, calls } = fixture(options);
     await offer();
     assert.deepEqual(calls.map(([event]) => event), expected);
+  }
+});
+
+test('a parseable setup marker defers the lookup and still asks Codex before showing the dialog', async t => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agx-sandbox-marker-'));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const marker = path.join(folder, '.sandbox', 'setup_marker.json');
+  await fs.mkdir(path.dirname(marker));
+  const env = { CODEX_HOME: folder };
+  for (const [contents, status] of [['{"version":42}', 'ready'], ['{"version":1}', 'updateRequired'], ['{', 'updateRequired']]) {
+    await fs.writeFile(marker, contents);
+    const waiting = Promise.withResolvers(), idle = Promise.withResolvers();
+    let deferred = false;
+    const { offer, calls } = fixture({ env, response: 1, statuses: [status], defer: () => {
+      deferred = true; waiting.resolve(); return idle.promise;
+    } });
+    const result = offer();
+    if (contents !== '{') {
+      await Promise.race([waiting.promise, result.then(() => assert.fail('readiness ran before idle'))]);
+      assert.deepEqual(calls, []);
+    }
+    idle.resolve();
+    await result;
+    assert.equal(deferred, contents !== '{');
+    assert.deepEqual(calls.map(([event]) => event), status === 'ready' ? ['locate', 'check'] : ['locate', 'check', 'dialog']);
   }
 });
 

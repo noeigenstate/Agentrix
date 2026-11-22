@@ -28,11 +28,15 @@ A ready result lasts for that conversation. Other results expire after five seco
 A known unready sandbox redirects a Claude lead's seat to its Claude model with low, medium or high seat effort (otherwise the lead's effort) and fast off, or gives a Codex lead built-in sub-agent instructions.
 The detached helper retains the fallback as its declared route and reports the original seat model and reason on start and end.
 Unknown readiness follows the usual launch path. Codex role startup still verifies elevated sandbox readiness independently.
+Local MCP roles own marked temp folders for their briefs, answers and logs. The detached helper stamps settlement before publishing its final receipt.
+The MCP sweeps asynchronously on startup and when it observes an end, at most once a minute. It expires settled folders after seven days
+and can evict read results oldest first above 256 folders. Active, unmarked and recently ended unread folders are protected.
 
 ## Owns
 - `integration/dispatch.cjs`
 - `integration/dispatch-outbox.cjs`
 - `integration/role-tools.cjs`
+- `integration/role-artifacts.cjs`
 - `integration/agent-event.cjs`
 - `electron/features/agents/dispatch-events.cjs`
 - `electron/features/agents/dispatch-intake.cjs`

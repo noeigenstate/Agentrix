@@ -385,7 +385,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         onStage('initialize');
         const init = await rpc.request('initialize', { clientInfo: { name: 'agentrix', version: '1.0.0' }, capabilities: { experimentalApi: true } });
         assertOpen();
-        const compatibility = assertCompatible(init);
+        let compatibility;
+        try { compatibility = assertCompatible(init); }
+        catch (error) {
+          if (elevatedRole() && error.code === 'unsupported_codex_version') error.message = translate(ELEVATED_VERSION_MESSAGE);
+          throw error;
+        }
         rpc.notify('initialized');
         if (elevatedRole()) {
           onStage('sandbox_readiness');

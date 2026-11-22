@@ -10,6 +10,7 @@ const { once } = require('node:events');
 const { createHash, randomUUID } = require('node:crypto');
 const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runDetached, waitDetached, RATE_INTERVAL } = require('../integration/dispatch.cjs');
 const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
+const { createRoleArtifacts, sweepRoleArtifacts, RETENTION } = require('../integration/role-artifacts.cjs');
 const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
 const { validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
@@ -617,8 +618,9 @@ test('detached Codex and Claude write engine timing and expose it to wait withou
   const store = new DetachedRuns(cwd), brief = path.join(cwd, 'brief.md');
   await fs.writeFile(brief, 'Synthetic role task');
   for (const [agent, model] of [['codex', 'gpt-6.1-sol'], ['claude', 'claude-sonnet-5-5']]) {
-    const id = randomUUID(), out = path.join(cwd, agent + '.md');
-    store.create({ id, cwd, out, createdAt: Date.now(), argv: [agent, '--role', 'review', '--title', 'Timed role',
+    const roleArtifacts = await createRoleArtifacts(cwd);
+    const id = randomUUID(), out = path.join(roleArtifacts.folder, 'answer.md');
+    store.create({ id, cwd, out, roleArtifacts, createdAt: Date.now(), argv: [agent, '--role', 'review', '--title', 'Timed role',
       '--model', model, '--effort', 'high', '--cwd', cwd, '--brief', brief, '--out', out, ...(agent === 'claude' ? ['--permission', 'plan'] : ['--read-only'])] });
     assert.equal(await runDetached(store.file(id), {
       env: { CODEX_HOME: cwd }, resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
@@ -649,6 +651,8 @@ test('detached Codex and Claude write engine timing and expose it to wait withou
     }), 0);
     assert.deepEqual(timing, [{ id, startedAt, confirmedAt, endedAt }]);
     assert.equal(output.trimEnd().split('\n').at(-1), endedLine);
+    await sweepRoleArtifacts(cwd, { now: endedAt + RETENTION });
+    await assert.rejects(fs.stat(roleArtifacts.folder), { code: 'ENOENT' });
   }
 });
 

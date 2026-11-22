@@ -1,8 +1,23 @@
 const path = require('node:path');
+const fs = require('node:fs/promises');
 const { setTimeout: sleep } = require('node:timers/promises');
 const { withSandboxServer, readiness } = require('../codex-app-server/index.cjs');
 const { REFRESH_LIMIT, WAIT_MESSAGE, readRefresh, sandboxCwd, sandboxHome } = require('../codex-app-server/sandbox-refresh.cjs');
 const { runSetup } = require('./elevate.cjs');
+
+async function hasSetupMarker(home) {
+  try {
+    const file = path.join(home, '.sandbox', 'setup_marker.json');
+    const stat = await fs.lstat(file);
+    if (!stat.isFile() || stat.size > 4096) return false;
+    const handle = await fs.open(file, 'r');
+    try {
+      const buffer = Buffer.alloc(4097);
+      const { bytesRead } = await handle.read(buffer);
+      return bytesRead <= 4096 && Number.isSafeInteger(JSON.parse(buffer.toString('utf8', 0, bytesRead))?.version);
+    } finally { await handle.close(); }
+  } catch { return false; }
+}
 
 async function finishRefresh(file, { cwd, env, home, active }, { now = Date.now, pause = sleep, read = readRefresh, ...server } = {}) {
   const until = now() + REFRESH_LIMIT;
@@ -30,19 +45,24 @@ async function finishRefresh(file, { cwd, env, home, active }, { now = Date.now,
 }
 
 function createSandboxSetup({ platform = process.platform, find, cwd, env = process.env, show, t, active,
-  dismissed = () => false, dismiss = () => {}, progress = () => {}, check = readiness, setup = runSetup, finish = finishRefresh }) {
+  dismissed = () => false, dismiss = () => {}, progress = () => {}, check = readiness, setup = runSetup, finish = finishRefresh,
+  defer = () => sleep(30_000, undefined, { ref: false }) }) {
   let checked = false;
   const title = () => t('Codex 角色沙箱');
   const tell = (type, message) => active() && show({ type, title: title(), message: t(message), buttons: [t('关闭')] });
   return async function offer() {
     if (platform !== 'win32' || checked || dismissed() || !active()) return;
+    checked = true;
     try {
-      const file = await find();
-      if (!file || checked || !active()) return;
-      checked = true;
-      const status = await check(file, { cwd, env });
-      if ((status !== 'notConfigured' && status !== 'updateRequired') || !active()) return;
       const home = sandboxHome(env);
+      // A marker changes only when to ask. Codex validates its version and account file.
+      if (await hasSetupMarker(home)) await defer();
+      if (dismissed() || !active()) return;
+      const file = await find();
+      if (!file) { checked = false; return; }
+      if (dismissed() || !active()) return;
+      const status = await check(file, { cwd, env });
+      if ((status !== 'notConfigured' && status !== 'updateRequired') || dismissed() || !active()) return;
       const locations = [t('Codex 程序：{file}', { file }), t('Codex 主目录：{home}', { home })].join('\n');
       const detail = [
         locations,

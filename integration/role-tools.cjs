@@ -8,6 +8,7 @@ const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { validateSmallScope, localWindowsCodex, roleReadiness, elevatedSetupMessage } = require('./dispatch.cjs');
+const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { familyOf, launchSeat, liveSeatMap, claudeLeadSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -116,8 +117,16 @@ async function createWorktree(cwd, suffix) {
 }
 
 function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadAgent, leadSeat,
-  platform = process.platform, checkReadiness = roleReadiness, now = Date.now }) {
+  platform = process.platform, checkReadiness = roleReadiness, now = Date.now, tempRoot = os.tmpdir(), cleanup = false }) {
   const runs = new Map();
+  let nextSweep = 0, sweeping = false;
+  function sweep() {
+    if (!cleanup || sweeping || now() < nextSweep) return;
+    nextSweep = now() + 60_000;
+    sweeping = true;
+    void sweepRoleArtifacts(tempRoot, { now: now() }).finally(() => { sweeping = false; });
+  }
+  sweep();
   let readiness;
   function sandboxStatus() {
     if (!readiness || readiness.until <= now()) {
@@ -183,7 +192,10 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       run.confirmedAt ??= timestamp(status?.confirmedAt);
       const end = lines.find(line => line.startsWith(`[dispatch] ended ${run.id} `));
       const loss = lines.includes(`[dispatch] unknown run ${run.id}`) ? `unknown run ${run.id}` : failure;
-      if (end) Object.assign(run, { end, endedAt: timestamp(status?.endedAt), observedEndAt: Date.now() });
+      if (end) {
+        Object.assign(run, { end, endedAt: timestamp(status?.endedAt), observedEndAt: Date.now() });
+        sweep();
+      }
       else if (loss) Object.assign(run, { end: `lost: ${loss}`, observedEndAt: Date.now(), lost: true });
       else {
         const activity = lines.find(line => line.startsWith(`[dispatch] still running ${run.id} `));
@@ -230,25 +242,25 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       let waitingId;
       try {
         const work = checkout?.cwd ?? (folder || cwd);
-        const files = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-role-'));
-        const briefFile = path.join(files, 'brief.md'), out = path.join(files, 'answer.md');
+        const artifacts = await createRoleArtifacts(tempRoot);
+        const briefFile = path.join(artifacts.folder, 'brief.md'), out = path.join(artifacts.folder, 'answer.md');
         fs.writeFileSync(briefFile, brief, { mode: 0o600 });
         const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
         const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
           ...(small ? ['--small'] : []),
           ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
-          ...(roleFallback && { roleFallback }),
+          roleArtifacts: artifacts, ...(roleFallback && { roleFallback }),
           onTiming: status => {
             if (!status.waitingLine || waitingId) return;
             waitingId = status.id;
-            runs.set(waitingId, { id: waitingId, seat, title, out, cwd: work, calledAt, observedStartAt: Date.now(), activity: status.waitingLine });
+            runs.set(waitingId, { id: waitingId, seat, title, out, artifacts, cwd: work, calledAt, observedStartAt: Date.now(), activity: status.waitingLine });
           },
         });
         const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
         if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
         const status = timing.get(started[1]);
-        const run = runs.get(started[1]) || { id: started[1], seat, title, out, cwd: work, calledAt, observedStartAt: Date.now() };
+        const run = runs.get(started[1]) || { id: started[1], seat, title, out, artifacts, cwd: work, calledAt, observedStartAt: Date.now() };
         Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: null });
         runs.set(started[1], run);
         return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch }) };
@@ -274,7 +286,12 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     async role_result({ id }) {
       const run = own(id);
       await refresh([run], 1);
-      return { ...describe(run), answer: run.end && !run.lost && fs.existsSync(run.out) ? fs.readFileSync(run.out, 'utf8') : null };
+      const answer = run.end && !run.lost ? await fs.promises.readFile(run.out, 'utf8').catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+        return null;
+      }) : null;
+      if (answer !== null) await stampRoleArtifacts(run.artifacts, 'read');
+      return { ...describe(run), answer };
     },
     async stop_role({ id }) {
       const run = own(id);

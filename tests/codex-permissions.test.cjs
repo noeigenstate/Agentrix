@@ -197,10 +197,14 @@ test('local Windows dispatch stops before opening a thread when elevated setup i
 });
 
 test('local Windows dispatch asks the user to update Codex when the readiness method is unavailable', async t => {
-  const server = codexServer({ reject: { 'windowsSandbox/readiness': -32601 } });
-  const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch' } });
-  await assert.rejects(session.start(), { code: 'unsupported_codex_version', stage: 'sandbox_readiness', message: /Codex 版本过旧.*请更新 Codex/ });
-  assert.equal(server.threadRequests('thread/start').length, 0);
+  for (const [version, stage] of [['0.167.0', 'sandbox_readiness'], ['0.165.0', 'initialize']]) {
+    const server = codexServer({ version, reject: { 'windowsSandbox/readiness': -32601 } });
+    const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch' } });
+    await assert.rejects(session.start(), { code: 'unsupported_codex_version', stage, message: /Codex 版本过旧.*请更新 Codex/ });
+    assert.equal(server.wire.some(row => row.method === 'windowsSandbox/readiness'), stage === 'sandbox_readiness');
+    assert.equal(server.threadRequests('thread/start').length, 0);
+    assert.equal(session.snapshot().state, 'failed');
+  }
 });
 
 test('every local elevated Windows role verifies the sandbox cwd before sending its brief', async t => {

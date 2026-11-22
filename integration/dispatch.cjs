@@ -655,20 +655,28 @@ function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, e
   onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }) });
 }
 
-async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming, roleFallback } = {}) {
+async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming,
+  roleFallback, roleArtifacts } = {}) {
   // Keep the admitted choices stable if routing changes before the detached child starts.
   const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   const launchSnapshot = argv.includes('--seat') ? parseSeatMap(env.AGENTRIX_SEATS) ?? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   env = { ...env, AGENTRIX_DISPATCH_PINNED_SEATS: JSON.stringify(seatSnapshot), AGENTRIX_SEATS: JSON.stringify(launchSnapshot) };
-  const options = argumentsOf(argv, env, seatSnapshot, roleFallback);
-  timeout ??= 60000 + (localWindowsCodex(options.agent, env) ? ROLE_LIMIT : 0);
-  store ||= detachedRuns(options.cwd, true);
-  const id = randomUUID(), file = store.file(id);
-  const saved = argv.filter(arg => arg !== '--detach');
-  saved[saved.indexOf('--cwd') + 1] = options.cwd;
-  store.create({ id, argv: saved, source, cwd: options.cwd, out: options.out, createdAt: Date.now(), ...(roleFallback && { roleFallback }) });
-  try { store.prune(); } catch { /* Old receipt cleanup never prevents a new launch. */ }
-  const descriptor = fs.openSync(file + '.log', 'ax', 0o600);
+  const id = randomUUID();
+  let options, file, descriptor;
+  try {
+    options = argumentsOf(argv, env, seatSnapshot, roleFallback);
+    timeout ??= 60000 + (localWindowsCodex(options.agent, env) ? ROLE_LIMIT : 0);
+    store ||= detachedRuns(options.cwd, true);
+    file = store.file(id);
+    const saved = argv.filter(arg => arg !== '--detach');
+    saved[saved.indexOf('--cwd') + 1] = options.cwd;
+    store.create({ id, argv: saved, source, cwd: options.cwd, out: options.out, createdAt: Date.now(), roleFallback, roleArtifacts });
+    try { store.prune(); } catch { /* Old receipt cleanup never prevents a new launch. */ }
+    descriptor = fs.openSync(file + '.log', 'ax', 0o600);
+  } catch (error) {
+    if (roleArtifacts) await require('./role-artifacts.cjs').stampRoleArtifacts(roleArtifacts, 'ended');
+    throw error;
+  }
   let child, exit;
   const exited = new Promise(resolve => { exit = resolve; }), controller = new AbortController();
   try {
@@ -682,6 +690,7 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
     await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
     child.unref();
   } catch (error) {
+    if (roleArtifacts) await require('./role-artifacts.cjs').stampRoleArtifacts(roleArtifacts, 'ended');
     await store.update(id, { settled: true, exitCode: 1 }).catch(() => {});
     stdout.write(`[dispatch] failed to start ${id}: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`);
     return 1;
@@ -764,6 +773,7 @@ async function runDetached(file, deps = {}) {
     return code;
   } finally {
     const endedAt = Date.now();
+    if (entry.roleArtifacts) await require('./role-artifacts.cjs').stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
     await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
@@ -827,13 +837,13 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
 
 async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal, roleFallback } = {}) {
+  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal, roleFallback, roleArtifacts } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
     const [, leadAgent, model, effort] = argv;
     const leadSeat = model && seatExpectation({ model, effort });
-    return serve({ roles: createRoleTools({ env, engine: run, leadAgent, leadSeat }) }).then(() => 0);
+    return serve({ roles: createRoleTools({ env, engine: run, leadAgent, leadSeat, cleanup: true }) }).then(() => 0);
   }
   if (usesRoundtable(argv)) { stdout.write('[dispatch] ' + roundtablesRemoved + '\n'); return 1; }
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'stop', 'wait'].includes(argv[0]))) {
@@ -843,7 +853,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
       if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, signal: waitSignal });
-      return await startDetached(argv, { env, stdout, launch, source, onTiming, roleFallback });
+      return await startDetached(argv, { env, stdout, launch, source, onTiming, roleFallback, roleArtifacts });
     } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
   }
   plannerOutput = stdout;
@@ -1437,8 +1447,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient?.close(); controlClient = null;
             if (localWindowsCodex(options.agent, workerEnv)
-              && (['sandbox_mismatch', 'elevated_sandbox_not_ready', 'sandbox_cwd_unverified', 'sandbox_refresh_pending'].includes(error.code)
-              || error.stage === 'sandbox_readiness' && error.code === 'unsupported_codex_version')) throw new Error(error.message);
+              && ['sandbox_mismatch', 'elevated_sandbox_not_ready', 'sandbox_cwd_unverified', 'sandbox_refresh_pending', 'unsupported_codex_version']
+                .includes(error.code)) throw new Error(error.message);
             const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'sandbox_readiness', 'sandbox_cwd', 'thread_start', 'thread_resume']
               .includes(error.stage) ? error.stage : 'startup';
             const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
