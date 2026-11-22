@@ -452,6 +452,9 @@ PY
     if [[ $current_note == *" Agentrix skill delivery: "* ]]; then
         current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
     fi
+    if [[ $conversation == 1 ]]; then
+        current_note="Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode. Work directly with Claude Code tools.${current_note:+ $current_note}"
+    fi
     [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
     local settings_file
     settings_file=$(mktemp "${__pg_note_file%/*}/claude-settings.XXXXXX") || return 1

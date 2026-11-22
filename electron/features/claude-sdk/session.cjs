@@ -139,10 +139,10 @@ function createClaudeSession(spec, emit, dependencies) {
     return run.subagentReports = (run.subagentReports || Promise.resolve()).then(async () => {
       const current = () => !closed && !stopping && !run.closing && active === run && run.initialized && input?.session_id === providerId;
       if (typeof spec.onSubagent !== 'function' || !current() || typeof input.agent_id !== 'string'
-        || !/^[A-Za-z0-9_-]{1,100}$/.test(input.agent_id) || typeof input.agent_type !== 'string') return;
+        || !/^[A-Za-z0-9_-]{1,100}$/.test(input.agent_id) || input.agent_type != null && typeof input.agent_type !== 'string') return;
       const folder = await claudeSubagentFolder(spec, providerId, input.transcript_path);
       if (!current()) return;
-      const signal = { kind, terminalId: spec.terminalId, agentId: input.agent_id, agentType: input.agent_type,
+      const signal = { kind, terminalId: spec.terminalId, agentId: input.agent_id, agentType: (input.agent_type ?? '').trim(),
         transcriptPath: kind === 'stop' && typeof input.agent_transcript_path === 'string' ? input.agent_transcript_path : null,
         toolUseId: typeof toolUseId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(toolUseId) ? toolUseId : null, at };
       const binding = { runtimeSessionId: spec.runtimeSessionId, providerSessionId: providerId, folder };

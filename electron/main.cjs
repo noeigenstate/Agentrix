@@ -1152,7 +1152,8 @@ function nativeSubagent(spec, signal, { runtimeSessionId, providerSessionId, fol
   const calls = callsOf(s, project);
   if (folder) calls.setFolder(folder);
   if (signal.kind === 'seat') calls.observeSeatInput(signal);
-  else calls.subagent(signal);
+  // An untyped SDK hook may belong to Claude's own helper. Use the same hold as terminal hooks.
+  else calls.subagent(signal, !signal.agentType);
   scheduleState();
 }
 

@@ -321,29 +321,53 @@ for (const kind of ['bash', 'zsh']) test(`the ${kind} terminal's PATH has no shi
   assert.deepEqual(others, [['-p', 'say "hi" \\'], ['--version'], ['fix it']]);
 });
 
-test("the PowerShell terminal's PATH has no shims and the claude it starts has them first at depth zero, put back once it exits", { skip: process.platform !== 'win32' && 'bootstrap.ps1 runs in Windows terminals only', timeout: 60000 }, t => {
-  const folder = temporary(t), copied = path.join(folder, 'integration'), claude = path.join(folder, 'claude.cmd');
+for (const extension of ['cmd', 'ps1']) test(`the PowerShell wrapper gives claude.${extension} one file-backed role option and restores its environment`, {
+  skip: process.platform !== 'win32' && 'bootstrap.ps1 runs in Windows terminals only', timeout: 60000,
+}, t => {
+  const folder = temporary(t), copied = path.join(folder, 'integration'), claude = path.join(folder, `claude.${extension}`);
   const quoted = file => `'${file.replace(/'/g, "''")}'`;
   fs.mkdirSync(copied); fs.copyFileSync(path.join(root, 'integration/bootstrap.ps1'), path.join(copied, 'bootstrap.ps1'));
   // A stand-in refresh-path.ps1, so this computer's stored PATH is never read.
   fs.writeFileSync(path.join(copied, 'refresh-path.ps1'), '');
-  fs.writeFileSync(path.join(folder, 'probe.cjs'), probe);
-  fs.writeFileSync(claude, `@"${process.execPath}" "${path.join(folder, 'probe.cjs')}" %*\r\n`);
-  const { claudeEnvFile } = sessionBootstrap(folder);
+  const probeFile = path.join(folder, 'probe.cjs');
+  fs.writeFileSync(probeFile, probe + `\nconst option=process.argv[2]; if (option?.startsWith('--mcp-config=')) {`
+    + `console.log('CONFIG='+require('fs').readFileSync(option.slice('--mcp-config='.length)).toString('base64')); }\n`);
+  fs.writeFileSync(claude, extension === 'cmd' ? `@"${process.execPath}" "${probeFile}" %*\r\n` : `& ${quoted(process.execPath)} ${quoted(probeFile)} @args\n`);
+  const session = path.join(folder, 'session & tools');
+  fs.mkdirSync(session);
+  const { file: bootstrap, claudeEnvFile } = sessionBootstrap(session);
   const script = path.join(folder, 'probe.ps1');
   fs.writeFileSync(script, `$env:AGENTRIX_AGENT_ONLY='1'\n. ${quoted(path.join(copied, 'bootstrap.ps1'))}\n`
-    + `function Show { Write-Output ("SHELL=" + ($env:Path -split ';')[0] + "|" + $(if ($env:AGENTRIX_DISPATCH_DEPTH) { $env:AGENTRIX_DISPATCH_DEPTH } else { 'unset' })) }\nShow\nclaude --continue\nShow\n`);
-  const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: path.join(folder, 'bootstrap.json'), AGENTRIX_CLAUDE_EXECUTABLE: claude,
+    + `function global:Send-AgentrixEvent {}\n`
+    + `function Show { Write-Output ("SHELL=" + ($env:Path -split ';')[0] + "|" + $(if ($env:AGENTRIX_DISPATCH_DEPTH) { $env:AGENTRIX_DISPATCH_DEPTH } else { 'unset' })) }\n`
+    + `Show\nclaude 'fix the test'\nclaude 'check my config' --mcp-config own.json\nclaude -p 'print this'\nclaude --version\nShow\n`);
+  const env = { ...isolatedEnvironment(folder), AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_CLAUDE_EXECUTABLE: claude,
     AGENTRIX_DISPATCH_DEPTH: '0', PSModuleAnalysisCachePath: path.join(folder, 'module-cache') };
   const result = spawnSync(path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'), ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script],
     { cwd: folder, env, encoding: 'utf8', timeout: 45000, windowsHide: true });
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
   const shells = [...result.stdout.matchAll(/SHELL=(.*)\|(.*)/g)].map(match => [match[1].trim(), match[2].trim()]);
   assert.equal(shells.length, 2, result.stdout);
   for (const [first, depth] of shells) { assert.notEqual(first.toLowerCase(), shims.toLowerCase()); assert.equal(depth, 'unset'); }
   const planned = JSON.parse(/PLANNER=(.*)/.exec(result.stdout)[1]);
   assert.equal(planned.first.toLowerCase(), shims.toLowerCase()); assert.equal(planned.depth, '0'); assert.equal(planned.hook, claudeEnvFile);
-  assert.deepEqual(JSON.parse(/ARGV=(.*)/.exec(result.stdout)[1]), ['--continue'], 'a .cmd CLI is started as before, without the role tools');
+  const [[option, ...prompt], [second, ...words], ...others] = [...result.stdout.matchAll(/ARGV=(.*)/g)].map(match => JSON.parse(match[1]));
+  assert.deepEqual(prompt, ['fix the test']);
+  assert.deepEqual(words, ['check my config', '--mcp-config', 'own.json']);
+  assert.deepEqual(others, [['-p', 'print this'], ['--version']]);
+  for (const word of [option, second]) {
+    assert.match(word, /^--mcp-config=/);
+    const file = word.slice('--mcp-config='.length);
+    assert.equal(path.dirname(file), session);
+    assert.equal(fs.existsSync(file), false, 'a completed launch removes its config');
+  }
+  assert.notEqual(option, second);
+  const inline = spawnSync(process.execPath, [path.join(shims, 'intercept.cjs'), '--shim-env', 'json', '--role-tools', 'claude', 'fix the test'],
+    { env: { ...env, AGENTRIX_SEATS: 'null' }, encoding: 'utf8' });
+  assert.equal(inline.status, 0, inline.stderr);
+  const expected = JSON.parse(inline.stdout).at(-1).slice('--mcp-config='.length);
+  const configs = [...result.stdout.matchAll(/CONFIG=(.*)/g)].map(match => Buffer.from(match[1], 'base64'));
+  assert.deepEqual(configs, [Buffer.from(expected), Buffer.from(expected)]);
 });
 
 // A stand-in claude.exe, which Windows PowerShell compiles: only an executable is started with exact arguments. Each run

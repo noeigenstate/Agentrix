@@ -1368,6 +1368,28 @@ assert.deepEqual(trace(pairs.map(pair => pair[0])), trace(pairs.map(pair => pair
             self.assertTrue(second.stopping)
 
 class RemoteCodexShellNotifyTest(unittest.TestCase):
+    @unittest.skipUnless(os.path.exists(os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash")), "needs Bash")
+    def test_ssh_claude_lead_hears_that_role_tools_are_unavailable(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            cli = root / "claude"
+            cli.write_text('#!/bin/sh\nprintf "CLI=%s\\n" "$@"\n', encoding="utf-8", newline="\n")
+            cli.chmod(0o755)
+            (root / "notify.py").touch()
+            probe = root / "probe.sh"
+            probe.write_text(remote.BASH_SOURCE + 'PATH="$PWD:$PATH"\nclaude \'fix the test\'\nclaude --version\n', encoding="utf-8", newline="\n")
+            env = dict(os.environ, HOME=root.as_posix(), AGENTRIX_ROOT=root.as_posix(), AGENTRIX_PYTHON=sys.executable,
+                       AGENTRIX_NOTIFY_FILE=(root / "notify.py").as_posix(), AGENTRIX_READING_NOTE_FILE=(root / "note").as_posix(),
+                       AGENTRIX_READING_NOTE="Existing note.")
+            result = subprocess.run([os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash"), "--noprofile", "--norc", probe.as_posix()],
+                                    env=env, capture_output=True, encoding="utf-8", timeout=30, check=True)
+            words = [line[4:] for line in result.stdout.splitlines() if line.startswith("CLI=")]
+            self.assertEqual(words[2], "--append-system-prompt")
+            self.assertIn("Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode.", words[3])
+            self.assertTrue(words[3].endswith("Existing note."))
+            self.assertEqual(words[4], "fix the test")
+            self.assertEqual(words[7:], ["--append-system-prompt", "Existing note.", "--version"])
+
     def test_manual_codex_request_is_acknowledged_without_waiting_for_a_terminal_skill_note(self):
         worker = object.__new__(remote.Worker)
         worker.stopping = False; worker.token = "key"; worker.project_id = "p"

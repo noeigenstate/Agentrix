@@ -110,6 +110,38 @@ function global:Restore-AgentrixEnvironment([hashtable]$Previous) {
     foreach ($name in $Previous.Keys) { [Environment]::SetEnvironmentVariable($name, $Previous[$name]) }
 }
 
+function global:New-AgentrixClaudeSettingsPath([string]$Folder, [string]$Suffix) {
+    # Main also removes these files when the terminal exits. The note is named <session>-skills.txt.
+    $name = if ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' }
+        else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) }
+    Join-Path $Folder ($name + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + $Suffix)
+}
+
+# A single option word keeps Claude's variadic --mcp-config from consuming the user's prompt.
+# The space in the filename makes Windows PowerShell quote the whole word for cmd.exe.
+function global:Invoke-AgentrixClaudeShim([string]$Launcher, [string[]]$Arguments, [string[]]$RoleTools) {
+    $prefix = '--mcp-config='
+    $extension = [IO.Path]::GetExtension($Launcher)
+    if ($extension -notin @('.cmd', '.ps1') -or $RoleTools.Count -ne 1 -or
+        -not $RoleTools[0].StartsWith($prefix + '{', [StringComparison]::Ordinal)) {
+        & $Launcher @Arguments
+        return
+    }
+    $file = $null
+    $configArgs = @()
+    try {
+        try {
+            $file = New-AgentrixClaudeSettingsPath ([IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP)) '-mcp config.json'
+            if ($extension -eq '.cmd' -and $file -match '[%!]') { throw 'The config path contains characters that cmd.exe can expand.' }
+            [IO.File]::WriteAllText($file, $RoleTools[0].Substring($prefix.Length), [Text.UTF8Encoding]::new($false))
+            $configArgs = @($prefix + $file)
+        } catch { Write-Warning "Agentrix role tools are unavailable for this Claude launch. $($_.Exception.Message)" }
+        & $Launcher @configArgs @Arguments
+    } finally {
+        if ($file) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 # Windows PowerShell 5 strips embedded quotes when forwarding native arguments.
 # Build the standard Windows argv representation explicitly so notify's TOML
 # array, Chinese paths, quotes and trailing backslashes reach Codex intact.
@@ -255,15 +287,13 @@ function global:claude {
     $settingsArgs = @()
     if ($settings) {
         $sessionFolder = if ($env:AGENTRIX_BOOTSTRAP) { [IO.Path]::GetDirectoryName($env:AGENTRIX_BOOTSTRAP) } elseif ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetDirectoryName($env:AGENTRIX_READING_NOTE_FILE) } else { [IO.Path]::GetTempPath() }
-        # Named after the session (its note is <session>-skills.txt), as main removes it with that session; the bootstrap is named after the terminal.
-        $sessionName = if ($env:AGENTRIX_READING_NOTE_FILE) { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_READING_NOTE_FILE) -replace '-skills$', '' } else { [IO.Path]::GetFileNameWithoutExtension($env:AGENTRIX_BOOTSTRAP) }
-        $settingsFile = Join-Path $sessionFolder ($sessionName + '-claude-settings-' + [Guid]::NewGuid().ToString('N') + '.json')
+        $settingsFile = New-AgentrixClaudeSettingsPath $sessionFolder '.json'
         [IO.File]::WriteAllText($settingsFile, $settings, [Text.UTF8Encoding]::new($false))
         $settingsArgs = @("--settings", $settingsFile)
     }
     $planner = Set-AgentrixPlanner $launch.Env @($args)
     if (-not $global:AgentrixClaudeExecutable -or [IO.Path]::GetExtension($global:AgentrixClaudeExecutable) -ne '.exe') {
-        try { & $global:AgentrixClaudeCommand @settingsArgs @readingNote @leadArgs @args }
+        try { Invoke-AgentrixClaudeShim $global:AgentrixClaudeCommand ($settingsArgs + $readingNote + $leadArgs + @($args)) $planner.RoleTools }
         finally {
             Restore-AgentrixEnvironment $planner.Previous
             if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
@@ -273,8 +303,6 @@ function global:claude {
     }
     $claudeExit = 0
     try {
-        # Only an executable gets the role tools: their config is a JSON string, which Windows PowerShell cannot hand to a
-        # .cmd or .ps1 CLI intact.
         # What the reading view can show (electron/features/agents/reading-note.cjs); a later --append-system-prompt of the user's wins.
         $claudeExit = Invoke-AgentrixExecutable $global:AgentrixClaudeExecutable ($planner.RoleTools + $settingsArgs + $readingNote + $leadArgs + @($args))
     } catch {

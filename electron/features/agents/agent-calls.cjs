@@ -262,7 +262,7 @@ class AgentCalls {
       if (entry) this.feeds.retire(entry, false);
     }
   }
-  // `hookOnly`: the signal is a terminal's lifecycle hook, which Claude Code also sends for its internal helper agents.
+  // A terminal lifecycle hook or an untyped SDK hook can belong to Claude Code's internal helpers.
   // Alone it proves no sub-agent the conversation started, so the call it opens is held: followed and metered, but
   // not listed, counted or recorded until an Agent/Task tool call or a SendMessage of the conversation names it.
   subagent(signal, hookOnly = false) {

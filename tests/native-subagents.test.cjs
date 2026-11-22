@@ -10,6 +10,7 @@ const { queryOptions } = require('../electron/features/claude-sdk/query.cjs');
 const { createUsage } = require('../electron/features/claude-sdk/usage.cjs');
 const { encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+const { DashboardRecords } = require('../electron/features/dashboard/records.cjs');
 const { sameDirectory } = require('../electron/session-files.cjs');
 const { fakeSdk } = require('./fixtures/claude-sdk.cjs');
 const { defineMain } = require('./helpers/main-modules.cjs');
@@ -80,9 +81,22 @@ async function sessionFixture(t, f, onSubagent, options = {}) {
 }
 
 test("a native Claude session's Agent-tool sub-agent has its row from SubagentStart, its rate from its transcript, and ends on SubagentStop", async t => {
-  const f = workspace(t), calls = new AgentCalls({ terminalId: 'terminal', claudeHome: () => f.home, now: () => at(0) });
+  const f = workspace(t), dashboard = new DashboardRecords(f.directory), project = { id: 'project', kind: 'local', path: f.cwd };
+  const calls = new AgentCalls({ terminalId: 'terminal', claudeHome: () => f.home, now: () => at(0),
+    finished: (call, event) => dashboard.run(project, call, event) });
   t.after(() => calls.dispose());
-  const host = nativeHost(f, calls), runtime = await sessionFixture(t, f, host.spec.onSubagent);
+  const host = nativeHost(f, calls), helperRows = [];
+  const helperStopped = Promise.withResolvers();
+  const runtime = await sessionFixture(t, f, (signal, binding) => {
+    host.spec.onSubagent(signal, binding);
+    if (signal.agentId !== 'internal-helper') return;
+    helperRows.push(calls.snapshot());
+    if (signal.kind === 'stop') helperStopped.resolve();
+  });
+  await runtime.hook('SubagentStart', { agent_id: 'internal-helper', agent_type: '' });
+  await runtime.hook('SubagentStop', { agent_id: 'internal-helper', agent_type: undefined });
+  await helperStopped.promise;
+  assert.deepEqual(helperRows, [[], []]);
   assert.equal(fs.existsSync(f.folder), false);
   assert.deepEqual(await runtime.hook('SubagentStart'), {});
   const rows = () => calls.snapshot().flatMap(group => group.items);
@@ -107,6 +121,9 @@ test("a native Claude session's Agent-tool sub-agent has its row from SubagentSt
   await calls.work;
   assert.equal(rows().length, 1);
   assert.equal(child.done, true); assert.equal(rows()[0].endedAt, at(8));
+  await dashboard.flush();
+  const lines = fs.readFileSync(dashboard.file('runs'), 'utf8').trimEnd().split('\n').map(JSON.parse);
+  assert.deepEqual(lines.map(({ source, endedAt }) => [source, endedAt]), [['subagent', at(8)]]);
   assert.equal(runtime.events.filter(event => event.type === 'turn.completed').length, 0);
   assert.equal(runtime.events.filter(event => event.type === 'usage.updated').length, 0, 'child rates never enter parent usage');
   assert.doesNotMatch(JSON.stringify(runtime.events), /Placeholder finding|Placeholder result/);

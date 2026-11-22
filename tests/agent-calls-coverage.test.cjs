@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
+const { DashboardRecords } = require('../electron/features/dashboard/records.cjs');
 const { createClaudeActivity } = require('../electron/features/terminal-events/claude-activity.cjs');
 const { createHookIngest } = require('../electron/features/terminal-events/hook-ingest.cjs');
 
@@ -429,7 +430,10 @@ test('an existing transcript monitor sends remote records and clock updates to t
 test("an internal helper's hook pair makes no row, no live entry and no run record, and is forgotten", async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let now = at(30);
-  const finished = [], f = hooks(t, { finished: (_call, event) => finished.push(event), now: () => now });
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-helper-'));
+  t.after(() => fs.rm(folder, { recursive: true, force: true }));
+  const dashboard = new DashboardRecords(folder), project = { id: 'p', kind: 'local', path: folder }, finished = [];
+  const f = hooks(t, { local: true, now: () => now, finished: (call, event) => { finished.push(event); dashboard.run(project, call, event); } });
   f.take('SubagentStart', { agent_id: 'a2665b99ece0b671d', transcript_path: '/parent.jsonl' });
   assert.deepEqual([f.calls.snapshot(), f.calls.running()], [[], []], 'a running helper is not listed');
   f.take('SubagentStop', { agent_id: 'a2665b99ece0b671d', agent_transcript_path: '/subagents/agent-a2665b99ece0b671d.jsonl' });
@@ -444,16 +448,23 @@ test("an internal helper's hook pair makes no row, no live entry and no run reco
   f.take('SubagentStart', { agent_id: 'next-helper' }, 31 * 60);
   assert.deepEqual([...f.calls.calls.keys()], ['subagent:next-helper']);
 
-  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-helper-'));
-  t.after(() => fs.rm(folder, { recursive: true, force: true }));
-  const local = tracker(t, { local: true, finished: (_call, event) => finished.push(event) });
+  f.take('SubagentStart', { agent_id: 'child' }, 31 * 60 + 1);
+  f.calls.apply(use()); f.calls.apply(result(31 * 60 + 1));
+  f.take('SubagentStop', { agent_id: 'child' }, 31 * 60 + 2);
+  await dashboard.flush();
+  const lines = (await fs.readFile(dashboard.file('runs'), 'utf8')).trimEnd().split('\n').map(JSON.parse);
+  assert.deepEqual(lines.map(({ source, title }) => [source, title]), [['subagent', 'Inspect parser']]);
+  assert.equal(finished.length, 1);
+
+  const metered = [];
+  const local = tracker(t, { local: true, finished: (_call, event) => metered.push(event) });
   local.setFolder(folder);
   await fs.copyFile(path.join(__dirname, 'fixtures/claude-subagent-ssh.jsonl'), path.join(folder, 'agent-helper.jsonl'));
   await fs.writeFile(path.join(folder, 'agent-helper.meta.json'), JSON.stringify({ agentType: '' }));
   local.subagent(signal('start', 'helper', 0, { agentType: '' }), true); await local.work;
   local.subagent(signal('stop', 'helper', 9, { agentType: '' }), true); await local.work;
   assert.equal(local.calls.get('subagent:helper').rate.outputTokens, 75, 'the helper was read, so a late tool call would lose nothing');
-  assert.deepEqual([local.snapshot(), local.running(), finished], [[], [], []]);
+  assert.deepEqual([local.snapshot(), local.running(), metered], [[], [], []]);
 });
 
 test('an Agent-tool sub-agent has its row and one run record whichever of its hooks and its tool call is seen first', t => {
