@@ -244,7 +244,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         if (status.ownerWaitSequence > (run.ownerWaitSequence ?? 0) || !status.ownerWait) {
           Object.assign(run, { ownerWait: status.ownerWait, ownerWaitSequence: status.ownerWaitSequence, menu: status.menu });
         }
-        if (untilAny && status.ownerWaitSequence > (seenOwnerWaits.get(run.id) ?? 0)) {
+        if (untilAny && status.ownerWait && status.ownerWaitSequence > (seenOwnerWaits.get(run.id) ?? 0)) {
           ownerTransition = true;
           seenOwnerWaits.set(run.id, status.ownerWaitSequence);
         }

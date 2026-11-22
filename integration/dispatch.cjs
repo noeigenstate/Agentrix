@@ -881,7 +881,7 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
   };
   const check = async () => {
     const entries = [...pending].map(id => [id, store.read(id)]);
-    const ownerWaiting = entry => entry?.ownerWaitSequence && (seenOwnerWaits ? entry.ownerWaitSequence > (seenOwnerWaits.get(entry.id) ?? 0) : !!entry.ownerWait);
+    const ownerWaiting = entry => entry?.ownerWait && entry.ownerWaitSequence > (seenOwnerWaits?.get(entry.id) ?? 0);
     const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled || ownerWaiting(entry));
     await Promise.all(entries.map(async ([id, entry]) => {
       if (entry === null) { stdout.write(`[dispatch] unknown run ${id}\n`); pending.delete(id); unknown = true; }

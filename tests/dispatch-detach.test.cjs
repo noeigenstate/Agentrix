@@ -420,6 +420,24 @@ test('wait for any detached run returns when the first settles and reports the o
   assert.ok(text.includes(`[dispatch] still running ${ids[0]} `));
 });
 
+test('wait for any ignores a cleared owner prompt and wakes on the next active prompt', async t => {
+  const store = receipts(t), id = randomUUID();
+  store.create({ id, createdAt: Date.now(), ownerWait: null, ownerWaitSequence: 1 });
+  const updates = [];
+  const ownerWait = 'waiting for the owner: answer a Claude Code question';
+  const result = await waitDetached({ ids: [id], timeout: 240 }, {
+    store, untilAny: true, seenOwnerWaits: new Map(), stdout: { write() {} },
+    onTiming: status => updates.push(status),
+    async observe(check) {
+      assert.equal(await check(), undefined);
+      await store.update(id, { ownerWait, ownerWaitSequence: 2 });
+      assert.equal(await check(), true);
+    },
+  });
+  assert.equal(result, 75);
+  assert.deepEqual(updates.map(status => [status.ownerWait, status.ownerWaitSequence]), [[ownerWait, 2]]);
+});
+
 test('detached helper uses an independent process group, file stdio and the original start receipt', async t => {
   const store = receipts(t), brief = path.join(store.directory, 'brief.md');
   fs.writeFileSync(brief, 'Synthetic brief');
