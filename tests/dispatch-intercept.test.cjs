@@ -48,6 +48,34 @@ function toolServer(word) {
   return JSON.parse(word.slice('--mcp-config='.length)).mcpServers.agentrix;
 }
 
+test('Claude role arguments use the carried seat reader without loading dispatch and survive a reader failure', async t => {
+  const folder = temporary(t), shimFile = path.join(folder, 'shims', 'intercept.cjs');
+  const helper = path.join(folder, 'dispatch.cjs'), bootstrap = path.join(folder, 'bootstrap.json');
+  const seatFile = path.join(folder, 'electron', 'features', 'agents', 'call-seat.cjs');
+  fs.mkdirSync(path.dirname(shimFile), { recursive: true });
+  fs.mkdirSync(path.dirname(seatFile), { recursive: true });
+  fs.copyFileSync(path.join(shims, 'intercept.cjs'), shimFile);
+  fs.writeFileSync(helper, 'throw new Error("dispatch must not load");\n');
+  fs.writeFileSync(bootstrap + '.lead', 'sonnet\nlow\n0\nnull\n');
+  const { intercept } = require(shimFile);
+  const env = { ...planner, AGENTRIX_BOOTSTRAP: bootstrap };
+  async function launchWords() {
+    let words;
+    const code = await intercept(['claude', '--', 'review this'], { env, locate: async () => 'fake-claude', launch: (_file, args) => {
+      words = args;
+      const child = new EventEmitter();
+      queueMicrotask(() => child.emit('exit', 0));
+      return child;
+    } });
+    assert.equal(code, 0);
+    assert.deepEqual(words.slice(1), ['review this']);
+    return toolServer(words[0]).args;
+  }
+  assert.deepEqual(await launchWords(), [helper, 'mcp', 'claude']);
+  fs.copyFileSync(path.join(root, 'electron/features/agents/call-seat.cjs'), seatFile);
+  assert.deepEqual(await launchWords(), [helper, 'mcp', 'claude', 'sonnet', 'low']);
+});
+
 test("a call without a planner's depth zero and bootstrap, or with a worker identity, is refused as nested before stdin or dispatch", async () => {
   const cases = [{}, { AGENTRIX_DISPATCH_DEPTH: '0' }, { AGENTRIX_BOOTSTRAP: 'b.json' }, ...['1', '2', '-1', '', ' 0', 'invalid'].map(depth => ({ ...planner, AGENTRIX_DISPATCH_DEPTH: depth })),
     { ...planner, AGENTRIX_RUN_ID: 'worker' }, { ...planner, AGENTRIX_RUN_PROOF: 'proof' }];
@@ -117,7 +145,7 @@ test('native mode runs a delegation on the real CLI and conductor mode refuses i
   const [config, ...rest] = runs[0].args;
   assert.deepEqual(rest, ['--resume']);
   const server = toolServer(config);
-  assert.deepEqual([server.command, server.args.at(-1), server.env.ELECTRON_RUN_AS_NODE], ['node', 'mcp', '1']);
+  assert.deepEqual([server.command, ...server.args.slice(1), server.env.ELECTRON_RUN_AS_NODE], ['node', 'mcp', 'claude', '1']);
   assert.ok(server.env.AGENTRIX_BOOTSTRAP, 'the tool server reads the session');
   runs.length = 0;
   await shim().intercept(['codex', '--', 'resume', '--last'], { env: env('conductor'), cwd: root, stderr: output(), locate, launch });
@@ -149,7 +177,7 @@ test("one request answers a wrapper with the planner's words and, after a -- wor
   const answer = JSON.parse(ask([...request, 'claude', 'fix the test'])), [tools, ...none] = answer.slice(planner.length + 1);
   assert.deepEqual(answer.slice(0, planner.length + 1), [...planner, '--']);
   assert.deepEqual(none, [], 'one word, so the prompt after it stays the prompt');
-  assert.deepEqual(toolServer(tools), { type: 'stdio', command: process.execPath, args: [path.join(root, 'integration/dispatch.cjs'), 'mcp'],
+  assert.deepEqual(toolServer(tools), { type: 'stdio', command: process.execPath, args: [path.join(root, 'integration/dispatch.cjs'), 'mcp', 'claude'],
     env: { ELECTRON_RUN_AS_NODE: '1', AGENTRIX_BOOTSTRAP: file, AGENTRIX_SEATS: seats, AGENTRIX_DISPATCH_DEPTH: '0', AGENTRIX_SHIMS: posix(shims),
       AGENTRIX_SHIM_NODE: process.execPath, CODEX_HOME: owner.CODEX_HOME } });
   assert.deepEqual(ask(['--shim-env', '--role-tools', 'claude']).split('\0'), [...planner, '--', tools, ''], 'each word ends with NUL, so no shell splits the JSON');
@@ -159,6 +187,7 @@ test("one request answers a wrapper with the planner's words and, after a -- wor
   const codex = JSON.parse(ask([...request, 'codex', 'resume', '--last'])).slice(planner.length + 1);
   assert.deepEqual(codex.filter((_, index) => index % 2 === 0), ['-c', '-c', '-c']);
   assert.equal(codex[1], `mcp_servers.agentrix.command=${JSON.stringify(process.execPath)}`);
+  assert.equal(codex[3], `mcp_servers.agentrix.args=${JSON.stringify([path.join(root, 'integration/dispatch.cjs'), 'mcp', 'codex'])}`);
   for (const words of [['claude', '-p', 'x'], ['claude', '--print', 'x'], ['claude', '--version'], ['claude', 'mcp', 'list'], ['claude', 'update'],
     ['codex', 'exec', 'x'], ['other']]) assert.deepEqual(JSON.parse(ask([...request, ...words])), [...planner, '--'], words.join(' '));
   const { AGENTRIX_BOOTSTRAP: _, ...unbound } = owner;
@@ -352,7 +381,7 @@ test('the claude.exe the PowerShell wrapper starts for a conversation gets the r
   assert.deepEqual([first, toolServer(bare).env.AGENTRIX_SEATS, prompt], ['0', 'null', ['fix the test']]);
   assert.deepEqual([depth, words], ['0', [...lead, 'say "hi" \\', '--mcp-config', 'own.json']]);
   const server = toolServer(tools);
-  assert.deepEqual([server.command, server.args], [process.execPath, [path.join(root, 'integration/dispatch.cjs'), 'mcp']]);
+  assert.deepEqual([server.command, server.args], [process.execPath, [path.join(root, 'integration/dispatch.cjs'), 'mcp', 'claude', 'sonnet', 'high']]);
   assert.deepEqual(server.env, { ELECTRON_RUN_AS_NODE: '1', AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SEATS: seats, AGENTRIX_DISPATCH_DEPTH: '0', AGENTRIX_SHIMS: posix(shims),
     AGENTRIX_SHIM_NODE: process.execPath, CODEX_HOME: env.CODEX_HOME });
   assert.deepEqual(others, [['0', ...lead, '-p', 'say "hi"'], ['0', '--version'], ['0', 'mcp', 'list'], ['', ...lead, 'again']]);

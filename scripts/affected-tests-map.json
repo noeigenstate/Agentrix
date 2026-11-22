@@ -381,7 +381,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "330e5a5d07814a51b8ca163ac1e44a9694a223b9b6371783d635eb2b01143383",
+      "digest": "78bfd715b380a41098cac7bfe591ac16adfba53b325e34fd510202d0ceb5128c",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -413,7 +413,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "dc19e716797fd3dcd5fe18e33f8787fd773f4b9c1cae5b39cfc4d1b9ce06a800",
+      "digest": "43b382ae15920122a78b224b7753975df6691c39730fb58f0410e48bcaa9d03d",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
@@ -435,11 +435,12 @@
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "399523096b16cce3fbaa5aa291fd4d6b5d3eaba34e34d5a89d1249bf709e84d3",
+      "digest": "c71535f0bac3dc77526d7ea907fc5814e471029faa2623213bbcb8b2a92a67da",
       "targets": [
-        "integration/dispatch.cjs"
+        "integration/dispatch.cjs",
+        "electron/features/agents/call-seat.cjs"
       ],
-      "reason": "The intercept entrypoint invokes the existing dispatch helper beside the source, packaged or SSH runtime."
+      "reason": "The intercept entrypoint resolves the dispatch helper and the carried lead seat reader in source, packaged or SSH layouts."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
       "digest": "057fc0d23273a8ea93e614e21d42761a934e7bfd3ea70813e966568dd6981947",
@@ -449,7 +450,7 @@
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "b3d3c7f0b2424718e02ba5a501901e13e806058e7dbe9140c1eb7e4d00dc38ce",
+      "digest": "15319d8624f4a0c7c3f3c9246b978ccb1d76fe3a1c1723e32fd9ab5e8733b170",
       "targets": [
         "electron/features/agents/call-seat.cjs"
       ],

@@ -1,46 +1,14 @@
-const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { setTimeout: sleep } = require('node:timers/promises');
-const { createRpc, stopProcess, workerEnvironment } = require('../codex-app-server/index.cjs');
-const { ELEVATED_SANDBOX_ARGS, REFRESH_LIMIT, WAIT_MESSAGE, readRefresh, sandboxCwd, sandboxHome } = require('../codex-app-server/sandbox-refresh.cjs');
+const { withSandboxServer, readiness } = require('../codex-app-server/index.cjs');
+const { REFRESH_LIMIT, WAIT_MESSAGE, readRefresh, sandboxCwd, sandboxHome } = require('../codex-app-server/sandbox-refresh.cjs');
 const { runSetup } = require('./elevate.cjs');
-
-async function withServer(file, { cwd, env }, { launch = spawn, rpcFactory = createRpc, stop = stopProcess } = {}, query, refresh = false) {
-  const args = ['app-server', '--listen', 'stdio://', ...ELEVATED_SANDBOX_ARGS];
-  const options = { cwd, env: workerEnvironment(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
-  let child, rpc;
-  try {
-    if (/\.cmd$/i.test(file)) {
-      // Pass the shim path through a single quoted variable expansion.
-      const cmd = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
-      options.env.AGENTRIX_SETUP_CLI = file;
-      options.windowsVerbatimArguments = true;
-      child = launch(cmd, ['/d', '/v:off', '/s', '/c', '""%AGENTRIX_SETUP_CLI%" ' + args.join(' ') + '"'], options);
-    } else {
-      child = launch(file, args, options);
-    }
-    rpc = rpcFactory(child);
-    await rpc.request('initialize', { clientInfo: { name: 'agentrix-sandbox-setup', version: '1.0.0' }, capabilities: { experimentalApi: true } });
-    rpc.notify('initialized');
-    return await query(rpc);
-  } finally {
-    rpc?.close();
-    // The ACL worker may still be running when the UI deadline expires.
-    if (refresh) await stop(child, { preserveDescendants: true });
-    else await stop(child);
-  }
-}
-
-async function readiness(file, context, deps) {
-  const result = await withServer(file, context, deps, rpc => rpc.request('windowsSandbox/readiness', {}));
-  return result?.status ?? null;
-}
 
 async function finishRefresh(file, { cwd, env, home, active }, { now = Date.now, pause = sleep, read = readRefresh, ...server } = {}) {
   const until = now() + REFRESH_LIMIT;
   const timer = new AbortController();
   const timeout = sleep(REFRESH_LIMIT, false, { signal: timer.signal }).catch(() => false);
-  const working = withServer(file, { cwd, env }, server, async rpc => {
+  const working = withSandboxServer(file, { cwd, env }, server, async rpc => {
     let commandEnded = false, since;
     const remaining = until - now();
     const waiting = () => active() && !timer.signal.aborted && now() < until;

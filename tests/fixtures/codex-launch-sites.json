@@ -68,6 +68,14 @@
     "id": "electron/features/codex-app-server/index.cjs:75ca58dee1a9ce35f94d37c3"
   },
   {
+    "text": "launch(cmd, ['/d', '/v:off', '/s', '/c', '\"\"%AGENTRIX_SETUP_CLI%\" ' + args.join(' ') + '\"'], options)",
+    "id": "electron/features/codex-app-server/index.cjs:435fcd15a89bc1496a515d0b"
+  },
+  {
+    "text": "launch(file, args, options)",
+    "id": "electron/features/codex-app-server/index.cjs:cf9a69a6aa97d8bafb57dec6"
+  },
+  {
     "text": "resolveExecutable(env)",
     "id": "electron/features/codex-app-server/index.cjs:3a908719d731205401b693b4"
   },
@@ -90,14 +98,6 @@
   {
     "text": "launch(powershell, args, options, error => {\n    resolve(!error ? 'succeeded' : ({ 2: 'invalidHome', 3: 'declined', 4: 'unverified' })[error.code] || 'failed');\n  })",
     "id": "electron/features/codex-sandbox-setup/elevate.cjs:894e60cd8066d20907092d1e"
-  },
-  {
-    "text": "launch(cmd, ['/d', '/v:off', '/s', '/c', '\"\"%AGENTRIX_SETUP_CLI%\" ' + args.join(' ') + '\"'], options)",
-    "id": "electron/features/codex-sandbox-setup/index.cjs:435fcd15a89bc1496a515d0b"
-  },
-  {
-    "text": "launch(file, args, options)",
-    "id": "electron/features/codex-sandbox-setup/index.cjs:cf9a69a6aa97d8bafb57dec6"
   },
   {
     "text": "execFile('git', ['-C', project.path, ...args], { windowsHide: true, timeout: 3000 }, (error, stdout) => done(error ? '' : stdout.trim()))",
@@ -420,8 +420,8 @@
     "id": "integration/dispatch.cjs:0d06e497f7ec9a5ac21b7973"
   },
   {
-    "text": "run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000 })",
-    "id": "integration/dispatch.cjs:eea9cc8a8882a6d318076750"
+    "text": "run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000, roleFallback: entry.roleFallback })",
+    "id": "integration/dispatch.cjs:d5279f2d0a2f8d4bbaad586f"
   },
   {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",

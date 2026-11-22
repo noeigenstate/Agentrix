@@ -115,6 +115,28 @@ test('detached launcher saves absolute cwd and notices a helper load failure imm
   assert.equal(result, 1); assert.match(text, /failed to start/); assert.equal(store.read(saved.id).settled, true);
 });
 
+test('a detached Claude fallback keeps its declared route in the child receipt', async t => {
+  const store = receipts(t), bootstrap = path.join(store.directory, 'bootstrap.json');
+  const roleFallback = { configured: 'gpt-6.2-sol', model: 'sonnet', effort: 'medium', fast: false };
+  updateDispatchSeats(bootstrap, { developer: { model: 'gpt-6.2-sol', effort: 'minimal', fast: true } });
+  const argv = ['claude', '--detach', '--role', 'review', '--title', 'Fixture', '--seat', 'developer', '--permission', 'plan',
+    '--cwd', store.directory, '--brief', 'brief.md', '--out', 'answer.md'];
+  let saved;
+  await startDetached(argv, { store, env: { AGENTRIX_BOOTSTRAP: bootstrap }, roleFallback, stdout: { write() {} },
+    launch: (_file, args) => {
+      saved = store.read(path.basename(args.at(-1), '.json'));
+      updateDispatchSeats(bootstrap, { developer: { model: 'opus', effort: 'max', fast: true } });
+      const child = new EventEmitter();
+      child.unref = () => {};
+      queueMicrotask(() => { child.emit('spawn'); child.emit('exit', 1, null); });
+      return child;
+    },
+  });
+  assert.deepEqual(saved.roleFallback, roleFallback);
+  const options = argumentsOf(saved.argv, { AGENTRIX_BOOTSTRAP: bootstrap }, undefined, saved.roleFallback);
+  assert.deepEqual(options.expectedSeat, { model: 'sonnet', effort: 'medium', fast: false });
+});
+
 test('unadmitted helper timeout records settlement after requesting its stop', async t => {
   const store = receipts(t); let id, killed = false;
   store.observe = async () => null;

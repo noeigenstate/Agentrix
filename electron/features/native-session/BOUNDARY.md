@@ -1,6 +1,7 @@
 # Boundary: Native session router
 
 Owns provider-neutral session routing, validated renderer IPC, settings and worker SDK registration.
+The local MCP command identifies the lead provider. The private bootstrap sidecar carries the Claude lead seat.
 
 ## Owns
 - `electron/features/native-session/**`

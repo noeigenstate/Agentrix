@@ -31,6 +31,13 @@ const PERMISSIONS = {
 const permissionMode = value => typeof value === 'string' && Object.hasOwn(PERMISSIONS, value) ? value : 'full';
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 const ELEVATED_SETUP_MESSAGE = '如果 Agentrix 启动时显示沙箱设置提示，请选择「设置」。你也可以在管理员 PowerShell 中运行以下命令后重试。 {command}';
+function elevatedSetupMessage(env, codexHome, translate = value => value) {
+  const user = env.USERNAME && (env.USERDOMAIN ? env.USERDOMAIN + '\\' + env.USERNAME : env.USERNAME);
+  const quote = value => "'" + value.replaceAll("'", "''") + "'";
+  const userArg = user ? quote(user) : translate('<你的 Windows 用户>');
+  const command = `codex sandbox setup --elevated --user ${userArg} --codex-home ${quote(sandboxHome(env, codexHome))}`;
+  return translate(ELEVATED_SETUP_MESSAGE).replace('{command}', () => command);
+}
 const ELEVATED_VERSION_MESSAGE = '当前安装的 Codex 版本过旧，无法为角色启用 Windows 沙箱。请更新 Codex 后重试。';
 // Windows and an SSH host answer a writable request read-only when their Codex has no Windows sandbox configured.
 const REMOTE_WRITE = '远端 Codex 只给了只读沙箱，无法使用「先询问」。远端是 Windows 时，请在远端 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"（Agentrix 不会改远端的配置），或改用「全部放开」或「按 Codex 配置」。';
@@ -107,6 +114,37 @@ function stopProcess(child, { preserveDescendants = false } = {}) {
       try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
     }
   });
+}
+
+async function withSandboxServer(file, { cwd, env }, { launch = spawn, rpcFactory = createRpc, stop = stopProcess } = {}, query, refresh = false) {
+  const args = ['app-server', '--listen', 'stdio://', ...ELEVATED_SANDBOX_ARGS];
+  const options = { cwd, env: workerEnvironment(env), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
+  let child, rpc;
+  try {
+    if (/\.cmd$/i.test(file)) {
+      // Pass the shim path through a single quoted variable expansion.
+      const cmd = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
+      options.env.AGENTRIX_SETUP_CLI = file;
+      options.windowsVerbatimArguments = true;
+      child = launch(cmd, ['/d', '/v:off', '/s', '/c', '""%AGENTRIX_SETUP_CLI%" ' + args.join(' ') + '"'], options);
+    } else {
+      child = launch(file, args, options);
+    }
+    rpc = rpcFactory(child);
+    await rpc.request('initialize', { clientInfo: { name: 'agentrix-sandbox-setup', version: '1.0.0' }, capabilities: { experimentalApi: true } });
+    rpc.notify('initialized');
+    return await query(rpc);
+  } finally {
+    rpc?.close();
+    // The ACL worker may still be running when the UI deadline expires.
+    if (refresh) await stop(child, { preserveDescendants: true });
+    else await stop(child);
+  }
+}
+
+async function readiness(file, context, deps) {
+  const result = await withSandboxServer(file, context, deps, rpc => rpc.request('windowsSandbox/readiness', {}));
+  return result?.status ?? null;
 }
 
 function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis,
@@ -358,12 +396,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             throw Object.assign(new Error(translate(ELEVATED_VERSION_MESSAGE)), { code: 'unsupported_codex_version' });
           }
           if (readiness?.status !== 'ready') {
-            const user = env.USERNAME && (env.USERDOMAIN ? env.USERDOMAIN + '\\' + env.USERNAME : env.USERNAME);
-            const home = sandboxHome(env, spec.codexHome);
-            const userArg = user ? "'" + user.replaceAll("'", "''") + "'" : translate('<你的 Windows 用户>');
-            const homeArg = "'" + home.replaceAll("'", "''") + "'";
-            const command = `codex sandbox setup --elevated --user ${userArg} --codex-home ${homeArg}`;
-            const message = translate(ELEVATED_SETUP_MESSAGE).replace('{command}', () => command);
+            const message = elevatedSetupMessage(env, spec.codexHome, translate);
             throw Object.assign(new Error(message), { code: 'elevated_sandbox_not_ready' });
           }
         }
@@ -826,4 +859,4 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
   };
 }
 
-module.exports = { createCodexRuntime, workerEnvironment, createRpc, stopProcess };
+module.exports = { createCodexRuntime, workerEnvironment, createRpc, stopProcess, elevatedSetupMessage, withSandboxServer, readiness };

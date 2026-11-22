@@ -53,6 +53,16 @@ function seatExpectation(choice) {
   return { model, effort, fast: fast === true };
 }
 
+function claudeLeadSeat(bootstrap) {
+  try {
+    if (typeof bootstrap !== 'string' || !path.isAbsolute(bootstrap) || /^[\\/]{2}/.test(bootstrap)) return null;
+    const file = bootstrap + '.lead', stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.size > 2 * SEAT_BYTES) return null;
+    const [model, effort] = fs.readFileSync(file, 'utf8').split(/\r?\n/, 2);
+    return familyOf(model) === 'claude' ? seatExpectation({ model, effort }) : null;
+  } catch { return null; }
+}
+
 function launchSeat(value, enabledIds) {
   if (typeof value !== 'string' || !value) return null;
   const [seat, specialty] = value.split('/');
@@ -95,4 +105,4 @@ function callSeat(call, model) {
 }
 
 module.exports = { agentDescription, declaredSeat, callSeat, launchSeat, CLAUDE_ALIAS, CLAUDE_EFFORT, familyOf,
-  liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation, SEAT_BYTES };
+  liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation, claudeLeadSeat, SEAT_BYTES };

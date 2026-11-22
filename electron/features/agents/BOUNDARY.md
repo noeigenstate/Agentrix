@@ -22,7 +22,7 @@ The child's own reply or metadata takes precedence. See `tests/seat-auto.test.cj
 - `electron/reading-history*.cjs`
 
 ## Interface
-- `agentDescription` (`electron/features/agents/call-seat.cjs`) — parse declared seats and specialties. `launchSeat` resolves enabled launch IDs. Also exports Claude family, alias and effort rules.
+- `agentDescription` (`electron/features/agents/call-seat.cjs`) — parse declared seats and specialties. `launchSeat` resolves enabled launch IDs. `claudeLeadSeat` reads the private lead sidecar. Also exports Claude family, alias and effort rules.
 - `CallsCard` (`src/features/agents/AgentCalls.tsx`) — the called models of every terminal of the project (a row marked with its terminal), a 「后台任务」 group and a folded 「最近完成 N 个」, as rows of two lines whose buttons open a sub-agent view or a background task's; the left bar's Agent tab and the narrow window's popover list it; the file also exports CALL_STATES, failureWord, and rateValue, which the sub-agent view reuses The app reaches it through `AgentSidebar.tsx` (a render prop beside it, owned by no boundary) so the files module need not know the agents module.
 - `useSplits` (`src/features/agents/subagent-splits.ts`) — the sub-agent views the owner opened beside a terminal (transient, one per terminal: opening another replaces it); the file also exports splitsOf and closeSplit
 - `actionText` (`src/features/agents/action-text.ts`) — the words for the agent's current step (with `stepVerb`), shared by the reading view and the decision inbox

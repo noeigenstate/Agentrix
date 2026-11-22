@@ -585,8 +585,8 @@ function refreshSkillNotes() {
         updateDispatchSeats(s.bootstrapFile, skills.dispatchSeats(project.id) ?? {});
         if (updateBootstrapMode(s.bootstrapFile, skills.seatsInfo(project.id)?.conductor) && s.codexActive) tellMode(s, project);
       } catch (error) { report(error); }
-      if (s.skillNoteFile) {
-        try { updateBootstrapLead(s.bootstrapFile, skills.terminalLead(project.id)); } catch (error) { report(error); }
+      if (s.skillNoteFile || lead && s.agent === 'claude') {
+        try { updateBootstrapLead(s.bootstrapFile, s.nativeStructured ? lead : skills.terminalLead(project.id)); } catch (error) { report(error); }
       }
     }
     if (!s.skillNoteFile || s.codexActive) continue;
@@ -1323,6 +1323,9 @@ function wireNativeSessions(directory, codex, codexFactory) {
         if (committed && spec.bootstrapFile) {
           try { updateDispatchLaunchSeats(spec.bootstrapFile, delivery?.agentSeats); } catch (error) { report(error); }
           try { updateDispatchSeats(spec.bootstrapFile, skills.dispatchSeats?.(spec.projectId) ?? delivery?.agentSeats ?? {}); } catch (error) { report(error); }
+          if (spec.agent === 'claude') {
+            try { updateBootstrapLead(spec.bootstrapFile, lead); } catch (error) { report(error); }
+          }
         }
         skills.endSession(project.id, committed ? previous : skillSessionId);
       };

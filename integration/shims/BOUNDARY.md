@@ -1,6 +1,7 @@
 # Boundary: Intercept
 
 A planner's tool-shell calls to Codex exec and Claude print mode pass through PATH shims. Native mode runs them on the real CLI. Conductor mode directs the planner to the role tools. The owner's shell, scripts and typed commands keep their real CLI path.
+The MCP command carries the lead provider and, for a Claude terminal with a saved lead seat, its launch model and effort.
 
 ## Owns
 - `integration/shims/**`

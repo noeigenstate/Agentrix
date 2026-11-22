@@ -123,7 +123,19 @@ const sessionMode = env => { try { return fs.readFileSync(env.AGENTRIX_BOOTSTRAP
 // The lead session gets the role tools, which the worker engine serves over MCP stdio and refuses in native mode: a
 // session started in native mode has them when the owner switches it to conductor mode.
 function roleToolArgs(agent, env) {
-  const command = env.AGENTRIX_SHIM_NODE || process.execPath, args = [helperPath(), 'mcp'];
+  const helper = helperPath(), command = env.AGENTRIX_SHIM_NODE || process.execPath;
+  let lead;
+  if (agent === 'claude') {
+    try {
+      const installed = path.join(path.dirname(helper), 'electron');
+      const runtime = fs.existsSync(installed) ? installed : path.resolve(path.dirname(helper), '../electron');
+      const { claudeLeadSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+      lead = claudeLeadSeat(env.AGENTRIX_BOOTSTRAP);
+    } catch {
+      // The role tools can still read the lead sidecar when a role starts.
+    }
+  }
+  const args = [helper, 'mcp', agent, ...(lead ? [lead.model, lead.effort] : [])];
   const serverEnv = { ELECTRON_RUN_AS_NODE: '1', ...Object.fromEntries(Object.entries(env)
     .filter(([name]) => /^(AGENTRIX_(BOOTSTRAP|SEATS|DISPATCH_DEPTH|SHIMS|SHIM_NODE)|CODEX_HOME)$/.test(name))) };
   // One word: --mcp-config takes several values, and as a word of its own it would take the user's prompt for another.
@@ -175,6 +187,8 @@ function launchWords(source, agent, args) {
   return [...envWords(source, next), '--', ...(tools ? roleToolArgs(agent, next) : [])];
 }
 
+module.exports = { intercept, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };
+
 if (require.main === module) {
   let argv = process.argv.slice(2);
   if (!argv.length && process.env.AGENTRIX_INTERCEPT_ARGV) {
@@ -190,4 +204,3 @@ if (require.main === module) {
     process.stdout.write(json ? JSON.stringify(words) : words.map(word => word + '\0').join(''));
   } else intercept(argv).then(code => { process.exitCode = code; });
 }
-module.exports = { intercept, withShims, shimWords, shimFiles, hookFiles, runtimeFiles };

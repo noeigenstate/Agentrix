@@ -20,13 +20,14 @@ const { projectTeam, recordFindings, FINDINGS } = require(path.join(runtime, 'fe
 const { RunInbox, runId, validText } = require(path.join(runtime, 'features/team/inbox.cjs'));
 const { DISPATCH_TASK_KINDS, taskKind, routingVerdict: strictRoutingVerdict } = require(path.join(runtime, 'features/dashboard/records-routing.cjs'));
 const { WorkerSkillProposals } = require(path.join(runtime, 'features/skills/worker-proposals.cjs'));
-const { createCodexRuntime, workerEnvironment } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
+const { createCodexRuntime, workerEnvironment, elevatedSetupMessage, readiness } = require(path.join(runtime, 'features/codex-app-server/index.cjs'));
 const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/sandbox-refresh.cjs'));
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
 const { dispatchDirectory, validSeat } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
-const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
+  require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
@@ -50,7 +51,7 @@ const runtimeFiles = () => {
 };
 
 const START_TIMEOUT = 30000;
-const localWindowsCodex = (agent, env) => agent === 'codex' && process.platform === 'win32' && !env.SSH_CONNECTION;
+const localWindowsCodex = (agent, env, platform = process.platform) => agent === 'codex' && platform === 'win32' && !env.SSH_CONNECTION;
 const RATE_INTERVAL = 5000;
 const PINNED_SEATS = Symbol('pinned dispatch seats');
 // How long a Codex worker's blocking request (a question, a form, an approval) waits for an answer before it is declined.
@@ -158,7 +159,7 @@ function validateSmallScope(readOnly, allow) {
   }
 }
 
-function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) {
+function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], roleFallback) {
   if (usesRoundtable(argv)) throw new Error(roundtablesRemoved);
   const [agent, ...flags] = argv;
   if (agent === 'wait') return waitOptions(flags);
@@ -190,7 +191,14 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) 
       options[names.get(flag)] = value;
     }
   }
-  applySeatDefaults(options, env, seatSnapshot, seen.has('--fast'));
+  if (roleFallback) {
+    const { configured, ...choice } = roleFallback, expected = seatExpectation(choice);
+    if (!expected || !seatExpectation({ model: configured, effort: 'low' }) || !validSeat(options.seat)
+      || agent !== 'claude' || familyOf(expected.model) !== 'claude' || familyOf(configured) !== 'codex' || expected.fast) {
+      throw new Error('Invalid role fallback');
+    }
+    Object.assign(options, expected, { expectedSeat: expected, fastFromSeat: true, fallbackFrom: configured });
+  } else applySeatDefaults(options, env, seatSnapshot, seen.has('--fast'));
   for (const key of ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out']) if (!options[key]) throw new Error('Missing --' + key);
   if (!roles.has(options.role)) throw new Error('Expected --role 执行, 调查, 审查, exec, investigate or review');
   options.role = roles.get(options.role);
@@ -212,15 +220,17 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) 
   return options;
 }
 
-function routingVerdict(actual, declared) {
+function routingVerdict(actual, declared, fallback = false) {
   // Bundled alias floor (major, minor): bump this one line with a supported release. Older versions stay mismatches.
   const CLAUDE_ALIAS_FLOOR = [5, 5];
-  const current = /^(opus|sonnet|haiku)$/.test(declared?.model) && CLAUDE_ALIAS_FLOOR;
+  const target = fallback ? declared?.model?.replace(/\[(?:1m|fast)\]$/gi, '') : declared?.model;
+  const current = /^(opus|sonnet|haiku)$/.test(target) && CLAUDE_ALIAS_FLOOR;
   const model = actual.model?.replace(/(?:\[(?:1m|fast)\]|-\d{8})+$/gi, '');
-  const resolved = /^claude-(opus|sonnet|haiku)-(\d+)(?:[.-](\d+))?(?:[.-]\d+)*$/.exec(model || '');
-  const follows = current && resolved?.[1] === declared.model && (Number(resolved[2]) > current[0]
+  const resolved = /^claude-(opus|sonnet|haiku|fable)-(\d+)(?:[.-](\d+))?(?:[.-]\d+)*$/.exec(model || '');
+  const follows = current && resolved?.[1] === target && (Number(resolved[2]) > current[0]
     || Number(resolved[2]) === current[0] && Number(resolved[3] || 0) >= current[1]);
-  return strictRoutingVerdict(actual, follows ? { ...declared, model: actual.model } : declared);
+  const sameFallback = fallback && (target === model || target === 'fable' && resolved?.[1] === 'fable');
+  return strictRoutingVerdict(actual, follows || sameFallback ? { ...declared, model: actual.model } : declared);
 }
 function commandOf(options) {
   const settings = options.fast || options.fastFromSeat ? ['--settings', JSON.stringify({ fastMode: options.fast })] : [];
@@ -570,6 +580,10 @@ const helperClaudeLocator = createLocator();
 // to its program the way main's locator resolves it, else codex-runtime's own search; null when there is none.
 const locateCodex = (env, locator = helperLocator) => locator.locate({ env,
   prefer: Object.entries(env).find(([key]) => key.toUpperCase() === 'AGENTRIX_CODEX_EXECUTABLE')?.[1] || undefined }).then(found => found.file);
+async function roleReadiness(cwd, env, locate = locateCodex, check = readiness) {
+  const file = await locate(env);
+  return file ? check(file, { cwd, env }) : null;
+}
 // The Claude Code file a terminal would run, outside the shim folder; null when there is none.
 const locateClaude = async env => (await helperClaudeLocator.locate({ env })).terminal?.file || null;
 
@@ -641,18 +655,18 @@ function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, e
   onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }) });
 }
 
-async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming } = {}) {
+async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming, roleFallback } = {}) {
   // Keep the admitted choices stable if routing changes before the detached child starts.
   const seatSnapshot = argv.includes('--seat') ? liveSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   const launchSnapshot = argv.includes('--seat') ? parseSeatMap(env.AGENTRIX_SEATS) ?? launchSeatMap(env.AGENTRIX_BOOTSTRAP) : null;
   env = { ...env, AGENTRIX_DISPATCH_PINNED_SEATS: JSON.stringify(seatSnapshot), AGENTRIX_SEATS: JSON.stringify(launchSnapshot) };
-  const options = argumentsOf(argv, env, seatSnapshot);
+  const options = argumentsOf(argv, env, seatSnapshot, roleFallback);
   timeout ??= 60000 + (localWindowsCodex(options.agent, env) ? ROLE_LIMIT : 0);
   store ||= detachedRuns(options.cwd, true);
   const id = randomUUID(), file = store.file(id);
   const saved = argv.filter(arg => arg !== '--detach');
   saved[saved.indexOf('--cwd') + 1] = options.cwd;
-  store.create({ id, argv: saved, source, cwd: options.cwd, out: options.out, createdAt: Date.now() });
+  store.create({ id, argv: saved, source, cwd: options.cwd, out: options.out, createdAt: Date.now(), ...(roleFallback && { roleFallback }) });
   try { store.prune(); } catch { /* Old receipt cleanup never prevents a new launch. */ }
   const descriptor = fs.openSync(file + '.log', 'ax', 0o600);
   let child, exit;
@@ -746,7 +760,7 @@ async function runDetached(file, deps = {}) {
     confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
   let code = 1;
   try {
-    code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000 });
+    code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000, roleFallback: entry.roleFallback });
     return code;
   } finally {
     const endedAt = Date.now();
@@ -813,11 +827,13 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
 
 async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal } = {}) {
+  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal, roleFallback } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
-    return serve({ roles: createRoleTools({ env, engine: run }) }).then(() => 0);
+    const [, leadAgent, model, effort] = argv;
+    const leadSeat = model && seatExpectation({ model, effort });
+    return serve({ roles: createRoleTools({ env, engine: run, leadAgent, leadSeat }) }).then(() => 0);
   }
   if (usesRoundtable(argv)) { stdout.write('[dispatch] ' + roundtablesRemoved + '\n'); return 1; }
   if (argv.at(-1) === '--help' && (argv.length === 1 || argv.length === 2 && ['codex', 'claude', 'stop', 'wait'].includes(argv[0]))) {
@@ -827,7 +843,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
       if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, signal: waitSignal });
-      return await startDetached(argv, { env, stdout, launch, source, onTiming });
+      return await startDetached(argv, { env, stdout, launch, source, onTiming, roleFallback });
     } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
   }
   plannerOutput = stdout;
@@ -925,6 +941,10 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   };
   let drained = new Promise(resolve => { drain = resolve; });
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
+  const fallbackNote = () => options.fallbackFrom
+    ? ' · {configured} → {actual}，因为这台电脑尚未完成 Codex 沙箱设置。'
+      .replace('{configured}', () => options.fallbackFrom).replace('{actual}', () => output.model || options.model)
+    : '';
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, helperPid: process.pid, agent: options.agent, role: options.role, title: options.title,
     ...billing(),
@@ -959,14 +979,16 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     if (!activeRuntime) for (const messageId of resumeControlIds) void recordReceipt(messageId, 'delivered').catch(() => {});
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
-    const decision = routingVerdict(output, requested), mismatch = decision === 'mismatch';
+    const decision = routingVerdict(output, requested, options.fallbackFrom), mismatch = decision === 'mismatch';
     const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : decision;
-    const routing = verdict + (unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '');
+    const fallback = options.fallbackFrom && decision === 'ok' ? ' · fallback' : '';
+    const notes = unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '';
+    const routing = verdict + fallback + notes;
     if (!started) {
       started = true;
       detached?.confirmed?.(workerStartedAt, Date.now());
       sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
-      signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}`);
+      signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${fallbackNote()}`);
       for (const fact of inputFacts.values()) send(fact);
       if (heldLimits !== undefined) { reportAccount(heldLimits); heldLimits = undefined; }
     }
@@ -1082,7 +1104,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   };
   const onInterrupt = () => stop('SIGINT'), onTerminate = () => stop('SIGTERM'), onHangup = () => stop('SIGHUP');
   try {
-    options = argumentsOf(argv, env);
+    options = argumentsOf(argv, env, env[PINNED_SEATS], roleFallback);
     output = workerOutput();
     rollout = new CodexRollout(env.CODEX_HOME || path.join(homedir(), '.codex'), output);
     if (!['dispatch', 'intercepted'].includes(source)) throw new Error('Unknown dispatch source');
@@ -1353,11 +1375,13 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
       const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
       const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
-      if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured, verdict: routingVerdict(output, declared()),
+      if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured,
+        verdict: routingVerdict(output, declared(), options.fallbackFrom),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
-      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${scopeRestoreNote}${bookkeeping}${proposalNote()}${interventionNote()} · out ${options.out}`);
+      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${scopeRestoreNote}${bookkeeping}`
+        + `${proposalNote()}${interventionNote()} · out ${options.out}${fallbackNote()}`);
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();
@@ -1570,9 +1594,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       const reason = unconfirmed ? 'unconfirmed' : 'error';
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...usage(),
-        verdict: routingVerdict(output, declared()), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+        verdict: routingVerdict(output, declared(), options.fallbackFrom), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${bookkeeping}${proposalNote()}${interventionNote()} · out ${options.out}`);
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${bookkeeping}${proposalNote()}${interventionNote()} · out ${options.out}${fallbackNote()}`);
     }
     log?.destroy();
     return 1;
@@ -1593,5 +1617,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 }
 
 module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles,
-  run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL };
+  run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
+  localWindowsCodex, roleReadiness, elevatedSetupMessage };
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });

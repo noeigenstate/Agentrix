@@ -123,14 +123,14 @@ function createHostInputs(deps) {
     const delivery = skills?.delivery?.(project, false, sessionId, { agent, started: true });
     const dispatchSnapshot = deps.writeBootstrap({ file: bootstrapFile, eventServer: deps.eventServer, projectId: id, projectPath: project.path,
       sessionKey, controlAddress: deps.controlAddress, controlCapability, claudeBackgroundTasks: store.settings?.claudeBackgroundTasks,
-      dispatchSeats: delivery?.agentSeats ?? null, conductor });
+      lead: agent === 'claude' ? lead : undefined, dispatchSeats: delivery?.agentSeats ?? null, conductor });
     // The owner's own ! commands run without the shims: a typed claude or codex is the real CLI.
     const env = deps.nativeEnvironment(bootstrapFile, launch?.codexHome);
     const shellEnv = deps.nativeEnvironment(bootstrapFile, launch?.codexHome, { planner: false });
     const context = deps.startupNote(deps.READING_NOTE, deps.handoffFile(id), path.join(project.path, 'skills'), delivery);
     const spec = { agent, owner: 'gui', projectId: project.id, terminalId: id, cwd, env, shellEnv, context,
       sessionId, sessionKey, bootstrapFile, controlCapability, ...runOptions, seatsMap: delivery?.agentSeats, providerSessionId,
-      roleServer: roleServer(env) };
+      roleServer: roleServer(env, agent) };
     env.AGENTRIX_SEATS = agent === 'codex' ? dispatchSnapshot ?? 'null' : JSON.stringify(spec.seatsMap ?? null);
     if (agent === 'claude') spec.onSubagent = (signal, binding) => deps.nativeSubagent(spec, signal, binding);
     if (agent === 'claude') spec.onSeat = (observed, binding) => deps.nativeSubagent(spec, { ...observed, kind: 'seat', terminalId: id }, binding);
@@ -141,8 +141,8 @@ function createHostInputs(deps) {
 
   // The conductor's role tools, served by the worker engine over MCP stdio. Every lead has them and they refuse in native
   // mode, so a session started in native mode can call roles once the owner switches it.
-  function roleServer(env) {
-    return { command: process.execPath, args: [path.join(deps.integrationDir, 'dispatch.cjs'), 'mcp'], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
+  function roleServer(env, agent) {
+    return { command: process.execPath, args: [path.join(deps.integrationDir, 'dispatch.cjs'), 'mcp', agent], env: { ...env, ELECTRON_RUN_AS_NODE: '1' } };
   }
 
   return { readNativeConnections, liveHost, readNativeSubscriptionLimits, readNativeUsageInputs, connectionSpec, nativeEnvironment, nativeSpec };

@@ -7,19 +7,20 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { validateSmallScope } = require('./dispatch.cjs');
+const { validateSmallScope, localWindowsCodex, roleReadiness, elevatedSetupMessage } = require('./dispatch.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
-const { familyOf, launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { familyOf, launchSeat, liveSeatMap, claudeLeadSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 const REVIEWING = /^(reviewer|qa|security|a11y)(\/|$)/;
 const PROTOCOL = '2025-06-18';
 const RECENT_END_MS = 10 * 60 * 1000;
+const READINESS_CACHE_MS = 5000;
 const exec = promisify(execFile);
 const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 ? value : undefined;
 
 const text = description => ({ type: 'string', description });
 const TOOLS = [
-  { name: 'start_role', description: 'Start a background role and return its run id once confirmed. The role uses its seat\'s model, effort and fast setting.',
+  { name: 'start_role', description: 'Start a background role with its seat settings. Returns a confirmed run id or instructions if the role cannot be dispatched.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
       title: text('One line: what the role does'),
@@ -114,8 +115,35 @@ async function createWorktree(cwd, suffix) {
   return { cwd: work, branch, rollback };
 }
 
-function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
+function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadAgent, leadSeat,
+  platform = process.platform, checkReadiness = roleReadiness, now = Date.now }) {
   const runs = new Map();
+  let readiness;
+  function sandboxStatus() {
+    if (!readiness || readiness.until <= now()) {
+      const entry = { until: Infinity };
+      entry.result = Promise.resolve().then(() => checkReadiness(cwd, env)).catch(() => null)
+        .then(status => {
+          if (status !== 'ready') entry.until = now() + READINESS_CACHE_MS;
+          return status;
+        });
+      readiness = entry;
+    }
+    return readiness.result;
+  }
+  async function sandboxRoute(agent, seat) {
+    if (!['claude', 'codex'].includes(leadAgent) || !localWindowsCodex(agent, env, platform)) return {};
+    const lead = leadAgent === 'claude' ? leadSeat ?? claudeLeadSeat(env.AGENTRIX_BOOTSTRAP) : null;
+    if (leadAgent === 'claude' && (!lead || familyOf(lead.model) !== 'claude')) return {};
+    const status = await sandboxStatus();
+    if (status !== 'notConfigured' && status !== 'updateRequired') return {};
+    if (leadAgent === 'codex') {
+      const instruction = '这台电脑尚未完成 Codex 角色沙箱设置。请用 Codex 内置的子代理完成这个席位的工作。';
+      return { instruction: instruction + ' ' + elevatedSetupMessage(env) };
+    }
+    return { roleFallback: { configured: seat.model, model: lead.model,
+      effort: ['low', 'medium', 'high'].includes(seat.effort) ? seat.effort : lead.effort, fast: false } };
+  }
   const call = async (args, options) => {
     let output = '';
     const timing = new Map();
@@ -194,10 +222,14 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
       if (!readOnly && !allow.length) throw new Error('A role that changes files needs allow: the file globs it may change.');
       if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
       if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
+      const configuredAgent = familyOf(seats[id].model);
+      const { instruction, roleFallback } = await sandboxRoute(configuredAgent, seats[id]);
+      if (instruction) return { instruction };
+      const agent = roleFallback ? 'claude' : configuredAgent;
       const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree);
       let waitingId;
       try {
-        const agent = familyOf(seats[id].model), work = checkout?.cwd ?? (folder || cwd);
+        const work = checkout?.cwd ?? (folder || cwd);
         const files = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-role-'));
         const briefFile = path.join(files, 'brief.md'), out = path.join(files, 'answer.md');
         fs.writeFileSync(briefFile, brief, { mode: 0o600 });
@@ -206,6 +238,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
           ...(small ? ['--small'] : []),
           ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
+          ...(roleFallback && { roleFallback }),
           onTiming: status => {
             if (!status.waitingLine || waitingId) return;
             waitingId = status.id;

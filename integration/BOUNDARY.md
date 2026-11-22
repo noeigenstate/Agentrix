@@ -23,6 +23,11 @@ A local Windows Codex role reports its sandbox wait in the detached receipt and 
 Its detached launcher allows eight extra minutes for authorization.
 A writable `start_role` may create a local Git worktree and returns its branch and folder after confirmation.
 A failed checkout or launch rolls back the new worktree and branch.
+Before creating a worktree or dispatching a local Windows Codex seat, the role tools share a readiness check within the lead conversation.
+A ready result lasts for that conversation. Other results expire after five seconds. A Claude lead without a recorded seat skips preflight.
+A known unready sandbox redirects a Claude lead's seat to its Claude model with low, medium or high seat effort (otherwise the lead's effort) and fast off, or gives a Codex lead built-in sub-agent instructions.
+The detached helper retains the fallback as its declared route and reports the original seat model and reason on start and end.
+Unknown readiness follows the usual launch path. Codex role startup still verifies elevated sandbox readiness independently.
 
 ## Owns
 - `integration/dispatch.cjs`
