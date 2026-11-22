@@ -2788,7 +2788,7 @@
   "无效的运行选项。": "Invalid run options.",
   "此会话不支持切换权限。": "This session cannot change permissions.",
   "Codex 未应用工作区可写沙箱，已停止启动。请检查 Codex 沙箱配置后重试。": "Codex did not apply the workspace-write sandbox, so the start was stopped. Check your Codex sandbox config and try again.",
-  "请使用 Agentrix 安装程序重新安装并批准 Windows 沙箱设置。也可在管理员 PowerShell 中运行以下命令后重试。 {command}": "Reinstall Agentrix with its installer and approve sandbox setup, or run this in an elevated PowerShell and retry. {command}",
+  "请重启 Agentrix，在提示时选择「设置」。也可在管理员 PowerShell 中运行以下命令后重试。 {command}": "Restart Agentrix and choose Set up when prompted, or run this command in an elevated PowerShell and retry. {command}",
   "当前安装的 Codex 版本过旧，无法为角色启用 Windows 沙箱。请更新 Codex 后重试。": "The installed Codex is too old to enable Windows sandboxing for roles. Update Codex and try again.",
   "<你的 Windows 用户>": "<your Windows user>",
   "Codex 未应用完全访问权限，已停止启动。请检查 Codex 的沙箱配置或管理策略后重试。": "Codex did not apply full access, so the start was stopped. Check your Codex sandbox config or managed policy and try again.",
@@ -3714,5 +3714,12 @@
   "小任务更轻": "Lighter small tasks",
   "查一处内容或只改一两个文件的小任务，交给角色时只带必要的说明，开工更快、花费更少。": "A small task, such as one lookup or an edit to one or two files, reaches a role with only the notes it needs, so it starts sooner and costs less.",
   "Codex 角色沙箱": "Codex role sandbox",
-  "Windows 上用安装程序安装时，会请求一次管理员批准来设置 Codex 沙箱，之后 Codex 角色可直接运行测试；自动更新不会设置，请重新运行一次安装程序。": "On Windows, installing with the installer asks once for administrator approval to set up the Codex sandbox, after which Codex roles run tests directly; an automatic update does not set it up, so run the installer once more."
+  "在 Windows 上，Agentrix 会在应用内询问一次，征求管理员批准来设置 Codex 沙箱。": "On Windows, Agentrix asks once in the app for administrator approval to set up the Codex sandbox.",
+  "Agentrix 的 Codex 角色需要管理员批准，才能完成一次性的 Windows 沙箱设置。": "Agentrix’s Codex roles need administrator approval to complete a one-time Windows sandbox setup.",
+  "设置（Codex 沙箱）": "Set up",
+  "以后再说": "Later",
+  "Codex 主目录必须是本机的绝对路径，沙箱设置已跳过。": "The Codex home must be an absolute local path. Sandbox setup was skipped.",
+  "Codex 沙箱已设置完成。": "Codex sandbox setup is complete.",
+  "管理员批准已取消，Agentrix 下次启动时会再次询问。": "Administrator approval was canceled. Agentrix will ask again the next time it starts.",
+  "未能完成 Codex 沙箱设置，Agentrix 下次启动时会再次询问。": "Codex sandbox setup could not be completed. Agentrix will ask again the next time it starts."
 }

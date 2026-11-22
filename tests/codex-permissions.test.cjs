@@ -184,7 +184,7 @@ test('local Windows dispatch stops before opening a thread when elevated setup i
     const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly, env } });
     await assert.rejects(session.start(), {
       code: 'elevated_sandbox_not_ready',
-      message: /Agentrix 安装程序重新安装.*管理员 PowerShell.*codex sandbox setup --elevated --user 'DOMAIN\\test-user' --codex-home 'C:\\Codex User''s Home'/,
+      message: /重启 Agentrix.*「设置」.*管理员 PowerShell.*codex sandbox setup --elevated --user 'DOMAIN\\test-user' --codex-home 'C:\\Codex User''s Home'/,
     });
     assert.equal(server.threadRequests('thread/start').length, 0);
     assert.equal(session.snapshot().state, 'failed');

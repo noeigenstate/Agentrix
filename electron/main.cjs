@@ -70,9 +70,14 @@ const { scanDrives, fixedDrives } = require('./features/codex-runtime/drive-scan
 // found none, the time, for the next start, and tells the settings. An isolated profile (AGENTRIX_DATA_DIR) never
 // scans: its PATH keeps it from this machine's real Codex, and a scan would not.
 const codexHitFile = () => path.join(app.getPath('userData'), 'codex-location.json');
+let offerCodexSandboxSetup;
 const codexLocator = createCodexLocator({ scan: process.env.AGENTRIX_DATA_DIR ? null
   : async walk => scanDrives({ ...walk, drives: await fixedDrives(process.env), skipPaths: [process.env.TEMP, process.env.TMP, os.tmpdir()] }),
-  store: { read: () => readNativeJson(codexHitFile(), null), write: value => writeNativeJson(codexHitFile(), value) }, changed: () => agents.changed() });
+  store: { read: () => readNativeJson(codexHitFile(), null), write: value => writeNativeJson(codexHitFile(), value) },
+  changed: () => {
+    agents.changed();
+    if (codexLocator.peek()?.file) void offerCodexSandboxSetup?.();
+  } });
 const codexExecutable = () => codexLocator.locate().then(found => found.file);
 const codexAccounts = new CodexAccountUsage({ read: options => readCodexAccount({ ...options, resolveExecutable: codexExecutable }),
   resetClient: { rpcFactory: createResetRpc, resolveExecutable: codexExecutable }, resetStorage: {
@@ -1956,6 +1961,16 @@ if (!app.requestSingleInstanceLock()) {
       getActiveTerminal: () => activeTerminal, getActiveFileTree: () => activeFileTree, getShortcuts: () => store.settings.shortcuts });
     registerWindowLifecycle({ window, getSettings: () => store.settings, isQuitting: () => quitting, hasTray: () => !!tray,
       requestQuit, report, send, updateIndicators, clearAttention: () => clearTimeout(attentionTimer) });
+    if (process.platform === 'win32') {
+      const mainWindow = window;
+      mainWindow.once('show', () => {
+        const { createSandboxSetup } = require('./features/codex-sandbox-setup/index.cjs');
+        offerCodexSandboxSetup = createSandboxSetup({ find: async () => { await codexFirst; return codexExecutable(); },
+          cwd: probeDirectory, show: options => dialog.showMessageBox(mainWindow, options), t,
+          active: () => !quitting && !mainWindow.isDestroyed() });
+        void offerCodexSandboxSetup();
+      });
+    }
     tray = new Tray(trayImage('icon.png'));
     tray.setToolTip(t('Agentrix'));
     trayMenu();
