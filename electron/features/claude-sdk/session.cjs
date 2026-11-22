@@ -352,6 +352,9 @@ function createClaudeSession(spec, emit, dependencies) {
     try {
       const options = queryOptions(spec, { key, executable, abort: run.abort,
         providerSessionId: providerId, policy,
+        onRefusal: refusal => {
+          if (!closed && !stopping && active === run && spec.owner === 'dispatch') publish('worker.refused', refusal);
+        },
         onSubagent: (kind, input, toolUseId) => reportSubagent(run, kind, input, toolUseId),
         onSeat: (input, observed) => {
           if (closed || stopping || active !== run || !run.initialized || input.session_id !== providerId) return;

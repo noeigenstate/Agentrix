@@ -10,7 +10,8 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
 const { createHmac, randomUUID } = require('node:crypto');
-const { run } = require('../integration/dispatch.cjs');
+const { run, runDetached, detachedRuns } = require('../integration/dispatch.cjs');
+const { createRoleTools } = require('../integration/role-tools.cjs');
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
@@ -70,7 +71,7 @@ function transcript(claudeHome, cwd, sessionId) {
 }
 
 // The real helper and control channel, under a terminal lead whose terminal main knows.
-async function fixture(t) {
+async function fixture(t, { detached = false } = {}) {
   const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-'))), main = path.join(root, 'main'), repo = path.join(root, 'worker');
   fs.mkdirSync(path.join(main, 'src'), { recursive: true });
@@ -100,13 +101,18 @@ async function fixture(t) {
   const brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
   fs.mkdirSync(path.dirname(out)); fs.writeFileSync(brief, 'Synthetic terminal task');
   let stdout = '', finished = false;
-  const result = run(['claude', '--role', 'exec', '--title', 'Synthetic terminal worker', '--model', 'synthetic-model', '--effort', 'high',
-    '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**'], {
+  const started = Promise.withResolvers();
+  const argv = ['claude', '--role', 'exec', '--title', 'Synthetic terminal worker', '--model', 'synthetic-model', '--effort', 'high',
+    '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**'];
+  const deps = {
     env: { PATH: '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), CODEX_HOME: path.join(root, 'codex'), AGENTRIX_BOOTSTRAP: parent.bootstrap },
-    stdout: { write: text => { stdout += text; } }, rateInterval: 20,
+    stdout: { write: text => { stdout += text; if (text.startsWith('[dispatch] started ')) started.resolve(); } }, rateInterval: 20,
     resolveExecutable: () => assert.fail('a terminal worker never resolves a CLI in the helper'),
     launch: () => assert.fail('a terminal worker never spawns a CLI from the helper'),
-  }).finally(() => { finished = true; });
+  };
+  const store = detached ? detachedRuns(repo) : null, detachedId = detached ? randomUUID() : null;
+  if (store) store.create({ id: detachedId, argv, out, createdAt: Date.now() });
+  const result = (store ? runDetached(store.file(detachedId), deps) : run(argv, deps)).finally(() => { finished = true; });
   lifetime.defer('finish helper', async () => {
     if (!finished) { control.close(); terminals.closeAll(); }
     await lifetime.wait(result, `helper result; output=${stdout}`);
@@ -116,12 +122,42 @@ async function fixture(t) {
   const id = team.live()[0].id, sessionId = randomUUID(), pty = spawned[0];
   const api = createInterventions({ resolve: () => ({ terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, route: 'dispatch',
     runId: id, title: 'Synthetic terminal worker', cwd: repo, projectPath: repo, local: true }), pushControl: control.pushControl });
-  return { root, repo, id, pty, sessionId, parent, events, calls, out, result, api, terminals, notices, brief,
+  return { root, repo, id, pty, sessionId, parent, events, calls, out, result, api, terminals, notices, brief, started: started.promise,
     stdout: () => stdout, item: () => calls.snapshot().flatMap(group => group.items).find(item => item.id === `dispatch:${id}`),
     feed: () => calls.feeds.owned(calls.byId(`dispatch:${id}`))?.snapshot,
     log: transcript(parent.claudeHome, repo, sessionId),
     hook: (event, payload = {}) => terminals.hook({ terminalId: `worker-${id}`, event, sessionId, payload: { tool_use_id: 'synthetic-tool', ...payload } }) };
 }
+
+test('a hidden terminal owner prompt reaches the real detached receipt and wakes wait_roles', { timeout: 15000 }, async t => {
+  const f = await fixture(t, { detached: true });
+  fs.writeFileSync(f.parent.bootstrap + '.mode', 'conductor');
+  fs.writeFileSync(f.parent.bootstrap + '.seats', JSON.stringify({ reviewer: { model: 'sonnet', effort: 'high' } }));
+  const { tools } = createRoleTools({ env: f.parent.env, cwd: f.repo, engine: (args, deps) => {
+    if (args[0] === 'wait') return run(args, deps);
+    deps.stdout.write('[dispatch] started ' + f.id + ' claude\n');
+    return 0;
+  } });
+  await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Inspect', readOnly: true });
+  f.hook('UserPromptSubmit');
+  await f.started;
+  const writes = f.pty.writes.length;
+  const waiting = tools.wait_roles({ ids: [f.id], seconds: 30 });
+  f.hook('PermissionRequest', { tool_name: 'ExitPlanMode' });
+  const [role] = await waiting;
+  assert.equal(role.state, 'running');
+  assert.equal(role.waiting, 'waiting for the owner: approve the plan to leave plan mode');
+  assert.match(role.activity, /waiting for the owner/);
+  assert.equal((await tools.roles_status()).roles[0].waiting, role.waiting);
+  assert.equal(f.pty.writes.length, writes, 'only the owner can answer');
+  const store = detachedRuns(f.repo);
+  const cleared = store.observe(() => store.read(f.id)?.ownerWait === null ? true : undefined, 5000);
+  f.hook('PostToolUse', { tool_name: 'ExitPlanMode' });
+  assert.equal(await cleared, true);
+  assert.equal((await tools.roles_status()).roles[0].waiting, undefined);
+  f.hook('Stop', { last_assistant_message: 'Synthetic answer' });
+  assert.equal(await f.result, 0, f.stdout());
+});
 
 test("a terminal planner's worker shows its rate, waits for the owner and writes output on Stop", async t => {
   const f = await fixture(t), at = Date.now();

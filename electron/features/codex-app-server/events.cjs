@@ -126,6 +126,7 @@ function createEvents(spec, emit, now, renderImage, translate = value => value, 
       const live = method === 'item/completed';
       const payload = itemPayload(item, live, image => renderImage?.(image, 'live'), translate); items.set(item.id, payload);
       if (live) completed.add(item.id);
+      if (live && spec.owner === 'dispatch' && item.status === 'declined') payload.providerStatus = 'declined';
       if (publish('item.upsert', payload, { itemId: item.id, turnId: params.turnId ?? binding.turnId }) && live) settle(item.id, 'live');
     } else if (['item/agentMessage/delta', 'item/commandExecution/outputDelta', 'item/reasoning/summaryTextDelta', 'item/plan/delta'].includes(method)) {
       if (completed.has(params.itemId) || typeof params.delta !== 'string') return;

@@ -60,6 +60,7 @@ export function failureWord(failure: NonNullable<AgentCall['items'][number]['fai
   if (failure.reason === 'capacity') return t('模型满载');
   if (failure.reason === 'killed') return t('已停止');
   if (failure.reason === 'scope') return t('越界');
+  if (failure.reason === 'permission') return t('角色操作被拒绝');
   return failure.exitCode == null ? t('出错退出') : t('出错退出（代码 {code}）', { code: failure.exitCode });
 }
 

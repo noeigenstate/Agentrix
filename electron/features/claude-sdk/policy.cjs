@@ -1,6 +1,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { matches } = require('../../boundaries.cjs');
+const { commandPhrase } = require('../../agent-actions.cjs');
+const { diagnosticLine } = require('../agents/start-failure.cjs');
+const DENIALS = {
+  unsupported_tool: '此角色不允许使用该工具。',
+  read_only: '此角色是只读的，不能执行命令或编辑文件。',
+  git_forbidden: '任务策略禁止此 Git 操作。',
+  outside_worktree: '目标位于角色工作目录之外。',
+  invalid_path: '任务策略无法验证目标路径。',
+  outside_scope: '目标文件不在任务授权的编辑范围内。',
+  skill_not_authorized: '修改该技能需要明确授权其文件路径。',
+};
 const READ = new Set(['Read', 'Glob', 'Grep', 'LS']);
 const EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 function realTarget(file) {
@@ -38,9 +49,21 @@ function createPolicy(spec, audit = () => {}) {
         if (path.basename(file).toLowerCase() === 'skill.md' && !(spec.allow || []).includes(normalized)) reasonCode = 'skill_not_authorized';
       }
     }
-    const decision = { behavior: reasonCode === 'allowed' ? 'allow' : 'deny', reasonCode, reason: reasonCode === 'allowed' ? '已按任务授权。' : '任务策略拒绝此操作。' };
+    const decision = reasonCode === 'allowed' ? { behavior: 'allow', reasonCode, reason: '已按任务授权。' }
+      : { behavior: 'deny', reasonCode, reason: DENIALS[reasonCode] + '请勿绕过此限制。', action: deniedAction(intent, spec.env) };
     audit({ toolName: name, operation: intent.operation, ...decision });
     return decision;
   };
 }
+function deniedAction(intent, env = process.env) {
+  // Keep command arguments and tool inputs such as file contents out of the run record.
+  const tool = /^[A-Za-z][\w-]{0,79}$/.test(intent.toolName) ? intent.toolName : 'Tool';
+  if (intent.operation === 'command' && intent.command) return tool + ': ' + commandPhrase(intent.command).phrase;
+  if (!['read', 'edit'].includes(intent.operation)) return tool;
+  const mask = text => Object.values(env).reduce((value, secret) =>
+    typeof secret === 'string' && secret.length >= 4 ? value.replaceAll(secret, '<secret>') : value, text);
+  const target = diagnosticLine(intent.paths[0], { limit: 160 - tool.length - 2, mask });
+  return target ? tool + ': ' + target : tool;
+}
+
 module.exports = { createPolicy, toolIntent };

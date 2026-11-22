@@ -104,6 +104,26 @@ test('roles_status shows sandbox progress during start_role confirmation', async
   assert.equal((await started).id, 'run-1');
 });
 
+test('role status, wait and result return structured refusals from the detached receipt', async t => {
+  const { env, folder } = session(t, 'conductor');
+  const refused = [{ action: 'Bash: run tests', reason: 'read_only' }];
+  const fake = engine((args, onTiming) => {
+    if (args.includes('--detach')) {
+      fs.writeFileSync(args[args.indexOf('--out') + 1], '## Needs approval\nRun tests.');
+      return '[dispatch] started run-1 claude\n';
+    }
+    onTiming({ id: 'run-1', refused, endedAt: Date.now() });
+    return '[dispatch] ended run-1 claude · exit 0 reason permission · refused 1: Bash: run tests\n';
+  });
+  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+  await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Inspect', readOnly: true });
+  assert.deepEqual((await tools.wait_roles())[0].refused, refused);
+  assert.deepEqual((await tools.roles_status()).roles[0].refused, refused);
+  const result = await tools.role_result({ id: 'run-1' });
+  assert.deepEqual(result.refused, refused);
+  assert.match(result.answer, /^## Needs approval/);
+});
+
 test('start_role passes small through to the engine and refuses wide writable scopes before checkout', async t => {
   const { env, folder } = session(t, 'conductor'), fake = engine(() => '[dispatch] started run-1 codex\n');
   const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });

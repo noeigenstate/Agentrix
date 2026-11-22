@@ -100,7 +100,11 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   git(['worktree', 'add', '-qb', 'synthetic-worker', repo]);
   const team = projectTeam(repo, true), sdk = sdkFixture(), events = [], calls = new AgentCalls({ local: false });
   const owner = { terminalId: 'terminal', sessionKey: 'synthetic-owner' };
-  const eventServer = await createEventServer(event => { events.push(event); acceptDispatch(owner, event, calls); });
+  const endEvent = Promise.withResolvers();
+  const eventServer = await createEventServer(event => {
+    events.push(event); acceptDispatch(owner, event, calls);
+    if (event.type === 'dispatch-end') endEvent.resolve(event);
+  });
   lifetime.defer('close events', () => eventServer.close());
   // The helper signs with the bootstrap it read first (dispatch-outbox), so a failed reopen is main refusing the second registration.
   let registrations = 0;
@@ -118,7 +122,7 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   claude.credentials.save('sk-ant-synthetic-worker-only-000000');
   lifetime.defer('close Claude runtime', () => claude.close());
   let api, target, sentLate = false;
-  registerClaudeWorker({ control, claude, settings: () => ({ claudePath: 'api-only', monthlyBudgetUsd: null }), env: () => ({ PATH: '' }) });
+  registerClaudeWorker({ control, claude, settings: () => ({ claudePath: 'api-only', monthlyBudgetUsd: null }), env: () => ({ PATH: '', SYNTHETIC_PRIVATE: 'synthetic-private-env' }) });
   const bootstrap = path.join(root, 'bootstrap.json'), brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
   fs.mkdirSync(path.dirname(out)); fs.writeFileSync(brief, 'Synthetic task');
   fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: eventServer.address, controlAddress: address, controlCapability: 'synthetic-capability', ...owner, projectId: owner.terminalId }));
@@ -135,11 +139,12 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
     return take.call(this, finish);
   });
   let stdout = '', finished = false;
+  const started = Promise.withResolvers();
   const result = run(['claude', '--role', 'exec', '--title', 'Synthetic Claude worker', '--model', 'synthetic-model', '--effort', 'high',
     '--permission', 'acceptEdits', '--cwd', repo, '--brief', brief, '--out', out, '--allow', 'src/**'], {
     env: { PATH: '', HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home'), CODEX_HOME: path.join(root, 'codex'), AGENTRIX_BOOTSTRAP: bootstrap,
       ANTHROPIC_API_KEY: 'synthetic-parent-key', CLAUDE_CODE_OAUTH_TOKEN: 'synthetic-oauth' },
-    stdout: { write: text => { stdout += text; } },
+    stdout: { write: text => { stdout += text; if (text.startsWith('[dispatch] started ')) started.resolve(); } },
     resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server-env.cjs'), ...args] }),
     launch: () => assert.fail('API-only worker must not spawn a CLI'),
   }).finally(() => { finished = true; });
@@ -153,8 +158,31 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   target = { terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, route: 'dispatch', runId: id,
     title: 'Synthetic Claude worker', cwd: repo, projectPath: repo, local: true };
   api = createInterventions({ resolve: () => target, pushControl: control.pushControl });
-  return { root, repo, sdk, api, id, target, team, calls, events, out, result, stdout: () => stdout, finished: () => finished };
+  return { root, repo, sdk, api, id, target, team, calls, events, out, result, started: started.promise, endEvent: endEvent.promise, stdout: () => stdout, finished: () => finished };
 }
+
+test('a denied SDK tool reaches the dispatch end and leaves a successful process exit', { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  await f.started;
+  const [preTool] = f.sdk.calls[0].options.hooks.PreToolUse[0].hooks;
+  const blocked = await preTool({ tool_name: 'Edit', tool_input: { file_path: 'outside.txt', new_string: 'synthetic private file contents' } });
+  assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /授权的编辑范围内.*请勿绕过/);
+  assert.equal((await preTool({ tool_name: 'Read', tool_input: { file_path: 'outside.txt' } })).hookSpecificOutput.permissionDecision, 'allow');
+  await preTool({ tool_name: 'Edit', tool_input: { file_path: 'synthetic-private-env.txt' } });
+  for (let index = 0; index < 22; index++) await preTool({ tool_name: 'Bash', tool_input: { command: 'git push synthetic-secret' } });
+  f.sdk.finish();
+  assert.equal(await f.result, 0);
+  const end = await f.endEvent;
+  assert.equal(end.reason, 'permission');
+  assert.equal(f.calls.snapshot().flatMap(group => group.items).find(item => item.id === f.target.callId).failure.reason, 'permission');
+  assert.equal(end.refused.length, 20);
+  assert.deepEqual(end.refused[0], { action: 'Edit: outside.txt', reason: 'outside_scope' });
+  assert.deepEqual(end.refused[1], { action: 'Edit: <secret>.txt', reason: 'outside_scope' });
+  assert.deepEqual(end.refused[2], { action: 'Bash: 推送到远程仓库', reason: 'git_forbidden' });
+  assert.match(f.stdout(), /exit 0 reason permission · scope ok · refused 20: Edit: outside\.txt/);
+  assert.doesNotMatch(fs.readFileSync(f.out + '.log', 'utf8'), /synthetic private file contents|synthetic-private-env|synthetic-secret/);
+});
 
 test('B1: real Claude helper publishes started and a running activity row before the first result', { timeout: 15000 }, async t => {
   const f = await fixture(t);
@@ -164,6 +192,9 @@ test('B1: real Claude helper publishes started and a running activity row before
   const receipt = await f.api.interveneAgent('terminal', f.target.callId, 'Owner correction');
   assert.ok(['queued', 'delivered'].includes(receipt.status)); await until(() => f.sdk.inputs.length === 2);
   f.sdk.finish(); assert.equal(await f.result, 0);
+  assert.match(f.stdout(), /exit 0 reason exit · scope ok/);
+  assert.doesNotMatch(f.stdout(), / · refused /);
+  assert.equal((await f.endEvent).refused, undefined);
   assert.match(f.stdout(), /intervention .* consumed/); assert.doesNotMatch(f.stdout(), /intervention .* unknown/);
 });
 

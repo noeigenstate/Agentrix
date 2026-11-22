@@ -54,7 +54,7 @@ function routeAgentSeat(input, seats, onSeat) {
   return {};
 }
 
-function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {}, onSeat = () => {} }) {
+function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {}, onSeat = () => {}, onRefusal = () => {} }) {
   const bootstrap = spec.owner === 'gui' ? spec.bootstrapFile : null;
   const seatsNow = () => liveSeatMap(bootstrap) ?? spec.seatsMap;
   const reportSubagent = kind => async (input, toolUseId) => {
@@ -84,6 +84,7 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
         return routeAgentSeat(input, seatsNow(), onSeat);
       }
       if (decision.behavior === 'defer') return {};
+      if (decision.behavior === 'deny') onRefusal({ action: decision.action, reason: decision.reasonCode });
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
     }] }],
     ...((bootstrap || spec.seatsMap) && { PostToolUse: [{ matcher: 'Agent|Task', hooks: [async input => {

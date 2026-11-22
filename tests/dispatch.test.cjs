@@ -169,7 +169,8 @@ const codex = [
   { record: { type: 'turn.completed', usage: { output_tokens: 150, reasoning_output_tokens: 30 } } },
 ];
 
-async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0, hold, timeout = 30000, requestTimeout, extra = [], setup, isolated = false, environment = () => ({}), thread } = {}) {
+async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0,
+  hold, timeout = 30000, requestTimeout, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -194,7 +195,9 @@ async function fixture(t, lines = codex, { agent = 'codex', role = '执行', dec
   await fs.writeFile(config, JSON.stringify({ pipeName: server.name.startsWith('agentrix-') ? server.name : server.address, projectId: 'project', sessionKey: 'secret-for-test' }));
   await fs.writeFile(runner, `const {run}=require(${JSON.stringify(helper)});
 process.on('message', signal => process.emit(signal));
-run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTimeout}, resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
+run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTimeout},
+  ${detached ? 'detached: { id: require("node:crypto").randomUUID(), admitted() {} },' : ''}
+  resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', declaredModel || (agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5'), '--effort', agent === 'codex' ? 'max' : 'high',
     '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan']),
@@ -549,13 +552,32 @@ test('a blocking worker request is declined after the timeout and the worker fin
   const began = Date.now(), answer = 'Synthetic answer after the refusals.';
   const f = await fixture(t, [...codex, ...requests.map(([method, params]) => ({ request: { method, params } })), { write: 'answer.md', text: answer }], { requestTimeout: 200 });
   const result = await f.finished;
-  assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason exit/);
+  assert.equal(result.code, 0); assert.match(result.stdout, /exit 0 reason permission · refused 3: question request/);
   assert.ok(Date.now() - began >= requests.length * 200, 'no request is refused before its timeout');
   assert.deepEqual(result.stdout.split('\n').flatMap(line => /^\[dispatch\] request [\w-]+ [\w-]+ (.+)$/.exec(line)?.[1] ?? []),
     requests.flatMap(([, , opened, resolution]) => [opened, 'unanswered for 0.2 s; declining', resolution]));
   const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   assert.deepEqual(capture.requests.filter(request => !request.method), requests.map((request, index) => ({ id: `request-${index}`, result: request.at(-1) })));
   assert.equal(await fs.readFile(f.out, 'utf8'), answer);
+});
+
+test('a detached Codex role declines blocking requests immediately and records declined items', { timeout: 15000 }, async t => {
+  const request = { method: 'item/commandExecution/requestApproval', params: { command: 'npm test --token=synthetic-secret', itemId: 'asked' } };
+  const declined = id => ({ notify: { method: 'item/completed', params: { item: { id, type: 'commandExecution', status: 'declined', command: 'npm test' } } } });
+  const permissions = { method: 'item/permissions/requestApproval', params: { itemId: 'asked', permissions: { network: {} } } };
+  const f = await fixture(t, [...codex, { request }, { request: permissions }, declined('asked'), declined('other')], { detached: true });
+  const result = await f.finished;
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /requires owner approval; declining/);
+  assert.match(result.stdout, /exit 0 reason permission · refused 3: command approval/);
+  assert.doesNotMatch(result.stdout, /synthetic-secret/);
+  assert.deepEqual(f.events.at(-1).refused, [{ action: 'command approval: 运行测试', reason: 'approval_required' },
+    { action: 'permissions request', reason: 'approval_required' }, { action: 'command: 运行测试', reason: 'provider_declined' }]);
+  const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
+  assert.deepEqual(capture.requests.filter(entry => /^request-/.test(entry.id)), [
+    { id: 'request-0', result: { decision: 'decline' } },
+    { id: 'request-1', result: { permissions: {}, scope: 'turn' } },
+  ]);
 });
 
 test('no session, timeout and spawn failure print failed-start once and end unconfirmed', async t => {
@@ -895,9 +917,10 @@ test('small role briefs trim context by permission and preserve the default byte
   const team = { context: () => ['# Project memory\n\nMemory.', '# Working now\n\nPeers.', '# Repository\n\n(clean)'] };
   const render = (options, currentTeam = team) => briefOf({ cwd, ...options }, Buffer.from('Inspect src/a.js.'), currentTeam, { repo });
   const read = { readOnly: true, allow: [] }, write = { allow: ['src/a.js'] };
-  // Captured from the pre-change engine with this fixture.
-  assert.equal(createHash('sha256').update(render(read)).digest('hex'), '360fd84da8599f32e7f73387cb546948338aad8811c60442ea140567263cda24');
-  assert.equal(createHash('sha256').update(render(write)).digest('hex'), 'd1922a777657b74c2d0f332ec705a75a5dc33c9b8285b818fd77c19748d85656');
+  // The new standing rule is the only change to the captured default sections.
+  const withoutRefusalRule = options => render(options).toString().replace(/^- If an action is refused[^\n]+\n/m, '');
+  assert.equal(createHash('sha256').update(withoutRefusalRule(read)).digest('hex'), '360fd84da8599f32e7f73387cb546948338aad8811c60442ea140567263cda24');
+  assert.equal(createHash('sha256').update(withoutRefusalRule(write)).digest('hex'), 'd1922a777657b74c2d0f332ec705a75a5dc33c9b8285b818fd77c19748d85656');
 
   const readOnlyTeam = { context: () => assert.fail('small lookups should not gather team context') };
   const lookup = render({ ...read, small: true }, readOnlyTeam).toString();
@@ -920,6 +943,13 @@ test('every worker reads one short standing section before its task: scoped, rea
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const section = options => /# Standing rules\n[\s\S]*?(?=\n\n# Skill changes)/.exec(briefOf({ cwd: directory, allow: [], ...options }, Buffer.from('任务。')).toString())[0];
   const scoped = section({ allow: ['src/**'] });
+  for (const small of [false, true]) {
+    const codex = section({ agent: 'codex', readOnly: true, small });
+    const claude = section({ agent: 'claude', permission: 'plan', small });
+    for (const text of [codex, claude]) assert.match(text, /^- If an action is refused.+## Needs approval.+$/m);
+    assert.match(claude, /^- End with a plain text answer.+Never call ExitPlanMode or ask the user a question.+$/m);
+    assert.doesNotMatch(codex, /ExitPlanMode/);
+  }
   for (const rule of [/code-standard skill this session was given/, /Change only the paths under "Files you may change"/, /Do not commit or push/,
     /do not start another worker/, /no GUI smoke test/, /system clipboard/, /only the tests the task touches/, /Report what you changed/,
     /language the task is written in/]) assert.match(scoped, rule);

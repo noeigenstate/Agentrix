@@ -52,4 +52,8 @@ function stderrCollector(kept = 8192) {
   }, text: () => text };
 }
 
-module.exports = { startupDetail, stderrTail, stderrCollector };
+function diagnosticLine(value, { limit = 160, mask } = {}) {
+  return typeof value === 'string' ? clip(line(redactor([], mask)(value)), limit) : '';
+}
+
+module.exports = { startupDetail, stderrTail, stderrCollector, diagnosticLine };

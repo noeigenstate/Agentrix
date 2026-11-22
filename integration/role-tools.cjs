@@ -12,6 +12,7 @@ const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts } = require(
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { familyOf, launchSeat, liveSeatMap, claudeLeadSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { validRefusals } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const REVIEWING = /^(reviewer|qa|security|a11y)(\/|$)/;
 const PROTOCOL = '2025-06-18';
 const RECENT_END_MS = 10 * 60 * 1000;
@@ -35,7 +36,7 @@ const TOOLS = [
   { name: 'roles_status', description: 'Show running roles and endings first observed in the last 10 minutes, plus the number of earlier endings.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {} } },
-  { name: 'wait_roles', description: 'Wait until any selected role ends or the timeout elapses, then show the selected roles.',
+  { name: 'wait_roles', description: 'Wait until any selected role ends, loses its receipt, starts waiting for the owner, or times out. Shows the selected roles.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {
       ids: { type: 'array', items: { type: 'string' }, description: 'Run ids; defaults to all running roles in this conversation' },
@@ -170,6 +171,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     if (!run) throw new Error(`No role run ${id} in this conversation.`);
     return run;
   };
+  const seenOwnerWaits = new Map();
   const describe = run => {
     const end = run.endedAt ?? run.observedEndAt;
     const measured = run.startedAt !== undefined && (!run.end || run.endedAt !== undefined);
@@ -178,18 +180,30 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       seconds: Math.max(0, Math.round(elapsed / 1000)),
       startSeconds: Math.max(0, ((run.confirmedAt ?? run.observedStartAt) - run.calledAt) / 1000),
       endedAt: end === undefined ? null : new Date(end).toISOString(),
-      ...(run.end ? { end: run.end } : { activity: run.activity ?? null }) };
+      refused: run.refused ?? [],
+      ...(run.end ? { end: run.end } : { activity: run.activity ?? null, ...(run.ownerWait && { waiting: run.ownerWait }) }) };
   };
 
   async function refreshGroup(folder, open, seconds, untilAny, signal) {
     const args = ['wait', ...open.map(run => run.id), '--cwd', folder, '--timeout', String(seconds)];
-    const { lines, timing } = await call(args, { untilAny, signal });
+    const { lines, timing } = await call(args, { untilAny, seenOwnerWaits, signal });
+    let ownerTransition = false;
     const failure = lines.find(line => line.startsWith('[dispatch] failed:'))?.slice('[dispatch] failed:'.length).trim();
     for (const run of open) {
       if (run.end) continue;
       const status = timing.get(run.id);
       run.startedAt ??= timestamp(status?.startedAt);
       run.confirmedAt ??= timestamp(status?.confirmedAt);
+      if (validRefusals(status?.refused) && status.refused.length >= (run.refused?.length ?? 0)) run.refused = status.refused;
+      if (status?.ownerWaitSequence >= (run.ownerWaitSequence ?? 0)) {
+        if (status.ownerWaitSequence > (run.ownerWaitSequence ?? 0) || !status.ownerWait) {
+          Object.assign(run, { ownerWait: status.ownerWait, ownerWaitSequence: status.ownerWaitSequence });
+        }
+        if (untilAny && status.ownerWaitSequence > (seenOwnerWaits.get(run.id) ?? 0)) {
+          ownerTransition = true;
+          seenOwnerWaits.set(run.id, status.ownerWaitSequence);
+        }
+      }
       const end = lines.find(line => line.startsWith(`[dispatch] ended ${run.id} `));
       const loss = lines.includes(`[dispatch] unknown run ${run.id}`) ? `unknown run ${run.id}` : failure;
       if (end) {
@@ -202,6 +216,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         if (activity) run.activity = activity;
       }
     }
+    return ownerTransition;
   }
 
   async function refresh(selected, seconds = 0, untilAny = false, cancellation) {
@@ -215,8 +230,8 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     const signal = cancellation && controller ? AbortSignal.any([cancellation, controller.signal]) : cancellation ?? controller?.signal;
     try {
       await Promise.all([...groups].map(async ([folder, open]) => {
-        await refreshGroup(folder, open, seconds, untilAny, signal);
-        if (open.some(run => run.end)) controller?.abort();
+        const ownerTransition = await refreshGroup(folder, open, seconds, untilAny, signal);
+        if (ownerTransition || open.some(run => run.end)) controller?.abort();
       }));
     } finally { controller?.abort(); }
   }
@@ -252,16 +267,17 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
           roleArtifacts: artifacts, ...(roleFallback && { roleFallback }),
           onTiming: status => {
-            if (!status.waitingLine || waitingId) return;
+            if (waitingId || !(status.waitingLine || status.ownerWait)) return;
             waitingId = status.id;
-            runs.set(waitingId, { id: waitingId, seat, title, out, artifacts, cwd: work, calledAt, observedStartAt: Date.now(), activity: status.waitingLine });
+            runs.set(waitingId, { id: waitingId, seat, title, out, artifacts, cwd: work, calledAt, observedStartAt: Date.now(),
+              activity: status.waitingLine ?? status.ownerWait, ownerWait: status.ownerWait });
           },
         });
         const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
         if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
         const status = timing.get(started[1]);
         const run = runs.get(started[1]) || { id: started[1], seat, title, out, artifacts, cwd: work, calledAt, observedStartAt: Date.now() };
-        Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: null });
+        Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: status?.ownerWait ?? null, ownerWait: status?.ownerWait });
         runs.set(started[1], run);
         return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch }) };
       } catch (error) {

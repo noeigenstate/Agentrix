@@ -25,9 +25,11 @@ const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/san
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
-const { dispatchDirectory, validSeat } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
+const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
   require(path.join(runtime, 'features/agents/call-seat.cjs'));
+const { commandPhrase } = require(path.join(runtime, 'command-phrase.cjs'));
+const { diagnosticLine } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'dispatch-outbox.cjs')) ? 'dispatch-outbox.cjs' : 'electron/dispatch-outbox.cjs');
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
@@ -265,6 +267,8 @@ function standingRules(options) {
     'Do not commit or push, and do not start another worker or agent.',
     'Run no GUI smoke test and never read or write the system clipboard.',
     'Run only the tests the task touches, never the whole suite.',
+    'If an action is refused, do not work around it. Finish what you can and list the exact refused action under ## Needs approval in your answer.',
+    ...(options.agent === 'claude' ? ['End with a plain text answer. Never call ExitPlanMode or ask the user a question. Nobody can answer inside a role.'] : []),
     `Report ${readOnly ? 'what you found, with the evidence (file:line)' : 'what you changed'}, what you ran with its result, and what stays unverified.`,
     'Write your messages and report in the language the task is written in; code, identifiers and comments follow the project\'s convention.',
   ].map((line, index) => index ? `- ${line}` : line).join('\n');
@@ -651,8 +655,9 @@ function detachedRuns(cwd, create = false) {
   return new DetachedRuns(path.join(temporary, ...parents));
 }
 
-function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine }) {
-  onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }) });
+function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, refused }) {
+  onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }),
+    ...(ownerWaitSequence && { ownerWait, ownerWaitSequence }), ...(refused && { refused }) });
 }
 
 async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming,
@@ -698,8 +703,9 @@ async function startDetached(argv, { env = process.env, stdout = process.stdout,
   let announcedWait;
   const observed = store.observe(() => {
     const current = store.read(id);
-    if (current?.waitingLine && current.waitingLine !== announcedWait) {
-      announcedWait = current.waitingLine;
+    const waiting = current?.waitingLine ?? current?.ownerWait;
+    if (waiting && waiting !== announcedWait) {
+      announcedWait = waiting;
       reportDetachedTiming(onTiming, current);
       stdout.write(announcedWait + '\n');
     }
@@ -757,7 +763,7 @@ async function runDetached(file, deps = {}) {
   await receipt({ helperPid: process.pid, helperStartedAt: Date.now() - Math.floor(process.uptime() * 1000), lease: { port: server.address().port, token } });
   let startTiming;
   const stdout = { write(text) {
-    try { process.stdout.write(text); } catch { /* Planner receipts cannot interrupt signed events or worker cleanup. */ }
+    try { (deps.stdout || process.stdout).write(text); } catch { /* Planner receipts cannot interrupt signed events or worker cleanup. */ }
     const line = String(text).trimEnd(), changes = { activityAt: Date.now() };
     if (line.startsWith(`[dispatch] waiting ${id}: `)) changes.waitingLine = line;
     if (line.startsWith(`[dispatch] started ${id} `)) Object.assign(changes, startTiming, { startedLine: line, waitingLine: null });
@@ -765,7 +771,14 @@ async function runDetached(file, deps = {}) {
     if (line.startsWith(`[dispatch] ended ${id} `)) changes.endedLine = line;
     void receipt(changes);
   } };
+  let ownerWaitSequence = 0;
   const detached = { id, admitted: () => receipt({ admitted: true }), sandboxReady: () => receipt({ waitingLine: null }),
+    ownerWaiting: detail => {
+      const ownerWait = detail ? 'waiting for the owner: ' + detail : null;
+      if (ownerWait) ownerWaitSequence++;
+      return receipt({ ownerWait, ownerWaitSequence, activityAt: Date.now() });
+    },
+    refusals: refused => receipt({ refused: [...refused] }),
     confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
   let code = 1;
   try {
@@ -774,7 +787,7 @@ async function runDetached(file, deps = {}) {
   } finally {
     const endedAt = Date.now();
     if (entry.roleArtifacts) await require('./role-artifacts.cjs').stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
-    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null }); await pending;
+    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null, ownerWait: null }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
 }
@@ -793,7 +806,7 @@ function helperAlive(pid, entry) {
 }
 
 async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe, onTiming,
-  alive = helperAlive, untilAny = false, signal } = {}) {
+  alive = helperAlive, untilAny = false, seenOwnerWaits, signal } = {}) {
   const pending = new Set(options.ids); let unknown = false;
   let completed = false, observing = true;
   const done = () => !pending.size || (untilAny && (completed || unknown));
@@ -807,7 +820,8 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
   };
   const check = async () => {
     const entries = [...pending].map(id => [id, store.read(id)]);
-    const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled);
+    const ownerWaiting = entry => entry?.ownerWaitSequence && (seenOwnerWaits ? entry.ownerWaitSequence > (seenOwnerWaits.get(entry.id) ?? 0) : !!entry.ownerWait);
+    const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled || ownerWaiting(entry));
     await Promise.all(entries.map(async ([id, entry]) => {
       if (entry === null) { stdout.write(`[dispatch] unknown run ${id}\n`); pending.delete(id); unknown = true; }
       if (!entry) return;
@@ -816,7 +830,7 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
       if (hasResult || signal?.aborted || !Number.isSafeInteger(entry.helperPid) || entry.helperPid < 1) return;
       if (await alive(entry.helperPid, entry) === false && observing) finish(id, entry, true);
     }));
-    return done() ? true : undefined;
+    return done() || hasResult ? true : undefined;
   };
   const ready = await check();
   if (!ready && !signal?.aborted && options.timeout > 0) await (observe || store.observe.bind(store))(check, options.timeout * 1000, { signal });
@@ -829,15 +843,15 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
     let activity = entry.activityAt || entry.createdAt;
     try { activity = Math.max(activity, fs.statSync(entry.out + '.log').mtimeMs); } catch {}
     const prefix = `[dispatch] waiting ${id}: `;
-    const waiting = typeof entry.waitingLine === 'string' && entry.waitingLine.startsWith(prefix) ? ' · ' + entry.waitingLine.slice(prefix.length) : '';
-    stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}${waiting}\n`);
+    const waiting = entry.ownerWait ?? (entry.waitingLine?.startsWith(prefix) ? entry.waitingLine.slice(prefix.length) : null);
+    stdout.write(`[dispatch] still running ${id} · ${Math.floor((Date.now() - entry.createdAt) / 1000)} s · last activity ${new Date(activity).toISOString()}${waiting ? ' · ' + waiting : ''}\n`);
   }
   return done() ? (unknown ? 1 : 0) : 75;
 }
 
 async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal, roleFallback, roleArtifacts } = {}) {
+  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, seenOwnerWaits, signal: waitSignal, roleFallback, roleArtifacts } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
@@ -852,7 +866,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   if (argv[0] === 'stop') return stopWorker(argv, stdout);
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
-      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, signal: waitSignal });
+      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, seenOwnerWaits, signal: waitSignal });
       return await startDetached(argv, { env, stdout, launch, source, onTiming, roleFallback, roleArtifacts });
     } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
   }
@@ -874,6 +888,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   let nativeBilling = null;
   let boardWatch, scopeRestoreBlocked = false, scopeRestoreNote = '';
   const controlReceipts = new Map(), requestTimers = new Map();
+  const refused = [], refusedItems = new Set();
+  const refusalNote = () => refused.length ? ' · refused ' + refused.length + ': ' + refused[0].action : '';
+  function recordRefusal(refusal, itemId) {
+    if (refused.length >= REFUSAL_LIMIT || !validRefusal(refusal)) return;
+    if (refusal.reason === 'provider_declined' && itemId && refusedItems.has(itemId)) return;
+    if (itemId) refusedItems.add(itemId);
+    refused.push({ action: refusal.action, reason: refusal.reason });
+    detached?.refusals?.(refused);
+  }
   const controlInputs = new Map(), retriedControls = new Set(), unreadControls = new Set();
   const deferredControlIds = [];
   let resumeControlIds = [], resumeInputId;
@@ -1292,18 +1315,39 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     }
     await openControl();
     if (options.agent === 'claude' && !controlClient && controlLeadMode === 'native') throw new Error(controlFailure);
-    // Nobody answers a dispatched worker's request, and the app-server waits for ever: a blocking one is declined so the run goes on.
-    function requestOpened({ requestId, kind, blocking, preview, questions }) {
-      const text = (preview || questions?.[0]?.question || '').slice(0, 160);
+    function requestOpened({ itemId, payload: { requestId, kind, blocking, preview, questions } }) {
+      const text = detached ? '' : (preview || questions?.[0]?.question || '').slice(0, 160);
       signal(`request ${id} ${requestId} ${kind} opened${text ? ': ' + JSON.stringify(text).slice(1, -1) : ''}`);
-      requestTimers.set(requestId, blocking ? setTimeout(() => {
-        signal(`request ${id} ${requestId} unanswered for ${requestTimeout / 1000} s; declining`);
-        // A declined approval lets its turn continue, where cancelling it interrupts the turn; the other kinds have only the cancel form.
+      if (!blocking) { requestTimers.set(requestId, null); return; }
+      const action = kind === 'command' && preview ? 'command approval: ' + commandPhrase(preview).phrase : kind + ' request';
+      recordRefusal({ action, reason: 'approval_required' }, itemId);
+      const decline = () => {
+        if (!requestTimers.has(requestId)) return;
+        const detail = detached ? 'requires owner approval' : `unanswered for ${requestTimeout / 1000} s`;
+        signal(`request ${id} ${requestId} ${detail}; declining`);
+        // Cancelling a command or file approval interrupts its turn. Declining lets it continue.
         try { if (['command', 'file-change'].includes(kind)) activeRuntime?.answer(requestId, { decision: 'deny' }); else activeRuntime?.cancel(requestId); }
         catch (error) { signal(`request ${id} ${requestId} not declined: ${error.message}`); }
-      }, requestTimeout) : null);
+      };
+      requestTimers.set(requestId, detached ? null : setTimeout(decline, requestTimeout));
+      if (detached) queueMicrotask(decline);
+    }
+
+    function observePermission(event) {
+      if (event.replay) return;
+      const { type, payload, itemId } = event;
+      if (type === 'worker.refused' && options.agent === 'claude') recordRefusal(payload);
+      else if (type === 'worker.awaiting-owner' && nativeBilling === 'subscription') {
+        detached?.ownerWaiting?.(diagnosticLine(payload.detail) || null);
+      } else if (options.agent === 'codex' && type === 'request.opened') requestOpened(event);
+      else if (options.agent === 'codex' && type === 'item.upsert' && payload.providerStatus === 'declined') {
+        const detail = payload.kind === 'command' ? payload.content?.phrase : payload.content?.tool;
+        const action = diagnosticLine(detail ? payload.kind + ': ' + detail : payload.kind);
+        recordRefusal({ action, reason: 'provider_declined' }, itemId);
+      }
     }
     function acceptNative(event) {
+      observePermission(event);
       if (event.providerSessionId) output.sessionId = event.providerSessionId;
       if (event.type === 'turn.started') {
         nativeTurn = event.turnId; nativeRunning = true; output.confirmed = true;
@@ -1343,8 +1387,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         signal(`transport ${id} claude-terminal: ${String(event.payload.reason || 'terminal lead').replace(/[\r\n]+/g, ' ')}`);
       } else if (event.type === 'transcript.record' && nativeBilling === 'subscription') {
         if (meterRecord(event.payload)) output.record(event.payload);
-      } else if (event.type === 'request.opened' && options.agent === 'codex') requestOpened(event.payload);
-      else if (event.type === 'request.resolved' && requestTimers.has(event.payload.requestId)) {
+      } else if (event.type === 'request.resolved' && requestTimers.has(event.payload.requestId)) {
         clearTimeout(requestTimers.get(event.payload.requestId)); requestTimers.delete(event.payload.requestId);
         signal(`request ${id} ${event.payload.requestId} ${event.payload.resolution}`);
       }
@@ -1375,6 +1418,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       else if (result.killedBy) reason = 'killed';
       else if (output.failed || result.code !== 0) reason = 'error';
       else if (outOfScope?.length) reason = 'scope';
+      else if (refused.length) reason = 'permission';
       let answer = '';
       try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
       const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
@@ -1388,9 +1432,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured,
         verdict: routingVerdict(output, declared(), options.fallbackFrom),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
-        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
-      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${scopeRestoreNote}${bookkeeping}`
+      signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${refusalNote()}${scopeRestoreNote}${bookkeeping}`
         + `${proposalNote()}${interventionNote()} · out ${options.out}${fallbackNote()}`);
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
@@ -1604,9 +1648,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       const reason = unconfirmed ? 'unconfirmed' : 'error';
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
       if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...usage(),
-        verdict: routingVerdict(output, declared(), options.fallbackFrom), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+        verdict: routingVerdict(output, declared(), options.fallbackFrom), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${bookkeeping}${proposalNote()}${interventionNote()} · out ${options.out}${fallbackNote()}`);
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${refusalNote()}${bookkeeping}${proposalNote()}${interventionNote()} · out ${options.out}${fallbackNote()}`);
     }
     log?.destroy();
     return 1;

@@ -2,6 +2,7 @@ const { TASK_KINDS } = require('../dashboard/records-routing.cjs');
 const { createHash, createHmac, timingSafeEqual } = require('node:crypto');
 const path = require('node:path');
 const uuid = value => typeof value === 'string' && /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(value);
+const REFUSAL_LIMIT = 20;
 const line = (value, limit) => typeof value === 'string' && value.length > 0 && value.length <= limit && !/[\x00-\x1f\x7f]/.test(value);
 const number = value => Number.isFinite(value) && value >= 0 && value <= Number.MAX_SAFE_INTEGER;
 const validSeat = value => typeof value === 'string' && /^[a-z][a-z0-9-]{0,31}(?:\/[a-z][a-z0-9-]{0,23})?$/.test(value);
@@ -117,7 +118,8 @@ function validDispatch(event) {
     (event.kind == null || TASK_KINDS.includes(event.kind)) &&
     (event.meeting == null || typeof event.meeting === 'string' && /^[\w.-]{1,64}$/.test(event.meeting)) &&
     (event.skipMeeting == null || line(event.skipMeeting, 1024));
-  return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed', 'scope'].includes(event.reason) &&
+  return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed', 'scope', 'permission'].includes(event.reason) &&
+    (event.refused === undefined || validRefusals(event.refused)) &&
     (event.outOfScope === undefined || Array.isArray(event.outOfScope) && event.outOfScope.length <= 50 && event.outOfScope.every(file => line(file, 4096))) &&
     (event.exitCode === null || Number.isSafeInteger(event.exitCode) && Math.abs(event.exitCode) <= 0xffffffff) && number(event.endedAt) &&
     (event.outputTokens === null || Number.isSafeInteger(event.outputTokens) && event.outputTokens >= 0) &&
@@ -125,6 +127,10 @@ function validDispatch(event) {
     optionalCount(event.outOfScopeCount) && optionalCount(event.skillProposals) && (event.reportedCostUsd == null || number(event.reportedCostUsd)) &&
     (event.verdict === undefined || ['ok', 'mismatch', 'unverified'].includes(event.verdict));
 }
+
+const validRefusal = entry => line(entry?.action, 160) && typeof entry.reason === 'string' &&
+  /^[a-z_]{1,40}$/.test(entry.reason) && Object.keys(entry).length === 2;
+const validRefusals = value => Array.isArray(value) && value.length <= REFUSAL_LIMIT && value.every(validRefusal);
 
 // calls: the session's called models (AgentCalls), present whether or not an agent runs in that terminal.
 // observeAccount: takes a running Codex call's account report as a limits payload (dispatchAccount); it may decline it.
@@ -141,4 +147,4 @@ function acceptDispatch(session, event, calls, observeAccount, admissionKey = se
   return calls?.dispatch(['dispatch-declared', 'dispatch-start'].includes(event.type) ? { ...event, planner } : event) || false;
 }
 
-module.exports = { acceptDispatch, validDispatch, validSeat, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame };
+module.exports = { REFUSAL_LIMIT, validRefusal, validRefusals, acceptDispatch, validDispatch, validSeat, dispatchAccount, dispatchDirectory, dispatchKeyId, dispatchFrame, verifyDispatchFrame };

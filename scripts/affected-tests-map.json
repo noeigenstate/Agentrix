@@ -381,7 +381,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "75f3c3b84728d6034a4cd07ba17a82319aeed7ba4d09fd6762a82f0f6d1063c6",
+      "digest": "3102a22dcddaf20a0e5ef03818678b8bad0e78b1491444c14987266b55361fbd",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -443,14 +443,14 @@
       "reason": "The intercept entrypoint resolves the dispatch helper and the carried lead seat reader in source, packaged or SSH layouts."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "057fc0d23273a8ea93e614e21d42761a934e7bfd3ea70813e966568dd6981947",
+      "digest": "f37d61748caee2e242c2baddc9c4a8d480ad8fc1f48b08e584d3de22f0710735",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "5f2e289f90dcbcd608da2856356243f4adaf9b76608a6dc7ba010c8851b4eab6",
+      "digest": "b671182772c11b720a486f95e6f1b51944be8deeaf53ca7a7174b441f7f5ba06",
       "targets": [
         "electron/features/agents/call-seat.cjs"
       ],

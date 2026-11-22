@@ -13,6 +13,7 @@ const SCROLLBACK = 512 * 1024, KEYS_LIMIT = 65536, TEXT_LIMIT = 256, FIELD_LIMIT
 // shell integration's event wiring (main.cjs startTerminal, zsh-terminal.cjs), and an entrypoint naming another client.
 const PRIVATE = /^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|READING_NOTE|SOCKET|PROJECT_ID|HOOK_|EVENT_HELPER|START_DIR|NODE$|USER_ZDOTDIR$)|^AGENTRIX_.*SESSION_KEY$|^CLAUDE_CODE_ENTRYPOINT$/i;
 // Hooks that mean the CLI asks the owner, and the ones that mean it went on.
+const { commandPhrase } = require('../../command-phrase.cjs');
 const ASKS = new Set(['PermissionRequest', 'Elicitation']);
 const ASK_NOTICES = new Set(['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog']);
 const ANSWERS = new Set(['PostToolUse', 'PostToolUseFailure', 'PermissionDenied', 'ElicitationResult']);
@@ -166,10 +167,11 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   const clearTimers = w => { for (const timer of w.timers.keys()) clearTimer(w, timer); };
   const delay = (w, ms) => new Promise(resolve => later(w, resolve, ms, resolve));
 
-  function setAwaiting(w, value) {
+  function setAwaiting(w, value, detail = 'resume after an interrupted turn') {
     if (w.awaiting === value) return;
     w.awaiting = value;
     try { calls(w.run)?.setAwaiting(w.runId, value); } catch {}
+    publish(w, 'worker.awaiting-owner', { detail: value === 'owner' ? detail : null });
   }
   function closeAsks(w, asks = w.asks) {
     for (const ask of asks) {
@@ -221,7 +223,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   }
   // A start-up dialog fires no hook: drawn output with no prompt submitted after 15 s shows as waiting (display only).
   function startNotice(w) {
-    if (w.noticeDue && w.drawn && !w.prompted && !w.exited && !w.closed) { w.promptWait = true; setAwaiting(w, 'owner'); }
+    if (w.noticeDue && w.drawn && !w.prompted && !w.exited && !w.closed) { w.promptWait = true; setAwaiting(w, 'owner', 'respond to the Claude Code startup dialog'); }
   }
   function receive(w, data) {
     if (w.closed || w.exited) return;
@@ -314,6 +316,16 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   // The turn's final reply: the latest reply when it has text and ends the turn (a final stop reason, or no tool call).
   const finalText = w => w.last?.texts.length && (FINAL_REASONS.has(w.last.reason) || !w.last.tool) ? w.last.texts.join('\n\n') : null;
 
+  function ownerPrompt(payload, elicitation) {
+    if (elicitation) return 'answer a Claude Code elicitation';
+    const tool = typeof payload.tool_name === 'string' && /^[A-Za-z][\w-]{0,79}$/.test(payload.tool_name) ? payload.tool_name : null;
+    if (tool === 'ExitPlanMode') return 'approve the plan to leave plan mode';
+    if (tool === 'AskUserQuestion') return 'answer a Claude Code question';
+    const input = payload.tool_input;
+    const command = tool === 'Bash' && typeof input?.command === 'string' ? ' (' + commandPhrase(input.command).phrase + ')' : '';
+    return tool ? 'approve ' + tool + command : 'approve a Claude Code action';
+  }
+
   async function onHook(w, name, { sessionId, sentAt, toolUseId, agentId, requestId, elicitationId, payload = {} }) {
     if (w.closed || w.exited) return;
     if (typeof sessionId === 'string' && /^[\w-]{1,160}$/.test(sessionId) && !w.sessionId) { w.sessionId = sessionId; w.stream.provider(sessionId); }
@@ -327,7 +339,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       if (key && !w.closedAsks.has(key)) w.asks.add(key);
       else if (!notice && !key) w.asks.add(`unknown:${agentId || payload.agent_id || ''}`);
       if (w.asks.size) clearTimer(w, w.enterTimer);
-      setAwaiting(w, w.asks.size || w.promptWait ? 'owner' : null); return;
+      setAwaiting(w, w.asks.size || w.promptWait ? 'owner' : null, ownerPrompt(payload, elicitation)); return;
     }
     // A Stop from an earlier turn cannot clear this turn's questions.
     if (STOPS.has(name) && timed && sentAt < w.startAt) return;
@@ -394,7 +406,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     stream.publish('path.changed', { previous: null, selected: 'terminal-worker', reason: 'terminal lead (subscription)' });
     // Never rejects: the run always finishes. The folder goes once the PTY's exit is seen, retried while Windows holds it.
     w.close = () => w.closing ||= (async () => {
-      w.closed = true; w.running = false; clearTimers(w); setAwaiting(w, null);
+      setAwaiting(w, null); w.closed = true; w.running = false; clearTimers(w);
       try {
         if (w.pty) {
           const exit = new Promise(resolve => { w.onExited = resolve; });

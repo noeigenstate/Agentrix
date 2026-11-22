@@ -42,7 +42,7 @@ export type AgentCall = { agent: 'Claude Code' | 'Codex'; provider: string | nul
   // Availability of the call's artifacts. Main owns their paths.
   brief?: boolean; log?: boolean;
   // A dispatched worker that ended badly or never confirmed (skills/agent-dispatch): shown in words instead of a plain state.
-  failure?: { reason: 'unconfirmed' | 'capacity' | 'killed' | 'error' | 'scope'; exitCode: number | null;
+  failure?: { reason: 'unconfirmed' | 'capacity' | 'killed' | 'error' | 'scope' | 'permission'; exitCode: number | null;
     // scope: files the worker changed outside the paths it was allowed (skills/agent-dispatch, --allow).
     files?: string[] } | null;
   declared?: { model: string; effort: string | null; fast: boolean | null }; }[] };
