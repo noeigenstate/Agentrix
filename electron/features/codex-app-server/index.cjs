@@ -29,6 +29,8 @@ const PERMISSIONS = {
 };
 const permissionMode = value => typeof value === 'string' && Object.hasOwn(PERMISSIONS, value) ? value : 'full';
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
+const ELEVATED_ROLE_CONFIG = { 'windows.sandbox': 'elevated', 'features.prefer_mxc': false };
+const ELEVATED_SETUP_MESSAGE = 'Set up the elevated Windows sandbox, then retry the role. In an administrator terminal, run codex.exe sandbox setup --elevated --current-user.';
 // Windows and an SSH host answer a writable request read-only when their Codex has no Windows sandbox configured.
 const REMOTE_WRITE = '远端 Codex 只给了只读沙箱，无法使用「先询问」。远端是 Windows 时，请在远端 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"（Agentrix 不会改远端的配置），或改用「全部放开」或「按 Codex 配置」。';
 const SANDBOX_REFUSALS = {
@@ -102,7 +104,9 @@ function stopProcess(child) {
   });
 }
 
-function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis, renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, shellOf = ownerShell, accountKey } = {}) {
+function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis,
+  renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, shellOf = ownerShell, accountKey,
+  appServerArgs = ['app-server', '--listen', 'stdio://'] } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -182,6 +186,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         events.publish('session.state', { state, reason });
       };
       const windowsLocal = () => platform === 'win32' && spec.kind !== 'ssh';
+      const elevatedRole = () => windowsLocal() && spec.owner === 'dispatch';
       const place = () => windowsLocal() ? 'windows' : spec.kind === 'ssh' ? 'ssh' : null;
       const releaseThread = threadId => rpc?.request('thread/unsubscribe', { threadId }).catch(() => {});
       // Only the owner's own writable session has a permissions choice.
@@ -190,13 +195,14 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       // choice says. spec.policy is a caller's explicit policy and overrides that choice: the dispatch helper sends approvalPolicy 'never'
       // (integration/dispatch.cjs), the real-CLI tests a sandbox. Approval requests always go to the user.
       function threadPolicy() {
+        if (elevatedRole()) return { sandbox: spec.readOnly ? 'read-only' : 'workspace-write', approvalPolicy: 'never' };
         const policy = spec.policy || (ownPermissions() ? PERMISSIONS[spec.permissions] : {});
         const sandbox = spec.readOnly ? 'read-only' : policy.sandbox || (spec.owner === 'dispatch' ? 'workspace-write' : null);
         return { ...(sandbox ? { sandbox } : {}), ...(policy.approvalPolicy ? { approvalPolicy: policy.approvalPolicy } : {}) };
       }
       // Windows without a configured sandbox answers a writable request read-only: the same request is made once more with a request-scoped
       // unelevated sandbox, which changes neither the user's configuration nor another request.
-      const unelevated = (params, result) => windowsLocal() && params.sandbox === 'workspace-write' && result.sandbox?.type === 'readOnly'
+      const unelevated = (params, result) => windowsLocal() && !elevatedRole() && params.sandbox === 'workspace-write' && result.sandbox?.type === 'readOnly'
         ? { ...params, config: { ...params.config, 'windows.sandbox': 'unelevated' } } : null;
       function bind(threadId) {
         const home = spec.codexHome || spec.env?.CODEX_HOME || path.join(spec.env?.HOME || spec.env?.USERPROFILE || homedir(), '.codex');
@@ -318,7 +324,10 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         resetting = task; await task;
       }
       async function connectThread(executable, env, onStage, isReconnecting) {
-        child ||= spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,
+        // Readiness uses app-server's startup config, so the process and the thread must request the same backend.
+        // Codex treats bare `elevated` as a literal string, so Windows launchers need no embedded quotes.
+        const configArgs = elevatedRole() ? Object.entries(ELEVATED_ROLE_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${value}`]) : [];
+        child ||= spawnProcess(executable, [...appServerArgs, ...configArgs], { cwd: wireCwd, env, windowsHide: true,
           detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
         rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
           onDropped: bytes => events.publish('item.dropped', { reason: 'too_large', bytes }),
@@ -335,6 +344,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         assertOpen();
         const compatibility = assertCompatible(init);
         rpc.notify('initialized');
+        if (elevatedRole()) {
+          onStage('sandbox_readiness');
+          const readiness = await rpc.request('windowsSandbox/readiness');
+          if (readiness?.status !== 'ready') throw Object.assign(new Error(ELEVATED_SETUP_MESSAGE), { code: 'elevated_sandbox_not_ready' });
+        }
         onStage('capability_probe'); await probeCapabilities(rpc);
         assertOpen();
         return compatibility;
@@ -343,7 +357,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       function acceptThread(result, options, { threadId, resumed, resuming }) {
         if (typeof result?.thread?.id !== 'string' || resumed && result.thread.id !== threadId || result.cwd
           && (spec.kind === 'ssh' ? path.resolve(result.cwd) !== path.resolve(wireCwd) : !sameDirectory(result.cwd, wireCwd))) throw new Error('invalid_thread');
-        assertSandbox(options.sandbox, result.sandbox, place());
+        assertSandbox(options.sandbox, result.sandbox, elevatedRole() ? null : place());
         startedWritable = options.sandbox === 'workspace-write';
         if (resuming && result.thread.status?.type === 'active') throw new Error('thread_in_use');
         assertOpen();
@@ -401,7 +415,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             ...threadPolicy(), approvalsReviewer: 'user' };
           const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}),
-            ...(spec.roleServer && { mcp_servers: { agentrix: spec.roleServer } }) };
+            ...(spec.roleServer && { mcp_servers: { agentrix: spec.roleServer } }), ...(elevatedRole() && ELEVATED_ROLE_CONFIG) };
           const requestThread = (options, resumeId) => rpc.request(resumeId ? 'thread/resume' : 'thread/start', {
             ...options, ...(resumeId && { threadId: resumeId, excludeTurns: true }), config: { ...config, ...options.config },
           });

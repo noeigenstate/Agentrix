@@ -310,7 +310,8 @@ test('Codex receives stdin/argv/cwd and reads its rollout for routing and final 
   assert.equal(end.verdict, 'ok'); assert.equal(end.inputTokens, null); assert.equal(end.cachedTokens, null); assert.equal(end.reportedCostUsd, null);
   const capture = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   assert.equal(capture.cwd, f.directory); assert.match(capture.brief, /Unicode: 执行/);
-  assert.deepEqual(capture.args, commandOf(argumentsOf(f.args)));
+  const elevatedArgs = process.platform === 'win32' ? ['-c', 'windows.sandbox=elevated', '-c', 'features.prefer_mxc=false'] : [];
+  assert.deepEqual(capture.args, [...commandOf(argumentsOf(f.args)), ...elevatedArgs]);
   const log = await fs.readFile(f.out + '.log', 'utf8');
   assert.ok(log.split('\n').filter(Boolean).map(JSON.parse).some(event => event.type === 'turn.completed'));
   const policy = capture.requests.find(request => request.method === 'thread/start').params;
@@ -833,7 +834,8 @@ test('a real helper entrypoint resolves a fake executable without evaluating pat
   let stdout = ''; child.stdout.on('data', chunk => { stdout += chunk; f.releaseOn(stdout); }); child.stderr.resume();
   const [code] = await once(child, 'close');
   assert.equal(code, 0); assert.match(stdout, /routing ok/);
-  assert.deepEqual(JSON.parse(await fs.readFile(f.capture, 'utf8')).args, commandOf(argumentsOf(f.args)));
+  const elevatedArgs = process.platform === 'win32' ? ['-c', 'windows.sandbox=elevated', '-c', 'features.prefer_mxc=false'] : [];
+  assert.deepEqual(JSON.parse(await fs.readFile(f.capture, 'utf8')).args, [...commandOf(argumentsOf(f.args)), ...elevatedArgs]);
 });
 
 const gitInit = async (directory, files) => {

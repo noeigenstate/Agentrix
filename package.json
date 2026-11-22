@@ -148,6 +148,7 @@
       }
     ],
     "nsis": {
+      "include": "build/installer.nsh",
       "artifactName": "Agentrix-Setup-${version}-x64.${ext}",
       "oneClick": false,
       "perMachine": false,

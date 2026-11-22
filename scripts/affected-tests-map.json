@@ -10,6 +10,8 @@
     "package.json",
     "package-lock.json",
     "npm-shrinkwrap.json",
+    "build/installer.nsh",
+    "build/codex-sandbox-setup.ps1",
     ".github/**",
     "scripts/**",
     "tests/fixtures/**",
@@ -87,6 +89,7 @@
     "tests/voice-runtime.test.cjs",
     "tests/voice.test.cjs",
     "tests/waiting-card.test.cjs",
+    "tests/windows-installer.test.cjs",
     "tests/workspace-ipc-updates.test.cjs"
   ],
   "tests": {
@@ -378,7 +381,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "3909fb1a14e49c24ec7bec3c8c9cca28fabd90df7db2261e4c18f810f3f3ca6c",
+      "digest": "e27070cf34120376d51bdf20d774dc9ed44f5785c26d91839faa125db3eb4eb1",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",

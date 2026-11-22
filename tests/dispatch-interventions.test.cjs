@@ -36,6 +36,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
       if (request.method === 'turn/interrupt') rpc({method:'turn/completed',params:{threadId:fixture.session,turn:{id:'fixture-turn',status:'interrupted'}}});
       let result={};
       if(request.method==='initialize')result={userAgent:'codex/0.166.0'};
+      if(request.method==='windowsSandbox/readiness')result={status:'ready'};
       if(['thread/start','thread/resume'].includes(request.method)){threadRequest=request;result={thread:{id:fixture.badSession&&fs.existsSync(path.join(fixture.root,'count'))?fixture.otherSession:p.threadId||fixture.session,turns:[]},cwd:process.cwd(),sandbox:{type:p.sandbox==='read-only'?'readOnly':'workspaceWrite'}};}
       rpc({id:request.id,result});
     }));
