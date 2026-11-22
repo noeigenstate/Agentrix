@@ -341,7 +341,7 @@ async function boardRun(t, { refused = false, native = false } = {}) {
   const code = await run(['claude', '--role', 'review', '--title', 'Synthetic real-board task', '--model', 'synthetic-model', '--effort', 'high',
     '--permission', 'plan', '--cwd', f.root, '--brief', brief, '--out', out], {
     env: { PATH: '', HOME: f.root, USERPROFILE: f.root, CODEX_HOME: path.join(f.root, 'codex'), AGENTRIX_BOOTSTRAP: f.session.bootstrapFile,
-      DISPATCH_FIXTURE: fixture, DISPATCH_CAPTURE: path.join(f.root, 'capture.json') },
+      DISPATCH_FIXTURE: fixture, DISPATCH_CAPTURE: path.join(f.root, '.git', 'capture.json') },
     stdout: { write: value => { stdout += value; } },
     resolveExecutable: (_agent, args) => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/dispatch-worker.cjs'), ...args] }),
     launch: (file, args, options) => { launches++; return lifetime.child(spawn(file, args, options)); },

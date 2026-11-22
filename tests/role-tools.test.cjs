@@ -312,14 +312,14 @@ test('start_role rolls back a failed worktree checkout or launch and allows a re
   assert.equal(started.branch, 'work/retry');
 });
 
-test('a read-only Claude reviewer runs in plan mode as a review', async t => {
+test('a read-only Claude reviewer runs with dontAsk as a review', async t => {
   const { env } = session(t, 'conductor');
   const fake = engine(args => args.includes('--detach') ? '[dispatch] started run-2 claude model opus effort high fast off · routing ok\n' : '');
   const { tools } = createRoleTools({ env, cwd: os.tmpdir(), engine: fake.run });
   await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Read the diff', readOnly: true });
   const args = fake.calls[0];
   assert.deepEqual(args.slice(0, 6), ['claude', '--detach', '--seat', 'reviewer', '--role', 'review']);
-  assert.deepEqual(args.slice(args.indexOf('--permission'), args.indexOf('--permission') + 2), ['--permission', 'plan']);
+  assert.deepEqual(args.slice(args.indexOf('--permission'), args.indexOf('--permission') + 2), ['--permission', 'dontAsk']);
 });
 
 test('a Claude role reports the effort passed to its fake CLI when the CLI leaves it out', async t => {

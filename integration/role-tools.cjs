@@ -189,6 +189,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       startSeconds: Math.max(0, ((run.confirmedAt ?? run.observedStartAt) - run.calledAt) / 1000),
       endedAt: end === undefined ? null : new Date(end).toISOString(),
       refused: run.refused ?? [],
+      ...(run.routing && { routing: run.routing }),
       ...(run.needsDecision && { needsDecision: true }),
       ...(run.end ? { end: run.end } : { activity: run.activity ?? null, ...(run.ownerWait && { waiting: run.ownerWait }), ...(run.menu && { menu: run.menu }) }) };
   };
@@ -203,6 +204,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       const status = timing.get(run.id);
       run.startedAt ??= timestamp(status?.startedAt);
       run.confirmedAt ??= timestamp(status?.confirmedAt);
+      if (status?.routing) run.routing = status.routing;
       if (validRefusals(status?.refused) && status.refused.length >= (run.refused?.length ?? 0)) run.refused = status.refused;
       if (status?.ownerWaitSequence >= (run.ownerWaitSequence ?? 0)) {
         if (status.ownerWaitSequence > (run.ownerWaitSequence ?? 0) || !status.ownerWait) {
@@ -273,7 +275,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
         const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
           ...(small ? ['--small'] : []),
-          ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
+          ...(agent === 'claude' ? ['--permission', readOnly ? 'dontAsk' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])], {
           roleArtifacts: artifacts, ...(roleFallback && { roleFallback }),
           onTiming: status => {
@@ -287,6 +289,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
         const status = timing.get(started[1]);
         const run = runs.get(started[1]) || { id: started[1], seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now() };
+        if (status?.routing) run.routing = status.routing;
         Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: status?.ownerWait ?? null, ownerWait: status?.ownerWait });
         runs.set(started[1], run);
         return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch }) };

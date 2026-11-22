@@ -212,6 +212,22 @@ test('read-only workers deny edits and shell and require exact SKILL authorizati
   assert.equal(createPolicy({ owner: 'dispatch', cwd: dir, allow: ['**'] })('Edit', { file_path: path.join(dir, 'SKILL.md') }).reasonCode, 'skill_not_authorized');
 });
 
+test('a read-only SDK role opens a non-plan query with only reading tools', async t => {
+  const { runtime, spec, fake } = setup(t);
+  const worker = runtime.create({ ...spec, owner: 'dispatch', readOnly: true }, () => {});
+  t.after(() => worker.close());
+  await worker.start();
+  worker.send({ clientMessageId: randomUUID(), text: 'Inspect the repository.' });
+  await until(() => fake.inputs.length === 1);
+  const { options } = fake.calls[0];
+  assert.equal(options.permissionMode, 'dontAsk');
+  assert.equal(options.allowDangerouslySkipPermissions, undefined);
+  assert.deepEqual(options.tools, ['Read', 'Glob', 'Grep', 'LS']);
+  for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'mcp__*']) {
+    assert.ok(options.disallowedTools.includes(tool), tool);
+  }
+});
+
 test('a generic failed turn keeps the same SDK query for the next explicit send', async t => {
   const dir = directory(t), sessionId = randomUUID(), first = fakeSdk({ auto: false, sessionId });
   let loads = 0; const events = [];

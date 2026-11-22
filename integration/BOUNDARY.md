@@ -10,7 +10,10 @@ The Codex shell wrappers request native launch. The local and SSH native launche
 Local and SSH Claude wrappers read the lead file at launch. It carries model, effort, fast flag and seat-map JSON.
 The local Claude wrappers give the conversation they start the role tools (the Intercept boundary's `--role-tools`). The SSH wrapper tells Claude that the tools are unavailable there.
 Readers also accept the legacy three-line and six-line forms. Hooks and the helper read accepted seats from the private sidecar at invocation.
-The helper puts one standing-rules section (code standard by path, scope, no commit or push, no other workers, tests, report, language) before every brief (`standingRules`).
+The helper puts one standing-rules section before every brief and tells roles to skip absent skills. Normal briefs inline the
+code standards when the base and extensions fit the 8 KiB source budget. Small or oversized briefs keep the path references.
+Read-only Claude launches use dontAsk and reading tools only. The legacy plan argument maps to that restriction.
+Read-only runs check the Git working tree after execution even with no allow globs. A detected change is outside scope.
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"
 Claude's terminal Agent and Task hooks report provisional and final input by tool-use ID.
@@ -25,6 +28,8 @@ The helper retains up to 20 worker refusals in receipts and the authenticated en
 SDK bookkeeping denials stay in the policy audit. Only denied work is included in the run’s refusal list.
 An accepted stop keeps reason `killed` with any bounded tree-stop failure in the end line and authenticated event. Artifact settlement requires worker exit evidence.
 The end line includes the count and first action. Role status, wait and result expose the structured list.
+A Claude role keeps its early session-based start. The first provider model updates signed routing and the detached
+receipt as it arrives. Status and the final line expose the resulting verdict.
 All briefs ask roles to report blocked actions under Needs approval. Claude briefs direct roles to finish with plain text and avoid owner dialogs.
 Roles defer choices affecting scope, reversibility or product behavior under Needs decision. On settlement, that answer heading adds a fixed end-line note and a boolean to detached role status and results.
 `roles_status` lists endings for ten minutes from first observation and reports engine timing when available.

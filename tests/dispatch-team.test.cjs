@@ -220,27 +220,43 @@ test('board entries leave on failed spawn and interruption', async t => {
   assert.deepEqual(team.live(), []); assert.equal(team.entries().at(-1).type, 'end');
 });
 
-test('briefs inject ledger first then recent memory live peers and bounded repository context', async t => {
+test('briefs inject the ledger first, then selected memory, live peers and bounded repository context', async t => {
   const f = await lab(t), team = projectTeam(f.repo, true), id = randomUUID();
   const ledger = path.join(f.runtime, 'ledger.md'); await fs.writeFile(ledger, 'The owner chose cents.\n');
-  await fs.writeFile(team.memory, 'Old preface.\n## Round 1 · old\nobsolete\n## Round 2 · middle\nmiddle decision\n## Round 3 · new\nnew decision\n### Findings\nlatest finding\n');
+  await fs.writeFile(team.memory, 'Old preface.\n## Round 1 · old\nobsolete\n## Round 2 · Storage\n- Update src/a.js.\n'
+    + '### 2026-01-01 12:00 · Dispatch timing · worker\n- Latest finding.\n');
   team.register(options(f.repo, ['--allow', 'src/b.js']), id);
   for (let n = 0; n < 45; n++) await fs.writeFile(path.join(f.repo, `dirty-${String(n).padStart(2, '0')}.txt`), 'dirty');
-  const text = briefOf({ cwd: f.repo, allow: ['src/a.js'], ledger }, Buffer.from('Actual task.'), team).toString();
+  const text = briefOf({ cwd: f.repo, allow: ['src/a.js'], ledger }, Buffer.from('Actual dispatch task.'), team).toString();
   assert.ok(text.indexOf('# Shared context') < text.indexOf('# Project memory'));
   assert.ok(text.indexOf('# Project memory') < text.indexOf('# Working now'));
   assert.ok(text.indexOf('# Working now') < text.indexOf('# Repository'));
   assert.ok(text.indexOf('# Repository') < text.indexOf('# Files you may change'));
-  assert.match(text, /Old preface[\s\S]*## Round 1 · old[\s\S]*middle decision[\s\S]*new decision[\s\S]*latest finding/);
+  assert.match(text, /Dispatch timing[\s\S]*Latest finding\.[\s\S]*## Round 2 · Storage[\s\S]*src\/a\.js/);
+  assert.doesNotMatch(text, /Old preface|Round 1|obsolete/);
   assert.ok(text.includes(team.memory)); assert.match(text, /Owner of A \(codex gpt-6.1-sol, 执行\): src\/b.js/);
   assert.match(text, /… and 5 more/); assert.match(text, /[a-f0-9]+ base/);
-  assert.match(text, /## Findings for the ledger/); assert.match(text, /# Task\n\nActual task\.$/);
+  assert.match(text, /## Findings for the ledger/); assert.match(text, /# Task\n\nActual dispatch task\.$/);
   const noLedger = briefOf({ cwd: f.repo, allow: [] }, Buffer.from('Read.'), team).toString();
   assert.match(noLedger, /# Handing back/);
   team.release(id);
-  const excerpt = memoryExcerpt('## Round 1\nold\n## Round 2\n' + '汉字'.repeat(15000) + '\n## Round 3\n最新 finding\n');
-  assert.ok(Buffer.byteLength(excerpt) <= 24 * 1024); assert.ok(excerpt.startsWith('…\n')); assert.ok(excerpt.endsWith('最新 finding'));
-  assert.ok(!excerpt.includes('\uFFFD'));
+});
+
+test('memory picks task paths and title words newest first and skips entries that cannot fit whole', () => {
+  const entry = (day, title, body) => `### 2026-01-${day} 12:00 · ${title} · worker\n\n${body}\n`;
+  const older = entry('01', 'Storage', 'src/a.js and the complete old finding.');
+  const middle = entry('02', 'Routing', '汉字'.repeat(400) + ' End of middle.');
+  const latest = entry('03', 'Routing', '汉字'.repeat(1000) + ' End of latest.');
+  const irrelevant = entry('04', 'Quota review', 'other/a.js');
+  const ownerEvent = '### 2026-01-03T13:00:00Z · Owner stop · Quota\n\nStopped another role.\n';
+  const excerpt = memoryExcerpt(older + middle + latest + ownerEvent + irrelevant, { brief: 'Review routing in src/a.js' });
+  assert.equal(excerpt, [latest.trimEnd(), older.trimEnd()].join('\n\n'));
+  assert.ok(Buffer.byteLength(excerpt) <= 6 * 1024);
+  assert.equal(memoryExcerpt(older + irrelevant, { allow: ['src/**'], brief: 'Review.' }), older.trimEnd());
+  assert.equal(memoryExcerpt(older + irrelevant, { brief: 'Inspect billing.' }), '');
+  const sdk = entry('05', 'SDK 权限', 'Denied tool.');
+  assert.equal(memoryExcerpt(sdk, { brief: 'Inspect the SDK.' }), sdk.trimEnd());
+  assert.equal(memoryExcerpt(sdk, { brief: '检查权限设置。' }), sdk.trimEnd());
 });
 
 test('findings always reach memory and also reach an explicit ledger', async t => {

@@ -2,6 +2,7 @@ const { apiEnvironment } = require('./credentials.cjs');
 const { billingIdentityError } = require('./identity.cjs');
 const { routeSettings } = require('./routing.cjs');
 const { workerTools } = require('./policy.cjs');
+const { READ_ONLY_MODE, READ_ONLY_DENIED } = require('../claude-runtime/decide.cjs');
 const { seatHookOutput, observedAgentSeat, liveSeatMap } = require('../skills/agent-seat.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -57,6 +58,7 @@ function routeAgentSeat(input, seats, onSeat) {
 
 function queryOptions(spec, { key, executable, abort, providerSessionId, policy, canUseTool, onSubagent = () => {}, onSeat = () => {}, onRefusal = () => {} }) {
   const bootstrap = spec.owner === 'gui' ? spec.bootstrapFile : null;
+  const readOnly = spec.owner === 'dispatch' && spec.readOnly;
   const seatsNow = () => liveSeatMap(bootstrap) ?? spec.seatsMap;
   const reportSubagent = kind => async (input, toolUseId) => {
     // Visibility must never block the CLI or add context to either conversation.
@@ -69,9 +71,10 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
     env: apiEnvironment(spec.env || process.env, key, spec.owner || 'gui'),
     // The owner's choice: SDK sessions do not ask about each tool. A worker's limits are its PreToolUse policy, which still denies under
     // this mode, and questions still reach canUseTool: both proved against the real CLI in tests/claude-sdk-real-cli.test.cjs.
-    abortController: abort, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, includePartialMessages: true,
+    abortController: abort, permissionMode: readOnly ? READ_ONLY_MODE : 'bypassPermissions',
+    ...(!readOnly && { allowDangerouslySkipPermissions: true }), includePartialMessages: true,
     settingSources: ['user', 'project', 'local'],
-    ...(spec.owner === 'dispatch' && { tools: workerTools(spec.readOnly), disallowedTools: ['mcp__*'] }),
+    ...(spec.owner === 'dispatch' && { tools: workerTools(readOnly), disallowedTools: readOnly ? [...READ_ONLY_DENIED] : ['mcp__*'] }),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT,
       spec.owner === 'gui' && !Object.entries(spec.env || process.env).some(([name, value]) => name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS' && value === '1')
         ? 'The fork subagent runs in the background, so you can keep chatting with the user while it works.' : null,

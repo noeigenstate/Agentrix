@@ -25,6 +25,7 @@ const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/san
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
+const { READ_ONLY_MODE, readOnlyArgs } = require(path.join(runtime, 'features/claude-runtime/decide.cjs'));
 const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
   require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -76,7 +77,7 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--kind <${DISPATCH_TASK_KINDS.join('|')}>] task category for long-term evaluation
   [--detach]             survive the launching shell; collect results with wait
   Codex: [--fast] [--image <file> ...] [--read-only]
-  Claude: --permission <plan|acceptEdits>
+  Claude: --permission <dontAsk|acceptEdits> (dontAsk is read-only)
 
   node dispatch.cjs stop <run id> [--reason <text>] [--no-resume] [--cwd <dir>]
   node dispatch.cjs wait <run id> [<run id> ...] [--timeout <seconds>] [--cwd <dir>]
@@ -211,9 +212,11 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS], 
   if (!/^[A-Za-z0-9][\w.:@+/[\]-]*$/.test(options.model)) throw new Error('Expected a model name for --model');
   if (!/^[A-Za-z][\w-]*$/.test(options.effort)) throw new Error('Expected an effort level for --effort');
   if (agent === 'claude' && (options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
-  if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
+  if (agent === 'claude' && !['plan', READ_ONLY_MODE, 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission dontAsk or acceptEdits');
+  if (options.permission === 'plan') options.permission = READ_ONLY_MODE; // Legacy CLI invocations and detached receipts.
+  if (options.permission === READ_ONLY_MODE) options.readOnly = true;
   if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
-  if (options.small) validateSmallScope(options.readOnly || options.permission === 'plan', options.allow);
+  if (options.small) validateSmallScope(options.readOnly, options.allow);
   if (options.resume && !/^[A-Za-z0-9][\w-]{0,159}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
   options.cwd = path.resolve(options.cwd);
   for (const key of ['brief', 'out', 'ledger']) if (options[key]) options[key] = path.resolve(options.cwd, options[key]);
@@ -236,10 +239,14 @@ function routingVerdict(actual, declared, fallback = false) {
 }
 function commandOf(options) {
   const settings = options.fast || options.fastFromSeat ? ['--settings', JSON.stringify({ fastMode: options.fast })] : [];
+  const readOnly = isReadOnly(options);
   if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
-    '--effort', options.effort, ...settings, '--permission-mode', options.permission, '--output-format', 'stream-json', '--verbose'];
+    '--effort', options.effort, ...settings, '--permission-mode', readOnly ? READ_ONLY_MODE : 'acceptEdits',
+    ...(readOnly ? readOnlyArgs() : []), '--output-format', 'stream-json', '--verbose'];
   return ['app-server', '--listen', 'stdio://'];
 }
+
+const isReadOnly = options => options.readOnly || ['plan', READ_ONLY_MODE].includes(options.permission);
 
 // The code-standard skill files in the worker's folder: the system skill's source and the project's extensions of it.
 function codeStandardFiles(cwd) {
@@ -252,21 +259,36 @@ function codeStandardFiles(cwd) {
   return [...skillIn('resources/skills', extensionPrefix.slice(0, -1)), ...['skills', '.claude/skills', '.codex/skills'].flatMap(extensions)];
 }
 
-// The rules every worker follows whatever its task, so a brief holds only the task. A read-only worker (Codex
-// --read-only, Claude plan permission) changes nothing; one with --allow changes only those paths.
+const STANDARD_LIMIT = 8 * 1024;
+function inlineStandards(options, files) {
+  if (options.small || files.length < 2 || files[0] !== 'resources/skills/code-standard/SKILL.md') return '';
+  let remaining = STANDARD_LIMIT;
+  try {
+    const bodies = files.map(file => {
+      const target = path.join(options.cwd, file), stat = fs.lstatSync(target);
+      remaining -= stat.size;
+      if (!stat.isFile() || remaining < 0) throw new Error('code_standard_unavailable');
+      return fs.readFileSync(target, 'utf8').replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n/u, '').trim();
+    });
+    const body = bodies.join('\n\n');
+    return bodies.every(Boolean) && Buffer.byteLength(body) <= STANDARD_LIMIT ? body : '';
+  } catch { return ''; }
+}
+
 function standingRules(options) {
-  const readOnly = options.readOnly || options.permission === 'plan', files = codeStandardFiles(options.cwd).map(file => `\`${file}\``);
+  const readOnly = isReadOnly(options), files = codeStandardFiles(options.cwd), inline = inlineStandards(options, files);
   const scope = readOnly ? 'This task is read-only: change, create and delete no file.'
     : options.allow.length ? 'Change only the paths under "Files you may change"; stay inside the task.'
       : 'Change only what the task needs.';
-  const standard = files.length ? `read ${files.join(' and ')} and follow them`
+  const standard = files.length ? `read ${files.map(file => `\`${file}\``).join(' and ')} and follow them`
     : 'follow the code-standard skill this session was given and the project\'s conventions';
   return ['# Standing rules\n\nAgentrix gives these to every worker. They hold unless the task below states an exception.\n',
-    `Code standard: ${standard} in any code you write or review.`,
+    inline ? 'Follow the Code standards below in any code you write or review.' : `Code standard: ${standard} in any code you write or review.`,
     `Scope: ${scope}`,
     'Do not commit or push, and do not start another worker or agent.',
     'Run no GUI smoke test and never read or write the system clipboard.',
     'Run only the tests the task touches, never the whole suite.',
+    'Skip skills named in AGENTS.md or project instructions if they are absent from your environment. Do not search for them.',
     'Never ask the user. Finish independent work. Report exact refusals under ## Needs approval. Do not work around them.',
     ...(options.small ? ['Decide implementation (one line with why), take the smaller viable approach (note the other), '
       + 'and defer scope changes, irreversible actions, or changes to UI or behavior to the lead under ## Needs decision (options, effects, recommendation).'] : [
@@ -276,20 +298,20 @@ function standingRules(options) {
     ...(options.agent === 'claude' ? ['End with a plain text answer. Never call ExitPlanMode.'] : []),
     `Report ${readOnly ? 'what you found, with the evidence (file:line)' : 'what you changed'}, what you ran with its result, and what stays unverified.`,
     'Write your messages and report in the language the task is written in; code, identifiers and comments follow the project\'s convention.',
-  ].map((line, index) => index ? `- ${line}` : line).join('\n');
+  ].map((line, index) => index ? `- ${line}` : line).join('\n') + (inline ? `\n\n# Code standards\n\n${inline}` : '');
 }
 
 // What the worker reads before the brief: the task's shared ledger, the boundaries of the modules it may change, the
 // paths it may change, the standing rules, and how to hand its findings back.
 function briefOf(options, brief, team, { id, repo, before } = {}) {
   const parts = [];
-  const smallReadOnly = options.small && (options.readOnly || options.permission === 'plan');
+  const smallReadOnly = options.small && isReadOnly(options);
   if (options.ledger) {
     let ledger = '';
     try { ledger = fs.readFileSync(options.ledger, 'utf8').trim(); } catch {}
     if (ledger) parts.push(`# Shared context for this task\n\n${ledger}`);
   }
-  if (team && !smallReadOnly) parts.push(...team.context(id, before).slice(options.small ? 1 : 0));
+  if (team && !smallReadOnly) parts.push(...team.context(id, before, { small: options.small, allow: options.allow, brief: brief.toString('utf8') }));
   if (smallReadOnly) parts.push('# Files you may change\n\nNone.');
   else if (options.allow.length) {
     for (const boundary of boundariesFor(options.cwd, options.allow, repo)) {
@@ -391,7 +413,8 @@ class WorkerOutput {
     this.resumed = false; this.lastCounters = {}; this.invalidCounters = new Set();
   }
   settings(value) {
-    this.model = word(value.model) || this.model;
+    const model = word(value.model);
+    if (model && model !== '<synthetic>') this.model = model;
     this.effort = this.launchEffort ?? (word(value.perTurnEffort ?? value.reasoning_effort ?? value.reasoningEffort ?? value.effort ?? value.reasoning?.effort) || this.effort);
     const tier = value.service_tier ?? value.serviceTier ?? value.speed ?? value.usage?.speed;
     if (typeof value.fast === 'boolean') this.fast = value.fast;
@@ -503,7 +526,7 @@ class WorkerOutput {
         this.confirmed ||= !!this.sessionId;
         this.settings(record);
         const models = Object.keys(record.modelUsage || {});
-        if (models.length === 1) this.model = models[0];
+        if (models.length === 1) this.settings({ model: models[0] });
         this.result = typeof record.result === 'string' ? record.result : null;
         const input = count(record.usage?.input_tokens), creation = count(record.usage?.cache_creation_input_tokens);
         this.stdoutUsage = { inputTokens: input !== null && creation !== null ? input + creation : null,
@@ -659,9 +682,10 @@ function detachedRuns(cwd, create = false) {
   return new DetachedRuns(path.join(temporary, ...parents));
 }
 
-function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, menu, refused, needsDecision }) {
+function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, menu, refused, needsDecision, routing }) {
   onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }),
-    ...(ownerWaitSequence && { ownerWait, ownerWaitSequence, menu }), ...(refused && { refused }), ...(settled && needsDecision === true && { needsDecision }) });
+    ...(ownerWaitSequence && { ownerWait, ownerWaitSequence, menu }), ...(refused && { refused }),
+    ...(settled && needsDecision === true && { needsDecision }), ...(routing && { routing }) });
 }
 
 async function answerDetachedRole({ id, cwd, agent, allow, readOnly }, { wait, choice }, env) {
@@ -811,10 +835,11 @@ async function runDetached(file, deps = {}) {
       return receipt({ ownerWait, ownerWaitSequence, menu, activityAt: Date.now() });
     },
     refusals: refused => receipt({ refused: [...refused] }),
+    routing: routing => receipt({ routing }),
     needsDecision: () => { needsDecision = true; },
     trackProcess: pid => artifacts?.trackRoleProcess(entry.roleArtifacts, pid),
     deferArtifactSettlement: () => { processExitUnconfirmed = true; },
-    confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
+    confirmed: (startedAt, confirmedAt, routing) => { startTiming = { startedAt, confirmedAt, ...(routing && { routing }) }; } };
   let code = 1;
   try {
     code = await run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000, roleFallback: entry.roleFallback });
@@ -1048,6 +1073,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     const route = unconfirmed ? declared() : output.routing();
     return `${options.agent} model ${route.model} effort ${route.effort || 'unreported'} fast ${route.fast === null ? 'unreported' : route.fast ? 'on' : 'off'}`;
   };
+  const routeVerdict = () => routingVerdict(output, declared(), options.fallbackFrom);
+  const roleRouting = () => options.agent === 'claude' && output.model !== null
+    ? { ...output.routing(), verdict: routeVerdict() } : null;
   // A start is confirmed only by the worker's own records: its session, and Codex's turn context in that session's file.
   // While it runs, every new record is checked at once. A worker that has exited is judged once, on everything it left
   // (final), so a fast worker that did start is reported started and done, and one without those records is not.
@@ -1059,14 +1087,14 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     if (!activeRuntime) for (const messageId of resumeControlIds) void recordReceipt(messageId, 'delivered').catch(() => {});
     const actual = output.routing(), requested = declared();
     const unverified = Object.keys(requested).filter(key => output[key] === null);
-    const decision = routingVerdict(output, requested, options.fallbackFrom), mismatch = decision === 'mismatch';
+    const decision = routeVerdict(), mismatch = decision === 'mismatch';
     const verdict = mismatch ? `MISMATCH (declared ${requested.model} ${requested.effort} fast ${requested.fast ? 'on' : 'off'})` : decision;
     const fallback = options.fallbackFrom && decision === 'ok' ? ' · fallback' : '';
     const notes = unverified.length ? ` (${unverified.join(', ')}${verdict === 'unverified' ? '' : ' unverified'})` : '';
     const routing = verdict + fallback + notes;
     if (!started) {
       started = true;
-      detached?.confirmed?.(workerStartedAt, Date.now());
+      detached?.confirmed?.(workerStartedAt, Date.now(), roleRouting());
       sentRoute = actual; send({ ...assignment(), ...actual, ...(mismatch ? { declared: requested } : {}) });
       signal(`started ${id} ${reported()} · routing ${routing} · pid ${child.pid} session ${output.sessionId}${fallbackNote()}`);
       for (const fact of inputFacts.values()) send(fact);
@@ -1087,6 +1115,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     const route = output.routing();
     if (['model', 'effort', 'fast'].every(key => route[key] === sentRoute[key])) return;
     sentRoute = route; send({ type: 'dispatch-routing', id, ...route });
+    const routing = roleRouting();
+    if (routing) detached?.routing?.(routing);
   };
   // The worker's own app-server reads its account and quota. A planner in a terminal has no native Codex session, so
   // these reports are the pane's first-hand Codex reading. Each report reads the account afresh; it is named only with
@@ -1282,10 +1312,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       }, POLL_INTERVAL);
     }
     if (killed) throw new Error('Dispatch interrupted before launch');
-    const checking = options.allow.length > 0;
-    const repo = checking ? repoFiles(options.cwd) : undefined;
+    const scoped = options.allow.length > 0;
+    const repo = scoped || options.readOnly ? repoFiles(options.cwd) : undefined;
     // What the working tree held before the worker, so its own changes can be checked against --allow afterwards.
-    if (checking) before = snapshot(options.cwd, repo);
+    if (scoped || options.readOnly) before = snapshot(options.cwd, repo);
+    const checking = scoped || Boolean(before);
     skillGuard = new WorkerSkillProposals(options, env, repo);
     const dirtyBytes = new Map();
     let capturedBytes = 0;
@@ -1345,11 +1376,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     }
     const inspectScope = () => {
       const after = checking ? snapshot(options.cwd, before) : null;
-      const own = after ? new Set([options.out, `${options.out}.log`, options.ledger, team?.memory, ...skillGuard.artifacts].filter(Boolean)
+      const own = after ? new Set([options.out, `${options.out}.log`, ...(options.readOnly ? [] : [options.ledger, team?.memory]), ...skillGuard.artifacts].filter(Boolean)
         .map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
       const outbox = after && send.directory && path.relative(after.root, send.directory).split(path.sep).join('/');
       const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file) && !(outbox && file.startsWith(outbox + '/')))) ?? null;
-      return { after, changed, outOfScope: changed && changed.filter(file => !matches(options.allow, file)) };
+      return { after, changed, outOfScope: changed && changed.filter(file => options.readOnly || !matches(options.allow, file)) };
     };
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
@@ -1368,7 +1399,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         const client = await connectDispatchControl({ address: bootstrap.controlAddress, runId: id,
         projectId: bootstrap.projectId, sessionKey: bootstrap.sessionKey, capability: bootstrap.controlCapability,
         cwd: options.cwd, agent: options.agent, allow: options.allow,
-        readOnly: !!options.readOnly || options.permission === 'plan',
+        readOnly: options.readOnly,
         onControl: async messageId => { await readInbox(); return controlReceipts.get(messageId) || inbox?.receipt(messageId) || 'queued'; },
         onEvent: event => acceptNative(event) });
         if (ending) client.close(); else { controlClient = client; controlFailure = null; controlLeadMode = null; }
@@ -1437,7 +1468,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         const fact = workerInput(event, controlInputs, resumeControlIds, resumeInputId);
         if (fact) recordInput(fact.entryId, fact.inputId, fact.origin, fact.ownerMessageIds);
       } else if (event.type === 'routing.updated') {
-        // Effective Codex settings come from the worker's app-server response, including when no turn record has arrived.
+        // Provider settings can arrive after the start was confirmed.
         output.nativeRouting(event.payload); reroute();
       }
       else if (event.type === 'input.receipt' && controlReceipts.has(event.payload.clientMessageId)) void recordReceipt(event.payload.clientMessageId, event.payload.status).catch(() => {});
@@ -1513,12 +1544,13 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       const stopFailure = stopFailureFor(reason);
       if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured,
         ...(stopFailure && { treeStopFailure: stopFailure }),
-        verdict: routingVerdict(output, declared(), options.fallbackFrom),
+        verdict: routeVerdict(),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
       signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${refusalNote()}${scopeRestoreNote}${bookkeeping}`
-        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}${needsDecision ? ' · needs decision' : ''}`);
+        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`
+        + `${options.agent === 'claude' && !unconfirmed ? ' · routing ' + routeVerdict() : ''}${needsDecision ? ' · needs decision' : ''}`);
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();
@@ -1546,7 +1578,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         if (killed) throw new Error('Dispatch interrupted before launch');
         const spec = { owner: 'dispatch', projectId: bootstrap?.projectId || id, terminalId: bootstrap?.projectId || id, runtimeSessionId: id, runId: id,
           cwd: options.cwd, worktree: options.cwd, model: options.model, effort: options.effort, fast: options.fast,
-          readOnly: options.readOnly || options.permission === 'plan' || ['审查', '调查'].includes(options.role), allow: options.allow, env: workerEnv,
+          readOnly: options.readOnly || ['审查', '调查'].includes(options.role), allow: options.allow, env: workerEnv,
           policy: { approvalPolicy: 'never' },
           providerSessionId: effective.resume || null };
         const completion = new Promise(resolve => { settleNative = resolve; });

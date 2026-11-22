@@ -145,7 +145,7 @@ test('default send leaves the child running and joins ordered messages in same-s
     assert.match(resumed.brief, /业主插话：First change\.[\s\S]*业主插话：第二条\nKeep the scope\.[\s\S]*继续执行当前任务。/);
     assert.match(resumed.brief, /src\/\*\*/);
     assert.deepEqual(resumed.args.slice(0, 3), agent === 'codex' ? ['app-server', '--listen', 'stdio://'] : ['-p', '--resume', f.session]);
-    if (agent === 'claude') assert.ok(resumed.args.includes('plan'));
+    if (agent === 'claude') assert.equal(resumed.args[resumed.args.indexOf('--permission-mode') + 1], 'dontAsk');
     if (agent === 'codex') { assert.equal(resumed.threadRequest.params.threadId, f.session); assert.equal(resumed.threadRequest.params.serviceTier, 'fast'); assert.equal(resumed.threadRequest.params.config.model_reasoning_effort, 'max'); }
     await f.api.interveneAgent('terminal', f.target.callId, 'During the resumed run.');
     assert.equal(f.children[1].exitCode, null);

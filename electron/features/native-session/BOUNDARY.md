@@ -2,6 +2,7 @@
 
 Owns provider-neutral session routing, validated renderer IPC, settings and worker SDK registration.
 The local MCP command identifies the lead provider. The private bootstrap sidecar carries the Claude lead seat.
+The authenticated read-only binding selects Claude worker permissions for both the SDK and hidden terminal.
 
 ## Owns
 - `electron/features/native-session/**`
@@ -21,6 +22,7 @@ The local MCP command identifies the lead provider. The private bootstrap sideca
 - `tokenRate` (`electron/features/native-session/router.cjs`) — synchronous host-only read of the bound runtime's shared meter for the activity pane; no renderer IPC or provider event schema extension
 
 ## May import
+
 - `electron/features/skills/seat-rules.mjs` (validate option-safe Claude worker model and effort values)
 - `electron/features/agents/agent-usage.cjs` (public account observation reducers)
 - `electron/features/agents/agent-command.cjs` (routing command names and their refusal)

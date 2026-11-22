@@ -4,6 +4,7 @@ const { createHmac, randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { withoutShims } = require('../../shared/agentrix-shims.cjs');
 const { claudeBackgroundEnvironment } = require('../../shared/claude-background.cjs');
+const { READ_ONLY_MODE, readOnlyArgs } = require('../claude-runtime/decide.cjs');
 const { TranscriptTail } = require('../../transcript-tail.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
 const { createWorkerMenu } = require('./worker-menu.cjs');
@@ -106,6 +107,14 @@ function launchCommand(file, args, { platform, cmdPath, powershellPath }) {
   return { file, args };
 }
 
+function fitsInitialArgument(file, args, prompt, platform) {
+  if (/[\0-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(prompt) || Buffer.byteLength(prompt) > 24 * 1024) return false;
+  if (platform !== 'win32') return true;
+  if (/\.(?:bat|cmd|ps1)$/i.test(file) || /^"[\s\S]*"$/.test(prompt) || !/[ \t]/.test(prompt)) return false;
+  // Count the whole command line, leaving room for node-pty's quoting (at most twice each argument's length).
+  return [file, ...args, '--', prompt].reduce((length, arg) => length + 2 * arg.length + 3, 1) <= 30_000;
+}
+
 function killTree(pty, platform = process.platform) {
   const end = () => { try { pty.kill(); } catch {} };
   if (platform === 'win32') {
@@ -186,7 +195,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     while (w.closedAsks.size > CLOSED_ASKS_LIMIT) w.closedAsks.delete(w.closedAsks.values().next().value);
   }
   function publish(w, type, payload, options) { if (!w.closed) w.stream.publish(type, payload, options); }
-  // A sentence the worker reads, naming a file in its brief folder; no part of a brief or message is ever typed.
+  // File references must also be safe when they are typed for a later intervention.
   function sentence(text) {
     if (CONTROL.test(text)) throw new Error('worker_prompt_unsafe');
     return text;
@@ -207,16 +216,21 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     // beside it, out of that directory's reach.
     fs.mkdirSync(w.briefs, { recursive: true, mode: 0o700 });
     const brief = path.join(w.briefs, 'brief.md'), settings = path.join(w.folder, 'settings.json');
-    fs.writeFileSync(brief, prompt, { mode: 0o600 });
     w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh'),
       allowBackgroundTasks: allowBackgroundTasks() });
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
     const hookSettings = w.hooks.channel === 'http' ? w.hooks.settings.http : w.hooks.settings.fallback;
     fs.writeFileSync(settings, typeof w.spec.fast === 'boolean'
       ? JSON.stringify({ ...JSON.parse(hookSettings), fastMode: w.spec.fast }) : hookSettings, { mode: 0o600 });
-    const args = [...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs, '--permission-mode', w.spec.permission,
-      ...(w.spec.model ? ['--model', w.spec.model] : []), ...(w.spec.effort ? ['--effort', w.spec.effort] : []),
-      sentence(`Read the task brief in ${brief} and carry it out.`)];
+    const readOnly = w.spec.readOnly;
+    const args = [...(readOnly ? readOnlyArgs() : []), ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,
+      '--permission-mode', readOnly ? READ_ONLY_MODE : 'acceptEdits',
+      ...(w.spec.model ? ['--model', w.spec.model] : []), ...(w.spec.effort ? ['--effort', w.spec.effort] : [])];
+    if (fitsInitialArgument(file, args, prompt, platform)) args.push('--', prompt);
+    else {
+      fs.writeFileSync(brief, prompt, { mode: 0o600 });
+      args.push(sentence(`Read the task brief in ${brief} and carry it out.`));
+    }
     const command = launchCommand(file, args, { platform, cmdPath, powershellPath });
     w.pty = spawn(command.file, command.args, { name: 'xterm-256color', cols: w.cols, rows: w.rows, cwd: w.spec.cwd, env: w.env,
       ...(platform === 'win32' ? { useConpty: true, useConptyDll: true } : {}) });
@@ -260,7 +274,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     if (!w.closed) void w.close();
   }
 
-  // An owner's message goes in as the brief does: a file in the brief folder, named by one typed sentence, written once
+  // An owner's message goes in as a file in the brief folder, named by one typed sentence, written once
   // while the CLI waits for a prompt. UserPromptSubmit confirms it.
   function write(w, input) {
     w.idle = false; w.inFlight = input;

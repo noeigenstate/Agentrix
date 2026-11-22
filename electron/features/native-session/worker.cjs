@@ -3,6 +3,7 @@ const { exact, text, assert } = require('./validate.cjs');
 const { choosePath } = require('./routing.cjs');
 const { createEventStream } = require('./events.cjs');
 const { validModel, EFFORT } = require('../skills/seat-rules.mjs');
+const { READ_ONLY_MODE } = require('../claude-runtime/decide.cjs');
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // terminals: main's worker terminals (worker-terminals/BOUNDARY.md); a local terminal lead's worker runs in one of them.
 function registerClaudeWorker({ control, claude, settings, terminals = null, context = () => '', env = () => process.env }) {
@@ -10,14 +11,14 @@ function registerClaudeWorker({ control, claude, settings, terminals = null, con
     assert(exact(payload, ['prompt', 'model', 'effort', 'fast', 'resume', 'images', 'out', 'permission']) && text(payload.prompt) &&
       (payload.model === undefined || validModel(payload.model)) && (payload.effort === undefined || typeof payload.effort === 'string' && EFFORT.test(payload.effort))
       && (payload.fast === undefined || typeof payload.fast === 'boolean')
-      && (payload.permission == null || ['plan', 'acceptEdits'].includes(payload.permission)) && (payload.resume == null || SESSION_ID.test(payload.resume)));
+      && (payload.permission == null || ['plan', READ_ONLY_MODE, 'acceptEdits'].includes(payload.permission)) && (payload.resume == null || SESSION_ID.test(payload.resume)));
     const runtimeSessionId = randomUUID();
     const runtimeEnv = { ...env(run) };
     for (const name of Object.keys(runtimeEnv)) if (/^AGENTRIX_(?:BOOTSTRAP|CONTROL|CAPABILITY|.*SESSION_KEY)|^CLAUDE_CODE_ENTRYPOINT$/i.test(name)) delete runtimeEnv[name];
     const spec = { agent: 'claude', owner: 'dispatch', runtimeSessionId, terminalId: run.runId, projectId: run.projectId, runId: run.runId,
       cwd: run.cwd, worktree: run.worktree || run.cwd, allow: run.allow, readOnly: run.readOnly,
       model: payload.model, effort: payload.effort, fast: payload.fast, context: context(run), env: runtimeEnv,
-      providerSessionId: payload.resume || null, permission: run.readOnly ? 'plan' : payload.permission || 'acceptEdits' };
+      providerSessionId: payload.resume || null, permission: run.readOnly ? READ_ONLY_MODE : 'acceptEdits' };
     const pathEvent = reason => createEventStream(spec, event => stream.emit(event)).publish('path.changed', { previous: null, selected: 'terminal', reason });
     // Only a local terminal lead's worker is billed like its terminal; an SSH one keeps the CLI path.
     const terminal = run.leadMode === 'terminal' && run.local === true && terminals;

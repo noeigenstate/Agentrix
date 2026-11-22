@@ -171,7 +171,7 @@ const codex = [
 
 async function fixture(t, lines = codex, { agent = 'codex', role = '执行', declaredModel, bootstrap = true, exitCode = 0,
   hold, timeout = 30000, requestTimeout, detached = false, extra = [], setup, isolated = false, environment = () => ({}), thread,
-  captureWakes = false } = {}) {
+  captureWakes = false, readOnly = !extra.includes('--allow') } = {}) {
   const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-')));
   const directory = isolated ? path.join(root, 'worker') : root;
   if (isolated) {
@@ -206,7 +206,8 @@ run(process.argv.slice(2), {startTimeout:${timeout}, requestTimeout:${requestTim
   resolveExecutable:(_,args)=>({file:process.execPath,args:[${JSON.stringify(worker)},...args]})})
 .then(code=>{process.exitCode=code;process.disconnect?.();});`);
   const args = [agent, '--role', role, '--title', 'Exact dispatch task', '--model', declaredModel || (agent === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5'), '--effort', agent === 'codex' ? 'max' : 'high',
-    '--cwd', directory, '--brief', brief, '--out', out, ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', '--read-only'] : ['--permission', 'plan']),
+    '--cwd', directory, '--brief', brief, '--out', out,
+    ...(agent === 'codex' ? ['--fast', '--image', 'first image.png', ...(readOnly ? ['--read-only'] : [])] : ['--permission', readOnly ? 'dontAsk' : 'acceptEdits']),
     ...extra];
   const env = { ...dispatchEnvironment(), CODEX_HOME: path.join(directory, 'codex'), DISPATCH_FIXTURE: input, DISPATCH_CAPTURE: capture };
   Object.assign(env, await environment(directory));
@@ -681,7 +682,8 @@ test('detached Codex and Claude expose engine timing and a decision heading thro
     assert.equal(await waitDetached({ ids: [id], timeout: 0 }, {
       store, onTiming: status => timing.push(status), stdout: { write: value => { output += value; } },
     }), 0);
-    assert.deepEqual(timing, [{ id, startedAt, confirmedAt, endedAt, ...(needsDecision && { needsDecision }) }]);
+    const routing = agent === 'claude' ? { model: 'claude-sonnet-5-5', effort: 'high', fast: false, verdict: 'ok' } : null;
+    assert.deepEqual(timing, [{ id, startedAt, confirmedAt, endedAt, ...(needsDecision && { needsDecision }), ...(routing && { routing }) }]);
     assert.equal(endedLine.endsWith(' · needs decision'), needsDecision);
     assert.doesNotMatch(endedLine, /Private options/);
     assert.equal(output.trimEnd().split('\n').at(-1), endedLine);
@@ -981,11 +983,12 @@ test('small role briefs trim context by permission and preserve the default byte
   await fs.mkdir(path.join(cwd, 'src'));
   await fs.writeFile(path.join(cwd, boundary), '# Boundary: Source\n\nPrivate module context.\n\n## Owns\n- `src/**`\n');
   const repo = { root: cwd, files: [boundary, 'src/a.js'] };
-  const team = { context: () => ['# Project memory\n\nMemory.', '# Working now\n\nPeers.', '# Repository\n\n(clean)'] };
+  const team = { context: (_id, _before, { small }) => [...(small ? [] : ['# Project memory\n\nMemory.']), '# Working now\n\nPeers.', '# Repository\n\n(clean)'] };
   const render = (options, currentTeam = team) => briefOf({ cwd, ...options }, Buffer.from('Inspect src/a.js.'), currentTeam, { repo });
   const read = { readOnly: true, allow: [] }, write = { allow: ['src/a.js'] };
   // The captured default sections outside the escalation rules keep their original bytes.
-  const withoutEscalationRules = options => render(options).toString().replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
+  const withoutEscalationRules = options => render(options).toString()
+    .replace(/^- Skip skills named in AGENTS\.md.*\n/m, '').replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
   assert.equal(createHash('sha256').update(withoutEscalationRules(read)).digest('hex'), '360fd84da8599f32e7f73387cb546948338aad8811c60442ea140567263cda24');
   assert.equal(createHash('sha256').update(withoutEscalationRules(write)).digest('hex'), 'd1922a777657b74c2d0f332ec705a75a5dc33c9b8285b818fd77c19748d85656');
 
@@ -1005,7 +1008,7 @@ test('small role briefs trim context by permission and preserve the default byte
   for (const text of [lookup, edit]) assert.match(text, /# Standing rules[\s\S]*# Skill changes[\s\S]*## Findings for the ledger[\s\S]*# Task\n\nInspect src\/a\.js\.$/);
 });
 
-test('every worker reads one short standing section before its task: scoped, read-only, and the code standard by path', async t => {
+test('standing rules inline bounded standards for normal briefs and keep references for small or oversized briefs', async t => {
   const directory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-standing-')));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const section = options => /# Standing rules\n[\s\S]*?(?=\n\n# Skill changes)/.exec(briefOf({ cwd: directory, allow: [], ...options }, Buffer.from('任务。')).toString())[0];
@@ -1018,6 +1021,7 @@ test('every worker reads one short standing section before its task: scoped, rea
       assert.match(text, /Decide implementation.+one line.+smaller.+other/);
       assert.match(text, /## Needs decision.+options.+(?:effects|consequences).+recommendation/);
       assert.match(text, /scope changes, irreversible actions, or changes to UI or behavior/);
+      assert.match(text, /^- Skip skills named in AGENTS\.md or project instructions .* Do not search for them\.$/m);
       if (small) assert.match(text, /^- Decide implementation.+## Needs decision.+$/m);
     }
     assert.match(claude, /^- End with a plain text answer\. Never call ExitPlanMode\.$/m);
@@ -1034,13 +1038,34 @@ test('every worker reads one short standing section before its task: scoped, rea
   assert.match(section({ permission: 'acceptEdits' }), /Scope: Change only what the task needs\./);
   for (const file of ['resources/skills/code-standard/SKILL.md', 'skills/code-standard-team/SKILL.md', 'skills/other/SKILL.md']) {
     await fs.mkdir(path.dirname(path.join(directory, file)), { recursive: true });
-    await fs.writeFile(path.join(directory, file), '# Skill\n');
+    await fs.writeFile(path.join(directory, file), `---\nname: fixture\n---\n# ${path.basename(path.dirname(file))} rules\n`);
   }
   await fs.mkdir(path.join(directory, '.claude/skills/code-standard-empty'), { recursive: true });
   const named = section({ allow: ['src/**'] });
-  assert.match(named, /read `resources\/skills\/code-standard\/SKILL\.md` and `skills\/code-standard-team\/SKILL\.md` and follow them in any code/);
-  assert.doesNotMatch(named, /skills\/other|code-standard-empty|session was given/);
-  assert.ok(named.length < 1200, `the standing section stays short (${named.length})`);
+  assert.match(named, /# Code standards\n\n# code-standard rules\n\n# code-standard-team rules/);
+  assert.doesNotMatch(named, /other rules|code-standard-empty|session was given|name: fixture/);
+  assert.ok(Buffer.byteLength(named) < 8 * 1024 + 1400);
+  const references = /read `resources\/skills\/code-standard\/SKILL\.md` and `skills\/code-standard-team\/SKILL\.md` and follow them in any code/;
+  assert.match(section({ small: true }), references);
+  await fs.appendFile(path.join(directory, 'skills/code-standard-team/SKILL.md'), '汉'.repeat(3000));
+  const oversized = section({ allow: ['src/**'] });
+  assert.match(oversized, references);
+  assert.doesNotMatch(oversized, /# Code standards|汉/);
+  assert.ok(Buffer.byteLength(oversized) < 1400, `the reference section stays short (${Buffer.byteLength(oversized)})`);
+});
+
+test('a read-only Claude headless role disables writing tools and detects tracked and new writes without allow globs', async t => {
+  const lines = [{ record: { type: 'system', subtype: 'init', session_id: 'read-only-session', model: 'claude-sonnet-5-5' } },
+    { write: 'src/a.js', text: 'changed' }, { write: 'src/new.js', text: 'created' }];
+  const f = await fixture(t, lines, { agent: 'claude', setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': 'original' }) });
+  const result = await f.finished;
+  const { args } = JSON.parse(await fs.readFile(f.capture, 'utf8'));
+  const value = flag => args[args.indexOf(flag) + 1];
+  assert.equal(value('--permission-mode'), 'dontAsk');
+  assert.equal(value('--tools'), 'Read,Glob,Grep,LS');
+  for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'NotebookEdit']) assert.ok(value('--disallowedTools').split(',').includes(tool));
+  assert.match(result.stdout, /reason scope · OUT OF SCOPE: src\/a\.js, src\/new\.js/);
+  assert.deepEqual(f.events.find(event => event.type === 'dispatch-end').outOfScope, ['src/a.js', 'src/new.js']);
 });
 
 test('a worker that changes files outside --allow ends out of scope, with the files, and its findings reach the ledger', async t => {

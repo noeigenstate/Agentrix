@@ -3,6 +3,7 @@ const path = require('node:path');
 const { matches } = require('../../boundaries.cjs');
 const { commandPhrase } = require('../../agent-actions.cjs');
 const { diagnosticLine } = require('../agents/start-failure.cjs');
+const { READ_TOOLS, EDIT_TOOLS } = require('../claude-runtime/decide.cjs');
 const DENIALS = {
   unsupported_tool: '此角色不允许使用该工具。',
   read_only: '此角色是只读的，不能执行命令或编辑文件。',
@@ -12,9 +13,9 @@ const DENIALS = {
   outside_scope: '目标文件不在任务授权的编辑范围内。',
   skill_not_authorized: '修改该技能需要明确授权其文件路径。',
 };
-const READ = new Set(['Read', 'Glob', 'Grep', 'LS']);
-const EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-const workerTools = readOnly => [...READ, ...(readOnly ? [] : ['Bash', ...EDIT])];
+const READ = new Set(READ_TOOLS);
+const EDIT = new Set(EDIT_TOOLS);
+const workerTools = readOnly => [...READ_TOOLS, ...(readOnly ? [] : ['Bash', ...EDIT_TOOLS])];
 function realTarget(file) {
   let parent = path.resolve(file), suffix = [];
   while (!fs.existsSync(parent)) {

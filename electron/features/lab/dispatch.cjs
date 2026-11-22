@@ -30,7 +30,7 @@ async function claudeLoginFailed(result, out) {
 
 function workerArguments({ arm, cwd, brief, out, helper, kind = 'core', review = false }) {
   const codex = arm === 'sol' && !review;
-  const mode = codex ? ['--fast'] : ['--permission', review ? 'plan' : 'acceptEdits'];
+  const mode = codex ? ['--fast'] : ['--permission', review ? 'dontAsk' : 'acceptEdits'];
   const scope = review ? [] : ['--allow', '**'];
   return [
     helper, codex ? 'codex' : 'claude', '--role', review ? '审查' : '执行',
@@ -51,7 +51,7 @@ function taskBrief(task, arm, helper, runDirectory, control = path.join(runDirec
     'Run appropriate existing tests and report their actual results.',
     'Use Node and this dispatch entrypoint for every model invocation: ' + helper,
     'Quote paths for your shell. GPT: gpt-6.1-sol --effort max --fast.',
-    'Claude: Opus/Sonnet 5.5 --effort high --permission acceptEdits; use plan for read-only reviews.',
+    'Claude: Opus/Sonnet 5.5 --effort high --permission acceptEdits. Use --permission dontAsk for read-only reviews.',
     'Give each editing worker --allow for its assigned module paths. Use real brief files and keep outputs under control.',
     'Only the lead may dispatch the planned workers. Those workers must never delegate further.',
   ];

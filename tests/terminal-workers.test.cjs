@@ -149,6 +149,8 @@ test('a hidden terminal owner prompt reaches the real detached receipt and wakes
   await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Inspect', readOnly: true });
   f.hook('UserPromptSubmit');
   await f.started;
+  assert.match(f.stdout(), /started .* model unreported .* routing unverified/);
+  assert.equal((await tools.roles_status()).roles[0].routing, undefined);
   const writes = f.pty.writes.length;
   const waiting = tools.wait_roles({ ids: [f.id], seconds: 30 });
   f.hook('PermissionRequest', { tool_name: 'ExitPlanMode' });
@@ -163,8 +165,16 @@ test('a hidden terminal owner prompt reaches the real detached receipt and wakes
   f.hook('PostToolUse', { tool_name: 'ExitPlanMode' });
   assert.equal(await cleared, true);
   assert.equal((await tools.roles_status()).roles[0].waiting, undefined);
+  const observed = store.observe(() => store.read(f.id)?.routing, 5000);
+  f.log.append(f.log.reply('r1', 'p1', 'reply', 'Synthetic answer', Date.now()));
+  const route = { model: 'synthetic-model', effort: 'high', fast: null, verdict: 'ok' };
+  assert.deepEqual(await observed, route);
+  assert.deepEqual((await tools.roles_status()).roles[0].routing, route);
   f.hook('Stop', { last_assistant_message: 'Synthetic answer' });
   assert.equal(await f.result, 0, f.stdout());
+  const ended = (await tools.roles_status()).roles[0];
+  assert.deepEqual(ended.routing, route);
+  assert.match(ended.end, /model synthetic-model .* routing ok/);
 });
 
 function readMenu(folder, name, maxRows = 28) {
@@ -274,9 +284,7 @@ test('the attached owner’s first key reserves the prompt across redraws and de
 
 test("a terminal planner's worker shows its rate, waits for the owner and writes output on Stop", async t => {
   const f = await fixture(t), at = Date.now();
-  const briefs = path.join(f.root, `worker-${f.id}`, 'brief');
-  assert.equal(f.pty.args.at(-1), `Read the task brief in ${path.join(briefs, 'brief.md')} and carry it out.`);
-  assert.match(fs.readFileSync(path.join(briefs, 'brief.md'), 'utf8'), /Synthetic terminal task/);
+  assert.match(f.pty.args.at(-1), /# Task\n\nSynthetic terminal task$/);
   f.pty.emit('Claude Code is ready\r\n');
   f.log.append(f.log.prompt('p1', 'Synthetic terminal task', at), f.log.reply('r1', 'p1', 'm1', 'Looking at the files.', at + 2000));
   f.hook('UserPromptSubmit', { prompt: 'Read the task brief' });
@@ -566,8 +574,9 @@ function launchHarness(t, configure) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-launch-')));
   t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }));
   const parent = parentTerminal(root); parent.write({});
-  const spawned = [], events = [], clock = inputClock();
-  const deps = { spawn: fakeSpawn(spawned), claudeFile: () => path.join(root, 'stand-in', 'claude'),
+  const spawned = [], events = [], clock = inputClock(), launched = Promise.withResolvers();
+  const spawn = fakeSpawn(spawned);
+  const deps = { spawn: (...args) => { const pty = spawn(...args); launched.resolve(pty); return pty; }, claudeFile: () => path.join(root, 'stand-in', 'claude'),
     parent: () => ({ env: parent.env, sessionKey: 'synthetic', bootstrapFile: parent.bootstrap }),
     calls: () => null, hooks: hooksFor, runtimeDir: () => root, claudeHome: () => parent.claudeHome,
     now: clock.now, schedule: clock.schedule, cancel: clock.cancel, kill: pty => pty.kill() };
@@ -578,10 +587,34 @@ function launchHarness(t, configure) {
   registerClaudeWorker({ control: { onRequest: (_name, fn) => { handler = fn; } }, claude: {}, settings: () => ({}), terminals });
   const binding = { runId: 'launch', projectId: 'terminal', agent: 'claude', cwd: root, worktree: root, allow: [], local: true, leadMode: 'terminal' };
   const stream = { emit: event => events.push(event), onControl: fn => { control = fn; return () => {}; } };
-  return { root, parent, spawned, events, clock, terminals,
+  return { root, parent, spawned, events, clock, terminals, launched: launched.promise,
     hook: (event, payload = {}) => terminals.hook({ terminalId: 'worker-launch', event, sessionId: SESSION, payload }),
-    start: () => handler(binding, { prompt: 'Synthetic brief' }, stream), control: message => control(message) };
+    start: (prompt = 'Synthetic brief', readOnly = false) => handler({ ...binding, readOnly }, { prompt }, stream), control: message => control(message) };
 }
+
+test('a read-only terminal role passes an exact short brief to the executable and uses a file for Windows limits or shell shims', async t => {
+  const short = '# Task\n\nInspect "quotes", %VARIABLE% and ! without edits.';
+  for (const [extension, prompt, inline] of [['.exe', short, true], ['.exe', 'x '.repeat(9000), false], ['.ps1', short, false], ['.cmd', short, false]]) {
+    const f = launchHarness(t, (deps, root) => Object.assign(deps, { platform: 'win32', claudeFile: () => path.join(root, 'claude' + extension) }));
+    const result = f.start(prompt, true);
+    const pty = await f.launched, { args } = pty, folder = path.join(f.root, 'worker-launch', 'brief');
+    const value = flag => args[args.indexOf(flag) + 1];
+    if (Array.isArray(args)) {
+      assert.equal(value('--permission-mode'), 'dontAsk');
+      assert.equal(value('--tools'), 'Read,Glob,Grep,LS');
+      for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'NotebookEdit']) assert.ok(value('--disallowedTools').split(',').includes(tool));
+      assert.equal(args.at(-1), inline ? prompt : `Read the task brief in ${path.join(folder, 'brief.md')} and carry it out.`);
+    } else {
+      assert.match(args, /"--permission-mode" "dontAsk"/);
+      assert.match(args, /Read the task brief/);
+      assert.ok(!args.includes(prompt));
+    }
+    assert.deepEqual(fs.readdirSync(folder), inline ? [] : ['brief.md']);
+    if (!inline) assert.equal(fs.readFileSync(path.join(folder, 'brief.md'), 'utf8'), prompt);
+    pty.exit({ exitCode: 1 });
+    assert.deepEqual(await result, { status: 'failed' });
+  }
+});
 
 test('a worker leaves no pending timers after start, hooks, Stop and close', async t => {
   const f = launchHarness(t), result = f.start(), at = f.clock.now();
@@ -886,7 +919,7 @@ test('a terminal launch failure after its initial input fails visibly without CL
   });
   await assert.rejects(f.start(), error => error.code === 'after_input' && error.beforeInput !== true);
   assert.equal(f.spawned.length, 1);
-  assert.ok(f.spawned[0].args.at(-1).startsWith('Read the task brief'), 'spawn already received the initial prompt');
+  assert.equal(f.spawned[0].args.at(-1), 'Synthetic brief', 'spawn already received the initial prompt');
   assert.equal(f.events.some(event => event.type === 'path.changed' && event.payload.selected === 'terminal'), false);
   assert.equal(f.spawned[0].killed, 1);
 });
@@ -1029,7 +1062,7 @@ test("a worker's hooks never reach a project terminal or its completion", async 
   assert.equal(f.pty.args.filter(arg => arg === '--add-dir').length, 1);
   assert.equal(f.pty.args[f.pty.args.indexOf('--add-dir') + 1], path.join(folder, 'brief'));
   assert.deepEqual(fs.readdirSync(folder).sort(), ['brief', 'claude-env.sh', 'settings.json']);
-  assert.deepEqual(fs.readdirSync(path.join(folder, 'brief')), ['brief.md']);
+  assert.deepEqual(fs.readdirSync(path.join(folder, 'brief')), []);
 
   // A command-hook event with the worker's key and the HTTP hooks reach only the worker's call.
   f.command('Notification', 'attention');

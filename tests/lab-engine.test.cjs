@@ -977,9 +977,13 @@ test('the lab copy of the real dispatch helper starts Codex on the file credenti
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const helper = path.join(__dirname, '../integration/dispatch.cjs');
   const modules = JSON.parse(await fs.readFile(await copyHelper(helper, directory), 'utf8')), source = modules['dispatch.cjs'];
-  const start = source.indexOf('function commandOf(options) {');
-  const commandOf = require('node:vm').runInNewContext(`(${source.slice(start, source.indexOf('\n}', start) + 2)})`);
-  assert.deepEqual([...commandOf({ agent: 'codex' })], ['-c', 'cli_auth_credentials_store="file"', 'app-server', '--listen', 'stdio://']);
+  for (const [name, content] of Object.entries(modules)) {
+    const file = path.join(directory, name);
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, content);
+  }
+  const { commandOf } = require(path.join(directory, 'dispatch.cjs'));
+  assert.deepEqual(commandOf({ agent: 'codex' }), ['-c', 'cli_auth_credentials_store="file"', 'app-server', '--listen', 'stdio://']);
   assert.equal(commandOf({ agent: 'claude', model: 'm', effort: 'high', permission: 'plan' }).includes('-c'), false);
   assert.deepEqual(require(helper).commandOf({ agent: 'codex' }), ['app-server', '--listen', 'stdio://'], 'only the lab copy is rewritten');
   assert.match(source, /send = globalThis\.__AGENTRIX_LAB_SINK;/); assert.doesNotMatch(source, /send = eventSink\(/);

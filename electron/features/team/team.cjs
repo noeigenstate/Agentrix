@@ -5,6 +5,7 @@ const { execFileSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { setTimeout: delay } = require('node:timers/promises');
 const { queueControl, recordControl, controlOf } = require('./inbox.cjs');
+const { globRegExp } = require('../../boundaries.cjs');
 
 const FINDINGS = '## Findings for the ledger';
 const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
@@ -38,12 +39,36 @@ function teamAt(common, cwd, create = false) {
   return new Team(directory, cwd);
 }
 
-function memoryExcerpt(text) {
-  const bytes = Buffer.from(text), marker = '…\n', limit = 24 * 1024;
-  if (bytes.length <= limit) return text.trim();
-  let start = bytes.length - limit + Buffer.byteLength(marker);
-  while ((bytes[start] & 0xc0) === 0x80) start++;
-  return marker + bytes.subarray(start).toString('utf8').trim();
+const MEMORY_LIMIT = 6 * 1024;
+const commonWords = new Set(('about after and are before brief can change changes check code does file files fix for from had has have how '
+  + 'implement inspect into investigate keep must new not only our read report review role see should task test tests that the their them then this '
+  + 'update use verify was what when will with work would you 任务 代码 修复 文件 测试 角色').split(' '));
+let han;
+const words = text => (text.toLowerCase().match(/[a-z][a-z0-9_]{2,}|\p{Script=Han}+/gu) || [])
+  .flatMap(word => /^[a-z]/.test(word) ? [word]
+    : Array.from((han ??= new Intl.Segmenter('zh', { granularity: 'word' })).segment(word), part => part.segment).filter(part => part.length > 1))
+  .filter(word => !commonWords.has(word));
+const paths = text => (text.toLowerCase().replaceAll('\\', '/').match(/[\p{L}\d_.-]+(?:\/[\p{L}\d_.-]+)+|[\p{L}\d_-]+\.[a-z][a-z\d]+/gu) || [])
+  .map(file => file.replace(/\.+$/, ''));
+
+function memoryExcerpt(text, { allow = [], brief = '' } = {}) {
+  const taskWords = new Set(words(brief)), taskPaths = new Set(paths(brief));
+  const globs = allow.map(glob => globRegExp(glob.toLowerCase()));
+  const entries = text.split(/(?=^### \d{4}-\d{2}-\d{2}(?=[T\s])|^## Round\b|^# )/m);
+  const chosen = [];
+  let bytes = 0;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i].trim();
+    if (!/^### \d{4}-\d{2}-\d{2}(?=[T\s])|^## Round\b/.test(entry)) continue;
+    const heading = entry.split('\n', 1)[0], title = heading.split(' · ')[1] ?? heading;
+    if (!words(title).some(word => taskWords.has(word))
+        && !paths(entry).some(file => taskPaths.has(file) || globs.some(glob => glob.test(file)))) continue;
+    const size = Buffer.byteLength(entry) + (chosen.length ? 2 : 0);
+    if (bytes + size > MEMORY_LIMIT) continue;
+    chosen.push(entry);
+    bytes += size;
+  }
+  return chosen.join('\n\n');
 }
 
 // Findings reach project memory as well as an explicit task ledger, with one append when they are the same file.
@@ -140,7 +165,7 @@ class Team {
   release(id) {
     for (const extension of ['.json', '.tmp']) fs.rmSync(path.join(this.board, id + extension), { force: true });
   }
-  context(id, before) {
+  context(id, before, { small, allow, brief } = {}) {
     const workers = this.live().filter(worker => worker.id !== id);
     const working = workers.map(worker => `- ${worker.title} (${worker.agent} ${worker.model}, ${worker.role}): ${worker.allow.length ? worker.allow.join(', ') : 'no file changes'}`).join('\n');
     let status = '', log = '';
@@ -152,8 +177,8 @@ class Team {
     }
     try { log = git(this.cwd, ['log', '--oneline', '-5']).trim(); } catch { log = '(history unavailable)'; }
     const lines = status.split(/\r?\n/).filter(Boolean);
-    return [`# Project memory\n\n${this.memory}\nRead it whole if needed.\n\n${memoryExcerpt(read(this.memory))}`,
-      `# Working now\n\n${working || '- none'}`,
+    const memory = small ? [] : [`# Project memory\n\nFull project memory: ${this.memory}\n\n${memoryExcerpt(read(this.memory), { allow, brief })}`.trimEnd()];
+    return [...memory, `# Working now\n\n${working || '- none'}`,
       `# Repository\n\n${lines.slice(0, 40).join('\n') || '(clean)'}${lines.length > 40 ? `\n… and ${lines.length - 40} more` : ''}\n\n${log || '(no commits)'}`];
   }
   finish(options, report) {
