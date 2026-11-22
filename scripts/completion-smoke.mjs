@@ -97,14 +97,19 @@ async function checkPaneFit(pane) {
     codex.append(codexMetrics);
     const source = fixture.querySelector('[data-usage-detail]');
     if (source) codex.append(source.cloneNode(true));
+    const routingRows = fixture.querySelector('.activity-routing-rows');
+    // The clone has no resize observer. Measure its single-column layout at each height independently.
+    routingRows.removeAttribute('data-compact');
     fixture.setAttribute('aria-hidden', 'true');
     document.body.append(fixture);
     try {
       for (const height of [1000, 900, 800]) {
         fixture.style.height = `${height - titleHeight}px`;
+        routingRows.removeAttribute('data-dense');
+        routingRows.toggleAttribute('data-dense', fixture.scrollHeight > fixture.clientHeight);
         problems.push(...inspect(fixture, `340×${height - titleHeight}`));
-        const rows = getComputedStyle(fixture.querySelector('.activity-routing-rows')).gridTemplateColumns.split(' ');
-        if (rows.length !== (height === 800 ? 2 : 1)) problems.push(`${height}px window has ${rows.length} routing columns`);
+        const columns = getComputedStyle(routingRows).gridTemplateColumns.split(' ');
+        if (columns.length !== 1) problems.push(`${height}px window has ${columns.length} routing columns`);
       }
     } finally { fixture.remove(); }
     return problems;
