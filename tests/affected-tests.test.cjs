@@ -104,19 +104,20 @@ test('a test helper mapped to one module selects that module and the tests that 
 test('declared and pinned dynamic dependencies propagate; a stale pin or stale explicit test mapping forces full coverage', async t => {
   const f = fixture(t), { buildCatalog, repinDynamicLoad, selectTests } = await core;
   const file = 'src/a/index.ts', manifestFile = 'scripts/affected-tests-map.json';
-  const source = "const a = require(variable);\nconst b = import(`./${name}.js`);\nconst c = createRequire(base)('package');";
+  const declarations = "const variable = './b'; const name = 'file'; const base = __filename;\n";
+  const source = declarations + "const a = require(variable);\nconst b = import(`./${name}.js`);\nconst c = createRequire(base)('package');";
   f.write(file, source);
   f.manifest.dynamicLoads[file] = { targets: ['src/b/index.ts'], reason: 'Fixture runtime module binding' };
   f.write(manifestFile, JSON.stringify(f.manifest));
   const digest = repinDynamicLoad(f.directory, file);
   f.manifest.dynamicLoads[file].digest = digest;
-  f.write(file, "const b = import( `./${name}.js` );\r\nconst unrelated = 3;\r\nconst a = require(/* comment */ variable);\r\nconst c = createRequire(base)('package');");
+  f.write(file, declarations + "const b = import( `./${name}.js` );\r\nconst unrelated = 3;\r\nconst a = require(/* comment */ variable);\r\nconst c = createRequire(base)('package');");
   assert.equal(repinDynamicLoad(f.directory, file), digest);
   let c = buildCatalog(f.directory, f.manifest);
   assert.deepEqual(c.errors, []);
   assert.deepEqual(selectTests(c, ['src/b/index.ts']).modules, [f.id('a'), f.id('b')]);
   for (const changed of [source + '\nconst d = require(extra);', source + '\nrequire(variable);', source.replace('variable', 'other'),
-    source.replace('${name}', '${other}'), source.replace("'package'", "'different'"), source.split('\n')[0]]) {
+    source.replace('${name}', '${other}'), source.replace("'package'", "'different'"), declarations + 'require(variable);']) {
     f.write(file, changed);
     const mismatch = selectTests(buildCatalog(f.directory, f.manifest), []);
     assert.equal(mismatch.full, true);
@@ -134,6 +135,37 @@ test('declared and pinned dynamic dependencies propagate; a stale pin or stale e
   assert.deepEqual(selectTests(c, ['src/b/index.ts']).modules, [f.id('a'), f.id('b')]);
   f.manifest.globalTests.push('tests/deleted.test.cjs');
   assert.match(buildCatalog(f.directory, f.manifest).errors.join(), /Stale global test/);
+});
+
+test('dynamic pins cover loader aliases, wrappers, binding chains and unresolved dependencies', async t => {
+  const f = fixture(t), { buildCatalog, repinDynamicLoad } = await core;
+  const file = 'src/a/index.ts', manifestFile = 'scripts/affected-tests-map.json';
+  const cases = [
+    ["const target = './a'; require(target);", './a', './b'],
+    ["const prefix = './a'; const runtime = prefix + '.js'; require(runtime);", './a', './b'],
+    ["const folders = { runtime: './a' }; const { runtime } = folders; require(runtime);", './a', './b'],
+    ["const r = require; r('./a');", './a', './b'],
+    ["const r = module.require; r('./a');", './a', './b'],
+    ["const r = createRequire(__filename); r('./a');", './a', './b'],
+    ["const { createRequire: factory } = require('node:module'); const r = factory(__filename); r('./a');", './a', './b'],
+    ["function open(file) { return require(file); } open('./a');", './a', './b'],
+    ["const open = file => import(file); const wrapped = open; wrapped('./a');", './a', './b'],
+    ["const load = function named() { return require('node:fs'); }; load('./a');", './a', './b'],
+    ["const host = { open() { return require('node:fs'); } }; host.open('./a');", './a', './b'],
+    ["const config = {}; config.target = './a'; require(config.target);", './a', './b'],
+    ["const loaders = { open: require }; loaders.open('./a');", './a', './b'],
+    ["const unrelated = 1; require(missing);", 'unrelated = 1', 'unrelated = 2'],
+  ];
+  for (const [source, from, to] of cases) {
+    f.write(file, source);
+    f.manifest.dynamicLoads[file] = { targets: ['src/b/index.ts'], reason: 'Known fixture target' };
+    f.write(manifestFile, JSON.stringify(f.manifest));
+    const digest = repinDynamicLoad(f.directory, file);
+    f.manifest.dynamicLoads[file].digest = digest;
+    assert.deepEqual(buildCatalog(f.directory, f.manifest).errors, [], source);
+    f.write(file, source.replace(from, to));
+    assert.match(buildCatalog(f.directory, f.manifest).errors.join(), /Unclassified dynamic load/, source);
+  }
 });
 
 test('the Codex module skips independent Claude budget and connection tests; mixed-provider tests remain conservatively selected', async () => {

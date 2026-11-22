@@ -52,7 +52,10 @@ function decide(facts = [], settings = {}, { agent = 'claude', owner = 'gui', tr
 const READ_ONLY_MODE = 'dontAsk';
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'LS'];
 const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
-const READ_ONLY_DENIED = [...EDIT_TOOLS, 'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'mcp__*'];
-const readOnlyArgs = () => ['--tools', READ_TOOLS.join(','), '--disallowedTools', READ_ONLY_DENIED.join(',')];
+const WORKER_DENIED = ['EnterPlanMode'];
+const READ_ONLY_DENIED = [...EDIT_TOOLS, 'Bash', 'PowerShell', ...WORKER_DENIED, 'ExitPlanMode', 'AskUserQuestion', 'mcp__*'];
+const workerToolArgs = readOnly => [...(readOnly ? ['--tools', READ_TOOLS.join(',')] : []),
+  '--disallowedTools', (readOnly ? READ_ONLY_DENIED : WORKER_DENIED).join(',')];
+const readOnlyArgs = () => workerToolArgs(true);
 
-module.exports = { decide, nameOf, READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, readOnlyArgs };
+module.exports = { decide, nameOf, READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED, workerToolArgs, readOnlyArgs };

@@ -20,48 +20,54 @@ function available(frame) {
   return deny.length === 1 ? deny : [];
 }
 
-function createWorkerMenu({ waiting, write, refused }) {
-  let current, last, ownerTouched = false;
+const RETRY_MS = 1000;
+
+function createWorkerMenu({ waiting, write, refused, now, retryAfter }) {
+  let current, ownerTouched = false;
   function send(menu, target) {
     const offset = target.number - menu.frame.selected;
     const keys = (offset < 0 ? '\x1b[A' : '\x1b[B').repeat(Math.abs(offset)) + '\r';
-    menu.used = true;
+    menu.answeredAt = now();
+    retryAfter(RETRY_MS);
     try { write(keys); } catch { return reject('delivery_unknown'); }
     waiting(null);
     return { status: 'delivered' };
   }
   return {
     get active() { return !!current; },
-    get answered() { return !!current?.used; },
+    get answered() { return current?.answeredAt !== undefined && now() - current.answeredAt < RETRY_MS; },
     ownerInput() { ownerTouched = true; },
     clear() {
       if (current) waiting(null);
-      current = last = undefined;
+      current = undefined;
       ownerTouched = false;
     },
     frame(frame, seq, action) {
       if (!validFrame(frame)) {
-        if (current && !current.used) waiting(null);
+        if (current && current.answeredAt === undefined) waiting(null);
+        if (current?.answeredAt !== undefined) ownerTouched = false;
         current = undefined;
         return;
       }
-      const same = last?.frame.identity === frame.identity && last.frame.kind === frame.kind;
-      const menu = same ? last : { id: randomUUID(), used: false };
+      const same = current?.frame.identity === frame.identity && current.frame.kind === frame.kind;
+      const retry = same && current.answeredAt !== undefined && now() - current.answeredAt >= RETRY_MS && !current.retried;
+      const menu = retry || !same ? { id: randomUUID(), retried: retry } : current;
+      if (retry) ownerTouched = false;
       Object.assign(menu, { frame, seq, options: available(frame) });
       const changed = current !== menu;
-      current = last = menu;
-      if (menu.used) return;
+      current = menu;
+      if (menu.answeredAt !== undefined) return;
       if (changed || menu.navigable !== frame.navigable) waiting({ id: menu.id, kind: frame.kind, title: frame.title, answerable: frame.kind !== 'permission'
           && frame.navigable && menu.options.length > 0,
         options: (frame.kind === 'permission' ? frame.options : menu.options).map(({ number, label }) => ({ number, label })) });
       menu.navigable = frame.navigable;
-      if (frame.kind === 'permission' && frame.navigable && !ownerTouched && menu.options.length === 1 && send(menu, menu.options[0]).status === 'delivered') {
+      if (!menu.retried && frame.kind === 'permission' && frame.navigable && !ownerTouched && menu.options.length === 1 && send(menu, menu.options[0]).status === 'delivered') {
         refused({ reason: 'needs approval', action });
       }
     },
     answer({ wait, choice }, seq) {
-      if (!current) return reject(last && wait === last.id ? 'stale_wait' : 'not_waiting');
-      if (current.id !== wait || current.seq !== seq || current.used) return reject('stale_wait');
+      if (!current) return reject('not_waiting');
+      if (current.id !== wait || current.seq !== seq || current.answeredAt !== undefined) return reject('stale_wait');
       if (current.frame.kind === 'permission') return reject('permission_prompt');
       if (ownerTouched) return reject('owner_has_input');
       if (!current.frame.navigable) return reject('unsupported_menu');

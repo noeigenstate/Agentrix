@@ -276,6 +276,7 @@ test('start_role bases a new worktree on the lead checkout or a verified explici
   assert.equal(git(['branch', '--list', 'work/invalid']), '');
   for (const [worktree, cwd, from, expected] of [
     ['lead', lead, undefined, leadHead],
+    ['explicit-head', lead, 'HEAD', leadHead],
     ['explicit-branch', folder, 'lead-branch', leadHead],
     ['explicit-commit', lead, projectHead, projectHead],
     ['non-git', path.join(folder, 'missing'), undefined, projectHead],

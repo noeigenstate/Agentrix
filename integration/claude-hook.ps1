@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$PipeName,
     [Parameter(Mandatory=$true)][string]$ProjectId,
     [Parameter(Mandatory=$true)][string]$SessionKey,
-    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'stop-failed', 'notify', 'session', 'progress', 'permission', 'seat-routing')][string]$Kind,
+    [Parameter(Mandatory=$true)][ValidateSet('start', 'stop', 'stop-failed', 'notify', 'session', 'progress', 'permission', 'seat-routing', 'worker-permission')][string]$Kind,
     [string]$NoteFile = $env:AGENTRIX_READING_NOTE_FILE,
     [string]$NodePath
 )
@@ -13,10 +13,10 @@ param(
 # SessionStart prints instructions. The separate seat-routing hook can print tool input or a notice.
 $ErrorActionPreference = 'Stop'
 
-if ($Kind -eq 'seat-routing') {
+if ($Kind -in @('seat-routing', 'worker-permission')) {
     try {
         if (-not $NodePath) { exit 0 }
-        if ((-not $env:AGENTRIX_SEATS -or $env:AGENTRIX_SEATS -eq 'null') -and
+        if ($Kind -eq 'seat-routing' -and (-not $env:AGENTRIX_SEATS -or $env:AGENTRIX_SEATS -eq 'null') -and
             ($env:AGENTRIX_BOOTSTRAP -notmatch '^[A-Za-z]:[\\/]' -or -not [IO.File]::Exists($env:AGENTRIX_BOOTSTRAP + '.seats'))) { exit 0 }
         $start = [Diagnostics.ProcessStartInfo]::new($NodePath)
         $start.UseShellExecute = $false
@@ -31,7 +31,7 @@ if ($Kind -eq 'seat-routing') {
         if ($length -ge $inputBuffer.Length) { exit 0 }
         $start.EnvironmentVariables['ELECTRON_RUN_AS_NODE'] = '1'
         $helper = Join-Path $PSScriptRoot 'agent-event.cjs'
-        $start.Arguments = '"{0}" claude-hook "\\.\pipe\{1}" "{2}" "{3}" seat-routing' -f $helper, $PipeName, $ProjectId, $SessionKey
+        $start.Arguments = '"{0}" claude-hook "\\.\pipe\{1}" "{2}" "{3}" {4}' -f $helper, $PipeName, $ProjectId, $SessionKey, $Kind
         $child = [Diagnostics.Process]::Start($start)
         try {
             $output = $child.StandardOutput.ReadToEndAsync()

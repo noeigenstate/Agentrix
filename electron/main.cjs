@@ -273,7 +273,7 @@ const workerTerminals = createWorkerTerminals({ spawn: (file, args, options) => 
   // Only a Claude terminal lead's own environment: a terminal that switched to a native session since registration has none.
   parent: run => { const s = sessions.get(run.projectId); return s?.usageEnv && s.agent === 'claude' && !s.nativeStructured ? { env: s.usageEnv, sessionKey: s.sessionKey, bootstrapFile: s.bootstrapFile } : null; },
   calls: run => { const s = sessions.get(run.projectId), project = s && store.findTerminal(run.projectId)?.project; return project ? callsOf(s, project) : null; },
-  hooks: ({ terminalId, sessionKey, env, cwd }) => terminalHooks({ port: hookServer?.port, terminalId, sessionKey, eventServer, env, cwd,
+  hooks: ({ terminalId, sessionKey, env, cwd }) => terminalHooks({ port: hookServer?.port, terminalId, sessionKey, eventServer, env, cwd, workerPermission: true,
     shell: { posix: process.platform !== 'win32', powershellPath, script: path.join(integrationDir, 'claude-hook.ps1'), node: process.execPath,
       helper: path.join(integrationDir, 'agent-event.cjs') } }) });
 const agents = new AgentsManager({ onChange: state => send('agents:changed', state), translate: t,

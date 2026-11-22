@@ -1,8 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { matches } = require('../../boundaries.cjs');
-const { commandPhrase } = require('../../agent-actions.cjs');
-const { diagnosticLine } = require('../agents/start-failure.cjs');
+const { deniedAction } = require('../agents/start-failure.cjs');
 const { READ_TOOLS, EDIT_TOOLS } = require('../claude-runtime/decide.cjs');
 const DENIALS = {
   unsupported_tool: '此角色不允许使用该工具。',
@@ -54,21 +53,10 @@ function createPolicy(spec, audit = () => {}) {
     }
     const decision = reasonCode === 'allowed' ? { behavior: 'allow', reasonCode, reason: '已按任务授权。' }
       : { behavior: 'deny', reasonCode, reason: DENIALS[reasonCode] + '请勿绕过此限制。',
-        ...(intent.operation !== 'other' && { action: deniedAction(intent, spec.env) }) };
+        ...(intent.operation !== 'other' && { action: deniedAction({ ...intent, command: intent.operation === 'command' ? intent.command : null,
+          paths: ['read', 'edit'].includes(intent.operation) ? intent.paths : [] }, spec.env) }) };
     audit({ toolName: name, operation: intent.operation, ...decision });
     return decision;
   };
 }
-function deniedAction(intent, env = process.env) {
-  // Keep command arguments and tool inputs such as file contents out of the run record.
-  const tool = /^[A-Za-z][\w-]{0,79}$/.test(intent.toolName) ? intent.toolName : 'Tool';
-  if (intent.operation === 'command' && intent.command) return tool + ': ' + commandPhrase(intent.command).phrase;
-  if (!['read', 'edit'].includes(intent.operation)) return tool;
-  const mask = text => Object.entries(env).reduce((value, [name, secret]) =>
-    /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|AUTH)(?:_|$)/i.test(name) && typeof secret === 'string' && secret.length >= 8
-      ? value.replaceAll(secret, '<secret>') : value, text);
-  const target = diagnosticLine(intent.paths[0], { limit: 160 - tool.length - 2, mask });
-  return target ? tool + ': ' + target : tool;
-}
-
 module.exports = { createPolicy, toolIntent, workerTools };

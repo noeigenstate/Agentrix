@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
-const { execFileSync } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { createHmac, randomUUID } = require('node:crypto');
 const { run, runDetached, detachedRuns } = require('../integration/dispatch.cjs');
 const { createRoleTools } = require('../integration/role-tools.cjs');
@@ -21,6 +21,7 @@ const { registerClaudeWorker } = require('../electron/features/native-session/wo
 const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
 const { encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
 const { projectTeam } = require('../electron/features/team/team.cjs');
+const { createWorkerMenu } = require('../electron/features/worker-terminals/worker-menu.cjs');
 const { createWorkerTerminals, meterRecord } = require('../electron/features/worker-terminals/worker-terminals.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { Terminal } = require('@xterm/xterm');
@@ -59,8 +60,10 @@ function parentTerminal(root, extra = {}) {
     KEEP_ME: 'kept', ZDOTDIR: path.join(root, 'agentrix-zsh'), AGENTRIX_USER_ZDOTDIR: path.join(root, 'user-zdotdir'), AGENTRIX_BOOTSTRAP: bootstrap };
   return { claudeHome, parentCopy, bootstrap, env, write: fields => fs.writeFileSync(bootstrap, JSON.stringify({ shims: SHIMS, claudeEnvFile: parentCopy, ...fields, ...extra })) };
 }
-const hooksFor = ({ terminalId, sessionKey, env, cwd }) => terminalHooks({ port: 4567, terminalId, sessionKey, eventServer: { address: 'synthetic-socket', name: 'synthetic-pipe' },
-  env, cwd, shell: { posix: false, powershellPath: 'powershell.exe', script: 'claude-hook.ps1' }, read: () => { throw new Error('absent'); } });
+const hooksFor = ({ eventServer = { address: 'synthetic-socket', name: 'synthetic-pipe' }, ...input }) => terminalHooks({
+  ...input, port: 4567, eventServer, workerPermission: true,
+  shell: { posix: false, powershellPath: 'powershell.exe', script: 'claude-hook.ps1', node: process.execPath }, read: () => { throw new Error('absent'); },
+});
 
 function transcript(claudeHome, cwd, sessionId) {
   const file = path.join(claudeHome, 'projects', encodeClaudeCwd(cwd), `${sessionId}.jsonl`);
@@ -73,7 +76,7 @@ function transcript(claudeHome, cwd, sessionId) {
 }
 
 // The real helper and control channel, under a terminal lead whose terminal main knows.
-async function fixture(t, { detached = false, screenMonitoring = false } = {}) {
+async function fixture(t, { detached = false, screenMonitoring = false, now } = {}) {
   const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-'))), main = path.join(root, 'main'), repo = path.join(root, 'worker');
   fs.mkdirSync(path.join(main, 'src'), { recursive: true });
@@ -83,7 +86,8 @@ async function fixture(t, { detached = false, screenMonitoring = false } = {}) {
   git(['worktree', 'add', '-qb', 'synthetic-worker', repo]);
   const team = projectTeam(repo, true), events = [], calls = new AgentCalls({ local: false });
   const owner = { terminalId: 'terminal', sessionKey: 'synthetic-owner' };
-  const eventServer = await createEventServer(event => { events.push(event); acceptDispatch(owner, event, calls); });
+  let terminals;
+  const eventServer = await createEventServer(event => { if (!terminals?.event(event)) { events.push(event); acceptDispatch(owner, event, calls); } });
   lifetime.defer('close events', () => eventServer.close());
   const control = createDispatchControl({ resolveRun: auth => {
     const entry = team.live().find(value => value.id === auth.runId);
@@ -96,8 +100,9 @@ async function fixture(t, { detached = false, screenMonitoring = false } = {}) {
   parent.write({ pipeName: eventServer.address, controlAddress: address, controlCapability: 'synthetic-capability', ...owner, projectId: owner.terminalId });
   const spawned = [], notices = [], channels = {};
   let screenListener;
-  const terminals = createWorkerTerminals({ spawn: fakeSpawn(spawned), claudeFile: () => path.join(root, 'stand-in', 'claude'), hooks: hooksFor,
-    screenMonitoring, send: (channel, packet) => { if (channel === 'worker-terminal:screen') screenListener?.(packet); },
+  terminals = createWorkerTerminals({ spawn: fakeSpawn(spawned), claudeFile: () => path.join(root, 'stand-in', 'claude'),
+    hooks: input => hooksFor({ ...input, eventServer }),
+    now, screenMonitoring, send: (channel, packet) => { if (channel === 'worker-terminal:screen') screenListener?.(packet); },
     parent: binding => binding.projectId === owner.terminalId ? { env: parent.env, sessionKey: owner.sessionKey, bootstrapFile: parent.bootstrap } : null,
     calls: () => calls, runtimeDir: () => root, claudeHome: () => assert.fail('the worker env names its Claude home'),
     schedule: (fn, ms) => ms === 15000 ? notices.push(fn) : setTimeout(fn, ms), kill: pty => pty.kill() });
@@ -130,7 +135,7 @@ async function fixture(t, { detached = false, screenMonitoring = false } = {}) {
   const id = team.live()[0].id, sessionId = randomUUID(), pty = spawned[0];
   const api = createInterventions({ resolve: () => ({ terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, route: 'dispatch',
     runId: id, title: 'Synthetic terminal worker', cwd: repo, projectPath: repo, local: true }), pushControl: control.pushControl });
-  return { root, repo, id, pty, sessionId, parent, events, calls, out, result, api, terminals, notices, brief, channels, started: started.promise,
+  return { root, repo, id, pty, sessionId, parent, events, eventServer, calls, out, result, api, terminals, notices, brief, channels, started: started.promise,
     stdout: () => stdout, item: () => calls.snapshot().flatMap(group => group.items).find(item => item.id === `dispatch:${id}`),
     feed: () => calls.feeds.owned(calls.byId(`dispatch:${id}`))?.snapshot,
     log: transcript(parent.claudeHome, repo, sessionId),
@@ -186,7 +191,7 @@ function readMenu(folder, name, maxRows = 28) {
 }
 
 async function menuFixture(t) {
-  const f = await fixture(t, { detached: true, screenMonitoring: true });
+  const f = await fixture(t, { detached: true, screenMonitoring: true, now: () => 1000 });
   const store = detachedRuns(f.repo);
   const receipt = predict => store.observe(() => predict(store.read(f.id)), 5000);
   fs.writeFileSync(f.parent.bootstrap + '.mode', 'conductor');
@@ -203,30 +208,33 @@ async function menuFixture(t) {
     draw: (folder, name) => f.pty.emit(readMenu(folder, name)) };
 }
 
-test('answer_role uses the current parsed menu once and automatically refuses a permission', { timeout: 15000 }, async t => {
+test('answer_role uses the current parsed menu and keeps active waits visible', { timeout: 15000 }, async t => {
   const { f, tools, receipt, menu, draw } = await menuFixture(t);
   const noWait = { id: f.id, wait: randomUUID(), choice: 1 };
   await assert.rejects(tools.answer_role(noWait), /not waiting/);
   f.hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_use_id: 'question' });
   const [ownerPrompt] = await tools.wait_roles({ ids: [f.id], seconds: 5 });
   assert.match(ownerPrompt.waiting, /waiting for the owner: answer a Claude Code question/);
-  const waitingForMenu = tools.wait_roles({ ids: [f.id], seconds: 30 }, t.signal);
   draw('questions', 'claude-question');
   const question = await menu('question');
-  const [waiting] = await waitingForMenu;
+  const [waiting] = await tools.wait_roles({ ids: [f.id], seconds: 30 }, t.signal);
   assert.match(waiting.waiting, /question .*回收站怎么处理？ · 1\. 保留回收站（推荐） · 2\. 清空回收站/);
   assert.deepEqual(waiting.menu, question);
   assert.deepEqual((await tools.roles_status()).roles[0].menu, question);
-  const [alreadyReported] = await tools.wait_roles({ ids: [f.id], seconds: 0 });
-  assert.equal(alreadyReported.menu, undefined);
+  const [alreadyReported] = await tools.wait_roles({ ids: [f.id], seconds: 540 }, t.signal);
+  assert.equal(alreadyReported.waiting, waiting.waiting);
+  assert.deepEqual(alreadyReported.menu, { id: question.id, kind: 'question' });
   await assert.rejects(tools.answer_role(noWait), /stale/);
   await assert.rejects(tools.answer_role({ id: f.id, wait: question.id, choice: 'Type something.' }), /invalid_choice/);
   await assert.rejects(tools.answer_role({ id: f.id, wait: question.id, choice: 99 }), /invalid_choice/);
-  const answer = { id: f.id, wait: waiting.menu.id, choice: '清空回收站' };
-  assert.equal((await tools.answer_role(answer)).status, 'delivered');
-  await assert.rejects(tools.answer_role(answer), /not waiting|stale_wait/);
+  const protocol = '\x1b[?1;2c\x1b[2;3R\x1b[I\x1b]10;rgb:fff/fff/fff\x07';
   const call = 'dispatch:' + f.id;
   const split = f.channels['worker-terminal:attach']('terminal', call);
+  f.channels['worker-terminal:keys']('terminal', call, split.epoch, protocol);
+  assert.deepEqual(f.pty.writes.splice(0), [protocol]);
+  const answer = { id: f.id, wait: waiting.menu.id, choice: '清空回收站' };
+  assert.equal((await tools.answer_role(answer)).status, 'delivered');
+  await assert.rejects(tools.answer_role(answer), /not[ _]waiting|stale_wait/);
   f.channels['worker-terminal:keys']('terminal', call, split.epoch, '\r');
   f.channels['worker-terminal:detach']('terminal', call);
   assert.deepEqual(f.pty.writes, ['\x1b[B\r']);
@@ -246,22 +254,71 @@ test('answer_role uses the current parsed menu once and automatically refuses a 
   assert.deepEqual(plan.options, [{ number: 2, label: 'No' }]);
   await assert.rejects(tools.answer_role({ id: f.id, wait: plan.id, choice: 1 }), /invalid_choice/);
   f.pty.emit('\x1b[2J\x1b[H');
-  await assert.rejects(tools.answer_role({ id: f.id, wait: plan.id, choice: 2 }), /not waiting|stale_wait/);
+  await assert.rejects(tools.answer_role({ id: f.id, wait: plan.id, choice: 2 }), /not[ _]waiting|stale_wait/);
   assert.deepEqual(f.pty.writes, ['\x1b[B\r']);
   draw('screens', 'claude-investigation-plan-waiting');
-  assert.equal((await menu('plan')).id, plan.id);
-  assert.equal((await tools.answer_role({ id: f.id, wait: plan.id, choice: 2 })).status, 'delivered');
+  const shownAgain = await menu('plan');
+  assert.notEqual(shownAgain.id, plan.id);
+  assert.equal((await tools.answer_role({ id: f.id, wait: shownAgain.id, choice: 2 })).status, 'delivered');
 
   f.hook('PostToolUse', { tool_use_id: 'plan' });
-  f.hook('PermissionRequest', { tool_name: 'Write', tool_use_id: 'permission' });
-  draw('screens', 'claude-permission');
-  assert.deepEqual(await receipt(entry => entry?.refused), [{ reason: 'needs approval', action: 'Write a file' }]);
-  assert.deepEqual(f.pty.writes, ['\x1b[B\r', '\x1b[B\r', '\x1b[B\x1b[B\r']);
-  draw('screens', 'claude-permission');
   f.hook('Stop', { last_assistant_message: 'Synthetic answer' });
   assert.equal(await f.result, 0, f.stdout());
+});
+
+test('a worker permission hook denies without interrupting the turn and reports the refused action', { timeout: 15000 }, async t => {
+  const { f, receipt } = await menuFixture(t);
+  const integration = path.join(__dirname, '../integration'), id = 'worker-' + f.id, key = keyOfWorker(f);
+  const windows = process.platform === 'win32';
+  const program = windows ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe') : process.execPath;
+  const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(integration, 'claude-hook.ps1'),
+    '-PipeName', f.eventServer.name, '-ProjectId', id, '-SessionKey', key, '-NodePath', process.execPath, '-Kind', 'worker-permission']
+    : [path.join(integration, 'agent-event.cjs'), 'claude-hook', f.eventServer.address, id, key, 'worker-permission'];
+  const child = spawn(program, args, { windowsHide: true, env: { ...f.pty.options.env, ...(windows && { SystemRoot: process.env.SystemRoot }) } });
+  child.stdin.end(JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: f.sessionId, tool_name: 'Write',
+    tool_input: { file_path: 'private-notes.txt', content: 'fixture-private-content' } }));
+  const chunks = [];
+  for await (const chunk of child.stdout) chunks.push(chunk);
+  const hook = JSON.parse(Buffer.concat(chunks).toString()).hookSpecificOutput;
+  assert.equal(hook.hookEventName, 'PermissionRequest');
+  assert.equal(hook.decision.behavior, 'deny');
+  assert.equal(hook.decision.interrupt, false);
+  assert.match(hook.decision.message, /Continue without it.*## Needs approval/);
+  assert.deepEqual(await receipt(entry => entry?.refused), [{ reason: 'needs approval', action: 'Write: private-notes.txt' }]);
+  f.hook('PermissionDenied', { tool_name: 'Write' });
+  const answer = '## Needs approval\n\n- Write private-notes.txt.';
+  f.log.append(f.log.reply('continued', 'tool', 'assistant', answer, Date.now()));
+  f.hook('Stop', { last_assistant_message: answer });
+  assert.equal(await f.result, 0, f.stdout());
   assert.match(f.stdout(), /exit 0 reason permission/);
-  assert.equal(f.pty.writes.length, 3);
+  assert.equal(fs.readFileSync(f.out, 'utf8').trim(), answer);
+  assert.deepEqual(f.pty.writes, []);
+});
+
+test('a still-current menu can be answered once more after the injected clock fires', () => {
+  let now = 0, retry, wait;
+  const writes = [];
+  const frame = { kind: 'question', title: 'Choose', identity: 'choose', navigable: true, selected: 1,
+    options: [{ number: 1, label: 'A', role: 'answer' }, { number: 2, label: 'B', role: 'answer' }] };
+  const menus = createWorkerMenu({ now: () => now, retryAfter: ms => { retry = () => { now += ms; menus.frame(frame, 1); }; },
+    waiting: menu => { wait = menu; }, write: keys => writes.push(keys), refused: assert.fail });
+  menus.frame(frame, 1);
+  const first = wait.id;
+  assert.equal(menus.answer({ wait: first, choice: 2 }, 1).status, 'delivered');
+  assert.equal(menus.answered, true);
+  assert.equal(menus.answer({ wait: first, choice: 2 }, 1).reason, 'stale_wait');
+  retry();
+  const second = wait.id;
+  assert.notEqual(second, first);
+  assert.equal(menus.answered, false);
+  assert.equal(menus.answer({ wait: second, choice: 2 }, 1).status, 'delivered');
+  retry();
+  assert.equal(wait, null);
+  assert.equal(menus.answered, false);
+  assert.deepEqual(writes, ['\x1b[B\r', '\x1b[B\r']);
+  menus.frame(null, 2);
+  menus.frame(frame, 3);
+  assert.notEqual(wait.id, second);
 });
 
 test('the attached owner’s first key reserves the prompt across redraws and detach', { timeout: 15000 }, async t => {
@@ -324,6 +381,7 @@ test("billing follows the lead's mode and no client identity is set", async t =>
   const { args, options: { env } } = f.pty;
   for (const flag of ['-p', '--print', '--output-format', '--input-format']) assert.ok(!args.includes(flag), `no ${flag}`);
   assert.deepEqual(args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2), ['--permission-mode', 'acceptEdits']);
+  assert.equal(args[args.indexOf('--disallowedTools') + 1], 'EnterPlanMode');
   for (const name of [...PRIVATE_NAMES, 'AGENTRIX_SDK_PARENT', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) assert.equal(env[name], undefined, name);
   assert.equal(env.KEEP_ME, 'kept');
   assert.equal(env.AGENTRIX_SHIM_USER_ZDOTDIR, path.join(f.root, 'user-zdotdir'), 'the user\'s own zsh folder is back, behind the shims');
@@ -1066,6 +1124,11 @@ test("a worker's hooks never reach a project terminal or its completion", async 
   // The worker's --settings are exactly terminalHooks()'s for its own id and key, with no note file; its only added
   // directory is the brief folder, which holds neither the settings nor the start-up hook copy.
   assert.equal(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'), expected.settings.http);
+  for (const settings of Object.values(expected.settings)) {
+    const permission = JSON.parse(settings).hooks.PermissionRequest[0].hooks[0];
+    assert.match(permission.command, /-Kind worker-permission/);
+    assert.equal(permission.async, undefined);
+  }
   assert.ok(!Object.keys(env).some(name => /READING_NOTE/i.test(name)));
   assert.equal(f.pty.args.filter(arg => arg === '--add-dir').length, 1);
   assert.equal(f.pty.args[f.pty.args.indexOf('--add-dir') + 1], path.join(folder, 'brief'));

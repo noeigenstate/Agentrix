@@ -1,4 +1,5 @@
 const os = require('node:os');
+const { commandPhrase } = require('../../command-phrase.cjs');
 const { scrubText } = require('./skill-privacy.cjs');
 const LIMIT = 300, HEAD = 160;
 // Credentials scrubText has no rule for: HTTP authorization schemes, API key headers and secret query parameters.
@@ -56,4 +57,15 @@ function diagnosticLine(value, { limit = 160, mask } = {}) {
   return typeof value === 'string' ? clip(line(redactor([], mask)(value)), limit) : '';
 }
 
-module.exports = { startupDetail, stderrTail, stderrCollector, diagnosticLine };
+function deniedAction(intent, env = process.env) {
+  // Keep command arguments and tool inputs such as file contents out of the run record.
+  const tool = /^[A-Za-z][\w-]{0,79}$/.test(intent.toolName) ? intent.toolName : 'Tool';
+  if (intent.command) return tool + ': ' + commandPhrase(intent.command).phrase;
+  const mask = text => Object.entries(env).reduce((value, [name, secret]) =>
+    /(?:^|_)(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIALS?|AUTH)(?:_|$)/i.test(name) && typeof secret === 'string' && secret.length >= 8
+      ? value.replaceAll(secret, '<secret>') : value, text);
+  const target = diagnosticLine(intent.paths?.[0], { limit: 160 - tool.length - 2, mask });
+  return target ? tool + ': ' + target : tool;
+}
+
+module.exports = { startupDetail, stderrTail, stderrCollector, diagnosticLine, deniedAction };

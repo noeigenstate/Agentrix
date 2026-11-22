@@ -426,7 +426,7 @@ test('wait for any ignores a cleared owner prompt and wakes on the next active p
   const updates = [];
   const ownerWait = 'waiting for the owner: answer a Claude Code question';
   const result = await waitDetached({ ids: [id], timeout: 240 }, {
-    store, untilAny: true, seenOwnerWaits: new Map(), stdout: { write() {} },
+    store, untilAny: true, stdout: { write() {} },
     onTiming: status => updates.push(status),
     async observe(check) {
       assert.equal(await check(), undefined);

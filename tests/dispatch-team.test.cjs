@@ -149,6 +149,10 @@ test('worktrees share team state and outside git the helper behaves as before', 
   assert.equal(team.directory, peer.directory);
   await fs.writeFile(team.memory, 'Shared decision.\n');
   assert.equal(await fs.readFile(peer.memory, 'utf8'), 'Shared decision.\n');
+  const [restrictedMemory] = peer.context(null, null, { readOnly: true });
+  assert.match(restrictedMemory, /cannot be read from this role.*lead can supply an entry/);
+  assert.ok(!restrictedMemory.includes(peer.memory));
+  assert.ok(team.context(null, null, { readOnly: true })[0].includes(team.memory));
   assert.ok(team.directory.endsWith(path.join('.git', 'agentrix')));
   assert.equal(projectTeam(f.runtime, true), null);
   const plain = await start(f, { cwd: f.runtime, edits: [['a.js', 'outside git']] });
@@ -242,21 +246,26 @@ test('briefs inject the ledger first, then selected memory, live peers and bound
   team.release(id);
 });
 
-test('memory picks task paths and title words newest first and skips entries that cannot fit whole', () => {
+test('memory includes the newest two entries and matches older bodies within its byte budget', () => {
   const entry = (day, title, body) => `### 2026-01-${day} 12:00 · ${title} · worker\n\n${body}\n`;
   const older = entry('01', 'Storage', 'src/a.js and the complete old finding.');
-  const middle = entry('02', 'Routing', '汉字'.repeat(400) + ' End of middle.');
-  const latest = entry('03', 'Routing', '汉字'.repeat(1000) + ' End of latest.');
-  const irrelevant = entry('04', 'Quota review', 'other/a.js');
-  const ownerEvent = '### 2026-01-03T13:00:00Z · Owner stop · Quota\n\nStopped another role.\n';
-  const excerpt = memoryExcerpt(older + middle + latest + ownerEvent + irrelevant, { brief: 'Review routing in src/a.js' });
-  assert.equal(excerpt, [latest.trimEnd(), older.trimEnd()].join('\n\n'));
+  const cjk = entry('02', 'Routing', '审核读取权限。');
+  const body = entry('03', 'Transport', 'Uses sharedBinder. Blue packets.\n\n' + '汉字'.repeat(1200));
+  const unrelated = entry('04', 'Database', 'Other notes.');
+  const first = entry('05', 'Quota', 'Other findings.');
+  const second = entry('06', 'Progress', 'Other facts.');
+  const all = older + cjk + body + unrelated + first + second;
+  const excerpt = memoryExcerpt(all, { brief: 'Review sharedBinder and src/a.js for 权限规则' });
+  assert.ok(excerpt.startsWith([second.trimEnd(), first.trimEnd()].join('\n\n')));
+  assert.match(excerpt, /Blue packets\.\n\n\[Entry truncated\]/);
+  assert.match(excerpt, /审核读取权限/);
+  assert.match(excerpt, /complete old finding/);
+  assert.doesNotMatch(excerpt, /Database|汉字/);
   assert.ok(Buffer.byteLength(excerpt) <= 6 * 1024);
-  assert.equal(memoryExcerpt(older + irrelevant, { allow: ['src/**'], brief: 'Review.' }), older.trimEnd());
-  assert.equal(memoryExcerpt(older + irrelevant, { brief: 'Inspect billing.' }), '');
-  const sdk = entry('05', 'SDK 权限', 'Denied tool.');
-  assert.equal(memoryExcerpt(sdk, { brief: 'Inspect the SDK.' }), sdk.trimEnd());
-  assert.equal(memoryExcerpt(sdk, { brief: '检查权限设置。' }), sdk.trimEnd());
+  const largeFirst = entry('07', 'Very recent', 'a'.repeat(9000));
+  const largeSecond = entry('08', 'Latest', 'b'.repeat(9000));
+  const large = memoryExcerpt(all + largeFirst + largeSecond);
+  assert.match(large, /Latest[\s\S]*Entry truncated[\s\S]*Very recent[\s\S]*Entry truncated/);
 });
 
 test('findings always reach memory and also reach an explicit ledger', async t => {

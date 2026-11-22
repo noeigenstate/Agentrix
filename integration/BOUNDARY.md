@@ -13,7 +13,7 @@ Readers also accept the legacy three-line and six-line forms. Hooks and the help
 The helper puts one standing-rules section before every brief and tells roles to skip absent skills. Normal briefs inline the
 code standards when the base and extensions fit the 8 KiB source budget. Small or oversized briefs keep the path references.
 Read-only Claude launches use dontAsk and reading tools only. The legacy plan argument maps to that restriction.
-Read-only runs check the Git working tree after execution even with no allow globs. A detected change is outside scope.
+Read-only runs check the Git working tree after execution even with no allow globs. Changes are reported with unknown authorship and do not trigger restoration, quarantine or failure.
 Custom IDs select enabled roles directly. A Developer specialty selects the enabled specialty first and falls back to Developer when enabled.
 Launch defaults preserve the declared spelling — test: `tests/dispatch.test.cjs` › "custom and enabled specialty seats supply dispatch defaults while the original spelling is reported"
 Claude's terminal Agent and Task hooks report provisional and final input by tool-use ID.
@@ -21,7 +21,7 @@ Unsupported Agent and Task seat choices produce a notice and leave the input unt
 SSH applies seat sidecar updates in channel order. A failed update leaves the previous sidecar available.
 
 `wait_roles` returns when any selected role ends, its receipt is lost, a selected hidden terminal starts waiting for the owner, or the timeout elapses.
-A wait reports each observed owner-wait transition once per lead conversation. Status shows the prompt category while the wait is active.
+A wait returns immediately while a selected role has an active owner wait. Summary rows retain the wait and current menu id and kind.
 Wait returns full details for roles whose lifecycle or owner-wait state changed during the call. Other selected roles get one-line summaries.
 For a recognised hidden Claude menu, the wait line also reports the menu id, kind, title and offered options. The conversation's
 `answer_role` uses that id through the authenticated control channel. The worker checks the current PTY sequence and choice.
@@ -38,8 +38,8 @@ Roles defer choices affecting scope, reversibility or product behavior under Nee
 A local Windows Codex role reports its sandbox wait in the detached receipt and in role status during confirmation.
 Its detached launcher allows eight extra minutes for authorization.
 A writable `start_role` may create a local Git worktree and returns its branch and folder after confirmation.
-It returns the abbreviated base commit. An explicit `from` resolves in the project repository and takes precedence over a same-project
-`cwd` worktree's HEAD. Otherwise the base is the project checkout's HEAD.
+It returns the abbreviated base commit. A same-project `cwd` uses its own HEAD by default and when `from` is explicitly `HEAD`.
+Other explicit refs resolve in the project repository.
 A failed checkout or launch rolls back the new worktree and branch.
 Before creating a worktree or dispatching a local Windows Codex seat, the role tools share a readiness check within the lead conversation.
 A ready result lasts for that conversation. Other results expire after five seconds. A Claude lead without a recorded seat skips preflight.
@@ -53,7 +53,7 @@ links are removed without following them, and failed removals back off without c
 
 When a dynamic load changes, review its declared targets and reason in `scripts/affected-tests-map.json`, then run
 `node scripts/affected-tests.mjs --repin <repo-relative file>` and `node --test tests/affected-tests.test.cjs`.
-The pin tracks normalized load expressions and their context. Unrelated edits and line moves do not need a new pin.
+The pin tracks loads, loader calls and the declarations their arguments use. Unresolved dependencies use a normalized whole-file digest.
 
 ## Owns
 - `integration/dispatch.cjs`

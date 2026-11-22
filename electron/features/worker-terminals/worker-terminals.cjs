@@ -4,7 +4,8 @@ const { createHmac, randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { withoutShims } = require('../../shared/agentrix-shims.cjs');
 const { claudeBackgroundEnvironment } = require('../../shared/claude-background.cjs');
-const { READ_ONLY_MODE, readOnlyArgs } = require('../claude-runtime/decide.cjs');
+const { READ_ONLY_MODE, workerToolArgs } = require('../claude-runtime/decide.cjs');
+const { isTerminalResponse } = require('../../terminal-input.cjs');
 const { TranscriptTail } = require('../../transcript-tail.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
 const { createWorkerMenu } = require('./worker-menu.cjs');
@@ -32,7 +33,6 @@ const INTERRUPTED = /^\[Request interrupted by user/;
 const CONTROL = /[\0-\x1f\x7f]/;
 const short = (value, limit = FIELD_LIMIT) => typeof value === 'string' && value.length <= limit;
 const plain = text => text.replace(/\s+/g, ' ').trim();
-const permissionActions = new Map([['Bash', 'Run a shell command'], ['Edit', 'Edit a file'], ['Write', 'Write a file'], ['Read', 'Read a file']]);
 
 // What the dispatch helper's meter takes of a transcript record (the JS form of remote-worker.py compact_subagent_record):
 // its place in the conversation, a reply's identity, model, output tokens, effort and speed, tool calls and results, and
@@ -223,7 +223,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     fs.writeFileSync(settings, typeof w.spec.fast === 'boolean'
       ? JSON.stringify({ ...JSON.parse(hookSettings), fastMode: w.spec.fast }) : hookSettings, { mode: 0o600 });
     const readOnly = w.spec.readOnly;
-    const args = [...(readOnly ? readOnlyArgs() : []), ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,
+    const args = [...workerToolArgs(readOnly), ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,
       '--permission-mode', readOnly ? READ_ONLY_MODE : 'acceptEdits',
       ...(w.spec.model ? ['--model', w.spec.model] : []), ...(w.spec.effort ? ['--effort', w.spec.effort] : [])];
     if (fitsInitialArgument(file, args, prompt, platform)) args.push('--', prompt);
@@ -255,8 +255,9 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     if (screenMonitoring) send('worker-terminal:screen', { epoch: w.epoch, seq: w.seq, cols: w.cols, rows: w.rows, data, ...(ended && { exited: true }) });
   }
   function observeMenu(w) {
-    if (!w.screenFrame || w.screenFrame.seq !== w.seq || !w.asks.size && !w.menuTool) return;
+    if (!w.screenFrame || w.screenFrame.seq !== w.seq) return;
     const { frame, seq } = w.screenFrame;
+    if (!w.asks.size && !w.menuTool && !w.menu.active && !(w.deniedPermission && frame?.kind === 'permission')) return;
     if (frame && w.menuTool && frame.kind !== w.menuTool) { w.menu.frame(null, seq); return; }
     if (frame) {
       clearTimer(w, w.enterTimer);
@@ -371,7 +372,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     if (ASKS.has(name) || notice) {
       if (payload.tool_name === 'AskUserQuestion') w.menuTool = 'question';
       if (payload.tool_name === 'ExitPlanMode') w.menuTool = 'plan';
-      if (name === 'PermissionRequest') w.permissionAction = permissionActions.get(payload.tool_name);
+      if (name === 'PermissionRequest' && /^[A-Za-z][\w-]{0,79}$/.test(payload.tool_name ?? '')) w.permissionAction = payload.tool_name;
       if (key && !w.closedAsks.has(key)) w.asks.add(key);
       else if (!notice && !key) w.asks.add(`unknown:${agentId || payload.agent_id || ''}`);
       if (w.asks.size) clearTimer(w, w.enterTimer);
@@ -380,6 +381,8 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     }
     // A Stop from an earlier turn cannot clear this turn's questions.
     if (STOPS.has(name) && timed && sentAt < w.startAt) return;
+    if (CLEAR_ASKS.has(name) || name === 'PreToolUse' && id && id !== w.deniedPermission?.id
+        || ANSWERS.has(name) && id === w.deniedPermission?.id) w.deniedPermission = null;
     if (CLEAR_ASKS.has(name)) closeAsks(w);
     else if (ANSWERS.has(name) && key) closeAsks(w, [key]);
     if (PROGRESS.has(name)) {
@@ -446,7 +449,8 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     w.menu = createWorkerMenu({
       waiting: menu => publish(w, 'worker.menu', { menu }),
       write: keys => writeKeys(w, keys),
-      refused: refusal => publish(w, 'worker.refused', refusal),
+      now, retryAfter: ms => later(w, () => observeMenu(w), ms),
+      refused: refusal => { if (!w.deniedPermission) publish(w, 'worker.refused', refusal); },
     });
     workers.set(w.id, w);
     stream.publish('path.changed', { previous: null, selected: 'terminal-worker', reason: 'terminal lead (subscription)' });
@@ -517,6 +521,13 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       const w = byId(event?.projectId);
       if (!w) return false;
       if (event.sessionKey === w.key && event.type === 'agent-activity' && typeof event.hookEvent === 'string') {
+        if (event.hookEvent === 'PermissionRequest' && typeof event.workerRefused === 'string' && event.workerRefused.length <= 160) {
+          const id = event.requestId ?? null;
+          if (!id || id !== w.deniedPermission?.id) publish(w, 'worker.refused', { reason: 'needs approval', action: event.workerRefused });
+          w.deniedPermission = { id };
+          observeMenu(w);
+          return true;
+        }
         deliver(w, event.hookEvent, { sessionId: event.sessionId, sentAt: Number.isFinite(event.sentAt) ? event.sentAt : undefined,
           toolUseId: event.toolUseId, agentId: event.agentId, requestId: event.requestId, elicitationId: event.elicitationId,
           payload: { tool_name: event.menuTool ?? (event.hookEvent === 'PermissionRequest' ? event.message : undefined),
@@ -541,8 +552,9 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       listen('worker-terminal:keys', (terminalId, callId, epoch, data, viewId = 'owner') => {
         const w = byCall(terminalId, callId);
         if (w?.pty && w.attachments.has(viewId) && !w.exited && !w.closed && w.epoch === epoch && w.awaiting === 'owner'
-            && !w.menu.answered && typeof data === 'string' && data.length <= KEYS_LIMIT) {
-          if (data) {
+            && typeof data === 'string' && data.length <= KEYS_LIMIT) {
+          if (!isTerminalResponse(data)) {
+            if (w.menu.answered) return;
             w.menu.ownerInput();
             // Ctrl+C and Ctrl+U clear the prompt; text following that clear starts a new draft. Enter waits for its hook.
             const cleared = Math.max(data.lastIndexOf('\x03'), data.lastIndexOf('\x15'));

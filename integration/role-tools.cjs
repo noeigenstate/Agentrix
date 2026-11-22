@@ -25,24 +25,25 @@ const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <=
 const text = description => ({ type: 'string', description });
 const TOOLS = [
   { name: 'start_role',
-    description: 'Start a role with its seat settings. Returns a run id with the short base commit for a new worktree, or instructions when dispatch is unavailable.',
+    description: 'Start a role with its seat settings. Returns a run id and any worktree base, or instructions when dispatch is unavailable. '
+      + 'Read-only Claude roles cannot run commands or tests. Use a Codex seat for those reviews or run the tests yourself.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
       title: text('One line: what the role does'),
       brief: text('The task only, kept short: the goal, what was wrong, what must keep working, done-when. Agentrix adds the standing rules'),
-      readOnly: { type: 'boolean', description: 'True for a role that only reads, such as a review or research' },
+      readOnly: { type: 'boolean', description: 'Read-only Claude roles cannot run commands or tests. Choose a Codex seat for test-running reviews or run the tests yourself.' },
       small: { type: 'boolean', description: 'Use a short brief for a precise read-only lookup or an edit to one or two named files.' },
       allow: { type: 'array', items: { type: 'string' }, description: 'Globs of the files the role may change; required unless readOnly' },
       cwd: text('Folder to work in. With worktree, uses this project worktree’s HEAD as the default base.'),
       worktree: text('Branch suffix for a new work/<suffix> worktree for a writable role. Defaults to the project HEAD when no project worktree is supplied.'),
-      from: text('Optional branch or commit for the new worktree base. Requires worktree.'),
+      from: text('Optional branch or commit for the new worktree base. HEAD uses the supplied same-project cwd. Requires worktree.'),
     } } },
   { name: 'roles_status',
     description: 'Show full running roles and the 10 newest endings first observed in the last 10 minutes, with counts for older and omitted recent endings. Use role_result for details.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {} } },
   { name: 'wait_roles',
-    description: 'Wait for an ending, lost receipt, new owner wait, or timeout. Returns full details for roles that changed and one-line summaries for the rest.',
+    description: 'Wait for an ending, lost receipt, active owner wait, or timeout. Returns full details for roles that changed and one-line summaries for the rest.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {
       ids: { type: 'array', items: { type: 'string' }, description: 'Run ids; defaults to all running roles in this conversation' },
@@ -72,13 +73,22 @@ function excludeDependencies(exclude) {
 
 async function worktreeBaseFolder(git, root, folder) {
   if (!folder) return root;
-  const commonArgs = ['--path-format=absolute', '--git-common-dir'];
+  const commonArgs = ['--git-common-dir'];
   const source = await git(['rev-parse', '--is-inside-work-tree', ...commonArgs], folder).catch(() => null);
   const [inside, sourceCommon] = source?.stdout.trim().split(/\r?\n/) ?? [];
   if (inside !== 'true' || !sourceCommon) return root;
   const { stdout } = await git(['rev-parse', ...commonArgs], root);
-  const [projectGit, sourceGit] = await Promise.all([stdout.trim(), sourceCommon].map(dir => fs.promises.realpath(dir)));
+  const [projectGit, sourceGit] = await Promise.all([path.resolve(root, stdout.trim()), path.resolve(folder, sourceCommon)].map(dir => fs.promises.realpath(dir)));
   return path.relative(projectGit, sourceGit) === '' ? folder : root;
+}
+
+async function resolveWorktreeCommit(git, from, folder) {
+  const revision = from ?? 'HEAD';
+  const invalid = () => new Error(from === undefined ? 'Git could not resolve HEAD to create the worktree.' : 'from must resolve to a Git commit in this project.');
+  // One positional argv word, with no option or revision-set syntax.
+  if (revision.startsWith('-') || revision.includes('\0')) throw invalid();
+  await git(['check-ref-format', '--allow-onelevel', revision], folder).catch(() => { throw invalid(); });
+  return git(['rev-parse', '--verify', `${revision}^{commit}`], folder).catch(() => { throw invalid(); });
 }
 
 async function createWorktree(cwd, suffix, folder, from) {
@@ -92,9 +102,8 @@ async function createWorktree(cwd, suffix, folder, from) {
     if (error.stderr?.includes('not a git repository')) throw new Error('The project is not a Git repository.');
     throw new Error('Could not determine the project Git root.');
   }
-  const baseFolder = from === undefined ? await worktreeBaseFolder(git, root, folder) : root;
-  const { stdout: commitOutput } = await git(['rev-parse', '--verify', '--end-of-options', `${from ?? 'HEAD'}^{commit}`], baseFolder)
-    .catch(() => { throw new Error(from === undefined ? 'Git could not resolve HEAD to create the worktree.' : 'from must resolve to a Git commit in this project.'); });
+  const baseFolder = from === undefined || from === 'HEAD' ? await worktreeBaseFolder(git, root, folder) : root;
+  const { stdout: commitOutput } = await resolveWorktreeCommit(git, from, baseFolder);
   const commit = commitOutput.trim();
   const { stdout: shortCommit } = await git(['rev-parse', '--short', commit], root);
   const branchExists = () => git(['show-ref', '--verify', '--quiet', ref], root).then(() => true, error => {
@@ -132,8 +141,8 @@ async function createWorktree(cwd, suffix, folder, from) {
       throw new Error('Git could not check out the worktree branch.', { cause });
     });
     if ((await fs.promises.stat(modules).catch(error => { if (error.code !== 'ENOENT') throw error; }))?.isDirectory()) {
-      const { stdout } = await git(['rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'], work);
-      excludeDependencies(stdout.trim());
+      const { stdout } = await git(['rev-parse', '--git-path', 'info/exclude'], work);
+      excludeDependencies(path.resolve(work, stdout.trim()));
       await fs.promises.symlink(modules, link, process.platform === 'win32' ? 'junction' : 'dir');
       linked = true;
     }
@@ -156,6 +165,8 @@ function summarize(run) {
   const reason = run.lost ? 'lost' : /\bexit -?\d+ reason ([a-z]+)\b/.exec(run.end)?.[1] ?? 'exit';
   return { id: run.id, seat: run.seat, title: title.length <= SUMMARY_TITLE_LIMIT ? run.title : title.slice(0, SUMMARY_TITLE_LIMIT - 1).join('') + '…',
     state: run.end ? 'ended' : 'running', seconds: elapsedSeconds(run), ...(run.end && { reason }),
+    ...(!run.end && run.ownerWait && { waiting: run.ownerWait }),
+    ...(!run.end && run.ownerWait && run.menu && { menu: { id: run.menu.id, kind: run.menu.kind } }),
     ...(run.needsDecision && { needsDecision: true }), refusedCount: run.refused?.length ?? 0 };
 }
 
@@ -230,8 +241,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
 
   async function refreshGroup(folder, open, seconds, untilAny, signal) {
     const args = ['wait', ...open.map(run => run.id), '--cwd', folder, '--timeout', String(seconds)];
-    const { lines, timing } = await call(args, { untilAny, seenOwnerWaits, signal });
-    let ownerTransition = false;
+    const { lines, timing } = await call(args, { untilAny, signal });
     const failure = lines.find(line => line.startsWith('[dispatch] failed:'))?.slice('[dispatch] failed:'.length).trim();
     for (const run of open) {
       if (run.end) continue;
@@ -241,11 +251,8 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       if (status?.routing) run.routing = status.routing;
       if (validRefusals(status?.refused) && status.refused.length >= (run.refused?.length ?? 0)) run.refused = status.refused;
       if (status?.ownerWaitSequence >= (run.ownerWaitSequence ?? 0)) {
-        if (status.ownerWaitSequence > (run.ownerWaitSequence ?? 0) || !status.ownerWait) {
-          Object.assign(run, { ownerWait: status.ownerWait, ownerWaitSequence: status.ownerWaitSequence, menu: status.menu });
-        }
+        Object.assign(run, { ownerWait: status.ownerWait, ownerWaitSequence: status.ownerWaitSequence, menu: status.menu });
         if (untilAny && status.ownerWait && status.ownerWaitSequence > (seenOwnerWaits.get(run.id) ?? 0)) {
-          ownerTransition = true;
           seenOwnerWaits.set(run.id, status.ownerWaitSequence);
         }
       }
@@ -261,7 +268,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         if (activity) run.activity = activity;
       }
     }
-    return ownerTransition;
+    return open.some(run => run.end || run.ownerWait);
   }
 
   async function refresh(selected, seconds = 0, untilAny = false, cancellation) {
@@ -275,8 +282,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     const signal = cancellation && controller ? AbortSignal.any([cancellation, controller.signal]) : cancellation ?? controller?.signal;
     try {
       await Promise.all([...groups].map(async ([folder, open]) => {
-        const ownerTransition = await refreshGroup(folder, open, seconds, untilAny, signal);
-        if (ownerTransition || open.some(run => run.end)) controller?.abort();
+        if (await refreshGroup(folder, open, seconds, untilAny, signal)) controller?.abort();
       }));
     } finally { controller?.abort(); }
   }

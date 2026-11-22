@@ -25,7 +25,7 @@ const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/san
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
-const { READ_ONLY_MODE, readOnlyArgs } = require(path.join(runtime, 'features/claude-runtime/decide.cjs'));
+const { READ_ONLY_MODE, workerToolArgs } = require(path.join(runtime, 'features/claude-runtime/decide.cjs'));
 const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
   require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -242,8 +242,23 @@ function commandOf(options) {
   const readOnly = isReadOnly(options);
   if (options.agent === 'claude') return ['-p', ...(options.resume ? ['--resume', options.resume] : []), '--model', options.model,
     '--effort', options.effort, ...settings, '--permission-mode', readOnly ? READ_ONLY_MODE : 'acceptEdits',
-    ...(readOnly ? readOnlyArgs() : []), '--output-format', 'stream-json', '--verbose'];
+    ...workerToolArgs(readOnly), '--output-format', 'stream-json', '--verbose'];
   return ['app-server', '--listen', 'stdio://'];
+}
+
+function reportChangedFiles(event, changed) {
+  if (!changed?.length) return event;
+  const filesChanged = [];
+  let remaining = 15 * 1024 - Buffer.byteLength(JSON.stringify(event));
+  for (const file of changed) {
+    if (filesChanged.length === 50) break;
+    if (file.length > 4096 || /[\x00-\x1f\x7f]/.test(file)) continue;
+    const bytes = Buffer.byteLength(JSON.stringify(file)) + 1;
+    if (bytes > remaining) continue;
+    filesChanged.push(file);
+    remaining -= bytes;
+  }
+  return { ...event, filesChangedCount: changed.length, filesChanged };
 }
 
 const isReadOnly = options => options.readOnly || ['plan', READ_ONLY_MODE].includes(options.permission);
@@ -288,7 +303,7 @@ function standingRules(options) {
     'Do not commit or push, and do not start another worker or agent.',
     'Run no GUI smoke test and never read or write the system clipboard.',
     'Run only the tests the task touches, never the whole suite.',
-    'Skip skills named in AGENTS.md or project instructions if they are absent from your environment. Do not search for them.',
+    'Skip a named skill only if it is neither installed nor present under the repository\'s skills/ folder. Do not search elsewhere.',
     'Never ask the user. Finish independent work. Report exact refusals under ## Needs approval. Do not work around them.',
     ...(options.small ? ['Decide implementation (one line with why), take the smaller viable approach (note the other), '
       + 'and defer scope changes, irreversible actions, or changes to UI or behavior to the lead under ## Needs decision (options, effects, recommendation).'] : [
@@ -311,7 +326,7 @@ function briefOf(options, brief, team, { id, repo, before } = {}) {
     try { ledger = fs.readFileSync(options.ledger, 'utf8').trim(); } catch {}
     if (ledger) parts.push(`# Shared context for this task\n\n${ledger}`);
   }
-  if (team && !smallReadOnly) parts.push(...team.context(id, before, { small: options.small, allow: options.allow, brief: brief.toString('utf8') }));
+  if (team && !smallReadOnly) parts.push(...team.context(id, before, { small: options.small, readOnly: isReadOnly(options), allow: options.allow, brief: brief.toString('utf8') }));
   if (smallReadOnly) parts.push('# Files you may change\n\nNone.');
   else if (options.allow.length) {
     for (const boundary of boundariesFor(options.cwd, options.allow, repo)) {
@@ -867,7 +882,7 @@ function helperAlive(pid, entry) {
 }
 
 async function waitDetached(options, { stdout = process.stdout, store = detachedRuns(options.cwd), observe, onTiming,
-  alive = helperAlive, untilAny = false, seenOwnerWaits, signal } = {}) {
+  alive = helperAlive, untilAny = false, signal } = {}) {
   const pending = new Set(options.ids); let unknown = false;
   let completed = false, observing = true;
   const done = () => !pending.size || (untilAny && (completed || unknown));
@@ -881,14 +896,13 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
   };
   const check = async () => {
     const entries = [...pending].map(id => [id, store.read(id)]);
-    const ownerWaiting = entry => entry?.ownerWait && entry.ownerWaitSequence > (seenOwnerWaits?.get(entry.id) ?? 0);
-    const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled || ownerWaiting(entry));
+    const hasResult = untilAny && entries.some(([, entry]) => entry === null || entry?.settled || entry?.ownerWait);
     await Promise.all(entries.map(async ([id, entry]) => {
       if (entry === null) { stdout.write(`[dispatch] unknown run ${id}\n`); pending.delete(id); unknown = true; }
       if (!entry) return;
       if (entry.startedLine && store.claimStart(id)) stdout.write(entry.startedLine + '\n');
       if (entry.settled) { finish(id, entry); return; }
-      if (hasResult || signal?.aborted || !Number.isSafeInteger(entry.helperPid) || entry.helperPid < 1) return;
+      if ((hasResult && !entry.ownerWait) || signal?.aborted || !Number.isSafeInteger(entry.helperPid) || entry.helperPid < 1) return;
       if (await alive(entry.helperPid, entry) === false && observing) finish(id, entry, true);
     }));
     return done() || hasResult ? true : undefined;
@@ -912,7 +926,7 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
 
 async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, seenOwnerWaits, signal: waitSignal, roleFallback, roleArtifacts,
+  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, signal: waitSignal, roleFallback, roleArtifacts,
   launchTreeStop } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
@@ -928,7 +942,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   if (argv[0] === 'stop') return stopWorker(argv, stdout);
   if (argv[0] === 'wait' || argv.includes('--detach')) {
     try {
-      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, seenOwnerWaits, signal: waitSignal });
+      if (argv[0] === 'wait') return await waitDetached(argumentsOf(argv), { stdout, onTiming, untilAny, signal: waitSignal });
       return await startDetached(argv, { env, stdout, launch, source, onTiming, roleFallback, roleArtifacts });
     } catch (error) { stdout.write(`[dispatch] failed: ${String(error.message).replace(/[\r\n]+/g, ' ')}\n`); return 1; }
   }
@@ -1025,7 +1039,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   };
   const interventionNote = () => (interventions ? ` · owner intervened ${interventions}` : '') + (stops ? ` · owner stopped ${stops}` : '');
   const restoreSkills = changedFiles => {
-    if (!skillGuard) return;
+    if (!skillGuard || options.readOnly) return;
     const total = skillGuard.finish(id, changedFiles);
     skillProposals = skillGuard.restoredCount;
     skillChangesLeftLive = total - skillProposals;
@@ -1320,7 +1334,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     skillGuard = new WorkerSkillProposals(options, env, repo);
     const dirtyBytes = new Map();
     let capturedBytes = 0;
-    for (const { file } of before?.status || []) {
+    for (const { file } of (options.readOnly ? [] : before?.status ?? [])) {
       try {
         const filename = path.join(before.root, file), stat = fs.lstatSync(filename);
         const relative = path.relative(fs.realpathSync(before.root), fs.realpathSync(path.dirname(filename)));
@@ -1380,7 +1394,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         .map(file => path.relative(after.root, file).split(path.sep).join('/'))) : null;
       const outbox = after && send.directory && path.relative(after.root, send.directory).split(path.sep).join('/');
       const changed = (after && changedBetween(before, after)?.filter(file => !own.has(file) && !(outbox && file.startsWith(outbox + '/')))) ?? null;
-      return { after, changed, outOfScope: changed && changed.filter(file => options.readOnly || !matches(options.allow, file)) };
+      return { after, changed, outOfScope: changed && changed.filter(file => !options.readOnly && !matches(options.allow, file)) };
     };
     let brief = briefOf(options, fs.readFileSync(options.brief), team, { id, repo, before: checking ? before : undefined });
     log = fs.createWriteStream(options.out + '.log');
@@ -1537,16 +1551,19 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       const bookkeeping = await recordTeam({ answer, header, reason });
       await inputTail.catch(() => {});
       if (!team) { try { recordFindings(options, answer, header); } catch {} }
+      const filesChanged = options.readOnly ? changed : null;
       const scope = !checking ? '' : changed === null ? (team ? ' · scope unchecked (working tree unavailable)' : ' · scope unchecked (not a git working tree)')
+        : filesChanged?.length ? ` · files changed during run: ${filesChanged.length} (author unknown)`
         : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
       const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
       const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
       const stopFailure = stopFailureFor(reason);
-      if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured,
+      if (!endSent) send(reportChangedFiles({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured,
         ...(stopFailure && { treeStopFailure: stopFailure }),
         verdict: routeVerdict(),
-        ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
-        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
+        ...(outOfScope && !options.readOnly ? { outOfScopeCount: outOfScope.length } : {}),
+        ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() },
+      filesChanged));
       endSent = true;
       signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${refusalNote()}${scopeRestoreNote}${bookkeeping}`
         + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`

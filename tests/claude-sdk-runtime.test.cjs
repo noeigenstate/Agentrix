@@ -50,6 +50,7 @@ test('a worker loads normal setting sources while blocking failed policy hooks',
   await session.send({ clientMessageId: randomUUID(), text: 'worker' });
   assert.deepEqual(fake.calls[0].options.settingSources, ['user', 'project', 'local']);
   assert.equal(fake.calls[0].options.hooks.PreToolUse[0].onFailure, 'block');
+  assert.ok(fake.calls[0].options.disallowedTools.includes('EnterPlanMode'));
   assert.equal((await fake.calls[0].options.canUseTool('Bash', { command: 'node --version' }, {})).behavior, 'allow');
 });
 test('unsupported Agent seats publish one reading notice without making a reply', async t => {

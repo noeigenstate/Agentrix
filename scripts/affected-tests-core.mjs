@@ -35,11 +35,102 @@ function expressionTokens(node, tree) {
     : node.getWidth(tree) ? [node.getText(tree).replaceAll('\r\n', '\n')] : [];
 }
 
-function loadFingerprint(kind, node, tree) {
+const identifier = node => ts.isIdentifier(node) ? node.text : null;
+const member = node => ts.isPropertyAccessExpression(node) ? node.name.text
+  : ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression) ? node.argumentExpression.text : null;
+const globals = new Set(['__dirname', '__filename', 'module', 'require', 'process', 'createRequire']);
+
+function localBindings(tree) {
+  let checker;
+  return node => {
+    checker ??= ts.createProgram([tree.fileName], { noResolve: true, noLib: true, allowJs: true, types: [] }, {
+      getSourceFile: file => file === tree.fileName ? tree : undefined,
+      getDefaultLibFileName: () => '', writeFile() {}, getCurrentDirectory: () => '',
+      getDirectories: () => [], fileExists: file => file === tree.fileName, readFile: () => undefined,
+      getCanonicalFileName: file => file, useCaseSensitiveFileNames: () => true, getNewLine: () => '\n',
+    }).getTypeChecker();
+    const symbol = ts.isShorthandPropertyAssignment(node.parent) ? checker.getShorthandAssignmentValueSymbol(node.parent) : checker.getSymbolAtLocation(node);
+    return symbol?.declarations?.filter(declaration => declaration.getSourceFile() === tree) ?? [];
+  };
+}
+
+function loadAnalysis(tree, nodes) {
+  const bindings = localBindings(tree), assigned = new Set();
+  for (const node of nodes) {
+    if (!ts.isBinaryExpression(node) || node.operatorToken.kind < ts.SyntaxKind.FirstAssignment || node.operatorToken.kind > ts.SyntaxKind.LastAssignment) continue;
+    let target = node.left;
+    while (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) target = target.expression;
+    if (identifier(target)) assigned.add(target.text);
+  }
+  const factories = new Set(['createRequire']), loaders = new Set(['require']);
+  const factory = node => factories.has(identifier(node)) || member(node) === 'createRequire';
+  const direct = node => node.kind === ts.SyntaxKind.ImportKeyword || identifier(node) === 'require' || member(node) === 'require';
+  const load = node => direct(node) || loaders.has(identifier(node) ?? member(node)) || ts.isCallExpression(node) && factory(node.expression);
+  const enclosingFunction = node => {
+    for (let parent = node.parent; parent; parent = parent.parent) if (ts.isFunctionLike(parent)) return parent;
+  };
+  function addName(set, name) {
+    if (!name || set.has(name)) return false;
+    set.add(name);
+    return true;
+  }
+  let changed;
+  do {
+    changed = false;
+    for (const node of nodes) {
+      if (ts.isBindingElement(node) && node.propertyName?.getText(tree) === 'createRequire'
+        || ts.isImportSpecifier(node) && node.propertyName?.text === 'createRequire') {
+        if (addName(factories, identifier(node.name))) changed = true;
+      }
+      if (ts.isVariableDeclaration(node) && node.initializer) {
+        if (factory(node.initializer) && addName(factories, identifier(node.name))) changed = true;
+        if (load(node.initializer) && addName(loaders, identifier(node.name))) changed = true;
+      }
+      if (ts.isCallExpression(node) && (load(node.expression) || factory(node.expression))) {
+        const fn = enclosingFunction(node);
+        if (fn?.name && addName(loaders, identifier(fn.name))) changed = true;
+        if (fn && (ts.isVariableDeclaration(fn.parent) || ts.isPropertyAssignment(fn.parent))
+            && addName(loaders, identifier(fn.parent.name))) changed = true;
+      }
+    }
+  } while (changed);
+  return { bindings, assigned, direct, load, factory };
+}
+
+function loadFingerprint(kind, node, tree, { bindings, assigned }) {
   let context = node.parent;
   while (context && !ts.isVariableDeclaration(context) && !ts.isStatement(context)) context = context.parent;
   const anchor = context && ts.isVariableDeclaration(context) ? expressionTokens(context.name, tree) : context?.kind;
-  return JSON.stringify([kind, anchor ?? null, expressionTokens(node, tree)]);
+  const declarations = new Set();
+  let unresolved = false;
+  function visit(child) {
+    if (ts.isIdentifier(child)) {
+      const parent = child.parent;
+      if (!(parent.name === child && !ts.isShorthandPropertyAssignment(parent))) {
+        const local = bindings(child);
+        if (assigned.has(child.text) || !local.length && !globals.has(child.text)) unresolved = true;
+        for (const declaration of local) {
+          let source = declaration;
+          if (ts.isBindingElement(source)) {
+            while (ts.isBindingElement(source) || ts.isObjectBindingPattern(source) || ts.isArrayBindingPattern(source)) source = source.parent;
+          }
+          if (ts.isImportSpecifier(source) || ts.isNamespaceImport(source) || ts.isImportClause(source)) {
+            while (!ts.isImportDeclaration(source)) source = source.parent;
+          }
+          if (declarations.has(source)) continue;
+          declarations.add(source);
+          // A parameter can be set by any caller, including a callback outside this file.
+          if (ts.isParameter(source) || ts.isVariableDeclaration(source) && !(source.parent.flags & ts.NodeFlags.Const)) unresolved = true;
+          else if (!ts.isImportDeclaration(source)) visit(source);
+        }
+      }
+    }
+    ts.forEachChild(child, visit);
+  }
+  visit(node);
+  if (unresolved) return null;
+  return JSON.stringify([kind, anchor ?? null, expressionTokens(node, tree),
+    [...declarations].map(declaration => JSON.stringify(expressionTokens(declaration, tree))).sort()]);
 }
 
 // Parse import/export/require, including literal dynamic imports. Nonliteral loads remain
@@ -57,33 +148,36 @@ function references(root, file, text) {
     if (found) targets.add(found);
     else if (value.startsWith('.')) unresolved.push(value);
   };
+  const nodes = [];
   function visit(node) {
+    nodes.push(node);
     if (ts.isStringLiteralLike(node)) literals.push(node.text);
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) add(node.moduleSpecifier.text);
-    const load = ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
-      || ts.isIdentifier(node.expression) && node.expression.text === 'require'
-      || ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'require'
-      || ts.isElementAccessExpression(node.expression) && node.expression.argumentExpression
-        && ts.isStringLiteralLike(node.expression.argumentExpression) && node.expression.argumentExpression.text === 'require');
-    if (load) {
-      if (node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) add(node.arguments[0].text);
-      else dynamic.push(loadFingerprint('load', node, tree));
-    }
-    if (ts.isIdentifier(node) && node.text === 'require') {
-      const parent = node.parent;
-      const known = ts.isCallExpression(parent) && parent.expression === node
-        || ts.isPropertyAccessExpression(parent) && (parent.expression === node && ['main', 'cache', 'resolve'].includes(parent.name.text)
-          || parent.name === node && ts.isCallExpression(parent.parent) && parent.parent.expression === parent);
-      if (!known) dynamic.push(loadFingerprint('indirect require', parent, tree));
-    }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'createRequire') {
-      const invocation = ts.isCallExpression(node.parent) && node.parent.expression === node ? node.parent : node;
-      dynamic.push(loadFingerprint('createRequire alias', invocation, tree));
-    }
     ts.forEachChild(node, visit);
   }
   visit(tree);
-  const dynamicDigest = dynamic.length ? createHash('sha256').update(JSON.stringify(dynamic.sort())).digest('hex') : null;
+  const analysis = loadAnalysis(tree, nodes);
+  const { load, direct, factory } = analysis;
+  for (const node of nodes) {
+    if (ts.isCallExpression(node)) {
+      if (load(node.expression)) {
+        if (direct(node.expression) && ts.isStringLiteralLike(node.arguments[0] ?? node)) add(node.arguments[0].text);
+        else dynamic.push(loadFingerprint('load', node, tree, analysis));
+      } else if (factory(node.expression)) dynamic.push(loadFingerprint('createRequire', node, tree, analysis));
+    }
+    if (identifier(node) === 'require') {
+      const parent = node.parent;
+      const known = ts.isCallExpression(parent) && parent.expression === node
+        || ts.isPropertyAccessExpression(parent) && ['main', 'cache', 'resolve'].includes(parent.name.text) && parent.expression === node
+        || member(parent) === 'require' && ts.isCallExpression(parent.parent) && parent.parent.expression === parent;
+      if (!known) {
+        const alias = ts.isVariableDeclaration(parent) || member(parent) === 'require' && ts.isVariableDeclaration(parent.parent);
+        dynamic.push(alias ? loadFingerprint('indirect require', parent, tree, analysis) : null);
+      }
+    }
+  }
+  const dynamicDigest = !dynamic.length ? null : createHash('sha256').update(dynamic.includes(null)
+    ? text.replaceAll('\r\n', '\n') : JSON.stringify(dynamic.sort())).digest('hex');
   return { targets, literals, unresolved, dynamicDigest };
 }
 

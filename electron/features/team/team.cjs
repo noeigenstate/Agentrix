@@ -43,30 +43,59 @@ const MEMORY_LIMIT = 6 * 1024;
 const commonWords = new Set(('about after and are before brief can change changes check code does file files fix for from had has have how '
   + 'implement inspect into investigate keep must new not only our read report review role see should task test tests that the their them then this '
   + 'update use verify was what when will with work would you 任务 代码 修复 文件 测试 角色').split(' '));
-let han;
-const words = text => (text.toLowerCase().match(/[a-z][a-z0-9_]{2,}|\p{Script=Han}+/gu) || [])
-  .flatMap(word => /^[a-z]/.test(word) ? [word]
-    : Array.from((han ??= new Intl.Segmenter('zh', { granularity: 'word' })).segment(word), part => part.segment).filter(part => part.length > 1))
-  .filter(word => !commonWords.has(word));
+const words = text => (text.toLowerCase().match(/[a-z][a-z0-9_]{2,}|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu) || [])
+  .flatMap(word => {
+    if (/^[a-z]/.test(word)) return [word];
+    const chars = Array.from(word);
+    return chars.slice(1).map((char, index) => chars[index] + char);
+  }).filter(word => !commonWords.has(word));
 const paths = text => (text.toLowerCase().replaceAll('\\', '/').match(/[\p{L}\d_.-]+(?:\/[\p{L}\d_.-]+)+|[\p{L}\d_-]+\.[a-z][a-z\d]+/gu) || [])
-  .map(file => file.replace(/\.+$/, ''));
+  .flatMap(raw => {
+    const file = raw.replace(/\.+$/, '');
+    return file.includes('/') ? [file, file.split('/').at(-1)] : [file];
+  });
+
+const memoryEntry = /^(?:### \d{4}-\d{2}-\d{2}(?=[T\s])|## Round\b)/;
+const truncated = '\n\n[Entry truncated]';
+function fitEntry(entry, budget) {
+  if (Buffer.byteLength(entry) <= budget) return entry;
+  const available = budget - Buffer.byteLength(truncated);
+  const paragraphs = entry.replaceAll('\r\n', '\n').split(/\n[ \t]*\n/);
+  const kept = [];
+  let bytes = 0;
+  for (const paragraph of paragraphs) {
+    const size = Buffer.byteLength(paragraph) + (kept.length ? 2 : 0);
+    if (bytes + size > available) break;
+    kept.push(paragraph); bytes += size;
+  }
+  const heading = entry.split('\n', 1)[0].trimEnd();
+  if (kept.length) return kept.join('\n\n') + truncated;
+  if (available < 1) return '';
+  let clipped = '';
+  for (const char of heading) {
+    bytes += Buffer.byteLength(char);
+    if (bytes > available) break;
+    clipped += char;
+  }
+  return clipped + truncated;
+}
 
 function memoryExcerpt(text, { allow = [], brief = '' } = {}) {
   const taskWords = new Set(words(brief)), taskPaths = new Set(paths(brief));
   const globs = allow.map(glob => globRegExp(glob.toLowerCase()));
-  const entries = text.split(/(?=^### \d{4}-\d{2}-\d{2}(?=[T\s])|^## Round\b|^# )/m);
+  const entries = text.split(/(?=^### \d{4}-\d{2}-\d{2}(?=[T\s])|^## Round\b|^# )/m)
+    .map(entry => entry.trim()).filter(entry => memoryEntry.test(entry)).reverse();
   const chosen = [];
-  let bytes = 0;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const entry = entries[i].trim();
-    if (!/^### \d{4}-\d{2}-\d{2}(?=[T\s])|^## Round\b/.test(entry)) continue;
-    const heading = entry.split('\n', 1)[0], title = heading.split(' · ')[1] ?? heading;
-    if (!words(title).some(word => taskWords.has(word))
-        && !paths(entry).some(file => taskPaths.has(file) || globs.some(glob => glob.test(file)))) continue;
-    const size = Buffer.byteLength(entry) + (chosen.length ? 2 : 0);
-    if (bytes + size > MEMORY_LIMIT) continue;
-    chosen.push(entry);
-    bytes += size;
+  let remaining = MEMORY_LIMIT;
+  for (const [index, entry] of entries.entries()) {
+    if (index >= 2 && !paths(entry).some(file => taskPaths.has(file) || globs.some(glob => glob.test(file)))
+        && !words(entry).some(word => taskWords.has(word))) continue;
+    const gap = chosen.length ? 2 : 0;
+    const reserve = index === 0 && entries.length > 1 ? Math.min(MEMORY_LIMIT / 2, Buffer.byteLength(entries[1]) + 2) : 0;
+    const excerpt = fitEntry(entry, remaining - gap - reserve);
+    if (!excerpt) continue;
+    chosen.push(excerpt);
+    remaining -= Buffer.byteLength(excerpt) + gap;
   }
   return chosen.join('\n\n');
 }
@@ -165,7 +194,7 @@ class Team {
   release(id) {
     for (const extension of ['.json', '.tmp']) fs.rmSync(path.join(this.board, id + extension), { force: true });
   }
-  context(id, before, { small, allow, brief } = {}) {
+  context(id, before, { small, readOnly, allow, brief } = {}) {
     const workers = this.live().filter(worker => worker.id !== id);
     const working = workers.map(worker => `- ${worker.title} (${worker.agent} ${worker.model}, ${worker.role}): ${worker.allow.length ? worker.allow.join(', ') : 'no file changes'}`).join('\n');
     let status = '', log = '';
@@ -177,7 +206,12 @@ class Team {
     }
     try { log = git(this.cwd, ['log', '--oneline', '-5']).trim(); } catch { log = '(history unavailable)'; }
     const lines = status.split(/\r?\n/).filter(Boolean);
-    const memory = small ? [] : [`# Project memory\n\nFull project memory: ${this.memory}\n\n${memoryExcerpt(read(this.memory), { allow, brief })}`.trimEnd()];
+    const relative = path.relative(this.cwd, this.memory);
+    const outside = path.isAbsolute(relative) || relative.startsWith('..' + path.sep);
+    const pointer = readOnly && outside
+      ? 'The full project memory is outside the role folder and cannot be read from this role. The lead can supply an entry on request.'
+      : `Full project memory: ${this.memory}`;
+    const memory = small ? [] : [`# Project memory\n\n${pointer}\n\n${memoryExcerpt(read(this.memory), { allow, brief })}`.trimEnd()];
     return [...memory, `# Working now\n\n${working || '- none'}`,
       `# Repository\n\n${lines.slice(0, 40).join('\n') || '(clean)'}${lines.length > 40 ? `\n… and ${lines.length - 40} more` : ''}\n\n${log || '(no commits)'}`];
   }

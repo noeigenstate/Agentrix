@@ -242,7 +242,7 @@ test('helper constructs exact Codex/Claude argv and rejects incomplete or ambigu
   const options = argumentsOf(['codex', ...base, '--fast', '--image', 'a.png', '--image', 'b.png', '--read-only']);
   assert.deepEqual(commandOf(options), ['app-server', '--listen', 'stdio://']);
   assert.deepEqual(commandOf(argumentsOf(['claude', ...base, '--permission', 'acceptEdits'])),
-    ['-p', '--model', 'test-model', '--effort', 'high', '--permission-mode', 'acceptEdits', '--output-format', 'stream-json', '--verbose']);
+    ['-p', '--model', 'test-model', '--effort', 'high', '--permission-mode', 'acceptEdits', '--disallowedTools', 'EnterPlanMode', '--output-format', 'stream-json', '--verbose']);
   for (const seat of ['designer', 'developer/frontend', 'a' + '1'.repeat(31) + '/b' + '2'.repeat(23)]) {
     assert.equal(argumentsOf(['codex', ...base, '--seat', seat]).seat, seat);
   }
@@ -988,7 +988,7 @@ test('small role briefs trim context by permission and preserve the default byte
   const read = { readOnly: true, allow: [] }, write = { allow: ['src/a.js'] };
   // The captured default sections outside the escalation rules keep their original bytes.
   const withoutEscalationRules = options => render(options).toString()
-    .replace(/^- Skip skills named in AGENTS\.md.*\n/m, '').replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
+    .replace(/^- Skip a named skill.*\n/m, '').replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
   assert.equal(createHash('sha256').update(withoutEscalationRules(read)).digest('hex'), '360fd84da8599f32e7f73387cb546948338aad8811c60442ea140567263cda24');
   assert.equal(createHash('sha256').update(withoutEscalationRules(write)).digest('hex'), 'd1922a777657b74c2d0f332ec705a75a5dc33c9b8285b818fd77c19748d85656');
 
@@ -1021,7 +1021,7 @@ test('standing rules inline bounded standards for normal briefs and keep referen
       assert.match(text, /Decide implementation.+one line.+smaller.+other/);
       assert.match(text, /## Needs decision.+options.+(?:effects|consequences).+recommendation/);
       assert.match(text, /scope changes, irreversible actions, or changes to UI or behavior/);
-      assert.match(text, /^- Skip skills named in AGENTS\.md or project instructions .* Do not search for them\.$/m);
+      assert.match(text, /^- Skip a named skill only if it is neither installed nor present under the repository's skills\/ folder\. Do not search elsewhere\.$/m);
       if (small) assert.match(text, /^- Decide implementation.+## Needs decision.+$/m);
     }
     assert.match(claude, /^- End with a plain text answer\. Never call ExitPlanMode\.$/m);
@@ -1057,15 +1057,21 @@ test('standing rules inline bounded standards for normal briefs and keep referen
 test('a read-only Claude headless role disables writing tools and detects tracked and new writes without allow globs', async t => {
   const lines = [{ record: { type: 'system', subtype: 'init', session_id: 'read-only-session', model: 'claude-sonnet-5-5' } },
     { write: 'src/a.js', text: 'changed' }, { write: 'src/new.js', text: 'created' }];
-  const f = await fixture(t, lines, { agent: 'claude', setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': 'original' }) });
+  const f = await fixture(t, lines, { agent: 'claude', isolated: true, setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'src/a.js': 'original' }) });
   const result = await f.finished;
   const { args } = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   const value = flag => args[args.indexOf(flag) + 1];
   assert.equal(value('--permission-mode'), 'dontAsk');
   assert.equal(value('--tools'), 'Read,Glob,Grep,LS');
   for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'NotebookEdit']) assert.ok(value('--disallowedTools').split(',').includes(tool));
-  assert.match(result.stdout, /reason scope · OUT OF SCOPE: src\/a\.js, src\/new\.js/);
-  assert.deepEqual(f.events.find(event => event.type === 'dispatch-end').outOfScope, ['src/a.js', 'src/new.js']);
+  assert.match(result.stdout, /reason exit · files changed during run: 2 \(author unknown\)/);
+  const end = f.events.find(event => event.type === 'dispatch-end');
+  assert.equal(end.reason, 'exit');
+  assert.equal(end.filesChangedCount, 2);
+  assert.deepEqual(end.filesChanged, ['src/a.js', 'src/new.js']);
+  assert.equal(end.outOfScope, undefined);
+  assert.equal(await fs.readFile(path.join(f.directory, 'src/a.js'), 'utf8'), 'changed');
+  assert.equal(await fs.readFile(path.join(f.directory, 'src/new.js'), 'utf8'), 'created');
 });
 
 test('a worker that changes files outside --allow ends out of scope, with the files, and its findings reach the ledger', async t => {
@@ -1110,7 +1116,7 @@ test('dispatch restores unapproved skill edits and reports proposal counts on su
 
 test('an unconfirmed exited worker restores its skill edits before the failure event', async t => {
   const f = await fixture(t, [{ write: 'skills/sample/SKILL.md', text: 'Unconfirmed proposal.' }], { hold: 0,
-    isolated: true,
+    isolated: true, extra: ['--allow', 'src/**'],
     setup: directory => gitInit(directory, { '.gitignore': PROBE_FILES, 'skills/sample/SKILL.md': 'Pre-run contents.' }),
   });
   assert.notEqual((await f.finished).code, 0);

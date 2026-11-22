@@ -13,6 +13,7 @@ const { createHash } = require('node:crypto');
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { sessionContext } = require(path.join(runtime, 'features/skills/session.cjs'));
 const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'features/skills/agent-seat.cjs'));
+const { deniedAction } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const { liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 
 function send(socket, event) {
@@ -53,7 +54,7 @@ const CLAUDE_STATES = { start: 'working', stop: 'complete', 'stop-failed': 'fail
 function claudeEvent(input, projectId, sessionKey, kind) {
   const sentAt = Date.now();
   if (!Object.hasOwn(CLAUDE_STATES, kind)) return null;
-  const hook = JSON.parse(input);
+  const hook = typeof input === 'string' ? JSON.parse(input) : input;
   // Idle notifications must not turn a completed round back into a waiting one.
   if (kind === 'notify' && !['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog'].includes(hook?.notification_type)) return null;
   const sessionId = String(hook?.session_id ?? '');
@@ -108,9 +109,29 @@ function seatRouting(input, snapshot, bootstrap) {
     ...(observed && typeof hook.session_id === 'string' && { observed: { ...observed, sessionId: hook.session_id } }) };
 }
 
+function workerPermission(input, projectId, sessionKey) {
+  const hook = JSON.parse(input);
+  if (hook?.hook_event_name !== 'PermissionRequest') return {};
+  const event = claudeEvent(hook, projectId, sessionKey, 'permission');
+  if (!event || ['AskUserQuestion', 'ExitPlanMode'].includes(hook.tool_name)) return { event };
+  const tool = hook.tool_input;
+  const command = typeof tool?.command === 'string' && ['Bash', 'PowerShell'].includes(hook.tool_name) ? tool.command : null;
+  const paths = [tool?.file_path, tool?.path, tool?.notebook_path].filter(value => typeof value === 'string');
+  const action = deniedAction({ toolName: hook.tool_name, command, paths });
+  const message = 'This action is not allowed in this role. Continue without it and list it under ## Needs approval.';
+  return { output: { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message, interrupt: false } } },
+    event: { ...event, workerRefused: action } };
+}
+
 async function main([action, socket, projectId, sessionKey, argument, ...rest]) {
   if (!socket || !projectId || !sessionKey) return;
   const input = action === 'claude-hook' ? await readInput() : null;
+  if (action === 'claude-hook' && argument === 'worker-permission') {
+    const { output, event } = workerPermission(input, projectId, sessionKey);
+    if (event) await send(socket, event);
+    if (output) process.stdout.write(JSON.stringify(output) + '\n');
+    return;
+  }
   if (action === 'claude-hook' && argument === 'seat-routing') {
     const { output, observed } = seatRouting(input, process.env.AGENTRIX_SEATS, process.env.AGENTRIX_BOOTSTRAP);
     if (output) process.stdout.write(JSON.stringify(output) + '\n');
