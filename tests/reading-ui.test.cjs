@@ -514,7 +514,7 @@ function workingComposerHarness(t, agent, overrides = {}) {
     }
   };
   h.render();
-  return { ...h, view, parsed,
+  return { ...h, view, parsed, subscribe, frame,
     async drain() { const pending = view.pending; view.pending = false; parsed(false); for (let i = 0; i < 24; i++) await Promise.resolve(); view.pending = pending; },
     async tick(ms) { clock += ms; if (!view.pending || view.parsed) parsed(); await h.tick(ms); },
     async advance(ms, notify = true) { clock += ms; if (notify && (!view.pending || view.parsed)) parsed(false); await h.advance(ms); } };
@@ -626,22 +626,51 @@ for (const refusals of [1, 3]) test(`receiver no-write proof permits another att
   assert.deepEqual(h.written.map(write => write.text), ['\r']); assert.deepEqual(outboxTexts(h), []);
 });
 
-test('a direct reading send reaches the receiver during pending output and is not lost', async t => {
+test('a busy send survives output arriving during the paste IPC round trip', async t => {
   const h = workingComposerHarness(t, 'claude'), paste = window.agentrix.pasteTerminal;
-  const screen = require('../src/features/terminal/terminal-screen.ts');
-  const source = fs.readFileSync(path.join(__dirname, '../src/features/terminal/TerminalPane.tsx'), 'utf8');
-  const start = source.indexOf('    const offPaste = '), end = source.indexOf('    const selection = ', start);
-  let receive, pending = true;
-  Function('window', 'disposed', 'id', 'sessionId', 'readScreen', 'currentAgent', 'terminal', 'canPasteScreen', 'recordScreenPaste', 'screenPaste', source.slice(start, end))(
-    { agentrix: { onTerminalPaste(fn) { receive = fn; } } }, false, h.props.terminal.id, 'session',
-    () => ({ rows: ['────', '❯ ', '────'], parsed: true, pending }), { current: 'claude' },
-    { paste: text => { void paste(h.props.terminal.id, text, 'session'); } }, screen.canPasteScreen, screen.recordScreenPaste, screen.screenPaste);
-  window.agentrix.pasteTerminal = async (id, text, sessionId) => { receive({ id, text, sessionId }); return { ok: true }; };
+  const { receiveScreenPaste } = require('../src/features/terminal/terminal-screen.ts');
+  let requests = 0;
+  window.agentrix.pasteTerminal = async (id, text, sessionId) => {
+    requests++;
+    h.view.pending = true;
+    receiveScreenPaste(id, sessionId, text, () => 'claude', () => { void paste(id, text, sessionId); }, h.frame, h.subscribe);
+    return { ok: true };
+  };
   h.edit('direct during output'); h.press('Enter'); await h.advance(0, false);
+  assert.equal(requests, 1);
   assert.deepEqual(h.pasted, []); assert.deepEqual(h.written, []);
-  pending = false; await h.tick(0); await h.tick(400); await h.tick(700);
+  h.render();
+  assert.equal(outboxReason(h), 'Agentrix has not sent this message because it cannot yet confirm a safe terminal input.');
+  const input = h.frame().rows;
+  for (let redraw = 0; redraw < 24; redraw++) {
+    h.view.rows = ['● Offline output probe · 8s', `  ⎿  $ node probe.cjs (3s · ${redraw + 10} lines)`, '     (ctrl+b to run in background)', ...input];
+    h.parsed(false);
+  }
+  assert.deepEqual(h.pasted, []); assert.deepEqual(h.written, []);
+  delete h.view.rows;
+  await h.drain();
+  assert.deepEqual(h.pasted.map(item => item.text), ['direct during output']);
+  assert.deepEqual(h.written, []);
+  await h.tick(400); await h.drain(); await h.tick(700);
   assert.deepEqual(h.view.records.map(record => record.text), ['direct during output']);
   assert.deepEqual(h.pasted.map(item => item.text), ['direct during output']); assert.deepEqual(outboxTexts(h), []);
+  assert.equal(requests, 1, 'a redraw at the receiver must not require a fresh IPC round trip');
+});
+
+test('a permission prompt parsed while busy paste IPC waits gets no paste or Enter', async t => {
+  const h = workingComposerHarness(t, 'claude');
+  const { receiveScreenPaste } = require('../src/features/terminal/terminal-screen.ts');
+  window.agentrix.pasteTerminal = async (id, text, sessionId) => {
+    h.view.pending = true;
+    receiveScreenPaste(id, sessionId, text, () => 'claude', () => h.pasted.push({ id, text }), h.frame, h.subscribe);
+    return { ok: true };
+  };
+  h.edit('leave the permission dialog alone'); h.press('Enter'); await h.advance(0, false);
+  h.view.rows = ['Do you want to proceed?', '❯ 1. Yes', '  2. No', 'Esc to cancel'];
+  h.view.pending = false;
+  h.parsed(); await h.tick(400);
+  assert.deepEqual(h.pasted, []); assert.deepEqual(h.written, []);
+  assert.deepEqual(outboxTexts(h), ['leave the permission dialog alone']);
 });
 
 test('an ordinary held message drains when its hidden project returns to input', async t => {
@@ -1816,6 +1845,36 @@ test('pending users retain their cards and a new sending prompt separates live a
   sections = timelineSections(render());
   assert.deepEqual(sections.map(section => section.match(/reading-step is-(\w+)/)[1]), ['agent', 'user']);
   assert.match(sections[0], /role="status"/); assert.match(sections[1], /reading-pending is-queued/);
+});
+
+test('Claude assistant text renders between tool calls as transcript blocks arrive', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { createConversationBuffer } = require('../src/features/reading/conversation-buffer.ts');
+  const { state, render } = readingHarness(t);
+  state.terminal.agent = 'claude'; state.terminal.codexActivity = 'working';
+  const buffer = createConversationBuffer(entries => { state.entries = entries; }, true);
+  t.after(() => buffer.dispose());
+  const log = new ConversationLog(change => buffer.push({ changes: [change.entry] }));
+  buffer.snapshot([]);
+  const blocks = [
+    { type: 'text', text: 'FIRST_VISIBLE_REPLY' },
+    { type: 'tool_use', id: 'toolu_first', name: 'Read', input: { file_path: 'first-probe.txt' } },
+    { type: 'text', text: 'MIDDLE_VISIBLE_REPLY' },
+    { type: 'tool_use', id: 'toolu_second', name: 'Read', input: { file_path: 'second-probe.txt' } },
+    { type: 'text', text: 'FINAL_VISIBLE_REPLY' },
+  ];
+  for (const [index, block] of blocks.entries()) {
+    // Claude writes a separate UUID per block. Blocks from one provider response can share a message ID.
+    claudeConversation(log, { type: 'assistant', uuid: `block-${index}`, timestamp: new Date(1000 + index).toISOString(),
+      message: { id: index < 2 ? 'msg_first' : index < 4 ? 'msg_second' : 'msg_final', stop_reason: null, content: [block] } });
+    t.mock.timers.tick(50);
+    const html = render();
+    const arrived = blocks.slice(0, index + 1);
+    assert.deepEqual(state.entries.map(entry => entry.role), arrived.map(item => item.type === 'text' ? 'assistant' : 'tool'));
+    assert.deepEqual(html.match(/(?:FIRST|MIDDLE|FINAL)_VISIBLE_REPLY/g), arrived.filter(item => item.type === 'text').map(item => item.text));
+    if (block.type === 'tool_use') assert.ok(html.includes(block.input.file_path));
+  }
 });
 
 test('real Claude queue records render without an echo and promote once in producer order', t => {

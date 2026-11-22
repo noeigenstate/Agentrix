@@ -4,10 +4,8 @@ const jsx = require('react/jsx-runtime');
 const { hookHarness } = require('./helpers/hook-harness.cjs');
 const { popupHarness, elements, idle } = require('./reading-popup-coverage.test.cjs');
 const wrapAnsi = require('wrap-ansi');
-const fs = require('node:fs');
-const path = require('node:path');
 const screens = require('../src/features/terminal/terminal-screen.ts');
-const { canPasteScreen, beginScreenPaste, recordScreenPaste, screenPaste } = screens;
+const { canPasteScreen, beginScreenPaste, receiveScreenPaste } = screens;
 const { DIALOG_SETTLE } = require('../src/features/reading/reading-ready.ts');
 const { registerReadingTerminal, mountReadingTerminal } = require('../src/features/terminal/terminal-popup.ts');
 const { parseAgentScreen } = require('../src/features/agents/agent-screen.ts');
@@ -86,16 +84,9 @@ test('popup mount failure is implicit; X, backdrop and popup cancellation are ex
 });
 
 function pasteReceiver(readScreen, paste) {
-  const source = fs.readFileSync(path.join(__dirname, '../src/features/terminal/TerminalPane.tsx'), 'utf8');
-  const start = source.indexOf('    const offPaste = '), end = source.indexOf('    const selection = ', start);
-  assert.ok(start > 0 && end > start);
-  let receive;
-  // The actual receiver, including its final pre-paste guard. No xterm, preload or PTY is started.
-  return (id, sessionId) => {
-    Function('window', 'disposed', 'id', 'sessionId', 'readScreen', 'currentAgent', 'terminal', 'canPasteScreen', 'recordScreenPaste', 'screenPaste', source.slice(start, end))(
-      { agentrix: { onTerminalPaste(fn) { receive = fn; } } }, false, id, sessionId, readScreen, { current: 'claude' },
-      { paste, input: paste }, canPasteScreen, recordScreenPaste, screenPaste);
-    return receive;
+  return (id, sessionId) => packet => {
+    if (packet.id !== id || packet.sessionId !== sessionId) return;
+    receiveScreenPaste(id, sessionId, packet.text, () => 'claude', () => paste(packet.text), readScreen);
   };
 }
 
@@ -122,6 +113,21 @@ test('a reading message requires an empty Claude input at the paste receiver', (
   rows[1] = '❯ ';
   assert.equal(canPasteScreen('claude', { rows, pending: true }, true), false);
   assert.equal(canPasteScreen('claude', { rows, pending: false }, true), true);
+});
+
+test('a busy paste that times out cannot write on a later parse', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const rows = ['────', '❯ ', '────'];
+  let writes = 0, notify;
+  const receipt = beginScreenPaste('terminal', 'session', 'held words', true, () => true);
+  receiveScreenPaste('terminal', 'session', 'held words', () => 'claude', () => writes++,
+    () => ({ rows, pending: true }), (_id, listener) => { notify = listener; return () => { notify = undefined; }; });
+  assert.equal(receipt.status, 'pending');
+  t.mock.timers.tick(2000);
+  await receipt.waiting;
+  assert.equal(receipt.status, 'refused');
+  assert.equal(notify, undefined);
+  assert.equal(writes, 0);
 });
 
 test('send-to-agent reaches an untracked receiver during pending output and reports actual success', async t => {

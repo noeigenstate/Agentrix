@@ -657,10 +657,19 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (text) {
       if (attempt) {
         attempt.phase = 'pasting';
-        attempt.paste = beginScreenPaste(terminal.id, terminal.sessionId, text, tracked);
+        const canWrite = tracked && workingNow.current ? () => readyInput()?.text === '' : undefined;
+        attempt.paste = beginScreenPaste(terminal.id, terminal.sessionId, text, tracked, canWrite);
         attempt.echo = pendingId ?? undefined;
       }
       const pasted = await window.agentrix.pasteTerminal(terminal.id, text, terminal.sessionId);
+      const waiting = attempt?.paste?.status === 'pending' && attempt.paste.waiting;
+      if (waiting && ownsSend(owner)) {
+        if (pendingId) cancelEcho(pendingId);
+        pendingId = null;
+        directPaste.current = null;
+        setOutbox(messages => [...messages]);
+        await waiting;
+      }
       if (attempt) attempt.phase = pasted.ok ? 'pasted' : 'rejected';
       if (!ownsSend(owner)) return;
       if (attempt?.paste?.status === 'refused') { if (pendingId) cancelEcho(pendingId); return; }
@@ -671,7 +680,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
         if (own && !pictureSend && !input.current?.value) edit(words);
         onError(pasted.error); return;
       }
-      if (automatic) { pendingId = echo(text, [], 0); if (attempt && pendingId) attempt.echo = pendingId; }
+      if (automatic || waiting) { pendingId = echo(text, [], 0); if (attempt && pendingId) attempt.echo = pendingId; }
       remember();
     }
     if (pictureSend) clearSentDraft(message);
@@ -944,7 +953,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const shownOutbox = outbox.filter(message => message.id !== directPaste.current);
   const head = shownOutbox[0];
   const pasteRejected = head?.attempt?.phase === 'rejected' && head.attempt.paste?.status !== 'refused' && (head.recoveries ?? 0) >= 1;
-  const outboxReason = pasteRejected ? 'term.paste_rejected' : sending.current ? null : awaitsReceipt(head) ? 'term.receipt_missing'
+  const waitingForParse = head?.attempt?.paste?.status === 'pending' && !!head.attempt.paste.waiting;
+  const outboxReason = pasteRejected ? 'term.paste_rejected' : waitingForParse ? 'term.cli_not_ready' : sending.current ? null : awaitsReceipt(head) ? 'term.receipt_missing'
     : parsedScreen.choice?.kind === 'question' ? 'term.waiting_question'
     : parsedScreen.choice?.kind === 'permission' ? 'term.waiting_permission'
     : hasChoice && !cliDialogShown(kind, visibleScreen?.rows ?? [], parsedScreen) ? 'term.reported_waiting'
@@ -974,7 +984,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       <span data-reason={outboxReason ?? undefined}>{outboxReason ? reasonWords(outboxReason) : t('发送中')}</span>
       <ul>{shownOutbox.map(message => <li key={message.id}>
         <span className="reading-notice-text" title={message.text}>{message.text}</span>
-        {awaitsReceipt(message) && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}
+        {!(message === head && waitingForParse) && awaitsReceipt(message) && <span>{sending.current ? t('发送中') : t('送达未确认，请在终端检查')}</span>}
       <div className="reading-notice-actions"><button type="button" className="button small" onClick={() => { if (draft || sending.current) return; saveOutbox(outbox.filter(item => item.id !== message.id)); edit(message.text); }} disabled={!!draft || sending.current}>{t('取回')}</button></div></li>)}</ul></div>}
     {waitingShown && terminalPopup === null && <div className="reading-choice-host" ref={choiceHost}><WaitingCard title={waitingTitle(screen)} terminalId={terminal.id} onOpenTerminal={() => { startDialog(terminal.id, dialogInstance.current, true); setTerminalPopup({ command: '', prompt: dialogInstance.current }); }} /></div>}
     {/* The command list is part of the page, above the message box, not a popup over the conversation. */}

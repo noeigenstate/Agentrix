@@ -30,18 +30,21 @@ let incarnation = 0;
 let frameRevision = 0;
 const pending = new Map<string, Set<(screen: Screen) => void>>();
 const pendingParses = new Map<string, Set<(screen: Screen) => void>>();
-export type PasteReceipt = { sessionId: string; text: string; status: 'pending' | 'accepted' | 'refused'; emptyInput: boolean };
+export type PasteReceipt = {
+  sessionId: string; text: string; status: 'pending' | 'accepted' | 'refused'; emptyInput: boolean;
+  canWrite?: () => boolean; waiting?: Promise<void>;
+};
 const pastes = new Map<string, PasteReceipt>();
 
 // IPC acceptance is not terminal acceptance. The packet receiver can prove it refused this paste without writing it.
-export function beginScreenPaste(id: string, sessionId: string, text: string, emptyInput = false): PasteReceipt {
-  const receipt: PasteReceipt = { sessionId, text, status: 'pending', emptyInput };
+export function beginScreenPaste(id: string, sessionId: string, text: string, emptyInput = false, canWrite?: () => boolean): PasteReceipt {
+  const receipt: PasteReceipt = { sessionId, text, status: 'pending', emptyInput, canWrite };
   pastes.set(id, receipt); return receipt;
 }
 export function recordScreenPaste(id: string, sessionId: string, text: string, accepted: boolean) {
   const receipt = pastes.get(id);
   if (receipt?.sessionId !== sessionId || receipt.text !== text) return;
-  receipt.status = accepted ? 'accepted' : 'refused'; pastes.delete(id);
+  receipt.status = accepted ? 'accepted' : 'refused'; receipt.canWrite = undefined; pastes.delete(id);
 }
 export function canPasteScreen(agent: ScreenAgent, frame: Screen | null, emptyInput = false) {
   if (!frame) return false;
@@ -236,6 +239,37 @@ export function subscribeScreen(id: string, listener: (screen: Screen) => void, 
 
 // Delivery callbacks do no UI work until a message can actually advance.
 export const subscribeParsed = (id: string, listener: (screen: Screen) => void) => subscribeScreen(id, listener, true);
+
+export function receiveScreenPaste(id: string, sessionId: string, text: string, agent: () => ScreenAgent | null, paste: () => void,
+  read = readScreen, subscribe = subscribeParsed) {
+  const receipt = screenPaste(id, sessionId, text);
+  if (!receipt) { paste(); return; }
+  const finish = (frame: Screen | null) => {
+    // A delayed packet cannot consume a replacement receipt.
+    if (screenPaste(id, sessionId, text) !== receipt) return;
+    const kind = agent();
+    const accepted = (kind ? canPasteScreen(kind, frame, receipt.emptyInput) : !receipt.emptyInput) && (receipt.canWrite?.() ?? true);
+    recordScreenPaste(id, sessionId, text, accepted);
+    if (accepted) paste();
+  };
+  const frame = read(id);
+  if (!receipt.canWrite || !frame?.pending) { finish(frame); return; }
+
+  // More PTY output can arrive during paste IPC. Use the next drained parse in the receiver so it
+  // doesn't take another IPC round trip, and check that frame before touching xterm.
+  receipt.waiting = new Promise<void>(resolve => {
+    let off = () => {};
+    let done = false;
+    const complete = (current: Screen | null) => {
+      if (done) return;
+      done = true; clearTimeout(timer); off();
+      finish(current); resolve();
+    };
+    const timer = setTimeout(() => complete(null), 2000);
+    off = subscribe(id, current => { if (!current.pending) complete(current); });
+    if (done) off();
+  });
+}
 
 export function useScreen(id: string, sessionId?: string | null) {
   const [value, setValue] = useState(() => ({ id, screen: readScreen(id) }));
