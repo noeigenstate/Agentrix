@@ -23,7 +23,7 @@ Delivery reuses instructions already in context and preserves owner prompts verb
 
 ## Interface
 - `familyOf` (`electron/features/skills/seat-rules.mjs`) — shared model family, rank, effort lists and validation.
-- `authorIdentityConflict` (`electron/features/skills/role-rules.mjs`) — shared role validation, limits, kinds and reviewer independence.
+- `checkTeamRules` (`electron/features/skills/role-rules.mjs`) — validates the lead, role limits and name uniqueness. The module also exports custom role validation and role kinds.
 - `SkillsStore` (`electron/features/skills/store.cjs`) — skill library, project routing, launch manifests, frozen sessionRoles, catalog observation and model probes.
 - `registerSkillsIpc` (`electron/features/skills/ipc.cjs`) — skills IPC handlers, including routing reads, saves and confirmation actions
 - `seatHookOutput` (`electron/features/skills/agent-seat.cjs`) — model and effort rewrite and provisional report for a declared Claude seat. `observedAgentSeat` supplies final input.
@@ -51,7 +51,7 @@ Delivery reuses instructions already in context and preserves owner prompts verb
 
 ## Invariants
 - Built-ins refuse save, delete, revert, proposals and optimization. — test: `tests/skills.test.cjs` › "skill defaults, exact public shape, read-only built-ins and local-only project scopes"
-- Confirmed worker and lead settings apply live to running native conversations — test: `tests/skills.test.cjs` › "worker seats go live while the running lead stays pinned"
+- Confirmed worker and lead settings apply live to running native conversations — test: `tests/skills.test.cjs` › "worker and lead seats go live in the running conversation"
 - Skill folders never escape managed storage; invalid names and symlinks are refused on read, save, import and delete — agents and imports supply these paths — test: `tests/skills.test.cjs` › "invalid names, imports and symlinked skill folders cannot escape managed storage"
 - SSH receives only enabled built-in/global text and optional adopted routing weights, never project skills or local paths — remote copies stay private to the remote session and weights stay outside committed files — test: `tests/skills.test.cjs` › "SSH bundle contains only enabled built-in/global files, never project skills or local paths"; test: `tests/skills-session.test.cjs` › "routing note is optional, current on a new delivery and included in bounded SSH manifests"
 - User-confirmed proposals wait in skill-pending; workers need a literal allowed SKILL.md path to apply an edit, and broad globs preserve proposals then restore pre-run bytes only in an isolated worker worktree; managed and shared changes remain live with unknown authorship — the user and lead retain their respective approval controls — test: `tests/skills.test.cjs` › "pending proposals do not change the active file; accept, reject and agent-created review"; test: `tests/dispatch-skill-proposals.test.cjs` › "broad scope restores edited/new/deleted skills and preserves worker versions beside the answer"; test: `tests/dispatch-skill-proposals.test.cjs` › "concurrent owner edits to global and built-in skills are report-only, unrelated inherited deliveries are ignored"

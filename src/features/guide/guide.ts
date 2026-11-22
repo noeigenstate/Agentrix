@@ -3,7 +3,7 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "角色出现在 Agent 页", text: "终端对话在指挥家模式下调用的角色，现在会显示在 Agent 页和运行记录里。", group: "new" },
+  { title: "Agent 页角色", text: "终端对话在指挥家模式下调用的角色，现在会显示在 Agent 页和运行记录里。", group: "new" },
   { title: "调用角色更快", text: "多个角色可以同时启动，角色一结束就通知，不再空等；显示的用时是角色真实的运行时间。", group: "new" },
   { title: "小任务更轻", text: "查一处内容或只改一两个文件的小任务，交给角色时只带必要的说明，开工更快、花费更少。", group: "new" },
   { title: "Codex 角色沙箱", text: "在 Windows 上，Agentrix 会在应用内询问一次，征求管理员批准来设置 Codex 沙箱。", group: "new" },

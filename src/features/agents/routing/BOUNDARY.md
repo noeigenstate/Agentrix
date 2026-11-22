@@ -19,7 +19,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 
 ## May import
 - `electron/features/skills/seat-rules.mjs` (shared seat validation and model rules)
-- `electron/features/skills/role-rules.mjs` (shared role validation, locks, ID generation and reviewer checks)
+- `electron/features/skills/role-rules.mjs` (shared role validation, locks and ID generation)
 - `src/features/agents/subagent-splits.ts` (the `CallRow` type)
 - `src/shared/i18n.ts`
 - `src/shared/routing-command.ts`
@@ -30,10 +30,8 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - The edit menu uses the model's own effort levels and fast availability — test: `tests/seats-ui.test.cjs` › "the 更换 menu lists the row’s own efforts, switches fast only where the row has it"
 - A project save uses the digest at the start of its draft — test: `tests/seats-ui.test.cjs` › "a file-watch refresh does not replace a draft’s compare-and-swap digest"
 - The read-only box follows accepted roles and the running lead — test: `tests/seats-ui.test.cjs` › "the conversation box uses accepted settings across drafts"
-- A blocked reviewer prevents saving and offers a one-click fix — test: `tests/seats-ui.test.cjs` › "a blocked reviewer is framed, named 已阻止, explained with a one-click fix and cannot be saved"
-- An alias and its resolved ID count as one model for reviewer independence — test: `tests/seats-ui.test.cjs` › "an alias and the id it resolves to are one model for the reviewer rule"
 - Confirmation shows full project text and main’s allowed actions — test: `tests/routing-review-ui.test.cjs` › "routing review shows every change, flag and custom text as plain text"
-- The key follows accepted roles and shows the running lead with any pending restart — test: `tests/seats-ui.test.cjs` › "the routing key refreshes accepted roles"
+- The key follows accepted roles and shows the lead the conversation runs now — test: `tests/seats-ui.test.cjs` › "the routing key refreshes accepted roles and shows the lead the conversation runs now"
 
 ## Not ours
 - Persisting and validating seat choices or applying them at launch — Skills and the launch runtimes.

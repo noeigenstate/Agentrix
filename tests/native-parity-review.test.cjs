@@ -17,23 +17,42 @@ function directory(t) {
   disposers.set(root, []);
   t.after(async () => { for (const close of disposers.get(root)) await close(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); disposers.delete(root); }); return root;
 }
-function codex(t, root, extra = {}) {
-  const log = path.join(root, 'wire');
-  const factory = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: (_file, _args, options) =>
-    spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options), ...extra });
-  const runtime = factory.create({ cwd: root, owner: 'gui', context: 'LOCAL_STARTUP_NOTE', env: { ...process.env, GIT_CEILING_DIRECTORIES: root, CODEX_HOME: root, SYNTHETIC_CODEX_LOG: log }, ...extra.spec }, () => {});
-  disposers.get(root).push(() => runtime.close()); return { runtime, log, wire: () => fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) };
+function codex(root, { mode, spec, ...extra } = {}) {
+  const log = path.join(root, 'wire'), launches = [];
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'fake-only', spawnProcess: (_file, args, options) => {
+    launches.push(args);
+    return spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], options);
+  }, ...extra });
+  const env = { ...process.env, GIT_CEILING_DIRECTORIES: root, CODEX_HOME: root, SYNTHETIC_CODEX_LOG: log, ...(mode && { SYNTHETIC_CODEX_MODE: mode }) };
+  const runtime = factory.create({ cwd: root, owner: 'gui', context: 'LOCAL_STARTUP_NOTE', env, ...spec }, () => {});
+  disposers.get(root).push(() => runtime.close());
+  return { runtime, launches, wire: () => fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) };
 }
 test('B1 local Codex start and resume transmit developer instructions', async t => {
-  const root = directory(t), first = codex(t, root); const opened = await first.runtime.start();
+  const root = directory(t), first = codex(root); const opened = await first.runtime.start();
   assert.equal(first.wire().find(row => row.method === 'thread/start').params.config.developer_instructions, 'LOCAL_STARTUP_NOTE');
   await first.runtime.close();
-  const next = codex(t, root, { spec: { providerSessionId: opened.providerSessionId } }); await next.runtime.resume();
+  const next = codex(root, { spec: { providerSessionId: opened.providerSessionId } }); await next.runtime.resume();
   assert.equal(next.wire().findLast(row => row.method === 'thread/resume' && row.params.threadId).params.config.developer_instructions, 'LOCAL_STARTUP_NOTE');
 });
-test('B2 Windows dispatch retries read-only once with request-scoped unelevated sandbox', async t => {
-  const root = directory(t), f = codex(t, root, { platform: 'win32', spec: { owner: 'dispatch', env: { ...process.env,
-    GIT_CEILING_DIRECTORIES: root, CODEX_HOME: root, SYNTHETIC_CODEX_LOG: path.join(root, 'wire'), SYNTHETIC_CODEX_MODE: 'windows-sandbox' } } });
+test('B2 Windows dispatch checks elevated readiness and rejects a read-only downgrade without retrying', async t => {
+  const f = codex(directory(t), { platform: 'win32', mode: 'windows-sandbox', spec: { owner: 'dispatch' } });
+  await assert.rejects(f.runtime.start(), { code: 'sandbox_mismatch', requestedSandbox: 'workspace-write', appliedSandbox: 'readOnly' });
+  assert.equal(f.launches.length, 1);
+  assert.deepEqual(f.launches[0].slice(0, 3), ['app-server', '--listen', 'stdio://']);
+  assert.ok(f.launches[0].includes('windows.sandbox=elevated'));
+  const wire = f.wire();
+  const starts = wire.filter(row => ['thread/start', 'thread/resume'].includes(row.method) && row.params.cwd);
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].params.config['windows.sandbox'], 'elevated');
+  assert.equal(starts[0].params.sandbox, 'workspace-write');
+  assert.equal(starts[0].params.approvalPolicy, 'never');
+  const readiness = wire.findIndex(row => row.method === 'windowsSandbox/readiness');
+  assert.ok(readiness >= 0 && readiness < wire.indexOf(starts[0]));
+  assert.deepEqual(wire[readiness].params, {});
+});
+test('B2 a Windows owner using ask still retries once with a request-scoped unelevated sandbox', async t => {
+  const f = codex(directory(t), { platform: 'win32', mode: 'windows-sandbox', spec: { permissions: 'ask' } });
   await f.runtime.start(); const starts = f.wire().filter(row => ['thread/start', 'thread/resume'].includes(row.method) && row.params.cwd);
   assert.equal(starts.length, 2); assert.equal(starts[0].params.config['windows.sandbox'], undefined);
   assert.equal(starts[1].params.config['windows.sandbox'], 'unelevated');

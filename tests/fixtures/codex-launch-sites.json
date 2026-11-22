@@ -76,8 +76,8 @@
     "id": "electron/features/codex-app-server/index.cjs:74b6934bfd7d22001795421f"
   },
   {
-    "text": "spawnProcess(executable, ['app-server', '--listen', 'stdio://'], { cwd: wireCwd, env, windowsHide: true,\n          detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
-    "id": "electron/features/codex-app-server/index.cjs:736ac26a2e0e631385a05a1a"
+    "text": "spawnProcess(executable, [...appServerArgs, ...configArgs], { cwd: wireCwd, env, windowsHide: true,\n          detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] })",
+    "id": "electron/features/codex-app-server/index.cjs:cc642ea748279b64475965a4"
   },
   {
     "text": "run(path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],\n        { windowsHide: true, timeout: timeoutMs, env }, (error, stdout) => {\n          const drives = error ? [] : String(stdout).trim().split(';').filter(drive => /^[A-Za-z]:$/.test(drive)).map(drive => `${drive.toUpperCase()}\\\\`);\n          resolve(drives.length ? drives : fallback);\n        })",
@@ -420,8 +420,8 @@
     "id": "integration/dispatch.cjs:0d06e497f7ec9a5ac21b7973"
   },
   {
-    "text": "run(entry.argv, { ...deps, env, stdout, source: entry.source, detached: { id, admitted: () => receipt({ admitted: true }) }, startTimeout: 60000 })",
-    "id": "integration/dispatch.cjs:e344f5c4081416c1f948c63d"
+    "text": "run(entry.argv, { ...deps, env, stdout, source: entry.source, detached, startTimeout: 60000 })",
+    "id": "integration/dispatch.cjs:eea9cc8a8882a6d318076750"
   },
   {
     "text": "spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true })",
@@ -436,8 +436,8 @@
     "id": "integration/dispatch.cjs:32d4f444116a1f80f605c410"
   },
   {
-    "text": "resolveExecutable('codex', commandOf(effective), env, codex)",
-    "id": "integration/dispatch.cjs:f167369a7801750d2d6dda34"
+    "text": "resolveExecutable('codex', args, env, codex)",
+    "id": "integration/dispatch.cjs:7030218e110f76071ab4c4aa"
   },
   {
     "text": "launch(command.file, command.args, spawnOptions)",
@@ -518,6 +518,10 @@
   {
     "text": "run([\"show\", \"-s\", \"--format=%P\", value + \"^{commit}\", \"--\"])",
     "id": "integration/remote-worker.py:aa2c218bedf4974df02806d5"
+  },
+  {
+    "text": "exec('git', args, { cwd: folder, windowsHide: true, env: { ...process.env, LC_ALL: 'C' } })",
+    "id": "integration/role-tools.cjs:669d626e704a02e1d4510d8c"
   },
   {
     "text": "['exec', 'e']",

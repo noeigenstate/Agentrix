@@ -17,6 +17,11 @@ Claude's terminal Agent and Task hooks report provisional and final input by too
 Unsupported Agent and Task seat choices produce a notice and leave the input untouched. The dispatch declaration and the Agent hook's first observation carry the seat expectation used by call history.
 SSH applies seat sidecar updates in channel order. A failed update leaves the previous sidecar available.
 
+`wait_roles` returns when any selected role ends, its receipt is lost, or the timeout elapses.
+`roles_status` lists endings for ten minutes from first observation and reports engine timing when available.
+A writable `start_role` may create a local Git worktree and returns its branch and folder after confirmation.
+A failed checkout or launch rolls back the new worktree and branch.
+
 ## Owns
 - `integration/dispatch.cjs`
 - `integration/dispatch-outbox.cjs`
@@ -33,7 +38,7 @@ SSH applies seat sidecar updates in channel order. A failed update leaves the pr
 - `resolveRegistration` (`electron/features/agents/dispatch-registration.cjs`) — main's current-session, worker-cwd board and lead-mode binding, or a coded refusal; test: `tests/dispatch-registration.test.cjs` › "a worker in a worktree registers against the board its helper admitted it on; a board from another Git common directory is refused with project_mismatch; a worker outside Git is bound from its authenticated declaration and no wider".
 - `USAGE` (`integration/dispatch.cjs`) — the helper's command line (`node dispatch.cjs <codex|claude> … [--seat <id>[/<specialty>]] [--detach]`, `wait <run id> … [--timeout <s>] [--cwd <dir>]`, and `stop <run id> [--reason] [--no-resume]` for the planner to stop a worker whose owner intervention conflicts with its task); detached helpers retain receipts beside the team journal (standalone helpers use a per-directory temporary store), and wait returns 75 while runs remain active, otherwise 0 with worker exit codes in the end lines; receipts are advisory and main's signed events are authoritative, receipt replacement retries sharing violations without interrupting event delivery, and a per-run socket nonce distinguishes helper identity from PID reuse; a normal owner intervention never stops a worker: it is resumed in the same session after its current run; sessions learn its path from the startup note (skills/agent-dispatch)
 - `[dispatch]` (`integration/dispatch.cjs`) — the started / failed to start / ended lines, and a Codex worker's request lines (opened, unanswered, resolution); events carry kind, the requested model and verified routing, and a model reported after the start follows as dispatch-routing; outputTokens/activeMs are the meter's timed pair and totalOutputTokens is the invocation's cost count; resumed Codex never falls back to stdout totals
-- Role tools (`integration/role-tools.cjs`) — concurrent MCP calls with one reply per request. `wait_roles` returns when any selected role ends, its receipt is lost, or the timeout elapses. Closing stdin cancels pending waits. `roles_status` lists endings for ten minutes from first observation and reports engine timing when available. A writable `start_role` may create a local Git worktree and returns its branch and folder after confirmation. A failed checkout or launch rolls back the new worktree and branch.
+- `createRoleTools` (`integration/role-tools.cjs`) — creates the role tools. The module also exports `serve`, which replies once per MCP request and cancels pending waits when stdin closes.
 - `runtimeFiles` (`integration/dispatch.cjs`) — the electron modules the helper carries; copied by scripts/after-pack.cjs and electron/remote-connection.cjs
 - `acceptDispatch` (`electron/features/agents/dispatch-events.cjs`) — main.cjs hands it every dispatch-* event from a session's event pipe
 - `createDispatchIntake` (`electron/features/agents/dispatch-intake.cjs`) — main's intake and per-terminal inbox binding/disposal for a session's dispatch-* events over the app shell's deps; holds the per-project dispatchAccounts, read by dispatchReading and cleared by clearDispatchAccount

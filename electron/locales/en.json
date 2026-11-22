@@ -3707,7 +3707,7 @@
   "调用角色时，固定的工作规则由 Agentrix 自动附上，任务交代更短，角色更快开工。": "When a role is called, Agentrix adds the standing work rules itself, so the task brief is shorter and the role starts sooner.",
   "子代理列表": "Sub-agent list",
   "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。": "The Agent tab lists only the sub-agents the conversation started; rows of unknown origin no longer appear.",
-  "角色出现在 Agent 页": "Roles show in the Agent tab",
+  "Agent 页角色": "Roles in the Agent tab",
   "终端对话在指挥家模式下调用的角色，现在会显示在 Agent 页和运行记录里。": "Roles called by a terminal conversation in conductor mode now appear in the Agent tab and the run record.",
   "调用角色更快": "Faster role calls",
   "多个角色可以同时启动，角色一结束就通知，不再空等；显示的用时是角色真实的运行时间。": "Several roles can start at once and a finished role is reported at once, with no idle waiting; the time shown is the real run time of the role.",
