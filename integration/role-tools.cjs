@@ -8,7 +8,7 @@ const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { validateSmallScope, localWindowsCodex, roleReadiness, elevatedSetupMessage } = require('./dispatch.cjs');
-const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts } = require('./role-artifacts.cjs');
+const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { familyOf, launchSeat, liveSeatMap, claudeLeadSeat } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -125,7 +125,9 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     if (!cleanup || sweeping || now() < nextSweep) return;
     nextSweep = now() + 60_000;
     sweeping = true;
-    void sweepRoleArtifacts(tempRoot, { now: now() }).finally(() => { sweeping = false; });
+    void sweepRoleArtifacts(tempRoot, { now: now(), onRemoved: (folder, days) => {
+      for (const run of runs.values()) if (run.artifacts.folder === folder) run.cleanupDays = days;
+    } }).finally(() => { sweeping = false; });
   }
   sweep();
   let readiness;
@@ -306,7 +308,18 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         if (error.code !== 'ENOENT') throw error;
         return null;
       }) : null;
-      if (answer !== null) await stampRoleArtifacts(run.artifacts, 'read');
+      if (answer !== null) {
+        run.answerRead = true;
+        await stampRoleArtifacts(run.artifacts, 'read');
+      } else if (run.end) {
+        const elapsed = now() - (run.endedAt ?? run.observedEndAt);
+        const missing = !fs.existsSync(run.artifacts.folder);
+        const days = run.cleanupDays !== undefined ? run.cleanupDays : elapsed >= ORPHAN_RETENTION ? 30 : elapsed >= RETENTION ? 7 : null;
+        if (run.cleanupDays !== undefined || missing && (days || run.answerRead)) {
+          const notice = days ? `Answer removed by cleanup after ${days} days.` : 'Answer removed by cleanup to make room for newer role folders.';
+          return { ...describe(run), answer: notice, answerRemoved: true };
+        }
+      }
       return { ...describe(run), answer };
     },
     async stop_role({ id }) {

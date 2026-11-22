@@ -71,6 +71,14 @@ test('rework follows review completion and explicit review follow-ups, with auth
   assert.deepEqual(result.modelRuns.map(row => row.firstPass), [false, false, null, true, false]);
 });
 
+test('a permission note preserves a successful in-scope first pass and its original reason', () => {
+  const result = summary({ records: { runs: [run('noted', { title: 'Noted', reason: 'permission' }),
+    run('failed', { title: 'Failed', reason: 'permission', exitCode: 1 })] } });
+  assert.equal(result.kpis.firstPassRate, 0.5);
+  assert.equal(model(result).firstPassRate, 0.5);
+  assert.deepEqual(result.modelRuns.find(row => row.title === 'Noted' && row.firstPass)?.reason, 'permission');
+});
+
 test('model task lists follow the range and project, newest first, with the same cost and outcome evidence', () => {
   const recent = run('recent', { title: 'Latest task', at: now, fast: true, meeting: 'r',
     inputTokens: 1e6, cachedTokens: 1e6, totalOutputTokens: 1e6 });

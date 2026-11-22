@@ -27,7 +27,7 @@ function normalizeRuns(records, now) {
 
 function workerPass(run, contexts) {
   if (!execution(run) || !Number.isInteger(run.exitCode) || !nonnegative(run.outOfScope) || !text(run.reason, 32)) return null;
-  if (run.reason !== 'exit' || run.exitCode !== 0 || run.outOfScope !== 0 || reviewFollowup(run)) return false;
+  if (!['exit', 'permission'].includes(run.reason) || run.exitCode !== 0 || run.outOfScope !== 0 || reviewFollowup(run)) return false;
   const context = contexts.get(keyOf(run.projectId, run.meeting));
   return !context || !context.isRework(run) && !context.findingAuthors.has(run.model) && !context.reworkAuthors.has(keyOf(run.model, run.kind));
 }

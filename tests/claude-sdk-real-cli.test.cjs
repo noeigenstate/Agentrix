@@ -690,7 +690,9 @@ test('B7 project key replacements fail before the real CLI contacts any endpoint
   await assert.rejects(f.run(), error => error.code === 'project_api_key_override'); assert.equal(f.stats.requests, 0);
 });
 
-test('B4 B8 real running-turn mode changes ask about background tasks and full retirement stops them', { skip, timeout: 60000 }, async t => {
+test('B4 B8 real running-turn mode changes ask about background tasks and the child eventually exits after retirement', { skip, timeout: 60000 }, async t => {
+  const stopError = await windowsTreeStopError();
+  assert.equal(stopError, null);
   let change, writer;
   const f = await harness(t, data => {
     if (JSON.stringify(data.messages).includes('tool_result')) { change(); return [opening(data), ...textBlock(0, 'TURN ENDS'), ...finish('end_turn')]; }
@@ -730,21 +732,25 @@ test('B4 B8 real running-turn mode changes ask about background tasks and full r
   assert.equal(state.background.count, 1); assert.ok(ownedPid && alive(ownedPid), 'owned background pid was written and remains alive');
   assert.equal(events.filter(event => event.type === 'turn.started' && event.payload.origin === 'user').length, 1);
   await facade.close();
-  if (alive(ownedPid)) {
-    const stopError = await windowsTreeStopError();
-    if (stopError) assert.equal(alive(ownedPid), false, stopError);
-  }
   await child.exited;
   assert.equal(alive(ownedPid), false);
 });
 
 // Lead-run only (spawns the real CLI against the local stub with a fake key and a throwaway profile).
-test('CLAUDE_CODE_DISABLE_BACKGROUND_TASKS removes run_in_background from the Bash tool schema the CLI sends; without it the field is there', { skip, timeout: 60000 }, async t => {
-  const schemas = [], f = await harness(t, data => { schemas.push(data.tools?.find(tool => tool.name === 'Bash')?.input_schema?.properties); return [opening(data), ...textBlock(0, 'SCHEMA SEEN'), ...finish('end_turn')]; });
+test('a real dispatch sees only worker tools, and its background setting controls the Bash schema', { skip, timeout: 60000 }, async t => {
+  const offered = [], f = await harness(t, data => { offered.push(data.tools); return [opening(data), ...textBlock(0, 'SCHEMA SEEN'), ...finish('end_turn')]; });
   f.env.PATH = [process.env.SystemRoot && path.join(process.env.SystemRoot, 'System32'), process.platform === 'win32' ? null : '/usr/bin:/bin'].filter(Boolean).join(path.delimiter);
   await f.run({}, () => {}, { owner: 'dispatch' });
   f.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1';
   await f.run({}, () => {}, { owner: 'dispatch' });
+  await f.run({}, () => {}, { owner: 'dispatch', readOnly: true });
+  const schemas = offered.slice(0, 2).map(tools => tools.find(tool => tool.name === 'Bash')?.input_schema?.properties);
+  for (const [index, tools] of offered.entries()) {
+    const names = tools.map(tool => tool.name);
+    assert.ok(names.includes('Read'));
+    for (const name of names) assert.ok((index === 2 ? ['Read', 'Glob', 'Grep', 'LS']
+      : ['Read', 'Glob', 'Grep', 'LS', 'Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']).includes(name), name);
+  }
   assert.equal(schemas.length, 2);
   assert.ok(schemas[0], 'the Bash tool is offered'); assert.ok('run_in_background' in schemas[0], 'allowed: the field is there');
   assert.ok(schemas[1], 'the Bash tool is offered'); assert.equal('run_in_background' in schemas[1], false, 'disabled: no run_in_background');

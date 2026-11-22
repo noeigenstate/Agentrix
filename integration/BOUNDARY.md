@@ -20,6 +20,8 @@ SSH applies seat sidecar updates in channel order. A failed update leaves the pr
 `wait_roles` returns when any selected role ends, its receipt is lost, a selected hidden terminal starts waiting for the owner, or the timeout elapses.
 A wait reports each observed owner-wait transition once per lead conversation. Status shows the prompt category while the wait is active.
 The helper retains up to 20 worker refusals in receipts and the authenticated end event. A successful run with refusals ends with reason `permission` and its original exit code.
+SDK bookkeeping denials stay in the policy audit. Only denied work is included in the run’s refusal list.
+An accepted stop keeps reason `killed` with any bounded tree-stop failure in the end line and authenticated event. Artifact settlement requires worker exit evidence.
 The end line includes the count and first action. Role status, wait and result expose the structured list.
 All briefs ask roles to report blocked actions under Needs approval. Claude briefs direct roles to finish with plain text and avoid owner dialogs.
 `roles_status` lists endings for ten minutes from first observation and reports engine timing when available.
@@ -32,9 +34,10 @@ A ready result lasts for that conversation. Other results expire after five seco
 A known unready sandbox redirects a Claude lead's seat to its Claude model with low, medium or high seat effort (otherwise the lead's effort) and fast off, or gives a Codex lead built-in sub-agent instructions.
 The detached helper retains the fallback as its declared route and reports the original seat model and reason on start and end.
 Unknown readiness follows the usual launch path. Codex role startup still verifies elevated sandbox readiness independently.
-Local MCP roles own marked temp folders for their briefs, answers and logs. The detached helper stamps settlement before publishing its final receipt.
-The MCP sweeps asynchronously on startup and when it observes an end, at most once a minute. It expires settled folders after seven days
-and can evict read results oldest first above 256 folders. Active, unmarked and recently ended unread folders are protected.
+Local MCP roles own marked temp folders for their briefs, answers and logs. The detached helper records process IDs and stamps confirmed settlement before publishing its final receipt.
+The MCP sweeps asynchronously on startup and when it observes an end, at most once a minute. It expires settled folders after seven days,
+removes marked orphans after 30 days, and can evict read results oldest first above 256 folders. POSIX ownership and mode are checked again before removal,
+links are removed without following them, and failed removals back off without consuming the sweep cap. `role_result` explains when cleanup removed an answer.
 
 ## Owns
 - `integration/dispatch.cjs`

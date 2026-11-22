@@ -1,6 +1,7 @@
 # Boundary: Codex sandbox setup
 
 Offers elevated sandbox setup for the app's local Codex installation on Windows until Codex is ready or the owner dismisses future offers.
+A failed executable lookup allows another offer during the same app run.
 
 ## Owns
 - `electron/features/codex-sandbox-setup/**`

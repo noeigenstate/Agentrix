@@ -2,6 +2,7 @@
 
 Owns an independent app-server runtime over local stdio or an injected SSH byte stream for a native Codex session; normalizes its events and keeps request tickets and input receipts within that session.
 Live declined items carry the provider status separately for dispatch workers. The display status remains failed.
+Dispatch can receive a tree-stop failure even when direct process termination succeeds.
 
 ## Owns
 - `electron/features/codex-app-server/**`

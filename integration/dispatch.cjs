@@ -12,7 +12,7 @@ const { setImmediate } = require('node:timers');
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { TokenRates } = require(path.join(runtime, 'features/agents/token-rate.cjs'));
 const { agentSettings } = require(path.join(runtime, 'features/agents/agent-settings.cjs'));
-const { rolloutFiles, sessionMeta } = require(path.join(runtime, 'session-files.cjs'));
+const { rolloutFiles, sessionMeta, isOwnedDirectory } = require(path.join(runtime, 'session-files.cjs'));
 const { TranscriptTail } = require(path.join(runtime, 'transcript-tail.cjs'));
 const { imageMetadata } = require(path.join(runtime, 'oversized-record.cjs'));
 const { matches, snapshot, changedBetween, boundariesFor, repoFiles } = require(path.join(runtime, 'boundaries.cjs'));
@@ -649,8 +649,7 @@ function detachedRuns(cwd, create = false) {
     if (create) { try { fs.mkdirSync(folder, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; } }
     const stat = fs.lstatSync(folder, { throwIfNoEntry: false });
     if (!stat) break;
-    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== owner
-      || process.platform !== 'win32' && (stat.mode & 0o077)) throw new Error('Unsafe standalone receipt directory');
+    if (!isOwnedDirectory(stat, owner, process.platform === 'win32' ? 0 : 0o077)) throw new Error('Unsafe standalone receipt directory');
   }
   return new DetachedRuns(path.join(temporary, ...parents));
 }
@@ -748,6 +747,9 @@ async function runDetached(file, deps = {}) {
   const env = { ...(deps.env || process.env) };
   if (deps.pinnedSeats) Object.defineProperty(env, PINNED_SEATS, { value: parseSeatMap(env.AGENTRIX_DISPATCH_PINNED_SEATS) });
   delete env.AGENTRIX_DISPATCH_PINNED_SEATS;
+  const artifacts = entry.roleArtifacts && require('./role-artifacts.cjs');
+  let processExitUnconfirmed = false;
+  if (artifacts) artifacts.trackRoleProcess(entry.roleArtifacts, process.pid);
   // A per-run socket answers with a nonce: PID existence alone cannot distinguish a reused PID.
   const token = randomUUID(), server = net.createServer(socket => {
     socket.on('error', () => {}); socket.setTimeout(1000, () => socket.destroy()); socket.end(token);
@@ -779,6 +781,8 @@ async function runDetached(file, deps = {}) {
       return receipt({ ownerWait, ownerWaitSequence, activityAt: Date.now() });
     },
     refusals: refused => receipt({ refused: [...refused] }),
+    trackProcess: pid => artifacts?.trackRoleProcess(entry.roleArtifacts, pid),
+    deferArtifactSettlement: () => { processExitUnconfirmed = true; },
     confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
   let code = 1;
   try {
@@ -786,7 +790,7 @@ async function runDetached(file, deps = {}) {
     return code;
   } finally {
     const endedAt = Date.now();
-    if (entry.roleArtifacts) await require('./role-artifacts.cjs').stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
+    if (artifacts && !processExitUnconfirmed) await artifacts.stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
     await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null, ownerWait: null }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
@@ -851,7 +855,8 @@ async function waitDetached(options, { stdout = process.stdout, store = detached
 
 async function run(argv, { env = process.env, stdout = process.stdout, source = 'dispatch', launch = spawn, resolveExecutable = executable,
   locate = locateCodex, locateClaude: findClaude = locateClaude, startTimeout = START_TIMEOUT, rateInterval = RATE_INTERVAL,
-  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, seenOwnerWaits, signal: waitSignal, roleFallback, roleArtifacts } = {}) {
+  requestTimeout = REQUEST_TIMEOUT, detached = null, onTiming, untilAny, seenOwnerWaits, signal: waitSignal, roleFallback, roleArtifacts,
+  launchTreeStop } = {}) {
   if (argv[0] === 'intercept') return require(path.join(shimDirectory, 'intercept.cjs')).intercept(argv.slice(1), { env });
   if (argv[0] === 'mcp') {
     const { serve, createRoleTools } = require('./role-tools.cjs');
@@ -881,7 +886,17 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   let team = null, registered = false, teamFinished = false, skillGuard = null, skillProposals = 0, skillChangesLeftLive = 0;
   let inbox = null, inboxTimer, inboxRead = Promise.resolve(), messages = [], noResume = false, segmentStopped = false;
   let interventions = 0, stops = 0, completedUsage = null, resumeSession = null, segmentConfirmed = false;
-  let treeStop = Promise.resolve(), stoppingChild = null;
+  let treeStop = Promise.resolve(), stoppingChild, stoppingRuntime, treeStopError, workerProcess, nativeStopUnconfirmed;
+  const stoppedOnRequest = () => killed || segmentStopped || noResume;
+  const recordTreeStopFailure = error => { treeStopError ||= error; spawnError ||= error; };
+  const stopFailureFor = reason => reason === 'killed' && treeStopError ? diagnosticLine(treeStopError.message) || 'Unknown error' : null;
+  const stopFailureNote = failure => failure ? ` · tree stop failed: ${failure}` : '';
+  function trackWorker(process) {
+    workerProcess = process;
+    try { detached?.trackProcess?.(process.pid); }
+    catch (error) { spawnError ||= error; }
+    return process;
+  }
   let controlClient = null, activeRuntime = null, nativeTurn = null, settleNative, nativeFallback = null, nativeRunning = false;
   let bootstrap, controlOpening = false, controlAttemptAt = 0, ending = false;
   let controlFailure = 'bootstrap/missing_environment', controlLeadMode = null, transportFallback = false, lastControlFailure, lastControlNotice;
@@ -1067,7 +1082,17 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     if (requested) killed = true;
     if (activeRuntime) {
       const runtime = activeRuntime;
-      treeStop = Promise.resolve(runtime.interrupt()).catch(() => {}).then(() => runtime.close()).finally(() => {
+      if (stoppingRuntime === runtime) return;
+      stoppingRuntime = runtime;
+      treeStop = Promise.resolve().then(() => runtime.interrupt()).catch(error => {
+        if (options.agent === 'claude') {
+          nativeStopUnconfirmed = true;
+          recordTreeStopFailure(error);
+        }
+      }).then(() => runtime.close()).catch(error => {
+        nativeStopUnconfirmed = true;
+        recordTreeStopFailure(error);
+      }).finally(() => {
         nativeRunning = false; settleNative?.({ code: 1, killedBy: kind });
       });
       return;
@@ -1078,14 +1103,34 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     stoppingChild = victim;
     if (process.platform === 'win32') {
       treeStop = new Promise(resolve => {
-        const killer = spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
-        killer.on('error', error => { spawnError ||= error; victim.kill(); resolve(); });
-        killer.once('close', code => { if (code && victim.exitCode === null) { spawnError ||= new Error('Unable to stop worker tree'); victim.kill(); } resolve(); });
+        const failed = error => {
+          recordTreeStopFailure(error);
+          try { victim.kill(); } catch { /* Keep the original tree stop diagnostic. */ }
+          resolve();
+        };
+        try {
+          const killer = launchTreeStop ? launchTreeStop(victim.pid)
+            : spawn('taskkill.exe', ['/pid', String(victim.pid), '/t', '/f'], { stdio: 'ignore', windowsHide: true });
+          killer.once('error', failed);
+          killer.once('close', (code, signal) => {
+            if (code !== 0 && (victim.exitCode == null && victim.signalCode == null || stoppedOnRequest())) {
+              failed(new Error(`taskkill ${signal ? `ended with ${signal}` : `exited with code ${code}`}`));
+            } else resolve();
+          });
+        } catch (error) { failed(error); }
       });
     } else {
-      try { process.kill(-victim.pid, kind); } catch { victim.kill(kind); }
+      try { process.kill(-victim.pid, kind); }
+      catch (error) {
+        if (error.code !== 'ESRCH') recordTreeStopFailure(error);
+        try { victim.kill(kind); } catch (failure) { recordTreeStopFailure(failure); }
+      }
       treeStop = new Promise(resolve => {
-        forceTimer = setTimeout(() => { try { process.kill(-victim.pid, 'SIGKILL'); } catch {} resolve(); }, 1000);
+        forceTimer = setTimeout(() => {
+          try { process.kill(-victim.pid, 'SIGKILL'); }
+          catch (error) { if (error.code !== 'ESRCH') recordTreeStopFailure(error); }
+          resolve();
+        }, 1000);
       });
     }
   };
@@ -1108,7 +1153,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           stop('SIGTERM', false);
           if (direct) {
             let status = 'delivered';
-            try { await treeStop; } catch { status = 'unknown'; }
+            await treeStop;
+            if (nativeStopUnconfirmed) status = 'unknown';
             await recordReceipt(control.id, status);
           }
         } else {
@@ -1411,7 +1457,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       const route = output.routing();
       let reason = 'exit';
       if (unconfirmed) reason = 'unconfirmed';
-      else if (killed || segmentStopped || noResume) reason = 'killed';
+      else if (stoppedOnRequest()) reason = 'killed';
       else if (spawnError) reason = 'error';
       else if (output.capacity) reason = 'capacity';
       else if (result.killedBy) reason = 'killed';
@@ -1428,13 +1474,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         : outOfScope.length ? ` · OUT OF SCOPE: ${outOfScope.slice(0, 10).join(', ')}${outOfScope.length > 10 ? ` and ${outOfScope.length - 10} more` : ''}` : ' · scope ok';
       const exitCode = Number.isInteger(result.code) ? (result.code === 0 && unconfirmed ? 1 : result.code) : result.killedBy ? 128 + (signals[result.killedBy] || 1) : 1;
       const measured = usage(), rate = measured.outputTokens !== null && measured.activeMs > 0 ? `${Math.round(measured.outputTokens * 1000 / measured.activeMs)} token/s (${measured.outputTokens.toLocaleString('en-US')} output tokens in ${Math.round(measured.activeMs / 1000)} s)` : 'token/s unreported';
+      const stopFailure = stopFailureFor(reason);
       if (!endSent) send({ type: 'dispatch-end', id, ...route, ...billing(), exitCode, reason, ...measured,
+        ...(stopFailure && { treeStopFailure: stopFailure }),
         verdict: routingVerdict(output, declared(), options.fallbackFrom),
         ...(outOfScope ? { outOfScopeCount: outOfScope.length } : {}),
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
       signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${refusalNote()}${scopeRestoreNote}${bookkeeping}`
-        + `${proposalNote()}${interventionNote()} · out ${options.out}${fallbackNote()}`);
+        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`);
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();
@@ -1475,10 +1523,11 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           const found = async () => { if (resolveExecutable === executable && !codex) throw Object.assign(new Error('Codex was not found outside the Agentrix shim folder'), { code: 'ENOENT' }); return 'codex'; };
           activeRuntime = createCodexRuntime({
             accountKey: codexAccountKey || undefined, resolveExecutable: found, appServerArgs: commandOf(effective),
+            onTreeStopFailure: error => { if (stoppedOnRequest()) recordTreeStopFailure(error); },
             spawnProcess: (_file, args, spawnOptions) => {
               const command = resolveExecutable('codex', args, env, codex);
               if (!started) workerStartedAt = Date.now();
-              return launch(command.file, command.args, spawnOptions);
+              return trackWorker(launch(command.file, command.args, spawnOptions));
             },
           }).create({ ...spec, onSandboxWait: message => {
             sandboxWaitReported = true;
@@ -1578,8 +1627,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 
       if (killed) throw new Error('Dispatch interrupted before launch');
       if (!started) workerStartedAt = Date.now();
-      child = launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-        detached: process.platform !== 'win32' });
+      child = trackWorker(launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        detached: process.platform !== 'win32' }));
       if (killed) stop('SIGTERM');
       if (!resumeSession) log.on('error', error => { spawnError = error; stop('SIGTERM', false); });
       startTimer = setTimeout(() => {
@@ -1644,12 +1693,15 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     failed(error.message, 1);
     if (child?.pid) stop('SIGTERM', false);
     if (options) {
-      const reason = unconfirmed ? 'unconfirmed' : 'error';
+      const reason = unconfirmed ? 'unconfirmed' : stoppedOnRequest() ? 'killed' : 'error';
+      const stopFailure = stopFailureFor(reason);
       const bookkeeping = await recordTeam({ answer: '', header: '', reason });
-      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason: 'error', ...usage(),
+      if (!endSent) send({ type: 'dispatch-end', id, ...output.routing(), exitCode: 1, reason, ...usage(),
+        ...(stopFailure && { treeStopFailure: stopFailure }),
         verdict: routingVerdict(output, declared(), options.fallbackFrom), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
-      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${refusalNote()}${bookkeeping}${proposalNote()}${interventionNote()} · out ${options.out}${fallbackNote()}`);
+      signal(`ended ${id} ${reported()} · token/s unreported · exit 1 reason ${reason}${refusalNote()}${bookkeeping}`
+        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`);
     }
     log?.destroy();
     return 1;
@@ -1663,7 +1715,12 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
     await rejectDeferredControls().catch(() => { signal('deferred control receipts unavailable'); });
     await receiptTail; clearTimeout(forceTimer);
     await rollout?.pending;
-    await activeRuntime?.close(); controlClient?.close();
+    try { await activeRuntime?.close(); }
+    finally {
+      if ((workerProcess?.pid && workerProcess.exitCode == null && workerProcess.signalCode == null && !exited)
+        || (!workerProcess && treeStopError)) detached?.deferArtifactSettlement?.();
+      controlClient?.close();
+    }
     team?.release(id);
     process.removeListener('SIGINT', onInterrupt); process.removeListener('SIGTERM', onTerminate); process.removeListener('SIGHUP', onHangup);
   }

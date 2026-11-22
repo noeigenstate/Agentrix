@@ -223,5 +223,9 @@ async function findRolloutSession(directory, id, cwd) {
   return found;
 }
 
+function isOwnedDirectory(stat, uid, forbiddenMode) {
+  return stat.isDirectory() && (uid === undefined || stat.uid === uid) && !(stat.mode & forbiddenMode);
+}
+
 module.exports = { records, rolloutFiles, sessionMeta, nativeWatchPath, containedFile, sessionHeader, findRolloutSession,
-  physicalDirectory, sameDirectory, expandShortPath };
+  physicalDirectory, sameDirectory, expandShortPath, isOwnedDirectory };

@@ -381,7 +381,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "367f810032a79d0e4700a25f45ff4820468f4635fd4d093bc313fb6e66f1c7ce",
+      "digest": "d45fbb328882619cecb31f27fe5c5db879f9a335fa4bc3558b2d796cb4a91c1b",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -450,7 +450,7 @@
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "b671182772c11b720a486f95e6f1b51944be8deeaf53ca7a7174b441f7f5ba06",
+      "digest": "5d84ee67cd15d28d29b65e3d9dbaa28034af3af06c3ea9cb9d953b0e7e131b64",
       "targets": [
         "electron/features/agents/call-seat.cjs"
       ],
@@ -463,6 +463,12 @@
         "../../native/mac-titlebar/build/Release/mac_titlebar.node"
       ],
       "reason": "Generated macOS native binary; native/build infrastructure changes are unowned and force a full run."
+    },
+    "integration/role-artifacts.cjs": {
+      "targets": [
+        "./electron/session-files.cjs"
+      ],
+      "reason": "The packaged role artifact helper reads the copy carried by dispatch.runtimeFiles. Source checkouts import the original module."
     },
     "integration/shims/intercept.cjs": {
       "targets": [

@@ -122,7 +122,8 @@ async function fixture(t, { late = false, lateStop = false, reopenFailure = fals
   claude.credentials.save('sk-ant-synthetic-worker-only-000000');
   lifetime.defer('close Claude runtime', () => claude.close());
   let api, target, sentLate = false;
-  registerClaudeWorker({ control, claude, settings: () => ({ claudePath: 'api-only', monthlyBudgetUsd: null }), env: () => ({ PATH: '', SYNTHETIC_PRIVATE: 'synthetic-private-env' }) });
+  registerClaudeWorker({ control, claude, settings: () => ({ claudePath: 'api-only', monthlyBudgetUsd: null }),
+    env: () => ({ PATH: '', NODE_ENV: 'test', BUILD_PROFILE: 'release-preview', SYNTHETIC_TOKEN: 'synthetic-private-env', SHORT_KEY: 'tiny' }) });
   const bootstrap = path.join(root, 'bootstrap.json'), brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
   fs.mkdirSync(path.dirname(out)); fs.writeFileSync(brief, 'Synthetic task');
   fs.writeFileSync(bootstrap, JSON.stringify({ pipeName: eventServer.address, controlAddress: address, controlCapability: 'synthetic-capability', ...owner, projectId: owner.terminalId }));
@@ -170,6 +171,9 @@ test('a denied SDK tool reaches the dispatch end and leaves a successful process
   assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /授权的编辑范围内.*请勿绕过/);
   assert.equal((await preTool({ tool_name: 'Read', tool_input: { file_path: 'outside.txt' } })).hookSpecificOutput.permissionDecision, 'allow');
   await preTool({ tool_name: 'Edit', tool_input: { file_path: 'synthetic-private-env.txt' } });
+  await preTool({ tool_name: 'Edit', tool_input: { file_path: 'tests/tiny/release-preview/a.cjs' } });
+  await preTool({ tool_name: 'WebSearch', tool_input: { query: 'synthetic-secret' } });
+  await preTool({ tool_name: 'PowerShell', tool_input: { command: 'git push synthetic-secret' } });
   for (let index = 0; index < 22; index++) await preTool({ tool_name: 'Bash', tool_input: { command: 'git push synthetic-secret' } });
   f.sdk.finish();
   assert.equal(await f.result, 0);
@@ -179,9 +183,28 @@ test('a denied SDK tool reaches the dispatch end and leaves a successful process
   assert.equal(end.refused.length, 20);
   assert.deepEqual(end.refused[0], { action: 'Edit: outside.txt', reason: 'outside_scope' });
   assert.deepEqual(end.refused[1], { action: 'Edit: <secret>.txt', reason: 'outside_scope' });
-  assert.deepEqual(end.refused[2], { action: 'Bash: 推送到远程仓库', reason: 'git_forbidden' });
+  assert.deepEqual(end.refused[2], { action: 'Edit: tests/tiny/release-preview/a.cjs', reason: 'outside_scope' });
+  assert.deepEqual(end.refused[3], { action: 'WebSearch', reason: 'unsupported_tool' });
+  assert.deepEqual(end.refused[4], { action: 'PowerShell: 推送到远程仓库', reason: 'git_forbidden' });
+  assert.deepEqual(end.refused[5], { action: 'Bash: 推送到远程仓库', reason: 'git_forbidden' });
   assert.match(f.stdout(), /exit 0 reason permission · scope ok · refused 20: Edit: outside\.txt/);
   assert.doesNotMatch(fs.readFileSync(f.out + '.log', 'utf8'), /synthetic private file contents|synthetic-private-env|synthetic-secret/);
+});
+
+test('bookkeeping denied by the SDK hook leaves a successful dispatch without refusals', { timeout: 15000 }, async t => {
+  const f = await fixture(t);
+  await f.started;
+  const { tools, hooks } = f.sdk.calls[0].options;
+  const [preTool] = hooks.PreToolUse[0].hooks;
+  for (const name of ['TodoWrite', 'ToolSearch', 'Skill', 'Agent', 'Task', 'AskUserQuestion', 'ExitPlanMode']) {
+    assert.ok(!tools.includes(name), name);
+    assert.equal((await preTool({ tool_name: name, tool_input: {} })).hookSpecificOutput.permissionDecision, 'deny', name);
+  }
+  f.sdk.finish();
+  assert.equal(await f.result, 0);
+  const end = await f.endEvent;
+  assert.equal(end.reason, 'exit');
+  assert.equal(end.refused, undefined);
 });
 
 test('B1: real Claude helper publishes started and a running activity row before the first result', { timeout: 15000 }, async t => {

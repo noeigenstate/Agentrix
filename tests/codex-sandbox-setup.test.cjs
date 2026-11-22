@@ -95,6 +95,18 @@ test('Later defers the offer until another app run', async () => {
   }
 });
 
+test('a failed executable lookup allows another startup offer in the same run', async () => {
+  let attempts = 0, dialogs = 0;
+  const offer = createSandboxSetup({ platform: 'win32', env: {}, cwd, active: () => true, t: value => value,
+    find: async () => { if (++attempts === 1) throw new Error('lookup failed'); return file; },
+    check: async () => 'notConfigured', show: async () => { dialogs++; return { response: 1 }; } });
+  await offer();
+  assert.equal(dialogs, 0);
+  await Promise.all([offer(), offer()]);
+  assert.equal(attempts, 2);
+  assert.equal(dialogs, 1);
+});
+
 test('Don’t ask again saves the choice and suppresses future startup offers', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'agx-sandbox-settings-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));

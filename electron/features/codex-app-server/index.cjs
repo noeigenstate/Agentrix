@@ -81,7 +81,7 @@ function permissionsFailure(error, sent) {
 }
 
 const occupied = new Map();
-function stopProcess(child, { preserveDescendants = false } = {}) {
+function stopProcess(child, { preserveDescendants = false, onTreeStopFailure = () => {} } = {}) {
   if (!child) return Promise.resolve();
   // A CLI metadata child can inherit stdout after the app-server itself exits.
   // Release our pipe ends on proved local exit; a pipe holder is not a live server.
@@ -103,7 +103,10 @@ function stopProcess(child, { preserveDescendants = false } = {}) {
     else if (tree) {
       execFile(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/taskkill.exe'), ['/pid', String(child.pid), '/t', '/f'],
         { windowsHide: true, timeout: 2000 }, error => {
-          if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+          if (error) {
+            onTreeStopFailure(new Error(`taskkill ${typeof error.code === 'number' ? `exited with code ${error.code}` : error.code || 'failed'}`));
+            if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+          }
           treeStopped = true; settle();
         });
     } else if (preserveDescendants) {
@@ -111,7 +114,8 @@ function stopProcess(child, { preserveDescendants = false } = {}) {
       child.stdin.end();
       child.kill('SIGKILL');
     } else {
-      try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+      try { process.kill(-child.pid, 'SIGKILL'); }
+      catch (error) { if (error.code !== 'ESRCH') onTreeStopFailure(error); child.kill('SIGKILL'); }
     }
   });
 }
@@ -149,7 +153,7 @@ async function readiness(file, context, deps) {
 
 function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExecutable, launchRemote, now = Date.now, timers = globalThis,
   renderImage, settleImage, resetAtLimit, translate = value => value, platform = process.platform, shellOf = ownerShell, accountKey,
-  appServerArgs = ['app-server', '--listen', 'stdio://'] } = {}) {
+  appServerArgs = ['app-server', '--listen', 'stdio://'], onTreeStopFailure } = {}) {
   const scopes = new Map();
   return {
     limits: scope => scopes.get(scope) || null,
@@ -781,7 +785,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         closed = true; threadKnown(); settingsSeen?.(); connectionAbort.abort(); setState('stopping'); requests?.cancelAll();
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
         rpc?.close();
-        try { await stopProcess(child, { preserveDescendants }); }
+        try { await stopProcess(child, { preserveDescendants, onTreeStopFailure }); }
         finally {
           child?.dispose?.();
           if (lockKey && occupied.get(lockKey) === spec.runtimeSessionId) occupied.delete(lockKey);

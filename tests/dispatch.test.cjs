@@ -13,7 +13,7 @@ const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
 const { createRoleArtifacts, sweepRoleArtifacts, RETENTION } = require('../integration/role-artifacts.cjs');
 const { execFileSync } = require('node:child_process');
 const { TokenRates } = require('../electron/features/agents/token-rate.cjs');
-const { validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
+const { dispatchDirectory, validDispatch } = require('../electron/features/agents/dispatch-events.cjs');
 const { createEventServer } = require('../electron/events.cjs');
 const { digest, deliveryMarker } = require('../electron/features/skills/session.cjs');
 
@@ -683,6 +683,51 @@ test('detached Codex and Claude write engine timing and expose it to wait withou
     assert.equal(output.trimEnd().split('\n').at(-1), endedLine);
     await sweepRoleArtifacts(cwd, { now: endedAt + RETENTION });
     await assert.rejects(fs.stat(roleArtifacts.folder), { code: 'ENOENT' });
+  }
+});
+
+test('a failed Windows tree stop reports killed and retains artifacts without worker exit proof', { skip: process.platform !== 'win32' }, async t => {
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-dispatch-tree-'));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const server = await createEventServer(() => {});
+  t.after(() => server.close());
+  const store = new DetachedRuns(cwd), brief = path.join(cwd, 'brief.md'), bootstrap = path.join(cwd, 'boot.json');
+  await fs.writeFile(brief, 'Synthetic role task');
+  await fs.writeFile(bootstrap, JSON.stringify({ pipeName: server.name, projectId: 'fixture', sessionKey: 'synthetic-session' }));
+  for (const exited of [false, true]) {
+    const id = randomUUID(), roleArtifacts = await createRoleArtifacts(cwd), out = path.join(roleArtifacts.folder, 'answer.md');
+    store.create({ id, cwd, out, roleArtifacts, createdAt: Date.now(), argv: ['claude', '--role', 'review', '--title', 'Stop fixture',
+      '--model', 'claude-sonnet-5-5', '--effort', 'high', '--cwd', cwd, '--brief', brief, '--out', out, '--permission', 'plan'] });
+    const code = await runDetached(store.file(id), {
+      env: { AGENTRIX_BOOTSTRAP: bootstrap }, resolveExecutable: () => ({ file: 'synthetic-cli', args: [] }),
+      stdout: { write: line => { if (line.startsWith('[dispatch] started ')) process.emit('SIGTERM'); } },
+      launchTreeStop: () => {
+        const killer = new EventEmitter();
+        queueMicrotask(() => killer.emit('error', new Error('Synthetic access denied')));
+        return killer;
+      },
+      launch: () => {
+        const child = Object.assign(new EventEmitter(), { pid: 2147483647, exitCode: null, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() });
+        child.stdin.once('finish', () => child.stdout.write(JSON.stringify(claude[0]) + '\n'));
+        child.kill = () => queueMicrotask(() => {
+          if (exited) child.emit('exit', 143);
+          child.stdout.end(); child.stderr.end(); child.emit('close', 143);
+        });
+        return child;
+      },
+    });
+    assert.equal(code, 143);
+    const receipt = store.read(id);
+    assert.match(receipt.endedLine, /reason killed · tree stop failed: Synthetic access denied/);
+    const directory = path.join(dispatchDirectory(bootstrap), id);
+    const frames = await Promise.all((await fs.readdir(directory)).map(async name => JSON.parse(await fs.readFile(path.join(directory, name), 'utf8'))));
+    const end = frames.find(frame => frame.type === 'dispatch-end');
+    assert.ok(validDispatch(end));
+    assert.equal(end.reason, 'killed');
+    assert.equal(end.treeStopFailure, 'Synthetic access denied');
+    await sweepRoleArtifacts(cwd, { now: receipt.endedAt + RETENTION });
+    assert.equal((await fs.stat(roleArtifacts.folder).catch(error => { if (error.code === 'ENOENT') return null; throw error; })) === null, exited);
   }
 });
 

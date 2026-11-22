@@ -1,6 +1,7 @@
 # Boundary: Dashboard
 
 Keeps private evaluation records, summarizes local model and collaboration evidence, and owns the dashboard window and owner-adopted routing weights. Incidents, findings and roundtable issues from historical Team journals stay available in reports.
+Successful in-scope runs with a permission note remain eligible for first pass and model scoring under the usual review rules.
 
 ## Owns
 - `electron/features/dashboard/**` — bounded records and decisions, cost and summary functions, journal readers, suggestions, window, IPC and dedicated preload

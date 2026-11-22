@@ -1,6 +1,7 @@
 const { apiEnvironment } = require('./credentials.cjs');
 const { billingIdentityError } = require('./identity.cjs');
 const { routeSettings } = require('./routing.cjs');
+const { workerTools } = require('./policy.cjs');
 const { seatHookOutput, observedAgentSeat, liveSeatMap } = require('../skills/agent-seat.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -70,6 +71,7 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
     // this mode, and questions still reach canUseTool: both proved against the real CLI in tests/claude-sdk-real-cli.test.cjs.
     abortController: abort, permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true, includePartialMessages: true,
     settingSources: ['user', 'project', 'local'],
+    ...(spec.owner === 'dispatch' && { tools: workerTools(spec.readOnly), disallowedTools: ['mcp__*'] }),
     systemPrompt: { type: 'preset', preset: 'claude_code', append: [spec.owner === 'gui' ? NATIVE_CONTEXT : IDENTITY_CONTEXT,
       spec.owner === 'gui' && !Object.entries(spec.env || process.env).some(([name, value]) => name.toUpperCase() === 'CLAUDE_CODE_DISABLE_BACKGROUND_TASKS' && value === '1')
         ? 'The fork subagent runs in the background, so you can keep chatting with the user while it works.' : null,
@@ -84,7 +86,7 @@ function queryOptions(spec, { key, executable, abort, providerSessionId, policy,
         return routeAgentSeat(input, seatsNow(), onSeat);
       }
       if (decision.behavior === 'defer') return {};
-      if (decision.behavior === 'deny') onRefusal({ action: decision.action, reason: decision.reasonCode });
+      if (decision.behavior === 'deny' && decision.action) onRefusal({ action: decision.action, reason: decision.reasonCode });
       return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: decision.behavior, permissionDecisionReason: decision.reason } };
     }] }],
     ...((bootstrap || spec.seatsMap) && { PostToolUse: [{ matcher: 'Agent|Task', hooks: [async input => {

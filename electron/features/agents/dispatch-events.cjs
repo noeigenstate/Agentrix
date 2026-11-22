@@ -120,6 +120,7 @@ function validDispatch(event) {
     (event.skipMeeting == null || line(event.skipMeeting, 1024));
   return event.type === 'dispatch-end' && ['exit', 'killed', 'capacity', 'error', 'unconfirmed', 'scope', 'permission'].includes(event.reason) &&
     (event.refused === undefined || validRefusals(event.refused)) &&
+    (event.treeStopFailure === undefined || event.reason === 'killed' && line(event.treeStopFailure, 160)) &&
     (event.outOfScope === undefined || Array.isArray(event.outOfScope) && event.outOfScope.length <= 50 && event.outOfScope.every(file => line(file, 4096))) &&
     (event.exitCode === null || Number.isSafeInteger(event.exitCode) && Math.abs(event.exitCode) <= 0xffffffff) && number(event.endedAt) &&
     (event.outputTokens === null || Number.isSafeInteger(event.outputTokens) && event.outputTokens >= 0) &&

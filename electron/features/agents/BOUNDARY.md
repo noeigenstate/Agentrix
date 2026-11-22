@@ -3,7 +3,7 @@
 Reads agent records and account usage for the Activity view, and presents the agent calls and background tasks in the Agent tab and the narrow header popover.
 Agent or Task routing reports its model alias and effort by tool-use ID at PreToolUse. PostToolUse reconciles the final input.
 The child's own reply or metadata takes precedence. See `tests/seat-auto.test.cjs`.
-An authenticated dispatch end with reason permission counts as a failed role for review, even when the worker process exited successfully.
+An authenticated dispatch end with reason permission shows the refused-work state for review. Dashboard scoring uses the run's execution and review evidence.
 
 ## Owns
 - `src/features/agents/AgentCalls.tsx` (the called models' list and its rows, with the state words and the rate column)

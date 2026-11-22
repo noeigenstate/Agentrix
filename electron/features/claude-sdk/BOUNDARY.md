@@ -14,8 +14,8 @@ Owner sessions currently keep tool and hook environment inheritance; dispatch wo
 Project hooks remain enabled for workers, matching the trusted project's CLI behavior. Owner questions still reach canUseTool under bypassPermissions.
 Worker scope policy constrains the model's requested inputs and applies the bound read-only flag; it does not sandbox project hooks, which can execute commands
 and rewrite an allowed input to a path outside the worker scope. This is an explicit owner decision, not an isolation guarantee.
-PreToolUse denials give the role a specific reason and a direction to stop pursuing the denied action.
-The worker stream carries a reason code and a short action summary, omitting command arguments and file contents.
+Dispatch sessions offer only the built-in tools the worker policy can allow at that access level. PreToolUse denials give a specific reason and a direction to stop.
+The worker stream carries denied work with a reason code and a short action summary. Bookkeeping denials stay in the audit, and summaries omit command arguments and file contents.
 
 ## Owns
 - `electron/features/claude-sdk/**`

@@ -58,7 +58,7 @@ function createSandboxSetup({ platform = process.platform, find, cwd, env = proc
       // A marker changes only when to ask. Codex validates its version and account file.
       if (await hasSetupMarker(home)) await defer();
       if (dismissed() || !active()) return;
-      const file = await find();
+      const file = await Promise.resolve().then(find).catch(() => null);
       if (!file) { checked = false; return; }
       if (dismissed() || !active()) return;
       const status = await check(file, { cwd, env });
