@@ -47,6 +47,7 @@ function appServer(fixture) {
       return send({ id: request.id, error: { code: -32600, message: 'Invalid request: missing field `threadId`' } });
     let result = {};
     if (request.method === 'initialize') result = { userAgent: 'codex/0.166.0' };
+    if (request.method === 'windowsSandbox/readiness') result = { status: 'ready' };
     // fixture.thread: what the response adds, such as the model the thread runs as.
     if (['thread/start', 'thread/resume'].includes(request.method)) result = { thread: { id: threadId, turns: [] }, cwd: process.cwd(),
       sandbox: { type: { 'read-only': 'readOnly', 'danger-full-access': 'dangerFullAccess' }[params.sandbox] || 'workspaceWrite' }, approvalPolicy: params.approvalPolicy || 'on-request', ...fixture.thread };

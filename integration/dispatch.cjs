@@ -1365,16 +1365,21 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           const codex = resolveExecutable === executable ? await locate(env) : null;
           // A bare `codex` would find the shim folder again: no Codex outside it is a start failure.
           const found = async () => { if (resolveExecutable === executable && !codex) throw Object.assign(new Error('Codex was not found outside the Agentrix shim folder'), { code: 'ENOENT' }); return 'codex'; };
-          activeRuntime = createCodexRuntime({ accountKey: codexAccountKey || undefined, resolveExecutable: found, spawnProcess: (_file, _args, spawnOptions) => {
-            const command = resolveExecutable('codex', commandOf(effective), env, codex);
-            if (!started) workerStartedAt = Date.now();
-            return launch(command.file, command.args, spawnOptions);
-          } }).create(spec, acceptNative);
+          activeRuntime = createCodexRuntime({
+            accountKey: codexAccountKey || undefined, resolveExecutable: found, appServerArgs: commandOf(effective),
+            spawnProcess: (_file, args, spawnOptions) => {
+              const command = resolveExecutable('codex', args, env, codex);
+              if (!started) workerStartedAt = Date.now();
+              return launch(command.file, command.args, spawnOptions);
+            },
+          }).create(spec, acceptNative);
           if (effective.resume) await rollout.prepare(effective.resume);
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient?.close(); controlClient = null;
-            const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'thread_start', 'thread_resume'].includes(error.stage) ? error.stage : 'startup';
+            if (error.code === 'elevated_sandbox_not_ready' || process.platform === 'win32' && error.code === 'sandbox_mismatch') throw new Error(error.message);
+            const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'sandbox_readiness', 'thread_start', 'thread_resume']
+              .includes(error.stage) ? error.stage : 'startup';
             const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
               : Number.isInteger(error.code) ? `rpc_${error.code}`
               : ['ENOENT', 'EACCES', 'EPERM', 'EINVAL', 'codex_cli_required', 'rpc_timeout', 'process_failed', 'process_exited', 'disconnected',

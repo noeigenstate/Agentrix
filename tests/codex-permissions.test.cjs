@@ -20,7 +20,7 @@ const CONFIGURED = { sandbox: { type: 'readOnly', networkAccess: false }, approv
 // `apply(params)` is the sandbox the stand-in really applies to a thread request; `settle(params)` what it reports after a settings update (null
 // sends no notice), `reviewer` the approver it reports, `noise` notices it sends before its confirmation, `silentProbe` an ephemeral start it
 // announces but never answers, `reject` a method it refuses with that JSON-RPC code. As 0.167 does, it announces every thread it starts.
-function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox, settle, reviewer, initialReviewer = 'user', noise = [], silentProbe = false, announceProbe = true, reject = {}, version = '0.167.0', onWrite = () => {}, threadId = 'owner-thread' } = {}) {
+function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.sandbox] } : CONFIGURED.sandbox, settle, reviewer, initialReviewer = 'user', noise = [], silentProbe = false, announceProbe = true, reject = {}, readiness = 'ready', version = '0.167.0', onWrite = () => {}, threadId = 'owner-thread' } = {}) {
   const child = new EventEmitter(), wire = [], waits = [];
   let probes = 0, starts = 0;
   child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.exitCode = null;
@@ -39,6 +39,7 @@ function codexServer({ apply = params => params.sandbox ? { type: TYPES[params.s
           ? { code: reject[request.method], message: 'private server message' } : reject[request.method] });
         let result = {};
         if (request.method === 'initialize') result = { userAgent: 'codex/' + version };
+        else if (request.method === 'windowsSandbox/readiness') result = { status: readiness };
         else if (['thread/start', 'thread/resume'].includes(request.method)) {
           const id = p.threadId || (p.ephemeral ? `probe-${++probes}` : ++starts === 1 ? threadId : `${threadId}-${starts}`), configured = !p.sandbox && !p.approvalPolicy;
           const thread = { id, turns: [], status: { type: 'idle' }, ephemeral: p.ephemeral === true };
@@ -79,12 +80,14 @@ function directory(t) {
 // A runtime over one stand-in, local or SSH. The SSH one reaches the stand-in through the injected remote launcher, as main's does.
 function runtime(t, { kind = 'local', platform = 'linux', server = codexServer(), spec = {}, timers } = {}) {
   const root = directory(t), remote = kind === 'ssh';
+  const launches = [];
   if (remote) Object.assign(server.child, { remote: true, remoteScope: 'remote-scope' });
-  const factory = createCodexRuntime({ platform, timers, optionsHome: root, resolveExecutable: async () => 'fake-only', spawnProcess: () => server.child,
+  const factory = createCodexRuntime({ platform, timers, optionsHome: root, resolveExecutable: async () => 'fake-only',
+    spawnProcess: (_file, args) => { launches.push(args); return server.child; },
     launchRemote: async () => ({ cwd: '/srv/project', child: server.child, hosts: [], context: spec.context }) });
   const session = factory.create({ owner: 'gui', projectId: 'p', terminalId: 't', ...(remote ? { kind: 'ssh', cwd: '/srv/project', env: {} } : { cwd: root, env: { CODEX_HOME: root, PATH: '' } }), ...spec }, () => {});
   t.after(() => session.close());
-  return { session, server, root };
+  return { session, server, root, launches };
 }
 const policyOf = params => ({ sandbox: params.sandbox, approvalPolicy: params.approvalPolicy, approvalsReviewer: params.approvalsReviewer });
 const FULL = { sandbox: 'danger-full-access', approvalPolicy: 'never', approvalsReviewer: 'user' };
@@ -151,6 +154,47 @@ test('dispatched and read-only sessions keep their own sandbox and approvals wha
   }
 });
 
+test('local Windows dispatch requires elevated readiness and requests the scoped backend on start and resume', async t => {
+  for (const platform of ['win32', 'linux']) for (const kind of ['local', 'ssh']) {
+    const elevated = platform === 'win32' && kind === 'local';
+    for (const readOnly of [false, true]) for (const resume of [false, true]) {
+      const spec = { owner: 'dispatch', policy: { approvalPolicy: 'never' }, readOnly, providerSessionId: resume ? 'owner-thread' : null };
+      const { session, server, launches } = runtime(t, { kind, platform, spec });
+      await session[resume ? 'resume' : 'start']();
+      const method = resume ? 'thread/resume' : 'thread/start';
+      const [request] = server.threadRequests(method);
+      const readiness = server.wire.findIndex(row => row.method === 'windowsSandbox/readiness');
+      assert.deepEqual(policyOf(request.params), { sandbox: readOnly ? 'read-only' : 'workspace-write', approvalPolicy: 'never', approvalsReviewer: 'user' });
+      assert.deepEqual(request.params.config, elevated ? { 'windows.sandbox': 'elevated', 'features.prefer_mxc': false } : {});
+      assert.equal(readiness >= 0, elevated);
+      if (elevated) {
+        assert.ok(readiness < server.wire.indexOf(request));
+        assert.deepEqual(launches[0].slice(3), ['-c', 'windows.sandbox="elevated"', '-c', 'features.prefer_mxc=false']);
+      }
+      await session.close();
+    }
+  }
+});
+
+test('local Windows dispatch stops before opening a thread when elevated setup is missing or stale', async t => {
+  for (const readiness of ['notConfigured', 'updateRequired']) for (const readOnly of [false, true]) {
+    const server = codexServer({ readiness });
+    const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly } });
+    await assert.rejects(session.start(), { code: 'elevated_sandbox_not_ready', message: /administrator terminal.*codex\.exe sandbox setup --elevated --current-user/ });
+    assert.equal(server.threadRequests('thread/start').length, 0);
+    assert.equal(session.snapshot().state, 'failed');
+  }
+});
+
+test('local Windows dispatch still rejects sandbox mismatches without retrying', async t => {
+  for (const readOnly of [false, true]) {
+    const server = codexServer({ apply: () => ({ type: readOnly ? 'workspaceWrite' : 'readOnly' }) });
+    const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly } });
+    await assert.rejects(session.start(), { code: 'sandbox_mismatch', requestedSandbox: readOnly ? 'read-only' : 'workspace-write' });
+    assert.equal(server.threadRequests('thread/start').length, 1);
+  }
+});
+
 test('a sandbox Codex did not apply stops the start and says why: full, ask over SSH, and ask on Windows after one unelevated retry', async t => {
   const readOnly = () => ({ type: 'readOnly', networkAccess: false });
   const cases = [
@@ -167,7 +211,7 @@ test('a sandbox Codex did not apply stops the start and says why: full, ask over
     assert.equal(server.threadRequests('thread/start').length, starts, 'only a local Windows writable request is retried, once');
     assert.equal(session.snapshot().state, 'failed');
   }
-  // On Windows the owner's "ask" gets the same request-scoped unelevated retry as a dispatched worker, and the read-only thread is let go first.
+  // On Windows the owner's "ask" retries with a request-scoped unelevated override and lets the read-only thread go first.
   const server = codexServer({ apply: params => params.config?.['windows.sandbox'] === 'unelevated' ? { type: 'workspaceWrite' } : readOnly() });
   const { session } = runtime(t, { platform: 'win32', server, spec: { permissions: 'ask' } });
   await session.start();
