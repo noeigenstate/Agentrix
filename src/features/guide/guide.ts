@@ -3,9 +3,13 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "终端可调角色", text: "在终端里启动的 Claude 对话，指挥家模式下也能直接调用团队角色，不用绕路。", group: "new" },
-  { title: "角色启动更快", text: "调用角色时，固定的工作规则由 Agentrix 自动附上，任务交代更短，角色更快开工。", group: "new" },
-  { title: "子代理列表", text: "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。", group: "new" },
+  { title: "角色出现在 Agent 页", text: "终端对话在指挥家模式下调用的角色，现在会显示在 Agent 页和运行记录里。", group: "new" },
+  { title: "调用角色更快", text: "多个角色可以同时启动，角色一结束就通知，不再空等；显示的用时是角色真实的运行时间。", group: "new" },
+  { title: "小任务更轻", text: "查一处内容或只改一两个文件的小任务，交给角色时只带必要的说明，开工更快、花费更少。", group: "new" },
+  { title: "Codex 角色沙箱", text: "Windows 上用安装程序安装时，会请求一次管理员批准来设置 Codex 沙箱，之后 Codex 角色可直接运行测试；自动更新不会设置，请重新运行一次安装程序。", group: "new" },
+  { title: "终端可调角色", text: "在终端里启动的 Claude 对话，指挥家模式下也能直接调用团队角色，不用绕路。" },
+  { title: "角色启动更快", text: "调用角色时，固定的工作规则由 Agentrix 自动附上，任务交代更短，角色更快开工。" },
+  { title: "子代理列表", text: "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。" },
   { title: "模式即时生效", text: "在活动区切换出生模式和指挥家模式后，正在运行的对话不用重开：从你的下一条消息起就按新模式工作，角色工具随时可用。" },
   { title: "两种模式", text: "总指挥卡片上的开关切换出生模式和指挥家模式：关闭时总指挥像原来的命令行一样自己完成任务，其余角色变灰不可用；打开时它只规划和调度角色，并随时回答你、汇报进度。" },
   { title: "后台调用角色", text: "指挥家模式下，总指挥用工具在后台启动角色，不再停下来等结果；原生对话里角色完成时会自动收到通知。" },

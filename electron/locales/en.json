@@ -3706,5 +3706,13 @@
   "角色启动更快": "Roles start sooner",
   "调用角色时，固定的工作规则由 Agentrix 自动附上，任务交代更短，角色更快开工。": "When a role is called, Agentrix adds the standing work rules itself, so the task brief is shorter and the role starts sooner.",
   "子代理列表": "Sub-agent list",
-  "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。": "The Agent tab lists only the sub-agents the conversation started; rows of unknown origin no longer appear."
+  "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。": "The Agent tab lists only the sub-agents the conversation started; rows of unknown origin no longer appear.",
+  "角色出现在 Agent 页": "Roles show in the Agent tab",
+  "终端对话在指挥家模式下调用的角色，现在会显示在 Agent 页和运行记录里。": "Roles called by a terminal conversation in conductor mode now appear in the Agent tab and the run record.",
+  "调用角色更快": "Faster role calls",
+  "多个角色可以同时启动，角色一结束就通知，不再空等；显示的用时是角色真实的运行时间。": "Several roles can start at once and a finished role is reported at once, with no idle waiting; the time shown is the real run time of the role.",
+  "小任务更轻": "Lighter small tasks",
+  "查一处内容或只改一两个文件的小任务，交给角色时只带必要的说明，开工更快、花费更少。": "A small task, such as one lookup or an edit to one or two files, reaches a role with only the notes it needs, so it starts sooner and costs less.",
+  "Codex 角色沙箱": "Codex role sandbox",
+  "Windows 上用安装程序安装时，会请求一次管理员批准来设置 Codex 沙箱，之后 Codex 角色可直接运行测试；自动更新不会设置，请重新运行一次安装程序。": "On Windows, installing with the installer asks once for administrator approval to set up the Codex sandbox, after which Codex roles run tests directly; an automatic update does not set it up, so run the installer once more."
 }
