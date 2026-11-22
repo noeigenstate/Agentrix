@@ -6,7 +6,7 @@ export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
   { title: "角色出现在 Agent 页", text: "终端对话在指挥家模式下调用的角色，现在会显示在 Agent 页和运行记录里。", group: "new" },
   { title: "调用角色更快", text: "多个角色可以同时启动，角色一结束就通知，不再空等；显示的用时是角色真实的运行时间。", group: "new" },
   { title: "小任务更轻", text: "查一处内容或只改一两个文件的小任务，交给角色时只带必要的说明，开工更快、花费更少。", group: "new" },
-  { title: "Codex 角色沙箱", text: "Windows 上用安装程序安装时，会请求一次管理员批准来设置 Codex 沙箱，之后 Codex 角色可直接运行测试；自动更新不会设置，请重新运行一次安装程序。", group: "new" },
+  { title: "Codex 角色沙箱", text: "在 Windows 上，Agentrix 会在应用内询问一次，征求管理员批准来设置 Codex 沙箱。", group: "new" },
   { title: "终端可调角色", text: "在终端里启动的 Claude 对话，指挥家模式下也能直接调用团队角色，不用绕路。" },
   { title: "角色启动更快", text: "调用角色时，固定的工作规则由 Agentrix 自动附上，任务交代更短，角色更快开工。" },
   { title: "子代理列表", text: "Agent 页只显示对话真正启动的子代理，不再出现来历不明的空行。" },

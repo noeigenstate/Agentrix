@@ -10,8 +10,6 @@
     "package.json",
     "package-lock.json",
     "npm-shrinkwrap.json",
-    "build/installer.nsh",
-    "build/codex-sandbox-setup.ps1",
     ".github/**",
     "scripts/**",
     "tests/fixtures/**",
@@ -89,7 +87,6 @@
     "tests/voice-runtime.test.cjs",
     "tests/voice.test.cjs",
     "tests/waiting-card.test.cjs",
-    "tests/windows-installer.test.cjs",
     "tests/workspace-ipc-updates.test.cjs"
   ],
   "tests": {

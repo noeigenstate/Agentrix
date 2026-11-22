@@ -88,6 +88,18 @@
     "id": "electron/features/codex-runtime/locator.cjs:5e1cb0fd74fce32e757a5400"
   },
   {
+    "text": "launch(powershell, args, { cwd: system, env, windowsHide: true }, error => {\n    resolve(!error ? 'succeeded' : ({ 2: 'invalidHome', 3: 'declined' })[error.code] || 'failed');\n  })",
+    "id": "electron/features/codex-sandbox-setup/elevate.cjs:278d979bc0f1c437441bd728"
+  },
+  {
+    "text": "launch(cmd, ['/d', '/v:off', '/s', '/c', '\"\"%AGENTRIX_SETUP_CLI%\" ' + args.join(' ') + '\"'], options)",
+    "id": "electron/features/codex-sandbox-setup/index.cjs:435fcd15a89bc1496a515d0b"
+  },
+  {
+    "text": "launch(file, args, options)",
+    "id": "electron/features/codex-sandbox-setup/index.cjs:cf9a69a6aa97d8bafb57dec6"
+  },
+  {
     "text": "execFile('git', ['-C', project.path, ...args], { windowsHide: true, timeout: 3000 }, (error, stdout) => done(error ? '' : stdout.trim()))",
     "id": "electron/features/git/runtime.cjs:7d0a9d27c0840eae80b50ca0"
   },
