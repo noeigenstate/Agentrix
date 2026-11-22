@@ -427,7 +427,7 @@ async function panelStage({ app, page, view, box, emit, event, output, checks, a
     defaultEnabled: false, defaultFresh: false, inherits: 'developer' });
   const routing = { ...team, roles, skill: 'model-routing', lead: 'orchestrator', leadAgent: 'claude', authors, fresh,
     leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer },
-    template: { roles: {} }, config: null, current: null, currentRoles: null,
+    template: { roles: {}, conductor: true }, config: null, current: null, currentRoles: null,
     routing: { layer: 'template', state: 'absent', remote: false, path: null, digest: null, actions: [] },
     effective: team.defaults, installed: { claude: true, codex: true }, issues: [], catalogAt: { claude: null, codex: null } };
   // Main side: canned answers; mode 'hold' keeps the next answer back until released so the loading state can be seen.

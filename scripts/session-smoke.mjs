@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
 import { setMode } from './mode-switch.mjs';
+import { assertClaudeTerminalArgs } from './claude-terminal-args.mjs';
 
 const require = createRequire(import.meta.url);
 const { createSSHFixture } = require('../tests/helpers/ssh-fixture.cjs');
@@ -87,13 +88,12 @@ async function verifyResume() {
   }
   assert.equal(await receipt(projects[2]), null);
   assert.equal(await receipt(projects[3]), null);
-  // Claude Code resumes its own session through the wrapper (hooks passed with --settings first).
+  // Claude Code resumes its own session through the terminal wrapper.
   await waitFor(async () => (await receipt(claudeProjects[0])) && (await receipt(claudeProjects[1])), 'restored Claude Code processes');
-  assert.equal((await receipt(claudeProjects[0])).args[0], '--settings');
-  assert.equal((await receipt(claudeProjects[0])).args[2], '--append-system-prompt');
-  assert.match((await receipt(claudeProjects[0])).args[3], /^You run inside Agentrix/);
-  assert.deepEqual((await receipt(claudeProjects[0])).args.slice(4), ['--resume', claudeProjects[0].sessionId, '继续']);
-  assert.deepEqual((await receipt(claudeProjects[1])).args.slice(4), ['--resume', claudeProjects[1].sessionId]);
+  for (const project of claudeProjects) {
+    const resumeArgs = [project.sessionId, ...(project.restore.interrupted ? ['继续'] : [])];
+    assertClaudeTerminalArgs((await receipt(project)).args, project.name, resumeArgs);
+  }
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.filter(p => p.codexActive).length === 4, 'four active restored conversations');
   assert.deepEqual((await page.evaluate(() => window.agentrix.getState())).value.projects.filter(p => p.agent === 'claude').map(p => p.id).sort(), claudeProjects.map(p => p.id).sort());
   const stored = JSON.parse(await fs.readFile(path.join(dataDir, 'workspace.json'), 'utf8'));
@@ -147,7 +147,8 @@ try {
   await backToShell('shell ready for the terminal agent');
   // The agent a typed command runs in the terminal itself is Claude Code (its offline stand-in records how it was started).
   await page.evaluate(id => window.agentrix.writeTerminal(id, 'claude\r'), projects[0].id);
-  await waitFor(async () => (await receipt(projects[0]))?.args[0] === '--settings' && (await first()).agent === 'claude', 'manually typed Claude Code');
+  await waitFor(async () => (await receipt(projects[0]))?.args.includes('--settings') && (await first()).agent === 'claude', 'manually typed Claude Code');
+  assertClaudeTerminalArgs((await receipt(projects[0])).args, 'manually typed Claude Code');
   const panel = page.locator(`[data-project-id="${projects[0].id}"]`);
   // A running agent's conversation shows as a document by default; the title-bar switch shows the terminal itself.
   await panel.locator('.reading-view').waitFor();

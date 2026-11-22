@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { _electron as electron } from 'playwright-core';
 import { waitFor } from './wait.mjs';
+import { assertClaudeTerminalArgs } from './claude-terminal-args.mjs';
 
 if (process.platform !== 'win32') {
   console.log('SKIP: slow session restoration smoke requires Windows PowerShell.');
@@ -108,13 +109,7 @@ async function runScenario(label, delay) {
       const result = await receipt(project);
       assert.ok(result, `${label}: ${project.name} has a resume receipt`);
       if (project.restore.agent === 'claude') {
-        assert.equal(result.args[0], '--settings', `${label}: ${project.name} uses the Claude wrapper`);
-        // The hooks travel as a settings file (Windows PowerShell does not escape JSON for claude.cmd); the wrapper deletes it
-        // when Claude exits, so only its name is left to check here.
-        assert.match(result.args[1], /[\\/][\w-]+-claude-settings-(?:[0-9a-f]{32}\.json|[A-Za-z0-9]{6})$/, `${label}: ${project.name} receives a session-owned settings file`);
-        // Then what the reading view can show (electron/features/agents/reading-note.cjs), before the resume arguments.
-        assert.deepEqual([result.args[2], /^You run inside Agentrix/.test(result.args[3])], ['--append-system-prompt', true], `${label}: ${project.name} is told what the reading view shows`);
-        assert.deepEqual(result.args.slice(4), ['--resume', project.sessionId, '继续'], `${label}: ${project.name} resumes intact`);
+        assertClaudeTerminalArgs(result.args, `${label}: ${project.name}`, [project.sessionId, '继续']);
       } else {
         await waitFor(async () => (await receipt(project))?.continued, 'app-server continuation');
         const rpc = await receipt(project);

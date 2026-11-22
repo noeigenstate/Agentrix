@@ -94,8 +94,9 @@ try {
   await write(fixturePrompt + "; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r");
   await waitFor(async () => (await state()).codexActive && (await state()).agent === 'claude', 'authenticated Claude fixture');
   await showReading(); // The activity pane follows the selected split; the first plain shell is still selected.
-  const pane = page.locator('.activity-pane'); await pane.waitFor();
-  const limitValues = () => pane.locator('.activity-limit > b').allTextContents();
+  const claudeQuota = page.locator('.activity-pane').getByRole('region', { name: 'Claude', exact: true });
+  await claudeQuota.waitFor();
+  const limitValues = () => claudeQuota.locator('.activity-limit > b').allTextContents();
   await waitFor(async () => (await limitValues()).join() === '5%,15%', 'Claude cache reaches the activity pane', 4000);
   const newerUsage = structuredClone(cachedUsage);
   newerUsage.cachedUsageUtilization.fetchedAtMs = Date.now();
@@ -104,12 +105,16 @@ try {
   const replacement = usageFile + '.tmp';
   await fs.writeFile(replacement, JSON.stringify(newerUsage)); await fs.rename(replacement, usageFile);
   await waitFor(async () => (await limitValues()).join() === '34%,23%', 'Claude cache replacement pushes limits without /usage or a hook', 4000);
-  assert.match(await pane.innerText(), /额度来自 Claude Code，/);
+  const observed = (await state()).agentUsage;
+  assert.equal(observed?.limitsFrom, 'Claude Code');
+  assert.equal(observed?.limitsAt, newerUsage.cachedUsageUtilization.fetchedAtMs);
+  // Compact panes hide this note. The focused account read can present the same cached windows as “Claude”.
+  assert.match(await claudeQuota.locator('[data-usage-detail]').textContent(), /^额度来自 Claude(?: Code)，.+ 更新$/);
   await fs.writeFile(usageFile, JSON.stringify(cachedUsage));
   await new Promise(resolve => setTimeout(resolve, 2300));
   assert.deepEqual(await limitValues(), ['34%', '23%'], 'an older Claude cache cannot roll the pane back');
   assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].unread, 0);
-  checks.push('Claude limits: cache replacement pushes to the activity pane without /usage; older snapshots lose and background reads never rearm completion');
+  checks.push('Claude limits: the pane shows the replacement values from the Claude Code cache without /usage; older snapshots lose and background reads never rearm completion');
   // Draw the stand-in CLI's input; the popup shows its actual xterm output.
   const idle = "Clear-Host; Show-ReadingFixtureInput\r";
   const renderIdle = async (label, agent = 'claude') => { await write(idle); await waitForFixtureIdle(physicalRows, label, agent); };
@@ -161,6 +166,8 @@ try {
   };
   await reading(); await composer.fill('/');
   await palette.getByRole('option').filter({ has: page.getByText('/status', { exact: true }) }).waitFor();
+  const routingOptions = palette.getByRole('option').filter({ has: page.locator('code').filter({ hasText: /^\/(model|effort|fast)$/ }) });
+  assert.equal(await routingOptions.count(), 0, 'Claude’s picker leaves model, effort and fast to model routing');
   const custom = palette.getByRole('option').filter({ hasText: '/fix-issue' });
   assert.equal(await custom.locator('small').innerText(), '项目');
   assert.ok((await custom.innerText()).includes('修复问题'));
@@ -689,6 +696,7 @@ try {
   await palette.getByRole('option').filter({ has: page.getByText('/compact', { exact: true }) }).waitFor();
   assert.equal(await palette.getByRole('option').filter({ hasText: '/fix-issue' }).count(), 0, 'agent change reloads commands');
   assert.equal(await palette.getByRole('option').filter({ hasText: '/security-review' }).count(), 0);
+  assert.equal(await routingOptions.count(), 0, 'Codex’s picker also leaves those controls to model routing');
   await composer.fill('');
   const native = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
   await page.evaluate(({ id, runtime }) => window.agentrix.nativeSession.stop(id, runtime), { id: terminalId, runtime: native.value.runtimeSessionId });
