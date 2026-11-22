@@ -63,6 +63,7 @@ function claudeEvent(input, projectId, sessionKey, kind) {
     projectId, sessionKey, type: 'agent-activity', agent: 'claude', state: CLAUDE_STATES[kind], sessionId,
     message: ['notify', 'permission'].includes(kind) ? String(hook.message ?? hook.tool_name ?? '').slice(0, 300) : null,
     sentAt, hookEvent: String(hook.hook_event_name ?? ''), sessionSource: String(hook.source ?? ''),
+    ...(['AskUserQuestion', 'ExitPlanMode'].includes(hook.tool_name) ? { menuTool: hook.tool_name } : {}),
     ...(typeof hook.turn_id === 'string' ? { turnId: hook.turn_id } : {}),
     ...(typeof hook.tool_use_id === 'string' ? { requestId: hook.tool_use_id } : {}),
     // The prompt whose turn this is: a late Stop of an older prompt cannot end a newer turn.

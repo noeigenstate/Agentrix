@@ -568,6 +568,10 @@
     "id": "src/features/agents/SubagentInput.tsx:9d7f4475067877d886e282dc"
   },
   {
+    "text": "terminal.write(data, () => {\n      if (screens.get(epoch)?.seq !== seq) return;\n      const buffer = terminal.buffer.active;\n      const lines = Array.from({ length: rows }, (_, index) => buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '');\n      bridge.reportWorkerMenu(epoch, seq, parseWorkerMenu(lines));\n    })",
+    "id": "src/features/agents/worker-menu-screen.ts:49c2b783bb7000b0be8307b6"
+  },
+  {
     "text": "terminal.write(packet.data)",
     "id": "src/features/agents/WorkerTerminal.tsx:95cd903c8f0b930155272c31"
   },

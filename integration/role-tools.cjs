@@ -7,7 +7,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { validateSmallScope, localWindowsCodex, roleReadiness, elevatedSetupMessage } = require('./dispatch.cjs');
+const { validateSmallScope, localWindowsCodex, roleReadiness, elevatedSetupMessage, answerDetachedRole } = require('./dispatch.cjs');
 const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
@@ -36,11 +36,17 @@ const TOOLS = [
   { name: 'roles_status', description: 'Show running roles and endings first observed in the last 10 minutes, plus the number of earlier endings.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {} } },
-  { name: 'wait_roles', description: 'Wait until any selected role ends, loses its receipt, starts waiting for the owner, or times out. Shows the selected roles.',
+  { name: 'wait_roles', description: 'Wait until a selected role ends, loses its receipt, reports a new wait, or times out. Shows the selected roles.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {
       ids: { type: 'array', items: { type: 'string' }, description: 'Run ids; defaults to all running roles in this conversation' },
       seconds: { type: 'integer', minimum: 0, maximum: 540, default: 240 },
+    } } },
+  { name: 'answer_role', description: 'Answer a hidden Claude role’s question or plan menu using the wait id and a listed option.',
+    inputSchema: { type: 'object', required: ['id', 'wait', 'choice'], properties: {
+      id: text('The run id start_role returned'),
+      wait: text('The current menu id from wait_roles or roles_status'),
+      choice: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'string' }] },
     } } },
   { name: 'role_result', description: 'Read the final answer of a role that has ended.',
     annotations: { readOnlyHint: true },
@@ -184,7 +190,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       endedAt: end === undefined ? null : new Date(end).toISOString(),
       refused: run.refused ?? [],
       ...(run.needsDecision && { needsDecision: true }),
-      ...(run.end ? { end: run.end } : { activity: run.activity ?? null, ...(run.ownerWait && { waiting: run.ownerWait }) }) };
+      ...(run.end ? { end: run.end } : { activity: run.activity ?? null, ...(run.ownerWait && { waiting: run.ownerWait }), ...(run.menu && { menu: run.menu }) }) };
   };
 
   async function refreshGroup(folder, open, seconds, untilAny, signal) {
@@ -200,7 +206,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       if (validRefusals(status?.refused) && status.refused.length >= (run.refused?.length ?? 0)) run.refused = status.refused;
       if (status?.ownerWaitSequence >= (run.ownerWaitSequence ?? 0)) {
         if (status.ownerWaitSequence > (run.ownerWaitSequence ?? 0) || !status.ownerWait) {
-          Object.assign(run, { ownerWait: status.ownerWait, ownerWaitSequence: status.ownerWaitSequence });
+          Object.assign(run, { ownerWait: status.ownerWait, ownerWaitSequence: status.ownerWaitSequence, menu: status.menu });
         }
         if (untilAny && status.ownerWaitSequence > (seenOwnerWaits.get(run.id) ?? 0)) {
           ownerTransition = true;
@@ -260,6 +266,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       let waitingId;
       try {
         const work = checkout?.cwd ?? (folder || cwd);
+        const binding = { agent, allow, readOnly, cwd: work };
         const artifacts = await createRoleArtifacts(tempRoot);
         const briefFile = path.join(artifacts.folder, 'brief.md'), out = path.join(artifacts.folder, 'answer.md');
         fs.writeFileSync(briefFile, brief, { mode: 0o600 });
@@ -272,14 +279,14 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
           onTiming: status => {
             if (waitingId || !(status.waitingLine || status.ownerWait)) return;
             waitingId = status.id;
-            runs.set(waitingId, { id: waitingId, seat, title, out, artifacts, cwd: work, calledAt, observedStartAt: Date.now(),
+            runs.set(waitingId, { id: waitingId, seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now(),
               activity: status.waitingLine ?? status.ownerWait, ownerWait: status.ownerWait });
           },
         });
         const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);
         if (!started) throw new Error(lines.find(line => line.startsWith('[dispatch] failed')) || 'The role did not start.');
         const status = timing.get(started[1]);
-        const run = runs.get(started[1]) || { id: started[1], seat, title, out, artifacts, cwd: work, calledAt, observedStartAt: Date.now() };
+        const run = runs.get(started[1]) || { id: started[1], seat, title, out, artifacts, ...binding, calledAt, observedStartAt: Date.now() };
         Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: status?.ownerWait ?? null, ownerWait: status?.ownerWait });
         runs.set(started[1], run);
         return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch }) };
@@ -301,6 +308,20 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       const selected = ids === undefined ? [...runs.values()].filter(run => !run.end) : [...new Set(ids)].map(own);
       await refresh(selected, selected.some(run => run.end) ? 0 : seconds, true, signal);
       return selected.map(describe);
+    },
+    async answer_role({ id, wait, choice }) {
+      const run = own(id);
+      if (typeof wait !== 'string' || !/^[a-f\d-]{36}$/.test(wait)) throw new Error('A current menu wait id is required.');
+      if (!(Number.isInteger(choice) && choice > 0) && !(typeof choice === 'string' && choice.length > 0 && choice.length <= 512)) {
+        throw new Error('Choose a listed option number or exact label.');
+      }
+      await refresh([run]);
+      if (run.end || !run.menu) throw new Error('The role is not waiting on a menu.');
+      if (run.menu.id !== wait) throw new Error('That menu wait is stale.');
+      if (run.menu.kind === 'permission') throw new Error('Permission prompts cannot be answered by the lead.');
+      const result = await answerDetachedRole(run, { wait, choice }, env);
+      if (result?.status !== 'delivered') throw new Error(`The answer was not delivered (${result?.reason ?? 'unknown'}).`);
+      return { id, wait, status: result.status };
     },
     async role_result({ id }) {
       const run = own(id);

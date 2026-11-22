@@ -23,6 +23,8 @@ const { encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
 const { projectTeam } = require('../electron/features/team/team.cjs');
 const { createWorkerTerminals, meterRecord } = require('../electron/features/worker-terminals/worker-terminals.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
+const { Terminal } = require('@xterm/xterm');
+const { observeWorkerMenus } = require('../src/features/agents/worker-menu-screen.ts');
 const Module = require('node:module');
 
 const SHIMS = path.join(__dirname, '../integration/shims');
@@ -71,7 +73,7 @@ function transcript(claudeHome, cwd, sessionId) {
 }
 
 // The real helper and control channel, under a terminal lead whose terminal main knows.
-async function fixture(t, { detached = false } = {}) {
+async function fixture(t, { detached = false, screenMonitoring = false } = {}) {
   const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-'))), main = path.join(root, 'main'), repo = path.join(root, 'worker');
   fs.mkdirSync(path.join(main, 'src'), { recursive: true });
@@ -92,11 +94,17 @@ async function fixture(t, { detached = false } = {}) {
   lifetime.defer('close control', () => control.close());
   const parent = parentTerminal(root);
   parent.write({ pipeName: eventServer.address, controlAddress: address, controlCapability: 'synthetic-capability', ...owner, projectId: owner.terminalId });
-  const spawned = [], notices = [];
+  const spawned = [], notices = [], channels = {};
+  let screenListener;
   const terminals = createWorkerTerminals({ spawn: fakeSpawn(spawned), claudeFile: () => path.join(root, 'stand-in', 'claude'), hooks: hooksFor,
+    screenMonitoring, send: (channel, packet) => { if (channel === 'worker-terminal:screen') screenListener?.(packet); },
     parent: binding => binding.projectId === owner.terminalId ? { env: parent.env, sessionKey: owner.sessionKey, bootstrapFile: parent.bootstrap } : null,
     calls: () => calls, runtimeDir: () => root, claudeHome: () => assert.fail('the worker env names its Claude home'),
     schedule: (fn, ms) => ms === 15000 ? notices.push(fn) : setTimeout(fn, ms), kill: pty => pty.kill() });
+  const registerChannel = (channel, handler) => { channels[channel] = handler; };
+  terminals.register({ handle: registerChannel, listen: registerChannel });
+  if (screenMonitoring) observeWorkerMenus({ onWorkerScreen: listener => { screenListener = listener; },
+    reportWorkerMenu: channels['worker-terminal:menu'] }, (cols, rows) => new Terminal({ cols, rows, scrollback: 0 }));
   registerClaudeWorker({ control, claude: {}, settings: () => assert.fail('a terminal worker reads no Claude path setting'), terminals });
   const brief = path.join(root, 'brief.md'), out = path.join(repo, '.dispatch/answer.md');
   fs.mkdirSync(path.dirname(out)); fs.writeFileSync(brief, 'Synthetic terminal task');
@@ -122,7 +130,7 @@ async function fixture(t, { detached = false } = {}) {
   const id = team.live()[0].id, sessionId = randomUUID(), pty = spawned[0];
   const api = createInterventions({ resolve: () => ({ terminalId: 'terminal', callId: `dispatch:${id}`, parentSessionId: 'planner', confirmed: true, route: 'dispatch',
     runId: id, title: 'Synthetic terminal worker', cwd: repo, projectPath: repo, local: true }), pushControl: control.pushControl });
-  return { root, repo, id, pty, sessionId, parent, events, calls, out, result, api, terminals, notices, brief, started: started.promise,
+  return { root, repo, id, pty, sessionId, parent, events, calls, out, result, api, terminals, notices, brief, channels, started: started.promise,
     stdout: () => stdout, item: () => calls.snapshot().flatMap(group => group.items).find(item => item.id === `dispatch:${id}`),
     feed: () => calls.feeds.owned(calls.byId(`dispatch:${id}`))?.snapshot,
     log: transcript(parent.claudeHome, repo, sessionId),
@@ -157,6 +165,111 @@ test('a hidden terminal owner prompt reaches the real detached receipt and wakes
   assert.equal((await tools.roles_status()).roles[0].waiting, undefined);
   f.hook('Stop', { last_assistant_message: 'Synthetic answer' });
   assert.equal(await f.result, 0, f.stdout());
+});
+
+function readMenu(folder, name, maxRows = 28) {
+  const rows = fs.readFileSync(path.join(__dirname, 'fixtures', folder, name + '.txt'), 'utf8').trimEnd().split(/\r?\n/);
+  return '\x1b[2J\x1b[H' + rows.slice(-maxRows).join('\r\n');
+}
+
+async function menuFixture(t) {
+  const f = await fixture(t, { detached: true, screenMonitoring: true });
+  const store = detachedRuns(f.repo);
+  const receipt = predict => store.observe(() => predict(store.read(f.id)), 5000);
+  fs.writeFileSync(f.parent.bootstrap + '.mode', 'conductor');
+  fs.writeFileSync(f.parent.bootstrap + '.seats', JSON.stringify({ developer: { model: 'sonnet', effort: 'high' } }));
+  const { tools } = createRoleTools({ env: f.parent.env, cwd: f.repo, engine: (args, deps) => {
+    if (args[0] === 'wait') return run(args, deps);
+    deps.stdout.write('[dispatch] started ' + f.id + ' claude\n');
+    return 0;
+  } });
+  await tools.start_role({ seat: 'developer', title: 'Build', brief: 'Inspect', allow: ['src/**'] });
+  f.hook('UserPromptSubmit');
+  await f.started;
+  return { f, tools, receipt, menu: kind => receipt(entry => entry?.menu?.kind === kind ? entry.menu : undefined),
+    draw: (folder, name) => f.pty.emit(readMenu(folder, name)) };
+}
+
+test('answer_role uses the current parsed menu once and automatically refuses a permission', { timeout: 15000 }, async t => {
+  const { f, tools, receipt, menu, draw } = await menuFixture(t);
+  const noWait = { id: f.id, wait: randomUUID(), choice: 1 };
+  await assert.rejects(tools.answer_role(noWait), /not waiting/);
+  f.hook('PreToolUse', { tool_name: 'AskUserQuestion', tool_use_id: 'question' });
+  draw('questions', 'claude-question');
+  const question = await menu('question');
+  const [waiting] = await tools.wait_roles({ ids: [f.id], seconds: 0 });
+  assert.match(waiting.waiting, /question .*回收站怎么处理？ · 1\. 保留回收站（推荐） · 2\. 清空回收站/);
+  assert.deepEqual(waiting.menu, question);
+  assert.deepEqual((await tools.roles_status()).roles[0].menu, question);
+  await assert.rejects(tools.answer_role(noWait), /stale/);
+  await assert.rejects(tools.answer_role({ id: f.id, wait: question.id, choice: 'Type something.' }), /invalid_choice/);
+  await assert.rejects(tools.answer_role({ id: f.id, wait: question.id, choice: 99 }), /invalid_choice/);
+  const answer = { id: f.id, wait: question.id, choice: '清空回收站' };
+  assert.equal((await tools.answer_role(answer)).status, 'delivered');
+  await assert.rejects(tools.answer_role(answer), /not waiting|stale_wait/);
+  const call = 'dispatch:' + f.id;
+  const split = f.channels['worker-terminal:attach']('terminal', call);
+  f.channels['worker-terminal:keys']('terminal', call, split.epoch, '\r');
+  f.channels['worker-terminal:detach']('terminal', call);
+  assert.deepEqual(f.pty.writes, ['\x1b[B\r']);
+
+  f.hook('PostToolUse', { tool_use_id: 'question' });
+  f.hook('PreToolUse', { tool_name: 'AskUserQuestion', tool_use_id: 'multi' });
+  draw('questions', 'claude-question-multi');
+  const multi = await receipt(entry => entry?.menu?.kind === 'question' && entry.menu.id !== question.id ? entry.menu : undefined);
+  assert.equal(multi.answerable, false);
+  assert.deepEqual(multi.options.map(option => option.label), ['node_modules', 'dist', '.test-output']);
+  await assert.rejects(tools.answer_role({ id: f.id, wait: multi.id, choice: 1 }), /unsupported_menu/);
+  assert.deepEqual(f.pty.writes, ['\x1b[B\r']);
+  f.hook('PostToolUse', { tool_use_id: 'multi' });
+  f.hook('PermissionRequest', { tool_name: 'ExitPlanMode', tool_use_id: 'plan' });
+  draw('screens', 'claude-investigation-plan-waiting');
+  const plan = await menu('plan');
+  assert.deepEqual(plan.options, [{ number: 2, label: 'No' }]);
+  await assert.rejects(tools.answer_role({ id: f.id, wait: plan.id, choice: 1 }), /invalid_choice/);
+  f.pty.emit('\x1b[2J\x1b[H');
+  await assert.rejects(tools.answer_role({ id: f.id, wait: plan.id, choice: 2 }), /not waiting|stale_wait/);
+  assert.deepEqual(f.pty.writes, ['\x1b[B\r']);
+  draw('screens', 'claude-investigation-plan-waiting');
+  assert.equal((await menu('plan')).id, plan.id);
+  assert.equal((await tools.answer_role({ id: f.id, wait: plan.id, choice: 2 })).status, 'delivered');
+
+  f.hook('PostToolUse', { tool_use_id: 'plan' });
+  f.hook('PermissionRequest', { tool_name: 'Write', tool_use_id: 'permission' });
+  draw('screens', 'claude-permission');
+  assert.deepEqual(await receipt(entry => entry?.refused), [{ reason: 'needs approval', action: 'Write a file' }]);
+  assert.deepEqual(f.pty.writes, ['\x1b[B\r', '\x1b[B\r', '\x1b[B\x1b[B\r']);
+  draw('screens', 'claude-permission');
+  f.hook('Stop', { last_assistant_message: 'Synthetic answer' });
+  assert.equal(await f.result, 0, f.stdout());
+  assert.match(f.stdout(), /exit 0 reason permission/);
+  assert.equal(f.pty.writes.length, 3);
+});
+
+test('the attached owner’s first key reserves the prompt across redraws and detach', { timeout: 15000 }, async t => {
+  const { f, tools, receipt, menu, draw } = await menuFixture(t);
+  const call = 'dispatch:' + f.id;
+  f.hook('PermissionRequest', { tool_name: 'Write', tool_use_id: 'permission' });
+  await receipt(entry => entry?.ownerWait || undefined);
+  const attached = f.channels['worker-terminal:attach']('terminal', call);
+  f.channels['worker-terminal:keys']('terminal', call, attached.epoch, '\x1b[B');
+  f.channels['worker-terminal:detach']('terminal', call);
+  draw('screens', 'claude-permission');
+  const permission = await menu('permission');
+  await assert.rejects(tools.answer_role({ id: f.id, wait: permission.id, choice: 3 }), /Permission prompts/);
+  assert.deepEqual(f.pty.writes, ['\x1b[B']);
+  f.hook('PostToolUse', { tool_use_id: 'permission' });
+  f.hook('PermissionRequest', { tool_name: 'AskUserQuestion', tool_use_id: 'question' });
+  draw('questions', 'claude-question');
+  const question = await menu('question');
+  f.channels['worker-terminal:attach']('terminal', call);
+  f.channels['worker-terminal:keys']('terminal', call, attached.epoch, '\x1b[B');
+  f.channels['worker-terminal:detach']('terminal', call);
+  await assert.rejects(tools.answer_role({ id: f.id, wait: question.id, choice: 1 }), /owner_has_input/);
+  assert.deepEqual(f.pty.writes, ['\x1b[B', '\x1b[B']);
+  f.hook('Stop', { last_assistant_message: 'Synthetic answer' });
+  assert.equal(await f.result, 0, f.stdout());
+  assert.doesNotMatch(f.stdout(), /reason permission/);
 });
 
 test("a terminal planner's worker shows its rate, waits for the owner and writes output on Stop", async t => {

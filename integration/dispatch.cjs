@@ -659,9 +659,19 @@ function detachedRuns(cwd, create = false) {
   return new DetachedRuns(path.join(temporary, ...parents));
 }
 
-function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, refused, needsDecision }) {
+function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, menu, refused, needsDecision }) {
   onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }),
-    ...(ownerWaitSequence && { ownerWait, ownerWaitSequence }), ...(refused && { refused }), ...(settled && needsDecision === true && { needsDecision }) });
+    ...(ownerWaitSequence && { ownerWait, ownerWaitSequence, menu }), ...(refused && { refused }), ...(settled && needsDecision === true && { needsDecision }) });
+}
+
+async function answerDetachedRole({ id, cwd, agent, allow, readOnly }, { wait, choice }, env) {
+  const file = env.AGENTRIX_BOOTSTRAP;
+  if (!file || fs.statSync(file).size > BOOTSTRAP_LIMIT) throw new Error('Role control is unavailable.');
+  const { controlAddress: address, projectId, sessionKey, controlCapability: capability } = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''));
+  if (!address || !sessionKey || !capability) throw new Error('Role control is unavailable.');
+  const client = await connectDispatchControl({ address, runId: id, projectId, sessionKey, capability, cwd, agent, allow, readOnly, answerOnly: true });
+  try { return await client.request('role.answer', { wait, choice }); }
+  finally { client.close(); }
 }
 
 function hasDecisionHeading(answer) {
@@ -792,10 +802,13 @@ async function runDetached(file, deps = {}) {
   } };
   let ownerWaitSequence = 0, needsDecision = false;
   const detached = { id, admitted: () => receipt({ admitted: true }), sandboxReady: () => receipt({ waitingLine: null }),
-    ownerWaiting: detail => {
-      const ownerWait = detail ? 'waiting for the owner: ' + detail : null;
+    ownerWaiting: (detail, menu = null) => {
+      const ownerWait = menu ? `waiting on ${menu.kind} [${menu.id}]: ${menu.title}`
+        + menu.options.map(({ number, label }) => ` · ${number}. ${label}`).join('')
+        + (menu.answerable || menu.kind === 'permission' ? '' : ' · no supported answer')
+        : detail ? 'waiting for the owner: ' + detail : null;
       if (ownerWait) ownerWaitSequence++;
-      return receipt({ ownerWait, ownerWaitSequence, activityAt: Date.now() });
+      return receipt({ ownerWait, ownerWaitSequence, menu, activityAt: Date.now() });
     },
     refusals: refused => receipt({ refused: [...refused] }),
     needsDecision: () => { needsDecision = true; },
@@ -809,7 +822,7 @@ async function runDetached(file, deps = {}) {
   } finally {
     const endedAt = Date.now();
     if (artifacts && !processExitUnconfirmed) await artifacts.stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
-    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null, ownerWait: null,
+    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null, ownerWait: null, menu: null,
       ...(needsDecision && { needsDecision }) }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
@@ -1404,6 +1417,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       if (type === 'worker.refused' && options.agent === 'claude') recordRefusal(payload);
       else if (type === 'worker.awaiting-owner' && nativeBilling === 'subscription') {
         detached?.ownerWaiting?.(diagnosticLine(payload.detail) || null);
+      } else if (type === 'worker.menu' && nativeBilling === 'subscription') {
+        detached?.ownerWaiting?.(null, payload.menu);
       } else if (options.agent === 'codex' && type === 'request.opened') requestOpened(event);
       else if (options.agent === 'codex' && type === 'item.upsert' && payload.providerStatus === 'declined') {
         const detail = payload.kind === 'command' ? payload.content?.phrase : payload.content?.tool;
@@ -1749,5 +1764,5 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 
 module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles,
   run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
-  localWindowsCodex, roleReadiness, elevatedSetupMessage };
+  localWindowsCodex, roleReadiness, elevatedSetupMessage, answerDetachedRole };
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });

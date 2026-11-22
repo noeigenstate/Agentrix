@@ -267,6 +267,7 @@ function send(channel, data) { if (window && !window.isDestroyed()) window.webCo
 const claudeLocator = createLocator();
 // A local terminal lead's Claude workers, each in a hidden terminal of its own, never in `sessions` (worker-terminals/BOUNDARY.md).
 const workerTerminals = createWorkerTerminals({ spawn: (file, args, options) => pty.spawn(file, args, options), send, cmdPath, powershellPath,
+  screenMonitoring: true,
   allowBackgroundTasks: () => store.settings?.claudeBackgroundTasks,
   claudeFile: () => claudeLocator.peek()?.terminal?.path || null, runtimeDir: () => runtimeDir, claudeHome: () => claudeConfigDir(),
   // Only a Claude terminal lead's own environment: a terminal that switched to a native session since registration has none.

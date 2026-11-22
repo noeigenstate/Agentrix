@@ -75,10 +75,31 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
         if (!verified || verified.runId !== value.runId || verified.projectId !== value.projectId || !path.isAbsolute(verified.cwd || '') || !Array.isArray(verified.allow)) return refuse(value.runId, 'dispatch.control_unbound', verified?.leadMode);
         // A worker may tighten its admitted mode (for example --permission plan), never loosen main's binding.
         const run = { ...verified, readOnly: !!verified.readOnly || value.readOnly === true };
+        if (value.answerOnly === true) {
+          const target = clients.get(run.runId);
+          if (!run.local || run.leadMode !== 'terminal' || run.agent !== 'claude' || target?.run.projectId !== run.projectId
+              || target.run.leadMode !== 'terminal' || target.run.agent !== 'claude' || !target.control) {
+            return refuse(run.runId, 'dispatch.control_unbound', run.leadMode);
+          }
+          client = { run, answerTarget: target };
+          socket.setTimeout(2000);
+          send({ type: 'registered', runId: run.runId });
+          return;
+        }
         if (clients.has(run.runId)) return refuse(run.runId, 'dispatch.duplicate_run', run.leadMode);
         client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
         send({ type: 'registered', runId: run.runId, ...(accountKey && verified.local === true ? { accountKey } : {}) });
+        return;
+      }
+      if (client.answerTarget) {
+        const target = client.answerTarget;
+        if (value.type !== 'request' || value.method !== 'role.answer' || !validId(value.requestId) || client.answered) return socket.destroy();
+        client.answered = true;
+        const result = clients.get(client.run.runId) === target && target.control
+          ? await target.control({ type: 'answer-role', wait: value.payload?.wait, choice: value.payload?.choice })
+          : { status: 'rejected', reason: 'not_waiting' };
+        send({ type: 'result', requestId: value.requestId, ok: true, value: result });
         return;
       }
       if (value.type === 'receipt' && validId(value.messageId) && status(value.status)) {
@@ -114,7 +135,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
     };
     send = frames(socket, value => { void handle(value).catch(() => socket.destroy()); }, () => {
       sockets.delete(socket);
-      if (!client) return;
+      if (!client || client.answerTarget) return;
       if (clients.get(client.run.runId) === client) clients.delete(client.run.runId);
       for (const [messageId, task] of client.pending) { clearTimeout(task.timer); task.resolve({ messageId, status: 'unknown' }); }
       // A's provider owns disconnect cleanup; application exit keeps today's worker policy.
@@ -157,7 +178,8 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
   };
 }
 
-function connectDispatchControl({ address, runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly = false, onControl = async () => 'queued', onEvent = () => {}, timeout = 2000 }) {
+function connectDispatchControl({ address, runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly = false, answerOnly,
+  onControl = async () => 'queued', onEvent = () => {}, timeout = 2000 }) {
   return new Promise((resolve, reject) => {
     const socket = net.connect(address), pending = new Map();
     let registered = false, connected = false, failure, counter = 0, serial = Promise.resolve();
@@ -206,7 +228,7 @@ function connectDispatchControl({ address, runId, projectId, sessionKey, capabil
     };
     socket.once('connect', () => {
       connected = true;
-      try { send({ type: 'register', runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly, finishProtocol: 1 }); } catch { socket.destroy(); }
+      try { send({ type: 'register', runId, projectId, sessionKey, capability, cwd, agent, allow, readOnly, answerOnly, finishProtocol: 1 }); } catch { socket.destroy(); }
     });
   });
 }

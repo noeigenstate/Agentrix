@@ -372,7 +372,7 @@
       "reason": "Loads a downloaded external native speech engine."
     },
     "integration/agent-event.cjs": {
-      "digest": "0397ebbce70e529c39f981d1f3487722c09468422a4396d9b8660898df66bf73",
+      "digest": "ef7bc66a9e20bb3bb697efc6553789be8a2fb943fe8e8ded17a0d585b0149564",
       "targets": [
         "electron/features/skills/session.cjs",
         "electron/features/skills/agent-seat.cjs",
@@ -381,7 +381,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "d7a2efce45cc46f57d248447543b726716b5586c7ed565f84735b33ac6fa8148",
+      "digest": "272d9afd0339f1864575f1ade74d63d9f81a92782c52c9bd75926943db46fe00",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -443,14 +443,14 @@
       "reason": "The intercept entrypoint resolves the dispatch helper and the carried lead seat reader in source, packaged or SSH layouts."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "f37d61748caee2e242c2baddc9c4a8d480ad8fc1f48b08e584d3de22f0710735",
+      "digest": "e13f07a9a77bb771f9b0718b94fefdd4d42319016b599d0bfa148a71b2b53bed",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "cd41e3b2134a17dfe646a237b34fee50c348b8c34f866b428090473a49d144d6",
+      "digest": "735ecdbd248508690a4e38ba2b4ad346fc62511698306e80fe66b1b0debef40d",
       "targets": [
         "electron/features/agents/call-seat.cjs"
       ],

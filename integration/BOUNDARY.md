@@ -19,6 +19,8 @@ SSH applies seat sidecar updates in channel order. A failed update leaves the pr
 
 `wait_roles` returns when any selected role ends, its receipt is lost, a selected hidden terminal starts waiting for the owner, or the timeout elapses.
 A wait reports each observed owner-wait transition once per lead conversation. Status shows the prompt category while the wait is active.
+For a recognised hidden Claude menu, the wait line also reports the menu id, kind, title and offered options. The conversation's
+`answer_role` uses that id through the authenticated control channel. The worker checks the current PTY sequence and choice.
 The helper retains up to 20 worker refusals in receipts and the authenticated end event. A successful run with refusals ends with reason `permission` and its original exit code.
 SDK bookkeeping denials stay in the policy audit. Only denied work is included in the run’s refusal list.
 An accepted stop keeps reason `killed` with any bounded tree-stop failure in the end line and authenticated event. Artifact settlement requires worker exit evidence.

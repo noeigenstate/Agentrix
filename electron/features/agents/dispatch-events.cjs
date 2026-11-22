@@ -130,7 +130,7 @@ function validDispatch(event) {
 }
 
 const validRefusal = entry => line(entry?.action, 160) && typeof entry.reason === 'string' &&
-  /^[a-z_]{1,40}$/.test(entry.reason) && Object.keys(entry).length === 2;
+  (entry.reason === 'needs approval' || /^[a-z_]{1,40}$/.test(entry.reason)) && Object.keys(entry).length === 2;
 const validRefusals = value => Array.isArray(value) && value.length <= REFUSAL_LIMIT && value.every(validRefusal);
 
 // calls: the session's called models (AgentCalls), present whether or not an agent runs in that terminal.

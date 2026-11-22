@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { Terminal } from '@xterm/xterm';
 import { SquaresFour, FolderSimplePlus, MagnifyingGlass, X, Minus, Square, ListChecks, CheckCircle, Info, Circle, Stamp, CirclesFour } from '@phosphor-icons/react';
 import type { AgentsState, AppUpdateState, MenuCommand, Project, ProjectLocation, Result, Settings, SSHAuthPrompt, Workspace } from './shared/types';
 import { ProjectSwitchHud } from './features/workspace/ProjectSwitchHud';
@@ -6,6 +7,7 @@ import { ProjectExplorer } from './features/files/ProjectExplorer';
 import { AgentTabScope } from './features/agents/AgentCalls';
 import { SeatsHost } from './features/agents/ActivityPane';
 import { AgentSidebar } from './features/agents/AgentSidebar';
+import { observeWorkerMenus } from './features/agents/worker-menu-screen';
 import { AddProjectDialog } from './features/workspace/AddProjectDialog';
 import { SSHAuthDialog } from './features/ssh/SSHAuthDialog';
 import { useProjectReorder } from './features/workspace/useProjectReorder';
@@ -16,7 +18,7 @@ import { useProjectFocusMotion } from './features/workspace/useProjectFocusMotio
 import { useWorkspaceAppearance } from './features/workspace/useWorkspaceAppearance';
 import { VoiceOverlay } from './features/voice/VoiceButton';
 import { applyLanguage, t } from './shared/i18n';
-import { isMac } from './shared/platform';
+import { isMac, isWindows } from './shared/platform';
 import { actionFor, applyShortcuts, editingKeyInField, shortcut, type ShortcutAction } from './features/shortcuts/shortcuts';
 import { gridColumns, gridNeighbor } from './features/workspace/grid-navigation';
 import { quickDictation } from './features/voice/voice-input';
@@ -37,6 +39,9 @@ const FilePopup = lazy(() => import('./features/files/FilePopup').then(module =>
 const GitDiffView = lazy(() => import('./features/git/GitDiffView').then(module => ({ default: module.GitDiffView })));
 
 const api = window.agentrix;
+if (typeof api?.onWorkerScreen === 'function') observeWorkerMenus(api, (cols, rows) => new Terminal({
+  cols, rows, scrollback: 0, ...(isWindows && { windowsPty: { backend: 'conpty', buildNumber: 21376 } }),
+}));
 
 // A terminal added by shortcut appears after the next state update; focus it once its input exists.
 function focusTerminalWhenReady(id: string, tries = 60) {

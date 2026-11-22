@@ -116,6 +116,7 @@ try {
         message = $(if ($Kind -in @('notify', 'permission')) { $text = if ($null -ne $hook.message) { [string]$hook.message } else { [string]$hook.tool_name }; $text.Substring(0, [Math]::Min(300, $text.Length)) } else { $null })
         sentAt = $sentAt
         hookEvent = [string]$hook.hook_event_name
+        menuTool = $(if ($hook.tool_name -in @('AskUserQuestion', 'ExitPlanMode')) { [string]$hook.tool_name } else { $null })
         sessionSource = [string]$hook.source
         sessionId = $sessionId
         # Where Claude writes this conversation; Agentrix reads the steps of the round from it.

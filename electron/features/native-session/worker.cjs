@@ -61,6 +61,7 @@ async function driveWorker({ run, spec, payload, stream, terminal, claude, claud
   };
   const runtime = terminal ? terminal.create(run, spec, createEventStream(spec, onEvent)) : claude.create(spec, onEvent);
   const unsubscribe = stream.onControl(async controlMessage => {
+    if (controlMessage.type === 'answer-role') return runtime.answerRole?.(controlMessage) ?? { status: 'rejected', reason: 'not_waiting' };
     if (controlMessage.type === 'disconnect' || controlMessage.type === 'stop') {
       stopping = controlMessage.type === 'stop';
       await runtime.close(); finish({ status: controlMessage.type === 'stop' ? 'interrupted' : 'failed' }); return 'delivered';
