@@ -12,6 +12,7 @@ const { scopePathKey, usageAtLimit, resetCreditMessage } = require('../agents/co
 const { codexExecutable } = require('../codex-runtime/locator.cjs');
 const { workerEnvironment } = require('./environment.cjs');
 const { statusPanel } = require('./status.cjs');
+const { ELEVATED_SANDBOX_CONFIG, ELEVATED_SANDBOX_ARGS, sandboxHome, verifyRoleCwd } = require('./sandbox-refresh.cjs');
 const { startupDetail } = require('../agents/start-failure.cjs');
 const { routingCommand, routingPatch, routingOwned } = require('../agents/agent-command.cjs');
 const { ownerShell, ownerShellCommand } = require('../../shared/agentrix-shims.cjs');
@@ -29,7 +30,6 @@ const PERMISSIONS = {
 };
 const permissionMode = value => typeof value === 'string' && Object.hasOwn(PERMISSIONS, value) ? value : 'full';
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
-const ELEVATED_ROLE_CONFIG = { 'windows.sandbox': 'elevated', 'features.prefer_mxc': false };
 const ELEVATED_SETUP_MESSAGE = '请重启 Agentrix，在提示时选择「设置」。也可在管理员 PowerShell 中运行以下命令后重试。 {command}';
 const ELEVATED_VERSION_MESSAGE = '当前安装的 Codex 版本过旧，无法为角色启用 Windows 沙箱。请更新 Codex 后重试。';
 // Windows and an SSH host answer a writable request read-only when their Codex has no Windows sandbox configured.
@@ -74,7 +74,7 @@ function permissionsFailure(error, sent) {
 }
 
 const occupied = new Map();
-function stopProcess(child) {
+function stopProcess(child, { preserveDescendants = false } = {}) {
   if (!child) return Promise.resolve();
   // A CLI metadata child can inherit stdout after the app-server itself exits.
   // Release our pipe ends on proved local exit; a pipe holder is not a live server.
@@ -82,7 +82,7 @@ function stopProcess(child) {
   if (child.exitCode != null || child.signalCode != null) { release(); return Promise.resolve(); }
   // Windows finds the tree only through a live app-server, and Codex's children outlive it (no job ends them): the tree is
   // stopped before our input ends (Codex leaves on end of input), and the stop ends when the server has gone and taskkill has finished.
-  const tree = !child.remote && process.platform === 'win32' && child.pid;
+  const tree = !preserveDescendants && !child.remote && process.platform === 'win32' && child.pid;
   return new Promise((resolve, reject) => {
     let gone = false, treeStopped = !tree;
     const remove = () => { clearTimeout(timer); child.removeListener('close', closed); child.removeListener('exit', exited); };
@@ -99,6 +99,10 @@ function stopProcess(child) {
           if (error && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
           treeStopped = true; settle();
         });
+    } else if (preserveDescendants) {
+      // A .cmd shim's app-server inherits this pipe and exits on EOF.
+      child.stdin.end();
+      child.kill('SIGKILL');
     } else {
       try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
     }
@@ -327,7 +331,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       async function connectThread(executable, env, onStage, isReconnecting) {
         // Readiness uses app-server's startup config, so the process and the thread must request the same backend.
         // Codex treats bare `elevated` as a literal string, so Windows launchers need no embedded quotes.
-        const configArgs = elevatedRole() ? Object.entries(ELEVATED_ROLE_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${value}`]) : [];
+        const configArgs = elevatedRole() ? ELEVATED_SANDBOX_ARGS : [];
         child ||= spawnProcess(executable, [...appServerArgs, ...configArgs], { cwd: wireCwd, env, windowsHide: true,
           detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
         rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,
@@ -355,7 +359,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           }
           if (readiness?.status !== 'ready') {
             const user = env.USERNAME && (env.USERDOMAIN ? env.USERDOMAIN + '\\' + env.USERNAME : env.USERNAME);
-            const home = env.CODEX_HOME || spec.codexHome || path.join(env.USERPROFILE || env.HOME || homedir(), '.codex');
+            const home = sandboxHome(env, spec.codexHome);
             const userArg = user ? "'" + user.replaceAll("'", "''") + "'" : translate('<你的 Windows 用户>');
             const homeArg = "'" + home.replaceAll("'", "''") + "'";
             const command = `codex sandbox setup --elevated --user ${userArg} --codex-home ${homeArg}`;
@@ -429,7 +433,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           const options = { cwd: wireCwd, model: spec.model ?? null, serviceTier: spec.fast === false ? 'default' : spec.fast === true ? 'fast' : null,
             ...threadPolicy(), approvalsReviewer: 'user' };
           const config = { ...(spec.effort && { model_reasoning_effort: spec.effort }), ...(context ? { developer_instructions: context } : {}),
-            ...(spec.roleServer && { mcp_servers: { agentrix: spec.roleServer } }), ...(elevatedRole() && ELEVATED_ROLE_CONFIG) };
+            ...(spec.roleServer && { mcp_servers: { agentrix: spec.roleServer } }), ...(elevatedRole() && ELEVATED_SANDBOX_CONFIG) };
           const requestThread = (options, resumeId) => rpc.request(resumeId ? 'thread/resume' : 'thread/start', {
             ...options, ...(resumeId && { threadId: resumeId, excludeTurns: true }), config: { ...config, ...options.config },
           });
@@ -454,6 +458,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             assertOpen();
           }
           acceptThread(result, options, { threadId, resumed, resuming });
+          if (elevatedRole()) {
+            stage = 'sandbox_cwd';
+            await verifyRoleCwd({ rpc, cwd: wireCwd, env, home: sandboxHome(env, spec.codexHome), assertOpen, translate,
+              sandbox: { ...result.sandbox, networkAccess: false }, onWait: spec.onSandboxWait });
+          }
           // Dispatch needs the resumed model context, not a copy of its historical output.
           if (resumed && spec.owner !== 'dispatch') await replayHistory();
           assertOpen();
@@ -462,10 +471,11 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           return { providerSessionId: result.thread.id, runtimeSessionId: spec.runtimeSessionId, reason: compatibility.reason };
         } catch (error) {
           error.stage ||= stage;
+          const stop = () => close({ preserveDescendants: stage === 'sandbox_cwd' });
           // The reason is only added: working it out must never replace the error or skip the close below.
-          try { error.detail ||= startupDetail(error, await rpc?.diagnostics({ stop: close, timers }), { hosts }); } catch { }
+          try { error.detail ||= startupDetail(error, await rpc?.diagnostics({ stop, timers }), { hosts }); } catch { }
           if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
-          await close(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
+          await stop(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
         }
       }
       async function replayHistory() {
@@ -728,12 +738,12 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         requests.cancelAll();
         if (active) await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId });
       }
-      async function close() {
+      async function close({ preserveDescendants = false } = {}) {
         if (closed) return;
         closed = true; threadKnown(); settingsSeen?.(); connectionAbort.abort(); setState('stopping'); requests?.cancelAll();
         if (active && rpc) { try { await rpc.request('turn/interrupt', { threadId: events.binding.providerSessionId, turnId: events.binding.turnId }, 250); } catch {} }
         rpc?.close();
-        try { await stopProcess(child); }
+        try { await stopProcess(child, { preserveDescendants }); }
         finally {
           child?.dispose?.();
           if (lockKey && occupied.get(lockKey) === spec.runtimeSessionId) occupied.delete(lockKey);

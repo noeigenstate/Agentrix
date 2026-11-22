@@ -89,6 +89,7 @@ export function App() {
     guideShown.current = true; if (workspace.settings.guideVersion) setGuide('news'); else startTour();
   }, [workspace?.guide, workspace?.settings.guideVersion]);
   const [error, setError] = useState<string | null>(null);
+  const [sandboxProgress, setSandboxProgress] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
   const [addOpen, setAddOpen] = useState(false);
   const [sshAuth, setSSHAuth] = useState<SSHAuthPrompt[]>([]);
@@ -184,6 +185,7 @@ export function App() {
     const offState = api.onState(setWorkspace);
     const offFocus = api.onFocusProject(focusProject);
     const offError = api.onError(reportError);
+    const offSandboxProgress = api.onSandboxProgress?.(setSandboxProgress);
     const offUpdates = api.onUpdateState(setUpdates);
     const offAgents = api.onAgents(setAgents);
     const offFullScreen = api.onFullScreen(setFullScreen);
@@ -195,7 +197,10 @@ export function App() {
     perform(api.getUpdateState()).then(state => { if (state) setUpdates(state); });
     perform(api.getState()).then(state => { if (state) setWorkspace(state); });
     const clock = setInterval(() => setNow(Date.now()), 5000);
-    return () => { offState(); offFocus(); offError(); offUpdates(); offAgents(); offFullScreen(); offAuth(); offEditor(); clearInterval(clock); if (errorTimer.current) clearTimeout(errorTimer.current); };
+    return () => {
+      offState(); offFocus(); offError(); offSandboxProgress?.(); offUpdates(); offAgents(); offFullScreen(); offAuth(); offEditor();
+      clearInterval(clock); if (errorTimer.current) clearTimeout(errorTimer.current);
+    };
   }, [focusProject, perform, reportError, allowNavigation]);
   // A card that sends the owner to a settings page (the launcher's incomplete Claude Code) asks with this event.
   useEffect(() => {
@@ -406,7 +411,10 @@ export function App() {
     </div>
     {popup && <Suspense fallback={null}><FilePopup target={popup} onError={reportError} /></Suspense>}
     <SeatsHost />
-    {error && <div className="error-toast" role="alert"><Info size={18} /><span>{error}</span><IconButton label={t('关闭提示')} onClick={() => setError(null)}><X size={16} /></IconButton></div>}
+    {(error || sandboxProgress) && <div className="error-toast" role={error ? 'alert' : 'status'}><Info size={18} />
+      <span>{error || sandboxProgress}</span>
+      <IconButton label={t('关闭提示')} onClick={() => error ? setError(null) : setSandboxProgress(null)}><X size={16} /></IconButton>
+    </div>}
     {guide === 'tour' && <GuideTour projects={projects} focusedId={focusedId} withAdd={tourWithAdd.current} nativeTitlebar={nativeTitlebar} onClose={closeGuide} />}
     {guide && guide !== 'tour' && <UsageGuide version={workspace.version} start={guide} onTour={startTour} onClose={closeGuide} />}
     {settingsOpen && <SettingsDialog settings={settings} projects={workspace.projects} projectId={focus?.id} desktopGlass={workspace.desktopGlass} uiZoom={workspace.uiZoom} localShell={workspace.localShell ?? null} agents={agents} onAgents={setAgents} initialSection={settingsSection} focusOnOpen={settingsFocus} updates={updates} onGuide={() => { setSettingsOpen(false); setSettingsSection('appearance'); startTour(); }} onCheckUpdate={() => { perform(api.checkForUpdates()); }} onInstallUpdate={installUpdate} onDownloadPage={() => { perform(api.openDownloadPage()); }} close={() => { setSettingsOpen(false); setSettingsSection('appearance'); setSettingsFocus(false); }} update={setPreference} quit={() => perform(api.quit())} />}
