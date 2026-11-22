@@ -1392,7 +1392,9 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
           try { if (effective.resume) await activeRuntime.resume(); else await activeRuntime.start(); }
           catch (error) {
             await activeRuntime.close(); activeRuntime = null; controlClient?.close(); controlClient = null;
-            if (error.code === 'elevated_sandbox_not_ready' || process.platform === 'win32' && error.code === 'sandbox_mismatch') throw new Error(error.message);
+            const localWindows = process.platform === 'win32' && !workerEnv.SSH_CONNECTION;
+            if (localWindows && (error.code === 'sandbox_mismatch' || error.code === 'elevated_sandbox_not_ready'
+              || error.stage === 'sandbox_readiness' && error.code === 'unsupported_codex_version')) throw new Error(error.message);
             const stage = ['resolve_executable', 'spawn', 'initialize', 'capability_probe', 'sandbox_readiness', 'thread_start', 'thread_resume']
               .includes(error.stage) ? error.stage : 'startup';
             const category = error.category && /^(?:rpc_-\d+|request_failed|unexpected_success)$/.test(error.category) ? error.category
