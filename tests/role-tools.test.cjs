@@ -104,7 +104,7 @@ test('roles_status shows sandbox progress during start_role confirmation', async
   assert.equal((await started).id, 'run-1');
 });
 
-test('role status, wait and result return structured refusals from the detached receipt', async t => {
+test('role wait and result return structured refusals while status summarizes the settled receipt', async t => {
   const { env, folder } = session(t, 'conductor');
   const refused = [{ action: 'Bash: run tests', reason: 'read_only' }];
   const fake = engine((args, onTiming) => {
@@ -118,7 +118,10 @@ test('role status, wait and result return structured refusals from the detached 
   const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
   await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Inspect', readOnly: true });
   assert.deepEqual((await tools.wait_roles())[0].refused, refused);
-  assert.deepEqual((await tools.roles_status()).roles[0].refused, refused);
+  const { roles: [summary] } = await tools.roles_status();
+  assert.equal(summary.refusedCount, 1);
+  assert.equal(summary.reason, 'permission');
+  assert.equal(summary.refused, undefined);
   const result = await tools.role_result({ id: 'run-1' });
   assert.deepEqual(result.refused, refused);
   assert.match(result.answer, /^## Needs approval/);
@@ -144,7 +147,7 @@ test('role results and status expose a settled decision without reading the answ
   settled = true;
   const { roles: [ended] } = await tools.roles_status();
   assert.equal(ended.needsDecision, true);
-  assert.match(ended.end, / · needs decision$/);
+  assert.equal(ended.reason, 'exit');
   fs.writeFileSync(out, answer);
   const result = await tools.role_result({ id: 'run-1' });
   assert.equal(result.needsDecision, true);
@@ -190,7 +193,7 @@ test('start_role returns the engine error for a missing working directory', asyn
     ...context, launch: () => assert.fail('A missing working directory must fail before launch'),
   }) });
   await assert.rejects(tools.start_role({ seat: 'developer', title: 'Build', brief: 'Make the change', allow: ['src/**'], cwd: missing }), /^Error: \[dispatch\] failed: ENOENT/);
-  assert.deepEqual(await tools.roles_status(), { roles: [], earlierEnded: 0 });
+  assert.deepEqual(await tools.roles_status(), { roles: [], earlierEnded: 0, omittedRecentEnded: 0 });
 });
 
 test('start_role creates local worktrees from HEAD, shares dependencies and rejects invalid requests', async t => {
@@ -201,7 +204,6 @@ test('start_role creates local worktrees from HEAD, shares dependencies and reje
   const { tools } = createRoleTools({ env, cwd: project, engine: fake.run });
   const request = { seat: 'developer', title: 'Build', brief: 'Implement the update', allow: ['source'], worktree: 'frontend' };
   await assert.rejects(tools.start_role({ ...request, readOnly: true }), /read-only role cannot create a worktree/);
-  await assert.rejects(tools.start_role({ ...request, cwd: project }), /either cwd or worktree/);
   await assert.rejects(tools.start_role(request), /not a Git repository/);
   assert.equal(fake.calls.length, 0);
 
@@ -220,8 +222,9 @@ test('start_role creates local worktrees from HEAD, shares dependencies and reje
   });
   assert.equal(created.length, 1);
   assert.equal(attempts.find(result => result.status === 'rejected').reason.message, 'Branch work/frontend already exists.');
-  const { cwd, branch } = created[0].value;
+  const { cwd, branch, base } = created[0].value;
   assert.equal(branch, 'work/frontend');
+  assert.equal(base, git(['rev-parse', '--short', head]));
   assert.equal(path.dirname(cwd), os.tmpdir());
   assert.equal(git(['branch', '--show-current'], cwd), branch);
   assert.equal(git(['rev-parse', 'HEAD'], cwd), head);
@@ -247,6 +250,48 @@ test('start_role creates local worktrees from HEAD, shares dependencies and reje
   assert.equal(fs.existsSync(path.join(other.cwd, 'node_modules')), false);
 });
 
+test('start_role bases a new worktree on the lead checkout or a verified explicit revision', async t => {
+  const { env, folder, cleanups } = session(t, 'conductor');
+  const project = path.join(folder, 'project'), lead = path.join(folder, 'lead');
+  fs.mkdirSync(project);
+  const git = gitFixture(project);
+  const projectHead = git(['rev-parse', 'HEAD']);
+  git(['worktree', 'add', '--quiet', '-b', 'lead-branch', lead]);
+  cleanups.push(() => git(['worktree', 'remove', '--force', lead]));
+  fs.writeFileSync(path.join(lead, 'source'), 'lead commit');
+  git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '--no-gpg-sign', '-am', 'lead change'], lead);
+  const leadHead = git(['rev-parse', 'HEAD'], lead);
+  fs.writeFileSync(path.join(lead, 'source'), 'uncommitted lead change');
+  const modules = path.join(project, 'node_modules');
+  fs.mkdirSync(modules);
+  const fake = engine(args => `[dispatch] started ${path.basename(args[args.indexOf('--cwd') + 1])} codex\n`);
+  const { tools } = createRoleTools({ env, cwd: project, engine: fake.run, tempRoot: folder });
+  const task = { seat: 'developer', title: 'Build', brief: 'Build it', allow: ['source'] };
+  const blob = git(['rev-parse', 'HEAD:source']);
+  for (const from of ['', '--all', 'missing-branch', blob]) {
+    await assert.rejects(tools.start_role({ ...task, cwd: lead, worktree: 'invalid', from }), /from must/);
+  }
+  await assert.rejects(tools.start_role({ ...task, from: 'lead-branch' }), /requires worktree/);
+  assert.equal(fake.calls.length, 0);
+  assert.equal(git(['branch', '--list', 'work/invalid']), '');
+  for (const [worktree, cwd, from, expected] of [
+    ['lead', lead, undefined, leadHead],
+    ['explicit-branch', folder, 'lead-branch', leadHead],
+    ['explicit-commit', lead, projectHead, projectHead],
+    ['non-git', path.join(folder, 'missing'), undefined, projectHead],
+  ]) {
+    const started = await tools.start_role({ ...task, cwd, worktree, from });
+    cleanups.push(() => {
+      fs.unlinkSync(path.join(started.cwd, 'node_modules'));
+      git(['worktree', 'remove', '--force', started.cwd]);
+    });
+    assert.equal(started.base, git(['rev-parse', '--short', expected]));
+    assert.equal(git(['rev-parse', 'HEAD'], started.cwd), expected);
+    assert.equal(fs.readFileSync(path.join(started.cwd, 'source'), 'utf8'), expected === leadHead ? 'lead commit' : 'committed');
+    assert.equal(fs.realpathSync.native(path.join(started.cwd, 'node_modules')), fs.realpathSync.native(modules));
+  }
+});
+
 test('start_role rolls back a failed worktree checkout or launch and allows a retry with the same suffix', async t => {
   const { env, folder, cleanups } = session(t, 'conductor');
   const git = gitFixture(folder);
@@ -263,7 +308,7 @@ test('start_role rolls back a failed worktree checkout or launch and allows a re
   const baseline = git(['worktree', 'list', '--porcelain']);
   const request = { seat: 'developer', title: 'Build', brief: 'Build it', allow: ['source'], worktree: 'retry' };
   for (const [failure, message] of [
-    ['checkout', 'Git could not create a worktree from HEAD.'],
+    ['checkout', 'Git could not check out the worktree branch.'],
     ['brief', 'Cannot write brief'],
     ['engine', '[dispatch] failed: fixture failure'],
     ['no-start', 'The role did not start.'],
@@ -423,7 +468,7 @@ test('an unready Codex lead gets instructions before checkout, with coalesced ch
   assert.deepEqual(Object.keys(result), ['instruction']);
   assert.match(result.instruction, /Codex 内置的子代理/);
   assert.match(result.instruction, /codex sandbox setup --elevated/);
-  assert.deepEqual(await tools.roles_status(), { roles: [], earlierEnded: 0 });
+  assert.deepEqual(await tools.roles_status(), { roles: [], earlierEnded: 0, omittedRecentEnded: 0 });
   assert.equal(fake.calls.length, 0);
   assert.equal(checks, 1);
   time += 4999;
@@ -552,7 +597,8 @@ test('role timing follows the engine across delayed queries, running roles, stop
       fs.writeFileSync(answer, 'Final answer');
 
       now = startedAt + (state === 'running' ? 16000 : state === 'stopped' ? 30000 : 97000);
-      const result = state === 'stopped' ? await tools.stop_role({ id }) : (await tools.roles_status()).roles[0];
+      const result = state === 'stopped' ? await tools.stop_role({ id })
+        : state === 'running' ? (await tools.roles_status()).roles[0] : (await tools.wait_roles())[0];
       assert.equal(result.startSeconds, state === 'legacy' ? 10 : 7);
       assert.equal(result.seconds, state === 'running' ? 16 : state === 'legacy' ? 89 : 31);
       assert.equal(result.endedAt, state === 'running' ? null : new Date(state === 'legacy' ? now : endedAt).toISOString());
@@ -591,13 +637,16 @@ test('wait_roles selects running roles, returns on the first ending across folde
   firstEnded.resolve();
   const roles = await waiting;
   assert.deepEqual(roles.map(({ id, state }) => [id, state]), [['run-1', 'ended'], ['run-2', 'running']]);
-  assert.match(roles[1].activity, /run-2/);
+  assert.match(roles[0].end, /ended run-1/);
+  assert.equal(roles[1].activity, undefined);
   for (const options of [{ seconds: 2 }, { ids: ['run-2', 'run-2'], seconds: 540 }]) {
     const remaining = await tools.wait_roles(options);
     assert.deepEqual(remaining.map(({ id, state }) => [id, state]), [['run-2', 'running']]);
     assert.equal(fake.calls.at(-1).at(-1), String(options.seconds));
   }
-  assert.equal((await tools.wait_roles({ ids: ['run-1', 'run-2'] }))[0].state, 'ended');
+  const [settled] = await tools.wait_roles({ ids: ['run-1', 'run-2'] });
+  assert.equal(settled.state, 'ended');
+  assert.equal(settled.end, undefined);
   assert.deepEqual(await tools.wait_roles({ ids: [] }), []);
   await assert.rejects(tools.wait_roles({ ids: ['other'] }), /No role run other in this conversation/);
   await assert.rejects(tools.wait_roles({ seconds: 541 }), /between 0 and 540/);
@@ -632,12 +681,50 @@ test('roles_status keeps the ten-minute boundary and role_result can still read 
   now++;
   const justObserved = await tools.roles_status();
   assert.equal(justObserved.earlierEnded, 0);
-  assert.deepEqual(justObserved.roles.map(role => role.id), ['run-1', 'run-2', 'run-3']);
+  assert.deepEqual(justObserved.roles.map(role => role.id), ['run-3', 'run-2', 'run-1']);
   now += 600000;
   const { roles, earlierEnded } = await tools.roles_status();
   assert.equal(earlierEnded, 1);
-  assert.deepEqual(roles.map(({ id, state }) => [id, state]), [['run-2', 'ended'], ['run-3', 'running']]);
+  assert.deepEqual(roles.map(({ id, state }) => [id, state]), [['run-3', 'running'], ['run-2', 'ended']]);
   assert.equal((await tools.role_result({ id: 'run-1' })).answer, 'Final answer');
+});
+
+test('roles_status caps recent endings by settlement time and writes each summary on one line', async t => {
+  const { env, folder } = session(t, 'conductor');
+  const startedAt = Date.UTC(2026, 0, 1), title = 'Review '.repeat(20);
+  let next = 0;
+  t.mock.method(Date, 'now', () => startedAt + 30_000);
+  const fake = engine((args, onTiming) => {
+    if (args.includes('--detach')) {
+      const id = String(++next);
+      onTiming({ id, startedAt });
+      return `[dispatch] started ${id} claude\n`;
+    }
+    return args.slice(1, args.indexOf('--cwd')).map(id => {
+      if (id === '13') return '[dispatch] still running 13 last activity now\n';
+      onTiming({ id, endedAt: startedAt + (13 - Number(id)) * 1000, needsDecision: id === '1' });
+      return `[dispatch] ended ${id} claude · exit 0 reason exit\n`;
+    }).join('');
+  });
+  const roles = createRoleTools({ env, cwd: folder, engine: fake.run, tempRoot: folder });
+  for (const _ of Array(13)) await roles.tools.start_role({ seat: 'reviewer', title, brief: 'Read', readOnly: true });
+  const input = new PassThrough(), output = new PassThrough(), result = Promise.withResolvers();
+  output.on('data', chunk => result.resolve(JSON.parse(chunk).result.content[0].text));
+  const done = serve({ roles, input, output });
+  input.end('{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"roles_status"}}\n');
+  await done;
+  const text = await result.promise;
+  const { roles: [running, ...ended], earlierEnded, omittedRecentEnded } = JSON.parse(text);
+  assert.equal(running.id, '13');
+  assert.equal(running.title, title);
+  assert.match(running.activity, /last activity/);
+  assert.deepEqual(ended.map(role => role.id), Array.from({ length: 10 }, (_, index) => String(index + 1)));
+  assert.deepEqual(ended[0], { id: '1', seat: 'reviewer', title: title.slice(0, 63) + '…', state: 'ended', seconds: 12,
+    reason: 'exit', needsDecision: true, refusedCount: 0 });
+  assert.ok(text.split('\n').some(line => line.trim() === JSON.stringify(ended[0]) + ','));
+  assert.equal(earlierEnded, 0);
+  assert.equal(omittedRecentEnded, 2);
+  assert.equal((await roles.tools.role_result({ id: '12' })).title, title);
 });
 
 test('a missing work folder or unknown receipt ends its role and stops future refreshes', async t => {
@@ -660,7 +747,9 @@ test('a missing work folder or unknown receipt ends its role and stops future re
     const [lost] = await tools.wait_roles();
     assert.equal(lost.state, 'ended');
     assert.equal(lost.end, `lost: ${reason}`);
-    assert.deepEqual(await tools.roles_status(), { roles: [lost], earlierEnded: 0 });
+    assert.deepEqual(await tools.roles_status(), { roles: [
+      { id: 'missing', seat: 'developer', title: 'Inspect', state: 'ended', seconds: lost.seconds, reason: 'lost', refusedCount: 0 },
+    ], earlierEnded: 0, omittedRecentEnded: 0 });
     assert.deepEqual(await tools.wait_roles(), []);
     assert.equal((await tools.role_result({ id: 'missing' })).answer, null);
     assert.equal(fake.calls.length, 2);

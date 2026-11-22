@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, execFileSync } from 'node:child_process';
-import { buildCatalog, selectTests } from './affected-tests-core.mjs';
+import { buildCatalog, repinDynamicLoad, selectTests } from './affected-tests-core.mjs';
 import { clipboardSuites } from './gui-suites.mjs';
 import policy from './clipboard-policy.cjs';
 
@@ -55,6 +55,10 @@ export function runCommands(plan, catalog, { kind = 'all', packaged = false, loc
 }
 
 export function parseOptions(args) {
+  if (args[0] === '--repin') {
+    if (args.length !== 2 || args[1].startsWith('--')) throw new Error('Usage: --repin <repo-relative file>');
+    return { repin: args[1] };
+  }
   const options = {};
   for (let i = 0; i < args.length; i++) {
     const key = args[i].slice(2);
@@ -69,6 +73,10 @@ export function parseOptions(args) {
 
 export function main(args = process.argv.slice(2), execute = spawnSync) {
   const options = parseOptions(args);
+  if (options.repin !== undefined) {
+    console.log(`${options.repin}: ${repinDynamicLoad(root, options.repin)}`);
+    return 0;
+  }
   let { plan, catalog } = options.plan ? { plan: JSON.parse(fs.readFileSync(options.plan, 'utf8')), catalog: buildCatalog(root) }
     : planFor({ base: options.base, head: options.head, full: options.full ? 'Explicit full matrix' : null });
   if (options.catalog) console.log(JSON.stringify({ modules: catalog.modules, globals: [...catalog.globalTests], errors: catalog.errors }, null, 2));

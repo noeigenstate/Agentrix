@@ -22,6 +22,7 @@ SSH applies seat sidecar updates in channel order. A failed update leaves the pr
 
 `wait_roles` returns when any selected role ends, its receipt is lost, a selected hidden terminal starts waiting for the owner, or the timeout elapses.
 A wait reports each observed owner-wait transition once per lead conversation. Status shows the prompt category while the wait is active.
+Wait returns full details for roles whose lifecycle or owner-wait state changed during the call. Other selected roles get one-line summaries.
 For a recognised hidden Claude menu, the wait line also reports the menu id, kind, title and offered options. The conversation's
 `answer_role` uses that id through the authenticated control channel. The worker checks the current PTY sequence and choice.
 The helper retains up to 20 worker refusals in receipts and the authenticated end event. A successful run with refusals ends with reason `permission` and its original exit code.
@@ -32,10 +33,13 @@ A Claude role keeps its early session-based start. The first provider model upda
 receipt as it arrives. Status and the final line expose the resulting verdict.
 All briefs ask roles to report blocked actions under Needs approval. Claude briefs direct roles to finish with plain text and avoid owner dialogs.
 Roles defer choices affecting scope, reversibility or product behavior under Needs decision. On settlement, that answer heading adds a fixed end-line note and a boolean to detached role status and results.
-`roles_status` lists endings for ten minutes from first observation and reports engine timing when available.
+`roles_status` shows full running roles and the ten newest endings first observed in the last ten minutes. Each ending is summarized on one line with its reason and refusal count.
+`earlierEnded` counts endings past the ten-minute window. `omittedRecentEnded` counts recent endings beyond the cap. `role_result` gives full details.
 A local Windows Codex role reports its sandbox wait in the detached receipt and in role status during confirmation.
 Its detached launcher allows eight extra minutes for authorization.
 A writable `start_role` may create a local Git worktree and returns its branch and folder after confirmation.
+It returns the abbreviated base commit. An explicit `from` resolves in the project repository and takes precedence over a same-project
+`cwd` worktree's HEAD. Otherwise the base is the project checkout's HEAD.
 A failed checkout or launch rolls back the new worktree and branch.
 Before creating a worktree or dispatching a local Windows Codex seat, the role tools share a readiness check within the lead conversation.
 A ready result lasts for that conversation. Other results expire after five seconds. A Claude lead without a recorded seat skips preflight.
@@ -46,6 +50,10 @@ Local MCP roles own marked temp folders for their briefs, answers and logs. The 
 The MCP sweeps asynchronously on startup and when it observes an end, at most once a minute. It expires settled folders after seven days,
 removes marked orphans after 30 days, and can evict read results oldest first above 256 folders. POSIX ownership and mode are checked again before removal,
 links are removed without following them, and failed removals back off without consuming the sweep cap. `role_result` explains when cleanup removed an answer.
+
+When a dynamic load changes, review its declared targets and reason in `scripts/affected-tests-map.json`, then run
+`node scripts/affected-tests.mjs --repin <repo-relative file>` and `node --test tests/affected-tests.test.cjs`.
+The pin tracks normalized load expressions and their context. Unrelated edits and line moves do not need a new pin.
 
 ## Owns
 - `integration/dispatch.cjs`

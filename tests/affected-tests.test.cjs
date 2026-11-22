@@ -77,6 +77,8 @@ test('unknown files, missing ownership, dynamic-load changes and every shared tr
   assert.equal(selectTests(broken, ['src/c/index.ts']).full, true);
   f.write('src/b/index.ts', 'const indirect = require; indirect(variable);');
   assert.match(buildCatalog(f.directory, f.manifest).errors.join(), /Unclassified dynamic load/);
+  f.write('src/b/index.ts', "module['require'](variable);");
+  assert.match(buildCatalog(f.directory, f.manifest).errors.join(), /Unclassified dynamic load/);
 });
 
 test('a smoke-only change selects its suites and importing tests; notes do not broaden selection', async t => {
@@ -100,16 +102,33 @@ test('a test helper mapped to one module selects that module and the tests that 
 });
 
 test('declared and pinned dynamic dependencies propagate; a stale pin or stale explicit test mapping forces full coverage', async t => {
-  const f = fixture(t), { buildCatalog, selectTests } = await core;
-  f.write('src/a/index.ts', 'require(variable);');
-  const { createHash } = require('node:crypto');
-  f.manifest.dynamicLoads['src/a/index.ts'] = { digest: createHash('sha256').update('require(variable);').digest('hex'), targets: ['src/b/index.ts'], reason: 'Fixture runtime module binding' };
+  const f = fixture(t), { buildCatalog, repinDynamicLoad, selectTests } = await core;
+  const file = 'src/a/index.ts', manifestFile = 'scripts/affected-tests-map.json';
+  const source = "const a = require(variable);\nconst b = import(`./${name}.js`);\nconst c = createRequire(base)('package');";
+  f.write(file, source);
+  f.manifest.dynamicLoads[file] = { targets: ['src/b/index.ts'], reason: 'Fixture runtime module binding' };
+  f.write(manifestFile, JSON.stringify(f.manifest));
+  const digest = repinDynamicLoad(f.directory, file);
+  f.manifest.dynamicLoads[file].digest = digest;
+  f.write(file, "const b = import( `./${name}.js` );\r\nconst unrelated = 3;\r\nconst a = require(/* comment */ variable);\r\nconst c = createRequire(base)('package');");
+  assert.equal(repinDynamicLoad(f.directory, file), digest);
   let c = buildCatalog(f.directory, f.manifest);
   assert.deepEqual(c.errors, []);
   assert.deepEqual(selectTests(c, ['src/b/index.ts']).modules, [f.id('a'), f.id('b')]);
-  f.manifest.dynamicLoads['src/a/index.ts'].digest = 'stale';
-  c = buildCatalog(f.directory, f.manifest); assert.equal(selectTests(c, []).full, true);
-  f.write('src/a/index.ts', 'export const value = 1;'); delete f.manifest.dynamicLoads['src/a/index.ts'];
+  for (const changed of [source + '\nconst d = require(extra);', source + '\nrequire(variable);', source.replace('variable', 'other'),
+    source.replace('${name}', '${other}'), source.replace("'package'", "'different'"), source.split('\n')[0]]) {
+    f.write(file, changed);
+    const mismatch = selectTests(buildCatalog(f.directory, f.manifest), []);
+    assert.equal(mismatch.full, true);
+    assert.ok(mismatch.fullReasons.some(reason => reason.includes(`Unclassified dynamic load: ${file}`)));
+  }
+  f.write(file, source + '\nconst = ;');
+  assert.throws(() => repinDynamicLoad(f.directory, file), /Cannot parse/);
+  assert.equal(selectTests(buildCatalog(f.directory, f.manifest), []).full, true);
+  f.write(file, 'export const value = 1;');
+  assert.throws(() => repinDynamicLoad(f.directory, file), /remove its pin/);
+  assert.match(buildCatalog(f.directory, f.manifest).errors.join(), /Stale dynamic-load mapping/);
+  delete f.manifest.dynamicLoads[file];
   f.write(f.id('a'), fs.readFileSync(path.join(f.directory, f.id('a')), 'utf8').replace('## May import\n', '## May import\n- `src/b/**`\n'));
   c = buildCatalog(f.directory, f.manifest);
   assert.deepEqual(selectTests(c, ['src/b/index.ts']).modules, [f.id('a'), f.id('b')]);
@@ -130,7 +149,9 @@ test('--run keeps selected file argv, rejects ambiguous options, and never permi
   const c = await actual(), plan = { unit: ['tests/affected-tests.test.cjs'], real: [], python: [], gui: ['clipboard', 'composer', 'session', 'gpu-terminal', 'workspace', 'editor-terminals'] };
   assert.deepEqual(runCommands(plan, c, { env: { CI: 'true' } }).at(-1).args, ['--test', '--test-concurrency=4', 'tests/affected-tests.test.cjs']);
   assert.equal(runCommands(plan, c, { kind: 'gui', env: { GITHUB_ACTIONS: 'true' } }).length, 1);
-  for (const args of [['--base'], ['--base', 'a', '--base', 'b'], ['--kind', 'bad'], ['--plan', 'p', '--base', 'b'], ['--wat']]) assert.throws(() => parseOptions(args));
+  assert.deepEqual(parseOptions(['--repin', 'integration/role-tools.cjs']), { repin: 'integration/role-tools.cjs' });
+  for (const args of [['--base'], ['--base', 'a', '--base', 'b'], ['--kind', 'bad'], ['--plan', 'p', '--base', 'b'], ['--wat'],
+    ['--repin'], ['--repin', 'file.cjs', '--run']]) assert.throws(() => parseOptions(args));
 });
 
 test('the --run entrypoint executes only selected unit argv and returns the first child failure', async t => {

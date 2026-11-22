@@ -16,13 +16,16 @@ const { validRefusals } = require(path.join(runtime, 'features/agents/dispatch-e
 const REVIEWING = /^(reviewer|qa|security|a11y)(\/|$)/;
 const PROTOCOL = '2025-06-18';
 const RECENT_END_MS = 10 * 60 * 1000;
+const RECENT_END_LIMIT = 10;
+const SUMMARY_TITLE_LIMIT = 64;
 const READINESS_CACHE_MS = 5000;
 const exec = promisify(execFile);
 const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15 ? value : undefined;
 
 const text = description => ({ type: 'string', description });
 const TOOLS = [
-  { name: 'start_role', description: 'Start a background role with its seat settings. Returns a confirmed run id or instructions if the role cannot be dispatched.',
+  { name: 'start_role',
+    description: 'Start a role with its seat settings. Returns a run id with the short base commit for a new worktree, or instructions when dispatch is unavailable.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
       title: text('One line: what the role does'),
@@ -30,13 +33,16 @@ const TOOLS = [
       readOnly: { type: 'boolean', description: 'True for a role that only reads, such as a review or research' },
       small: { type: 'boolean', description: 'Use a short brief for a precise read-only lookup or an edit to one or two named files.' },
       allow: { type: 'array', items: { type: 'string' }, description: 'Globs of the files the role may change; required unless readOnly' },
-      cwd: text('Folder to work in, such as a git worktree; the project folder by default'),
-      worktree: text('Branch suffix for a new work/<suffix> worktree from HEAD; for writable roles without cwd'),
+      cwd: text('Folder to work in. With worktree, uses this project worktree’s HEAD as the default base.'),
+      worktree: text('Branch suffix for a new work/<suffix> worktree for a writable role. Defaults to the project HEAD when no project worktree is supplied.'),
+      from: text('Optional branch or commit for the new worktree base. Requires worktree.'),
     } } },
-  { name: 'roles_status', description: 'Show running roles and endings first observed in the last 10 minutes, plus the number of earlier endings.',
+  { name: 'roles_status',
+    description: 'Show full running roles and the 10 newest endings first observed in the last 10 minutes, with counts for older and omitted recent endings. Use role_result for details.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {} } },
-  { name: 'wait_roles', description: 'Wait until a selected role ends, loses its receipt, reports a new wait, or times out. Shows the selected roles.',
+  { name: 'wait_roles',
+    description: 'Wait for an ending, lost receipt, new owner wait, or timeout. Returns full details for roles that changed and one-line summaries for the rest.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', properties: {
       ids: { type: 'array', items: { type: 'string' }, description: 'Run ids; defaults to all running roles in this conversation' },
@@ -48,7 +54,7 @@ const TOOLS = [
       wait: text('The current menu id from wait_roles or roles_status'),
       choice: { anyOf: [{ type: 'integer', minimum: 1 }, { type: 'string' }] },
     } } },
-  { name: 'role_result', description: 'Read the final answer of a role that has ended.',
+  { name: 'role_result', description: 'Read a role’s full status, refusal details, and final answer when available.',
     annotations: { readOnlyHint: true },
     inputSchema: { type: 'object', required: ['id'], properties: { id: text('The run id start_role returned') } } },
   { name: 'stop_role', description: 'Stop a running role.',
@@ -64,7 +70,18 @@ function excludeDependencies(exclude) {
   fs.appendFileSync(exclude, (contents && !contents.endsWith('\n') ? '\n' : '') + 'node_modules\n');
 }
 
-async function createWorktree(cwd, suffix) {
+async function worktreeBaseFolder(git, root, folder) {
+  if (!folder) return root;
+  const commonArgs = ['--path-format=absolute', '--git-common-dir'];
+  const source = await git(['rev-parse', '--is-inside-work-tree', ...commonArgs], folder).catch(() => null);
+  const [inside, sourceCommon] = source?.stdout.trim().split(/\r?\n/) ?? [];
+  if (inside !== 'true' || !sourceCommon) return root;
+  const { stdout } = await git(['rev-parse', ...commonArgs], root);
+  const [projectGit, sourceGit] = await Promise.all([stdout.trim(), sourceCommon].map(dir => fs.promises.realpath(dir)));
+  return path.relative(projectGit, sourceGit) === '' ? folder : root;
+}
+
+async function createWorktree(cwd, suffix, folder, from) {
   if (typeof suffix !== 'string' || !suffix.trim()) throw new Error('worktree must be a non-empty branch suffix.');
   const branch = `work/${suffix}`;
   const ref = `refs/heads/${branch}`;
@@ -75,6 +92,11 @@ async function createWorktree(cwd, suffix) {
     if (error.stderr?.includes('not a git repository')) throw new Error('The project is not a Git repository.');
     throw new Error('Could not determine the project Git root.');
   }
+  const baseFolder = from === undefined ? await worktreeBaseFolder(git, root, folder) : root;
+  const { stdout: commitOutput } = await git(['rev-parse', '--verify', '--end-of-options', `${from ?? 'HEAD'}^{commit}`], baseFolder)
+    .catch(() => { throw new Error(from === undefined ? 'Git could not resolve HEAD to create the worktree.' : 'from must resolve to a Git commit in this project.'); });
+  const commit = commitOutput.trim();
+  const { stdout: shortCommit } = await git(['rev-parse', '--short', commit], root);
   const branchExists = () => git(['show-ref', '--verify', '--quiet', ref], root).then(() => true, error => {
     if (error.code === 1) return false;
     throw new Error('Could not check whether the worktree branch already exists.');
@@ -84,7 +106,7 @@ async function createWorktree(cwd, suffix) {
 
   const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agentrix-role-worktree-'));
   // Reserve the ref separately so a failed checkout can only roll back its own branch.
-  try { await git(['branch', '--', branch, 'HEAD'], root); }
+  try { await git(['branch', '--', branch, commit], root); }
   catch (error) {
     await fs.promises.rmdir(work).catch(() => {});
     const stderr = error.stderr ?? '';
@@ -95,8 +117,7 @@ async function createWorktree(cwd, suffix) {
       throw new Error(duplicate);
     }
     if (stderr.includes('is not a valid branch name')) throw new Error('The worktree suffix is not a valid Git branch name.');
-    if (stderr.includes("not a valid object name: 'HEAD'")) throw new Error('Git could not resolve HEAD to create the worktree.');
-    throw new Error('Git could not create a worktree from HEAD.');
+    throw new Error('Git could not create the worktree branch.');
   }
   const modules = path.join(root, 'node_modules');
   const link = path.join(work, 'node_modules');
@@ -108,7 +129,7 @@ async function createWorktree(cwd, suffix) {
   };
   try {
     await git(['worktree', 'add', '--quiet', work, branch], root).catch(cause => {
-      throw new Error('Git could not create a worktree from HEAD.', { cause });
+      throw new Error('Git could not check out the worktree branch.', { cause });
     });
     if ((await fs.promises.stat(modules).catch(error => { if (error.code !== 'ENOENT') throw error; }))?.isDirectory()) {
       const { stdout } = await git(['rev-parse', '--path-format=absolute', '--git-path', 'info/exclude'], work);
@@ -120,7 +141,22 @@ async function createWorktree(cwd, suffix) {
     await rollback().catch(() => {});
     throw error;
   }
-  return { cwd: work, branch, rollback };
+  return { cwd: work, branch, base: shortCommit.trim(), rollback };
+}
+
+function elapsedSeconds(run) {
+  const end = run.endedAt ?? run.observedEndAt;
+  const measured = run.startedAt !== undefined && (!run.end || run.endedAt !== undefined);
+  const elapsed = measured ? (end ?? Date.now()) - run.startedAt : (run.observedEndAt ?? Date.now()) - run.observedStartAt;
+  return Math.max(0, Math.round(elapsed / 1000));
+}
+
+function summarize(run) {
+  const title = Array.from(run.title);
+  const reason = run.lost ? 'lost' : /\bexit -?\d+ reason ([a-z]+)\b/.exec(run.end)?.[1] ?? 'exit';
+  return { id: run.id, seat: run.seat, title: title.length <= SUMMARY_TITLE_LIMIT ? run.title : title.slice(0, SUMMARY_TITLE_LIMIT - 1).join('') + '…',
+    state: run.end ? 'ended' : 'running', seconds: elapsedSeconds(run), ...(run.end && { reason }),
+    ...(run.needsDecision && { needsDecision: true }), refusedCount: run.refused?.length ?? 0 };
 }
 
 function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadAgent, leadSeat,
@@ -182,10 +218,8 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
   const seenOwnerWaits = new Map();
   const describe = run => {
     const end = run.endedAt ?? run.observedEndAt;
-    const measured = run.startedAt !== undefined && (!run.end || run.endedAt !== undefined);
-    const elapsed = measured ? (end ?? Date.now()) - run.startedAt : (run.observedEndAt ?? Date.now()) - run.observedStartAt;
     return { id: run.id, seat: run.seat, title: run.title, state: run.end ? 'ended' : 'running',
-      seconds: Math.max(0, Math.round(elapsed / 1000)),
+      seconds: elapsedSeconds(run),
       startSeconds: Math.max(0, ((run.confirmedAt ?? run.observedStartAt) - run.calledAt) / 1000),
       endedAt: end === undefined ? null : new Date(end).toISOString(),
       refused: run.refused ?? [],
@@ -248,13 +282,15 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
   }
 
   const tools = {
-    async start_role({ seat, title, brief, readOnly = false, allow = [], cwd: folder, worktree, small = false }) {
+    async start_role({ seat, title, brief, readOnly = false, allow = [], cwd: folder, worktree, from, small = false }) {
       const calledAt = Date.now();
       if (!conductor()) throw new Error('Conductor mode is off: the team roles are unavailable.');
       const seats = liveSeatMap(env.AGENTRIX_BOOTSTRAP) ?? {}, id = launchSeat(seat, Object.keys(seats));
       if (!id || id === 'orchestrator') throw new Error(`Seat ${seat} is not an enabled role on this team.`);
       if (worktree !== undefined && readOnly) throw new Error('A read-only role cannot create a worktree.');
-      if (worktree !== undefined && folder !== undefined) throw new Error('Specify either cwd or worktree.');
+      if (from !== undefined && (worktree === undefined || typeof from !== 'string' || !from.trim())) {
+        throw new Error('from must be a non-empty branch or commit and requires worktree.');
+      }
       if (typeof small !== 'boolean') throw new Error('small must be a boolean.');
       if (small) validateSmallScope(readOnly, allow);
       if (!readOnly && !allow.length) throw new Error('A role that changes files needs allow: the file globs it may change.');
@@ -264,7 +300,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       const { instruction, roleFallback } = await sandboxRoute(configuredAgent, seats[id]);
       if (instruction) return { instruction };
       const agent = roleFallback ? 'claude' : configuredAgent;
-      const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree);
+      const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree, folder, from);
       let waitingId;
       try {
         const work = checkout?.cwd ?? (folder || cwd);
@@ -292,7 +328,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         if (status?.routing) run.routing = status.routing;
         Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: status?.ownerWait ?? null, ownerWait: status?.ownerWait });
         runs.set(started[1], run);
-        return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch }) };
+        return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch, base: checkout.base }) };
       } catch (error) {
         if (waitingId) runs.delete(waitingId);
         await checkout?.rollback().catch(() => {});
@@ -302,15 +338,20 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     async roles_status() {
       await refresh([...runs.values()]);
       const cutoff = Date.now() - RECENT_END_MS;
-      const roles = [...runs.values()].filter(run => !run.end || run.observedEndAt >= cutoff).map(describe);
-      return { roles, earlierEnded: runs.size - roles.length };
+      const running = [...runs.values()].filter(run => !run.end);
+      const recent = [...runs.values()].reverse().filter(run => run.end && run.observedEndAt >= cutoff)
+        .sort((a, b) => (b.endedAt ?? b.observedEndAt) - (a.endedAt ?? a.observedEndAt) || b.observedEndAt - a.observedEndAt);
+      return { roles: [...running.map(describe), ...recent.slice(0, RECENT_END_LIMIT).map(summarize)],
+        earlierEnded: runs.size - running.length - recent.length, omittedRecentEnded: Math.max(0, recent.length - RECENT_END_LIMIT) };
     },
     async wait_roles({ ids, seconds = 240 } = {}, signal) {
       if (!Number.isInteger(seconds) || seconds < 0 || seconds > 540) throw new Error('seconds must be an integer between 0 and 540.');
       if (ids !== undefined && (!Array.isArray(ids) || ids.some(id => typeof id !== 'string'))) throw new Error('ids must be an array of run ids.');
       const selected = ids === undefined ? [...runs.values()].filter(run => !run.end) : [...new Set(ids)].map(own);
+      const waitState = run => [run.end, run.ownerWait, run.ownerWaitSequence, seenOwnerWaits.get(run.id)];
+      const before = selected.map(waitState);
       await refresh(selected, selected.some(run => run.end) ? 0 : seconds, true, signal);
-      return selected.map(describe);
+      return selected.map((run, index) => waitState(run).some((value, field) => value !== before[index][field]) ? describe(run) : summarize(run));
     },
     async answer_role({ id, wait, choice }) {
       const run = own(id);
@@ -358,6 +399,22 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
   return { tools, list: () => TOOLS };
 }
 
+function formatRoleRows(roles, indent) {
+  const padding = ' '.repeat(indent);
+  const rows = roles.map(role => padding + JSON.stringify(role, null, 'startSeconds' in role ? 2 : 0).replaceAll('\n', '\n' + padding));
+  return rows.length ? `[\n${rows.join(',\n')}\n${padding.slice(2)}]` : '[]';
+}
+
+function toolResultText(name, result) {
+  if (name === 'wait_roles') return formatRoleRows(result, 2);
+  if (name === 'roles_status') {
+    const { roles, ...counts } = result;
+    const fields = [`"roles": ${formatRoleRows(roles, 4)}`, ...Object.entries(counts).map(([key, value]) => `${JSON.stringify(key)}: ${value}`)];
+    return `{\n  ${fields.join(',\n  ')}\n}`;
+  }
+  return JSON.stringify(result, null, 2);
+}
+
 // MCP over stdio: one JSON-RPC message per line.
 async function serve({ roles, input = process.stdin, output = process.stdout }) {
   const reply = (id, result) => {
@@ -368,7 +425,7 @@ async function serve({ roles, input = process.stdin, output = process.stdout }) 
   const callTool = async (id, params) => {
     try {
       const result = await roles.tools[params.name](params.arguments || {}, controller.signal);
-      reply(id, { result: { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] } });
+      reply(id, { result: { content: [{ type: 'text', text: toolResultText(params.name, result) }] } });
     }
     catch (error) { reply(id, { result: { content: [{ type: 'text', text: String(error?.message || error) }], isError: true } }); }
   };

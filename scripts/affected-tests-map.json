@@ -350,29 +350,29 @@
   },
   "dynamicLoads": {
     "electron/features/claude-sdk/runtime.cjs": {
-      "digest": "5514a683472814e99f5536a593b1f3b9875b04f709de90992715e45115f083c5",
+      "digest": "6e77e6d7f11ea19fbd0ad75fd187548e1d07ab0da6ae057b8d2e1bec063db9f4",
       "targets": [],
       "reason": "Loads the installed external Agent SDK; dependency changes force full coverage."
     },
     "electron/features/lab/executor.cjs": {
-      "digest": "e533fb26d5fb352265df5129b25110c399da059946398672a074da70bc82904c",
+      "digest": "a34598b8f07d6bef748c419f992aca070983b99fa4d95a0df1c44a30fc51e595",
       "targets": [],
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "42c2988032145ed3fb38e95b65d744a13889ad080dabe8d34445ced05126f885",
+      "digest": "dde61c9035bd3f56c33ac93787b400075d80855d6a902f59414687f81250140d",
       "targets": [
         "integration/dispatch.cjs"
       ],
       "reason": "Reads the carried dispatch runtime inventory."
     },
     "electron/voice-worker.cjs": {
-      "digest": "dbde1e6005d856cd483f152a10d80a7035d3f2f0617f709ea386b1248dcad42c",
+      "digest": "bcd3349befd72d76388208a329e0c37725eeac2852b240600714dfb1120cccad",
       "targets": [],
       "reason": "Loads a downloaded external native speech engine."
     },
     "integration/agent-event.cjs": {
-      "digest": "ef7bc66a9e20bb3bb697efc6553789be8a2fb943fe8e8ded17a0d585b0149564",
+      "digest": "c95b1d572d1438e2296b3daae332294e383956b5852932ee2a56bb8015c5617d",
       "targets": [
         "electron/features/skills/session.cjs",
         "electron/features/skills/agent-seat.cjs",
@@ -381,7 +381,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "6ff933cebb4de6881d5a853a5d4eaa0ce39f04a0d675b5de42d554be1fceffb3",
+      "digest": "3cded9033dfd51907569526f1da1a3ee9fbfa4247074e3a909ec60005357aa38",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",
@@ -408,26 +408,26 @@
       "reason": "Loads the same carried electron modules, outbox and intercept implementation beside the source or packaged helper."
     },
     "electron/updates.cjs": {
-      "digest": "48725f320ea0b968c87bdff1e7e669d40f09a67d457456b02efc85a15f3fd833",
+      "digest": "49d527ef2d8be5b60a81808ece0789ca2bb610d36a7cf6070bef7c4ac2b21df1",
       "targets": [],
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "43b382ae15920122a78b224b7753975df6691c39730fb58f0410e48bcaa9d03d",
+      "digest": "0514516ff63c949a1c94e8b7c0cdfc163a2afdc6721e34abb668ad0d72c19352",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
       "reason": "App-shell composition root: edits force full coverage, while provider changes do not fan out through the host inputs. The bootstrap dynamically loads the installed intercept module."
     },
     "integration/dispatch-outbox.cjs": {
-      "digest": "ffb94e25593947baf8f80268440163c8387f09654285abfcdae0c6660dd91650",
+      "digest": "a2cdac6841149985b0bcaa55e6e56c819fe56a85f65e98bd7e0beb4b1e9f85e6",
       "targets": [
         "electron/features/agents/dispatch-events.cjs"
       ],
       "reason": "The source, packaged and SSH outbox share the carried dispatch frame authentication implementation."
     },
     "electron/features/lab/session.cjs": {
-      "digest": "33836be80376c230063a1a1c7c0d43acffdc147b9810b1d373b763eefb9d7cd8",
+      "digest": "3169a989520ffd85310a33fc73a21dd3322c7d0eacc6b198cab3563e3f346cd1",
       "targets": [
         "integration/shims/intercept.cjs",
         "integration/dispatch.cjs"
@@ -435,7 +435,7 @@
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "c71535f0bac3dc77526d7ea907fc5814e471029faa2623213bbcb8b2a92a67da",
+      "digest": "893492b2b7b05835b864d5ff2076bde39b66f76d2fd72e06ac93bc6d1c79b0dc",
       "targets": [
         "integration/dispatch.cjs",
         "electron/features/agents/call-seat.cjs"
@@ -443,18 +443,19 @@
       "reason": "The intercept entrypoint resolves the dispatch helper and the carried lead seat reader in source, packaged or SSH layouts."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "e200e3911c0aef86218984d1ad860838af36c0adc55eeb1f1b550d2cb24added",
+      "digest": "f12afdd351c55451cc152b71815b3c8ddb597517f0083c74deb1b2c20e3251c2",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
       "reason": "A worker terminal applies the installed intercept module the parent terminal's bootstrap names (withShims at depth 1)."
     },
     "integration/role-tools.cjs": {
-      "digest": "bb0732027c6b536eaaa9e916cd7ca0867666cca6cfe62ef1f804db6284dccae3",
+      "digest": "86597365da2b00ae3e98c415000e0f4693c9ec8ab203151a0c5389c056ec9579",
       "targets": [
-        "electron/features/agents/call-seat.cjs"
+        "electron/features/agents/call-seat.cjs",
+        "electron/features/agents/dispatch-events.cjs"
       ],
-      "reason": "The role tools load the carried call-seat module beside the source or packaged engine, as dispatch.cjs does."
+      "reason": "The role tools load the carried seat rules and dispatch event validators beside the source or packaged engine."
     }
   },
   "unresolvedImports": {

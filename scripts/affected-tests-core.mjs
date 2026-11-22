@@ -29,11 +29,29 @@ function resolveFile(root, file, specifier) {
     .map(suffix => base + suffix).find(candidate => fs.existsSync(path.join(root, candidate)) && fs.statSync(path.join(root, candidate)).isFile()) ?? null;
 }
 
+function expressionTokens(node, tree) {
+  const children = node.getChildren(tree).filter(child => !ts.isJSDoc(child));
+  return children.length ? children.flatMap(child => expressionTokens(child, tree))
+    : node.getWidth(tree) ? [node.getText(tree).replaceAll('\r\n', '\n')] : [];
+}
+
+function loadFingerprint(kind, node, tree) {
+  let context = node.parent;
+  while (context && !ts.isVariableDeclaration(context) && !ts.isStatement(context)) context = context.parent;
+  const anchor = context && ts.isVariableDeclaration(context) ? expressionTokens(context.name, tree) : context?.kind;
+  return JSON.stringify([kind, anchor ?? null, expressionTokens(node, tree)]);
+}
+
 // Parse import/export/require, including literal dynamic imports. Nonliteral loads remain
 // explicit in the manifest; module May import declarations conservatively supplement them.
 function references(root, file, text) {
   const targets = new Set(), literals = [], unresolved = [], dynamic = [];
   const tree = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const diagnostic = tree.parseDiagnostics[0];
+  if (diagnostic) {
+    const parseError = `Cannot parse ${file}: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, ' ')}`;
+    return { targets, literals, unresolved, parseError, dynamicDigest: null };
+  }
   const add = value => {
     const found = resolveFile(root, file, value.split('?')[0]);
     if (found) targets.add(found);
@@ -44,23 +62,44 @@ function references(root, file, text) {
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) add(node.moduleSpecifier.text);
     const load = ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
       || ts.isIdentifier(node.expression) && node.expression.text === 'require'
-      || ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'require');
+      || ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'require'
+      || ts.isElementAccessExpression(node.expression) && node.expression.argumentExpression
+        && ts.isStringLiteralLike(node.expression.argumentExpression) && node.expression.argumentExpression.text === 'require');
     if (load) {
       if (node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) add(node.arguments[0].text);
-      else dynamic.push(node.getText(tree));
+      else dynamic.push(loadFingerprint('load', node, tree));
     }
     if (ts.isIdentifier(node) && node.text === 'require') {
       const parent = node.parent;
       const known = ts.isCallExpression(parent) && parent.expression === node
         || ts.isPropertyAccessExpression(parent) && (parent.expression === node && ['main', 'cache', 'resolve'].includes(parent.name.text)
           || parent.name === node && ts.isCallExpression(parent.parent) && parent.parent.expression === parent);
-      if (!known) dynamic.push('indirect require');
+      if (!known) dynamic.push(loadFingerprint('indirect require', parent, tree));
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'createRequire') dynamic.push('createRequire alias');
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'createRequire') {
+      const invocation = ts.isCallExpression(node.parent) && node.parent.expression === node ? node.parent : node;
+      dynamic.push(loadFingerprint('createRequire alias', invocation, tree));
+    }
     ts.forEachChild(node, visit);
   }
   visit(tree);
-  return { targets, literals, unresolved, dynamicDigest: dynamic.length ? createHash('sha256').update(text.replaceAll('\r\n', '\n')).digest('hex') : null };
+  const dynamicDigest = dynamic.length ? createHash('sha256').update(JSON.stringify(dynamic.sort())).digest('hex') : null;
+  return { targets, literals, unresolved, dynamicDigest };
+}
+
+export function repinDynamicLoad(root, file) {
+  const manifestFile = path.join(root, 'scripts/affected-tests-map.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
+  const entry = manifest.dynamicLoads?.[file];
+  if (!entry?.reason || !Array.isArray(entry.targets)) throw new Error(`Declare the targets and reason for ${file} in dynamicLoads first.`);
+  const { dynamicDigest, parseError } = references(root, file, read(root, file));
+  if (parseError) throw new Error(parseError);
+  if (!dynamicDigest) throw new Error(`No dynamic loads in ${file}; remove its pin.`);
+  if (entry.digest !== dynamicDigest) {
+    entry.digest = dynamicDigest;
+    fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + '\n');
+  }
+  return dynamicDigest;
 }
 
 export function buildCatalog(root, manifest = JSON.parse(read(root, 'scripts/affected-tests-map.json'))) {
@@ -78,13 +117,15 @@ export function buildCatalog(root, manifest = JSON.parse(read(root, 'scripts/aff
   for (const file of files.filter(file => source.test(file))) {
     const refs = references(root, file, read(root, file));
     const product = /^(electron|src|integration)\//.test(file) && !globalChange(file, manifest);
+    if (refs.parseError) errors.push(refs.parseError);
     if (product && refs.unresolved.length) {
       const declared = manifest.unresolvedImports?.[file];
       if (!declared?.reason || refs.unresolved.some(target => !declared.targets.includes(target))) errors.push(`Unresolved relative import: ${file}: ${refs.unresolved.join(', ')}`);
     }
-    if (product && refs.dynamicDigest) {
-      const declared = manifest.dynamicLoads?.[file];
-      if (!declared || declared.digest !== refs.dynamicDigest || !declared.reason || declared.targets.some(target => !files.includes(target))) errors.push(`Unclassified dynamic load: ${file}`);
+    const declared = manifest.dynamicLoads?.[file];
+    if ((product || declared) && refs.dynamicDigest) {
+      if (!declared || declared.digest !== refs.dynamicDigest || !declared.reason || !Array.isArray(declared.targets)
+        || declared.targets.some(target => !files.includes(target))) errors.push(`Unclassified dynamic load: ${file}`);
       else declared.targets.forEach(target => refs.targets.add(target));
     }
     referencesByFile.set(file, refs);
