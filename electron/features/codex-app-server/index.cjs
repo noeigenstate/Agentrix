@@ -30,7 +30,8 @@ const PERMISSIONS = {
 const permissionMode = value => typeof value === 'string' && Object.hasOwn(PERMISSIONS, value) ? value : 'full';
 const SANDBOX_TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 const ELEVATED_ROLE_CONFIG = { 'windows.sandbox': 'elevated', 'features.prefer_mxc': false };
-const ELEVATED_SETUP_MESSAGE = 'Set up the elevated Windows sandbox, then retry the role. In an administrator terminal, run codex.exe sandbox setup --elevated --current-user.';
+const ELEVATED_SETUP_MESSAGE = '请使用 Agentrix 安装程序重新安装并批准 Windows 沙箱设置。也可在管理员 PowerShell 中运行以下命令后重试。 {command}';
+const ELEVATED_VERSION_MESSAGE = '当前安装的 Codex 版本过旧，无法为角色启用 Windows 沙箱。请更新 Codex 后重试。';
 // Windows and an SSH host answer a writable request read-only when their Codex has no Windows sandbox configured.
 const REMOTE_WRITE = '远端 Codex 只给了只读沙箱，无法使用「先询问」。远端是 Windows 时，请在远端 Codex 用户配置的 [windows] 中设置 sandbox = "unelevated"（Agentrix 不会改远端的配置），或改用「全部放开」或「按 Codex 配置」。';
 const SANDBOX_REFUSALS = {
@@ -186,7 +187,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         events.publish('session.state', { state, reason });
       };
       const windowsLocal = () => platform === 'win32' && spec.kind !== 'ssh';
-      const elevatedRole = () => windowsLocal() && spec.owner === 'dispatch';
+      const elevatedRole = () => windowsLocal() && spec.owner === 'dispatch' && !(spec.env || process.env).SSH_CONNECTION;
       const place = () => windowsLocal() ? 'windows' : spec.kind === 'ssh' ? 'ssh' : null;
       const releaseThread = threadId => rpc?.request('thread/unsubscribe', { threadId }).catch(() => {});
       // Only the owner's own writable session has a permissions choice.
@@ -346,8 +347,21 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
         rpc.notify('initialized');
         if (elevatedRole()) {
           onStage('sandbox_readiness');
-          const readiness = await rpc.request('windowsSandbox/readiness');
-          if (readiness?.status !== 'ready') throw Object.assign(new Error(ELEVATED_SETUP_MESSAGE), { code: 'elevated_sandbox_not_ready' });
+          let readiness;
+          try { readiness = await rpc.request('windowsSandbox/readiness', {}); }
+          catch (error) {
+            if (error.code !== -32601) throw error;
+            throw Object.assign(new Error(translate(ELEVATED_VERSION_MESSAGE)), { code: 'unsupported_codex_version' });
+          }
+          if (readiness?.status !== 'ready') {
+            const user = env.USERNAME && (env.USERDOMAIN ? env.USERDOMAIN + '\\' + env.USERNAME : env.USERNAME);
+            const home = env.CODEX_HOME || spec.codexHome || path.join(env.USERPROFILE || env.HOME || homedir(), '.codex');
+            const userArg = user ? "'" + user.replaceAll("'", "''") + "'" : translate('<你的 Windows 用户>');
+            const homeArg = "'" + home.replaceAll("'", "''") + "'";
+            const command = `codex sandbox setup --elevated --user ${userArg} --codex-home ${homeArg}`;
+            const message = translate(ELEVATED_SETUP_MESSAGE).replace('{command}', () => command);
+            throw Object.assign(new Error(message), { code: 'elevated_sandbox_not_ready' });
+          }
         }
         onStage('capability_probe'); await probeCapabilities(rpc);
         assertOpen();

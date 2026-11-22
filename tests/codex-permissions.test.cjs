@@ -169,6 +169,7 @@ test('local Windows dispatch requires elevated readiness and requests the scoped
       assert.equal(readiness >= 0, elevated);
       if (elevated) {
         assert.ok(readiness < server.wire.indexOf(request));
+        assert.deepEqual(server.wire[readiness].params, {});
         assert.deepEqual(launches[0].slice(3), ['-c', 'windows.sandbox=elevated', '-c', 'features.prefer_mxc=false']);
       }
       await session.close();
@@ -179,10 +180,48 @@ test('local Windows dispatch requires elevated readiness and requests the scoped
 test('local Windows dispatch stops before opening a thread when elevated setup is missing or stale', async t => {
   for (const readiness of ['notConfigured', 'updateRequired']) for (const readOnly of [false, true]) {
     const server = codexServer({ readiness });
-    const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly } });
-    await assert.rejects(session.start(), { code: 'elevated_sandbox_not_ready', message: /administrator terminal.*codex\.exe sandbox setup --elevated --current-user/ });
+    const env = { USERDOMAIN: 'DOMAIN', USERNAME: 'test-user', CODEX_HOME: "C:\\Codex User's Home" };
+    const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly, env } });
+    await assert.rejects(session.start(), {
+      code: 'elevated_sandbox_not_ready',
+      message: /Agentrix 安装程序重新安装.*管理员 PowerShell.*codex sandbox setup --elevated --user 'DOMAIN\\test-user' --codex-home 'C:\\Codex User''s Home'/,
+    });
     assert.equal(server.threadRequests('thread/start').length, 0);
     assert.equal(session.snapshot().state, 'failed');
+  }
+});
+
+test('local Windows dispatch asks the user to update Codex when the readiness method is unavailable', async t => {
+  const server = codexServer({ reject: { 'windowsSandbox/readiness': -32601 } });
+  const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch' } });
+  await assert.rejects(session.start(), { code: 'unsupported_codex_version', stage: 'sandbox_readiness', message: /Codex 版本过旧.*请更新 Codex/ });
+  assert.equal(server.threadRequests('thread/start').length, 0);
+});
+
+test('dispatch launched inside SSH on Windows does not probe elevated readiness', async t => {
+  const server = codexServer({ apply: () => ({ type: 'workspaceWrite' }) });
+  const env = { SSH_CONNECTION: 'ssh-fixture' };
+  const { session } = runtime(t, { platform: 'win32', server, spec: { owner: 'dispatch', readOnly: true, env } });
+  await assert.rejects(session.start(), { code: 'sandbox_mismatch', requestedSandbox: 'read-only' });
+  assert.equal(server.wire.some(row => row.method === 'windowsSandbox/readiness'), false);
+});
+
+test('the dispatch helper keeps the sandbox mismatch category and read-only hint over SSH', async t => {
+  const { run } = require('../integration/dispatch.cjs');
+  const cwd = directory(t), brief = path.join(cwd, 'brief.txt');
+  fs.writeFileSync(brief, 'Synthetic review task');
+  for (const remote of [false, true]) {
+    const { child } = codexServer({ apply: () => ({ type: 'workspaceWrite' }) });
+    child.remote = true; // The in-process fixture has no OS process tree.
+    const env = { PATH: '', CODEX_HOME: cwd, ...(remote ? { SSH_CONNECTION: 'ssh-fixture' } : {}) };
+    let output = '';
+    const result = await run(['codex', '--role', 'review', '--title', 'Synthetic mismatch', '--model', 'gpt-6.1-sol',
+      '--effort', 'high', '--read-only', '--cwd', cwd, '--brief', brief, '--out', path.join(cwd, remote ? 'remote.md' : 'local.md')], {
+      env, stdout: { write: value => { output += value; } }, resolveExecutable: () => ({ file: 'fake-only', args: [] }), launch: () => child,
+    });
+    assert.equal(result, 1, output);
+    assert.match(output, /Codex 未应用只读沙箱/);
+    assert.equal(output.includes('(thread_start/sandbox_mismatch)'), remote || process.platform !== 'win32', output);
   }
 });
 
