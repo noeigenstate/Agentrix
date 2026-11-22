@@ -325,7 +325,8 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
       }
       async function connectThread(executable, env, onStage, isReconnecting) {
         // Readiness uses app-server's startup config, so the process and the thread must request the same backend.
-        const configArgs = elevatedRole() ? Object.entries(ELEVATED_ROLE_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`]) : [];
+        // Codex treats bare `elevated` as a literal string, so Windows launchers need no embedded quotes.
+        const configArgs = elevatedRole() ? Object.entries(ELEVATED_ROLE_CONFIG).flatMap(([key, value]) => ['-c', `${key}=${value}`]) : [];
         child ||= spawnProcess(executable, [...appServerArgs, ...configArgs], { cwd: wireCwd, env, windowsHide: true,
           detached: process.platform !== 'win32', stdio: ['pipe', 'pipe', 'pipe'] });
         rpc = createRpc(child, { timeout: spec.rpcTimeoutMs || 8000, onNotification: notification,

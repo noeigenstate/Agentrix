@@ -169,7 +169,7 @@ test('local Windows dispatch requires elevated readiness and requests the scoped
       assert.equal(readiness >= 0, elevated);
       if (elevated) {
         assert.ok(readiness < server.wire.indexOf(request));
-        assert.deepEqual(launches[0].slice(3), ['-c', 'windows.sandbox="elevated"', '-c', 'features.prefer_mxc=false']);
+        assert.deepEqual(launches[0].slice(3), ['-c', 'windows.sandbox=elevated', '-c', 'features.prefer_mxc=false']);
       }
       await session.close();
     }
