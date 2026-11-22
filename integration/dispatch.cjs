@@ -64,6 +64,7 @@ const USAGE = `Usage: node dispatch.cjs <codex|claude> --role <执行|调查|审
   [--seat <id>[/<specialty>]] the team role for this run, for example --seat x-mobile
                              uses the launch seat for omitted --model, --effort and --fast
   [--allow <glob> ...]    the only files it may change; any other change is reported as out of scope
+  [--small]              shorten the brief for a lookup or an edit to one or two named files
   [--ledger <file>]       the task's shared context: given to the worker, its findings appended after
   [--resume <session>]    continue that worker session (same context) instead of starting a new one
   [--kind <${DISPATCH_TASK_KINDS.join('|')}>] task category for long-term evaluation
@@ -147,6 +148,13 @@ const roundtablesRemoved = 'Roundtables were removed. Run without --meeting, min
 const usesRoundtable = ([command, ...flags]) => command === 'minutes' || command === 'consolidate'
   || flags.some(flag => flag === '--meeting' || flag.startsWith('--meeting='));
 
+function validateSmallScope(readOnly, allow) {
+  if (readOnly) return;
+  if (!Array.isArray(allow) || !allow.length || allow.length > 2 || allow.some(file => typeof file !== 'string' || /[*?\[\]{}]/.test(file))) {
+    throw new Error('A small writable role needs one or two named files in allow, without wildcards.');
+  }
+}
+
 function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) {
   if (usesRoundtable(argv)) throw new Error(roundtablesRemoved);
   const [agent, ...flags] = argv;
@@ -156,12 +164,13 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) 
   const options = { agent, images: [], allow: [], fast: false, readOnly: false };
   const keys = ['role', 'title', 'model', 'effort', 'cwd', 'brief', 'out', 'permission', 'ledger', 'resume', 'kind', 'seat'];
   const names = new Map(keys.map(key => [`--${key}`, key]));
+  const switches = new Map([['--fast', 'fast'], ['--read-only', 'readOnly'], ['--detach', 'detach'], ['--small', 'small']]);
   const seen = new Set();
   for (let i = 0; i < flags.length; i++) {
     const flag = flags[i];
-    if (flag === '--fast' || flag === '--read-only' || flag === '--detach') {
+    if (switches.has(flag)) {
       if (seen.has(flag)) throw new Error(`Repeated option ${flag}`);
-      seen.add(flag); options[flag === '--fast' ? 'fast' : flag === '--detach' ? 'detach' : 'readOnly'] = true; continue;
+      seen.add(flag); options[switches.get(flag)] = true; continue;
     }
     if (!names.has(flag) && !['--image', '--allow', '--skip-meeting'].includes(flag)) throw new Error(`Unknown option ${flag}`);
     const value = flags[++i];
@@ -191,6 +200,7 @@ function argumentsOf(argv, env = process.env, seatSnapshot = env[PINNED_SEATS]) 
   if (agent === 'claude' && (options.readOnly || options.images.length)) throw new Error('Claude supports --permission, not Codex options');
   if (agent === 'claude' && !['plan', 'acceptEdits'].includes(options.permission)) throw new Error('Expected --permission plan or acceptEdits');
   if (agent === 'codex' && options.permission) throw new Error('--permission is only for Claude');
+  if (options.small) validateSmallScope(options.readOnly || options.permission === 'plan', options.allow);
   if (options.resume && !/^[A-Za-z0-9][\w-]{0,159}$/.test(options.resume)) throw new Error('Expected a session id for --resume');
   options.cwd = path.resolve(options.cwd);
   for (const key of ['brief', 'out', 'ledger']) if (options[key]) options[key] = path.resolve(options.cwd, options[key]);
@@ -250,21 +260,26 @@ function standingRules(options) {
 // paths it may change, the standing rules, and how to hand its findings back.
 function briefOf(options, brief, team, { id, repo, before } = {}) {
   const parts = [];
+  const smallReadOnly = options.small && (options.readOnly || options.permission === 'plan');
   if (options.ledger) {
     let ledger = '';
     try { ledger = fs.readFileSync(options.ledger, 'utf8').trim(); } catch {}
     if (ledger) parts.push(`# Shared context for this task\n\n${ledger}`);
   }
-  if (team) parts.push(...team.context(id, before));
-  if (options.allow.length) {
-    for (const boundary of boundariesFor(options.cwd, options.allow, repo)) parts.push(`# Module boundary: ${boundary.file}\n\n${boundary.text.trim()}`);
+  if (team && !smallReadOnly) parts.push(...team.context(id, before).slice(options.small ? 1 : 0));
+  if (smallReadOnly) parts.push('# Files you may change\n\nNone.');
+  else if (options.allow.length) {
+    for (const boundary of boundariesFor(options.cwd, options.allow, repo)) {
+      const text = options.small ? 'Read this file from the repository root before editing.' : boundary.text.trim();
+      parts.push(`# Module boundary: ${boundary.file}\n\n${text}`);
+    }
     parts.push(`# Files you may change\n\n${options.allow.map(glob => `- \`${glob}\``).join('\n')}\n\nChange nothing else. Any other changed file is `
       + 'reported to the lead as out of scope and the work is rejected. If the task cannot be done within these paths, stop and say which file you would need and why.');
   }
   parts.push(standingRules(options));
   parts.push('# Skill changes\n\nDo not edit, add or delete any SKILL.md unless --allow names that exact file without wildcards: that is the lead\'s approval. '
     + 'Put suggested skill changes under ## Skill proposals in your answer. Unapproved changes are preserved beside your answer; only an isolated worker worktree is restored. Shared or managed files are report-only because their author is unknown.');
-  if (options.ledger || team) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
+  if (options.ledger || team || options.small) parts.push(`# Handing back\n\nEnd your final answer with a section headed exactly \`${FINDINGS}\`: bullets with the facts, decisions `
     + 'and pitfalls the next worker on this task must know (file:line where it helps). They are added to the shared context.');
   return Buffer.concat([Buffer.from(parts.join('\n\n') + '\n\n# Task\n\n'), brief]);
 }
@@ -1549,5 +1564,6 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   }
 }
 
+module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles,
+  run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL };
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });
-module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, RATE_INTERVAL };

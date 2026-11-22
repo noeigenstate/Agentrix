@@ -83,6 +83,28 @@ test('start_role refuses empty or whitespace-only briefs and titles before calli
   assert.equal(fake.calls.length, 0);
 });
 
+test('start_role passes small through to the engine and refuses wide writable scopes before checkout', async t => {
+  const { env, folder } = session(t, 'conductor'), fake = engine(() => '[dispatch] started run-1 codex\n');
+  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+  const request = { seat: 'developer', title: 'Inspect', brief: 'Inspect src/a.js.', small: true };
+  const message = 'A small writable role needs one or two named files in allow, without wildcards.';
+  for (const allow of [[], ['a', 'b', 'c'], ['src/**'], ['src/a?.js'], ['src/[ab].js'], ['src/{a,b}.js']]) {
+    await assert.rejects(tools.start_role({ ...request, allow, worktree: 'wide' }), { message });
+  }
+  assert.equal(fake.calls.length, 0);
+  assert.equal(TOOLS.find(tool => tool.name === 'start_role').inputSchema.properties.small.type, 'boolean');
+
+  for (const scope of [{ readOnly: true }, { allow: ['src/a.js'] }, { allow: ['src/a.js', 'src/b.js'] }]) {
+    await tools.start_role({ ...request, ...scope });
+    const argv = fake.calls.at(-1), options = argumentsOf(argv, env);
+    assert.equal(options.small, true);
+    assert.equal(options.readOnly, !!scope.readOnly);
+    assert.deepEqual(options.allow, scope.allow ?? []);
+  }
+  assert.throws(() => argumentsOf([...fake.calls.at(-1), '--allow', 'src/c.js'], env), { message });
+  assert.throws(() => argumentsOf([...fake.calls[1], '--allow', 'src/**'], env), { message });
+});
+
 test('start_role resolves a developer specialty through its enabled base seat', async t => {
   const { env, folder } = session(t, 'conductor');
   const fake = engine(args => {
