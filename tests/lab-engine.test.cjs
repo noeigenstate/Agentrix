@@ -57,7 +57,8 @@ function fakeDispatchModule(settingsFile) {
       tell({ kind: 'answer', text: JSON.stringify({ issues: /\+module.exports = 2/.test(patch) ? 1 : 0, findings: [] }) });
       return;
     }
-    const brief = fs.readFileSync(config.brief, 'utf8'), orchestrated = /Run the full pipeline:/.test(brief);
+    const brief = fs.readFileSync(config.brief, 'utf8');
+    const orchestrated = brief.includes('Start workers with --detach, then run wait <run-id> --timeout 540.');
     if (process.env.LAB_FAKE_PROOF) {
       const forbidden = file => { try { fs.readFileSync(file); return false; } catch { return true; } };
       const git = args => spawnSync('git', args, { encoding: 'utf8' });
@@ -349,14 +350,17 @@ isolatedTest('all four arms include nested usage, phase evidence and cleanup of 
   const id = await f.engine.start({ ...f.input, arms: ['orchestrated', 'opus', 'sol', 'sonnet'] });
   await f.engine.active.done;
   const experiment = (await f.engine.list())[0], orchestrated = experiment.runs[0];
-  assert.deepEqual(experiment.runs.map(run => run.state), ['passed', 'failed', 'passed', 'failed']);
+  const states = experiment.runs.map(run => run.state);
+  if (states[0] !== 'passed') t.diagnostic(await f.logs());
+  assert.deepEqual(states, ['passed', 'failed', 'passed', 'failed']);
   assert.ok(Math.abs(orchestrated.costUsd - 0.12) < 1e-8); assert.equal(orchestrated.outputTokens, 150);
   assert.equal(orchestrated.rework, null);
   assert.deepEqual(orchestrated.phases.map(phase => phase.name), ['plan', 'build', 'review']);
   const folder = path.join(f.userData, 'lab', id, 'runs', orchestrated.id);
   const journal = (await fs.readFile(path.join(folder, 'artifacts/journal.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   assert.ok(journal.every(entry => entry.type === 'end'));
-  assert.equal(await fs.stat(path.join(folder, 'workers/a')).catch(() => null), null);
+  assert.ok((await f.readCalls()).some(args => args.includes(path.join(folder, 'workspaces/workers/a'))));
+  await assert.rejects(fs.lstat(path.join(folder, 'workspaces/workers/a')), { code: 'ENOENT' });
   assert.equal(await fs.stat(path.join(f.projectPath, 'node_modules')).then(stat => stat.isDirectory()), true);
 });
 

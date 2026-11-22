@@ -249,7 +249,8 @@ function receipts(t) {
 test('standalone Linux receipts use separate uid roots while Windows keeps its per-user temp root', t => {
   const store = receipts(t), filename = path.resolve(__dirname, '../integration/dispatch.cjs');
   const { createRequire } = require('node:module'), vm = require('node:vm'), realRequire = createRequire(filename);
-  const legacy = path.join(store.directory, 'agentrix-dispatch'); fs.mkdirSync(legacy);
+  const temporary = fs.realpathSync(store.directory);
+  const legacy = path.join(temporary, 'agentrix-dispatch'); fs.mkdirSync(legacy);
   function locate(platform, uid) {
     const module = { exports: {} };
     const load = name => {
@@ -268,8 +269,8 @@ test('standalone Linux receipts use separate uid roots while Windows keeps its p
     return module.exports.detachedRuns(store.directory, true).directory;
   }
   const first = locate('linux', 1001), second = locate('linux', 1002);
-  assert.ok(first.startsWith(path.join(store.directory, 'agentrix-dispatch-1001') + path.sep));
-  assert.ok(second.startsWith(path.join(store.directory, 'agentrix-dispatch-1002') + path.sep));
+  assert.ok(first.startsWith(path.join(temporary, 'agentrix-dispatch-1001') + path.sep));
+  assert.ok(second.startsWith(path.join(temporary, 'agentrix-dispatch-1002') + path.sep));
   assert.notEqual(first, second);
   fs.rmdirSync(legacy);
   // Windows's temp root is already per-user; its legacy receipt path remains stable.

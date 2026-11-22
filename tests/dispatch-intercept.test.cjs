@@ -370,7 +370,8 @@ function shimCopy(folder, name) {
 test("a planner inside another Agentrix's planner keeps the user's own hooks: bash runs the user's BASH_ENV once and never a hook as the user's", {
   skip: !shellFor('bash') && 'bash is not installed here', timeout: 60000,
 }, t => {
-  const folder = temporary(t), home = path.join(folder, 'home'), log = path.join(folder, 'ran.log'), user = path.join(folder, 'user-env.sh');
+  const folder = fs.realpathSync(temporary(t)), home = path.join(folder, 'home');
+  const log = path.join(folder, 'ran.log'), user = path.join(folder, 'user-env.sh');
   fs.mkdirSync(home); fs.writeFileSync(user, `echo user >> "${posix(log)}"\n`);
   const a = shimCopy(folder, 'a'), b = shimCopy(folder, 'b');
   const outer = a.module.withShims({ ...isolatedEnvironment(home), BASH_ENV: posix(user), ZDOTDIR: 'user-zdotdir' }, { depth: 0 });

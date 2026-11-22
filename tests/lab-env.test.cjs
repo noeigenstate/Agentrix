@@ -27,7 +27,8 @@ test('a routing file in a Lab worktree leaves the worker specs unchanged', t => 
 });
 
 function sessionFixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lab-detach-'));
+  // This fixture bypasses LabSession.start(), which normally resolves the workspace root.
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'lab-detach-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const session = new LabSession({ labRoot: root, workspaceRoot: root, runId: 'fixture', allowDelegation: true });
   session.active = true;
@@ -54,6 +55,12 @@ async function rpc(session, root, args) {
   return messages;
 }
 
+async function detach(session, root, agent) {
+  const receipt = await rpc(session, root, [agent, '--detach']);
+  assert.equal(receipt.at(-1).exitCode, 0, receipt.map(message => message.output).join(''));
+  return receipt;
+}
+
 test('Lab helper instrumentation preserves detached ids and its authenticated meter', async t => {
   const { root } = sessionFixture(t);
   const file = await copyHelper(path.join(__dirname, '../integration/dispatch.cjs'), root);
@@ -75,8 +82,7 @@ test('Lab helper instrumentation preserves detached ids and its authenticated me
 
 test('Lab detach outlives the start RPC and wait returns its end line', async t => {
   const { session, root, launched } = sessionFixture(t);
-  const receipt = await rpc(session, root, ['codex', '--detach']);
-  assert.equal(receipt.at(-1).exitCode, 0);
+  const receipt = await detach(session, root, 'codex');
   const [id] = session.dispatches.keys();
   assert.match(receipt[0].output, new RegExp(id));
   assert.equal(launched[0].options.signal.aborted, false, 'start socket closed, job still owned by the session');
@@ -90,7 +96,7 @@ test('Lab detach outlives the start RPC and wait returns its end line', async t 
 
 test('Lab wait delivers the live session start once across timeouts and retains request receipts', async t => {
   const { session, root, launched } = sessionFixture(t);
-  await rpc(session, root, ['codex', '--detach']);
+  await detach(session, root, 'codex');
   const [id] = session.dispatches.keys(), job = launched[0], lines = [];
   let expire;
   session.schedule = callback => { expire = callback; return 1; };
@@ -111,7 +117,7 @@ test('Lab wait delivers the live session start once across timeouts and retains 
 
 for (const kind of ['failed to start', 'failed:']) test(`Lab wait preserves ${kind} admission diagnostics in its fallback end`, async t => {
   const { session, root, launched } = sessionFixture(t);
-  await rpc(session, root, ['claude', '--detach']);
+  await detach(session, root, 'claude');
   const [id] = session.dispatches.keys(), job = launched[0];
   const failure = kind === 'failed:' ? '[dispatch] failed: invalid --model argument'
     : `[dispatch] failed to start ${id}: worker runtime unavailable`;
@@ -129,7 +135,7 @@ for (const kind of ['failed to start', 'failed:']) test(`Lab wait preserves ${ki
 
 test('Lab detached receipts are bounded while the lead is away', async t => {
   const { session, root, launched } = sessionFixture(t);
-  await rpc(session, root, ['claude', '--detach']);
+  await detach(session, root, 'claude');
   const [id] = session.dispatches.keys(), job = launched[0], entry = session.dispatches.get(id);
   for (let n = 0; n < 30; n++) job.options.onLine(`[dispatch] request ${id} ${n} ` + 'x'.repeat(10000));
   assert.equal(entry.messages.length, 16);
@@ -139,7 +145,7 @@ test('Lab detached receipts are bounded while the lead is away', async t => {
 
 test('Lab wait reports unknown ids and still completes known runs with exit 1', async t => {
   const { session, root, launched } = sessionFixture(t);
-  await rpc(session, root, ['codex', '--detach']);
+  await detach(session, root, 'codex');
   const [id] = session.dispatches.keys(); launched[0].finish();
   const reply = await rpc(session, root, ['wait', 'unknown-run', id, '--cwd', root]);
   assert.match(reply[0].output, /unknown run unknown-run/);
@@ -149,7 +155,7 @@ test('Lab wait reports unknown ids and still completes known runs with exit 1', 
 
 test('Lab stop accepts its documented reason and keeps option validation strict', async t => {
   const { session, root, launched } = sessionFixture(t);
-  await rpc(session, root, ['claude', '--detach']);
+  await detach(session, root, 'claude');
   const [id] = session.dispatches.keys(), reason = 'Owner stopped this review';
   const reply = await rpc(session, root, ['stop', id, '--reason', reason, '--cwd', root, '--no-resume']);
   assert.equal(reply.at(-1).exitCode, 0);
@@ -160,7 +166,7 @@ test('Lab stop accepts its documented reason and keeps option validation strict'
 
 test('Lab wait caps its timeout and returns 75 without stopping either parallel run', async t => {
   const { session, root, launched } = sessionFixture(t);
-  await rpc(session, root, ['codex', '--detach']); await rpc(session, root, ['claude', '--detach']);
+  await detach(session, root, 'codex'); await detach(session, root, 'claude');
   const ids = [...session.dispatches.keys()], lines = [];
   assert.equal(session.jobs.size, 2);
   assert.throws(() => session.dispatchSelection(['wait', ...ids, '--timeout', '571']), /570/);
@@ -179,11 +185,11 @@ test('Lab wait caps its timeout and returns 75 without stopping either parallel 
 
 test('Lab stop and session cancellation end detached jobs', async t => {
   const { session, root, launched } = sessionFixture(t);
-  await rpc(session, root, ['codex', '--detach']);
+  await detach(session, root, 'codex');
   const [id] = session.dispatches.keys(), reply = await rpc(session, root, ['stop', id]);
   assert.equal(reply.at(-1).exitCode, 0);
   assert.equal(launched[0].options.signal.aborted, true);
-  await rpc(session, root, ['claude', '--detach']);
+  await detach(session, root, 'claude');
   session.controller.abort(); await Promise.allSettled(session.jobs);
   assert.equal(launched[1].options.signal.aborted, true);
 });
