@@ -7,7 +7,7 @@ const os = require('node:os');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
-const { randomUUID } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runDetached, waitDetached, RATE_INTERVAL } = require('../integration/dispatch.cjs');
 const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
 const { execFileSync } = require('node:child_process');
@@ -879,6 +879,36 @@ test('the worker reads the ledger, the boundaries of the modules it may change, 
   assert.match(briefOf({ cwd: directory, allow: [] }, Buffer.from('plain')).toString(), /## Skill proposals[\s\S]*plain$/);
   assert.equal(recordFindings(options, 'Done.\n\n## Findings for the ledger\n\n- `src/a.js:1` parses cents.\n', 'now · T'), true);
   assert.match(await fs.readFile(options.ledger, 'utf8'), /### now · T\n\n- `src\/a\.js:1` parses cents\./);
+});
+
+test('small role briefs trim context by permission and preserve the default bytes', async t => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'agentrix-small-brief-'));
+  t.after(() => fs.rm(cwd, { recursive: true, force: true }));
+  const boundary = 'src/BOUNDARY.md';
+  await fs.mkdir(path.join(cwd, 'src'));
+  await fs.writeFile(path.join(cwd, boundary), '# Boundary: Source\n\nPrivate module context.\n\n## Owns\n- `src/**`\n');
+  const repo = { root: cwd, files: [boundary, 'src/a.js'] };
+  const team = { context: () => ['# Project memory\n\nMemory.', '# Working now\n\nPeers.', '# Repository\n\n(clean)'] };
+  const render = (options, currentTeam = team) => briefOf({ cwd, ...options }, Buffer.from('Inspect src/a.js.'), currentTeam, { repo });
+  const read = { readOnly: true, allow: [] }, write = { allow: ['src/a.js'] };
+  // Captured from the pre-change engine with this fixture.
+  assert.equal(createHash('sha256').update(render(read)).digest('hex'), '360fd84da8599f32e7f73387cb546948338aad8811c60442ea140567263cda24');
+  assert.equal(createHash('sha256').update(render(write)).digest('hex'), 'd1922a777657b74c2d0f332ec705a75a5dc33c9b8285b818fd77c19748d85656');
+
+  const readOnlyTeam = { context: () => assert.fail('small lookups should not gather team context') };
+  const lookup = render({ ...read, small: true }, readOnlyTeam).toString();
+  assert.doesNotMatch(lookup, /# (?:Project memory|Working now|Repository|Module boundary)/);
+  assert.match(lookup, /# Files you may change\n\nNone\./);
+  assert.match(lookup, /read-only: change, create and delete no file/);
+  assert.equal(render({ permission: 'plan', allow: [], small: true }, readOnlyTeam).toString(), lookup);
+  assert.match(render({ ...read, small: true }, null).toString(), /## Findings for the ledger/);
+
+  const edit = render({ ...write, small: true }).toString();
+  assert.doesNotMatch(edit, /# Project memory|Private module context/);
+  assert.match(edit, /# Working now\n\nPeers\.\n\n# Repository\n\n\(clean\)/);
+  assert.match(edit, /# Module boundary: src\/BOUNDARY\.md\n\nRead this file from the repository root before editing\./);
+  assert.match(edit, /# Files you may change\n\n- `src\/a\.js`[\s\S]*out of scope/);
+  for (const text of [lookup, edit]) assert.match(text, /# Standing rules[\s\S]*# Skill changes[\s\S]*## Findings for the ledger[\s\S]*# Task\n\nInspect src\/a\.js\.$/);
 });
 
 test('every worker reads one short standing section before its task: scoped, read-only, and the code standard by path', async t => {

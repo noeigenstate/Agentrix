@@ -7,6 +7,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { validateSmallScope } = require('./dispatch.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { familyOf, launchSeat, liveSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -24,6 +25,7 @@ const TOOLS = [
       title: text('One line: what the role does'),
       brief: text('The task only, kept short: the goal, what was wrong, what must keep working, done-when. Agentrix adds the standing rules'),
       readOnly: { type: 'boolean', description: 'True for a role that only reads, such as a review or research' },
+      small: { type: 'boolean', description: 'Use a short brief for a precise read-only lookup or an edit to one or two named files.' },
       allow: { type: 'array', items: { type: 'string' }, description: 'Globs of the files the role may change; required unless readOnly' },
       cwd: text('Folder to work in, such as a git worktree; the project folder by default'),
       worktree: text('Branch suffix for a new work/<suffix> worktree from HEAD; for writable roles without cwd'),
@@ -177,13 +179,15 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
   }
 
   const tools = {
-    async start_role({ seat, title, brief, readOnly = false, allow = [], cwd: folder, worktree }) {
+    async start_role({ seat, title, brief, readOnly = false, allow = [], cwd: folder, worktree, small = false }) {
       const calledAt = Date.now();
       if (!conductor()) throw new Error('Conductor mode is off: the team roles are unavailable.');
       const seats = liveSeatMap(env.AGENTRIX_BOOTSTRAP) ?? {}, id = launchSeat(seat, Object.keys(seats));
       if (!id || id === 'orchestrator') throw new Error(`Seat ${seat} is not an enabled role on this team.`);
       if (worktree !== undefined && readOnly) throw new Error('A read-only role cannot create a worktree.');
       if (worktree !== undefined && folder !== undefined) throw new Error('Specify either cwd or worktree.');
+      if (typeof small !== 'boolean') throw new Error('small must be a boolean.');
+      if (small) validateSmallScope(readOnly, allow);
       if (!readOnly && !allow.length) throw new Error('A role that changes files needs allow: the file globs it may change.');
       if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
       if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
@@ -195,6 +199,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine }) {
         fs.writeFileSync(briefFile, brief, { mode: 0o600 });
         const role = readOnly ? REVIEWING.test(seat) ? 'review' : 'investigate' : 'exec';
         const { lines, timing } = await call([agent, '--detach', '--seat', seat, '--role', role, '--title', title,
+          ...(small ? ['--small'] : []),
           ...(agent === 'claude' ? ['--permission', readOnly ? 'plan' : 'acceptEdits'] : readOnly ? ['--read-only'] : []),
           '--cwd', work, '--brief', briefFile, '--out', out, ...allow.flatMap(glob => ['--allow', glob])]);
         const started = lines.map(line => /^\[dispatch\] started (\S+) (.*)/.exec(line)).find(Boolean);

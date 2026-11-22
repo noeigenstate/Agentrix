@@ -149,6 +149,9 @@ Five tools call the team; they are yours alone, and a role cannot call them.
   stay in scope (no file changes for a read-only role), no commit or push, no other workers, no GUI smoke tests or
   clipboard, only the tests the task touches, what to report, and the brief's language. Do not repeat any of these;
   state only an exception the task needs.
+- Set `small: true` for a read-only lookup with a named target or an edit limited to one or two named files in `allow`.
+  Small briefs omit project memory and also omit active roles and repository state for lookups.
+  For a small edit, list each allowed file explicitly and have the role read the referenced module boundaries before editing.
 - A role that changes files reports what it changed and checked; an end with `OUT OF SCOPE` means it changed files
   outside `allow`: have them reverted and the work redone, or split the task.
 - Running `codex exec` or `claude -p` from the shell is refused in conductor mode; roles start only through

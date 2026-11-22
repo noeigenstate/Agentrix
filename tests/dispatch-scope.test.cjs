@@ -46,7 +46,7 @@ function fixture(t) {
     await Promise.allSettled(workers.map(worker => worker.result));
   });
   t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
-  function start(name, allow, writes, cwd = linked) {
+  function start(name, allow, writes, cwd = linked, flags = []) {
     const base = path.join(root, randomUUID()), brief = base + '.md', configFile = base + '.json';
     const config = { sessionId: randomUUID(), writes: writes.map(([file, text]) => [path.join(cwd, file), text]),
       writeGate: base + '.write', written: base + '.written', release: base + '.release' };
@@ -54,7 +54,7 @@ function fixture(t) {
     fs.mkdirSync(path.join(cwd, '.dispatch'), { recursive: true });
     let stdout = '';
     const result = run(['claude', '--role', 'exec', '--title', name, '--model', 'synthetic-model', '--effort', 'high', '--permission', 'acceptEdits',
-      '--cwd', cwd, '--brief', brief, '--out', path.join(cwd, '.dispatch', name + '.md'), '--allow', allow], {
+      '--cwd', cwd, '--brief', brief, '--out', path.join(cwd, '.dispatch', name + '.md'), '--allow', allow, ...flags], {
       env: { PATH: '', DISPATCH_SCOPE_FIXTURE: configFile }, stdout: { write: text => { stdout += text; } },
       resolveExecutable: () => ({ file: process.execPath, args: [path.join(__dirname, 'fixtures/codex-app-server-scope.cjs')] }),
       launch: (file, args, options) => lifetime.child(spawn(file, args, options)),
@@ -138,7 +138,7 @@ for (const kind of ['unknown', 'nameless', 'replaced']) test(`N1: ${kind} board 
 test('L4: an owner edit in an exclusive worktree is preserved before restoring the dirty start snapshot', async t => {
   const f = fixture(t), file = path.join(f.linked, 'b/base.txt');
   fs.writeFileSync(file, 'Owner draft before dispatch.');
-  const worker = f.start('owner-edit', 'a/**', [['b/base.txt', 'Worker violation.']]);
+  const worker = f.start('owner-edit', 'a/base.txt', [['b/base.txt', 'Worker violation.']], f.linked, ['--small']);
   fs.writeFileSync(worker.writeGate, 'go'); await until(() => fs.existsSync(worker.written));
   fs.writeFileSync(file, 'Owner edit during dispatch.'); fs.writeFileSync(worker.release, 'done');
   assert.equal(await worker.result, 0);
