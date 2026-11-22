@@ -122,6 +122,33 @@ test('role status, wait and result return structured refusals from the detached 
   const result = await tools.role_result({ id: 'run-1' });
   assert.deepEqual(result.refused, refused);
   assert.match(result.answer, /^## Needs approval/);
+  assert.equal(result.needsDecision, undefined);
+});
+
+test('role results and status expose a settled decision without reading the answer for status', async t => {
+  const { env, folder } = session(t, 'conductor');
+  const answer = 'Completed the independent work.\n\n## Needs decision\n\nOptions for the lead.';
+  let out, settled = false;
+  const fake = engine((args, onTiming) => {
+    if (args.includes('--detach')) {
+      out = args[args.indexOf('--out') + 1];
+      return '[dispatch] started run-1 claude\n';
+    }
+    if (!settled) return '[dispatch] still running run-1\n';
+    onTiming({ id: 'run-1', endedAt: Date.now(), needsDecision: true });
+    return '[dispatch] ended run-1 claude · exit 0 reason exit · needs decision\n';
+  });
+  const { tools } = createRoleTools({ env, cwd: folder, engine: fake.run });
+  await tools.start_role({ seat: 'reviewer', title: 'Review', brief: 'Inspect', readOnly: true });
+  assert.equal((await tools.roles_status()).roles[0].needsDecision, undefined);
+  settled = true;
+  const { roles: [ended] } = await tools.roles_status();
+  assert.equal(ended.needsDecision, true);
+  assert.match(ended.end, / · needs decision$/);
+  fs.writeFileSync(out, answer);
+  const result = await tools.role_result({ id: 'run-1' });
+  assert.equal(result.needsDecision, true);
+  assert.equal(result.answer, answer);
 });
 
 test('start_role passes small through to the engine and refuses wide writable scopes before checkout', async t => {

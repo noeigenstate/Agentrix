@@ -267,8 +267,13 @@ function standingRules(options) {
     'Do not commit or push, and do not start another worker or agent.',
     'Run no GUI smoke test and never read or write the system clipboard.',
     'Run only the tests the task touches, never the whole suite.',
-    'If an action is refused, do not work around it. Finish what you can and list the exact refused action under ## Needs approval in your answer.',
-    ...(options.agent === 'claude' ? ['End with a plain text answer. Never call ExitPlanMode or ask the user a question. Nobody can answer inside a role.'] : []),
+    'Never ask the user. Finish independent work. Report exact refusals under ## Needs approval. Do not work around them.',
+    ...(options.small ? ['Decide implementation (one line with why), take the smaller viable approach (note the other), '
+      + 'and defer scope changes, irreversible actions, or changes to UI or behavior to the lead under ## Needs decision (options, effects, recommendation).'] : [
+      'Decide implementation details and explain your choice in one line. Take the smaller viable approach and note the other.',
+      'Stop before scope changes, irreversible actions, or changes to UI or behavior. Under ## Needs decision give the lead options, consequences and a recommendation.',
+    ]),
+    ...(options.agent === 'claude' ? ['End with a plain text answer. Never call ExitPlanMode.'] : []),
     `Report ${readOnly ? 'what you found, with the evidence (file:line)' : 'what you changed'}, what you ran with its result, and what stays unverified.`,
     'Write your messages and report in the language the task is written in; code, identifiers and comments follow the project\'s convention.',
   ].map((line, index) => index ? `- ${line}` : line).join('\n');
@@ -654,9 +659,21 @@ function detachedRuns(cwd, create = false) {
   return new DetachedRuns(path.join(temporary, ...parents));
 }
 
-function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, refused }) {
+function reportDetachedTiming(onTiming, { id, startedAt, confirmedAt, settled, endedAt, waitingLine, ownerWait, ownerWaitSequence, refused, needsDecision }) {
   onTiming?.({ id, startedAt, confirmedAt, endedAt: settled ? endedAt : undefined, ...(waitingLine && { waitingLine }),
-    ...(ownerWaitSequence && { ownerWait, ownerWaitSequence }), ...(refused && { refused }) });
+    ...(ownerWaitSequence && { ownerWait, ownerWaitSequence }), ...(refused && { refused }), ...(settled && needsDecision === true && { needsDecision }) });
+}
+
+function hasDecisionHeading(answer) {
+  let fence = '';
+  for (const [, marker, rest] of answer.matchAll(/^ {0,3}(#{2}(?=[ \t])|`{3,}|~{3,})([^\r\n]*)/gm)) {
+    if (fence) {
+      if (marker.startsWith(fence) && !rest.trim()) fence = '';
+    } else if (marker === '##') {
+      if (rest.trim().replace(/[ \t]+#+$/, '') === 'Needs decision') return true;
+    } else if (marker[0] !== '`' || !rest.includes('`')) fence = marker;
+  }
+  return false;
 }
 
 async function startDetached(argv, { env = process.env, stdout = process.stdout, launch = spawn, store, timeout, source = 'dispatch', onTiming,
@@ -773,7 +790,7 @@ async function runDetached(file, deps = {}) {
     if (line.startsWith(`[dispatch] ended ${id} `)) changes.endedLine = line;
     void receipt(changes);
   } };
-  let ownerWaitSequence = 0;
+  let ownerWaitSequence = 0, needsDecision = false;
   const detached = { id, admitted: () => receipt({ admitted: true }), sandboxReady: () => receipt({ waitingLine: null }),
     ownerWaiting: detail => {
       const ownerWait = detail ? 'waiting for the owner: ' + detail : null;
@@ -781,6 +798,7 @@ async function runDetached(file, deps = {}) {
       return receipt({ ownerWait, ownerWaitSequence, activityAt: Date.now() });
     },
     refusals: refused => receipt({ refused: [...refused] }),
+    needsDecision: () => { needsDecision = true; },
     trackProcess: pid => artifacts?.trackRoleProcess(entry.roleArtifacts, pid),
     deferArtifactSettlement: () => { processExitUnconfirmed = true; },
     confirmed: (startedAt, confirmedAt) => { startTiming = { startedAt, confirmedAt }; } };
@@ -791,7 +809,8 @@ async function runDetached(file, deps = {}) {
   } finally {
     const endedAt = Date.now();
     if (artifacts && !processExitUnconfirmed) await artifacts.stampRoleArtifacts(entry.roleArtifacts, 'ended', endedAt);
-    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null, ownerWait: null }); await pending;
+    await receipt({ settled: true, exitCode: code, endedAt, activityAt: endedAt, waitingLine: null, ownerWait: null,
+      ...(needsDecision && { needsDecision }) }); await pending;
     await new Promise(resolve => server.close(resolve));
   }
 }
@@ -1466,6 +1485,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
       else if (refused.length) reason = 'permission';
       let answer = '';
       try { answer = fs.readFileSync(options.out, 'utf8'); } catch {}
+      const needsDecision = hasDecisionHeading(answer);
+      if (needsDecision) detached?.needsDecision?.();
       const header = `${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${options.title} · ${options.agent} ${route.model} · session ${resumeSession || output.sessionId || 'unreported'}`;
       const bookkeeping = await recordTeam({ answer, header, reason });
       await inputTail.catch(() => {});
@@ -1482,7 +1503,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
         ...(outOfScope?.length ? { outOfScope: outOfScope.slice(0, 50) } : {}), ...(refused.length && { refused }), skillProposals, skillChangesLeftLive, endedAt: Date.now() });
       endSent = true;
       signal(`ended ${id} ${reported()} · ${rate} · exit ${exitCode} reason ${reason}${scope}${refusalNote()}${scopeRestoreNote}${bookkeeping}`
-        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}`);
+        + `${proposalNote()}${interventionNote()}${stopFailureNote(stopFailure)} · out ${options.out}${fallbackNote()}${needsDecision ? ' · needs decision' : ''}`);
       await new Promise((resolve, reject) => {
         if (log.closed) return resolve();
         log.once('close', resolve); log.once('error', reject); log.end();

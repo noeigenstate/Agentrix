@@ -3,7 +3,11 @@ const SSH_REFERENCE_NOTE = 'Shipped built-in and global skills are read-only ref
 const plain = value => String(value || '').replace(/\\/g, '/').replace(/"/g, "'").replace(/[\x00-\x1f\x7f]+/g, ' ');
 
 const NATIVE_MODE = 'Agentrix runs this session in native mode: you are the plain CLI conversation you were born as and do what you always did, the tasks yourself. Conductor mode is off, so the team roles are unavailable: do not dispatch them.';
-const CONDUCTOR_MODE = 'Agentrix runs this session in conductor mode: forget how you used to work. You are this project\'s conductor, with a team of roles to call, and your aim is to get every task done fast and well through them; the model-routing skill says how.';
+const CONDUCTOR_MODE = 'Agentrix runs this session in conductor mode: forget how you used to work. You are this project\'s conductor, with a team of roles to call, '
+  + 'and your aim is to get every task done fast and well through them; the model-routing skill says how. '
+  + 'For ## Needs decision, decide and continue or restart the role with your decision. Ask the owner only about irreversible or outward-facing actions '
+  + '(such as publishing, sending or deleting) or product decisions they have not delegated. Ask once with options and a recommendation. '
+  + 'For ## Needs approval, do the refused action yourself if allowed, or ask the owner once and restart the role with a wider allowance if approved.';
 
 // What a running session is told when the owner switches its mode: the mode itself and, for a conductor, its instructions.
 function modeNote(conductor, routingSkill) {

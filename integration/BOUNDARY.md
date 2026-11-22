@@ -24,6 +24,7 @@ SDK bookkeeping denials stay in the policy audit. Only denied work is included i
 An accepted stop keeps reason `killed` with any bounded tree-stop failure in the end line and authenticated event. Artifact settlement requires worker exit evidence.
 The end line includes the count and first action. Role status, wait and result expose the structured list.
 All briefs ask roles to report blocked actions under Needs approval. Claude briefs direct roles to finish with plain text and avoid owner dialogs.
+Roles defer choices affecting scope, reversibility or product behavior under Needs decision. On settlement, that answer heading adds a fixed end-line note and a boolean to detached role status and results.
 `roles_status` lists endings for ten minutes from first observation and reports engine timing when available.
 A local Windows Codex role reports its sandbox wait in the detached receipt and in role status during confirmation.
 Its detached launcher allows eight extra minutes for authorization.

@@ -639,7 +639,7 @@ test('a worker that exits right after its records is confirmed from them; withou
   assert.equal(f.events[0].unconfirmed, true); assert.equal(f.events[1].reason, 'unconfirmed');
 });
 
-test('detached Codex and Claude write engine timing and expose it to wait without changing the end line', async t => {
+test('detached Codex and Claude expose engine timing and a decision heading through the receipt and end line', async t => {
   const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
   const { createRequire } = require('node:module'), { runInNewContext } = require('node:vm');
   const peer = path.join(__dirname, 'fixtures/codex-app-server.cjs'), peerSource = await fs.readFile(peer, 'utf8');
@@ -648,6 +648,8 @@ test('detached Codex and Claude write engine timing and expose it to wait withou
   const store = new DetachedRuns(cwd), brief = path.join(cwd, 'brief.md');
   await fs.writeFile(brief, 'Synthetic role task');
   for (const [agent, model] of [['codex', 'gpt-6.1-sol'], ['claude', 'claude-sonnet-5-5']]) {
+    const needsDecision = agent === 'claude';
+    const answer = 'Done.\r\n\r\n## Needs decision\r\n\r\nPrivate options for the lead.';
     const roleArtifacts = await createRoleArtifacts(cwd);
     const id = randomUUID(), out = path.join(roleArtifacts.folder, 'answer.md');
     store.create({ id, cwd, out, roleArtifacts, createdAt: Date.now(), argv: [agent, '--role', 'review', '--title', 'Timed role',
@@ -665,7 +667,7 @@ test('detached Codex and Claude write engine timing and expose it to wait withou
             argv: ['node', peer, 'app-server'], env: {}, cwd: () => cwd, stdin: child.stdin, stdout: child.stdout, stderr: child.stderr, exit: child.kill,
           } });
         } else child.stdin.once('finish', () => queueMicrotask(() => {
-          for (const record of claude) child.stdout.write(JSON.stringify(record) + '\n');
+          for (const record of claude) child.stdout.write(JSON.stringify(record.type === 'result' ? { ...record, result: answer } : record) + '\n');
           child.kill();
         }));
         return child;
@@ -679,11 +681,24 @@ test('detached Codex and Claude write engine timing and expose it to wait withou
     assert.equal(await waitDetached({ ids: [id], timeout: 0 }, {
       store, onTiming: status => timing.push(status), stdout: { write: value => { output += value; } },
     }), 0);
-    assert.deepEqual(timing, [{ id, startedAt, confirmedAt, endedAt }]);
+    assert.deepEqual(timing, [{ id, startedAt, confirmedAt, endedAt, ...(needsDecision && { needsDecision }) }]);
+    assert.equal(endedLine.endsWith(' · needs decision'), needsDecision);
+    assert.doesNotMatch(endedLine, /Private options/);
     assert.equal(output.trimEnd().split('\n').at(-1), endedLine);
     await sweepRoleArtifacts(cwd, { now: endedAt + RETENTION });
     await assert.rejects(fs.stat(roleArtifacts.folder), { code: 'ENOENT' });
   }
+});
+
+test('a mention, a fenced example and a different heading do not add a decision note', async t => {
+  const answer = 'Mention ## Needs decision in prose.\n\n~~~md\n## Needs decision\n~~~\n\n### Needs decision\n## Needs decision later\n';
+  const records = claude.map(record => ({ record: record.type === 'result' ? { ...record, result: answer } : record }));
+  const { finished, directory } = await fixture(t, records, { agent: 'claude' });
+  const result = await finished;
+  assert.equal(result.code, 0);
+  assert.equal(await fs.readFile(path.join(directory, 'answer.md'), 'utf8'), answer);
+  assert.match(result.stdout, /\[dispatch\] ended /);
+  assert.doesNotMatch(result.stdout, / · needs decision/);
 });
 
 test('a failed Windows tree stop reports killed and retains artifacts without worker exit proof', { skip: process.platform !== 'win32' }, async t => {
@@ -969,10 +984,10 @@ test('small role briefs trim context by permission and preserve the default byte
   const team = { context: () => ['# Project memory\n\nMemory.', '# Working now\n\nPeers.', '# Repository\n\n(clean)'] };
   const render = (options, currentTeam = team) => briefOf({ cwd, ...options }, Buffer.from('Inspect src/a.js.'), currentTeam, { repo });
   const read = { readOnly: true, allow: [] }, write = { allow: ['src/a.js'] };
-  // The new standing rule is the only change to the captured default sections.
-  const withoutRefusalRule = options => render(options).toString().replace(/^- If an action is refused[^\n]+\n/m, '');
-  assert.equal(createHash('sha256').update(withoutRefusalRule(read)).digest('hex'), '360fd84da8599f32e7f73387cb546948338aad8811c60442ea140567263cda24');
-  assert.equal(createHash('sha256').update(withoutRefusalRule(write)).digest('hex'), 'd1922a777657b74c2d0f332ec705a75a5dc33c9b8285b818fd77c19748d85656');
+  // The captured default sections outside the escalation rules keep their original bytes.
+  const withoutEscalationRules = options => render(options).toString().replace(/^- Never ask the user\.[\s\S]*?(?=^- Report )/m, '');
+  assert.equal(createHash('sha256').update(withoutEscalationRules(read)).digest('hex'), '360fd84da8599f32e7f73387cb546948338aad8811c60442ea140567263cda24');
+  assert.equal(createHash('sha256').update(withoutEscalationRules(write)).digest('hex'), 'd1922a777657b74c2d0f332ec705a75a5dc33c9b8285b818fd77c19748d85656');
 
   const readOnlyTeam = { context: () => assert.fail('small lookups should not gather team context') };
   const lookup = render({ ...read, small: true }, readOnlyTeam).toString();
@@ -998,8 +1013,14 @@ test('every worker reads one short standing section before its task: scoped, rea
   for (const small of [false, true]) {
     const codex = section({ agent: 'codex', readOnly: true, small });
     const claude = section({ agent: 'claude', permission: 'plan', small });
-    for (const text of [codex, claude]) assert.match(text, /^- If an action is refused.+## Needs approval.+$/m);
-    assert.match(claude, /^- End with a plain text answer.+Never call ExitPlanMode or ask the user a question.+$/m);
+    for (const text of [codex, claude]) {
+      assert.match(text, /^- Never ask the user\. Finish independent work\. Report exact refusals under ## Needs approval\./m);
+      assert.match(text, /Decide implementation.+one line.+smaller.+other/);
+      assert.match(text, /## Needs decision.+options.+(?:effects|consequences).+recommendation/);
+      assert.match(text, /scope changes, irreversible actions, or changes to UI or behavior/);
+      if (small) assert.match(text, /^- Decide implementation.+## Needs decision.+$/m);
+    }
+    assert.match(claude, /^- End with a plain text answer\. Never call ExitPlanMode\.$/m);
     assert.doesNotMatch(codex, /ExitPlanMode/);
   }
   for (const rule of [/code-standard skill this session was given/, /Change only the paths under "Files you may change"/, /Do not commit or push/,

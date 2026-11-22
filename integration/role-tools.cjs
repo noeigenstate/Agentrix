@@ -183,6 +183,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       startSeconds: Math.max(0, ((run.confirmedAt ?? run.observedStartAt) - run.calledAt) / 1000),
       endedAt: end === undefined ? null : new Date(end).toISOString(),
       refused: run.refused ?? [],
+      ...(run.needsDecision && { needsDecision: true }),
       ...(run.end ? { end: run.end } : { activity: run.activity ?? null, ...(run.ownerWait && { waiting: run.ownerWait }) }) };
   };
 
@@ -209,7 +210,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       const end = lines.find(line => line.startsWith(`[dispatch] ended ${run.id} `));
       const loss = lines.includes(`[dispatch] unknown run ${run.id}`) ? `unknown run ${run.id}` : failure;
       if (end) {
-        Object.assign(run, { end, endedAt: timestamp(status?.endedAt), observedEndAt: Date.now() });
+        Object.assign(run, { end, endedAt: timestamp(status?.endedAt), observedEndAt: Date.now(), needsDecision: status?.needsDecision === true });
         sweep();
       }
       else if (loss) Object.assign(run, { end: `lost: ${loss}`, observedEndAt: Date.now(), lost: true });

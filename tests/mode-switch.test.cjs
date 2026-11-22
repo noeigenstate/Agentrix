@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { updateBootstrapMode } = require('../electron/features/terminal-events/bootstrap-file.cjs');
-const { modeNote } = require('../electron/features/skills/delivery.cjs');
+const { modeNote, skillInstructions } = require('../electron/features/skills/delivery.cjs');
 
 test('writing a session mode reports a switch only when it replaces the other mode', t => {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-mode-'));
@@ -28,4 +28,15 @@ test('the mode note names the new mode, and a conductor is sent to its instructi
   assert.match(native, /in native mode/);
   assert.doesNotMatch(native, /model-routing|start_role/);
   assert.doesNotMatch(modeNote(true, undefined), /read and follow/);
+});
+
+test('conductor startup and mode switching both give the lead the role escalation rules', () => {
+  const startup = conductor => skillInstructions({ conductor, skills: [], globalFolder: '<home>/skills' });
+  for (const text of [startup(true), modeNote(true)]) {
+    assert.match(text, /## Needs decision, decide and continue or restart the role with your decision/);
+    assert.match(text, /Ask the owner only about irreversible or outward-facing actions.+or product decisions they have not delegated/);
+    assert.match(text, /Ask once with options and a recommendation/);
+    assert.match(text, /## Needs approval, do the refused action yourself if allowed, or ask the owner once and restart the role with a wider allowance if approved/);
+  }
+  for (const text of [startup(false), modeNote(false)]) assert.doesNotMatch(text, /## Needs (decision|approval)/);
 });
