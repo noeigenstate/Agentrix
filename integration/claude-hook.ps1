@@ -35,22 +35,39 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
         $start.Arguments = '"{0}" claude-hook "\\.\pipe\{1}" "{2}" "{3}" {4}' -f $helper, $PipeName, $ProjectId, $SessionKey, $Kind
         $child = [Diagnostics.Process]::Start($start)
         try {
-            $output = $child.StandardOutput.ReadToEndAsync()
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            $output = if ($workerPermission) { $child.StandardOutput.ReadLineAsync() } else { $child.StandardOutput.ReadToEndAsync() }
             $write = $child.StandardInput.WriteAsync($inputBuffer, 0, $length)
             if (-not $write.Wait($(if ($workerPermission) { 8000 } else { 1500 }))) {
                 if ($workerPermission) { [Console]::Error.WriteLine('Agentrix worker permission hook timed out writing input to Node.') }
-                $child.Kill()
+                if (-not $workerPermission) { $child.Kill() }
                 exit 0
             }
             $child.StandardInput.Close()
-            if ($child.WaitForExit($(if ($workerPermission) { 15000 } else { 2500 }))) {
+            if ($workerPermission) {
+                if (-not $output.Wait([Math]::Max(0, 8000 - $clock.ElapsedMilliseconds))) {
+                    [Console]::Error.WriteLine('Agentrix worker permission hook timed out reading the decision from Node.')
+                    exit 0
+                }
+                $decision = $output.GetAwaiter().GetResult()
+                if ($null -ne $decision) {
+                    [Console]::Out.Write($decision + "`n")
+                    [Console]::Out.Flush()
+                }
+                # Give the 750 ms refusal report time to finish after forwarding the decision.
+                if ($child.WaitForExit(1000) -and $child.ExitCode -ne 0) {
+                    [Console]::Error.WriteLine("Agentrix worker permission Node exit code: $($child.ExitCode).")
+                }
+            } elseif ($child.WaitForExit(2500)) {
                 [Console]::Out.Write($output.Result)
-                if ($workerPermission -and $child.ExitCode -ne 0) { [Console]::Error.WriteLine("Agentrix worker permission Node exit code: $($child.ExitCode).") }
             } else {
-                if ($workerPermission) { [Console]::Error.WriteLine('Agentrix worker permission hook timed out waiting for Node.') }
                 $child.Kill()
             }
-        } finally { $child.Dispose() }
+        } finally {
+            try {
+                if ($workerPermission -and -not $child.HasExited) { $child.Kill() }
+            } finally { $child.Dispose() }
+        }
     } catch {
         if ($workerPermission) { [Console]::Error.WriteLine("Agentrix worker permission bridge failed ($($_.Exception.GetType().Name)).") }
     }

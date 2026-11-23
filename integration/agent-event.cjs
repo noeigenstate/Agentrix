@@ -16,16 +16,19 @@ const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'featur
 const { deniedAction } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const { liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 
-function send(socket, event, deadlineMs) {
+function send(socket, event) {
   return new Promise(resolve => {
     const connection = net.connect(socket);
     const done = () => { clearTimeout(deadline); connection.destroy(); resolve(); };
-    const deadline = deadlineMs ? setTimeout(done, deadlineMs) : null;
-    if (!deadline) connection.setTimeout(750, done);
+    const deadline = setTimeout(done, 750);
     connection.on('error', done);
     connection.on('close', done);
     connection.on('connect', () => connection.end(JSON.stringify(event) + '\n'));
   });
+}
+
+function writeOutput(output) {
+  return new Promise(resolve => process.stdout.write(JSON.stringify(output) + '\n', resolve));
 }
 
 function readInput(limit = 4 * 1024 * 1024) {
@@ -129,14 +132,13 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
   const input = action === 'claude-hook' ? await readInput() : null;
   if (action === 'claude-hook' && argument === 'worker-permission') {
     const { output, event } = workerPermission(input, projectId, sessionKey);
-    if (output) process.stdout.write(JSON.stringify(output) + '\n');
-    // Claude waits for the hook process to finish, so reporting needs an absolute deadline as well.
-    if (event) await send(socket, event, 750);
+    if (output) await writeOutput(output);
+    if (event) await send(socket, event);
     return;
   }
   if (action === 'claude-hook' && argument === 'seat-routing') {
     const { output, observed } = seatRouting(input, process.env.AGENTRIX_SEATS, process.env.AGENTRIX_BOOTSTRAP);
-    if (output) process.stdout.write(JSON.stringify(output) + '\n');
+    if (output) await writeOutput(output);
     if (observed) await send(socket, { type: 'claude-seat-input', projectId, sessionKey, ...observed });
     return;
   }
@@ -144,7 +146,7 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
     try {
       const noteFile = rest[0] || process.env.AGENTRIX_READING_NOTE_FILE;
       const context = noteFile && sessionContext(JSON.parse(input), fs.readFileSync(noteFile, 'utf8'));
-      if (context) process.stdout.write(JSON.stringify(context) + '\n');
+      if (context) await writeOutput(context);
     } catch {}
   }
   const event = action === 'codex-notify' ? codexEvent(argument, projectId, sessionKey)
@@ -156,7 +158,8 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
 if (require.main === module) {
   // Whatever happens, the agent continues: no output, exit code 0, and never longer than a few seconds.
   setTimeout(() => process.exit(0), 5000).unref();
-  main(process.argv.slice(2)).catch(() => {}).finally(() => { process.exitCode = 0; });
+  // A pending Windows pipe connect can keep Node alive after its socket is destroyed.
+  main(process.argv.slice(2)).catch(() => {}).finally(() => process.exit(0));
 }
 
 module.exports = { codexEvent, claudeEvent, shellEvent, seatRouting };

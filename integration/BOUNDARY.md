@@ -26,8 +26,11 @@ Wait returns full details for roles whose lifecycle or owner-wait state changed 
 For a recognised hidden Claude menu, the wait line also reports the menu id, kind, title and offered options. The conversation's
 `answer_role` uses that id through the authenticated control channel. The worker checks the current PTY sequence and choice.
 The helper retains up to 20 worker refusals in receipts and the authenticated end event. A successful run with refusals ends with reason `permission` and its original exit code.
-The hidden worker's permission hook writes its Claude decision before it reports the refusal. It gives the event
-connection at most 750 ms. A stalled connection cannot consume the rest of Claude's hook budget.
+The hidden worker's permission hook flushes its Claude decision before it reports the refusal. On Windows the bridge
+forwards the first decision line without waiting for Node to exit and terminates Node if it outlasts the report grace period.
+The Node helper gives all hook event reports an absolute 750 ms deadline and exits after the report attempt, even if
+Windows still has a pending pipe connection.
+Test: `tests/agent-event-worker-permission.test.cjs` › "the Windows bridge forwards the decision with the child still holding stdout open".
 SDK bookkeeping denials stay in the policy audit. Only denied work is included in the run’s refusal list.
 An accepted stop keeps reason `killed` with any bounded tree-stop failure in the end line and authenticated event. Artifact settlement requires worker exit evidence.
 The end line includes the count and first action. Role status, wait and result expose the structured list.

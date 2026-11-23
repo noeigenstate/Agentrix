@@ -8,6 +8,7 @@ const net = require('node:net');
 const { once } = require('node:events');
 const { harness, opening, textBlock, finish } = require('./claude-real.cjs');
 const { terminal } = require('./claude-terminal.cjs');
+const { occupyHookPipe, powershell } = require('./busy-hook-pipe.cjs');
 const { startHookReceiver } = require('../helpers/claude-hook-client.cjs');
 const { createEventServer } = require('../../electron/events.cjs');
 const { terminalHooks } = require('../../electron/features/terminal-events/hook-channel.cjs');
@@ -145,11 +146,13 @@ async function workerHooks(t, f, observer, role) {
       observer.note({ type: 'hook', event: event.hookEvent, payload: event });
     }
   });
-  if (role.permissionPipeDown) await eventServer.close();
-  else t.after(() => eventServer.close());
+  if (role.permissionPipeDown) {
+    await eventServer.close();
+    if (powershell) await occupyHookPipe(t, eventServer.name, f.env);
+  } else t.after(() => eventServer.close());
   const integration = path.resolve(__dirname, '../../integration');
   const shell = process.platform === 'win32'
-    ? { powershellPath: path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+    ? { powershellPath: powershell,
       script: path.join(integration, 'claude-hook.ps1'), node: process.execPath }
     : { posix: true, node: process.execPath, helper: path.join(integration, 'agent-event.cjs') };
   const options = { terminalId, sessionKey, eventServer, env: f.env, cwd: f.cwd, shell, workerPermission: true };
