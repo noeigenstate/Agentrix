@@ -8,10 +8,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const vm = require('node:vm');
-const { spawn, execFileSync } = require('node:child_process');
+const { execFileSync } = require('node:child_process');
 const { createHmac, randomUUID } = require('node:crypto');
 const { run, runDetached, detachedRuns } = require('../integration/dispatch.cjs');
 const { createRoleTools } = require('../integration/role-tools.cjs');
+const { workerPermission } = require('../integration/agent-event.cjs');
 const { createDispatchControl } = require('../electron/features/agents/dispatch-control.cjs');
 const { createInterventions } = require('../electron/features/agents/interventions.cjs');
 const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
@@ -269,31 +270,26 @@ test('answer_role uses the current parsed menu and keeps active waits visible', 
   assert.equal(await f.result, 0, f.stdout());
 });
 
-test('a worker permission hook denies without interrupting the turn and reports the refused action', { timeout: 15000 }, async t => {
-  const { f, receipt } = await menuFixture(t);
-  const integration = path.join(__dirname, '../integration'), id = 'worker-' + f.id, key = keyOfWorker(f);
-  const windows = process.platform === 'win32';
-  const program = windows ? path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe') : process.execPath;
-  const args = windows ? ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(integration, 'claude-hook.ps1'),
-    '-PipeName', f.eventServer.name, '-ProjectId', id, '-SessionKey', key, '-NodePath', process.execPath, '-Kind', 'worker-permission']
-    : [path.join(integration, 'agent-event.cjs'), 'claude-hook', f.eventServer.address, id, key, 'worker-permission'];
-  const child = spawn(program, args, { windowsHide: true, env: { ...f.pty.options.env, ...(windows && { SystemRoot: process.env.SystemRoot }) } });
-  child.stdin.end(JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: f.sessionId, tool_name: 'Write',
-    tool_input: { file_path: 'private-notes.txt', content: 'fixture-private-content' } }));
-  const chunks = [];
-  for await (const chunk of child.stdout) chunks.push(chunk);
-  const hook = JSON.parse(Buffer.concat(chunks).toString()).hookSpecificOutput;
+test('a worker permission hook denies without interrupting the turn and reports the refused action', async t => {
+  const { f, receipt, tools } = await menuFixture(t);
+  const input = JSON.stringify({ hook_event_name: 'PermissionRequest', session_id: f.sessionId, tool_name: 'Write',
+    tool_input: { file_path: 'private-notes.txt', content: 'fixture-private-content' } });
+  const { output: { hookSpecificOutput: hook }, event } = workerPermission(input, 'worker-' + f.id, keyOfWorker(f));
   assert.equal(hook.hookEventName, 'PermissionRequest');
   assert.equal(hook.decision.behavior, 'deny');
   assert.equal(hook.decision.interrupt, false);
   assert.match(hook.decision.message, /Continue without it.*## Needs approval/);
-  assert.deepEqual(await receipt(entry => entry?.refused ?? undefined), [{ reason: 'needs approval', action: 'Write: private-notes.txt' }]);
+  const expected = [{ reason: 'needs approval', action: 'Write: private-notes.txt' }];
+  const refused = receipt(entry => entry?.refused?.length ? entry.refused : undefined);
+  assert.equal(f.terminals.event(event), true);
+  assert.deepEqual(await refused, expected);
   f.hook('PermissionDenied', { tool_name: 'Write' });
   const answer = '## Needs approval\n\n- Write private-notes.txt.';
   f.log.append(f.log.reply('continued', 'tool', 'assistant', answer, Date.now()));
   f.hook('Stop', { last_assistant_message: answer });
   assert.equal(await f.result, 0, f.stdout());
   assert.match(f.stdout(), /exit 0 reason permission/);
+  assert.deepEqual((await tools.role_result({ id: f.id })).refused, expected);
   assert.equal(fs.readFileSync(f.out, 'utf8').trim(), answer);
   assert.deepEqual(f.pty.writes, []);
 });

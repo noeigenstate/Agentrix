@@ -195,4 +195,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).catch(() => {}).finally(() => process.exit(0));
 }
 
-module.exports = { codexEvent, claudeEvent, shellEvent, seatRouting };
+module.exports = { codexEvent, claudeEvent, shellEvent, seatRouting, workerPermission };

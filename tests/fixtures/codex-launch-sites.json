@@ -412,6 +412,10 @@
     "id": "electron/zsh-terminal.cjs:a5f63b7f6f661138fe716243"
   },
   {
+    "text": "spawn(process.execPath, [__filename, 'worker-report', socket], {\n    detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, AGENTRIX_WORKER_REPORT: report },\n  })",
+    "id": "integration/agent-event.cjs:7161caf290c7ec14e3e547f9"
+  },
+  {
     "text": "['exec', '执行']",
     "id": "integration/dispatch.cjs:7eeedc98678a9064e3c1cd6f"
   },

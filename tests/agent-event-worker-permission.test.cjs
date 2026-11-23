@@ -1,9 +1,13 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { EventEmitter, once } = require('node:events');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { createInterface } = require('node:readline');
+const { createEventServer } = require('../electron/events.cjs');
 const { occupyHookPipe, powershell } = require('./fixtures/busy-hook-pipe.cjs');
 const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 
@@ -105,4 +109,40 @@ test('the Windows bridge forwards the decision with the child still holding stdo
     hookEnv, timeout: 2500, checkStderr: stderr => assert.doesNotMatch(stderr, /decision child still alive/),
   });
   assertDeny(stdout);
+});
+
+test('the Windows refusal reporter can start reporting after the bridge exits', { skip: !powershell, timeout: 30000 }, async t => {
+  const bridgeExited = Promise.withResolvers();
+  const gate = net.createServer(socket => bridgeExited.promise.then(() => socket.end()));
+  gate.listen(0, '127.0.0.1');
+  await once(gate, 'listening');
+  t.after(() => gate.close());
+  const events = new EventEmitter();
+  const receiver = await createEventServer(event => events.emit('report', event));
+  t.after(() => receiver.close());
+  const preload = importSource(`import net from 'node:net';
+import { once } from 'node:events';
+if (process.argv[2] === 'worker-report') {
+  const gate = net.connect(${gate.address().port}, '127.0.0.1');
+  gate.resume();
+  await once(gate, 'end');
+}`);
+  const options = { signal: t.signal };
+  const reported = once(events, 'report', options);
+  // Process exit can be observed even if an inherited handle is still holding a pipe open.
+  const bridge = spawn(powershell, bridgeArgs(receiver.name), { windowsHide: true,
+    env: { ...env(), NODE_OPTIONS: '--import=' + preload }, stdio: ['pipe', 'pipe', 'inherit'] });
+  t.after(() => { bridgeExited.resolve(); if (bridge.exitCode === null) bridge.kill(); });
+  const exited = once(bridge, 'exit', options);
+  const lines = createInterface({ input: bridge.stdout });
+  t.after(() => lines.close());
+  const output = once(lines, 'line', options);
+  bridge.stdin.end(JSON.stringify(permissionInput));
+  const [[code], [decision], [report]] = await Promise.all([
+    exited.then(result => { bridgeExited.resolve(); return result; }), output, reported,
+  ]);
+  assert.equal(code, 0);
+  assertDeny(decision);
+  assert.equal(report.hookEvent, 'PermissionRequest');
+  assert.match(report.workerRefused, /^Bash: /);
 });

@@ -157,6 +157,10 @@
     ]
   },
   "helpers": {
+    "integration/claude-hook.ps1": [
+      "electron/features/terminal-events/BOUNDARY.md",
+      "integration/BOUNDARY.md"
+    ],
     "tests/helpers/claude-files.cjs": [
       "electron/features/claude-runtime/BOUNDARY.md"
     ]
