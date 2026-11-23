@@ -31,6 +31,8 @@ input directly and hands the report off to a separate process with its own stdio
 line, terminates the decision child and exits. Node and the PowerShell status hooks bound connect and write together to
 750 ms. Node exits after the attempt, even with a pending Windows pipe connection. AGENTRIX_HOOK_TRACE adds timing marks
 on stderr without including hook payloads or session keys.
+The Windows Claude hook uses UTF-8 on its redirected streams without accessing the pseudoterminal's console code pages.
+Seat routing and permission decisions end in LF, and the PowerShell SessionStart context ends in CRLF.
 Test: `tests/agent-event-worker-permission.test.cjs` › "the Windows bridge forwards the decision with the child still holding stdout open".
 SDK bookkeeping denials stay in the policy audit. Only denied work is included in the run’s refusal list.
 An accepted stop keeps reason `killed` with any bounded tree-stop failure in the end line and authenticated event. Artifact settlement requires worker exit evidence.

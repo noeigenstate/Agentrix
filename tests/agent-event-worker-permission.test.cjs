@@ -30,10 +30,10 @@ function startup(file) {
   return startups.get(file);
 }
 
-function runHook(t, file, args, { hookEnv = env(), timeout = 2200, input = permissionInput, checkStderr } = {}) {
+function runHook(t, file, args, { hookEnv = env(), timeout = 2200, input = permissionInput, checkStderr, encoding = 'utf8' } = {}) {
   const allowed = Math.ceil(timeout * scale + 2 * startup(file) + startup(process.execPath));
   const started = performance.now();
-  const child = spawnSync(file, args, { env: hookEnv, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true, timeout: allowed });
+  const child = spawnSync(file, args, { env: hookEnv, input: Buffer.from(JSON.stringify(input)), encoding, windowsHide: true, timeout: allowed });
   t.diagnostic(path.basename(file) + ' finished in ' + Math.round(performance.now() - started) + ' ms');
   assert.ifError(child.error);
   assert.equal(child.status, 0, child.stderr);
@@ -97,11 +97,14 @@ test('the PowerShell status hook exits when the event endpoint accepts but does 
 test('the PowerShell bridge preserves seat-routing stdout byte for byte', { skip: !powershell }, t => {
   const name = 'agentrix-' + randomUUID();
   const input = { hook_event_name: 'PreToolUse', session_id: 'worker', tool_name: 'Agent',
-    tool_input: { description: '[designer] Design the layout', prompt: 'Use a grid' } };
+    tool_input: { description: '[designer] Design the layout', prompt: 'Use a grid \u7f51\u683c' } };
   const hookEnv = { ...env(), AGENTRIX_SEATS: JSON.stringify({ designer: { model: 'sonnet', effort: 'high' } }) };
-  const expected = runHook(t, process.execPath, [helper, 'claude-hook', windowsPipe + name, 'project', 'session', 'seat-routing'], { input, hookEnv });
-  assert.equal(JSON.parse(expected).hookSpecificOutput.updatedInput.model, 'sonnet');
-  assert.equal(runHook(t, powershell, bridgeArgs(name, 'seat-routing'), { input, hookEnv }), expected);
+  const options = { input, hookEnv, encoding: 'buffer' };
+  const expected = runHook(t, process.execPath, [helper, 'claude-hook', windowsPipe + name, 'project', 'session', 'seat-routing'], options);
+  const { updatedInput } = JSON.parse(expected).hookSpecificOutput;
+  assert.equal(updatedInput.model, 'sonnet');
+  assert.equal(updatedInput.prompt, input.tool_input.prompt);
+  assert.deepEqual(runHook(t, powershell, bridgeArgs(name, 'seat-routing'), options), expected);
 });
 
 test('the Windows bridge forwards the decision with the child still holding stdout open', { skip: !powershell }, t => {

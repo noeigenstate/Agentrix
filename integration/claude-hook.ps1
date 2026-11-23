@@ -13,9 +13,15 @@ param(
 # SessionStart prints instructions. The separate seat-routing hook can print tool input or a notice.
 $ErrorActionPreference = 'Stop'
 
+function Write-HookLine($stream, $line, $newline = [Environment]::NewLine) {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($line + $newline)
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush()
+}
+
 function Write-HookTrace($stage) {
     if ($env:AGENTRIX_HOOK_TRACE) {
-        [Console]::Error.WriteLine("[agentrix-hook] $([DateTime]::UtcNow.ToString('o')) powershell $Kind $stage")
+        Write-HookLine ([Console]::OpenStandardError()) "[agentrix-hook] $([DateTime]::UtcNow.ToString('o')) powershell $Kind $stage"
     }
 }
 
@@ -34,8 +40,8 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
         $start.CreateNoWindow = $true
         # Node reads Claude's stdin directly. A second reader or an intermediate buffer delays the decision.
         $start.RedirectStandardOutput = $true
-        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-        $start.StandardOutputEncoding = [Console]::OutputEncoding
+        # The CLI is attached to a pseudoterminal. Use UTF-8 on the pipes without changing its console code page.
+        $start.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
         if ($workerPermission) {
             $start.EnvironmentVariables['AGENTRIX_WORKER_PERMISSION_BRIDGE'] = '1'
         }
@@ -50,14 +56,13 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
             $output = $child.StandardOutput.ReadLineAsync()
             if (-not $output.Wait($(if ($workerPermission) { 8000 } else { 1000 }))) {
                 if ($workerPermission) {
-                    [Console]::Error.WriteLine('Agentrix worker permission hook timed out reading the decision from Node.')
+                    Write-HookLine ([Console]::OpenStandardError()) 'Agentrix worker permission hook timed out reading the decision from Node.'
                 }
                 exit 0
             }
             $line = $output.GetAwaiter().GetResult()
             if ($null -ne $line) {
-                [Console]::Out.Write($line + "`n")
-                [Console]::Out.Flush()
+                Write-HookLine ([Console]::OpenStandardOutput()) $line "`n"
                 Write-HookTrace 'output-forwarded'
             }
             if (-not $workerPermission) {
@@ -70,7 +75,9 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
             Write-HookTrace 'bridge-exit'
         }
     } catch {
-        if ($workerPermission) { [Console]::Error.WriteLine("Agentrix worker permission bridge failed ($($_.Exception.GetType().Name)).") }
+        if ($workerPermission) {
+            Write-HookLine ([Console]::OpenStandardError()) "Agentrix worker permission bridge failed ($($_.Exception.GetType().Name))."
+        }
     }
     exit 0
 }
@@ -129,14 +136,18 @@ function Get-AgentrixSessionContext($hook) {
 
 try {
     $sentAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
-    [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $hook = [Console]::In.ReadToEnd() | ConvertFrom-Json
+    $inputReader = [IO.StreamReader]::new([Console]::OpenStandardInput(), [Text.UTF8Encoding]::new($false), $false)
+    try { $hook = $inputReader.ReadToEnd() | ConvertFrom-Json } finally { $inputReader.Dispose() }
     # Idle notifications must not turn a completed round back into a waiting one.
     if ($Kind -eq 'notify' -and $hook.notification_type -notin @('permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog')) { exit 0 }
     $sessionId = [string]$hook.session_id
     if (-not $sessionId) { exit 0 }
-    if ($Kind -eq 'session') { try { Get-AgentrixSessionContext $hook } catch { } }
+    if ($Kind -eq 'session') {
+        try {
+            $context = Get-AgentrixSessionContext $hook
+            if ($context) { Write-HookLine ([Console]::OpenStandardOutput()) $context }
+        } catch { }
+    }
     $eventData = @{
         projectId = $ProjectId
         sessionKey = $SessionKey
