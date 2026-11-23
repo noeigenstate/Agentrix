@@ -18,9 +18,22 @@ const permissionInput = { hook_event_name: 'PermissionRequest', session_id: 'wor
 const importSource = source => 'data:text/javascript,' + encodeURIComponent(source);
 const env = () => ({ ...dispatchEnvironment(), NODE_OPTIONS: '' });
 
+// A loaded runner can take seconds to start PowerShell at all, so the bound is the measured startup plus the allowance:
+// it still catches a hook that lingers on a dead pipe, which costs five seconds or more.
+const scale = Math.max(1, Number(process.env.AGENTRIX_TEST_TIMEOUT_SCALE) || 1), startups = new Map();
+function startup(file) {
+  if (!startups.has(file)) {
+    const started = performance.now();
+    spawnSync(file, file === process.execPath ? ['-e', '0'] : ['-NoLogo', '-NoProfile', '-Command', 'exit'], { windowsHide: true, timeout: 120000 });
+    startups.set(file, performance.now() - started);
+  }
+  return startups.get(file);
+}
+
 function runHook(t, file, args, { hookEnv = env(), timeout = 2200, input = permissionInput, checkStderr } = {}) {
+  const allowed = Math.ceil(timeout * scale + 2 * startup(file) + startup(process.execPath));
   const started = performance.now();
-  const child = spawnSync(file, args, { env: hookEnv, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true, timeout });
+  const child = spawnSync(file, args, { env: hookEnv, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true, timeout: allowed });
   t.diagnostic(path.basename(file) + ' finished in ' + Math.round(performance.now() - started) + ' ms');
   assert.ifError(child.error);
   assert.equal(child.status, 0, child.stderr);
