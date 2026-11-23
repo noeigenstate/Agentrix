@@ -4,7 +4,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { monitorActivity } = require('../../codex-activity.cjs');
 const { SkillHistory, safeId } = require('./history.cjs');
 const { metadata, draftText, readJson, writeFile, checkedPath, readText, listFolder, folderSignature, importFiles } = require('./files.cjs');
-const { skillInstructions, modeNote } = require('./delivery.cjs');
+const { skillInstructions, modeNote, routingChangeNote } = require('./delivery.cjs');
 const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
@@ -762,6 +762,27 @@ class SkillsStore {
   }
 
   // The note for a running session whose mode the owner switched (delivery.cjs).
+  // The enabled seats of a conductor project as one line, from the saved routing or from the map a session started with;
+  // null in native mode, where no seats are told.
+  seatTable(projectId, map = null) {
+    const info = this.seatsInfo(projectId);
+    if (!info?.conductor) return null;
+    const seats = map ?? info.effective;
+    return info.roles.filter(role => role.enabled !== false && seats?.[role.id]).map(role => {
+      const seat = seats[role.id];
+      return `${role.name} (${role.id}): ${seat.model} · ${seat.effort}${seat.fast ? ' · fast' : ''}`;
+    }).join('; ') || null;
+  }
+
+  // What a running conductor conversation is told after a routing change: the note and the table it now knows, or null.
+  routingChange(projectId, sessionId, told) {
+    const table = this.seatTable(projectId);
+    // A conversation that started with no seats (in native mode, say) has been told none.
+    const started = this.sessionSnapshot(projectId, sessionId)?.seatsMap;
+    const known = told !== undefined ? told : started ? this.seatTable(projectId, started) : null;
+    return table && table !== known ? { table, note: routingChangeNote(table) } : null;
+  }
+
   modeNote(project, sessionId, agent) {
     const delivery = this.deliveryInfo(project, false, sessionId, agent);
     return modeNote(delivery.conductor, delivery.skills.find(skill => skill.id === ROUTING_ID && skill.enabled)?.path);

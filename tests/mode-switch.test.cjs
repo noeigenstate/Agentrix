@@ -41,3 +41,21 @@ test('conductor startup and mode switching both give the lead the role escalatio
   }
   for (const text of [startup(false), modeNote(false)]) assert.doesNotMatch(text, /## Needs (decision|approval)/);
 });
+
+test('a running conductor is told a changed seat table once; native mode and an unchanged table tell nothing', t => {
+  const { SkillsStore } = require('../electron/features/skills/store.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-routing-change-'));
+  const project = { id: 'p', name: 'Isolated', path: path.join(root, 'project') }; fs.mkdirSync(project.path);
+  const store = new SkillsStore({ dataDir: path.join(root, 'profile'), builtinDir: path.join(__dirname, '../resources/skills'),
+    getProjects: () => [project], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  assert.equal(store.routingChange('p', 'session', undefined), null, 'native mode tells no seats');
+  const orchestrator = { model: 'claude-fable-5-2', effort: 'medium' };
+  const save = orchestrator => store.setRouting('project', 'p', { roles: { orchestrator }, conductor: true }, store.seatsInfo('p').routing.digest);
+  assert.deepEqual(save(orchestrator), { ok: true });
+  const first = store.routingChange('p', 'session', undefined);
+  assert.match(first.note, /^Agentrix: the owner changed model routing\. .*\(orchestrator\): claude-fable-5-2 · medium/);
+  assert.equal(store.routingChange('p', 'session', first.table), null, 'an unchanged table is not told again');
+  assert.deepEqual(save({ ...orchestrator, effort: 'high' }), { ok: true });
+  assert.match(store.routingChange('p', 'session', first.table).note, /\(orchestrator\): claude-fable-5-2 · high/);
+});

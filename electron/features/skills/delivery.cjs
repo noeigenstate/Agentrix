@@ -44,4 +44,9 @@ function skillInstructions({ skills, globalFolder, agents, pendingPath, remote =
   return plain(parts.join(' '));
 }
 
-module.exports = { MAX_NOTE, SSH_REFERENCE_NOTE, plain, skillInstructions, modeNote };
+// The seat table a conductor conversation runs with now, replacing the one it read when it started.
+function routingChangeNote(table) {
+  return plain(`Agentrix: the owner changed model routing. These seats replace the ones you were told before, including the table in the model-routing skill: ${table}. Your own model and effort already follow the orchestrator seat.`);
+}
+
+module.exports = { MAX_NOTE, SSH_REFERENCE_NOTE, plain, skillInstructions, modeNote, routingChangeNote };

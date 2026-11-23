@@ -565,6 +565,11 @@ function refreshSkillNotes() {
     const project = store.projects.find(project => project.id === s.projectId);
     if (!project) continue;
     const lead = s.nativeStructured && nativeSessions && skills.leadOptions(project.id, s.agent);
+    // A running terminal conductor reads its seats once; a change rides its next prompt, as a mode switch does.
+    if (!s.nativeStructured && s.agent === 'claude' && s.codexActive && project.kind !== 'ssh') {
+      const change = skills.routingChange(project.id, s.sessionId, s.toldSeats);
+      if (change) { s.toldSeats = change.table; s.routingNote = change.note; }
+    }
     if (lead) nativeSessions.applyRouting(s.terminalId, { model: lead.model, effort: lead.effort, fast: lead.fast === true }).catch(report);
     if (project.kind === 'ssh') {
       const remote = s.remoteConnection || s.terminal;
@@ -1140,8 +1145,9 @@ function tellMode(s, project) {
 }
 // The note a terminal's next prompt carries, handed over once.
 function takeModeNote(terminalId) {
-  const s = sessions.get(terminalId), note = s?.modeNote ?? null;
-  if (note) s.modeNote = null;
+  const s = sessions.get(terminalId);
+  const note = [s?.modeNote, s?.routingNote].filter(Boolean).join(' ') || null;
+  if (s) { s.modeNote = null; s.routingNote = null; }
   return note;
 }
 
