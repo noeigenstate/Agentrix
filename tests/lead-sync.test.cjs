@@ -55,6 +55,35 @@ test('the effort slider uses the label under its caret and never selects an unav
   assert.equal(pickerAction({ kind: 'effort', target: 'medium' }, rows.slice(0, -1)), null);
 });
 
+test('the effort slider uses Enter only when the selected effort advertises a session-only Enter', async () => {
+  const keys = [];
+  const slider = (caret, footer) => ['  Effort', '                             Faster                             Smarter',
+    `                             ${caret}      Ultracode  off`,
+    '                             low     medium     high     xhigh      max      Tab to toggle', '', footer];
+  const save = '  ←/→ to adjust · s to use this session only · Enter to save · Esc to cancel';
+  const sessionOnly = '  ←/→ to adjust · Enter to use this session only · Esc to cancel';
+  const frames = [
+    slider('────────────────────▲─────────────────────', save),
+    slider('──────────────────────────────▲───────────', save),
+    slider('────────────────────────────────────────▲─', sessionOnly),
+    ['Set effort level to max (this session only): Maximum capability with deepest reasoning.'],
+  ];
+  const step = { kind: 'effort', target: 'max' };
+  assert.equal(pickerAction(step, [...frames[2].slice(0, -1), 'Enter to save · Esc to cancel']), null);
+  assert.equal(pickerAction(step, frames[2]).key, '\r');
+  assert.equal(pickerAction({ kind: 'effort', target: 'xhigh' }, frames[2]).key, '\x1b[D');
+  const observed = [];
+  assert.equal(await applyLeadStep(step, {
+    rows: () => frames[keys.length - 2] ?? [],
+    inputMatches: command => keys.at(-1) === command,
+    active: () => true,
+    ready: () => !keys.length || keys.length === 5,
+    write: key => keys.push(key),
+  }, { submitted: command => observed.push(command), confirmed: setting => observed.push(setting) }), true);
+  assert.deepEqual(keys, ['/effort', '\r', '\x1b[C', '\x1b[C', '\r']);
+  assert.deepEqual(observed, ['/effort', 'max']);
+});
+
 test('only a matching cache confirmation or session-only echo advances the switch', () => {
   const step = { kind: 'model', target: 'claude-fable-5-2' };
   const rows = ['Switch model?', 'Your next response will be slower and use more tokens', '> 1. Yes, switch to Fable 5.2', '  2. No, go back'];
@@ -92,6 +121,37 @@ test('the effort-only switch opens only /effort and uses the displayed session-o
   const oldEcho = { ...terminal, rows: () => [...(keys.at(-1) === 's' ? [] : frames[keys.at(-1)] ?? []), ...frames.s] };
   assert.equal(await applyLeadStep(step, oldEcho, hooks), true);
   assert.deepEqual(observed, [['/effort', '/effort']], 'a matching but unchanged confirmation is not reported as a new result');
+});
+
+test('an unavailable effort sends one Escape and waits for the empty prompt', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const keys = [];
+  let empty = false;
+  const { promise: opened, resolve: open } = Promise.withResolvers();
+  const { promise: escaped, resolve: escape } = Promise.withResolvers();
+  const picker = ['Effort', '────────────────────▲─────────────────────', 'low     medium     high     xhigh      max',
+    '←/→ to adjust · s to use this session only · Enter to save · Esc to cancel'];
+  let settled = false;
+  const result = applyLeadStep({ kind: 'effort', target: 'auto' }, {
+    rows: () => empty ? ['Cancelled', '❯'] : picker,
+    inputMatches: command => keys.at(-1) === command,
+    ready: () => !keys.length || empty,
+    active: () => true,
+    write(key) {
+      keys.push(key);
+      if (key === '\r') open();
+      if (key === '\x1b') escape();
+    },
+  }).then(applied => { settled = true; return applied; });
+  await opened;
+  t.mock.timers.tick(3000);
+  await escaped;
+  await Promise.resolve();
+  assert.equal(settled, false);
+  empty = true;
+  t.mock.timers.tick(150);
+  assert.equal(await result, false);
+  assert.deepEqual(keys, ['/effort', '\r', '\x1b']);
 });
 
 test('lead sync registers only submitted conductor commands under the live conversation', async t => {

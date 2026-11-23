@@ -55,6 +55,7 @@ test('a running conductor is told a changed seat table once; native mode and an 
   assert.deepEqual(save(orchestrator), { ok: true });
   const first = store.routingChange('p', 'session', undefined);
   assert.match(first.note, /^Agentrix: the owner changed model routing\. .*\(orchestrator\): claude-fable-5-2 · medium/);
+  assert.match(first.note, /Agentrix will try to switch this session to the orchestrator seat\. Check the CLI for the active model and effort\.$/);
   assert.equal(store.routingChange('p', 'session', first.table), null, 'an unchanged table is not told again');
   assert.deepEqual(save({ ...orchestrator, effort: 'high' }), { ok: true });
   assert.match(store.routingChange('p', 'session', first.table).note, /\(orchestrator\): claude-fable-5-2 · high/);

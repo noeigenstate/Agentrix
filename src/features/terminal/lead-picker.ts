@@ -2,6 +2,7 @@ import { modelName } from '../../shared/model-name.ts';
 import { sameModel, type LeadStep } from './lead-steps.ts';
 
 const SESSION_ONLY = /\bs to use this session only\b/i;
+const EFFORT_SESSION_ENTER = /(?:^|·)\s*Enter to use this session only\s*·\s*Esc to cancel\b/i;
 const MODEL_HEADER = /^\s*Select model\s*$/i;
 const EFFORT_HEADER = /^\s*Effort\s*$/i;
 const UP = '\x1b[A', DOWN = '\x1b[B', LEFT = '\x1b[D', RIGHT = '\x1b[C';
@@ -39,7 +40,7 @@ function modelCursor(rows: string[], target: string, scanningDown: boolean) {
   return { position: focus.number, down, key: choice ? choice === focus ? 's' : choice.number < focus.number ? UP : DOWN : down ? DOWN : UP };
 }
 
-function effortCursor(rows: string[], target: string) {
+function effortCursor(rows: string[], target: string, confirm: string) {
   const marker = rows.findIndex(row => /^[\s─]*▲[─\s]/.test(row));
   if (marker < 0) return null;
   const caret = rows[marker].indexOf('▲');
@@ -47,13 +48,17 @@ function effortCursor(rows: string[], target: string) {
   const position = levels.findIndex(level => Math.abs(level.index + (level[0].length - 1) / 2 - caret) <= 2);
   const choice = levels.findIndex(level => level[0].toLowerCase() === target);
   if (position < 0 || choice < 0) return null;
-  return { position, down: false, key: choice === position ? 's' : choice < position ? LEFT : RIGHT };
+  return { position, down: false, key: choice === position ? confirm : choice < position ? LEFT : RIGHT };
 }
 
 export function pickerAction(step: LeadStep, rows: string[], scanningDown = false) {
   const menu = pickerRows(step, rows);
-  if (!menu || !SESSION_ONLY.test(menu.map(row => row.trim()).join(' '))) return null;
-  return step.kind === 'model' ? modelCursor(menu, step.target, scanningDown) : effortCursor(menu, step.target);
+  if (!menu) return null;
+  const text = menu.map(row => row.trim()).join(' ');
+  const sessionOnly = SESSION_ONLY.test(text);
+  if (step.kind === 'model') return sessionOnly ? modelCursor(menu, step.target, scanningDown) : null;
+  const confirm = sessionOnly ? 's' : EFFORT_SESSION_ENTER.test(text) ? '\r' : null;
+  return confirm ? effortCursor(menu, step.target, confirm) : null;
 }
 
 function appliedSettings(step: LeadStep, rows: string[]) {
@@ -94,7 +99,7 @@ type PickerTerminal = {
   ready: () => boolean;
 };
 
-async function selectInPicker(step: LeadStep, { rows, write, active }: PickerTerminal) {
+async function selectInPicker(step: LeadStep, { rows, write, active, ready }: PickerTerminal) {
   let previous: number | undefined, down = false;
   const visited = new Set<string>();
   while (visited.size < 40) {
@@ -108,13 +113,16 @@ async function selectInPicker(step: LeadStep, { rows, write, active }: PickerTer
     previous = next.position;
     down = next.down;
     write(next.key);
-    if (next.key === 's') return true;
+    if (next.key === 's' || next.key === '\r') return true;
   }
-  if (active() && pickerRows(step, rows())) write('\x1b');
+  if (active() && pickerRows(step, rows())) {
+    write('\x1b');
+    if (step.kind === 'effort') await until(() => !pickerRows(step, rows()) && ready(), active, 3000);
+  }
   return false;
 }
 
-// The selector advertises a session-only action. Enter inside the selector would save a user default.
+// Use the selected option's session-only action. Other options can advertise Enter to save a user default.
 export async function applyLeadStep(step: LeadStep, terminal: PickerTerminal, hooks?: {
   submitted: (command: '/model' | '/effort') => void;
   confirmed: (setting: string) => void;
