@@ -194,3 +194,19 @@ test('the launcher offers both agents and the two start modes, with no terminal 
   assert.equal(buttons.length, 2);
   assert.equal(nodes(first).some(node => typeof node.props.children === 'string' && /SDK/.test(node.props.children)), false); ui.dispose();
 });
+
+test('a terminal lead takes its seat only in conductor mode; in native mode the plain CLI picks its own model', t => {
+  const { SkillsStore } = require('../electron/features/skills/store.cjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-terminal-lead-'));
+  const project = { id: 'p', name: 'Isolated', path: path.join(root, 'project') }; fs.mkdirSync(project.path);
+  const store = new SkillsStore({ dataDir: path.join(root, 'profile'), builtinDir: path.join(__dirname, '../resources/skills'),
+    getProjects: () => [project], getAgents: () => ({ claude: { installed: true }, codex: { installed: true } }) });
+  t.after(() => { store.close(); fs.rmSync(root, { recursive: true, force: true }); });
+  const orchestrator = { model: 'sonnet', effort: 'max' };
+  assert.deepEqual(store.setRouting('template', null, { roles: { orchestrator } }, null), { ok: true });
+  assert.equal(store.routingOwned('p'), false);
+  assert.equal(store.terminalLead('p'), null);
+  assert.deepEqual(store.setRouting('project', 'p', { roles: { orchestrator }, conductor: true }, null), { ok: true });
+  assert.equal(store.routingOwned('p'), true);
+  assert.deepEqual({ model: store.terminalLead('p').model, effort: store.terminalLead('p').effort }, orchestrator);
+});

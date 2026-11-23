@@ -60,6 +60,12 @@ function global:Get-AgentrixReadingNote {
     return $env:AGENTRIX_READING_NOTE
 }
 
+# Native mode: the lead is the plain CLI, so its own --model and --effort are the owner's to give.
+function global:Test-AgentrixNativeMode {
+    if (-not $env:AGENTRIX_BOOTSTRAP) { return $false }
+    try { return ([IO.File]::ReadAllText($env:AGENTRIX_BOOTSTRAP + '.mode').Trim() -ceq 'native') } catch { return $false }
+}
+
 function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
     $launch = @{ LeadArgs = @(); Env = @{}; HookSettings = $Hooks.settings }
     if (-not $Conversation -or -not $env:AGENTRIX_BOOTSTRAP) { return $launch }
@@ -252,7 +258,7 @@ function global:claude {
     $conversation = $utilities -cnotcontains $args[0]
     foreach ($word in $args) {
         if ($word -ceq "--") { break }
-        if ($word -cmatch "^--(?:model|effort)(?:=|$)") {
+        if ($word -cmatch "^--(?:model|effort)(?:=|$)" -and -not (Test-AgentrixNativeMode)) {
             Write-Host @'
 模型由模型路由决定，请在模型路由中更改。
 '@

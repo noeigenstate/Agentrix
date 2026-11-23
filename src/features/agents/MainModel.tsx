@@ -79,8 +79,9 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
-  // A saved lead model reaches a conversation when it starts; a running one keeps the model it has.
-  const chosen = seats?.leads?.[terminal.agent === 'claude' ? 'claude' : 'codex']?.model;
+  // In conductor mode a saved lead model reaches a conversation when it starts; a running one keeps the model it has.
+  // In native mode the CLI's own /model and /effort decide, and the panel shows what it runs.
+  const chosen = seats?.conductor ? seats.leads?.[terminal.agent === 'claude' ? 'claude' : 'codex']?.model : null;
   const pending = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
   const now = useNow(Date.now);
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';

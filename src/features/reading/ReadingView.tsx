@@ -150,6 +150,17 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const [draft, setDraft] = useState('');
   const [routingNotice, setRoutingNotice] = useState<{ text: string } | null>(null);
   const routingRequest = useRef(0);
+  // Model routing owns /model, /effort and /fast only in conductor mode; until the mode is read it is assumed to.
+  const routingOwned = useRef(true);
+  useEffect(() => {
+    const api = window.agentrix;
+    if (!api?.skillSeats) return;
+    let active = true;
+    const load = () => void api.skillSeats(projectId ?? null, terminal.id).then(info => { if (active) routingOwned.current = info?.conductor !== false; }, () => {});
+    load();
+    const off = api.onSkills?.(load);
+    return () => { active = false; off?.(); };
+  }, [projectId, terminal.id]);
   useEffect(() => {
     if (!routingNotice) return;
     const timer = setTimeout(() => setRoutingNotice(null), 2000);
@@ -340,7 +351,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const ownsPicture = (generation: number) => mounted.current && pictureGeneration.current === generation;
   const pictureNotAccepted = () => onError(t('图片未发送。请在输入框中移除后重新粘贴。'));
   const routeCommand = (text: string, own: boolean) => {
-    if (!isRoutingCommand(text)) return false;
+    if (!isRoutingCommand(text) || !routingOwned.current) return false;
     if (own) edit('');
     const target = { projectId, terminalId: terminal.id }, request = ++routingRequest.current, epoch = identity.current.epoch;
     void readRoutingCommand(target).then(({ info, notice }) => {

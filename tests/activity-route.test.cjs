@@ -157,18 +157,18 @@ const agentSection = (html, name) => new RegExp('<section class="api-agent" aria
 // The main block and the called models together, for the heads they share.
 const bothMarkup = (calls, language, terminal) => mainMarkup(calls, language, terminal) + callsMarkup(calls, language);
 
-test('with routing off the lead panel is the main model, and a saved model that differs from the running one says when it applies', () => {
+test('with routing off the lead panel is the main model and names no routing model; in conductor mode a saved model that differs says when it applies', () => {
   const { MainModel, useMainTurn } = loadAgentsFile('MainModel.tsx');
   const terminal = { id: 'lead', agent: 'claude', codexActive: true, prompts: [], agentUsage: { model: 'claude-fable-5-2', limits: [], calls: [] } };
   const markup = seats => renderToStaticMarkup(React.createElement(({ terminal }) => React.createElement(MainModel, { turn: useMainTurn(terminal), seats }), { terminal }));
   const leads = model => ({ claude: { model, effort: 'medium' }, codex: null });
   const off = markup({ conductor: false, leads: leads('opus') });
   assert.match(off, /<h4>主模型<\/h4>/);
-  assert.match(off, /Fable 5\.2[\s\S]*已选 Opus，新对话生效。/);
-  const on = markup({ conductor: true, leads: leads('claude-fable-5-2') });
+  assert.doesNotMatch(off, /新对话生效/, 'in native mode /model and /effort decide; routing names no model');
+  const on = markup({ conductor: true, leads: leads('opus') });
   assert.match(on, /<h4>总指挥<\/h4>/);
-  assert.doesNotMatch(on, /新对话生效/);
-  assert.doesNotMatch(markup({ conductor: false, leads: leads('fable') }), /新对话生效/, 'an alias names whichever model of that family runs');
+  assert.match(on, /Fable 5\.2[\s\S]*已选 Opus，新对话生效。/);
+  assert.doesNotMatch(markup({ conductor: true, leads: leads('fable') }), /新对话生效/, 'an alias names whichever model of that family runs');
   assert.match(markup(null), /<h4>总指挥<\/h4>/, 'the heading is unchanged until the routing is known');
 });
 

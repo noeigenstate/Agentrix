@@ -402,7 +402,9 @@ class SkillsStore {
     return modelSeats.leadOptions(info.effective, agent, { ...info.installed, [agent]: true }, info.catalog, info.lead);
   }
 
+  // A terminal lead takes its seat only in conductor mode. In native mode it is the plain CLI, which /model and /effort change.
   terminalLead(projectId, { remote = false } = {}) {
+    if (!this.seatsInfo(projectId)?.conductor) return null;
     const seat = this.leadOptions(projectId, 'claude', { remote });
     if (!seat) return null;
     return { ...seat, seatsMap: this.dispatchSeats(projectId) };
@@ -414,6 +416,9 @@ class SkillsStore {
   }
 
   leadAgent(projectId) { return this.seatsInfo(projectId)?.leadAgent ?? null; }
+
+  // Whether model routing owns the lead's model, effort and fast: only in conductor mode.
+  routingOwned(projectId) { return !!this.seatsInfo(projectId)?.conductor; }
 
   observeModels(family, rows) { this.modelCatalog.accept(family, rows); }
 

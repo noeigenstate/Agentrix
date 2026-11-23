@@ -673,7 +673,7 @@ function launcher(runtime, calls, { kind = 'local', codexHere = true, startError
 
 test('the launcher puts the orchestrator family first and labels both leads from C0', async () => {
   const team = require('./fixtures/team-seats.json');
-  const routing = { ...team, leadAgent: 'codex', leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer } };
+  const routing = { ...team, conductor: true, leadAgent: 'codex', leads: { claude: team.defaults.orchestrator, codex: team.defaults.developer } };
   const h = launcher({ settings: { claudePath: 'terminal-only' }, saved: false }, [], { routing });
   try {
     h.render(); await settle();

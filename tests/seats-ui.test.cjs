@@ -910,7 +910,7 @@ test('the activity key is one button with a row for each role and opens the scop
   assert.match(textOf(heading), /Model routing/i);
   assert.deepEqual(findAll(tree, node => node.props['data-seat']).map(node => node.props['data-seat']), SEATS);
   assert.equal(findAll(tree, node => /^activity-routing-row( |$)/.test(node.props.className)).length, 10);
-  assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row is-unavailable').length, 9, 'native mode greys every role but the lead');
+  assert.equal(findAll(tree, node => node.props.className === 'activity-routing-row is-unavailable').length, 10, 'native mode greys every role, the lead too');
   const developer = byAttr(tree, 'data-seat', 'developer');
   assert.deepEqual(developer.props.children.slice(0, 3).map(textOf), ['Developer', 'GPT-6.2-Sol', 'high · Fast']);
   tree.props.onClick();

@@ -154,3 +154,48 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
   assert.match(output, refusal);
   assertLaunches(output);
 });
+
+// Native mode: the lead is the plain CLI, so the owner's own --model and --effort reach it; conductor mode still refuses them.
+const modeLines = (write, call) => [write('conductor'), call, write('native'), call];
+const assertModes = output => {
+  assert.equal((output.match(refusal) ?? []).length, 1, 'conductor mode refuses the override once');
+  const calls = output.split(/^CALL\n/gm).slice(1);
+  assert.equal(calls.length, 1, 'native mode launches');
+  assert.deepEqual([...calls[0].matchAll(/^WORD=(.*)$/gm)].map(row => row[1]), ['--effort', 'low']);
+};
+
+for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-integration.zsh']]) {
+  const shell = ['/bin', '/usr/bin'].map(dir => path.join(dir, name)).find(file => !win && fs.existsSync(file));
+  test(`${name} Claude passes the owner's --model and --effort only in native mode`, { skip: !shell }, async t => {
+    const dir = profile(t), fake = path.join(dir, 'stand-in.sh'), script = path.join(dir, 'probe.sh'), bootstrap = path.join(dir, 'bootstrap');
+    fs.writeFileSync(bootstrap, '{}');
+    fs.writeFileSync(bootstrap + '.lead', '');
+    fs.writeFileSync(fake, ['#!/bin/sh', 'printf "CALL\n"', 'shift 2', 'for word in "$@"; do printf "WORD=%s\n" "$word"; done', ''].join('\n'), { mode: 0o700 });
+    fs.writeFileSync(script, ['source "$AGENTRIX_TEST_INTEGRATION" zshrc',
+      ...modeLines(mode => `printf '${mode}\n' > "$AGENTRIX_BOOTSTRAP.mode"`, 'claude --effort low 2>&1')].join('\n') + '\n');
+    const { stdout } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), script], {
+      cwd: dir, env: { PATH: '/usr/bin:/bin', HOME: dir, ZDOTDIR: dir, TMPDIR: dir, AGENTRIX_NODE: '/usr/bin/true',
+        AGENTRIX_TEST_INTEGRATION: path.join(integration, file), AGENTRIX_CLAUDE_EXECUTABLE: fake, AGENTRIX_CODEX_EXECUTABLE: fake,
+        AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SOCKET: path.join(dir, 'unused.sock'), AGENTRIX_HOOK_FALLBACK: 'ordinary' },
+    });
+    assertModes(stdout);
+  });
+}
+
+test('PowerShell Claude passes the owner\'s --model and --effort only in native mode', { skip: !win }, async t => {
+  const dir = profile(t), script = path.join(dir, 'probe.ps1'), fake = path.join(dir, 'stand-in.ps1'), bootstrap = path.join(dir, 'bootstrap');
+  const wrapper = path.join(dir, 'bootstrap.ps1');
+  fs.copyFileSync(path.join(integration, 'bootstrap.ps1'), wrapper);
+  fs.writeFileSync(path.join(dir, 'refresh-path.ps1'), '# Keep the fixture PATH isolated.\n');
+  fs.writeFileSync(bootstrap, JSON.stringify({ hooks: { settings: { fallback: 'ordinary' } } }));
+  fs.writeFileSync(bootstrap + '.lead', '');
+  fs.writeFileSync(fake, ['"CALL"', '  if ($args.Length -gt 2) { $args[2..($args.Length - 1)] | ForEach-Object { "WORD=" + $_ } }', '  $global:LASTEXITCODE = 0'].join('\n'));
+  fs.writeFileSync(script, '\uFEFF' + ['. $env:AGENTRIX_TEST_INTEGRATION', 'function global:Send-AgentrixEvent {}', '$ErrorActionPreference = "Stop"',
+    ...modeLines(mode => `[IO.File]::WriteAllText($env:AGENTRIX_BOOTSTRAP + '.mode', "${mode}\`n")`, 'claude --effort low')].join('\n'));
+  const shell = path.join(process.env.SystemRoot || 'C:\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const { stdout } = await exec(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script], {
+    cwd: dir, env: { SystemRoot: process.env.SystemRoot || 'C:\Windows', PATH: path.dirname(shell), USERPROFILE: dir, TEMP: dir, TMP: dir, AGENTRIX_AGENT_ONLY: '1',
+      AGENTRIX_TEST_INTEGRATION: wrapper, AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_CLAUDE_EXECUTABLE: fake, AGENTRIX_CODEX_EXECUTABLE: fake },
+  });
+  assertModes(stdout.replaceAll('\r\n', '\n'));
+});

@@ -141,7 +141,8 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   if (primary) choices.sort((a, b) => Number(b.agent === primary) - Number(a.agent === primary));
   const seatLabel = (agent: Agent) => {
     const seat = routing?.leads?.[agent];
-    return seat ? t(agent !== primary ? '默认 · {model}' : routing?.conductor === false ? '主模型 · {model}' : '总指挥 · {model}', { model: routing?.catalog ? modelLabel(routing.catalog, seat.model) : routingModelName(seat.model) }) : null;
+    // In native mode the CLI picks its own model, so no seat is named.
+    return seat && routing?.conductor ? t(agent === primary ? '总指挥 · {model}' : '默认 · {model}', { model: routing.catalog ? modelLabel(routing.catalog, seat.model) : routingModelName(seat.model) }) : null;
   };
   return <div className="agent-launcher"><div className="agent-launcher-body">
     <p className="agent-launcher-title">{t('选择助手，开始开发')}</p>

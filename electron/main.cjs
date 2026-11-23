@@ -1715,6 +1715,7 @@ function registerIpc() {
   registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
   workerTerminals.register({ handle, listen });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
+    routingOwned: projectId => skills.routingOwned(projectId),
     gradeDelivery: (grade, project, session) => dashboard.grade(grade, project, session),
     readingPage: (id, request) => readingHistory.page(id, request.key, request.cursor),
     // The legacy reply IPC remains inert; no planner relay requests are emitted.

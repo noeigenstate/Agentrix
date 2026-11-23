@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
-import { isRoutingCommand } from '../../shared/routing-command.ts';
 import type { AgentCommand } from '../../shared/types';
 
 // A draft that is only the start of a command: "/" and its letters, no space yet.
@@ -12,7 +11,8 @@ export type PaletteItem = Pick<AgentCommand, 'name' | 'description' | 'source'> 
 export function matchCommands<Item extends PaletteItem>(commands: readonly Item[], draft: string) {
   const query = draft.slice(1).toLowerCase(), name = (command: Item) => command.name.slice(1).toLowerCase();
   const rank = (command: Item) => name(command) === query ? 0 : name(command).startsWith(query) ? 1 : 2;
-  return commands.filter(command => !isRoutingCommand(command.name) && name(command).includes(query)).sort((a, b) => rank(a) - rank(b));
+  // Main leaves out /model, /effort and /fast where model routing owns them.
+  return commands.filter(command => name(command).includes(query)).sort((a, b) => rank(a) - rank(b));
 }
 
 // The command list over the message box, shared by the reading view and the native session's box. `blocked`: the box takes nothing now;

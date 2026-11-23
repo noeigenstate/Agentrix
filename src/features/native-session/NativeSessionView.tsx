@@ -3,6 +3,7 @@
 // scroll, working line, result card and message box. Only what a terminal session does not have is added at the end of the timeline: the requests
 // waiting on the owner and the question about a run-mode change.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react';
+import { isRoutingCommand } from '../../shared/routing-command.ts';
 import { ArrowDown, Image as ImageIcon, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import { t } from '../../shared/i18n';
 import { fullHintProps, HIDDEN_NOTE, useFittingHint } from '../../shared/useFittingHint';
@@ -66,7 +67,9 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const sentRef = useRef<string[]>([]);
   sentRef.current = useMemo(() => sentTexts(entries, pending.prompts), [entries, pending]);
   const recall = useComposerHistory({ messages: () => sentRef.current, draft: text, setDraft: setText, input: box });
-  const commands: readonly ListLine[] = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
+  // Model routing owns /model, /effort and /fast in a native session, so its list never offers them.
+  const listed = useNativeCommands(terminalId, sessionId, open && text.startsWith('/'), model.session?.state);
+  const commands: readonly ListLine[] = useMemo(() => listed.filter(command => !isRoutingCommand(command.name)), [listed]);
   const palette = useCommandPalette({ id: terminalId, commands, draft: text, blocked: !open, recalled: recall.recalled, showEmpty: false, menu: actions.menu, note: open && text.startsWith('!') ? { name: '!', description: t('运行命令，输出会进入对话'), source: 'builtin' } : null,
     complete: command => { if (actions.menu) { actions.choose(command.name); return; } edit(`${command.name} `); box.current?.focus(); }, send: () => void send(), close: actions.close });
   const edit = (value: string) => { setText(value); palette.dismiss(false); recall.forget(); actions.forget(); };

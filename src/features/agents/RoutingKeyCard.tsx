@@ -58,7 +58,7 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
     <span ref={rowsRef} className="activity-routing-rows">{roles.map(role => {
       const seat = displayedSeat(info, role.id);
       const name = titleOf(role), effort = seat?.effort ?? '—';
-      return <span key={role.id} className={`activity-routing-row${info.conductor || role.id === info.lead ? '' : ' is-unavailable'}`} data-seat={role.id}>
+      return <span key={role.id} className={`activity-routing-row${info.conductor ? '' : ' is-unavailable'}`} data-seat={role.id}>
         <span className="activity-routing-role" title={name}>{name}</span>
         <strong className="activity-routing-model" title={seat?.model}>{seat ? modelLabel(info.catalog, seat.model) : '—'}</strong>
         <span className="activity-routing-setting" title={seat?.fast ? `${seat.effort} · ${fast}` : seat?.effort}>

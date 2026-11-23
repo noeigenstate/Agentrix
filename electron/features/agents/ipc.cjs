@@ -1,4 +1,4 @@
-function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, listAgentCommands, readingPage, gradeDelivery, interventions, relayResult, t }) {
+function registerAgentsIpc({ handle, agents, openExternal, getSession, findProject, listAgentCommands, routingOwned = () => true, readingPage, gradeDelivery, interventions, relayResult, t }) {
   handle('dashboard:grade', grade => {
     const project = findProject(grade?.terminalId);
     gradeDelivery(grade, project, getSession(grade.terminalId));
@@ -26,7 +26,8 @@ function registerAgentsIpc({ handle, agents, openExternal, getSession, findProje
   });
   handle('terminal:commands', async id => {
     const project = findProject(id), s = getSession(id);
-    const commands = await listAgentCommands({ agent: s?.agent || 'claude', projectPath: project.kind === 'ssh' ? undefined : project.path });
+    const commands = await listAgentCommands({ agent: s?.agent || 'claude', projectPath: project.kind === 'ssh' ? undefined : project.path,
+      routing: routingOwned(project.id) });
     return commands.map(command => command.source === 'builtin' ? { ...command, description: t(command.description) } : command);
   });
 }

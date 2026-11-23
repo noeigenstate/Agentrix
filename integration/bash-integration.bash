@@ -166,7 +166,11 @@ claude() {
   for word in "$@"; do
     case $word in
       --) break;;
-      --model|--model=*|--effort|--effort=*) printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2;;
+      # Native mode: the lead is the plain CLI, so its own --model and --effort are the owner's to give.
+      --model|--model=*|--effort|--effort=*)
+        if [[ -z ${AGENTRIX_BOOTSTRAP-} || "$(cat -- "${AGENTRIX_BOOTSTRAP}.mode" 2>/dev/null)" != native ]]; then
+          printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2
+        fi;;
       --version|-v|-V|--help|-h) conversation=0;;
     esac
   done

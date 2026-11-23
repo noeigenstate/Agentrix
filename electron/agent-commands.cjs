@@ -94,7 +94,7 @@ async function* commandFiles(directory, depth = Infinity) {
   }
 }
 
-async function listAgentCommands({ agent, projectPath, home = os.homedir(), claudeHome = path.join(home, '.claude'), codexHome = path.join(home, '.codex') }) {
+async function listAgentCommands({ agent, projectPath, routing = true, home = os.homedir(), claudeHome = path.join(home, '.claude'), codexHome = path.join(home, '.codex') }) {
   const builtin = BUILTINS[agent] || BUILTINS.claude;
   const groups = { builtin: Object.entries(builtin).flatMap(([view, commands]) => commands.map(([name, description]) => ({ name: '/' + name, description, source: 'builtin', view }))), project: [], user: [], skill: [] };
   let reads = 0;
@@ -128,7 +128,7 @@ async function listAgentCommands({ agent, projectPath, home = os.homedir(), clau
   }
   const seen = new Set();
   return Object.values(groups).flatMap(group => group.sort(byName)).filter(command => {
-    if (seen.has(command.name) || routingCommand(command.name.slice(1))) return false;
+    if (seen.has(command.name) || routing && routingCommand(command.name.slice(1))) return false;
     seen.add(command.name); return true;
   });
 }
