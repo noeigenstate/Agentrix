@@ -1,16 +1,85 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { leadSteps } = require('../src/features/terminal/lead-steps.ts');
+const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
+const { applyLeadStep, pickerAction, pickerResult } = require('../src/features/terminal/lead-picker.ts');
 
 // In conductor mode a changed lead seat reaches the running Claude Code as the commands the owner would type.
-test('a lead seat that differs from what the CLI runs becomes /model and /effort; a match or an unknown model types nothing', () => {
+test('a changed lead model reapplies its effort, while a matched or unknown seat types nothing', () => {
   const running = { model: 'claude-opus-5-5', effort: 'medium', fast: false };
-  assert.deepEqual(leadSteps({ model: 'claude-fable-5-2', effort: 'medium' }, running), [{ command: '/model claude-fable-5-2', confirm: true }]);
-  assert.deepEqual(leadSteps({ model: 'claude-opus-5-5', effort: 'high' }, running), [{ command: '/effort high', confirm: false }]);
+  assert.deepEqual(leadSteps({ model: 'claude-fable-5-2', effort: 'medium' }, running),
+    [{ kind: 'model', target: 'claude-fable-5-2' }, { kind: 'effort', target: 'medium' }]);
+  assert.deepEqual(leadSteps({ model: 'claude-opus-5-5', effort: 'high' }, running), [{ kind: 'effort', target: 'high' }]);
   assert.deepEqual(leadSteps({ model: 'sonnet', effort: 'low' }, running),
-    [{ command: '/model sonnet', confirm: true }, { command: '/effort low', confirm: false }]);
+    [{ kind: 'model', target: 'sonnet' }, { kind: 'effort', target: 'low' }]);
   assert.deepEqual(leadSteps({ model: 'opus', effort: 'medium' }, running), [], 'an alias matches the release of its line');
   assert.deepEqual(leadSteps({ model: 'claude-opus-5-5[1m]', effort: 'medium' }, running), [], 'the context variant is the same model');
   assert.deepEqual(leadSteps({ model: 'claude-fable-5-2', effort: 'high' }, { model: null, effort: null, fast: null }), [], 'nothing before the first reply names the model');
   assert.deepEqual(leadSteps(null, running), []);
+});
+
+test('Claude model echoes match the routed release or alias without hiding a different release', () => {
+  const echo = { type: 'user', message: { content: '<local-command-stdout>Set model to `Fable 5.2` and saved as your default for new sessions</local-command-stdout>' } };
+  const fable = agentSettings({ model: null, effort: 'medium', fast: false }, 'claude', echo);
+  assert.equal(fable.model, 'Fable 5.2');
+  assert.deepEqual(leadSteps({ model: 'claude-fable-5-2', effort: 'high' }, fable), [{ kind: 'effort', target: 'high' }]);
+  assert.deepEqual(leadSteps({ model: 'claude-fable-5-2', effort: 'medium' }, { ...fable, model: 'Fable 5.2 (1M)' }), []);
+  assert.deepEqual(leadSteps({ model: 'opus[1m]', effort: 'medium' }, { ...fable, model: 'Opus 5.5' }), []);
+  assert.deepEqual(leadSteps({ model: 'claude-opus-5-5', effort: 'medium' }, { ...fable, model: 'opus' }), []);
+  assert.deepEqual(leadSteps({ model: 'claude-fable-5-1', effort: 'medium' }, fable)[0], { kind: 'model', target: 'claude-fable-5-1' });
+  const local = { type: 'user', message: { content: '<local-command-stdout>Set model to `Fable 5.2` for this session only</local-command-stdout>' } };
+  assert.equal(agentSettings(null, 'claude', local).model, 'Fable 5.2');
+});
+
+test('the model picker selects a verified release through the session-only shortcut', () => {
+  const step = { kind: 'model', target: 'claude-fable-5-2' };
+  const rows = ['  Select model', '  > 1. Default (recommended)  Use the default model (currently Fable 5.2)',
+    '    2. Fable                  Fable 5.2 · Most capable', '  s to use this session only · Enter to save · Esc to cancel'];
+  assert.equal(pickerAction(step, rows).key, '\x1b[B');
+  rows[1] = rows[1].replace('>', ' ');
+  rows[2] = rows[2].replace('  ', ' >');
+  assert.equal(pickerAction(step, rows).key, 's');
+  assert.notEqual(pickerAction({ ...step, target: 'claude-fable-5-1' }, rows).key, 's');
+  assert.equal(pickerAction(step, rows.slice(0, -1)), null);
+});
+
+test('the effort slider uses the label under its caret and never selects an unavailable effort', () => {
+  const rows = ['  Effort', '                             ──────────▲───────────────────────────────      Ultracode off',
+    '                             low     medium     high     xhigh      max      Tab to toggle',
+    '  ←/→ to adjust · s to use this session only · Enter to save · Esc to cancel'];
+  assert.equal(pickerAction({ kind: 'effort', target: 'high' }, rows).key, '\x1b[C');
+  assert.equal(pickerAction({ kind: 'effort', target: 'medium' }, rows).key, 's');
+  assert.equal(pickerAction({ kind: 'effort', target: 'ultracode' }, rows), null);
+  assert.equal(pickerAction({ kind: 'effort', target: 'medium' }, rows.slice(0, -1)), null);
+});
+
+test('only a matching cache confirmation or session-only echo advances the switch', () => {
+  const step = { kind: 'model', target: 'claude-fable-5-2' };
+  const rows = ['Switch model?', 'Your next response will be slower and use more tokens', '> 1. Yes, switch to Fable 5.2', '  2. No, go back'];
+  assert.equal(pickerResult(step, rows), 'confirm');
+  assert.equal(pickerResult(step, rows.filter(row => !row.startsWith('Your'))), null);
+  assert.equal(pickerResult(step, ['Set model to Fable 5.2 for this session only']), 'applied');
+  assert.equal(pickerResult(step, ['Set model to Fable 5.2 and saved as your default for new sessions']), null);
+});
+
+test('the effort-only switch opens only /effort and uses the displayed session-only key', async () => {
+  const step = leadSteps({ model: 'claude-fable-5-2', effort: 'high' }, { model: 'Fable 5.2', effort: 'medium' })[0];
+  const keys = [];
+  const slider = (mark) => ['Effort', mark, 'low     medium     high', '←/→ to adjust · s to use this session only · Enter to save · Esc to cancel'];
+  const frames = {
+    '\r': slider('──────────▲───────────'),
+    '\x1b[C': slider('────────────────────▲─'),
+    s: ['Set effort level to high (this session only): Thorough'],
+  };
+  const terminal = {
+    rows: () => frames[keys.at(-1)] ?? [],
+    inputMatches: command => keys.at(-1) === command,
+    active: () => true,
+    ready: () => !keys.length || keys.at(-1) === 's',
+    write: key => keys.push(key),
+  };
+  assert.equal(await applyLeadStep(step, { ...terminal, active: () => false }), false);
+  assert.deepEqual(keys, []);
+  assert.equal(await applyLeadStep(step, terminal), true);
+  assert.deepEqual(keys, ['/effort', '\r', '\x1b[C', 's']);
 });

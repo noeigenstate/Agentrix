@@ -19,7 +19,7 @@ function claudeCommandOutput(record) {
   const words = typeof content === 'string' ? content : Array.isArray(content) ? content.map(block => typeof block?.text === 'string' ? block.text : '').join('\n') : '';
   const output = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(words)?.[1].replace(/\x1b\[[0-9;]*m/g, '');
   if (!output) return null;
-  const model = /^\s*Set model to\s+`?([^`\n(]+?)`?(?:\s+\(|\s+and\b|\s*$)/im.exec(output)?.[1];
+  const model = /^\s*Set model to\s+`?([^`\n(]+?)`?(?:\s+\(|\s+and\b|\s+for this session only\b|\s*$)/im.exec(output)?.[1];
   const effort = /^\s*Set effort level to\s+([a-z]+)\b/im.exec(output)?.[1];
   const fast = /\bfast mode\b[^\n.]*?\b(on|enabled|off|disabled)\b/i.exec(output)?.[1];
   if (!model && !effort && !fast) return null;
