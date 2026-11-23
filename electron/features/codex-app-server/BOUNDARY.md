@@ -4,6 +4,9 @@ Owns an independent app-server runtime over local stdio or an injected SSH byte 
 Live declined items carry the provider status separately for dispatch workers. The display status remains failed.
 Dispatch can receive a tree-stop failure even when direct process termination succeeds.
 
+After a startup write failure, diagnostics give local stdio and SSH up to 250 ms to report exit and stderr before cleanup.
+The detail uses `process_exited` when the exit status arrives, or `write_failed` when it is unavailable.
+
 ## Owns
 - `electron/features/codex-app-server/**`
 

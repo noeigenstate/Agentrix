@@ -2,6 +2,7 @@ const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
 const HISTORY_READS = new Set(['thread/turns/list', 'thread/items/list']);
 const keyOf = id => `${typeof id}:${id}`;
 const STDERR_TAIL = 4096;
+const WRITE_FAILURE_GRACE_MS = 250;
 
 // A write accepted by the stream is never retried, including after backpressure or timeout.
 function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onDisconnect = () => {}, onDropped = () => {}, timeout = 8000 } = {}) {
@@ -100,13 +101,15 @@ function createRpc(child, { onNotification = () => {}, onRequest = () => {}, onD
     // Ending the input is the process stop's step: a Windows server that left on it first would leave its children running.
     close() { fail('closed'); read.clear(); },
     // A live server's protocol rejection needs no exit. A dying server's detail waits for its final stderr and close.
-    async diagnostics({ stop, timers = globalThis } = {}) {
-      if (ending) await new Promise((resolve, reject) => {
+    async diagnostics({ stop, timers = globalThis, writeFailed = false } = {}) {
+      if (ending || writeFailed) await new Promise((resolve, reject) => {
         // A hung process or inherited pipe holder still needs the host's bounded cleanup. Detail follows close, or the end of
         // that cleanup when close never comes (a remote channel's receipt may not): once the stop has settled and the pipe ends
         // it released have closed, nothing more can be learned.
         const released = () => Promise.all(pipes.map((pipe, index) => pipe?.destroyed ? pipesClosed[index] : null));
-        const timer = stop && timers.setTimeout(() => { Promise.resolve().then(stop).then(released).then(resolve, reject); }, 3000);
+        // A failed write can arrive before the exit. Sample the status before cleanup can terminate the process.
+        const timer = writeFailed ? timers.setTimeout(resolve, WRITE_FAILURE_GRACE_MS)
+          : stop && timers.setTimeout(() => { Promise.resolve().then(stop).then(released).then(resolve, reject); }, 3000);
         processClosed.then(() => { timers.clearTimeout(timer); resolve(); });
       });
       return { stderr: stderrTail, processError: processError?.message || null, exitCode: child.exitCode ?? null, signal: child.signalCode ?? null };

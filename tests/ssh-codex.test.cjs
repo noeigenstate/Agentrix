@@ -112,6 +112,25 @@ test('missing remote Codex preserves a typed actionable startup failure', async 
   await assert.rejects(runtime.start(), { code: 'codex_cli_required' }); await runtime.close();
 });
 
+test('SSH startup reports the worker exit after its input request fails', async t => {
+  const events = new EventEmitter(), armed = Promise.withResolvers();
+  let processId;
+  const connection = { events, close() { events.emit('exit'); }, async request(op, params) {
+    if (op === 'codex-open') processId = params.processId;
+    if (op === 'codex-input') throw new Error('Broken pipe');
+    if (op === 'codex-close') events.emit('codex-process', { type: 'codex-exit', processId, code: 255 });
+  } };
+  const timers = { setTimeout(_fn, delay) { armed.resolve(delay); }, clearTimeout() {} };
+  const runtime = createCodexRuntime({ timers, launchRemote: async () => ({ cwd: process.cwd(), child: createRemoteCodexProcess(connection) }) })
+    .create({ kind: 'ssh', cwd: '/remote' }, () => {});
+  t.after(() => runtime.close());
+  const failure = runtime.start().then(() => assert.fail('the start must fail'), error => error);
+  assert.equal(await Promise.race([armed.promise, failure.then(error => assert.fail(error.detail))]), 250);
+  events.emit('codex-process', { type: 'codex-data', processId, stream: 'stderr', data: Buffer.from('codex: invalid config\n').toString('base64') });
+  events.emit('codex-process', { type: 'codex-exit', processId, code: 3 });
+  assert.equal((await failure).detail, 'initialize: process_exited (exit 3) · stderr: codex: invalid config');
+});
+
 
 test('N10 SSH thread history uses its remote byte channel and closes the lookup without account or model requests', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-ssh-history-'));

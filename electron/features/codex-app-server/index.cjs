@@ -515,7 +515,15 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
           error.stage ||= stage;
           const stop = () => close({ preserveDescendants: stage === 'sandbox_cwd' });
           // The reason is only added: working it out must never replace the error or skip the close below.
-          try { error.detail ||= startupDetail(error, await rpc?.diagnostics({ stop, timers }), { hosts }); } catch { }
+          try {
+            if (!error.detail) {
+              const writeFailed = error.code === 'write_failed';
+              const diagnostics = await rpc?.diagnostics({ stop, timers, writeFailed });
+              const reason = writeFailed && (diagnostics?.exitCode != null || diagnostics?.signal != null)
+                ? { stage: error.stage, code: 'process_exited' } : error;
+              error.detail = startupDetail(reason, diagnostics, { hosts });
+            }
+          } catch { }
           if (error.code === -32601 || error.code === -32602) error.code = 'unsupported_codex_capabilities';
           await stop(); setState('failed', typeof error.code === 'string' ? error.code : error.message); throw error;
         }

@@ -261,6 +261,30 @@ test('startup diagnostics end when the bounded stop settles, even when the exite
   assert.deepEqual(await diagnostics, { stderr: 'last words before exit', processError: null, exitCode: 1, signal: null });
 });
 
+for (const exits of [true, false]) test(`startup write failure ${exits ? 'uses a late exit code' : 'falls back at the diagnostic deadline'}`, async t => {
+  const child = new EventEmitter(), armed = Promise.withResolvers();
+  child.exitCode = null; child.signalCode = null;
+  child.stdout = new PassThrough(); child.stderr = new PassThrough();
+  child.stdin = new Writable({ write(_bytes, _encoding, done) { done(new Error('EPIPE')); } });
+  const exit = (code, signal = null) => {
+    child.exitCode = code; child.signalCode = signal;
+    child.emit('exit', code, signal); child.emit('close', code, signal);
+  };
+  child.kill = () => exit(null, 'SIGKILL');
+  const timers = { setTimeout(fn, delay) { armed.resolve({ fn, delay }); }, clearTimeout() {} };
+  const factory = createCodexRuntime({ resolveExecutable: async () => 'synthetic-only', spawnProcess: () => child, timers });
+  const runtime = factory.create({ cwd: os.tmpdir(), env: { PATH: '' } }, () => {});
+  t.after(() => runtime.close());
+  const failure = runtime.start().then(() => assert.fail('the start must fail'), error => error);
+  const timer = await Promise.race([armed.promise, failure.then(error => assert.fail(error.detail))]);
+  assert.equal(timer.delay, 250);
+  if (exits) {
+    child.stderr.write('codex: invalid config\n');
+    exit(3);
+  } else timer.fn();
+  assert.equal((await failure).detail, exits ? 'initialize: process_exited (exit 3) · stderr: codex: invalid config' : 'initialize: write_failed');
+});
+
 test('a failed start carries its stage, exit code and redacted stderr tail, and a protocol error its code and message', async t => {
   const lifetime = resources(t);
   const stderr = 'early line one\nearly line two\n\x1b[31mERROR\x1b[0m config: token=abcdefsecret123 Authorization: Bearer sk-proj-abcdefghijklmn\n'
