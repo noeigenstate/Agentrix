@@ -3771,5 +3771,11 @@
   "角色行用符号表示运行中、完成、失败、已停止和等你确认；模型核对一致时不再提示，路径保持一行。": "A role row shows running, finished, failed, stopped and waiting for you as a symbol; a routing check that matches is no longer mentioned, and the folder stays on one line.",
   "关闭指挥家模式后，左栏标题显示“主模型”；新选的模型与当前对话不同时，会提示它在新对话生效。": "With conductor mode off the side panel heading reads \"Main model\", and a newly chosen model that differs from the running conversation says it applies to new conversations.",
   "设置位置": "Settings position",
-  "Agentrix 菜单里的“设置”移到了最下面。": "Settings is now the last item in the Agentrix menu."
+  "Agentrix 菜单里的“设置”移到了最下面。": "Settings is now the last item in the Agentrix menu.",
+  "自动切换": "Live lead switch",
+  "指挥家模式下在模型路由里改总指挥后，正在运行的 Claude Code 会当场切换模型和思考深度，回复中途也能切，左栏同步显示。": "In conductor mode, changing the orchestrator in model routing switches the running Claude Code to the new model and effort at once, even mid-reply, and the side panel follows.",
+  "座位同步": "Seats in sync",
+  "指挥家模式下改了模型路由，你发下一条消息时，总指挥会收到新的座位表，不再按旧表回答。": "In conductor mode, after a routing change the orchestrator receives the new seat table with your next message instead of answering from the old one.",
+  "原生切换": "Native model choice",
+  "关闭指挥家模式后，终端里的主模型就是原本的命令行：用 /model、/effort 直接切换，模型路由卡整张变灰。": "With conductor mode off, the terminal lead is the plain command line: /model and /effort change it directly, and the model routing card is greyed out."
 }
