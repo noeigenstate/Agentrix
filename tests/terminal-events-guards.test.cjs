@@ -17,7 +17,8 @@ test('additionalContext, systemMessage, displayContent, continue and decision:bl
   const command = read('integration/claude-hook.ps1');
   const session = command.slice(command.indexOf('function Get-AgentrixSessionContext'), command.indexOf('\ntry {'));
   assert.doesNotMatch(command.replace(session, ''), answers);
-  assert.match(command, /if \(\$Kind -eq 'session'\) \{ try \{ Get-AgentrixSessionContext \$hook \}/);
+  assert.match(command, /if \(\$Kind -eq 'session'\) \{\s*try \{\s*(?:\$context = )?Get-AgentrixSessionContext \$hook\b/);
+  assert.equal(command.match(/Get-AgentrixSessionContext \$hook\b/g).length, 1, 'only the session kind reads the skill context');
 });
 
 test('the settings generators emit only http hooks but SessionStart, or the declared command fallback', () => {
