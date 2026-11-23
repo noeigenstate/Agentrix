@@ -1,6 +1,5 @@
 # Agentrix working agreements
 
-- Apply the user's `apply-gpt-5p6-guidance` skill silently for every request.
 - Agentrix tells each session its mode. Native mode (conductor mode off, the default): you are the plain CLI conversation and do the tasks yourself. Conductor mode: you plan and call the team roles through the delivered `model-routing` skill and do not carry out the tasks yourself.
 - Every code change, by any worker or the lead, follows the system `code-standard` skill (source in this repo: `resources/skills/code-standard/SKILL.md`) plus its extension `skills/code-standard-agentrix/SKILL.md`.
 - Run native GUI checks sequentially with isolated `AGENTRIX_DATA_DIR` profiles. Never close, restart or type into the user's real Agentrix sessions to run tests.

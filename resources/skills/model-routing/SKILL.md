@@ -121,19 +121,20 @@ Agentrix decides how each role runs and is billed; billing follows the run mode 
 - **Codex always runs in native mode.**
 - **A Claude lead's Claude roles follow the lead's run mode and never cross:** a native-mode lead's roles are billed to
   the API and never fall back to the subscription; a terminal-mode lead's roles run on the subscription.
-- **A Claude role of a terminal-mode lead** never appears in the grid and never arms a completion notification. When it
-  asks for a confirmation, its row in the Agent tab reads "waiting for your confirmation"; the owner answers in that
-  role's own terminal, and nothing is answered automatically.
+- **A Claude role of a terminal-mode lead** never appears in the grid and never arms a completion notification.
+  Permission requests are denied automatically; the role continues and lists refused actions under `## Needs approval`.
+  You answer question and plan menus with `answer_role` unless the owner presses a key in the role's terminal first.
 
 ### Calling roles
 
-Five tools call the team; they are yours alone, and a role cannot call them.
+Six tools call the team; they are yours alone, and a role cannot call them.
 
 | Tool | What it does |
 | --- | --- |
 | `start_role` | Starts a role in the background and returns its run id after launch is confirmed. Give `seat` (from the team table, or `developer/<specialty>`), a one-line `title` and the `brief`. Use `readOnly: true` for a role that only reads and `allow` with the editable file globs for a role that writes. Use `cwd` for an existing worktree. |
 | `roles_status` | Returns `{ roles, earlierEnded }` with running roles, endings first observed in the last 10 minutes, and a count of older endings. |
 | `wait_roles` | Returns the selected role statuses as soon as any selected role ends or the timeout elapses. `ids` defaults to all running roles. `seconds` defaults to 240 and allows up to 540. |
+| `answer_role` | Answers a question or plan menu using the menu id from `wait_roles` or `roles_status` and a listed option. It cannot answer permission requests. |
 | `role_result` | Reads the final answer by run id, including for older runs. |
 | `stop_role` | Stops a running role. |
 
