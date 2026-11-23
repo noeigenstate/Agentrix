@@ -225,6 +225,7 @@ test('start_role creates local worktrees from HEAD, shares dependencies and reje
   const { cwd, branch, base } = created[0].value;
   assert.equal(branch, 'work/frontend');
   assert.equal(base, git(['rev-parse', '--short', head]));
+  assert.deepEqual(created[0].value.baseSource, { kind: 'project', cwd: git(['rev-parse', '--show-toplevel']), ref: 'HEAD' });
   assert.equal(path.dirname(cwd), os.tmpdir());
   assert.equal(git(['branch', '--show-current'], cwd), branch);
   assert.equal(git(['rev-parse', 'HEAD'], cwd), head);
@@ -290,6 +291,46 @@ test('start_role bases a new worktree on the lead checkout or a verified explici
     assert.equal(git(['rev-parse', 'HEAD'], started.cwd), expected);
     assert.equal(fs.readFileSync(path.join(started.cwd, 'source'), 'utf8'), expected === leadHead ? 'lead commit' : 'committed');
     assert.equal(fs.realpathSync.native(path.join(started.cwd, 'node_modules')), fs.realpathSync.native(modules));
+  }
+});
+
+test('start_role defaults to the last role directory in this conversation when it still belongs to the project', async t => {
+  const { env, folder, cleanups } = session(t, 'conductor');
+  const project = path.join(folder, 'project'), previous = path.join(folder, 'previous'), foreign = path.join(folder, 'foreign');
+  fs.mkdirSync(project);
+  fs.mkdirSync(foreign);
+  const git = gitFixture(project);
+  gitFixture(foreign);
+  const projectRoot = git(['rev-parse', '--show-toplevel']);
+  const projectHead = git(['rev-parse', 'HEAD']);
+  git(['worktree', 'add', '--quiet', '-b', 'previous-role', previous]);
+  cleanups.push(() => { if (fs.existsSync(previous)) git(['worktree', 'remove', '--force', previous]); });
+
+  let count = 0;
+  const fake = engine(() => `[dispatch] started role-${++count} codex\n`);
+  const { tools } = createRoleTools({ env, cwd: project, engine: fake.run, tempRoot: folder });
+  const task = { seat: 'developer', title: 'Build', brief: 'Build it', allow: ['source'] };
+  await tools.start_role({ ...task, cwd: previous });
+  fs.writeFileSync(path.join(previous, 'source'), 'previous role commit');
+  git(['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '--no-gpg-sign', '-am', 'role change'], previous);
+  const previousHead = git(['rev-parse', 'HEAD'], previous);
+
+  const projectSource = { kind: 'project', cwd: projectRoot, ref: 'HEAD' };
+  for (const [worktree, options, head, source] of [
+    ['recent', {}, previousHead, { kind: 'last-role', cwd: previous, ref: 'HEAD' }],
+    ['explicit-head', { from: 'HEAD' }, projectHead, projectSource],
+    ['explicit-cwd', { cwd: project }, projectHead, { kind: 'cwd', cwd: project, ref: 'HEAD' }],
+    ['foreign', {}, projectHead, projectSource],
+    ['deleted', {}, projectHead, projectSource],
+  ]) {
+    if (worktree !== 'recent') await tools.start_role({ ...task, cwd: previous });
+    if (worktree === 'foreign') await tools.start_role({ ...task, cwd: foreign });
+    if (worktree === 'deleted') git(['worktree', 'remove', '--force', previous]);
+    const started = await tools.start_role({ ...task, worktree, ...options });
+    cleanups.push(() => git(['worktree', 'remove', '--force', started.cwd]));
+    assert.deepEqual(started.baseSource, source, worktree);
+    assert.equal(started.base, git(['rev-parse', '--short', head]), worktree);
+    assert.equal(git(['rev-parse', 'HEAD'], started.cwd), head, worktree);
   }
 });
 
