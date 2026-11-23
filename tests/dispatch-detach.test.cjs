@@ -7,6 +7,7 @@ const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 const { EventEmitter, once } = require('node:events');
 const { spawn, execFileSync } = require('node:child_process');
+const { setTimeout: delay } = require('node:timers/promises');
 const { argumentsOf, startDetached, waitDetached, run } = require('../integration/dispatch.cjs');
 const { DetachedRuns } = require('../integration/dispatch-outbox.cjs');
 const { updateDispatchSeats, updateDispatchLaunchSeats } = require('../electron/features/terminal-events/bootstrap-file.cjs');
@@ -510,11 +511,35 @@ async function fixture(t) {
   for (const key of Object.keys(env)) if (/^CLAUDECODE$|^ANTHROPIC_/.test(key)) delete env[key];
   const store = new DetachedRuns(path.join(repo, '.git/agentrix/detached')), ids = [], releases = new Map();
   t.after(async () => {
-    for (const id of ids) if (!store.read(id).settled) {
-      await run(['stop', id, '--no-resume', '--cwd', repo], { env, launch: () => assert.fail('stop launches no CLI') });
-      await waitDetached({ ids: [id], timeout: 5 }, { store, stdout: { write() {} } });
+    for (const id of ids) {
+      if (!store.read(id).settled) {
+        await run(['stop', id, '--no-resume', '--cwd', repo], { env, launch: () => assert.fail('stop launches no CLI') });
+        await waitDetached({ ids: [id], timeout: 5 }, { store, stdout: { write() {} } });
+      }
+      assert.equal(store.read(id).settled, true, `detached run ${id} did not settle during cleanup`);
     }
-    fs.rmSync(root, { recursive: true, force: true });
+    // A settled receipt precedes helper exit. On Windows its repo cwd can still block removal.
+    if (process.platform === 'win32') {
+      const live = new Map();
+      for (const id of ids) {
+        const { helperPid, startedLine } = store.read(id);
+        const workerPid = Number(startedLine?.match(/\bpid (\d+) session /)?.[1]);
+        if (helperPid) live.set(helperPid, 'helper');
+        if (workerPid) live.set(workerPid, 'worker');
+      }
+      const deadline = Date.now() + 5000;
+      while (live.size && Date.now() < deadline) {
+        for (const pid of live.keys()) {
+          try { process.kill(pid, 0); } catch (error) {
+            if (error.code !== 'ESRCH') throw error;
+            live.delete(pid);
+          }
+        }
+        if (live.size) await delay(50);
+      }
+      assert.equal(live.size, 0, `detached processes still alive: ${[...live].map(([pid, kind]) => `${kind} ${pid}`).join(', ')}`);
+    }
+    await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
   async function start(scope) {
     const out = path.join(root, randomUUID() + '.md'), release = out + '.release';

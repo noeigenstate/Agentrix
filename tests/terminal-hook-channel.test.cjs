@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { proxyOf, terminalHooks, downgradeHooks, reportHookChannel, startHookLaunch } = require('../electron/features/terminal-events/hook-channel.cjs');
 const { systemProxyEnvironment } = require('../electron/system-proxy.cjs');
 const { createEventServer } = require('../electron/events.cjs');
@@ -65,7 +66,8 @@ async function posixAnswers(t, shell, file, list) {
   for (const [env] of list) lines.push(`( unset ${NAMES.join(' ')}; ${Object.entries(env).map(([name, value]) => `${name}=${shQuote(value)}`).join('; ')}${Object.keys(env).length ? '; ' : ''}check )`);
   const script = path.join(folder(t), 'probe.sh');
   fs.writeFileSync(script, lines.join('\n') + '\n');
-  const { stdout } = await exec(shell, [...(shell === zsh ? ['-f'] : ['--noprofile', '--norc']), script.replace(/\\/g, '/')], { windowsHide: true });
+  const { stdout } = await exec(shell, [...(shell === zsh ? ['-f'] : ['--noprofile', '--norc']), script.replace(/\\/g, '/')],
+    { windowsHide: true, env: dispatchEnvironment() });
   return [...stdout.matchAll(/^R=(.*)$/gm)].map(match => match[1] || null);
 }
 const psQuote = value => `'${String(value).replace(/'/g, "''")}'`;
@@ -87,7 +89,8 @@ test('with a proxy and no loopback NO_PROXY entry the terminal keeps command hoo
       lines.push(...NAMES.filter(name => name === name.toUpperCase()).map(name => `[Environment]::SetEnvironmentVariable('${name}', $null)`));
       lines.push(...Object.entries(env).map(([name, value]) => `[Environment]::SetEnvironmentVariable('${name}', ${psQuote(value)})`), `'R=' + (Get-AgentrixHookProxy ${PORT})`);
     }
-    const { stdout } = await exec(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(lines.join('\n'), 'utf16le').toString('base64')], { windowsHide: true });
+    const { stdout } = await exec(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(lines.join('\n'), 'utf16le').toString('base64')],
+      { windowsHide: true, env: dispatchEnvironment() });
     assert.deepEqual([...stdout.matchAll(/^R=(.*?)\r?$/gm)].map(match => match[1] || null), cases.map(([, expected]) => expected), 'PowerShell');
   }
 
@@ -125,15 +128,18 @@ test('the PowerShell claude wrapper passes the HTTP settings, or with a proxy se
     shell: { posix: false, powershellPath: powershell, script: path.join(integration, 'claude-hook.ps1') }, platform: 'win32', home: directory, read: () => '{}' });
   const source = fs.readFileSync(path.join(integration, 'bootstrap.ps1'), 'utf8');
   const wrapper = source.slice(source.indexOf('function global:Get-AgentrixHookProxy'), source.indexOf('if ($global:AgentrixAgentOnly)'));
+  const probe = path.join(folder(t), 'probe.ps1'), launcher = path.join(path.dirname(probe), 'claude.ps1');
+  fs.writeFileSync(launcher, "$index = [Array]::IndexOf($args, '--settings')\n"
+    + "if ($index -ge 0) { [IO.File]::ReadAllText($args[$index + 1]) } else { 'none:' + ($args -join ' ') }\n");
   const script = `$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
 ${wrapper}
 function global:Get-AgentrixReadingNote {}
 function global:Get-AgentrixCommand {}
 $global:sent = @()
 function global:Send-AgentrixEvent { param([string]$Type, [int]$ExitCode = 0, [string]$Agent = 'codex', [string]$Command = '') $global:sent += "$Type|$Command" }
 $global:AgentrixSession = @{ hooks = (${psQuote(JSON.stringify(hooks))} | ConvertFrom-Json) }
-$global:AgentrixClaudeExecutable = $null
-$global:AgentrixClaudeCommand = { if ($args[0] -eq '--settings') { [IO.File]::ReadAllText($args[1]) } else { 'none:' + ($args -join ' ') } }
+$global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand = ${psQuote(launcher)}
 foreach ($name in @('HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY')) { [Environment]::SetEnvironmentVariable($name, $null) }
 $plain = claude
 $env:HTTP_PROXY = 'http://proxy:1'
@@ -141,10 +147,9 @@ $proxied = claude
 $global:AgentrixSession.hooks.settings.fallback = ''
 $bare = claude hello
 @{ plain = $plain; proxied = $proxied; bare = $bare; sent = $global:sent } | ConvertTo-Json -Compress`;
-  const probe = path.join(folder(t), 'probe.ps1');
-  fs.writeFileSync(probe, script);
+  fs.writeFileSync(probe, '\uFEFF' + script);
   const { stdout } = await exec(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', probe],
-    { windowsHide: true, env: { ...process.env, AGENTRIX_BOOTSTRAP: path.join(directory, 'session.json') } });
+    { windowsHide: true, env: { ...dispatchEnvironment(), AGENTRIX_BOOTSTRAP: path.join(directory, 'session.json') } });
   const result = JSON.parse(stdout);
   assert.equal(result.plain, hooks.settings.http);
   assert.equal(result.proxied, hooks.settings.fallback);

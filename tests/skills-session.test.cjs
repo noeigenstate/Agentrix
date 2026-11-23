@@ -1,4 +1,4 @@
-require('./fixtures/team-isolation.cjs');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -399,12 +399,19 @@ test('live current snapshots survive watcher recreation, refresh external edits,
 
 function hookProcess(file, args, input, noteFile) {
   return new Promise((resolve, reject) => {
-    const child = spawn(file, args, { env: { ...process.env, AGENTRIX_BOOTSTRAP: '', AGENTRIX_READING_NOTE_FILE: noteFile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(file, args, { env: { ...dispatchEnvironment(), AGENTRIX_READING_NOTE_FILE: noteFile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', bytes => { stdout += bytes; }); child.stderr.on('data', bytes => { stderr += bytes; });
     child.once('error', reject); child.once('close', code => resolve({ code, stdout, stderr }));
     child.stdin.end(JSON.stringify(input));
   });
+}
+
+function powershellProbe(folder, script, noteFile) {
+  const file = path.join(folder, 'probe.ps1');
+  fs.writeFileSync(file, '\uFEFF' + script); // Windows PowerShell requires the BOM for UTF-8 source.
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  return hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', file], {}, noteFile);
 }
 
 test('Node SessionStart writes one JSON context even without Agentrix; other hooks remain silent', async t => {
@@ -462,6 +469,8 @@ test('PowerShell Claude wrapper keeps the startup note and fallback before intac
   const terminalSession = '11111111-1111-4111-8111-111111111111';
   const f = await fixture(t), noteFile = path.join(f.root, `${terminalSession}-skills.txt`), note = f.note('wrapper');
   fs.writeFileSync(noteFile, note);
+  const command = path.join(f.root, 'claude.ps1');
+  fs.writeFileSync(command, "@{ args = @($args); settings = (Get-Content -LiteralPath $args[1] -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 10 -Compress\n");
   const source = fs.readFileSync(path.join(__dirname, '../integration/bootstrap.ps1'), 'utf8');
   const helper = source.slice(source.indexOf('function global:Get-AgentrixReadingNote'), source.indexOf('# Windows PowerShell 5'));
   const wrapper = source.slice(source.indexOf('function global:claude'), source.indexOf('if ($global:AgentrixAgentOnly)'));
@@ -475,11 +484,9 @@ function global:Get-AgentrixCommand {}
 ${powershellSession()}
 # Main names a terminal's bootstrap after the terminal; the settings file still carries the session, as main removes it by.
 $env:AGENTRIX_BOOTSTRAP = '${path.join(f.root, 'terminal.json').replace(/'/g, "''")}'
-$global:AgentrixClaudeExecutable = $null
-$global:AgentrixClaudeCommand = { @{ args = @($args); settings = (Get-Content -LiteralPath $args[1] -Raw | ConvertFrom-Json) } | ConvertTo-Json -Depth 10 -Compress }
+$global:AgentrixClaudeExecutable = $global:AgentrixClaudeCommand = '${command.replace(/'/g, "''")}'
 claude --resume fixture '继续'`;
-  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-  const result = await hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, noteFile);
+  const result = await powershellProbe(f.root, script, noteFile);
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
   const { args, settings } = JSON.parse(result.stdout);
   assert.equal(args[0], '--settings'); assert.ok(settings.hooks.SessionStart);
@@ -549,8 +556,7 @@ ${powershellSession()}
 $global:AgentrixClaudeExecutable = ${quote(command)}
 $global:AgentrixClaudeCommand = ${quote(command)}
 claude --resume fixture 'next task'`;
-  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-  const result = await hookProcess(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {}, noteFile);
+  const result = await powershellProbe(f.root, script, noteFile);
   assert.equal(result.code, 0); assert.equal(result.stderr, '');
   const { args, settings } = JSON.parse(fs.readFileSync(captureFile));
   assert.equal(args[0], '--settings'); assert.equal(path.dirname(args[1]), f.root);

@@ -256,6 +256,8 @@ test('answer_role uses the current parsed menu and keeps active waits visible', 
   await assert.rejects(tools.answer_role({ id: f.id, wait: plan.id, choice: 1 }), /invalid_choice/);
   f.pty.emit('\x1b[2J\x1b[H');
   await assert.rejects(tools.answer_role({ id: f.id, wait: plan.id, choice: 2 }), /not[ _]waiting|stale_wait/);
+  // A new PTY sequence already rejects the old answer, even before xterm parses and publishes the blank screen.
+  assert.equal(await receipt(entry => entry?.menu === null || undefined), true);
   assert.deepEqual(f.pty.writes, ['\x1b[B\r']);
   draw('screens', 'claude-investigation-plan-waiting');
   const shownAgain = await menu('plan');

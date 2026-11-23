@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { execFile } = require('node:child_process'), { promisify } = require('node:util');
+const { dispatchEnvironment } = require('./fixtures/team-isolation.cjs');
 const { isolatedEnvironment } = require('../scripts/native-approval-probe.cjs');
 const { timeoutScale } = require('../scripts/wait.mjs');
 const exec = promisify(execFile), integration = path.resolve(__dirname, '../integration');
@@ -26,7 +27,9 @@ for (const kind of ['bash', 'zsh']) {
     const alias = kind === 'bash' ? '[[ -n $PROBE_ALIAS ]] && __pg_alias_claude=$PROBE_ALIAS\n' : 'typeset -gA __pg_aliases\n[[ -n $PROBE_ALIAS ]] && __pg_aliases[claude]=$PROBE_ALIAS\n';
     fs.writeFileSync(probe, `${alias}${program}for name in claude codex; do __pg_program $name && printf 'WORDS=%s\\n' "$(printf '%s|' ${words})" || printf 'WORDS=none\\n'; done\n`);
     const run = async (hint, aliasWords = '') => {
-      const env = { ...process.env, PATH: `${slashes(bin)}:/usr/bin:/bin`, PROBE_ALIAS: aliasWords, AGENTRIX_CLAUDE_EXECUTABLE: hint };
+      const env = { ...dispatchEnvironment(), PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`,
+        PROBE_ALIAS: aliasWords, AGENTRIX_CLAUDE_EXECUTABLE: hint };
+      delete env.Path;
       const { stdout } = await exec(shell, [...(kind === 'bash' ? ['--noprofile', '--norc'] : ['-f']), slashes(probe)], { cwd: root, env, windowsHide: true, timeout: 10000 * timeoutScale });
       return [...stdout.matchAll(/WORDS=(.*)/g)].map(match => match[1]);
     };
