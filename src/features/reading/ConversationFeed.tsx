@@ -4,7 +4,7 @@ import type { ConversationEntry, GeneratedPicture } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { modelName } from '../../shared/model-name.ts';
-import type { LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
+import { routingNotice, type LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
 import { stepVerb } from '../agents/action-text';
 import { showPopup } from '../files/file-popup.ts';
 import { withoutDelivery } from '../home/delivery.ts';
@@ -122,13 +122,6 @@ function AssistantReply({ entry, agent, projectId, result = false, pathOf, onErr
 const quietOutput = (entry: ConversationEntry) => !entry.id.startsWith('shell:') && !entry.id.startsWith('native:') && entry.tool?.kind !== 'edit';
 const failureReason = (output: string) => { const line = output.split(/\r?\n/).find(row => row.trim())?.trim() || ''; return line.length > 140 ? `${line.slice(0, 139)}…` : line; };
 
-function routingNotice({ model, effort, incomplete }: LeadRoutingNotice) {
-  if (incomplete) return t('按模型路由切换未完成');
-  if (model && effort) return t('已按模型路由切换到 {model} · {effort}', { model, effort });
-  if (model) return t('已按模型路由切换到 {model}', { model });
-  return t('已按模型路由将思考深度调为 {effort}', { effort: effort ?? '' });
-}
-
 function ToolGroup({ entries, live, projectId, hideToolOutput = false, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; hideToolOutput?: boolean; onError: (message: string) => void }) {
   const running = entries.some(entry => !entry.tool?.done);
   const [open, setOpen] = useState(false);
@@ -193,7 +186,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
   }}>
       {decorations?.frame?.before}
       {turns.map((turn, index) => {
-        if (turn.kind === 'routing') return <p key={turn.id} data-reading-entry={turn.id} className="reading-status reading-routing-notice">{routingNotice(turn.notice)}</p>;
+        if (turn.kind === 'routing') return <p key={turn.id} data-reading-entry={turn.id} className="reading-status reading-routing-notice">{routingNotice(turn.notice, t)}</p>;
         if (turn.kind === 'user') {
           const sender = turn.entry.sender, planner = sender?.kind === 'planner';
           const identified = planner && sender.agent && sender.model;

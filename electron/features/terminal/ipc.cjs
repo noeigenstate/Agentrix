@@ -1,5 +1,6 @@
 const { isLocalCommand, isTerminalResponse } = require('../../terminal-input.cjs');
 const { approvalStamp } = require('./approval-guard.cjs');
+const { registerLeadFastSettings } = require('./lead-fast-settings.cjs');
 
 // terminal:screenFacts: what the renderer reads off a Claude terminal's screen, exactly these booleans, the PTY session
 // and a frame revision (C-4); no text.
@@ -9,7 +10,13 @@ const validFacts = facts => !!facts && typeof facts === 'object' && !Array.isArr
   && SCREEN_FLAGS.every(name => typeof facts[name] === 'boolean');
 
 // nativeHost: whether a native session holds the terminal or is starting on it, its PTY already gone.
-function registerTerminalIpc({ handle, listen, findProject, getSession, hasSession, nativeHost = () => false, startTerminal, addTerminal, removeTerminal, confirmTerminalClose, forgetRestorePlan, disposeTerminal, clearStartupError, broadcast, getProjectById, acknowledgeProject, expectCompletion, scheduleState, applyActivity, pollAfterSubmission, send, getActiveTerminal, setActiveTerminal, setActiveFileTree, now = () => Date.now(), platform = process.platform }) {
+function registerTerminalIpc({
+  handle, listen, findProject, getSession, hasSession, nativeHost = () => false, startTerminal, addTerminal, removeTerminal,
+  confirmTerminalClose, forgetRestorePlan, disposeTerminal, clearStartupError, broadcast, getProjectById, acknowledgeProject, expectCompletion,
+  scheduleState, applyActivity, pollAfterSubmission, send, getActiveTerminal, setActiveTerminal, setActiveFileTree, fastSettings,
+  now = () => Date.now(), platform = process.platform,
+}) {
+  if (fastSettings) registerLeadFastSettings({ handle, getSession, findProject, now, ...fastSettings });
   handle('terminal:start', id => startTerminal(id));
   handle('terminal:add', (id, start = true) => {
     if (typeof start !== 'boolean') throw new Error('无效的终端启动选项。');

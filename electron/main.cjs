@@ -1200,7 +1200,7 @@ function structuredEvent(id, event) {
   if (event.type === 'routing.updated') {
     const { observed, effective } = event.payload;
     if (typeof observed?.model === 'string') s.nativeObservedModel = observed.model;
-    s.agentSettings = Object.fromEntries(['model', 'effort', 'fast'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
+    s.agentSettings = Object.fromEntries(['model', 'effort', 'fast', 'ultracode'].map(key => [key, observed?.[key] ?? effective?.[key] ?? s.agentSettings?.[key] ?? null]));
   }
   if (event.type === 'item.upsert' && event.payload.kind === 'user-message' && event.payload.content.unsent !== true && event.payload.content.text) {
     const clientId = event.payload.content.clientMessageId || event.itemId;
@@ -1813,6 +1813,7 @@ function registerIpc() {
   });
   registerNativeIpc({ handle });
   terminalInput = registerTerminalIpc({ handle, listen, findProject, getSession: id => sessions.get(id), hasSession: id => sessions.has(id), nativeHost: id => nativeSpecs.has(id), startTerminal,
+    fastSettings: { claudeConfigDir, writeFileAtomic },
     addTerminal: id => store.addTerminal(id), removeTerminal: id => { store.removeTerminal(id); fs.promises.rm(handoffFile(id), { force: true }).catch(() => {}); }, confirmTerminalClose, forgetRestorePlan: id => restorePlans.delete(id),
     disposeTerminal, clearStartupError: id => startupErrors.delete(id), broadcast, getProjectById: id => store.projects.find(p => p.id === id),
     acknowledgeProject: id => store.acknowledge(id), expectCompletion: id => store.expectCompletion(id), scheduleState, applyActivity, pollAfterSubmission, send,

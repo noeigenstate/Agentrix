@@ -1,8 +1,8 @@
 import type { ConversationEntry, ProjectTerminal } from './types';
 
-type Command = '/model' | '/effort';
-type Submission = { command: Command; at: number; until: number };
-export type LeadRoutingNotice = { model?: string; effort?: string; incomplete?: boolean };
+export type LeadRoutingCommand = '/model' | '/effort' | '/fast on' | '/fast off';
+type Submission = { command: LeadRoutingCommand; at: number; until: number };
+export type LeadRoutingNotice = { model?: string; effort?: string; fast?: boolean; ultracode?: boolean; incomplete?: boolean; fastError?: { target: boolean; reason: string } };
 type Route = { submissions: Submission[]; outcome: LeadRoutingNotice | null };
 
 // Renderer memory only. A reopened transcript needs the same live PTY and conversation to use these receipts.
@@ -34,24 +34,43 @@ export function trackLeadRouting(scope: string) {
     for (const listener of listeners) listener();
   };
   return {
-    submit(command: Command, at = Date.now()) {
+    submit(command: LeadRoutingCommand, at = Date.now()) {
       const submission = { command, at, until: Infinity };
       update({ ...route, submissions: [...route.submissions, submission] });
       return (until = Date.now()) => update({ ...route, submissions: route.submissions.map(item => item === submission ? { ...item, until } : item) });
     },
-    finish(outcome: LeadRoutingNotice) { if (route.submissions.length) update({ ...route, outcome }); },
+    finish(outcome: LeadRoutingNotice | null) { if (route.submissions.length) update({ ...route, outcome }); },
   };
 }
 
 function isReceipt(entry: ConversationEntry, { command, at, until }: Submission) {
   if (entry.role !== 'user' || entry.queued || entry.cancelled || entry.answer || entry.images?.length || entry.sender?.kind === 'planner'
-    || entry.at < at || entry.at > until || entry.text !== command) return false;
+    || entry.at < at || entry.at > until) return false;
   const original = entry.original?.trim();
-  if (!original || original === command) return original === command;
-  // Claude can shorten the displayed command by dropping its arguments. Match the original, with zero arguments.
+  if (original === command) return entry.text === command || entry.text === command.split(' ', 1)[0];
+  if (!original) return false;
+  // Claude can shorten the displayed command by dropping its arguments. Match them against the original record.
   const name = original.match(/<command-name>\s*(\/\w+)\s*<\/command-name>/)?.[1];
-  const wrappers = /<command-name>[^<]*<\/command-name>|<command-message>[^<]*<\/command-message>|<command-args>\s*<\/command-args>/g;
-  return name === command && !original.replace(wrappers, '').trim();
+  const args = original.match(/<command-args>([^<]*)<\/command-args>/)?.[1].trim();
+  const wrappers = /<command-name>[^<]*<\/command-name>|<command-message>[^<]*<\/command-message>|<command-args>[^<]*<\/command-args>/g;
+  return !!name && (entry.text === name || entry.text === command) && (args ? `${name} ${args}` : name) === command && !original.replace(wrappers, '').trim();
+}
+
+export function routingNotice({ model, effort, incomplete, fast, ultracode, fastError }: LeadRoutingNotice,
+  t: (text: string, values?: Record<string, string>) => string) {
+  if (fastError) {
+    const { reason, target } = fastError;
+    return target ? t('快速模式未开启：{reason}', { reason }) : t('快速模式未关闭：{reason}', { reason });
+  }
+  if (incomplete) return t('按模型路由切换未完成');
+  const fastLabel = fast === undefined ? '' : fast ? t('快速') : t('快速已关闭');
+  const ultraLabel = ultracode === undefined ? '' : ultracode ? 'Ultracode' : t('Ultracode 已关闭');
+  const labels = [model, effort, ultraLabel, fastLabel].filter(Boolean);
+  if (model || labels.length > 1) return t('已按模型路由切换到 {model}', { model: labels.join(' · ') });
+  if (effort) return t('已按模型路由将思考深度调为 {effort}', { effort });
+  if (ultracode !== undefined) return ultracode ? t('已按模型路由开启 Ultracode') : t('已按模型路由关闭 Ultracode');
+  if (fast !== undefined) return fast ? t('已按模型路由开启快速模式') : t('已按模型路由关闭快速模式');
+  return '';
 }
 
 // A combined switch occupies its first matched position. The other matched records (and pending switches) are hidden.

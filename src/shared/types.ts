@@ -22,7 +22,7 @@ export type Project = {
 // A document, page or video an agent wrote, as its card in the reading view shows it.
 export type FileCard = { kind: 'markdown'; path: string; excerpt: string; outside?: boolean } | { kind: 'html'; path: string; picture: string | null } | { kind: 'video'; path: string; url: string } | { kind: 'image'; path: string; picture: string; remote?: boolean };
 // The model, effort and fast mode an agent's records show (electron/features/agents/agent-settings.cjs); null: not shown yet.
-export type AgentSettings = { model: string | null; effort: string | null; fast: boolean | null };
+export type AgentSettings = { model: string | null; effort: string | null; fast: boolean | null; ultracode: boolean | null };
 // What an agent spends, as its records show (electron/features/agents/agent-usage.cjs): the service its model is reached
 // through, the context it fills, the tokens of this round and of the conversation, and the plan's limits (Codex only).
 // input counts the cached part, output the reasoning; null: not known (yet).
@@ -545,6 +545,7 @@ type Bridge = {
   writeTerminal(id: string, data: string): void;
   writeApproval(id: string, key: string, stamp: ApprovalStamp, actionId: string): Promise<Result<ApprovalResult>>;
   answerTerminal(id: string, data: string): void;
+  leadFastSettings(id: string, request: { sessionId: string; target: boolean } | { token: string; confirmed: boolean }): Promise<Result<string | null>>;
   resizeTerminal(id: string, cols: number, rows: number): void;
   copy(text: string): Promise<Result<void>>;
   readClipboard(): Promise<Result<string>>;

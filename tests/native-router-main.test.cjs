@@ -163,6 +163,7 @@ test('the raw view a native session replaced reaches no PTY: its replies are dro
   let wiring;
   const context = { sessions, nativeSpecs, quitting: false, scheduleState() {}, bindDispatchInbox() {}, t: text => text, nativeSessions: {},
     store: { findTerminal: () => ({ project: { id: 'p' } }) }, registerTerminalIpc: value => { wiring = value; },
+    claudeConfigDir: require('../electron/claude-sessions.cjs').claudeConfigDir, writeFileAtomic: require('../electron/atomic-write.cjs').writeFileAtomic,
     createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage,
     PromptQueue: require('../electron/prompt-queue.cjs').PromptQueue, CompletionWork: require('../electron/completion-work.cjs').CompletionWork,
     ActionLog: require('../electron/agent-actions.cjs').ActionLog, ConversationLog: require('../electron/conversation.cjs').ConversationLog };

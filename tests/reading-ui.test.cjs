@@ -1812,6 +1812,24 @@ test('reading reports effort-only and unconfirmed routes and leaves ambiguous or
   assert.equal(html.split('>/model<').length - 1, 3);
 });
 
+test('an automatic /fast refusal renders gray and leaves the owner fast command visible', t => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { leadRoutingScope, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
+  const log = new ConversationLog();
+  for (const [uuid, at, args] of [['auto', 1010, 'on'], ['manual', 1020, 'off']]) {
+    const content = `<command-name>/fast</command-name>\n<command-message>fast</command-message>\n<command-args>${args}</command-args>`;
+    claudeConversation(log, { type: 'user', uuid, timestamp: new Date(at).toISOString(), message: { content } });
+  }
+  const h = readingHarness(t, log.list);
+  Object.assign(h.state.terminal, { id: 'routing-fast', agent: 'claude', codexActivity: 'idle' });
+  const route = trackLeadRouting(leadRoutingScope(h.state.terminal));
+  route.submit('/fast on', 1000)(1030);
+  route.finish({ incomplete: true, fastError: { target: true, reason: 'Fast mode requires usage credits · /usage-credits to turn them on' } });
+  const html = h.render();
+  assert.match(html, /reading-routing-notice">Fast mode was not turned on: Fast mode requires usage credits · \/usage-credits to turn them on/);
+  assert.equal(html.split('>/fast<').length - 1, 1);
+});
+
 test('Markdown can opt into soft line breaks without changing the reading view default', t => {
   const { Markdown } = readingHarness(t, [], { './markdown-escape': require('../src/features/reading/markdown-escape.ts') });
   const text = 'First line\ncontinues here.';

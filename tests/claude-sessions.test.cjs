@@ -170,7 +170,7 @@ test('SSH Claude hooks poll remote records with history, tools and settings thro
   assert.deepEqual(requests[0], ['claude-status', { path: file, since: 900 }]);
   assert.equal(h.s.activityMonitor.options.watch(), null); assert.equal(h.s.activityMonitor.options.interval(), 1000);
   assert.equal(h.s.conversation.loading, true); assert.equal(h.s.conversation.list[0].text, 'Remote prompt');
-  assert.deepEqual(h.s.agentSettings, { model: 'claude-test', effort: 'high', fast: true });
+  assert.deepEqual(h.s.agentSettings, { model: 'claude-test', effort: 'high', fast: true, ultracode: null });
   assert.deepEqual(described, [['/srv/project', 'read.txt']]);
   const tail = h.s.claudeTranscript;
   h.context.followClaude(h.project, h.s, { sessionId: 'session', transcriptPath: file, sentAt: 1200 });

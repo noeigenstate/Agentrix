@@ -3,13 +3,16 @@
 // /model or /fast: thread_settings_applied, whose service tier "priority" is fast mode). Claude Code writes them with
 // every reply (message.model, effort/perTurnEffort, usage.speed) and answers /model, /effort and /fast at once in its own output.
 // The reading view shows them above its message box.
-const EMPTY = { model: null, effort: null, fast: null };
+const EMPTY = { model: null, effort: null, fast: null, ultracode: null };
 const text = value => typeof value === 'string' && value.trim() ? value.trim() : null;
 
 function changed(current, patch) {
   const base = current || EMPTY;
-  const next = { model: patch.model ?? base.model, effort: patch.effort ?? base.effort, fast: patch.fast ?? base.fast };
-  return next.model === base.model && next.effort === base.effort && next.fast === base.fast ? current : next;
+  const next = {
+    model: patch.model ?? base.model, effort: patch.effort ?? base.effort, fast: patch.fast ?? base.fast,
+    ultracode: patch.ultracode ?? base.ultracode ?? null,
+  };
+  return Object.keys(next).every(key => next[key] === base[key]) ? current : next;
 }
 
 // What Claude Code printed for one of its own commands: "Set model to `Opus 5.5` …", "Set effort level to max (…)",
@@ -22,8 +25,12 @@ function claudeCommandOutput(record) {
   const model = /^\s*Set model to\s+`?([^`\n(]+?)`?(?:\s+\(|\s+and\b|\s+for this session only\b|\s*$)/im.exec(output)?.[1];
   const effort = /^\s*Set effort level to\s+([a-z]+)\b/im.exec(output)?.[1];
   const fast = /^[ \t]*(?:↯\s*|Kept\s+)?Fast mode\s+(?:is (?:now )?)?(on|enabled|off|disabled)\b/i.exec(output)?.[1];
-  if (!model && !effort && !fast) return null;
-  return { model: text(model), effort: text(effort)?.toLowerCase() ?? null, fast: fast ? /^(?:on|enabled)$/i.test(fast) : null };
+  const fastModel = fast && /\bmodel set to\s+`?([^`·\n]+?)`?(?:\s*·|\s*$)/i.exec(output)?.[1];
+  const standaloneUltra = /^\s*Ultracode (?:on|off) \(|^\s*Ultracode off\. Effort stays \w+\./i;
+  const ultracode = (effort || standaloneUltra.test(output)) && /\bUltracode\s+(on|off)\b/i.exec(output)?.[1];
+  if (!model && !effort && !fast && !ultracode) return null;
+  return { model: text(model || fastModel), effort: text(effort)?.toLowerCase() ?? null,
+    fast: fast ? /^(?:on|enabled)$/i.test(fast) : null, ultracode: ultracode ? ultracode.toLowerCase() === 'on' : null };
 }
 
 // The settings after this record; the same object when it changes nothing.
@@ -38,6 +45,10 @@ function agentSettings(current, agent, record) {
         fast: speed === 'fast' ? true : speed === 'standard' ? false : null });
     }
     if (record.type === 'user') { const said = claudeCommandOutput(record); return said ? changed(current, said) : current; }
+    if (record.type === 'attachment') {
+      const kind = record.attachment?.type;
+      if (kind === 'ultra_effort_enter' || kind === 'ultra_effort_exit') return changed(current, { ultracode: kind === 'ultra_effort_enter' });
+    }
     return current;
   }
   const payload = record.payload || {};

@@ -101,13 +101,20 @@ function omitClaudeHints(buffer: IBuffer, rows: string[]) {
   return true;
 }
 
+// Claude labels the upper input border while Ultracode is on. Keep it a border for the shared input parser.
+function claudeScreenRows(rows: string[]) {
+  return rows.map((row, index) => /^\s*─{2,}\s+ultracode\s+─+\s*$/i.test(row) && /^\s*❯/.test(rows[index + 1] ?? '')
+    ? row.replace(/ ultracode /i, '───────────') : row);
+}
+
 function read(terminal: Terminal, agent?: ScreenAgent | null): Pick<Screen, 'rows' | 'inputHint'> {
   const buffer = terminal.buffer.active, rows: string[] = [];
   // The live screen, from baseY: viewportY stays wherever the reader scrolled the terminal back to, and writes made from
   // the reading view never scroll it down again, so the questions and command output would be read from old rows.
   for (let index = 0; index < terminal.rows; index++) rows.push(buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '');
-  const inputHint = agent === 'claude' && omitClaudeHints(buffer, rows);
-  return inputHint ? { rows, inputHint } : { rows };
+  if (agent !== 'claude') return { rows };
+  const normalized = claudeScreenRows(rows), inputHint = omitClaudeHints(buffer, normalized);
+  return inputHint ? { rows: normalized, inputHint } : { rows: normalized };
 }
 
 function capture(entry: Entry): Screen {

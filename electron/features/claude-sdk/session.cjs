@@ -58,9 +58,10 @@ function createClaudeSession(spec, emit, dependencies) {
   function publishRouting(run, observed) {
     if (observed === run.routingObserved) return;
     run.routingObserved = observed;
+    const { model, effort, fast } = observed, settings = { model, effort, fast };
     publish('routing.updated', {
       declared: { model: spec.model || null, effort: spec.effort || null, fast: spec.fast ?? null },
-      effective: observed, observed, reason: null,
+      effective: settings, observed: settings, reason: null,
     });
   }
   function receipt(id, status) {
