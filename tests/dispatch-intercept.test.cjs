@@ -383,12 +383,16 @@ for (const { version, shell, extension } of shimCases) test(`PowerShell ${versio
     assert.equal(fs.existsSync(file), false, 'a completed launch removes its config');
   }
   assert.notEqual(option, second);
-  const inline = spawnSync(process.execPath, [path.join(shims, 'intercept.cjs'), '--shim-env', 'json', '--role-tools', 'claude', 'fix the test'],
-    { env: { ...env, AGENTRIX_SEATS: 'null' }, encoding: 'utf8' });
-  assert.equal(inline.status, 0, inline.stderr);
-  const expected = JSON.parse(inline.stdout).at(-1).slice('--mcp-config='.length);
-  const configs = [...result.stdout.matchAll(/CONFIG=(.*)/g)].map(match => Buffer.from(match[1], 'base64'));
-  assert.deepEqual(configs, [Buffer.from(expected), Buffer.from(expected)]);
+  const expected = { mcpServers: { agentrix: {
+    type: 'stdio', command: process.execPath, args: [path.join(root, 'integration/dispatch.cjs'), 'mcp', 'claude'],
+    env: {
+      ELECTRON_RUN_AS_NODE: '1', AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SEATS: 'null', AGENTRIX_DISPATCH_DEPTH: '0',
+      AGENTRIX_SHIMS: posix(shims), AGENTRIX_SHIM_NODE: process.execPath, CODEX_HOME: env.CODEX_HOME,
+    },
+  } } };
+  // Windows shells can pass the same environment in a different enumeration order.
+  const configs = [...result.stdout.matchAll(/CONFIG=(.*)/g)].map(match => JSON.parse(Buffer.from(match[1], 'base64').toString('utf8')));
+  assert.deepEqual(configs, [expected, expected]);
 });
 
 // A stand-in claude.exe, which Windows PowerShell compiles: only an executable is started with exact arguments. Each run
