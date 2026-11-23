@@ -21,8 +21,8 @@ export type Project = {
 };
 // A document, page or video an agent wrote, as its card in the reading view shows it.
 export type FileCard = { kind: 'markdown'; path: string; excerpt: string; outside?: boolean } | { kind: 'html'; path: string; picture: string | null } | { kind: 'video'; path: string; url: string } | { kind: 'image'; path: string; picture: string; remote?: boolean };
-// The model, effort and fast mode an agent's records show (electron/features/agents/agent-settings.cjs); null: not shown yet.
-export type AgentSettings = { model: string | null; effort: string | null; fast: boolean | null };
+// The settings an agent's records show (electron/features/agents/agent-settings.cjs); null: not shown yet.
+export type AgentSettings = { model: string | null; effort: string | null; fast: boolean | null; ultracode?: boolean | null };
 // What an agent spends, as its records show (electron/features/agents/agent-usage.cjs): the service its model is reached
 // through, the context it fills, the tokens of this round and of the conversation, and the plan's limits (Codex only).
 // input counts the cached part, output the reasoning; null: not known (yet).
@@ -239,7 +239,7 @@ export type SkillOptions = Partial<Pick<SkillInfo, 'enabled' | 'trigger' | 'firs
 // Worker seats follow accepted routing. The lead uses its launch seat.
 export type SeatId = string;
 export type Seat = {
-  model: string; effort: string; fast?: boolean;
+  model: string; effort: string; fast?: boolean; ultracode?: boolean;
 };
 export type SeatMap = Record<string, Seat>;
 export type SeatRole = { id: SeatId; name: string; duty: string; detail: string; outputs: string };
@@ -265,7 +265,7 @@ export type RoutingFlag = {
   role: SeatId; text?: string;
 };
 export type RoutingRoleState = {
-  enabled: boolean; fresh: boolean; model?: string; effort?: string; fast: boolean; from?: SeatId;
+  enabled: boolean; fresh: boolean; model?: string; effort?: string; fast: boolean; ultracode?: boolean; from?: SeatId;
   custom?: Pick<SeatRole, 'name' | 'duty' | 'outputs'>;
 };
 export type RoutingRoleChange = {
@@ -317,7 +317,7 @@ export type SeatsInfo = {
 };
 export type SeatsSaveError = {
   ok: false;
-  code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed'
+  code: 'unknown-seat' | 'invalid-model' | 'invalid-effort' | 'fast-not-allowed' | 'ultracode-not-allowed'
     | RoleRuleCode | 'file-changed' | 'file-unwritable' | 'action-unavailable';
   seat?: string;
   role?: SeatId;

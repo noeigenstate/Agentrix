@@ -123,7 +123,8 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
   return <section className="activity-card activity-main agent-team-group" aria-label={t('主模型')}>
     <h4>{seats?.conductor === false ? t('主模型') : currentLanguage() === 'en' ? t('Agent 面板 · 总指挥') : '总指挥'}</h4>
     <ul className="activity-call-rows">
-      <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} provider={usage?.provider} title={title} rate={usage?.rate} />
+      <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} ultracode={settings?.ultracode}
+        provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
       {pending && <li className="activity-call-note" role="status"><span /><p>{t('正在切换到 {model}', { model: pending })}</p><span /></li>}
     </ul>

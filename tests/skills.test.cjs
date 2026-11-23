@@ -73,6 +73,30 @@ const routeFile = project => path.join(project.path, '.agentrix', 'routing.json'
 const routeDocument = roles => JSON.stringify({ format: 'agentrix-routing', version: 1, ...routing(roles) });
 const seat = model => ({ model, effort: 'high' });
 
+test('Ultracode saves and reloads as an opt-in, and appears in both lead seat tables and the skill summary', t => {
+  const { store, projects } = fixture(t), [project] = projects;
+  const orchestrator = { ...seat('opus'), ultracode: true };
+  const saved = { conductor: true, roles: { orchestrator } };
+  assert.deepEqual(store.setRouting('project', project.id, saved, null), { ok: true });
+  assert.deepEqual(JSON.parse(fs.readFileSync(routeFile(project), 'utf8')).roles, saved.roles);
+  const info = store.seatsInfo(project.id);
+  assert.deepEqual(info.config, saved);
+  assert.deepEqual(info.effective.orchestrator, orchestrator);
+  assert.equal(store.terminalLead(project.id).ultracode, true);
+  assert.equal(store.terminalLead(project.id, { remote: true }).ultracode, undefined);
+  assert.match(store.seatTable(project.id), /\(orchestrator\): opus · high · ultracode;/);
+  const skill = store.delivery(project, false, 'ultracode', { agent: 'claude' }).rendered['builtin:model-routing'].text;
+  assert.match(skill, /^summary: .*opus · high · ultracode/m);
+  assert.match(skill, /^\| orchestrator \|.*\| opus · high · ultracode \|/m);
+  assert.equal((skill.match(/ · ultracode/g) ?? []).length, 2);
+  assert.deepEqual(store.setRouting('project', project.id, {
+    ...saved, roles: { orchestrator: { ...orchestrator, ultracode: false } },
+  }, info.routing.digest), { ok: true });
+  assert.doesNotMatch(fs.readFileSync(routeFile(project), 'utf8'), /ultracode/);
+  assert.deepEqual(store.seatsInfo(project.id).effective.orchestrator, seat('opus'));
+  assert.doesNotMatch(store.seatTable(project.id), /ultracode/);
+});
+
 test('a project without a routing file gets the template on first scan, trusted at once', t => {
   const { store, projects } = fixture(t), [project] = projects;
   projects.splice(1);

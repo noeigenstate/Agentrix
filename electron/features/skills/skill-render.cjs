@@ -2,7 +2,7 @@ const { outsideFences, region } = require('./builtin-format.cjs');
 const { agentAlias, defaultsFor, resolveSeat } = require('./model-seats.cjs');
 const { familyOf } = require('./seat-rules.mjs');
 
-const modelWords = seat => [seat.model, seat.effort, seat.fast && 'fast'].filter(Boolean).join(' · ');
+const modelWords = seat => [seat.model, seat.effort, seat.fast && 'fast', seat.ultracode && 'ultracode'].filter(Boolean).join(' · ');
 
 function launchWords(id, lead, seat, leadAgent, catalog, enabledSpecialties) {
   if (id === lead) return 'this session';
@@ -26,7 +26,7 @@ function teamRows(shipped, library, roles, spec, summary) {
   const specialties = roles.filter(role => role.source === 'library' && role.kind === 'author' && role.id !== 'performance').map(role => role.id);
   const rows = roles.flatMap(role => {
     const { id, name } = role, old = known.get(id);
-    const seat = resolveSeat(Object.hasOwn(map, id) ? map[id] : null, Object.hasOwn(defaults, id) ? defaults[id] : null, installed, catalog);
+    const seat = resolveSeat(Object.hasOwn(map, id) ? map[id] : null, Object.hasOwn(defaults, id) ? defaults[id] : null, installed, catalog, id === lead);
     if (!seat) return old ? [old] : [];
     const model = modelWords(seat), launch = launchWords(id, lead, seat, leadAgent, catalog, specialties);
     summary.push((role.source === 'custom' ? id : name) + ' ' + model);
@@ -76,4 +76,4 @@ function renderRoutingSkill(text, spec) {
   return parts.join('');
 }
 
-module.exports = { renderRoutingSkill };
+module.exports = { renderRoutingSkill, modelWords };

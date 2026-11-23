@@ -10,7 +10,7 @@ import { t, currentLanguage } from '../../shared/i18n';
 import {
   paletteGroups, ageOf, menuPlacement, withInstalled, assignCustom, assignModel, baselineFor, cleanDraft, configFor, draftRoles, resolveDraftSeats, updateDraftSeats,
   changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, rowFor,
-  sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, familyOf,
+  sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, allowsUltracode, familyOf, withSlot,
   displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
 } from './skill-seats';
 import { checkTeamRules, MAX_CUSTOM_ROLES, MAX_ENABLED_ROLES, nextRoleId } from '../../../electron/features/skills/role-rules.mjs';
@@ -557,8 +557,8 @@ function SeatPicker({ state, role }: DialogPart & { role: TeamRole }) {
   const { startDrag, dragged } = state.drag;
   const slot = role.id, seat = getSlot(working, slot), model = seat?.model;
   const name = model ? label(model) : t('未设置');
-  const summary = seat ? [seat.effort, seat.fast && t('快速'), role.fresh && t('新实例')].filter(Boolean).join(' · ') : '';
-  return <button type="button" className="seats-gem" data-pick={slot} aria-haspopup="menu"
+  const summary = seat ? [seat.effort, seat.fast && t('快速'), seat.ultracode && 'Ultracode', role.fresh && t('新实例')].filter(Boolean).join(' · ') : '';
+  return <button type="button" className="seats-gem" data-pick={slot} data-ultracode-on={seat?.ultracode || undefined} aria-haspopup="menu"
     aria-expanded={menu?.slot === slot && menu.kind === 'model'} title={[name, summary].filter(Boolean).join(' · ')}
     aria-label={t('{seat}：选择模型（{model}）', { seat: seatName(slot), model: [name, summary].filter(Boolean).join(' · ') })}
     onPointerDown={event => { if (model) startDrag(event, model, slot); }}
@@ -900,6 +900,8 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
   const slot = role.id, seat = getSlot(working, slot);
   if (!seat) return null;
   const model = rowFor(catalog, seat.model);
+  const showUltracode = allowsUltracode(seat.model, role.kind === 'lead');
+  const ultracodeNote = showUltracode ? t('每个任务都用多代理工作流，消耗更多') : null;
   const fastNote = !model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported']) : model.family === 'claude' ? t(FAST_BILLING) : undefined;
   return <div className="seats-menu-settings">
     <div className="seats-picker-efforts" data-effort={slot} data-tile-effort={slot} role="group" aria-label={t('{seat}的推理强度', { seat: seatName(slot) })}>
@@ -911,9 +913,13 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
     <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.fast} data-fast={slot} data-tile-fast={slot}
       disabled={saving || !model?.fast && !seat.fast} aria-label={t('{seat}快速模式', { seat: seatName(slot) })} title={fastNote}
       onClick={() => edit(setFast(working, slot, !seat.fast, catalog))}>{t('快速')}<i /></button>
+    {showUltracode && <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.ultracode} data-ultracode={slot}
+      disabled={saving} aria-describedby="seats-ultracode-note"
+      onClick={() => edit({ ok: true, map: withSlot(working, slot, { ...seat, ultracode: !seat.ultracode }) })}>Ultracode<i /></button>}
     {role.kind !== 'lead' && <button type="button" className="seats-switch" role="switch" aria-checked={role.fresh} data-fresh={slot}
       disabled={saving} onClick={() => state.roles.change(role, { fresh: !role.fresh })}>{t('新实例')}<i /></button>}
     {fastNote && <small className="seats-menu-note" data-fast-note>{fastNote}</small>}
+    {ultracodeNote && <small className="seats-menu-note" id="seats-ultracode-note">{ultracodeNote}</small>}
   </div>;
 }
 

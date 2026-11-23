@@ -47,6 +47,19 @@ test('the conductor switch is kept only when on and survives a round trip', t =>
   assert.equal(Object.hasOwn(read().config, 'conductor'), false);
 });
 
+test('a routing file review records the Ultracode change and rejects non-booleans', t => {
+  const { write, read } = fixture(t);
+  const orchestrator = { model: 'opus', effort: 'high', ultracode: true };
+  write(JSON.stringify(document({ orchestrator })));
+  const file = read(), empty = resolveTeam(entry, { roles: {} }, context[2]);
+  const next = resolveTeam(entry, file.config, context[2]);
+  const review = reviewFile(file, 'changed', next, empty, catalog);
+  assert.deepEqual(review.changes, [{ role: 'orchestrator', field: 'ultracode', from: undefined, to: true }]);
+  assert.equal(review.roleChanges[0].after.ultracode, true);
+  write(JSON.stringify(document({ orchestrator: { ...orchestrator, ultracode: 1 } })));
+  assert.equal(read().error.code, 'ultracode-not-allowed');
+});
+
 test('routing rejects unknown keys, prototype keys, newer versions, depth, invalid bytes and unsafe teams', t => {
   const { write, read } = fixture(t);
   for (const [contents, code] of [

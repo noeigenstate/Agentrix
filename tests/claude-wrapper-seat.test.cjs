@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { updateBootstrapLead } = require('../electron/features/terminal-events/bootstrap-file.cjs');
 const exec = promisify(execFile);
 
 const integration = path.resolve(__dirname, '../integration');
@@ -16,15 +17,20 @@ function profile(t) {
 }
 
 const win = process.platform === 'win32';
+const posixShell = name => win ? name === 'bash' && process.env.AGENTRIX_TEST_BASH
+  : ['/bin', '/usr/bin'].map(dir => path.join(dir, name)).find(file => fs.existsSync(file));
+const shellPath = value => win ? value.replaceAll('\\', '/') : value;
 const refusal = /模型由模型路由决定，请在模型路由中更改。/;
 const resumed = ['--model', 'claude-opus-5-5', '--effort', 'high', '--resume', 'fixture-session'];
 const utilities = [['mcp', 'list'], ['update'], ['doctor'], ['config', 'list'], ['--version'], ['-v'], ['--help'], ['-h'], ['--resume', '--help']];
 const prefixedSubcommands = [['--settings', 'owner-settings', 'mcp', 'list'], ['--debug', 'api', 'mcp', 'list']];
+const utilitiesWithMarker = [['--version'], ['mcp', 'list']];
 const invalidSeats = [['claude-opus&extra', 'high'], ['m'.repeat(161), 'high'], ['opus', 'High'], ['opus', 'e'.repeat(33)]];
 const nextModel = 'claude-sonnet-5-5[1m]';
 const background = 'claude-opus-5-5', subagent = 'claude-sonnet-5-5[1m]';
 const seats = '{"researcher":{"model":"sonnet","effort":"high"}}';
 const leadFormats = [[seats], [background, subagent, seats], [background, subagent], []];
+const settings = mode => JSON.stringify({ hooks: { Stop: [{ fixture: mode }] }, ...(mode === 'fast' && { fastMode: true }) });
 const cases = [
   ['bash-integration.bash', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
   ['zsh-integration.zsh', 'claude() {', /--model\|--model=\*\|--effort\|--effort=\*/],
@@ -43,35 +49,45 @@ test('the local Claude wrappers read the lead file and refuse overrides before r
   }
 });
 
-function assertLaunches(output) {
+function ultracodeLeads(bootstrap) {
+  for (const fast of [true, false]) {
+    const target = bootstrap + (fast ? '.ultra-fast' : '.ultra');
+    updateBootstrapLead(target, { model: nextModel, effort: 'medium', fast, seatsMap: JSON.parse(seats), ultracode: true });
+    assert.equal(fs.readFileSync(target + '.lead', 'utf8'), [nextModel, 'medium', fast ? '1' : '0', seats, 'ultracode', ''].join('\n'));
+  }
+}
+
+function assertLaunches(output, utilitySeats = 'null') {
   assert.deepEqual(output.match(/^STATUS=2$/gm), ['STATUS=2', 'STATUS=2']);
   const calls = output.split(/^CALL\n/gm).slice(1);
-  assert.deepEqual(calls.map(call => [...call.matchAll(/^SETTINGS=(.*)$/gm)].map(row => row[1])),
-    [['fast'], ...utilities.map(() => ['ordinary']), ...prefixedSubcommands.map(() => ['fast']),
-      ...invalidSeats.map(() => ['ordinary']), ['ordinary'], ...leadFormats.map(() => ['ordinary']), ['ordinary']]);
+  const modes = ['fast', ...utilities.map(() => 'ordinary'), ...prefixedSubcommands.map(() => 'fast'),
+    ...invalidSeats.map(() => 'ordinary'), 'ordinary', ...leadFormats.map(() => 'ordinary'), 'ordinary'];
+  const ordinary = JSON.parse(settings('ordinary')), fast = JSON.parse(settings('fast'));
+  const expectedSettings = [...modes.map(mode => JSON.parse(settings(mode))), { ...fast, ultracode: true }, { ...ordinary, ultracode: true },
+    ...utilitiesWithMarker.map(() => ordinary), ordinary];
+  assert.deepEqual(calls.map(call => JSON.parse(/^SETTINGS=(.*)$/m.exec(call)[1])), expectedSettings);
+  const next = ['--model', nextModel, '--effort', 'medium'];
   assert.deepEqual(calls.map(call => [...call.matchAll(/^WORD=(.*)$/gm)].map(row => row[1])),
     [resumed, ...utilities, ...prefixedSubcommands.map(words => [...resumed.slice(0, 4), ...words]),
-      ...invalidSeats.map(() => []), ['--model', nextModel, '--effort', 'medium', 'Explain', 'doctor'],
-      ...leadFormats.map(() => ['--model', nextModel, '--effort', 'medium']), ['--version']]);
+      ...invalidSeats.map(() => []), [...next, 'Explain', 'doctor'],
+      ...leadFormats.map(() => next), ['--version'], next, next, ...utilitiesWithMarker, next]);
   const env = calls.map(call => /^ENV=(.*)$/m.exec(call)?.[1]);
-  assert.deepEqual(env, [
-    ...Array(2 + utilities.length + prefixedSubcommands.length + invalidSeats.length).fill('inherited|unset|unset|unset'),
-    ...leadFormats.map(() => 'inherited|unset|unset|unset'),
-    'inherited|unset|unset|unset',
-  ]);
+  assert.deepEqual(env, expectedSettings.map(() => 'inherited|unset|unset|unset'));
   const maps = calls.map(call => /^SEATS=(.*)$/m.exec(call)?.[1]);
-  assert.deepEqual(maps.slice(-5, -1), [seats, seats, 'null', 'null']);
+  assert.deepEqual(maps.slice(modes.length - 1 - leadFormats.length, modes.length - 1), [seats, seats, 'null', 'null']);
+  assert.deepEqual(maps.slice(modes.length), [seats, seats, ...utilitiesWithMarker.map(() => utilitySeats), seats]);
   assert.match(output, /^RESTORED=inherited\|unset$/m);
 }
 
 for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-integration.zsh']]) {
-  const shell = ['/bin', '/usr/bin'].map(dir => path.join(dir, name)).find(file => !win && fs.existsSync(file));
+  const shell = posixShell(name);
   test(`${name} Claude takes the validated seat only on conversation launches`, { skip: !shell }, async t => {
     const dir = profile(t), fake = path.join(dir, 'stand-in.sh'), script = path.join(dir, 'probe.sh');
     const bootstrap = path.join(dir, 'bootstrap');
     fs.writeFileSync(bootstrap, '{}');
+    ultracodeLeads(bootstrap);
     fs.writeFileSync(fake, [
-      '#!/bin/sh', 'printf "CALL\\nSETTINGS=%s\\n" "$(cat "$2")"',
+      '#!/bin/sh', 'IFS= read -r settings < "$2" || :', 'printf "CALL\\nSETTINGS=%s\\n" "$settings"',
       'printf "ENV=%s|%s|%s|%s\\n" "${ANTHROPIC_DEFAULT_HAIKU_MODEL-unset}" "${CLAUDE_CODE_SUBAGENT_MODEL-unset}" \\',
       '  "${CLAUDE_CODE_SUBAGENT_MODEL_FORCE-unset}" "${ANTHROPIC_BASE_URL-unset}"',
       'printf "SEATS=%s\\n" "$AGENTRIX_SEATS"',
@@ -92,13 +108,19 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
       ]),
       `printf '%s\\n' '${nextModel}' medium 0 '${background}' '${subagent}' > "$AGENTRIX_BOOTSTRAP.lead"`,
       'claude --version',
+      'printf "conductor\\n" > "$AGENTRIX_BOOTSTRAP.mode"',
+      'cp "$AGENTRIX_BOOTSTRAP.ultra-fast.lead" "$AGENTRIX_BOOTSTRAP.lead"; claude',
+      'cp "$AGENTRIX_BOOTSTRAP.ultra.lead" "$AGENTRIX_BOOTSTRAP.lead"; claude',
+      ...utilitiesWithMarker.map(words => `claude ${words.join(' ')}`),
+      'printf "native\\n" > "$AGENTRIX_BOOTSTRAP.mode"; claude',
       'printf "RESTORED=%s|%s\\n" "${ANTHROPIC_DEFAULT_HAIKU_MODEL-unset}" "${CLAUDE_CODE_SUBAGENT_MODEL-unset}"',
     ].join('\n') + '\n');
-    const { stdout, stderr } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), script], {
-      cwd: dir, env: { PATH: '/usr/bin:/bin', HOME: dir, ZDOTDIR: dir, TMPDIR: dir, AGENTRIX_NODE: '/usr/bin/true',
-        AGENTRIX_TEST_INTEGRATION: path.join(integration, file), AGENTRIX_CLAUDE_EXECUTABLE: fake, AGENTRIX_CODEX_EXECUTABLE: fake,
-        AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SOCKET: path.join(dir, 'unused.sock'),
-        AGENTRIX_HOOK_FALLBACK: 'ordinary', AGENTRIX_FAST_HOOK_FALLBACK: 'fast', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'inherited' },
+    const { stdout, stderr } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), shellPath(script)], {
+      cwd: dir, timeout: win ? 120000 : 15000, env: {
+        PATH: '/usr/bin:/bin', HOME: shellPath(dir), ZDOTDIR: shellPath(dir), TMPDIR: shellPath(dir), AGENTRIX_NODE: ':',
+        AGENTRIX_TEST_INTEGRATION: shellPath(path.join(integration, file)), AGENTRIX_CLAUDE_EXECUTABLE: shellPath(fake), AGENTRIX_CODEX_EXECUTABLE: shellPath(fake),
+        AGENTRIX_BOOTSTRAP: shellPath(bootstrap), AGENTRIX_SOCKET: shellPath(path.join(dir, 'unused.sock')),
+        AGENTRIX_HOOK_FALLBACK: settings('ordinary'), AGENTRIX_FAST_HOOK_FALLBACK: settings('fast'), ANTHROPIC_DEFAULT_HAIKU_MODEL: 'inherited' },
     });
     assert.match(stderr, refusal);
     assertLaunches(stdout);
@@ -110,7 +132,8 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
   const wrapper = path.join(dir, 'bootstrap.ps1');
   fs.copyFileSync(path.join(integration, 'bootstrap.ps1'), wrapper);
   fs.writeFileSync(path.join(dir, 'refresh-path.ps1'), '# Keep the fixture PATH isolated.\n');
-  fs.writeFileSync(bootstrap, JSON.stringify({ hooks: { settings: { fallback: 'ordinary' }, fastSettings: { fallback: 'fast' } } }));
+  fs.writeFileSync(bootstrap, JSON.stringify({ hooks: { settings: { fallback: settings('ordinary') }, fastSettings: { fallback: settings('fast') } } }));
+  ultracodeLeads(bootstrap);
   fs.writeFileSync(fake, [
     '"CALL"',
     '  "SETTINGS=" + [IO.File]::ReadAllText($args[1])',
@@ -141,6 +164,11 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
     ]),
     `[IO.File]::WriteAllLines($lead, @('${nextModel}', 'medium', '0', '${background}', '${subagent}'))`,
     'claude --version',
+    '[IO.File]::WriteAllLines($env:AGENTRIX_BOOTSTRAP + ".mode", @("conductor"))',
+    '[IO.File]::Copy($env:AGENTRIX_BOOTSTRAP + ".ultra-fast.lead", $lead, $true); claude',
+    '[IO.File]::Copy($env:AGENTRIX_BOOTSTRAP + ".ultra.lead", $lead, $true); claude',
+    ...utilitiesWithMarker.map(words => `claude ${words.join(' ')}`),
+    '[IO.File]::WriteAllLines($env:AGENTRIX_BOOTSTRAP + ".mode", @("native")); claude',
     '$subagent = if ($env:CLAUDE_CODE_SUBAGENT_MODEL) { $env:CLAUDE_CODE_SUBAGENT_MODEL } else { "unset" }',
     '"RESTORED=$env:ANTHROPIC_DEFAULT_HAIKU_MODEL|$subagent"',
   ].join('\n'));
@@ -152,7 +180,7 @@ test('PowerShell Claude takes the validated seat only on conversation launches',
   });
   const output = stdout.replaceAll('\r\n', '\n');
   assert.match(output, refusal);
-  assertLaunches(output);
+  assertLaunches(output, '');
 });
 
 // Native mode: the lead is the plain CLI, so the owner's own --model and --effort reach it; conductor mode still refuses them.
@@ -165,7 +193,7 @@ const assertModes = output => {
 };
 
 for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-integration.zsh']]) {
-  const shell = ['/bin', '/usr/bin'].map(dir => path.join(dir, name)).find(file => !win && fs.existsSync(file));
+  const shell = posixShell(name);
   test(`${name} Claude passes the owner's --model and --effort only in native mode`, { skip: !shell }, async t => {
     const dir = profile(t), fake = path.join(dir, 'stand-in.sh'), script = path.join(dir, 'probe.sh'), bootstrap = path.join(dir, 'bootstrap');
     fs.writeFileSync(bootstrap, '{}');
@@ -173,10 +201,11 @@ for (const [name, file] of [['bash', 'bash-integration.bash'], ['zsh', 'zsh-inte
     fs.writeFileSync(fake, ['#!/bin/sh', 'printf "CALL\n"', 'shift 2', 'for word in "$@"; do printf "WORD=%s\n" "$word"; done', ''].join('\n'), { mode: 0o700 });
     fs.writeFileSync(script, ['source "$AGENTRIX_TEST_INTEGRATION" zshrc',
       ...modeLines(mode => `printf '${mode}\n' > "$AGENTRIX_BOOTSTRAP.mode"`, 'claude --effort low 2>&1')].join('\n') + '\n');
-    const { stdout } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), script], {
-      cwd: dir, env: { PATH: '/usr/bin:/bin', HOME: dir, ZDOTDIR: dir, TMPDIR: dir, AGENTRIX_NODE: '/usr/bin/true',
-        AGENTRIX_TEST_INTEGRATION: path.join(integration, file), AGENTRIX_CLAUDE_EXECUTABLE: fake, AGENTRIX_CODEX_EXECUTABLE: fake,
-        AGENTRIX_BOOTSTRAP: bootstrap, AGENTRIX_SOCKET: path.join(dir, 'unused.sock'), AGENTRIX_HOOK_FALLBACK: 'ordinary' },
+    const { stdout } = await exec(shell, [...(name === 'zsh' ? ['-f'] : ['--noprofile', '--norc']), shellPath(script)], {
+      cwd: dir, timeout: 15000, env: {
+        PATH: '/usr/bin:/bin', HOME: shellPath(dir), ZDOTDIR: shellPath(dir), TMPDIR: shellPath(dir), AGENTRIX_NODE: ':',
+        AGENTRIX_TEST_INTEGRATION: shellPath(path.join(integration, file)), AGENTRIX_CLAUDE_EXECUTABLE: shellPath(fake), AGENTRIX_CODEX_EXECUTABLE: shellPath(fake),
+        AGENTRIX_BOOTSTRAP: shellPath(bootstrap), AGENTRIX_SOCKET: shellPath(path.join(dir, 'unused.sock')), AGENTRIX_HOOK_FALLBACK: 'ordinary' },
     });
     assertModes(stdout);
   });

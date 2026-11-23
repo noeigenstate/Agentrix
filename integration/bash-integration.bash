@@ -155,6 +155,17 @@ __pg_hook_proxy() {
   ! $exempted
 }
 
+__pg_ultracode_settings() {
+  # The hook settings from main are compact JSON objects.
+  if [[ "$(cat -- "${AGENTRIX_BOOTSTRAP}.mode" 2>/dev/null)" != conductor ]]; then
+    printf '%s' "$1"
+  elif [[ -z $1 || $1 == '{}' ]]; then
+    printf '%s' '{"ultracode":true}'
+  else
+    printf '{"ultracode":true,%s' "${1#\{}"
+  fi
+}
+
 # Claude Code reports each turn through the hooks main wrote for this terminal (hook-channel.cjs), passed with --settings,
 # which merge with the user's own settings instead of replacing them: HTTP hooks, or command hooks when a proxy would
 # carry them. A proxy set in this terminal (by the user's start-up files, say) falls back too, and main is told why.
@@ -180,14 +191,14 @@ claude() {
   fi
   local -a program=("${__pg_words[@]}")
   local launch_http=$__pg_hook_settings launch_fallback=$__pg_hook_fallback
-  local model effort fast seat_map legacy_seats lead_file=${AGENTRIX_BOOTSTRAP-}.lead
+  local model effort fast seat_map ultracode legacy_seats lead_file=${AGENTRIX_BOOTSTRAP-}.lead
   local model_pattern='^[A-Za-z0-9][]A-Za-z0-9_.:@+/[-]{0,159}$' effort_pattern='^[a-z][a-z0-9-]{0,31}$'
   local -a lead_args=()
   if [[ $conversation == 1 && -n ${AGENTRIX_BOOTSTRAP-} && -r $lead_file ]] &&
     { IFS= read -r model && IFS= read -r effort && IFS= read -r fast && {
         # Old files put the seat map on line 6, after two retired fields.
         IFS= read -r seat_map || :
-        if IFS= read -r legacy_seats && IFS= read -r legacy_seats; then seat_map=$legacy_seats; fi
+        if IFS= read -r ultracode && IFS= read -r legacy_seats; then seat_map=$legacy_seats; ultracode=; fi
       }; } < "$lead_file" &&
     [[ $model =~ $model_pattern && $effort =~ $effort_pattern && ( $fast == 0 || $fast == 1 ) ]]; then
     lead_args=(--model "$model" --effort "$effort")
@@ -198,6 +209,7 @@ claude() {
   if [[ $__pg_hook_channel == http ]]; then
     if __pg_hook_proxy "$__pg_hook_port"; then __pg_send hook-channel 0 claude "$REPLY"; else settings=$launch_http; fi
   fi
+  [[ ${ultracode-} == ultracode && ${#lead_args[@]} -gt 0 ]] && settings=$(__pg_ultracode_settings "$settings")
   __pg_send codex-started 0 claude "$(__pg_command "$@")"
   # What the reading view can show; a later --append-system-prompt of the user's wins.
   local -a note=()

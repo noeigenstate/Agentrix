@@ -67,7 +67,7 @@ function global:Test-AgentrixNativeMode {
 }
 
 function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
-    $launch = @{ LeadArgs = @(); Env = @{}; HookSettings = $Hooks.settings }
+    $launch = @{ LeadArgs = @(); Env = @{}; HookSettings = $Hooks.settings; Ultracode = $false }
     if (-not $Conversation -or -not $env:AGENTRIX_BOOTSTRAP) { return $launch }
     $launch.Env.AGENTRIX_SEATS = 'null'
     $lead = $null
@@ -80,6 +80,8 @@ function global:Get-AgentrixClaudeLaunch([bool]$Conversation, $Hooks) {
     # Old files put the seat map on line 6, after two retired fields.
     $seatIndex = if ($lead.Length -ge 6) { 5 } else { 3 }
     if ($lead.Length -gt $seatIndex -and $lead[$seatIndex] -like '{*') { $launch.Env.AGENTRIX_SEATS = $lead[$seatIndex] }
+    $launch.Ultracode = $lead.Length -eq 5 -and $lead[4] -ceq 'ultracode' -and
+        (Get-Content -LiteralPath ($env:AGENTRIX_BOOTSTRAP + '.mode') -TotalCount 1 -ErrorAction SilentlyContinue) -ceq 'conductor'
     return $launch
 }
 
@@ -279,6 +281,10 @@ function global:claude {
     if ($hooks.channel -eq 'http') {
         $proxy = Get-AgentrixHookProxy $hooks.port
         if ($proxy) { Send-AgentrixEvent 'hook-channel' -Agent 'claude' -Command $proxy } else { $settings = $launchSettings.http }
+    }
+    if ($launch.Ultracode) {
+        $settings = if (-not $settings -or $settings -ceq '{}') { '{"ultracode":true}' }
+                    else { '{"ultracode":true,' + $settings.Substring(1) }
     }
     Send-AgentrixEvent 'codex-started' -Agent 'claude' -Command (Get-AgentrixCommand $args)
     $currentNote = Get-AgentrixReadingNote
