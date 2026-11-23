@@ -3781,5 +3781,8 @@
   "座位同步": "Seats in sync",
   "指挥家模式下改了模型路由，你发下一条消息时，总指挥会收到新的座位表，不再按旧表回答。": "In conductor mode, after a routing change the orchestrator receives the new seat table with your next message instead of answering from the old one.",
   "原生切换": "Native model choice",
-  "关闭指挥家模式后，终端里的主模型就是原本的命令行：用 /model、/effort 直接切换，模型路由卡整张变灰。": "With conductor mode off, the terminal lead is the plain command line: /model and /effort change it directly, and the model routing card is greyed out."
+  "关闭指挥家模式后，终端里的主模型就是原本的命令行：用 /model、/effort 直接切换，模型路由卡整张变灰。": "With conductor mode off, the terminal lead is the plain command line: /model and /effort change it directly, and the model routing card is greyed out.",
+  "指挥家模式下在模型路由里改总指挥后，正在运行的 Claude Code 会当场切换模型和思考深度，只对这段对话生效，不改你保存的默认；阅读视图里显示为一行灰色提示。": "In conductor mode, changing the orchestrator in model routing switches the running Claude Code to the new model and effort at once, for this conversation only and without changing your saved defaults; the reading view shows it as one muted line.",
+  "关闭指挥家模式后，终端里的主模型就是原本的命令行：用 /model、/effort 直接切换，左栏标题显示“主模型”，模型路由卡整张变灰。": "With conductor mode off, the terminal lead is the plain command line: /model and /effort change it directly, the side panel heading reads \"Main model\", and the model routing card is greyed out.",
+  "角色不再弹出选项框或确认框等你作答：实现细节自己决定，需要拍板的事交回总指挥；被拒的操作列在结果里，角色继续完成其余工作。": "Roles no longer open option or confirmation menus that wait for you: they decide implementation details themselves and return real decisions to the orchestrator; a refused action is listed in the result and the role finishes the rest of its work."
 }
