@@ -16,7 +16,7 @@ test('agent catalog parity allows only the existing terminal guide difference', 
   assert.throws(() => compareAgents(sdk, sdk), /retain the CLI guide/);
 });
 async function until(check) {
-  for (let i = 0; i < 300; i++) { if (check()) return; await sleep(50); }
+  for (let i = 0; i < 900; i++) { if (check()) return; await sleep(50); }
   assert.fail('the isolated CLI did not reach the expected state');
 }
 

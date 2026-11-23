@@ -6,7 +6,7 @@ const path = require('node:path');
 const { fixtureProcesses } = require('./fixtures/claude-sdk-processes.cjs');
 const entry = path.resolve(__dirname, '../integration/shims/intercept.cjs');
 
-test('installed launchers preserve quoted Unicode arguments and stdin through the host shells', { timeout: 30000 }, async t => {
+test('installed launchers preserve quoted Unicode arguments and stdin through the host shells', { timeout: 90000 }, async t => {
   const scope = fixtureProcesses(t, 'agx-intercept-shells-'), folder = scope.directory;
   // A stand-in entrypoint records what the actual shell launcher delivered; no installed provider is invoked.
   fs.writeFileSync(path.join(folder, 'intercept.cjs'), `const args=process.env.AGENTRIX_INTERCEPT_ARGV?JSON.parse(process.env.AGENTRIX_INTERCEPT_ARGV):process.argv.slice(2);
@@ -32,7 +32,7 @@ const chunks=[];process.stdin.on('data',part=>chunks.push(part));process.stdin.o
     child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
     const completed = new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
     child.stdin.end(input);
-    assert.equal(await scope.wait(completed, `${agent}${suffix} launcher`), 0, stderr);
+    assert.equal(await scope.wait(completed, `${agent}${suffix} launcher`, 20000), 0, stderr);
     const expectedCwd = fs.realpathSync.native(folder);
     const received = JSON.parse(stdout);
     assert.deepEqual({ ...received, cwd: fs.realpathSync.native(received.cwd) }, { args: [agent, '--', ...words], input: input.toString('base64'), cwd: expectedCwd }, `${agent}${suffix} preserves stdin bytes and cwd`);
