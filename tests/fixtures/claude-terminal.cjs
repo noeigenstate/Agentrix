@@ -8,11 +8,13 @@ const { once } = require('node:events');
 // Starts the CLI named by AGENTRIX_REAL_CLAUDE in f.cwd with f.env (copied when called). Resolves once the peer has the CLI
 // running. onChunk gets every piece of terminal output as it arrives, which is how a test sees the order of the screen
 // against the order of other events; capture keeps the last 64 KB for output().
-async function terminal(t, f, args = [], capture = false, onChunk = null) {
+async function terminal(t, f, args = [], capture = false, onChunk = null, trustedFolders = []) {
   const env = { ...f.env }; delete env.CI;
+  const projects = Object.fromEntries([f.cwd, ...trustedFolders].map(folder => [folder.replaceAll('\\', '/'),
+    { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true }]));
   fs.writeFileSync(path.join(env.CLAUDE_CONFIG_DIR, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true,
     lastOnboardingVersion: '2.1.318', theme: 'dark', customApiKeyResponses: { approved: [env.ANTHROPIC_API_KEY.slice(-20)], rejected: [] },
-    projects: { [f.cwd.replaceAll('\\', '/')]: { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true } } }));
+    projects }));
   const child = fork(path.join(__dirname, 'claude-terminal-peer.cjs'), [], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
   child.stderr.resume(); const ended = once(child, 'exit');
   f.cleanup(async () => {

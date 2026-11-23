@@ -48,12 +48,12 @@ test('real streaming input shell handling is observed rather than guessed', { sk
   assert.doesNotMatch(context, /<bash-stdout>OFFLINE_SHELL_PARITY/);
 });
 
-test('real worker context differs from GUI only by the admitted owner capability append', { skip, timeout: 60000 }, async t => {
+test('real worker context differs from GUI only by the admitted owner append and tool guidance', { skip, timeout: 60000 }, async t => {
   const requests = [];
   const f = await harness(t, data => { requests.push(data); return [opening(data), ...textBlock(0, 'ACK'), ...finish('end_turn')]; });
   await f.run({}, () => {}, { owner: 'dispatch' });
   await f.run({}, () => {}, { owner: 'gui' });
-  require('./fixtures/claude-parity.cjs').compareSystem(requests[0].system, requests[1].system, { gui: 'right' });
+  require('./fixtures/claude-parity.cjs').compareSystem(requests[0].system, requests[1].system, { gui: 'right', worker: true });
 });
 
 test('real Claude SDK receives fast mode from the launch seat and refuses live changes', { skip, timeout: 60000 }, async t => {

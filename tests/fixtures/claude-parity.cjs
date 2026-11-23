@@ -6,6 +6,16 @@ const guiAppend = "\n\nYou are Claude Code, Anthropic's official CLI for Claude.
   + 'If you need the user to run a shell command themselves, suggest they type `! <command>` in the prompt; its output becomes context in this conversation.\n\n\n'
   + 'The fork subagent runs in the background, so you can keep chatting with the user while it works.';
 
+// The worker's explicit tool list omits TaskCreate, Agent and Skill. The CLI omits their guidance with them.
+const ownerToolGuidance = [
+  " - Use TaskCreate to plan and track work. Mark each task completed as soon as it's done; don't batch.\n",
+  '# Session-specific guidance\n'
+    + ' - Calling Agent with subagent_type: "fork" creates a fork — it inherits your full conversation context and keeps its tool output out of your context. '
+    + 'Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won\'t need again. '
+    + 'Other subagent_type values start fresh agents with no context. **If you ARE the fork** — execute directly; do not re-delegate.\n'
+    + " - When the user types `/<skill-name>`, invoke it via Skill. Only use skills listed in the user-invocable skills section — don't guess.\n\n",
+];
+
 // CLI 2.1.317 and 2.1.318, paired requests from one offline server. Pin BOTH bytes at each
 // transport-dependent leaf: a new change in a known field must also fail.
 const leaves = {
@@ -18,9 +28,17 @@ const leaves = {
   'Bash.input_schema.properties.run_in_background.description': ['5d2850b8b1c68a06daf7646d32557efeedd5be218a30adc064fad6134fbdf98f', 'd1fd3b8715e2ad40c13e87a3e03499dec8456ca956aa1390577d3e65e8b3fc19'],
 };
 const hash = value => createHash('sha256').update(JSON.stringify(value) ?? 'undefined').digest('hex');
-// These two releases have identical admitted tool leaves. Keep version lookup
-// explicit: an unexamined release must not inherit the last release's exceptions.
-const leavesByVersion = { '2.1.317': leaves, '2.1.318': leaves };
+// Keep version lookup explicit: an unexamined release must not inherit these exceptions.
+const leavesByVersion = {
+  '2.1.317': leaves,
+  '2.1.318': leaves,
+  '2.1.330': {
+    ...leaves,
+    // This CLI adds SDK-specific background guidance to Agent and a timeout description to Bash.
+    'Agent.description': ['15dbb7f75f4ec12acc5e3c96896aa7f897404208e9c992c004936c49d3d23dd5', '4ea03b100d2125844e98b17200eb9a4e122c2b2c5f3e29fddb18caad5bdf2abd'],
+    'Bash.description': ['a27ebec49d3b410bd9d2ba8ad0e27adba1fbf983fd046d3652747a33103032e0', '66645f851bf21a5016e661ea87c8d3ba545cd81339417a562c349b96714bc1c1'],
+  },
+};
 function billingVersion(blocks) {
   const match = /^x-anthropic-billing-header: cc_version=(\d+\.\d+\.\d+)\.[a-f\d]+; cc_entrypoint=(?:sdk-ts|cli);$/.exec(blocks[0]?.text);
   assert.ok(match, 'unexpected billing header structure');
@@ -46,7 +64,7 @@ function compareAgents(sdk, tui) {
   assert.deepEqual([...sdk].sort(), tui.filter(name => name !== 'claude-code-guide').sort(),
     'new agent-name differences need a real paired investigation');
 }
-function compareSystem(left, right, { gui } = {}) {
+function compareSystem(left, right, { gui, worker = false } = {}) {
   const version = billingVersion(left);
   assert.equal(version, billingVersion(right), 'paired requests must use the same CLI version');
   const normalize = (blocks, isGui) => blocks.map((block, index) => {
@@ -57,6 +75,10 @@ function compareSystem(left, right, { gui } = {}) {
       if (isGui && index === blocks.length - 1) {
         assert.ok(text.endsWith(guiAppend), 'unexpected system-prompt GUI capability append');
         text = text.slice(0, -guiAppend.length);
+        if (worker) for (const guidance of ownerToolGuidance) {
+          assert.ok(text.includes(guidance), 'unexpected system-prompt owner tool guidance');
+          text = text.replace(guidance, '');
+        }
       }
       text = text.replace("You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.", "You are Claude Code, Anthropic's official CLI for Claude.")
         .replace('If you need the user to run a shell command themselves (e.g., an interactive login like `gcloud auth login`), suggest they type `! <command>` in the prompt — the `!` prefix runs the command in this session so its output lands directly in the conversation.\n - ', '')

@@ -26,7 +26,7 @@ test('real CLI baseline requires the locked native package and never searches th
 
 test('versioned parity admits only reviewed versions and exact transport differences', () => {
   const system = version => [{ type: 'text', text: `x-anthropic-billing-header: cc_version=${version}.abc; cc_entrypoint=sdk-ts;` }, { type: 'text', text: 'same instructions' }];
-  for (const version of ['2.1.317', '2.1.318']) {
+  for (const version of ['2.1.317', '2.1.318', '2.1.330']) {
     assert.equal(compareSystem(system(version), system(version)), version);
     compareTools([{ name: 'Bash', description: 'same' }], [{ name: 'Bash', description: 'same' }], version);
     assert.throws(() => compareTools([{ name: 'Bash', description: 'new SDK description' }], [{ name: 'Bash', description: 'new terminal description' }], version), /new tool\/schema/);

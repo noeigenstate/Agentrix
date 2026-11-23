@@ -659,7 +659,7 @@ function launchHarness(t, configure) {
 }
 
 test('a read-only terminal role passes an exact short brief to the executable and uses a file for Windows limits or shell shims', async t => {
-  const short = '# Task\n\nInspect "quotes", %VARIABLE% and ! without edits.';
+  const short = '--inspect\n\nKeep "quotes", %VARIABLE% and ! in the brief.';
   for (const [extension, prompt, inline] of [['.exe', short, true], ['.exe', 'x '.repeat(9000), false], ['.ps1', short, false], ['.cmd', short, false]]) {
     const f = launchHarness(t, (deps, root) => Object.assign(deps, { platform: 'win32', claudeFile: () => path.join(root, 'claude' + extension) }));
     const result = f.start(prompt, true);
@@ -669,7 +669,8 @@ test('a read-only terminal role passes an exact short brief to the executable an
       assert.equal(value('--permission-mode'), 'dontAsk');
       assert.equal(value('--tools'), 'Read,Glob,Grep,LS');
       for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'NotebookEdit']) assert.ok(value('--disallowedTools').split(',').includes(tool));
-      assert.equal(args.at(-1), inline ? prompt : `Read the task brief in ${path.join(folder, 'brief.md')} and carry it out.`);
+      if (inline) assert.deepEqual(args.slice(-2), ['--', prompt]);
+      else assert.equal(args.at(-1), `Read the task brief in ${path.join(folder, 'brief.md')} and carry it out.`);
     } else {
       assert.match(args, /"--permission-mode" "dontAsk"/);
       assert.match(args, /Read the task brief/);

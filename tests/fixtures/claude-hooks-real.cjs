@@ -9,6 +9,9 @@ const { once } = require('node:events');
 const { harness, opening, textBlock, finish } = require('./claude-real.cjs');
 const { terminal } = require('./claude-terminal.cjs');
 const { startHookReceiver } = require('../helpers/claude-hook-client.cjs');
+const { createEventServer } = require('../../electron/events.cjs');
+const { terminalHooks } = require('../../electron/features/terminal-events/hook-channel.cjs');
+const { READ_ONLY_MODE, workerToolArgs } = require('../../electron/features/claude-runtime/decide.cjs');
 
 // The events Agentrix hooks over HTTP (contract C-2); SessionStart stays the command hook and is not part of these tests.
 const HTTP_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied',
@@ -83,7 +86,7 @@ function observe(now = () => performance.now()) {
     for (const [name] of drawn) note({ type: 'screen', name });
     if (drawn.length) screen = '';
   };
-  return { timeline, markers, note, when, chunk,
+  return { timeline, markers, note, when, chunk, seen,
     hook: (event, after) => when(entry => entry.type === 'hook' && entry.event === event, after, `${event} hook`),
     screen: (name, after) => when(entry => entry.type === 'screen' && entry.name === name, after, `screen "${name}" (${markers[name]})`) };
 }
@@ -114,19 +117,75 @@ async function startProxy(t) {
 // Whether a request the proxy listed went to the hook receiver, forwarded by URL or tunnelled to its host.
 const toReceiver = (entry, receiver) => { const { origin, host } = new URL(receiver.hooks.url); return entry.startsWith(`${origin}/h/`) || entry === `CONNECT ${host}`; };
 
+async function startMcpProbe(t) {
+  const requests = [], name = 'probe';
+  const server = http.createServer(async (request, response) => {
+    if (request.method !== 'POST') return response.writeHead(405).end();
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const { id, method, params } = JSON.parse(body);
+    requests.push(method);
+    if (id === undefined) return response.writeHead(202).end();
+    const result = method === 'initialize'
+      ? { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name, version: '1.0.0' } }
+      : method === 'tools/list' ? { tools: [{ name: 'sample', inputSchema: { type: 'object', properties: {} } }] } : {};
+    response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const config = { mcpServers: { [name]: { type: 'http', url: `http://127.0.0.1:${server.address().port}/mcp` } } };
+  return { args: ['--strict-mcp-config', '--mcp-config', JSON.stringify(config)], requests, tool: `mcp__${name}__sample` };
+}
+
+async function workerHooks(t, f, observer, role) {
+  const terminalId = 'worker-role', sessionKey = 'offline-role-key';
+  const eventServer = await createEventServer(event => {
+    if (event.projectId === terminalId && event.sessionKey === sessionKey) {
+      observer.note({ type: 'hook', event: event.hookEvent, payload: event });
+    }
+  });
+  t.after(() => eventServer.close());
+  const integration = path.resolve(__dirname, '../../integration');
+  const shell = process.platform === 'win32'
+    ? { powershellPath: path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      script: path.join(integration, 'claude-hook.ps1'), node: process.execPath }
+    : { posix: true, node: process.execPath, helper: path.join(integration, 'agent-event.cjs') };
+  const options = { terminalId, sessionKey, eventServer, env: f.env, cwd: f.cwd, shell, workerPermission: true };
+  const receiver = await startHookReceiver({ terminalId, key: terminalHooks(options).key,
+    onRequest: ({ event, payload }) => observer.note({ type: 'hook', event, payload }) });
+  t.after(() => receiver.close());
+  const { settings } = terminalHooks({ ...options, port: receiver.server.address().port });
+  const tools = workerToolArgs(role.readOnly);
+  if (role.allowMcp) {
+    const index = tools.indexOf('--disallowedTools') + 1;
+    tools[index] = tools[index].split(',').filter(name => name !== 'mcp__*').join(',');
+  }
+  const root = path.dirname(f.cwd), briefs = path.join(root, 'brief');
+  fs.mkdirSync(briefs);
+  f.env.AGENTRIX_DATA_DIR = path.join(root, 'agentrix');
+  f.env.GIT_ALLOW_PROTOCOL = 'file';
+  observer.markers.plan = /(?:Would you like to proceed|Do you want to (?:approve|execute) (?:the|this) plan|Claude has written up a plan)/i;
+  return { receiver, settings: settings.http, trustedFolders: [briefs],
+    args: [...tools, '--permission-mode', role.readOnly ? READ_ONLY_MODE : 'acceptEdits', '--add-dir', briefs, ...(role.args || [])] };
+}
+
 // One session of the real terminal CLI in a throwaway profile, hooked the way `mode` says, against a stub model that answers
 // `respond`. `drive(session)` plays the turns; resolves with the session and the first model request that carried the prompt.
-async function hooked(t, mode, { respond, proxy = null, drive }) {
+async function hooked(t, mode, { respond, proxy = null, role, drive }) {
   const observer = observe(), bodies = [];
   const f = await harness(t, (data, response) => { const value = respond(data, response); bodies.push(data); observer.note({ type: 'api', tools: Boolean(data.tools?.length) }); return value; });
-  const receiver = mode === 'none' ? null : await startHookReceiver({ terminalId: 'terminal-1', key: 'key-1', onRequest: entry => observer.note({ type: 'hook', event: entry.event, payload: entry.payload }) });
+  const worker = role && await workerHooks(t, f, observer, role);
+  const receiver = worker ? worker.receiver : mode === 'none' ? null : await startHookReceiver({ terminalId: 'terminal-1', key: 'key-1',
+    onRequest: entry => observer.note({ type: 'hook', event: entry.event, payload: entry.payload }) });
   if (mode === 'gone') await receiver.close();
-  else if (receiver) t.after(() => receiver.close());
-  const settings = settingsFor(mode, receiver?.hooks), file = path.join(path.dirname(f.cwd), 'hook-settings.json');
-  if (settings) fs.writeFileSync(file, JSON.stringify(settings));
+  else if (receiver && !worker) t.after(() => receiver.close());
+  const settings = worker?.settings ?? settingsFor(mode, receiver?.hooks);
+  const file = path.join(path.dirname(f.cwd), 'hook-settings.json');
+  if (settings) fs.writeFileSync(file, worker ? settings : JSON.stringify(settings));
   if (proxy) Object.assign(f.env, { HTTP_PROXY: proxy.url, HTTPS_PROXY: proxy.url, ALL_PROXY: proxy.url, http_proxy: proxy.url, https_proxy: proxy.url });
-  const input = await terminal(t, f, settings ? ['--settings', file] : [], false, observer.chunk);
-  const session = { f, observer, input, bodies, receiver, mode, proxy };
+  const args = [...(settings ? ['--settings', file] : []), ...(worker?.args || [])];
+  const input = await terminal(t, f, args, false, observer.chunk, worker?.trustedFolders);
+  const session = { f, observer, input, bodies, receiver, mode, proxy, role };
   await drive(session);
   return { ...session, body: bodies.find(body => body.tools?.length && JSON.stringify(body.messages).includes('HOOK_PROMPT')) };
 }
@@ -162,4 +221,5 @@ async function playTurn(session, text = 'HOOK_PROMPT one') {
   return enter;
 }
 
-module.exports = { HTTP_EVENTS, ASYNC_OK, MODES, settingsFor, normalize, observe, startProxy, toReceiver, hooked, plainAnswer, submit, playTurn, allow, opening, textBlock, finish };
+module.exports = { HTTP_EVENTS, ASYNC_OK, MODES, settingsFor, normalize, observe, startProxy, toReceiver, startMcpProbe,
+  hooked, plainAnswer, submit, playTurn, allow, opening, textBlock, finish };

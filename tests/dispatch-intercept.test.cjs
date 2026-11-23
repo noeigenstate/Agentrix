@@ -69,11 +69,13 @@ test('Claude role arguments use the carried seat reader without loading dispatch
     } });
     assert.equal(code, 0);
     assert.deepEqual(words.slice(1), ['review this']);
-    return toolServer(words[0]).args;
+    const [serverHelper, ...serverArgs] = toolServer(words[0]).args;
+    return [fs.realpathSync.native(serverHelper), ...serverArgs];
   }
-  assert.deepEqual(await launchWords(), [helper, 'mcp', 'claude']);
+  const canonicalHelper = fs.realpathSync.native(helper);
+  assert.deepEqual(await launchWords(), [canonicalHelper, 'mcp', 'claude']);
   fs.copyFileSync(path.join(root, 'electron/features/agents/call-seat.cjs'), seatFile);
-  assert.deepEqual(await launchWords(), [helper, 'mcp', 'claude', 'sonnet', 'low']);
+  assert.deepEqual(await launchWords(), [canonicalHelper, 'mcp', 'claude', 'sonnet', 'low']);
 });
 
 test("a call without a planner's depth zero and bootstrap, or with a worker identity, is refused as nested before stdin or dispatch", async () => {

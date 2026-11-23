@@ -189,9 +189,9 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-shell-') as directory:
     root = pathlib.Path(directory)
     stub = root / 'claude'
     stub.write_text('''#!/bin/sh
-printf "values=%s|%s|%s|" "$ANTHROPIC_DEFAULT_HAIKU_MODEL" "$CLAUDE_CODE_SUBAGENT_MODEL" "$AGENTRIX_SEATS"
+printf "values=%s|%s|%s" "$ANTHROPIC_DEFAULT_HAIKU_MODEL" "$CLAUDE_CODE_SUBAGENT_MODEL" "$AGENTRIX_SEATS"
 shift 2
-printf "%s " "$@"
+printf "|%s" "$@"
 printf "\\n"
 ''')
     stub.chmod(0o700)
@@ -215,9 +215,14 @@ claude
            'AGENTRIX_CLAUDE_LEAD_FILE':str(root/'claude-lead'), 'AGENTRIX_CLAUDE_BACKGROUND_FILE':str(root/'policy')}
     result = subprocess.run([bash, '--noprofile', '--norc', '-c', probe, 'probe', str(rc)], env=env, text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
-    assert [line.rstrip() for line in result.stdout.splitlines() if line.startswith('values=')] == [
-        'values=||{}|--model sonnet --effort high --resume fixture',
-        'values=||null|--version', 'values=||{}|--model sonnet --effort high', 'values=||null|--model sonnet --effort high',
+    notice = ('Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode. '
+              'Work directly with Claude Code tools.')
+    conversation = ['--append-system-prompt', notice, '--model', 'sonnet', '--effort', 'high']
+    assert [line.split('|') for line in result.stdout.splitlines() if line.startswith('values=')] == [
+        ['values=', '', '{}', *conversation, '--resume', 'fixture'],
+        ['values=', '', 'null', '--version'],
+        ['values=', '', '{}', *conversation],
+        ['values=', '', 'null', *conversation],
     ], result.stdout
 `);
   if (output?.includes('SKIP Bash missing')) t.skip('Bash missing');
