@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { CaretRight, Lightning } from '@phosphor-icons/react';
 import type { SeatsInfo } from '../../shared/types';
 import { t } from '../../shared/i18n';
-import { openSeats, routingRoleName, routingModelName } from '../../shared/routing-command.ts';
+import { modelLabel, openSeats, routingRoleName } from '../../shared/routing-command.ts';
 import { displayedSeat } from './skill-seats';
 
 export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId?: string; terminalId: string; sessionId: string | null }) {
@@ -60,7 +60,7 @@ export function RoutingKeyCard({ projectId, terminalId, sessionId }: { projectId
       const name = titleOf(role), effort = seat?.effort ?? '—';
       return <span key={role.id} className={`activity-routing-row${info.conductor || role.id === info.lead ? '' : ' is-unavailable'}`} data-seat={role.id}>
         <span className="activity-routing-role" title={name}>{name}</span>
-        <strong className="activity-routing-model" title={seat?.model}>{seat ? routingModelName(seat.model) : '—'}</strong>
+        <strong className="activity-routing-model" title={seat?.model}>{seat ? modelLabel(info.catalog, seat.model) : '—'}</strong>
         <span className="activity-routing-setting" title={seat?.fast ? `${seat.effort} · ${fast}` : seat?.effort}>
           {effort}{seat?.fast && <><span className="activity-routing-fast"> · {fast}</span>
             <Lightning className="activity-routing-fast-icon" size={14} aria-hidden="true" /></>}

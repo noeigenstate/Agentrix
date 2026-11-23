@@ -3,6 +3,7 @@ import type {
   RoleConfig, RoutingConfig, Seat, SeatId, SeatIssue, SeatMap, SeatModel,
   SeatRole, SeatsInfo, SeatsSaveError, TeamRole,
 } from '../../shared/types';
+import { aliasTarget } from '../../shared/routing-command.ts';
 import { BASE_EFFORTS, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
 
 import { roleLocks } from '../../../electron/features/skills/role-rules.mjs';
@@ -252,11 +253,12 @@ export function paletteGroups(catalog: SeatModel[], query = ''): PaletteGroup[] 
       const top = versions.reduce<number[]>((best, version) => versionNewer(version, best) ? version : best, []);
       const current = (row: SeatModel) => isAliasRow(row) || !idVersion(row.model).length || (!versionNewer(idVersion(row.model), top) && !versionNewer(top, idVersion(row.model)));
       const weight = (row: SeatModel) => isAliasRow(row) ? 0 : idVersion(row.model).length ? 2 : 1;
-      const shown = all.filter(current).sort((a, b) => weight(a) - weight(b));
+      // An alias and the release it runs read the same; the release stays.
+      const shown = all.filter(current).filter(row => !(isAliasRow(row) && aliasTarget(catalog, row.model))).sort((a, b) => weight(a) - weight(b));
       const older = all.filter(row => !current(row)).sort((a, b) => versionNewer(idVersion(a.model), idVersion(b.model)) ? -1 : versionNewer(idVersion(b.model), idVersion(a.model)) ? 1 : 0);
       return { name, shown: shown.filter(match), older: older.filter(match) };
     }).filter(line => line.shown.length || line.older.length);
-    return { family, total: rows.length, lines };
+    return { family, total: rows.filter(row => !(isAliasRow(row) && aliasTarget(catalog, row.model))).length, lines };
   });
   return q ? groups.filter(group => group.lines.length) : groups;
 }

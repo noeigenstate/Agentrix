@@ -117,6 +117,7 @@ function compile(file, hooks, stubs = {}) {
     if (name.endsWith('/role-rules.mjs')) return original(name);
     if (name === '../../shared/routing-command.ts') return { OPEN_SEATS: 'agentrix:open-seats',
       routingModelName: require('../src/shared/routing-command.ts').routingModelName,
+      modelLabel: require('../src/shared/model-name.ts').modelLabel, aliasTarget: require('../src/shared/model-name.ts').aliasTarget,
       routingRoleName: text => stubs.language === 'zh' ? text : en['席位 · ' + text] ?? en[text] ?? text,
       openSeats: detail => window.dispatchEvent(new CustomEvent('agentrix:open-seats', { detail })) };
     if (name === '../../shared/model-name') return require('../src/shared/model-name.ts');
@@ -500,7 +501,7 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   const lead = dialogHarness(t, seatsInfo());
   byAttr(openMenu(lead, 'orchestrator'), 'data-custom').props.onClick();
   typeCustom(lead, 'claude-opus-9'); applyCustom(lead);
-  assert.match(textOf(byAttr(lead.render(), 'data-seat', 'orchestrator')), /claude-opus-9/);
+  assert.match(textOf(byAttr(lead.render(), 'data-seat', 'orchestrator')), /Opus 9/);
 });
 
 test('the refresh button asks main for the seats, shows the new catalog and when each list was read, and says when it fails', async t => {
@@ -614,7 +615,7 @@ test('a default-move receipt survives a newer read and the first edit without co
 
 // ---- second acceptance round: no tile overlaps another, small-tile chips shorten and ellipsize, the one-click fix is chosen by rule ----
 
-test('the card, banner and palette use the same short alias label and the menu keeps the full name', t => {
+test('the card, banner, palette and menu name a Claude model by its release, and an alias by the release it runs', t => {
   assert.equal(shortLabel('Opus (follows latest)'), 'Opus (latest)');
   assert.equal(shortLabel('GPT-6.2-Sol'), 'GPT-6.2-Sol');
   const rows = catalog({ opus: { label: 'Opus (follows latest)' } });
@@ -622,12 +623,23 @@ test('the card, banner and palette use the same short alias label and the menu k
   const tree = h.render();
   const slot = byAttr(tree, 'data-slot', 'architect');
   const gem = find(slot, node => node.props.className?.startsWith('seats-gem'));
-  assert.equal(textOf(find(gem, node => node.props.className === 'seats-gem-name')), 'Opus (latest)');
-  assert.equal(gem.props.title, 'Opus (latest) · high');
-  assert.equal(textOf(byAttr(tree, 'data-chip', 'opus')), 'Opus (latest)');
-  assert.match(byAttr(tree, 'data-chip', 'opus').props.title, /Opus \(latest\)/);
-  assert.match(textOf(byAttr(tree, 'data-moved')), /Opus \(latest\)/);
-  assert.match(textOf(openMenu(h, 'architect')), /Opus \(follows latest\)/, 'the menu keeps the full name');
+  // No release of the line is listed: the alias is all there is to show, without "latest".
+  assert.equal(textOf(find(gem, node => node.props.className === 'seats-gem-name')), 'Opus');
+  assert.equal(gem.props.title, 'Opus · high');
+  assert.equal(textOf(byAttr(tree, 'data-chip', 'opus')), 'Opus');
+  assert.match(textOf(byAttr(tree, 'data-moved')), /Opus/);
+  assert.doesNotMatch(textOf(tree) + textOf(openMenu(h, 'architect')), /latest/);
+  // With the release listed, the seat that holds the alias reads as that release and the alias chip is gone.
+  const listed = [...rows, row('claude-opus-5-5', 'Opus', 'claude', 3), row('claude-opus-5', 'claude-opus-5', 'claude', 3)];
+  const known = dialogHarness(t, seatsInfo({ catalog: listed }));
+  const knownTree = known.render();
+  assert.equal(textOf(find(byAttr(knownTree, 'data-slot', 'architect'), node => node.props.className === 'seats-gem-name')), 'Opus 5.5');
+  assert.equal(textOf(byAttr(knownTree, 'data-chip', 'claude-opus-5-5')), 'Opus 5.5');
+  assert.equal(findAll(knownTree, node => node.props['data-chip'] === 'opus').length, 0);
+  const menu = openMenu(known, 'architect');
+  assert.match(textOf(menu), /Opus 5\.5/);
+  assert.equal(findAll(menu, node => node.props['data-assign'] === 'opus').length, 0, 'the menu lists the release, checked for the alias');
+  assert.equal(byAttr(menu, 'data-assign', 'claude-opus-5-5').props['aria-checked'], true);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/seats-dialog.css'), 'utf8');
   assert.match(css, /\.seats-gem-name, \.seats-gem-summary \{[^}]*text-overflow: ellipsis/);
 });
@@ -648,11 +660,11 @@ const ids = rows => rows.map(entry => entry.model);
 
 test('the 模型盘 groups the real 28-model catalog by family and line, aliases and the newest version first, older versions folded; a new line appears by itself', () => {
   const groups = paletteGroups(REAL);
-  assert.deepEqual(groups.map(group => [group.family, group.total]), [['claude', 17], ['codex', 11]]);
+  assert.deepEqual(groups.map(group => [group.family, group.total]), [['claude', 14], ['codex', 11]]);
   assert.deepEqual(groups[0].lines.map(line => line.name), ['Opus', 'Sonnet', 'Haiku', 'Fable'], 'Claude lines in catalog order');
   assert.deepEqual(groups[1].lines.map(line => line.name), ['Sol', 'Astra', 'Terra', 'Luna', ''], 'Codex lines, the unnamed one last');
   const opus = lineNamed(groups, 'claude', 'Opus');
-  assert.deepEqual(ids(opus.shown), ['opus', 'claude-opus-5[1m]', 'claude-opus-5'], 'the alias first, then the newest version');
+  assert.deepEqual(ids(opus.shown), ['claude-opus-5[1m]', 'claude-opus-5'], 'the newest release; its alias reads the same and is not listed');
   assert.deepEqual(ids(opus.older), ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5-20251101'], 'older versions newest first, a date suffix is not a version');
   assert.deepEqual(ids(lineNamed(groups, 'claude', 'Fable').older), ['claude-fable-5'], 'Fable 5.1 is newer than 5');
   assert.equal(lineNamed(groups, 'claude', 'Haiku').older.length, 0, 'a line with nothing older has no fold');
@@ -661,7 +673,7 @@ test('the 模型盘 groups the real 28-model catalog by family and line, aliases
   assert.deepEqual(ids(sol.older), ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol']);
   assert.deepEqual(ids(lineNamed(groups, 'codex', '').shown), ['gpt-5.5']);
   const total = groups.flatMap(group => group.lines).reduce((n, line) => n + line.shown.length + line.older.length, 0);
-  assert.equal(total, REAL.length, 'every model is in exactly one place');
+  assert.equal(total, REAL.length - 3, 'every model but the three aliases is in exactly one place');
   const withNew = paletteGroups([...REAL, row('gpt-7-nova', 'GPT-7-Nova', 'codex', 3), row('gpt-6.9-nova', 'GPT-6.9-Nova', 'codex', 3), row('claude-quill-1', 'claude-quill-1', 'claude', 3)]);
   assert.deepEqual(ids(lineNamed(withNew, 'codex', 'Nova').shown), ['gpt-7-nova'], 'a new line is a new group, its newest first');
   assert.deepEqual(ids(lineNamed(withNew, 'codex', 'Nova').older), ['gpt-6.9-nova']);
@@ -673,13 +685,13 @@ test('the search in the 模型盘 keeps only matching models, in their lines, an
   const groups = paletteGroups(REAL, 'opus');
   assert.deepEqual(groups.map(group => group.family), ['claude'], 'a family with no match disappears');
   assert.deepEqual(groups[0].lines.map(line => line.name), ['Opus']);
-  assert.equal(groups[0].lines[0].shown.length + groups[0].lines[0].older.length, 7, 'every Opus row matches, old ones too');
+  assert.equal(groups[0].lines[0].shown.length + groups[0].lines[0].older.length, 6, 'every Opus row matches, old ones too');
   assert.deepEqual(ids(lineNamed(paletteGroups(REAL, 'SOL'), 'codex', 'Sol').older), ['gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol'], 'case does not matter');
   assert.deepEqual(paletteGroups(REAL, 'zzz'), []);
   const h = dialogHarness(t, seatsInfo({ catalog: REAL }));
   let tree = h.render();
   const chips = () => findAll(h.render(), node => node.props['data-chip'] !== undefined).map(node => node.props['data-chip']);
-  assert.equal(chips().length, 16, 'the 12 older versions are folded away');
+  assert.equal(chips().length, 13, 'the 12 older versions are folded away');
   byAttr(tree, 'data-palette-search').props.onChange({ target: { value: 'sol' } });
   assert.deepEqual(chips(), ['gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-5.6-sol'], 'search includes matching older versions');
   byAttr(h.render(), 'data-palette-search').props.onChange({ target: { value: 'zzz' } });
@@ -722,7 +734,7 @@ test('dragging a model from the 模型盘 onto a seat assigns it, and a model th
   listeners.pointermove({ clientX: 60, clientY: 60 });
   listeners.pointerup({ clientX: 60, clientY: 60 });
   tree = h.render();
-  assert.equal(textOf(find(byAttr(tree, 'data-slot', 'researcher'), node => node.props.className?.startsWith('seats-gem-name'))), 'claude-sonnet-5');
+  assert.equal(textOf(find(byAttr(tree, 'data-slot', 'researcher'), node => node.props.className?.startsWith('seats-gem-name'))), 'Sonnet 5');
   const off = byAttr(tree, 'data-chip', 'gpt-6.2-sol');
   assert.match(off.props.className, /is-off/);
   assert.match(off.props.title, /Codex is not installed/);

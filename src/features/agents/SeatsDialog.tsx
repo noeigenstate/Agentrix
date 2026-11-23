@@ -4,10 +4,11 @@ import {
   ArrowCounterClockwise, ArrowsClockwise, BookOpen, Browser, CaretDown, CheckCircle, ClipboardText, DotsThree, Code, Cpu, Database, Desktop, FileText, Flask, Gauge, GitBranch,
   HardDrives, Infinity as InfinityIcon, LockSimple, MagnifyingGlass, PencilSimple, Person, Plus, Prohibit, ShieldCheck, SidebarSimple, Stack, User, Warning, X,
 } from '@phosphor-icons/react';
+import { aliasTarget, modelLabel } from '../../shared/routing-command.ts';
 import type { RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
 import {
-  shortLabel, paletteGroups, ageOf, menuPlacement, withInstalled, assignCustom, assignModel, baselineFor, cleanDraft, configFor, draftRoles, resolveDraftSeats, updateDraftSeats,
+  paletteGroups, ageOf, menuPlacement, withInstalled, assignCustom, assignModel, baselineFor, cleanDraft, configFor, draftRoles, resolveDraftSeats, updateDraftSeats,
   changedSeats, fallbackFor, firstRefusal, getSlot, isAvailable, issuesOf, modelRow, rowFor,
   sameSeat, saveSeats, setEffort, setFast, startScope, swapSlots, familyOf,
   displayedSeat, seatSettingText, type Edit, type Scope, type SlotId,
@@ -58,14 +59,15 @@ type Custom = { text: string; error: string };
 const inside = (node: unknown, target: unknown) => !!node && typeof (node as Node).contains === 'function' && (node as Node).contains(target as Node);
 
 function modelMenuItems(catalog: SeatModel[], selected: string | undefined, pick: (model: string) => void) {
-  return catalog.map(row => <button key={row.model} type="button" role="menuitemradio" className="seats-menu-item" aria-checked={row.model === selected}
-    data-assign={row.model} title={row.label} disabled={!row.available} onClick={() => pick(row.model)}>
+  const current = selected && (aliasTarget(catalog, selected) ?? selected);
+  return catalog.filter(row => !aliasTarget(catalog, row.model)).map(row => <button key={row.model} type="button" role="menuitemradio" className="seats-menu-item" aria-checked={row.model === current}
+    data-assign={row.model} title={modelLabel(catalog, row.model)} disabled={!row.available} onClick={() => pick(row.model)}>
     <i className="seats-mk" data-family={row.family} />
-    <span className="seats-menu-model">{row.label}</span>
+    <span className="seats-menu-model">{modelLabel(catalog, row.model)}</span>
     <span className="seats-menu-details">
       {!row.available && <small>{row.reason}</small>}
       {row.listed === false && <small data-unlisted>{t('不在最新列表')}</small>}
-      {row.available && row.listed !== false && row.model === selected && <small>{t('当前')}</small>}
+      {row.available && row.listed !== false && row.model === current && <small>{t('当前')}</small>}
     </span>
   </button>);
 }
@@ -140,7 +142,7 @@ function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDi
   const info = refreshed ?? given;
   const catalog = withInstalled(info.catalog, info.installed, family => t('{agent} 未安装', { agent: family === 'codex' ? 'Codex' : 'Claude' }));
   const roles = info.roles ?? [];
-  const label = (model: string) => shortLabel(modelRow(catalog, model)?.label ?? model);
+  const label = (model: string) => modelLabel(catalog, model);
 
   const refresh = async (opening = false) => {
     if (reading.current) { if (!opening) queued.current = true; return; }
@@ -717,7 +719,7 @@ function ModelPalette({ state }: DialogPart) {
   const { query, setQuery, folds, setFolds } = state.panels;
   const searching = query.trim() !== '', groups = paletteGroups(catalog, query);
   const chip = (row: SeatModel, old = false) => {
-    const off = !row.available, name = shortLabel(row.label);
+    const off = !row.available, name = modelLabel(catalog, row.model);
     const hint = off ? t('{model}（{reason}）不能放入座位', { model: name, reason: row.reason ?? '' }) : t('{model} · 拖到座位上', { model: name });
     return <span key={row.model} className={`seats-chip${old ? ' is-old' : ''}${off ? ' is-off' : ''}`}
       data-chip={row.model} data-family={row.family} aria-disabled={off || undefined} title={hint}

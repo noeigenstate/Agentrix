@@ -100,7 +100,7 @@ test('a grouped Agent tab row keeps the specialty and model label beneath the ro
   ]);
   assert.match(html, /<h4>Developer<\/h4>/);
   assert.equal((html.match(/Developer/g) ?? []).length, 1);
-  assert.match(html, /<b>Backend<\/b><span>Opus \(latest\) · high/);
+  assert.match(html, /<b>Backend<\/b><span>Opus · high/);
 });
 
 test('grouped call rows lead with a labelled status icon and show only actionable routing notes', () => {

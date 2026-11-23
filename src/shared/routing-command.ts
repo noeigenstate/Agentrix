@@ -1,4 +1,5 @@
 import { modelName } from './model-name.ts';
+export { aliasTarget, modelLabel } from './model-name.ts';
 import type { SeatsInfo } from './types';
 
 export const OPEN_SEATS = 'agentrix:open-seats';

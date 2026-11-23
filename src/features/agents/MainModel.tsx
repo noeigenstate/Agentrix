@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { CaretDown, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
 import type { CliState, ProjectTerminal, SeatsInfo } from '../../shared/types';
 import { currentLanguage, t } from '../../shared/i18n';
-import { modelName } from '../../shared/model-name';
+import { modelLabel, modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
 import { readScreen, subscribeScreen, cliStateFor, nextCliState } from '../terminal/terminal-screen.ts';
 import { useNativeEntries } from '../native-session/native-store.ts';
@@ -81,7 +81,7 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
   // A saved lead model reaches a conversation when it starts; a running one keeps the model it has.
   const chosen = seats?.leads?.[terminal.agent === 'claude' ? 'claude' : 'codex']?.model;
-  const pending = chosen && actual && !sameModel(chosen, actual) ? /^[a-z]+$/.test(chosen) ? chosen[0].toUpperCase() + chosen.slice(1) : modelName(chosen) : null;
+  const pending = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
   const now = useNow(Date.now);
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
   // Native turns distinguish a failure from an interruption only for their own runtime session.
