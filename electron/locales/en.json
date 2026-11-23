@@ -1,4 +1,8 @@
 {
+  "按模型路由切换未完成": "Model routing switch did not complete",
+  "已按模型路由切换到 {model} · {effort}": "Model routing switched to {model} · {effort}",
+  "已按模型路由切换到 {model}": "Model routing switched to {model}",
+  "已按模型路由将思考深度调为 {effort}": "Model routing changed thinking effort to {effort}",
   "调用的模型": "Models called",
   "子代理 ×{count}": "Subagents ×{count}",
   "Codex 子任务 ×{count}": "Codex subtasks ×{count}",

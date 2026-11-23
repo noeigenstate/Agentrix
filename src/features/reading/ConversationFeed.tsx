@@ -4,6 +4,7 @@ import type { ConversationEntry, GeneratedPicture } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { UserAvatar } from '../../shared/UserAvatar';
 import { modelName } from '../../shared/model-name.ts';
+import type { LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
 import { stepVerb } from '../agents/action-text';
 import { showPopup } from '../files/file-popup.ts';
 import { withoutDelivery } from '../home/delivery.ts';
@@ -27,6 +28,7 @@ import './reading-flow.css';
 // quote: the reader's 引用 action, offered in a message's right-click menu (disabled holds the reason it cannot be used now); a feed without it offers none.
 export const ConversationDecorations = createContext<{
   start: number; status: ReactNode; running: boolean; anchor?: string; beforeResult: ReactNode; afterResult: ReactNode;
+  notices?: ReadonlyMap<string, LeadRoutingNotice | null>;
   quote?: { disabled: string | null; pick: (who: string, text: string) => void };
   frame?: { ref: RefObject<HTMLDivElement | null>; style: CSSProperties; before: ReactNode };
 } | null>(null);
@@ -120,6 +122,13 @@ function AssistantReply({ entry, agent, projectId, result = false, pathOf, onErr
 const quietOutput = (entry: ConversationEntry) => !entry.id.startsWith('shell:') && !entry.id.startsWith('native:') && entry.tool?.kind !== 'edit';
 const failureReason = (output: string) => { const line = output.split(/\r?\n/).find(row => row.trim())?.trim() || ''; return line.length > 140 ? `${line.slice(0, 139)}…` : line; };
 
+function routingNotice({ model, effort, incomplete }: LeadRoutingNotice) {
+  if (incomplete) return t('按模型路由切换未完成');
+  if (model && effort) return t('已按模型路由切换到 {model} · {effort}', { model, effort });
+  if (model) return t('已按模型路由切换到 {model}', { model });
+  return t('已按模型路由将思考深度调为 {effort}', { effort: effort ?? '' });
+}
+
 function ToolGroup({ entries, live, projectId, hideToolOutput = false, onError }: { entries: ConversationEntry[]; live: boolean; projectId: string; hideToolOutput?: boolean; onError: (message: string) => void }) {
   const running = entries.some(entry => !entry.tool?.done);
   const [open, setOpen] = useState(false);
@@ -162,8 +171,8 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
   const decorations = useContext(ConversationDecorations);
   const pathLinks = useReadingPaths(projectId, onError, decorations?.frame?.ref);
   const grouped = useMemo(() => blocks(entries), [entries]);
-  const turns = useMemo(() => conversationTurns(grouped, decorations?.start ?? 0), [grouped, decorations?.start]);
-  const result = useMemo(() => latestResult(entries, { idle: !live, interrupted: false }), [entries, live]);
+  const turns = useMemo(() => conversationTurns(grouped, decorations?.start ?? 0, decorations?.notices), [grouped, decorations?.start, decorations?.notices]);
+  const result = useMemo(() => decorations ? null : latestResult(entries, { idle: !live, interrupted: false }), [entries, live, decorations]);
   const copies = useMemo(() => generatedCopies(entries), [entries]);
   const pathOf = useMemo(() => (target: string) => replyLinkPath(projectId, target, copies), [projectId, copies]);
   const agent = kind === 'claude' ? 'Claude Code' : 'Codex';
@@ -171,7 +180,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
   let latestUser = -1, latestAgent = -1;
   for (let index = turns.length - 1; index >= 0; index--) {
     if (turns[index].kind === 'user') { latestUser = index; break; }
-    if (latestAgent < 0) latestAgent = index;
+    if (turns[index].kind === 'agent' && latestAgent < 0) latestAgent = index;
   }
   // Every rail node, including pending messages, stays in one content container for spacing and scroll anchoring.
   return <div className="reading-content conversation-feed" data-agent={kind} style={decorations?.frame?.style} {...pathLinks} onClick={event => {
@@ -184,6 +193,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
   }}>
       {decorations?.frame?.before}
       {turns.map((turn, index) => {
+        if (turn.kind === 'routing') return <p key={turn.id} data-reading-entry={turn.id} className="reading-status reading-routing-notice">{routingNotice(turn.notice)}</p>;
         if (turn.kind === 'user') {
           const sender = turn.entry.sender, planner = sender?.kind === 'planner';
           const identified = planner && sender.agent && sender.model;
@@ -194,7 +204,7 @@ export function ConversationFeed({ entries, agent: kind, projectId, live, hideTo
               {turn.entry.answer && <span className="reading-user-label">{planner ? t('{name} 回答了它的问题', { name: who }) : t('你回答了它的问题')}</span>}<UserMessage text={turn.entry.text || ''} images={turn.entry.images} imagesOmitted={(turn.entry as MessageEntry).imagesOmitted} rendered={planner} /></Message>
           </TimelineStep>;
         }
-        const liveStatus = index === turns.length - 1 ? decorations?.status : null;
+        const liveStatus = index === latestAgent ? decorations?.status : null;
         const tools = turn.blocks.flatMap(block => block.kind === 'tools' ? block.entries : []);
         const state = liveStatus && decorations?.running || tools.some(entry => !entry.tool?.done) ? 'running' : tools.some(entry => entry.tool?.failed) ? 'failed' : null;
         let shownTime = stepTime(turn.at);

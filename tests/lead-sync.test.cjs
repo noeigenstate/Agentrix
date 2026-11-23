@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const { leadSteps } = require('../src/features/terminal/lead-steps.ts');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
 const { applyLeadStep, pickerAction, pickerResult } = require('../src/features/terminal/lead-picker.ts');
+const { hookHarness } = require('./helpers/hook-harness.cjs');
+const { leadRoutingScope, leadRoutingSnapshot, subscribeLeadRouting } = require('../src/shared/lead-routing-notices.ts');
 
 // In conductor mode a changed lead seat reaches the running Claude Code as the commands the owner would type.
 test('a changed lead model reapplies its effort, while a matched or unknown seat types nothing', () => {
@@ -80,6 +82,52 @@ test('the effort-only switch opens only /effort and uses the displayed session-o
   };
   assert.equal(await applyLeadStep(step, { ...terminal, active: () => false }), false);
   assert.deepEqual(keys, []);
-  assert.equal(await applyLeadStep(step, terminal), true);
+  const observed = [], hooks = { submitted: command => observed.push([command, keys.at(-1)]), confirmed: setting => observed.push(setting) };
+  assert.equal(await applyLeadStep(step, terminal, hooks), true);
   assert.deepEqual(keys, ['/effort', '\r', '\x1b[C', 's']);
+  assert.deepEqual(observed, [['/effort', '/effort'], 'high']);
+
+  keys.length = 0;
+  observed.length = 0;
+  const oldEcho = { ...terminal, rows: () => [...(keys.at(-1) === 's' ? [] : frames[keys.at(-1)] ?? []), ...frames.s] };
+  assert.equal(await applyLeadStep(step, oldEcho, hooks), true);
+  assert.deepEqual(observed, [['/effort', '/effort']], 'a matching but unchanged confirmation is not reported as a new result');
+});
+
+test('lead sync registers only submitted conductor commands under the live conversation', async t => {
+  const terminal = { id: 'lead', sessionId: 'pty', agent: 'claude', codexActive: true, readingHistory: { threadId: 'conversation' },
+    agentSettings: { model: 'Fable 5.2', effort: 'medium' } };
+  const scope = leadRoutingScope(terminal), leads = { claude: { model: 'claude-fable-5-2', effort: 'high' } };
+  const native = Promise.resolve({ conductor: false, leads });
+  const keys = [];
+  let seats = native, reload;
+  const previous = global.window;
+  global.window = { agentrix: { skillSeats: () => seats, onSkills: load => { reload = load; }, answerTerminal: (_id, key) => keys.push(key) } };
+  const harness = hookHarness('src/features/terminal/lead-sync.ts', {
+    './terminal-screen': { readScreen: () => ({ sessionId: terminal.sessionId, rows: [] }), canPasteScreen: () => true, subscribeScreen: () => () => {} },
+    './lead-picker.ts': { async applyLeadStep(step, picker, hooks) {
+      assert.equal(step.kind, 'effort');
+      picker.write('/effort');
+      assert.equal(leadRoutingSnapshot(scope).length, 0);
+      hooks.submitted('/effort');
+      assert.equal(leadRoutingSnapshot(scope)[0].submissions[0].command, '/effort');
+      picker.write('\r');
+      hooks.confirmed(step.target);
+      return true;
+    } },
+  });
+  t.after(() => { harness.dispose(); global.window = previous; });
+  harness.render('LeadSync', { projectId: 'project', terminal });
+  await native;
+  assert.deepEqual(keys, []);
+  const completed = new Promise(resolve => {
+    const off = subscribeLeadRouting(() => {
+      const outcome = leadRoutingSnapshot(scope)[0]?.outcome;
+      if (outcome) { off(); resolve(outcome); }
+    });
+  });
+  seats = Promise.resolve({ conductor: true, leads });
+  reload();
+  assert.deepEqual(await completed, { effort: 'high', incomplete: false });
+  assert.deepEqual(keys, ['/effort', '\r']);
 });

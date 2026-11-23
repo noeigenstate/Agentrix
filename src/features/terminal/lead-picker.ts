@@ -56,6 +56,17 @@ export function pickerAction(step: LeadStep, rows: string[], scanningDown = fals
   return step.kind === 'model' ? modelCursor(menu, step.target, scanningDown) : effortCursor(menu, step.target);
 }
 
+function appliedSettings(step: LeadStep, rows: string[]) {
+  return rows.flatMap(row => {
+    if (step.kind === 'model') {
+      const model = /Set model to `?(.+?)`? for this session only/i.exec(row)?.[1];
+      return model && sameModel(step.target, model) ? [modelName(model)] : [];
+    }
+    const effort = /Set effort level to (\w+) \(this session only\)/i.exec(row)?.[1].toLowerCase();
+    return effort === step.target ? [effort] : [];
+  });
+}
+
 export function pickerResult(step: LeadStep, rows: string[]) {
   const menu = menuRows(rows, step.kind === 'model' ? /^\s*Switch model\?\s*$/ : /^\s*Change effort level\?\s*$/);
   if (menu) {
@@ -64,12 +75,7 @@ export function pickerResult(step: LeadStep, rows: string[]) {
     if (matches && menu.some(row => /Your next response will be slower and use more tokens/i.test(row))) return 'confirm';
     return null;
   }
-  for (const row of rows) {
-    const model = /Set model to `?(.+?)`? for this session only/i.exec(row)?.[1];
-    const effort = /Set effort level to (\w+) \(this session only\)/i.exec(row)?.[1];
-    if (step.kind === 'model' ? model && sameModel(step.target, model) : effort?.toLowerCase() === step.target) return 'applied';
-  }
-  return null;
+  return appliedSettings(step, rows).length ? 'applied' : null;
 }
 
 async function until(check: () => boolean, active: () => boolean, ms: number) {
@@ -109,17 +115,27 @@ async function selectInPicker(step: LeadStep, { rows, write, active }: PickerTer
 }
 
 // The selector advertises a session-only action. Enter inside the selector would save a user default.
-export async function applyLeadStep(step: LeadStep, terminal: PickerTerminal) {
+export async function applyLeadStep(step: LeadStep, terminal: PickerTerminal, hooks?: {
+  submitted: (command: '/model' | '/effort') => void;
+  confirmed: (setting: string) => void;
+}) {
   const { rows, write, active, ready, inputMatches } = terminal;
   if (!await until(ready, active, 60_000) || !active()) return false;
-  const command = `/${step.kind}`;
+  const command = `/${step.kind}` as const;
+  const previous = appliedSettings(step, rows());
   write(command);
   if (!await until(() => inputMatches(command), active, 3000) || !active() || !inputMatches(command)) return false;
+  hooks?.submitted(command);
   write('\r');
   if (!await selectInPicker(step, terminal)) return false;
   const result = () => pickerResult(step, rows());
   if (!await until(() => result() === 'confirm' || ready() && result() === 'applied', active, 5000) || !active()) return false;
-  if (result() !== 'confirm') return ready() && result() === 'applied';
-  write('\r');
-  return until(() => ready() && result() === 'applied', active, 5000);
+  if (result() === 'confirm') {
+    write('\r');
+    if (!await until(() => ready() && result() === 'applied', active, 5000) || !active()) return false;
+  }
+  const settings = appliedSettings(step, rows());
+  const fresh = settings.find(setting => settings.filter(item => item === setting).length > previous.filter(item => item === setting).length);
+  if (fresh) hooks?.confirmed(fresh);
+  return ready() && result() === 'applied';
 }

@@ -28,6 +28,7 @@ function hookHarness(filename, overrides = {}) {
       }];
     },
     useRef: initial => memo(() => ({ current: initial }), []),
+    useSyncExternalStore: (_subscribe, snapshot) => snapshot(),
     useMemo: memo,
     useCallback: (callback, deps) => memo(() => callback, deps),
     useLayoutEffect: effect,

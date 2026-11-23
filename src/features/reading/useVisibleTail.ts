@@ -1,11 +1,12 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { ConversationEntry } from '../../shared/types';
+import type { LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
 import { timelineIdentity } from './reading-timeline-identity.ts';
 import { conversationBlocks } from '../../../electron/conversation-blocks.mjs';
 
 type ConversationBlock = { kind: 'message'; entry: ConversationEntry } | { kind: 'tools'; id: string; entries: ConversationEntry[] };
 type AgentTurn = { kind: 'agent'; id: string; at: number; blocks: ConversationBlock[] };
-type ConversationTurn = { kind: 'user'; entry: ConversationEntry } | AgentTurn;
+type ConversationTurn = { kind: 'user'; entry: ConversationEntry } | { kind: 'routing'; id: string; notice: LeadRoutingNotice } | AgentTurn;
 export const VISIBLE_TAIL_PAGE = 40;
 export const blockId = (block: ConversationBlock) => block.kind === 'message' ? block.entry.id : block.id;
 
@@ -18,13 +19,16 @@ export function blocks(entries: readonly ConversationEntry[]): ConversationBlock
 
 // Page by content blocks, then nest the visible ones in turns. Read the prefix only for parent identity/time:
 // revealing earlier content in the same turn must not remount its tools or change the agent's timestamp.
-export function conversationTurns(grouped: readonly ConversationBlock[], start = 0): ConversationTurn[] {
+export function conversationTurns(grouped: readonly ConversationBlock[], start = 0, notices?: ReadonlyMap<string, LeadRoutingNotice | null>): ConversationTurn[] {
   const result: ConversationTurn[] = [];
   let agent: AgentTurn | undefined;
   grouped.forEach((block, index) => {
     if (block.kind === 'message' && block.entry.role === 'user') {
       agent = undefined;
-      if (index >= start) result.push({ kind: 'user', entry: block.entry });
+      if (index < start) return;
+      const notice = notices?.get(block.entry.id);
+      if (notice) result.push({ kind: 'routing', id: block.entry.id, notice });
+      else result.push({ kind: 'user', entry: block.entry });
     } else {
       if (!agent) {
         const entry = block.kind === 'tools' ? block.entries[0] : block.entry;

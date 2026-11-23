@@ -1,11 +1,31 @@
 import { useEffect, useRef } from 'react';
 import type { ProjectTerminal, SeatsInfo } from '../../shared/types';
+import { leadRoutingScope, trackLeadRouting } from '../../shared/lead-routing-notices.ts';
 import { claudeInputMatches } from '../agents/agent-screen-input.ts';
 import { applyLeadStep } from './lead-picker.ts';
 import { leadSteps } from './lead-steps.ts';
 import { canPasteScreen, readScreen, subscribeScreen, type Screen } from './terminal-screen';
 
 const tried = new Map<string, Set<string>>();
+
+async function switchLead(steps: ReturnType<typeof leadSteps>, terminal: Parameters<typeof applyLeadStep>[1], scope: string) {
+  const route = trackLeadRouting(scope);
+  const confirmed: { model?: string; effort?: string } = {};
+  let incomplete = true;
+  try {
+    for (const step of steps) {
+      let close: (() => void) | undefined;
+      try {
+        const applied = await applyLeadStep(step, terminal, {
+          submitted: command => { close = route.submit(command); },
+          confirmed: setting => { confirmed[step.kind] = setting; },
+        });
+        if (!applied) return;
+      } finally { close?.(); }
+    }
+    incomplete = steps.some(step => !confirmed[step.kind]);
+  } finally { route.finish({ ...confirmed, incomplete }); }
+}
 
 // Mounted once per terminal split; it draws nothing.
 export function LeadSync({ projectId, terminal }: { projectId: string; terminal: ProjectTerminal }) {
@@ -53,9 +73,7 @@ export function useLeadSync(projectId: string, terminal: ProjectTerminal) {
         const rows = () => frame()?.rows ?? [];
         const terminal = { rows, ready, active: live, write: (value: string) => api.answerTerminal(id, value),
           inputMatches: (command: string) => claudeInputMatches(rows(), command) };
-        for (const step of steps) {
-          if (!await applyLeadStep(step, terminal)) return;
-        }
+        await switchLead(steps, terminal, leadRoutingScope(current.current));
       } finally { running.current = false; }
     };
     let reads = 0;

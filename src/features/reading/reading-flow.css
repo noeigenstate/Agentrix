@@ -61,6 +61,7 @@
 .reading-step .reading-status { margin: 5px 0 0; flex-wrap: wrap; }
 .reading-step-body > .reading-status { margin-left: calc(var(--reading-inset) - var(--step-lead)); }
 .reading-turn > .reading-status { margin-left: var(--turn-pad); }
+.reading-routing-notice { display: block; margin: 0 var(--reading-inset); overflow-wrap: anywhere; }
 .reading-step .reading-status-mark { display: none; }
 /* You are on the right, as in a chat: the avatar at the column's right edge, the name and time to its left, the message under them hugging its text (at most 72 characters or 72% of the column wide, whichever is more, so
    a long message wraps at a readable measure, and never wider than the column). The agent's steps stay at the left on the rail; the rail joins agent steps only and passes no node or stub for yours. */

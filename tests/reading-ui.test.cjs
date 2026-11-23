@@ -36,7 +36,7 @@ function loadUI(name, overrides = {}) {
   const originalRequire = mod.require.bind(mod);
   mod.require = name => {
     const key = name.startsWith('.') ? './' + path.basename(name) : name;
-    if (name === 'react' && overrides.react) return { ...React, ...overrides.react };
+    if (name === 'react' && overrides.react) return { ...React, useSyncExternalStore: (_subscribe, snapshot) => snapshot(), ...overrides.react };
     // Stubbed screen modules keep their pure helpers (bindApproval, choiceIdentity) unless a test replaces them too.
     if (Object.hasOwn(overrides, key) && key === './terminal-screen') return { ...require('../src/features/terminal/terminal-screen.ts'), subscribeScreen: () => () => {}, subscribeParsed: () => () => {}, ...overrides[key] };
     if (Object.hasOwn(overrides, key) && key === './agent-screen') { const { choiceIdentity, waitingTitle } = require('../src/features/agents/agent-screen.ts'); return { choiceIdentity, waitingTitle, ...overrides[key] }; }
@@ -1749,6 +1749,68 @@ function readingHarness(t, entries = [], overrides = {}) {
   }));
   return { state, render, parsed, ReadingView, Markdown, environment };
 }
+
+test('reading combines registered Claude routing commands without replacing the last completed round or owner commands', t => {
+  const { ConversationLog, claudeConversation } = require('../electron/conversation.cjs');
+  const { leadRoutingScope, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
+  const log = new ConversationLog();
+  const feed = (uuid, at, text, type = 'user') => claudeConversation(log, {
+    type, uuid, timestamp: new Date(at).toISOString(), message: { content: type === 'user' ? text : [{ type: 'text', text }] },
+  });
+  feed('request', 900, 'Explain the change');
+  feed('reply', 950, 'Here is the explanation.', 'assistant');
+  feed('auto-model', 1010, '<command-name>/model</command-name><command-message>model</command-message><command-args></command-args>');
+  feed('echo', 1020, '<local-command-stdout>Set model to `Fable 5.2` for this session only</local-command-stdout>');
+  feed('auto-effort', 1110, '/effort');
+  feed('owner-model', 1130, '/model');
+  feed('owner-effort', 1140, '/effort');
+  const h = readingHarness(t, log.list.slice(0, 4));
+  Object.assign(h.state.terminal, { id: 'routing-terminal', agent: 'claude', codexActivity: 'idle', readingHistory: { threadId: 'routing-thread' } });
+  const route = trackLeadRouting(leadRoutingScope(h.state.terminal));
+  route.submit('/model', 1000)(1030);
+  const closeEffort = route.submit('/effort', 1100);
+  assert.doesNotMatch(h.render(), /reading-routing-notice|>\/model<|>\/effort</);
+  closeEffort(1120);
+  route.finish({ model: 'Fable 5.2', effort: 'high' });
+  const confirmed = h.render();
+  assert.equal((confirmed.match(/reading-routing-notice/g) ?? []).length, 1);
+  assert.match(confirmed, /Model routing switched to Fable 5\.2 · high/);
+  assert.match(confirmed, /class="result-status" role="status" aria-label="Done"/);
+  assert.doesNotMatch(confirmed, /Set model to|>\/model<|>\/effort<|Queued/);
+  h.state.entries = log.list;
+  const owner = h.render();
+  for (const command of ['/model', '/effort']) assert.equal(owner.split(`>${command}<`).length - 1, 1);
+  for (const replacement of [{ sessionId: 'reopened' }, { readingHistory: { threadId: 'another-thread' } }, { id: 'another-terminal' }]) {
+    const original = h.state.terminal;
+    h.state.terminal = { ...original, ...replacement };
+    const reopened = h.render();
+    assert.doesNotMatch(reopened, /reading-routing-notice/);
+    for (const command of ['/model', '/effort']) assert.equal(reopened.split(`>${command}<`).length - 1, 2);
+    h.state.terminal = original;
+  }
+});
+
+test('reading reports effort-only and unconfirmed routes and leaves ambiguous or argument-bearing commands with the owner', t => {
+  const { leadRoutingScope, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
+  const command = (id, at, text, original = text) => ({ id, at, role: 'user', text, original });
+  const h = readingHarness(t, [command('effort', 1010, '/effort'), command('failed', 1110, '/model'),
+    command('with-args', 1120, '/model', '<command-name>/model</command-name><command-args>opus</command-args>'),
+    command('duplicate-a', 1210, '/model'), command('duplicate-b', 1220, '/model')]);
+  Object.assign(h.state.terminal, { id: 'routing-effort', agent: 'claude', codexActivity: 'idle' });
+  const scope = leadRoutingScope(h.state.terminal);
+  const effort = trackLeadRouting(scope), failed = trackLeadRouting(scope), ambiguous = trackLeadRouting(scope);
+  effort.submit('/effort', 1000)(1030);
+  effort.finish({ effort: 'high' });
+  failed.submit('/model', 1100)(1130);
+  failed.finish({ incomplete: true });
+  ambiguous.submit('/model', 1200)(1230);
+  ambiguous.finish({ model: 'Opus 5.5' });
+  const html = h.render();
+  assert.match(html, /Model routing changed thinking effort to high/);
+  assert.match(html, /Model routing switch did not complete/);
+  assert.doesNotMatch(html, /Model routing switched to|>\/effort</);
+  assert.equal(html.split('>/model<').length - 1, 3);
+});
 
 test('Markdown can opt into soft line breaks without changing the reading view default', t => {
   const { Markdown } = readingHarness(t, [], { './markdown-escape': require('../src/features/reading/markdown-escape.ts') });

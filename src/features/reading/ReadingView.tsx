@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ClipboardEvent, type KeyboardEvent } from 'react';
 import { ArrowDown, Image as ImageIcon, Info, PaperPlaneRight, Stop } from '@phosphor-icons/react';
 import type { AgentCommand, ProjectTerminal } from '../../shared/types';
+import { leadRoutingNotices, leadRoutingScope, leadRoutingSnapshot, subscribeLeadRouting } from '../../shared/lead-routing-notices.ts';
 import { actionText } from '../agents/action-text';
 import { dictateInto } from '../voice/voice-input';
 import { VoiceButton } from '../voice/VoiceButton';
@@ -105,7 +106,12 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     if (!hidden || !conversationEntries.length || conversationEntries.some(entry => hidden.has(entry.id))) return;
     cleared.delete(conversation); setHidden(undefined);
   }, [conversationEntries, hidden, conversation]);
-  const entries = useMemo(() => conversationEntries.filter(entry => !entry.queued && !hidden?.has(entry.id)), [conversationEntries, hidden]);
+  const routingSnapshot = () => leadRoutingSnapshot(kind === 'claude' ? leadRoutingScope(terminal) : '');
+  const routes = useSyncExternalStore(subscribeLeadRouting, routingSnapshot, routingSnapshot);
+  const notices = useMemo(() => leadRoutingNotices(conversationEntries, routes), [conversationEntries, routes]);
+  const entries = useMemo(() => conversationEntries.filter(entry => !entry.queued && !hidden?.has(entry.id) && notices.get(entry.id) !== null),
+    [conversationEntries, hidden, notices]);
+  const roundEntries = useMemo(() => notices.size ? entries.filter(entry => !notices.has(entry.id)) : entries, [entries, notices]);
   const { pending, echo, cancelEcho } = usePendingPrompts(terminal.id, readingSession, conversationEntries, thread);
   // Queued records wait after the active turn, with or without a renderer echo. They never start a new agent turn.
   const cards = useMemo(() => pendingPromptCards(pending, conversationEntries.filter(entry => !hidden?.has(entry.id))), [pending, conversationEntries, hidden]);
@@ -925,7 +931,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
   // works or waits, and nothing for earlier rounds.
   const settled = !shownWorking && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
-  const result = useMemo(() => latestResult(entries, { idle: settled, interrupted }), [entries, settled, interrupted]);
+  const result = useMemo(() => latestResult(roundEntries, { idle: settled, interrupted }), [roundEntries, settled, interrupted]);
   // Only the owner's click on a message's 引用 gets here, so only it moves the keyboard to the message box.
   const quoteMessage = (who: string, text: string) => {
     const excerpt = quoteExcerpt(text);
@@ -940,8 +946,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     {result.kind === 'code' && <ResultChecks result={result} />}
     <ResultActions result={result} projectId={projectId} canSend={!inputBlocked && !!terminal.sessionId} onContinue={continueWith} onRetry={() => void send(result.request, false)} onError={onError} />
   </>;
-  const lastBlock = grouped.at(-1);
-  const statusInTurn = !!lastBlock && (lastBlock.kind === 'tools' || lastBlock.entry.role !== 'user') && pending.every(queued);
+  const lastEntry = roundEntries.at(-1);
+  const statusInTurn = !!lastEntry && lastEntry.role !== 'user' && pending.every(queued);
   const afterFeed = <><PendingPromptEntries prompts={cards.prompts} queued={queued} queuedNote={reasonWords('term.queued_behind_turn')}
     unconfirmedNote={kind === 'claude' ? reasonWords('term.receipt_missing') : undefined} undelivered={undelivered}
     onResend={resend} onDiscard={prompt => cancelEcho(prompt.id)} />
@@ -950,7 +956,8 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     : !entries.length && !cards.prompts.length ? <ReadingWelcome agent={kind} commands={commands} complete={complete} disabled={inputBlocked} screen={screen} starting={welcomeIsStarting} /> : <>
     {tail.hasEarlier && <button type="button" className="text-button reading-earlier" disabled={historyPage.loading} onClick={() => void tail.showEarlier()}>{historyPage.paged ? t('显示更早的对话') : t('显示更早的对话（{count}）', { count: tail.earlier })}</button>}
     {historyPage.error && <p role="status">{t(historyPage.error)}</p>}</>;
-  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: shownWorking, anchor: result?.anchor, beforeResult: resultStatus, afterResult: resultActions,
+  const body = <ConversationDecorations.Provider value={{ start: tail.earlier, status: statusInTurn ? status : null, running: shownWorking, anchor: result?.anchor,
+    beforeResult: resultStatus, afterResult: resultActions, notices,
     quote: { disabled: inputBlocked ? t('输入框暂时不可用，等它可用后再引用') : null, pick: quoteMessage },
     frame: { ref: content, style: { visibility: entries.length && !ready ? 'hidden' : undefined }, before: beforeFeed } }}>
       <ConversationFeed entries={terminal.agentCommand ? [] : entries} agent={kind} projectId={projectId} live={!settled} onError={onError} onOpenLink={onOpenLink}>{afterFeed}</ConversationFeed>
