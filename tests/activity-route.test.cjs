@@ -82,21 +82,66 @@ function callsMarkup(calls, language = 'zh', terminalId = 'placeholder') {
   return renderToStaticMarkup(React.createElement(CallsCard, { calls, terminalId }));
 }
 
-test('a grouped Agent tab row keeps the specialty and model label beneath the role heading', () => {
+function groupedCallsMarkup(items, language = 'en') {
   const team = require('./fixtures/team-seats.json');
   const info = { ...team, catalog: [{ model: 'opus', label: 'Opus (follows latest)' }] };
-  const { CallsCard, AgentTabScope } = compileFile(path.join(__dirname, '../src/features/agents/AgentCalls.tsx'), 'en', {
+  const { CallsCard, AgentTabScope } = compileFile(path.join(__dirname, '../src/features/agents/AgentCalls.tsx'), language, {
     useState: initial => React.useState(initial && typeof initial === 'object' ? { t1: info } : initial),
   });
-  const call = { agent: 'Claude Code', model: 'opus', effort: 'high', fast: false, items: [
-    { id: 'one', state: 'running', seat: 'developer', seatSource: 'declared', specialty: 'backend', title: 'Build parser' },
-  ] };
+  const call = { agent: 'Claude Code', model: 'opus', effort: 'high', fast: false, items };
   const terminal = { id: 't1', agentUsage: { calls: [call] } };
-  const html = renderToStaticMarkup(React.createElement(AgentTabScope.Provider, { value: 'p1' },
+  return renderToStaticMarkup(React.createElement(AgentTabScope.Provider, { value: 'p1' },
     React.createElement(CallsCard, { calls: [call], terminalId: 't1', terminals: [terminal] })));
+}
+
+test('a grouped Agent tab row keeps the specialty and model label beneath the role heading', () => {
+  const html = groupedCallsMarkup([
+    { id: 'one', state: 'running', seat: 'developer', seatSource: 'declared', specialty: 'backend', title: 'Build parser' },
+  ]);
   assert.match(html, /<h4>Developer<\/h4>/);
   assert.equal((html.match(/Developer/g) ?? []).length, 1);
   assert.match(html, /<b>Backend<\/b><span>Opus \(latest\) · high/);
+});
+
+test('grouped call rows lead with a labelled status icon and show only actionable routing notes', () => {
+  const { toggleFinished } = require('../src/features/agents/subagent-splits.ts');
+  const endedAt = Date.now(), worktree = '/workspace/worker-runs/a-long-worktree-name-that-needs-truncation';
+  const cases = [
+    ['running', 'CircleNotch', '运行中', { state: 'running', declared: { model: 'opus' }, worktree }],
+    ['awaiting', 'DotsThreeCircle', '等待你确认', { state: 'running', awaiting: 'owner', viewable: true }],
+    ['failed', 'Circle', '出错退出', { state: 'reviewing', endedAt, failure: { reason: 'error' }, declared: { model: 'not-opus' } }],
+    ['stopped', 'Stop', '已停止', { state: 'reviewing', endedAt, failure: { reason: 'killed' } }],
+    ['done', 'CheckCircle', '已完成', { state: 'done', endedAt, declared: { model: 'opus' } }],
+    ['starting', 'Circle', '启动中 · 未确认', { state: 'starting' }],
+    ['preparing', 'Circle', '准备中', { state: 'preparing' }],
+    ['reviewing', 'Record', '审核中', { state: 'reviewing', endedAt, declared: { model: 'opus' } }],
+  ];
+  const items = cases.map(([id, , , state]) => ({ id, title: `Task ${id}`, seat: 'developer', startedAt: endedAt - 65000, ...state }));
+  toggleFinished('t1');
+  try {
+    for (const language of ['zh', 'en']) {
+      const html = groupedCallsMarkup(items, language);
+      const rows = [...html.matchAll(/<li class="agent-team-call">(.*?)<\/li>/g)].map(match => match[1]);
+      assert.equal(rows.length, cases.length);
+      for (const [state, icon, key] of cases) {
+        const word = language === 'en' ? en[key] : key;
+        const row = rows.find(markup => markup.includes(`<strong>Task ${state}</strong>`));
+        assert.ok(row.includes(`data-state="${state}" role="img" aria-label="${word}" title="${word}"`));
+        assert.ok(row.includes(`data-icon="${icon}"></svg></span><strong>Task ${state}</strong><time>`));
+        assert.ok(!row.includes(`>${word}<`), `${word} appears in the label and tooltip only`);
+      }
+      const [running, awaiting, failed, stopped] = ['running', 'awaiting', 'failed', 'stopped'].map(state => rows.find(row => row.includes(`data-state="${state}"`)));
+      assert.match(running, /<span class="agent-team-line"><span class="agent-team-worktree" title="[^"]+">[^<]+<\/span><\/span>/);
+      assert.ok(running.includes(`title="${worktree}">${worktree}</span>`));
+      assert.equal((awaiting.match(/class="agent-team-line"/g) ?? []).length, 1, 'no empty metadata line or premature routing note');
+      assert.match(failed, /data-routing-verdict="mismatch"/);
+      assert.match(stopped, /data-routing-verdict="unknown"/);
+      assert.match(stopped, /<time>1:05<\/time>/);
+      assert.equal((html.match(/data-routing-verdict=/g) ?? []).length, 2);
+    }
+  } finally {
+    toggleFinished('t1');
+  }
 });
 // The pane's run-mode and allowance block, rendered from a main-process usage answer: both agents' sections (the terminal's agent is the current one).
 // options.claude / options.codex: each agent's connection kind; options.limits: each agent's main-process limits; options.usage overrides parts of the answer.

@@ -1,6 +1,6 @@
 import { routingModelName, routingRoleName } from '../../shared/routing-command.ts';
 import { createContext, useEffect, useState, type ReactNode } from 'react';
-import { CaretRight, CheckCircle, Circle, CircleNotch, DotsThreeCircle, Record as RecordDot, Terminal, WarningCircle } from '@phosphor-icons/react';
+import { CaretRight, CheckCircle, Circle, CircleNotch, DotsThreeCircle, Record as RecordDot, Stop, Terminal, WarningCircle } from '@phosphor-icons/react';
 import type { AgentCall, ProjectTerminal, SeatsInfo, SeatRole, TokenRate } from '../../shared/types';
 import { t } from '../../shared/i18n';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
@@ -52,6 +52,7 @@ export const CALL_STATES = {
   starting: { word: '启动中 · 未确认', icon: <Circle size={14} aria-hidden="true" /> },
 } as const;
 const AWAITING_WORD = '等待你确认';
+const awaitingIcon = <DotsThreeCircle size={14} aria-hidden="true" />;
 const MAX_CALL_ITEMS = 4;
 
 // A dispatched worker that did not finish cleanly, in words in the state column (skills/agent-dispatch).
@@ -81,7 +82,7 @@ function callItem({ row, open, now, label }: { row: CallRow; open: ReturnType<ty
   const declared = item.declared && t('分派时声明 {model} · {effort} · {mode}', { model: modelName(item.declared.model), effort: item.declared.effort ?? t('未报告'), mode: item.declared.fast == null ? t('未报告') : t(item.declared.fast ? '快速' : '普通') });
   const outside = item.failure?.files?.length ? t('改了允许范围之外的文件：{files}', { files: item.failure.files.join('、') }) : null;
   const cells = <>
-    <span className="activity-row-icon">{failure ? <WarningCircle size={14} weight="fill" aria-hidden="true" /> : awaiting ? <DotsThreeCircle size={14} aria-hidden="true" /> : CALL_STATES[state].icon}</span>
+    <span className="activity-row-icon">{failure ? <WarningCircle size={14} weight="fill" aria-hidden="true" /> : awaiting ? awaitingIcon : CALL_STATES[state].icon}</span>
     <span className="activity-call-text"><p>{item.title}</p><small className="activity-call-sub">{t(item.role)} · {word}
       {item.resumed && <span className="activity-call-pill" title={t('这一行由规划员续派唤醒。')}>{t('继续')}</span>}
       {item.source === 'intercepted' && <span className="activity-call-pill" title={t('由脚本自行启动，不是分派器启动。')}>{t('自启动')}</span>}</small></span>
@@ -151,15 +152,29 @@ function TeamSeats({ projectId, terminals, children }: {
   return children(info);
 }
 
-const VERDICTS = { mismatch: '核对不符', match: '核对一致', unknown: '核对未确认' } as const;
+const VERDICTS = { mismatch: '核对不符', unknown: '核对未确认' } as const;
+const TEAM_STATUS_ICONS = {
+  awaiting: awaitingIcon,
+  failed: <Circle size={8} weight="fill" aria-hidden="true" />,
+  stopped: <Stop size={14} weight="fill" aria-hidden="true" />,
+};
+
+function TeamCallStatus({ item }: { item: CallRow['item'] }) {
+  const { failure } = item;
+  const state = failure ? (failure.reason === 'killed' ? 'stopped' : 'failed')
+    : item.awaiting === 'owner' && item.state !== 'done' ? 'awaiting' : item.state;
+  const word = failure ? failureWord(failure) : t(state === 'awaiting' ? AWAITING_WORD : CALL_STATES[item.state].word);
+  const icon = state === 'awaiting' || state === 'failed' || state === 'stopped' ? TEAM_STATUS_ICONS[state] : CALL_STATES[state].icon;
+  return <span className="agent-team-status" data-state={state} role="img" aria-label={word} title={word}>{icon}</span>;
+}
 
 function TeamCallRow({ row, roles, info, now, labels, heading }: { row: CallRow; roles: readonly SeatRole[]; info?: SeatsInfo | null; now: number; labels: boolean; heading?: string }) {
   const { item, call, terminalId } = row;
-  const status = item.failure ? failureWord(item.failure) : t(item.awaiting === 'owner' && item.state !== 'done' ? AWAITING_WORD : CALL_STATES[item.state].word);
   const age = item.startedAt == null ? '—' : elapsedClock(Math.max(0, (item.endedAt ?? now) - item.startedAt));
   const catalogLabel = call.model && modelRow(info?.catalog ?? [], call.model)?.label;
   const model = callModelName({ ...call, model: call.model && (catalogLabel ? shortLabel(catalogLabel) : routingModelName(call.model)) });
   const verdict = routeVerdict(row, info);
+  const routingNote = verdict === 'mismatch' || verdict === 'unknown' && (item.endedAt != null || item.state === 'done') ? VERDICTS[verdict] : null;
   const late = noticeShown(terminalId, item, now), stop = stopState(terminalId, item.id);
   const { role, inferred } = callSeatRole(roles, item);
   const showName = !heading || (item.seatName && item.seatName !== heading);
@@ -170,11 +185,13 @@ function TeamCallRow({ row, roles, info, now, labels, heading }: { row: CallRow;
     showName && (item.seatName ?? routingRoleName(role.name, t)), specialtyLabel, !heading && item.offTeam && t('未在团队中'), inferred && t('推断'),
   ].filter(Boolean).join(' · ');
   const cells = <>
-      <span className="agent-team-subject"><strong>{item.title || model}</strong><time>{age}</time></span>
+      <span className="agent-team-subject"><TeamCallStatus item={item} /><strong>{item.title || model}</strong><time>{age}</time></span>
       <span className="agent-team-line">{roleLabel && <b>{roleLabel}</b>}<span>{[model, call.effort ?? '—', call.fast == null ? '—' : t(call.fast ? '快速' : '普通')].join(' · ')}</span></span>
-      <span className="agent-team-line"><span>{status}</span>{labels && <span>{row.title ?? t('终端 {number}', { number: row.number })}</span>}
+      {(labels || item.worktree || routingNote) && <span className="agent-team-line">
+        {labels && <span className="agent-team-terminal" title={row.title}>{row.title ?? t('终端 {number}', { number: row.number })}</span>}
         {item.worktree && <span className="agent-team-worktree" title={item.worktree}>{item.worktree}</span>}
-        <span data-routing-verdict={verdict}>{t(VERDICTS[verdict])}</span></span>
+        {routingNote && <span data-routing-verdict={verdict}>{t(routingNote)}</span>}
+      </span>}
   </>;
   return <li className="agent-team-call">
     {item.viewable

@@ -503,7 +503,7 @@ test('a grouped Agent tab card opens its worker session directly and an unavaila
   loader('shared/i18n.ts').applyLanguage('zh');
   const { CallsCard } = loader('features/agents/AgentCalls.tsx'), store = loader('features/agents/subagent-splits.ts');
   const calls = [call([
-    item(callId, { seat: 'developer', brief: true, log: true }),
+    item(callId, { seat: 'developer', awaiting: 'owner', brief: true, log: true }),
     item('dispatch:unavailable', { seat: 'developer', viewable: false }),
   ])];
   const scope = CallsCard({ calls, terminalId, terminals: [{ id: terminalId, agentUsage: { calls } }] });
@@ -519,6 +519,7 @@ test('a grouped Agent tab card opens its worker session directly and an unavaila
   assert.equal(unavailable.props.title, '没有可打开的工作会话');
   assert.equal(unavailable.props.onClick, undefined);
   const html = renderToStaticMarkup(rows[0]);
+  assert.match(html, /data-state="awaiting" role="img" aria-label="等待你确认"/);
   assert.doesNotMatch(html, /agent-team-details|本次调用没有简报或日志|>打开工作会话</);
   open.props.onClick();
   open.props.onClick();
