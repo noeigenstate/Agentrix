@@ -1,6 +1,6 @@
 // Seat choices are configuration, never evidence of which model actually ran.
 const { modelRow } = require('./model-catalog.cjs');
-const { BASE_EFFORTS, EFFORT, familyOf: family, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
+const { BASE_EFFORTS, EFFORT, familyOf: family, allowsUltracode, validModel, rankByName: rankOf, unsupportedEffort } = require('./seat-rules.mjs');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const ALIASES = ['opus', 'sonnet', 'haiku'];
 const TEAM = { orchestrator: 'opus', product: 'opus', architect: 'opus', designer: 'sonnet', developer: 'opus',
@@ -9,7 +9,7 @@ const CODEX_ROLES = new Set(['developer', 'devops']);
 const refusal = (code, seat, message) => ({ ok: false, code, ...(seat ? { seat } : {}), message });
 const fail = (code, seat, message) => { throw Object.assign(new Error(message), refusal(code, seat, message)); };
 
-function cleanSeat(raw, seat, models, stored = false) {
+function cleanSeat(raw, seat, models, stored = false, isLead = seat === 'orchestrator') {
   if (!object(raw) || !validModel(raw.model)) fail('invalid-model', seat, 'Expected a valid model id of at most 160 characters.');
   const agent = family(raw.model);
   const row = models?.find(row => row.model === raw.model);
@@ -17,7 +17,11 @@ function cleanSeat(raw, seat, models, stored = false) {
     fail('invalid-effort', seat, unsupportedEffort(agent));
   }
   if (raw.fast !== undefined && (typeof raw.fast !== 'boolean' || !stored && raw.fast && (row ? !row.fast : agent === 'claude'))) fail('fast-not-allowed', seat, 'Fast mode is unavailable for this model.');
-  return { model: raw.model, effort: raw.effort, ...(raw.fast !== undefined ? { fast: raw.fast } : {}) };
+  const ultracode = allowsUltracode(raw.model, isLead);
+  if (Object.hasOwn(raw, 'ultracode') && (typeof raw.ultracode !== 'boolean' || !stored && raw.ultracode && isLead && !ultracode)) {
+    fail('ultracode-not-allowed', seat, 'Ultracode requires a Claude orchestrator and a boolean setting.');
+  }
+  return { model: raw.model, effort: raw.effort, ...(raw.fast !== undefined ? { fast: raw.fast } : {}), ...(ultracode && raw.ultracode && { ultracode: true }) };
 }
 
 // A corrupt stored choice must not erase another seat.
@@ -125,13 +129,14 @@ function modelIdentity(models) {
   };
 }
 
-function resolveSeat(choice, fallback, installed, models) {
+function resolveSeat(choice, fallback, installed, models, isLead = false) {
   const selected = choice && installed[family(choice.model)] ? choice : fallback;
   if (!selected) return null;
   const row = models.find(row => row.model === selected.model);
   const seat = { ...selected };
   if (row && !row.efforts.includes(seat.effort)) seat.effort = row.defaultEffort || row.efforts[0];
   if (row && seat.fast && !row.fast) seat.fast = false;
+  if (seat.ultracode !== true || !allowsUltracode(seat.model, isLead)) delete seat.ultracode;
   return seat;
 }
 
@@ -139,7 +144,7 @@ function leadOptions(map, agent, installed, models = [], lead = 'orchestrator') 
   if (!installed[agent]) return null;
   const fallback = agent === 'claude' ? high('opus') : codexDefault(models);
   const selected = Object.hasOwn(map, lead) && family(map[lead].model) === agent ? map[lead] : fallback;
-  return resolveSeat(selected, fallback, installed, models);
+  return resolveSeat(selected, fallback, installed, models, true);
 }
 
 function leadConfiguration(map, lead, installed, models) {

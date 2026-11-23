@@ -109,6 +109,7 @@
 .seats-gem-name, .seats-gem-summary { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seats-gem-name { grid-column: 2; font-weight: 600; }
 .seats-gem-summary { color: var(--text-2); text-align: end; }
+.seats-gem[data-ultracode-on] { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .seats-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .seats-ghost { position: fixed; z-index: 450; display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 8px;
   border: 1px solid var(--border-hover); border-radius: 8px; background: var(--bg-card); pointer-events: none; }

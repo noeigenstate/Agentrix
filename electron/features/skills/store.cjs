@@ -9,10 +9,10 @@ const { digest, assertUserSkillName } = require('./session.cjs');
 const { pruneDeliveryFiles } = require('./delivery-cleanup.cjs');
 const { builtinMetadata, TRIGGERS } = require('./builtin-format.cjs');
 const modelSeats = require('./model-seats.cjs');
-const { familyOf } = require('./seat-rules.mjs');
+const { familyOf, allowsUltracode } = require('./seat-rules.mjs');
 const { cleanConfig, compactConfig, emptyConfig, resolveTeam, validateTeam } = require('./team-roles.cjs');
 const { readRouting, writeRouting, routingState, reviewFile, routingWatch } = require('./project-routing.cjs');
-const { renderRoutingSkill } = require('./skill-render.cjs');
+const { renderRoutingSkill, modelWords } = require('./skill-render.cjs');
 const { ModelCatalog, trackModelRuntime } = require('./model-catalog.cjs');
 const { probeCodex, probeClaude } = require('./model-probe.cjs');
 const { projectSkillTargets, replaceProjectSkills, projectSkillSignature, linkedSkillParent, extensionBase } = require('./project-skills.cjs');
@@ -407,6 +407,7 @@ class SkillsStore {
     if (!this.seatsInfo(projectId)?.conductor) return null;
     const seat = this.leadOptions(projectId, 'claude', { remote });
     if (!seat) return null;
+    if (remote) delete seat.ultracode;
     return { ...seat, seatsMap: this.dispatchSeats(projectId) };
   }
 
@@ -417,7 +418,7 @@ class SkillsStore {
 
   leadAgent(projectId) { return this.seatsInfo(projectId)?.leadAgent ?? null; }
 
-  // Whether model routing owns the lead's model, effort and fast: only in conductor mode.
+  // Model routing owns the lead's settings only in conductor mode.
   routingOwned(projectId) { return !!this.seatsInfo(projectId)?.conductor; }
 
   observeModels(family, rows) { this.modelCatalog.accept(family, rows); }
@@ -770,7 +771,8 @@ class SkillsStore {
     const seats = map ?? info.effective;
     return info.roles.filter(role => role.enabled !== false && seats?.[role.id]).map(role => {
       const seat = seats[role.id];
-      return `${role.name} (${role.id}): ${seat.model} · ${seat.effort}${seat.fast ? ' · fast' : ''}`;
+      const ultracode = allowsUltracode(seat.model, role.id === info.lead) && seat.ultracode;
+      return `${role.name} (${role.id}): ${modelWords({ ...seat, ultracode })}`;
     }).join('; ') || null;
   }
 

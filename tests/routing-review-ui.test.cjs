@@ -80,6 +80,15 @@ test('raw routing text shows control and bidi characters as visible escapes', ()
   assert.doesNotMatch(pre, /[\p{Cc}\p{Cf}]/u);
 });
 
+test('routing review displays Ultracode turning on and off', () => {
+  const withUltracode = { ...active, ultracode: true };
+  const panel = (before, after) => render({ ...foreign, review: { ...foreign.review,
+    roleChanges: [{ role: 'orchestrator', source: 'builtin', status: 'changed', before, after }],
+  } });
+  assert.match(panel(active, withUltracode), /Ultracode <span>否<\/span> → <span>是<\/span>/);
+  assert.match(panel(withUltracode, active), /Ultracode <span>是<\/span> → <span>否<\/span>/);
+});
+
 test('invalid and rejected routing show only main’s allowed actions and readable raw text', () => {
   const { review, ...source } = foreign;
   const link = { ...source, raw: undefined, state: 'invalid', actions: ['keep'], error: { code: 'link', message: 'code wins' } };

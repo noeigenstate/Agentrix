@@ -809,6 +809,12 @@ test('the main model section: the model its latest reply records (the setting on
   assert.ok(main(mainMarkup([], 'en', { agentUsage: usage({}) })).includes('<h4>Orchestrator</h4>'));
 });
 
+test('the main model shows Ultracode only when the session reports it is on', () => {
+  const markup = ultracode => mainMarkup([], 'zh', { agentSettings: { model: 'opus', effort: 'high', fast: false, ultracode } });
+  assert.match(markup(true), /activity-call-settings">high · 普通 · Ultracode<\/span>/);
+  for (const inactive of [false, null, undefined]) assert.doesNotMatch(markup(inactive), /Ultracode/);
+});
+
 test('the main row shows the step under way and spins only while the agent works; a finished or missing step shows the agent state, never a prompt or a sub-agent title', () => {
   const calls = [{ agent: 'Codex', model: 'gpt-6.1-sol', provider: 'OpenAI', items: [{ state: 'running', role: '执行', title: 'SUB TITLE' }] }];
   const step = (action, codexActivity) => /<section class="activity-card activity-main agent-team-group"[\s\S]*?<\/section>/.exec(mainMarkup(calls, 'zh',

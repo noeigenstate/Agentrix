@@ -20,6 +20,7 @@ const errors: Record<string, string> = {
   'role-text': '角色文字无效，或已启用角色的名称重复。',
   'role-limit': '超过角色数量上限。',
   'lead-locked': '总指挥必须保留。',
+  'ultracode-not-allowed': 'Ultracode 只支持 Claude 总指挥，设置值必须为布尔值。',
   'file-changed': '文件已在磁盘上更改，请重新查看。',
   'file-unwritable': '无法写入路由文件。',
   'action-unavailable': '此操作已不可用。',
@@ -52,12 +53,14 @@ export function resolveRouting(api: Pick<Window['agentrix'], 'resolveSkillRoutin
 
 const groups = { added: '新增角色', removed: '移除或停用的角色', changed: '修改的角色' } as const;
 
-const roleFields = { model: '模型', effort: '强度', fast: '快速', fresh: '新实例', enabled: '启用', from: '基于' } as const;
+const roleFields = { model: '模型', effort: '强度', fast: '快速', ultracode: 'Ultracode', fresh: '新实例', enabled: '启用', from: '基于' } as const;
 
 function RoleSettingsDiff({ before, after }: Pick<RoutingRoleChange, 'before' | 'after'>) {
+  const value = (state: RoutingRoleState | null, field: keyof typeof roleFields) =>
+    field === 'ultracode' && state ? state.ultracode === true : state?.[field];
   return <div className="seats-review-settings">
     {(Object.keys(roleFields) as (keyof typeof roleFields)[]).filter(field => before?.[field] !== after?.[field]).map(field =>
-      <span key={field}>{t(roleFields[field])} <span>{valueText(before?.[field])}</span> → <span>{valueText(after?.[field])}</span></span>)}
+      <span key={field}>{t(roleFields[field])} <span>{valueText(value(before, field))}</span> → <span>{valueText(value(after, field))}</span></span>)}
   </div>;
 }
 

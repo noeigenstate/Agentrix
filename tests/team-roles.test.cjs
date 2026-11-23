@@ -27,6 +27,19 @@ test('the default library is disabled and inherits the intended seats', () => {
   assert.deepEqual(changed.fresh, ['a11y', 'reviewer', 'qa']);
 });
 
+test('Ultracode is a boolean choice for the Claude orchestrator only', () => {
+  const orchestrator = { ...seat('opus'), ultracode: true };
+  const raw = config({ orchestrator, researcher: { ...seat('sonnet'), ultracode: true }, qa: { ultracode: true } });
+  const { config: cleaned } = cleanConfig(raw, entry, catalog, true, true);
+  assert.deepEqual(resolveTeam(entry, cleaned, defaults).effective, { ...defaults, orchestrator });
+  assert.deepEqual(compactConfig(entry, cleaned), config({ orchestrator }));
+  for (const rejected of [{ ...orchestrator, model: 'gpt-6.2-sol' }, { ...orchestrator, ultracode: 'true' }]) {
+    assert.throws(() => cleanConfig(config({ orchestrator: rejected }), entry, catalog), { code: 'ultracode-not-allowed' });
+  }
+  assert.deepEqual(modelSeats.resolveSeat(orchestrator, null, installed, catalog), seat('opus'));
+  assert.deepEqual(modelSeats.resolveSeat({ ...orchestrator, model: 'gpt-6.2-sol' }, null, installed, catalog, true), seat('gpt-6.2-sol'));
+});
+
 test('copies inherit roles and freshness and sit next to their source', () => {
   const roles = { reviewer: { enabled: false }, 'x-review': copy('reviewer', 'Review Lead', { fresh: false, ...seat('gpt-peer') }),
     frontend: { enabled: true }, 'x-app': copy('frontend', 'Application'), qa: { enabled: false } };

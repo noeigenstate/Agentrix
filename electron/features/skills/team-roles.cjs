@@ -3,8 +3,8 @@ const { roleKind, roleLocks, validRoleId, validateCustomRole, normalizeRoleText,
 const { familyOf, BASE_EFFORTS } = require('./seat-rules.mjs');
 const { outsideFences, region } = require('./builtin-format.cjs');
 
-const roleKeys = ['model', 'effort', 'fast', 'enabled', 'fresh', 'from', 'name', 'duty', 'outputs'];
-const seatKeys = ['model', 'effort', 'fast'];
+const seatKeys = ['model', 'effort', 'fast', 'ultracode'];
+const roleKeys = [...seatKeys, 'enabled', 'fresh', 'from', 'name', 'duty', 'outputs'];
 const textKeys = ['name', 'duty', 'outputs'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const emptyConfig = () => ({ roles: {} });
@@ -42,10 +42,12 @@ function roleConfig(id, raw, entry, catalog, stored, ignored, file) {
   } else if (['from', ...textKeys].some(key => Object.hasOwn(raw, key))) {
     fail('invalid-role', id);
   }
-  if (seatKeys.some(key => Object.hasOwn(raw, key))) {
+  const isLead = id === entry.seats[0];
+  if (Object.hasOwn(raw, 'ultracode') && typeof raw.ultracode !== 'boolean') fail('ultracode-not-allowed', id);
+  if (seatKeys.some(key => Object.hasOwn(raw, key) && (key !== 'ultracode' || isLead))) {
     try {
       if (file && !fileEffort(raw)) fail('invalid-effort', id);
-      Object.assign(fields, modelSeats.cleanSeat(raw, id, catalog, stored));
+      Object.assign(fields, modelSeats.cleanSeat(raw, id, catalog, stored, isLead));
     }
     catch (error) {
       if (!stored) throw error;
@@ -81,7 +83,8 @@ function baseRows(entry) {
 }
 
 const seatFrom = override => override.model === undefined ? undefined : Object.fromEntries(seatKeys.filter(key => Object.hasOwn(override, key)).map(key => [key, override[key]]));
-const sameSeat = (left, right) => left?.model === right?.model && left?.effort === right?.effort && !!left?.fast === !!right?.fast;
+const sameSeat = (left, right) => left?.model === right?.model && left?.effort === right?.effort
+  && !!left?.fast === !!right?.fast && !!left?.ultracode === !!right?.ultracode;
 
 function resolveTeam(entry, config, defaults) {
   const builtIn = baseRows(entry), overrides = config.roles;

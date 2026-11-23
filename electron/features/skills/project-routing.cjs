@@ -191,6 +191,7 @@ function reviewRoleState(item) {
   const { row, seat } = item, { enabled, fresh, from, name, duty, outputs } = row;
   return {
     enabled, fresh, ...(seat && { model: seat.model, effort: seat.effort }), fast: seat?.fast === true,
+    ...(seat?.ultracode === true && { ultracode: true }),
     ...(from && { from }), ...(row.source === 'custom' && { custom: { name, duty, outputs } }),
   };
 }
@@ -198,7 +199,7 @@ function reviewRoleState(item) {
 function diffRole(id, before, after, diff) {
   const oldState = reviewRoleState(before), newState = reviewRoleState(after);
   if (isDeepStrictEqual(oldState, newState)) return null;
-  for (const field of ['enabled', 'fresh', 'from', 'model', 'effort', 'fast']) diff(id, field, oldState?.[field], newState?.[field]);
+  for (const field of ['enabled', 'fresh', 'from', 'model', 'effort', 'fast', 'ultracode']) diff(id, field, oldState?.[field], newState?.[field]);
   for (const field of ['name', 'duty', 'outputs']) diff(id, field, oldState?.custom?.[field], newState?.custom?.[field]);
   let status = 'changed';
   if (!oldState || !oldState.enabled && newState?.enabled) status = 'added';

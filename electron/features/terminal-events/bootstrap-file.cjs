@@ -3,7 +3,7 @@ const path = require('node:path');
 const { Buffer } = require('node:buffer');
 const { randomUUID } = require('node:crypto');
 const { writeFileAtomic } = require('../../atomic-write.cjs');
-const { validModel, EFFORT } = require('../skills/seat-rules.mjs');
+const { validModel, EFFORT, familyOf } = require('../skills/seat-rules.mjs');
 const { SEAT_BYTES } = require('../agents/call-seat.cjs');
 
 // The file a terminal's shell integration and the dispatch helper read to reach main: the session's key, the event
@@ -16,7 +16,7 @@ const claudeEnvFile = file => file.replace(/\.json$/i, '') + '-claude-env.sh';
 function updateBootstrapLead(file, lead) {
   if (lead && (!validModel(lead.model) || typeof lead.effort !== 'string' || !EFFORT.test(lead.effort))) throw new Error('Invalid lead seat.');
   const lines = lead ? [lead.model, lead.effort, lead.fast === true ? '1' : '0',
-    JSON.stringify(lead.seatsMap ?? null), ''] : [];
+    JSON.stringify(lead.seatsMap ?? null), ...(lead.ultracode === true && familyOf(lead.model) === 'claude' ? ['ultracode'] : []), ''] : [];
   writeFileAtomic(file + '.lead', lines.join('\n'));
 }
 

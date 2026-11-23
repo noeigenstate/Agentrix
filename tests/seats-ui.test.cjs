@@ -504,6 +504,32 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   assert.match(textOf(byAttr(lead.render(), 'data-seat', 'orchestrator')), /Opus 9/);
 });
 
+test('the Claude orchestrator can toggle Ultracode, show it on its card and include it in the save', async t => {
+  const h = dialogHarness(t, seatsInfo());
+  const toggle = () => byAttr(liveMenu(h), 'data-ultracode', 'orchestrator');
+  const card = () => byAttr(h.render(), 'data-pick', 'orchestrator');
+  assert.equal(byAttr(openMenu(h, 'designer'), 'data-ultracode'), undefined);
+  openMenu(h, 'orchestrator');
+  assert.equal(toggle().props['aria-checked'], false);
+  assert.match(textOf(liveMenu(h)), /Uses multiple agents for every task, increasing usage/);
+  toggle().props.onClick();
+  assert.equal(toggle().props['aria-checked'], true);
+  assert.match(textOf(card()), /high · Ultracode/);
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls, [['project', 'p1', { roles: { orchestrator: { ...DEFAULTS.orchestrator, ultracode: true } } }, 'at-open']]);
+});
+
+test('a Codex replacement clears the Claude orchestrator’s Ultracode switch and saved choice', async t => {
+  const h = dialogHarness(t, seatsInfo({ project: { orchestrator: { ...DEFAULTS.orchestrator, ultracode: true } } }));
+  byAttr(openMenu(h, 'orchestrator'), 'data-assign', 'gpt-6.2-sol').props.onClick();
+  assert.doesNotMatch(textOf(byAttr(h.render(), 'data-pick', 'orchestrator')), /Ultracode/);
+  assert.equal(byAttr(openMenu(h, 'orchestrator'), 'data-ultracode'), undefined);
+  byAttr(h.render(), 'data-save').props.onClick();
+  await settle();
+  assert.deepEqual(h.calls[0][2], { roles: { orchestrator: { model: 'gpt-6.2-sol', effort: 'high', fast: true } } });
+});
+
 test('the refresh button asks main for the seats, shows the new catalog and when each list was read, and says when it fails', async t => {
   const now = Date.now(), at = { claude: now - 3 * 3600000 - 1000, codex: null };
   const refreshed = seatsInfo({ catalog: [...catalog(), row('gpt-6.2-sol', 'GPT-6.2-Sol', 'codex', 3)], catalogAt: { claude: now, codex: now - 120000 } });
@@ -1173,6 +1199,13 @@ test('the routing key refreshes accepted roles and shows the lead the conversati
   assert.match(textOf(byAttr(tree, 'data-seat', 'orchestrator')), /Orchestrator AgentOpushigh/i);
   assert.doesNotMatch(textOf(tree), /after restart/i);
   assert.match(tree.props['aria-label'], /needs review/);
+  const ultracodeSeat = { ...DEFAULTS.orchestrator, ultracode: true };
+  info = { ...info, effective: { ...effective, orchestrator: ultracodeSeat, 'x-role-0': ultracodeSeat } };
+  notify();
+  await settle();
+  const withUltracode = handle.render();
+  assert.match(textOf(byAttr(withUltracode, 'data-seat', 'orchestrator')), /high · Ultracode/);
+  assert.doesNotMatch(textOf(byAttr(withUltracode, 'data-seat', 'x-role-0')), /Ultracode/);
 });
 
 test('the conversation box uses accepted settings across drafts and never asks for a restart', async t => {

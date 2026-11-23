@@ -4,18 +4,18 @@ import type {
   SeatRole, SeatsInfo, SeatsSaveError, TeamRole,
 } from '../../shared/types';
 import { aliasTarget } from '../../shared/routing-command.ts';
-import { BASE_EFFORTS, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
+import { BASE_EFFORTS, allowsUltracode, familyOf, rankByName, unsupportedEffort, validModel } from '../../../electron/features/skills/seat-rules.mjs';
 
 import { roleLocks } from '../../../electron/features/skills/role-rules.mjs';
 
-export { familyOf };
+export { allowsUltracode, familyOf };
 
 export function displayedSeat(info: SeatsInfo, id: SeatId) {
   return id === info.lead ? info.current?.[id] ?? info.effective[id] : info.effective[id];
 }
 
 export const seatSettingText = (seat: Seat, model: string, fast: string) =>
-  [model, seat.effort, seat.fast && fast].filter(Boolean).join(' · ');
+  [model, seat.effort, seat.fast && fast, seat.ultracode && 'Ultracode'].filter(Boolean).join(' · ');
 
 // The dialog checks seat edits before saving. Main still validates saves and the dialog shows its refusal.
 export type SlotId = SeatId;
@@ -41,7 +41,8 @@ export function menuPlacement(anchor: { left: number; top: number; bottom: numbe
 }
 export const getSlot = (map: SeatMap, slot: SlotId): Seat | undefined => map[slot];
 export const withSlot = (map: SeatMap, slot: SlotId, seat: Seat): SeatMap => ({ ...map, [slot]: seat });
-export const sameSeat = (a?: Seat, b?: Seat) => !!a && !!b && a.model === b.model && a.effort === b.effort && !!a.fast === !!b.fast;
+export const sameSeat = (a?: Seat, b?: Seat) => !!a && !!b && a.model === b.model && a.effort === b.effort
+  && !!a.fast === !!b.fast && !!a.ultracode === !!b.ultracode;
 export const modelRow = (catalog: SeatModel[], model: string) => catalog.find(row => row.model === model);
 // A model the catalog does not know is not judged unavailable.
 export const isAvailable = (catalog: SeatModel[], model: string) => modelRow(catalog, model)?.available !== false;
@@ -100,8 +101,11 @@ export function draftRoles(info: SeatsInfo, config: RoutingConfig): TeamRole[] {
   });
 }
 
-const seatOf = (value?: RoleConfig): Seat | undefined =>
-  value?.model && value.effort ? { model: value.model, effort: value.effort, ...(value.fast ? { fast: true } : {}) } : undefined;
+function seatOf(value: RoleConfig | undefined, isLead: boolean): Seat | undefined {
+  if (!value?.model || !value.effort) return;
+  return { model: value.model, effort: value.effort, ...(value.fast && { fast: true }),
+    ...(value.ultracode === true && allowsUltracode(value.model, isLead) && { ultracode: true }) };
+}
 
 function seedSeat(role: TeamRole | undefined, defaults: SeatMap, resolve: (id: SeatId) => Seat | undefined) {
   if (!role) return;
@@ -114,7 +118,8 @@ export function resolveDraftSeats(defaults: SeatMap, roles: TeamRole[], config: 
   const map: SeatMap = {};
   const resolve = (id: string): Seat | undefined => {
     if (Object.hasOwn(map, id)) return map[id];
-    const seat = seatOf(config.roles[id]) ?? seedSeat(byId.get(id), defaults, resolve);
+    const role = byId.get(id);
+    const seat = seatOf(config.roles[id], role?.kind === 'lead') ?? seedSeat(role, defaults, resolve);
     if (seat) map[id] = seat;
     return seat;
   };
@@ -127,7 +132,7 @@ export const baselineFor = (info: SeatsInfo, scope: Scope) => resolveDraftSeats(
 export function updateDraftSeats(config: RoutingConfig, previous: SeatMap, next: SeatMap): RoutingConfig {
   const roles = { ...config.roles };
   for (const [id, seat] of Object.entries(next)) {
-    if (!sameSeat(previous[id], seat)) roles[id] = { ...roles[id], ...seat, fast: !!seat.fast };
+    if (!sameSeat(previous[id], seat)) roles[id] = { ...roles[id], ...seat, fast: !!seat.fast, ultracode: !!seat.ultracode };
   }
   return { ...config, roles };
 }
@@ -137,11 +142,11 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
   const entries = roles.flatMap(role => {
     const entry = config.roles[role.id];
     if (!entry) return [];
-    const { model, effort, fast, ...rest } = entry;
+    const { model, effort, fast, ultracode, ...rest } = entry;
     const inherited = seedSeat(role, info.defaults, id => resolved[id]);
     if (rest.enabled === role.defaultEnabled || role.locked.includes('enabled')) delete rest.enabled;
     if (rest.fresh === role.defaultFresh || role.locked.includes('fresh')) delete rest.fresh;
-    const seat = seatOf(entry);
+    const seat = seatOf(entry, role.kind === 'lead');
     const value = { ...rest, ...(seat && !sameSeat(seat, inherited) ? seat : {}) };
     return Object.keys(value).length ? [[role.id, value] as const] : [];
   });
@@ -149,10 +154,10 @@ export function cleanDraft(info: SeatsInfo, config: RoutingConfig): RoutingConfi
 }
 
 // A seat's model moved into another seat keeps its effort and fast only where the new model allows them (Claude fast stays off unless the seat already had it).
-function fitSeat(seat: Seat, row: SeatModel): Seat {
+function fitSeat(seat: Seat, row: SeatModel, ultracode = seat.ultracode): Seat {
   const effort = fitEffort(row, seat.effort);
-  if (!row.fast) return { model: row.model, effort };
-  return { model: row.model, effort, fast: row.family === 'codex' ? seat.fast ?? true : familyOf(seat.model) === 'claude' && !!seat.fast };
+  const fast = row.family === 'codex' ? seat.fast ?? true : familyOf(seat.model) === 'claude' && !!seat.fast;
+  return { model: row.model, effort, ...(row.fast && { fast }), ...(allowsUltracode(row.model, !!ultracode) && { ultracode: true }) };
 }
 
 function fitEffort(row: SeatModel, effort?: string) {
@@ -177,7 +182,7 @@ export function swapSlots(map: SeatMap, a: SlotId, b: SlotId, catalog: SeatModel
   const first = getSlot(map, a), second = getSlot(map, b), rows = [first, second].map(seat => seat && modelRow(catalog, seat.model));
   if (!first || !second || !rows[0] || !rows[1]) return { ok: false, reason: 'unknown-model' };
   if (a === b || first.model === second.model && sameSeat(first, second)) return { ok: false, reason: 'same' };
-  return { ok: true, map: withSlot(withSlot(map, a, fitSeat(second, rows[1])), b, fitSeat(first, rows[0])) };
+  return { ok: true, map: withSlot(withSlot(map, a, fitSeat(second, rows[1], !!first.ultracode)), b, fitSeat(first, rows[0], !!second.ultracode)) };
 }
 
 export function setEffort(map: SeatMap, slot: SlotId, effort: string, catalog: SeatModel[]): Edit {
