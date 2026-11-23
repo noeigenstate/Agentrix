@@ -3798,5 +3798,11 @@
   "关闭指挥家模式后，终端里的主模型就是原本的命令行：用 /model、/effort 直接切换，左栏标题显示“主模型”，模型路由卡整张变灰。": "With conductor mode off, the terminal lead is the plain command line: /model and /effort change it directly, the side panel heading reads \"Main model\", and the model routing card is greyed out.",
   "角色不再弹出选项框或确认框等你作答：实现细节自己决定，需要拍板的事交回总指挥；被拒的操作列在结果里，角色继续完成其余工作。": "Roles no longer open option or confirmation menus that wait for you: they decide implementation details themselves and return real decisions to the orchestrator; a refused action is listed in the result and the role finishes the rest of its work.",
   "深度切换": "Effort switch",
-  "指挥家模式下把总指挥的思考深度改成 max 时，运行中的 Claude Code 现在会正确切换，不再被取消。": "In conductor mode, changing the orchestrator's effort to max now switches the running Claude Code correctly instead of being cancelled."
+  "指挥家模式下把总指挥的思考深度改成 max 时，运行中的 Claude Code 现在会正确切换，不再被取消。": "In conductor mode, changing the orchestrator's effort to max now switches the running Claude Code correctly instead of being cancelled.",
+  "Ultracode": "Ultracode",
+  "模型路由里总指挥座位多了 Ultracode 开关：打开后每个任务都用多代理工作流，新对话直接带上，运行中的对话自动切换，左栏和路由卡会显示。": "The orchestrator seat in model routing has an Ultracode switch: when on, every task uses multi-agent workflows; new conversations start with it, running ones switch by themselves, and the side panel and routing card show it.",
+  "快速切换": "Fast mode switch",
+  "指挥家模式下，路由里的快速模式会自动切到运行中的 Claude Code，且不改你保存的默认；被拒绝时会弹出命令行给的原因，例如需要 usage credits。": "In conductor mode, fast mode in routing is switched on the running Claude Code without changing your saved default; when it is refused, the reason the CLI gives is shown, such as needing usage credits.",
+  "重复切换": "Switching back",
+  "把总指挥改回这段对话里用过的模型或思考深度时，会再次自动切换，左栏不再停在旧值上。": "Changing the orchestrator back to a model or effort already used in this conversation switches again, so the side panel no longer stays on the old value."
 }
