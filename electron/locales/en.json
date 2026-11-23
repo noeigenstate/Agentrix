@@ -3763,5 +3763,14 @@
   "终端角色": "Roles in terminals",
   "用 npm 方式安装的 Claude Code 在 PowerShell 里也能调用角色；SSH 终端会明确提示角色暂不可用。": "A Claude Code installed with npm can now call roles from PowerShell too, and SSH terminals say plainly that roles are not available there yet.",
   "已选 {model}，新对话生效。": "{model} is selected and applies to new conversations.",
-  "主模型 · {model}": "Main model · {model}"
+  "主模型 · {model}": "Main model · {model}",
+  "拒后继续": "Carries on after a refusal",
+  "角色被拒绝某个操作后会继续完成其余工作，并在结果里列出被拒的操作，不再停下来等你确认。": "A role that is refused an action now finishes the rest of its work and lists the refused action in its result instead of stopping to wait for you.",
+  "模型版本": "Model releases",
+  "模型路由里的 Claude 模型直接显示版本号，例如 Opus 5.5，不再显示“latest”；别名和它对应的版本只保留版本一项。": "Claude models in model routing are named by their release, such as Opus 5.5, and no longer say \"latest\"; an alias and the release it runs are listed once, as the release.",
+  "角色列表": "Role list",
+  "角色行用符号表示运行中、完成、失败、已停止和等你确认；模型核对一致时不再提示，路径保持一行。": "A role row shows running, finished, failed, stopped and waiting for you as a symbol; a routing check that matches is no longer mentioned, and the folder stays on one line.",
+  "关闭指挥家模式后，左栏标题显示“主模型”；新选的模型与当前对话不同时，会提示它在新对话生效。": "With conductor mode off the side panel heading reads \"Main model\", and a newly chosen model that differs from the running conversation says it applies to new conversations.",
+  "设置位置": "Settings position",
+  "Agentrix 菜单里的“设置”移到了最下面。": "Settings is now the last item in the Agentrix menu."
 }
