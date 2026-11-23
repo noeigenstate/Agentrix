@@ -69,13 +69,14 @@ export function AppMenu({ fullScreen, canReturn, updateReady, onAddProject, onRe
       <Item icon={<ArrowLeft size={16} />} label={t('返回项目')} keys={shortcut('overview')} disabled={!canReturn} onSelect={() => choose(onReturn)} />
       <div className="menu-divider" role="separator" />
       <Item icon={fullScreen ? <CornersIn size={16} /> : <CornersOut size={16} />} label={fullScreen ? t('退出全屏') : t('全屏')} keys={shortcut('fullscreen')} onSelect={() => choose(onFullScreen)} />
-      <Item icon={<GearSix size={16} />} label={t('设置')} keys={shortcut('settings')} onSelect={() => choose(onSettings)} />
       <Item icon={<Flask size={16} />} label={t('虚拟实验室')} onSelect={() => choose(openLab)} />
       <Item icon={<ChartBar size={16} />} label={t('数据看板')} onSelect={() => choose(openDashboard)} />
       {updateReady && <>
         <div className="menu-divider" role="separator" />
         <Item icon={<ArrowCircleUp size={16} />} label={t('重启并安装更新')} onSelect={() => choose(onInstallUpdate)} />
+        <div className="menu-divider" role="separator" />
       </>}
+      <Item icon={<GearSix size={16} />} label={t('设置')} keys={shortcut('settings')} onSelect={() => choose(onSettings)} />
     </div>, document.body)}
   </>;
 }

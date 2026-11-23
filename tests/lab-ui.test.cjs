@@ -721,7 +721,7 @@ test('the page reads only the lab bridge and imports only src/shared; the main w
   assert.deepEqual([...new Set(imports.filter(spec => !spec.startsWith('../../shared/')))], [], 'only src/shared is imported from outside the feature');
   const menu = read(path.join(src, 'features/titlebar/AppMenu.tsx'));
   assert.match(menu, /window\.agentrix\.openLab\(\)/); assert.match(menu, /label=\{t\('虚拟实验室'\)\} onSelect=\{\(\) => choose\(openLab\)\}/);
-  assert.ok(menu.indexOf("t('设置')") < menu.indexOf("t('虚拟实验室')"), 'the lab entry sits next to Settings');
+  assert.ok(menu.indexOf("t('虚拟实验室')") < menu.indexOf("t('设置')"), 'the lab entry precedes Settings');
 });
 
 test('every lab phrase has an English translation and shape-bearing words are not hard-coded in English', () => {

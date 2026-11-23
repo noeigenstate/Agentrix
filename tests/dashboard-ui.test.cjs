@@ -713,7 +713,7 @@ test('采纳 / 不采纳 / 撤销 call decide with the suggestion id and the sta
   assert.equal(note('dismissed', { kind: 'mechanism', title: 'T' }, null), '已标为不采纳「T」。'); assert.equal(note('open', { kind: 'weight', title: 'T' }, null), '已撤销「T」。');
 });
 
-test('the app menu offers 数据看板 after 设置, before any update item, and opening it closes the menu first', async () => {
+test('the app menu puts 设置 last with or without an update and closes before opening 数据看板', async () => {
   const h = hooks({ 0: { left: 0, top: 0 } }), logged = [], previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window'), original = console.error;
   const opened = [], labOpened = [];
   Object.defineProperty(globalThis, 'window', { configurable: true, value: { agentrix: {
@@ -725,8 +725,10 @@ test('the app menu offers 数据看板 after 设置, before any update item, and
     const loader = makeLoader({ react: h.api, 'react-dom': { createPortal: node => node }, '../shortcuts/shortcuts': { shortcut: () => '' } }), { AppMenu } = loader('features/titlebar/AppMenu.tsx');
     loader('shared/i18n.ts').applyLanguage('zh');
     const props = { fullScreen: false, canReturn: true, updateReady: true, onAddProject() {}, onReturn() {}, onFullScreen() {}, onSettings() {}, onInstallUpdate() {} };
-    const items = () => elements(h.render(() => AppMenu(props))).filter(node => node.props.label !== undefined);
-    assert.deepEqual(items().map(node => node.props.label), ['新建项目', '返回项目', '全屏', '设置', '虚拟实验室', '数据看板', '重启并安装更新']);
+    const items = (updateReady = props.updateReady) => elements(h.render(() => AppMenu({ ...props, updateReady }))).filter(node => node.props.label !== undefined);
+    const labels = ['新建项目', '返回项目', '全屏', '虚拟实验室', '数据看板'];
+    assert.deepEqual(items(false).map(node => node.props.label), [...labels, '设置']);
+    assert.deepEqual(items().map(node => node.props.label), [...labels, '重启并安装更新', '设置']);
     const entry = () => items().find(node => node.props.label === '数据看板');
     h.slots[0] = { left: 0, top: 0 }; entry().props.onSelect(); await settle();
     assert.deepEqual(opened, [null], 'the menu was already closed when the dashboard was asked to open');
