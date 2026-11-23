@@ -25,7 +25,7 @@ const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <=
 const text = description => ({ type: 'string', description });
 const TOOLS = [
   { name: 'start_role',
-    description: 'Start a role with its seat settings. Returns a run id and any worktree base, or instructions when dispatch is unavailable. '
+    description: 'Start a role with its seat settings. Returns a run id and any worktree base and source, or instructions when dispatch is unavailable. '
       + 'Read-only Claude roles cannot run commands or tests. Use a Codex seat for those reviews or run the tests yourself.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
@@ -34,9 +34,9 @@ const TOOLS = [
       readOnly: { type: 'boolean', description: 'Read-only Claude roles cannot run commands or tests. Choose a Codex seat for test-running reviews or run the tests yourself.' },
       small: { type: 'boolean', description: 'Use a short brief for a precise read-only lookup or an edit to one or two named files.' },
       allow: { type: 'array', items: { type: 'string' }, description: 'Globs of the files the role may change; required unless readOnly' },
-      cwd: text('Folder to work in. With worktree, uses this project worktree’s HEAD as the default base.'),
-      worktree: text('Branch suffix for a new work/<suffix> worktree for a writable role. Defaults to the project HEAD when no project worktree is supplied.'),
-      from: text('Optional branch or commit for the new worktree base. HEAD uses the supplied same-project cwd. Requires worktree.'),
+      cwd: text('Folder to work in. With worktree, a same-repository cwd supplies HEAD when from is omitted or HEAD.'),
+      worktree: text('New work/<suffix> worktree for a writable role. Without from or cwd, uses the last role’s valid same-repository HEAD, then the project HEAD.'),
+      from: text('Base branch or commit in this repository. HEAD uses a supplied same-repository cwd or the project checkout. Requires worktree.'),
     } } },
   { name: 'roles_status',
     description: 'Show full running roles and the 10 newest endings first observed in the last 10 minutes, with counts for older and omitted recent endings. Use role_result for details.',
@@ -72,14 +72,14 @@ function excludeDependencies(exclude) {
 }
 
 async function worktreeBaseFolder(git, root, folder) {
-  if (!folder) return root;
+  if (!folder) return;
   const commonArgs = ['--git-common-dir'];
   const source = await git(['rev-parse', '--is-inside-work-tree', ...commonArgs], folder).catch(() => null);
   const [inside, sourceCommon] = source?.stdout.trim().split(/\r?\n/) ?? [];
-  if (inside !== 'true' || !sourceCommon) return root;
+  if (inside !== 'true' || !sourceCommon) return;
   const { stdout } = await git(['rev-parse', ...commonArgs], root);
   const [projectGit, sourceGit] = await Promise.all([path.resolve(root, stdout.trim()), path.resolve(folder, sourceCommon)].map(dir => fs.promises.realpath(dir)));
-  return path.relative(projectGit, sourceGit) === '' ? folder : root;
+  if (path.relative(projectGit, sourceGit) === '') return folder;
 }
 
 async function resolveWorktreeCommit(git, from, folder) {
@@ -91,7 +91,7 @@ async function resolveWorktreeCommit(git, from, folder) {
   return git(['rev-parse', '--verify', `${revision}^{commit}`], folder).catch(() => { throw invalid(); });
 }
 
-async function createWorktree(cwd, suffix, folder, from) {
+async function createWorktree(cwd, suffix, folder, from, lastRoleCwd) {
   if (typeof suffix !== 'string' || !suffix.trim()) throw new Error('worktree must be a non-empty branch suffix.');
   const branch = `work/${suffix}`;
   const ref = `refs/heads/${branch}`;
@@ -102,8 +102,11 @@ async function createWorktree(cwd, suffix, folder, from) {
     if (error.stderr?.includes('not a git repository')) throw new Error('The project is not a Git repository.');
     throw new Error('Could not determine the project Git root.');
   }
-  const baseFolder = from === undefined || from === 'HEAD' ? await worktreeBaseFolder(git, root, folder) : root;
-  const { stdout: commitOutput } = await resolveWorktreeCommit(git, from, baseFolder);
+  const useLastRole = from === undefined && folder === undefined;
+  const baseFolder = from === undefined || from === 'HEAD'
+    ? await worktreeBaseFolder(git, root, useLastRole ? lastRoleCwd : folder) : undefined;
+  const baseSource = { kind: baseFolder ? (useLastRole ? 'last-role' : 'cwd') : 'project', cwd: baseFolder ?? root, ref: from ?? 'HEAD' };
+  const { stdout: commitOutput } = await resolveWorktreeCommit(git, from, baseSource.cwd);
   const commit = commitOutput.trim();
   const { stdout: shortCommit } = await git(['rev-parse', '--short', commit], root);
   const branchExists = () => git(['show-ref', '--verify', '--quiet', ref], root).then(() => true, error => {
@@ -150,7 +153,7 @@ async function createWorktree(cwd, suffix, folder, from) {
     await rollback().catch(() => {});
     throw error;
   }
-  return { cwd: work, branch, base: shortCommit.trim(), rollback };
+  return { cwd: work, branch, base: shortCommit.trim(), baseSource, rollback };
 }
 
 function elapsedSeconds(run) {
@@ -173,6 +176,7 @@ function summarize(run) {
 function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadAgent, leadSeat,
   platform = process.platform, checkReadiness = roleReadiness, now = Date.now, tempRoot = os.tmpdir(), cleanup = false }) {
   const runs = new Map();
+  let lastRoleCwd;
   let nextSweep = 0, sweeping = false;
   function sweep() {
     if (!cleanup || sweeping || now() < nextSweep) return;
@@ -306,7 +310,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       const { instruction, roleFallback } = await sandboxRoute(configuredAgent, seats[id]);
       if (instruction) return { instruction };
       const agent = roleFallback ? 'claude' : configuredAgent;
-      const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree, folder, from);
+      const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree, folder, from, lastRoleCwd);
       let waitingId;
       try {
         const work = checkout?.cwd ?? (folder || cwd);
@@ -334,7 +338,9 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         if (status?.routing) run.routing = status.routing;
         Object.assign(run, { startedAt: timestamp(status?.startedAt), confirmedAt: timestamp(status?.confirmedAt), activity: status?.ownerWait ?? null, ownerWait: status?.ownerWait });
         runs.set(started[1], run);
-        return { id: started[1], seat, started: started[2], ...(checkout && { cwd: work, branch: checkout.branch, base: checkout.base }) };
+        lastRoleCwd = work;
+        return { id: started[1], seat, started: started[2],
+          ...(checkout && { cwd: work, branch: checkout.branch, base: checkout.base, baseSource: checkout.baseSource }) };
       } catch (error) {
         if (waitingId) runs.delete(waitingId);
         await checkout?.rollback().catch(() => {});
