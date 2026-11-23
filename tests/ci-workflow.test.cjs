@@ -696,3 +696,29 @@ test('reuse rejects a rerun started during inspection and fails closed on incomp
   await assert.rejects(findReusableRun(endpoint => endpoint.includes('/jobs?') ? { jobs: [] } : incomplete.read(endpoint), incomplete.options), /Incomplete jobs response/);
   await assert.rejects(findReusableRun(endpoint => endpoint.includes('/jobs?') ? { jobs: [], total_count: 9 } : incomplete.read(endpoint), incomplete.options), /Incomplete jobs pagination/);
 });
+
+test('independent checks keep running after an earlier failure, and nothing is packaged for release unless every step passed', async () => {
+  const parsed = await workflow();
+  for (const [id, job] of Object.entries(parsed.jobs)) {
+    const ids = new Set(job.steps.map(step => step.id).filter(Boolean));
+    for (const step of job.steps) {
+      for (const needed of step.continues ?? []) {
+        const stepId = /^steps\.([\w-]+)\.outcome == 'success'$/.exec(needed)?.[1];
+        assert.ok(stepId ? ids.has(stepId) : /^needs\.windows\.result == 'success'$/.test(needed), `${id} / ${step.name}: ${needed}`);
+      }
+      // A release artifact or a publication keeps the default: it runs only when every earlier step passed.
+      const releases = /^(Create checksum|Upload verified|Publish|Download the tested|Verify release assets)/.test(step.name) || id === 'release';
+      if (releases) assert.equal(step.continues, undefined, `${id} / ${step.name}`);
+    }
+  }
+  const continuing = id => parsed.jobs[id].steps.filter(step => step.continues).map(step => step.name);
+  for (const name of ['Run unit and integration tests', 'Build Windows installer', 'Verify installer and automatic update metadata', 'Upload the desktop test build']) {
+    assert.ok(continuing('windows').includes(name), name);
+  }
+  assert.deepEqual(parsed.jobs['windows-desktop'].continues, ["needs.windows.outputs['test-build'] == 'success'"]);
+  assert.equal(parsed.jobs.windows.outputs['test-build'], '${{ steps.testbuild.outcome }}');
+  const desktop = parsed.jobs['windows-desktop'].steps.filter(step => /scripts\/retry\.mjs|npm run test:/.test(step.run ?? ''));
+  assert.ok(desktop.length > 15 && desktop.every(step => step.continues?.includes("steps.testbuild.outcome == 'success'")));
+  for (const id of ['macos', 'linux']) assert.ok(continuing(id).some(name => name.startsWith('Verify the packaged app')), id);
+  assert.ok(continuing('remote-linux').includes('Test real SSH and Linux PTY integration'));
+});

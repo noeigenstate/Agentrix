@@ -9,7 +9,20 @@ export function parseWorkflow(source) {
   // Artifact selection also imports this module, before any dependencies are installed.
   const workflow = require('js-yaml').load(source);
   if (!workflow?.jobs?.windows?.steps) throw new Error('The workflow has no Windows steps.');
+  for (const job of Object.values(workflow.jobs)) for (const row of [job, ...job.steps ?? []]) readContinuation(row);
   return workflow;
+}
+
+// An independent check keeps running after an earlier check failed, so one round reports every failure:
+//   if: ${{ !cancelled() && <what it needs> && (<its own condition>) }}
+// Readers see the step's own condition in `if` and what it needs in `continues`.
+const need = String.raw`(?:steps\.[\w-]+\.outcome|needs\.[\w-]+\.result|needs\.[\w-]+\.outputs\['[\w-]+'\]) [=!]= '[\w-]*'`;
+const continuation = new RegExp(String.raw`^\$\{\{ !cancelled\(\)((?: && ${need})*)(?: && \((.*)\))? \}\}$`);
+function readContinuation(row) {
+  const match = typeof row.if === 'string' && continuation.exec(row.if);
+  if (!match) return;
+  row.continues = match[1].split(' && ').filter(Boolean);
+  if (match[2] === undefined) delete row.if; else row.if = match[2];
 }
 
 const slug = name => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
