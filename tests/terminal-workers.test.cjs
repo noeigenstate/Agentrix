@@ -287,7 +287,7 @@ test('a worker permission hook denies without interrupting the turn and reports 
   assert.equal(hook.decision.behavior, 'deny');
   assert.equal(hook.decision.interrupt, false);
   assert.match(hook.decision.message, /Continue without it.*## Needs approval/);
-  assert.deepEqual(await receipt(entry => entry?.refused), [{ reason: 'needs approval', action: 'Write: private-notes.txt' }]);
+  assert.deepEqual(await receipt(entry => entry?.refused ?? undefined), [{ reason: 'needs approval', action: 'Write: private-notes.txt' }]);
   f.hook('PermissionDenied', { tool_name: 'Write' });
   const answer = '## Needs approval\n\n- Write private-notes.txt.';
   f.log.append(f.log.reply('continued', 'tool', 'assistant', answer, Date.now()));

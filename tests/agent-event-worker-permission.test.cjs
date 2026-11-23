@@ -14,12 +14,13 @@ const permissionInput = { hook_event_name: 'PermissionRequest', session_id: 'wor
 const importSource = source => 'data:text/javascript,' + encodeURIComponent(source);
 const env = () => ({ ...dispatchEnvironment(), NODE_OPTIONS: '' });
 
-function runHook(t, file, args, { hookEnv = env(), timeout = 2200, input = permissionInput } = {}) {
+function runHook(t, file, args, { hookEnv = env(), timeout = 2200, input = permissionInput, checkStderr } = {}) {
   const started = performance.now();
   const child = spawnSync(file, args, { env: hookEnv, input: JSON.stringify(input), encoding: 'utf8', windowsHide: true, timeout });
   t.diagnostic(path.basename(file) + ' finished in ' + Math.round(performance.now() - started) + ' ms');
   assert.ifError(child.error);
   assert.equal(child.status, 0, child.stderr);
+  checkStderr?.(child.stderr);
   return child.stdout;
 }
 
@@ -30,9 +31,9 @@ function assertDeny(decision) {
   assert.equal(output.decision.interrupt, false);
 }
 
-function bridgeArgs(name) {
+function bridgeArgs(name, kind = 'worker-permission') {
   return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(integration, 'claude-hook.ps1'),
-    '-PipeName', name, '-ProjectId', 'project', '-SessionKey', 'session', '-Kind', 'worker-permission', '-NodePath', process.execPath];
+    '-PipeName', name, '-ProjectId', 'project', '-SessionKey', 'session', '-Kind', kind, '-NodePath', process.execPath];
 }
 
 test('the worker permission decision reaches stdout before a stalled event connection', t => {
@@ -57,20 +58,51 @@ for (const endpoint of ['absent', 'busy']) {
     const address = powershell ? windowsPipe + name : path.join(os.tmpdir(), name + '.sock');
     assertDeny(runHook(t, process.execPath, [helper, 'claude-hook', address, 'project', 'session', 'worker-permission']));
     if (powershell) assertDeny(runHook(t, powershell, bridgeArgs(name), { timeout: 2500 }));
-    if (endpoint === 'busy') {
-      const input = { hook_event_name: 'Stop', session_id: 'worker' };
-      assert.equal(runHook(t, process.execPath, [helper, 'claude-hook', address, 'project', 'session', 'stop'], { input }), '');
+    for (const [kind, hook_event_name] of [['start', 'UserPromptSubmit'], ['progress', 'PreToolUse'], ['notify', 'Notification']]) {
+      const input = { hook_event_name, session_id: 'worker', notification_type: 'permission_prompt' };
+      assert.equal(runHook(t, process.execPath, [helper, 'claude-hook', address, 'project', 'session', kind], { input }), '');
+      if (powershell) assert.equal(runHook(t, powershell, bridgeArgs(name, kind), { input }), '');
     }
   });
 }
 
+test('the PowerShell status hook exits when the event endpoint accepts but does not read', { skip: !powershell }, async t => {
+  const name = 'agentrix-' + randomUUID();
+  await occupyHookPipe(t, name, env(), { stallWrite: true });
+  // Exceed the pipe buffer to ensure the write waits for the receiver.
+  const input = { hook_event_name: 'PreToolUse', session_id: 'worker', transcript_path: 'x'.repeat(128 * 1024) };
+  const stdout = runHook(t, powershell, bridgeArgs(name, 'progress'), {
+    input, hookEnv: { ...env(), AGENTRIX_HOOK_TRACE: '1' }, checkStderr: stderr => assert.match(stderr, /powershell progress pipe-write/),
+  });
+  assert.equal(stdout, '');
+});
+
+test('the PowerShell bridge preserves seat-routing stdout byte for byte', { skip: !powershell }, t => {
+  const name = 'agentrix-' + randomUUID();
+  const input = { hook_event_name: 'PreToolUse', session_id: 'worker', tool_name: 'Agent',
+    tool_input: { description: '[designer] Design the layout', prompt: 'Use a grid' } };
+  const hookEnv = { ...env(), AGENTRIX_SEATS: JSON.stringify({ designer: { model: 'sonnet', effort: 'high' } }) };
+  const expected = runHook(t, process.execPath, [helper, 'claude-hook', windowsPipe + name, 'project', 'session', 'seat-routing'], { input, hookEnv });
+  assert.equal(JSON.parse(expected).hookSpecificOutput.updatedInput.model, 'sonnet');
+  assert.equal(runHook(t, powershell, bridgeArgs(name, 'seat-routing'), { input, hookEnv }), expected);
+});
+
 test('the Windows bridge forwards the decision with the child still holding stdout open', { skip: !powershell }, t => {
-  const linger = importSource(`const { port1, port2 } = new MessageChannel();
-port1.on('message', () => {});
-process.exit = () => {};
-// Release the child even if a broken bridge fails to kill it.
-AbortSignal.timeout(4500).addEventListener('abort', () => { port1.close(); port2.close(); });`);
+  const linger = importSource(`if (process.argv.includes('worker-permission')) {
+  const { port1, port2 } = new MessageChannel();
+  port1.on('message', () => {});
+  process.exit = () => {};
+  const write = process.stdout.write;
+  process.stdout.write = function (...args) {
+    setTimeout(() => process.stderr.write('decision child still alive'), 500);
+    return write.apply(this, args);
+  };
+  // Release the child even if a broken bridge fails to kill it.
+  AbortSignal.timeout(4500).addEventListener('abort', () => { port1.close(); port2.close(); });
+}`);
   const hookEnv = { ...env(), NODE_OPTIONS: '--import=' + linger };
-  const stdout = runHook(t, powershell, bridgeArgs('agentrix-' + randomUUID()), { hookEnv, timeout: 2500 });
+  const stdout = runHook(t, powershell, bridgeArgs('agentrix-' + randomUUID()), {
+    hookEnv, timeout: 2500, checkStderr: stderr => assert.doesNotMatch(stderr, /decision child still alive/),
+  });
   assertDeny(stdout);
 });

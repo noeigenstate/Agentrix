@@ -13,6 +13,16 @@ param(
 # SessionStart prints instructions. The separate seat-routing hook can print tool input or a notice.
 $ErrorActionPreference = 'Stop'
 
+function Write-HookTrace($stage) {
+    if ($env:AGENTRIX_HOOK_TRACE) {
+        [Console]::Error.WriteLine("[agentrix-hook] $([DateTime]::UtcNow.ToString('o')) powershell $Kind $stage")
+    }
+}
+
+if ($env:AGENTRIX_HOOK_TRACE) {
+    Write-HookTrace "script-start process-start=$([Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().ToString('o'))"
+}
+
 if ($Kind -in @('seat-routing', 'worker-permission')) {
     $workerPermission = $Kind -eq 'worker-permission'
     try {
@@ -22,51 +32,42 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
         $start = [Diagnostics.ProcessStartInfo]::new($NodePath)
         $start.UseShellExecute = $false
         $start.CreateNoWindow = $true
-        $start.RedirectStandardInput = $true
+        # Node reads Claude's stdin directly. A second reader or an intermediate buffer delays the decision.
         $start.RedirectStandardOutput = $true
-        [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
         [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
         $start.StandardOutputEncoding = [Console]::OutputEncoding
-        $inputBuffer = [char[]]::new(4194305)
-        $length = [Console]::In.ReadBlock($inputBuffer, 0, $inputBuffer.Length)
-        if ($length -ge $inputBuffer.Length) { exit 0 }
+        if ($workerPermission) {
+            $start.EnvironmentVariables['AGENTRIX_WORKER_PERMISSION_BRIDGE'] = '1'
+        }
         $start.EnvironmentVariables['ELECTRON_RUN_AS_NODE'] = '1'
         $helper = Join-Path $PSScriptRoot 'agent-event.cjs'
         $start.Arguments = '"{0}" claude-hook "\\.\pipe\{1}" "{2}" "{3}" {4}' -f $helper, $PipeName, $ProjectId, $SessionKey, $Kind
+        Write-HookTrace 'node-launch'
         $child = [Diagnostics.Process]::Start($start)
         try {
+            Write-HookTrace 'node-launched'
             $clock = [Diagnostics.Stopwatch]::StartNew()
-            $output = if ($workerPermission) { $child.StandardOutput.ReadLineAsync() } else { $child.StandardOutput.ReadToEndAsync() }
-            $write = $child.StandardInput.WriteAsync($inputBuffer, 0, $length)
-            if (-not $write.Wait($(if ($workerPermission) { 8000 } else { 1500 }))) {
-                if ($workerPermission) { [Console]::Error.WriteLine('Agentrix worker permission hook timed out writing input to Node.') }
-                if (-not $workerPermission) { $child.Kill() }
+            $output = $child.StandardOutput.ReadLineAsync()
+            if (-not $output.Wait($(if ($workerPermission) { 8000 } else { 1000 }))) {
+                if ($workerPermission) {
+                    [Console]::Error.WriteLine('Agentrix worker permission hook timed out reading the decision from Node.')
+                }
                 exit 0
             }
-            $child.StandardInput.Close()
-            if ($workerPermission) {
-                if (-not $output.Wait([Math]::Max(0, 8000 - $clock.ElapsedMilliseconds))) {
-                    [Console]::Error.WriteLine('Agentrix worker permission hook timed out reading the decision from Node.')
-                    exit 0
-                }
-                $decision = $output.GetAwaiter().GetResult()
-                if ($null -ne $decision) {
-                    [Console]::Out.Write($decision + "`n")
-                    [Console]::Out.Flush()
-                }
-                # Give the 750 ms refusal report time to finish after forwarding the decision.
-                if ($child.WaitForExit(1000) -and $child.ExitCode -ne 0) {
-                    [Console]::Error.WriteLine("Agentrix worker permission Node exit code: $($child.ExitCode).")
-                }
-            } elseif ($child.WaitForExit(2500)) {
-                [Console]::Out.Write($output.Result)
-            } else {
-                $child.Kill()
+            $line = $output.GetAwaiter().GetResult()
+            if ($null -ne $line) {
+                [Console]::Out.Write($line + "`n")
+                [Console]::Out.Flush()
+                Write-HookTrace 'output-forwarded'
+            }
+            if (-not $workerPermission) {
+                [void]$child.WaitForExit([Math]::Max(0, 1000 - $clock.ElapsedMilliseconds))
             }
         } finally {
             try {
-                if ($workerPermission -and -not $child.HasExited) { $child.Kill() }
+                if (-not $child.HasExited) { $child.Kill() }
             } finally { $child.Dispose() }
+            Write-HookTrace 'bridge-exit'
         }
     } catch {
         if ($workerPermission) { [Console]::Error.WriteLine("Agentrix worker permission bridge failed ($($_.Exception.GetType().Name)).") }
@@ -159,11 +160,17 @@ try {
     # The prompt whose turn this is: with async hooks a late Stop of an older prompt cannot end a newer turn.
     if ($hook.prompt_id -is [string]) { $eventData.promptId = $hook.prompt_id }
     $eventData = $eventData | ConvertTo-Json -Compress
-    $pipe = [System.IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [System.IO.Pipes.PipeDirection]::Out)
+    $bytes = [Text.Encoding]::UTF8.GetBytes($eventData + [Environment]::NewLine)
+    $pipe = [IO.Pipes.NamedPipeClientStream]::new('.', $PipeName, [IO.Pipes.PipeDirection]::Out, [IO.Pipes.PipeOptions]::Asynchronous)
+    $report = [Diagnostics.Stopwatch]::StartNew()
     try {
-        $pipe.Connect(750)
-        $writer = [System.IO.StreamWriter]::new($pipe, [System.Text.UTF8Encoding]::new($false))
-        try { $writer.WriteLine($eventData); $writer.Flush() } finally { $writer.Dispose() }
-    } finally { $pipe.Dispose() }
+        Write-HookTrace 'pipe-connect'
+        if (-not $pipe.ConnectAsync(750).Wait(750)) { exit 0 }
+        Write-HookTrace 'pipe-write'
+        [void]$pipe.WriteAsync($bytes, 0, $bytes.Length).Wait([Math]::Max(0, 750 - $report.ElapsedMilliseconds))
+    } finally {
+        $pipe.Dispose()
+        Write-HookTrace "report-exit elapsed-ms=$($report.ElapsedMilliseconds)"
+    }
 } catch { }
 exit 0

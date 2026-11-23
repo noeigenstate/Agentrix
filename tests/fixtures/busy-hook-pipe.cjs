@@ -5,12 +5,13 @@ const { createInterface } = require('node:readline');
 
 const powershell = process.platform === 'win32' && path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
 
-async function occupyHookPipe(t, name, env) {
+async function occupyHookPipe(t, name, env, { stallWrite = false } = {}) {
   // A single connected instance makes subsequent CreateFile calls see ERROR_PIPE_BUSY.
-  const script = `
-$ErrorActionPreference = 'Stop'
-$server = [IO.Pipes.NamedPipeServerStream]::new('${name}', [IO.Pipes.PipeDirection]::InOut, 1)
-try {
+  const connect = stallWrite ? `
+    [void]$server.BeginWaitForConnection($null, $null)
+    [Console]::WriteLine('ready')
+    [void][Console]::ReadLine()
+  ` : `
     $client = [IO.Pipes.NamedPipeClientStream]::new('.', '${name}', [IO.Pipes.PipeDirection]::InOut)
     try {
         $client.Connect(1000)
@@ -18,6 +19,13 @@ try {
         [Console]::WriteLine('ready')
         [void][Console]::ReadLine()
     } finally { $client.Dispose() }
+  `;
+  const script = `
+$ErrorActionPreference = 'Stop'
+$options = [IO.Pipes.PipeOptions]::Asynchronous
+$server = [IO.Pipes.NamedPipeServerStream]::new('${name}', [IO.Pipes.PipeDirection]::InOut, 1, [IO.Pipes.PipeTransmissionMode]::Byte, $options, 4096, 4096)
+try {
+    ${connect}
 } finally { $server.Dispose() }
 `;
   const command = Buffer.from(script, 'utf16le').toString('base64');

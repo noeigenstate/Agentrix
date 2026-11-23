@@ -10,6 +10,7 @@ const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const { spawn } = require('node:child_process');
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
 const { sessionContext } = require(path.join(runtime, 'features/skills/session.cjs'));
 const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'features/skills/agent-seat.cjs'));
@@ -25,6 +26,22 @@ function send(socket, event) {
     connection.on('close', done);
     connection.on('connect', () => connection.end(JSON.stringify(event) + '\n'));
   });
+}
+
+function handOffReport(socket, event) {
+  // The bridge kills the decision child after stdout is flushed. Pass the report in the reporter's private environment
+  // so the handoff completes at launch, without waiting for the reporter to start reading a pipe.
+  const report = JSON.stringify(event);
+  if (report.length >= 32767) return;
+  const reporter = spawn(process.execPath, [__filename, 'worker-report', socket], {
+    detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, AGENTRIX_WORKER_REPORT: report },
+  });
+  reporter.on('error', () => {});
+  reporter.unref();
+}
+
+function hookTrace(kind, stage) {
+  if (process.env.AGENTRIX_HOOK_TRACE) process.stderr.write(`[agentrix-hook] ${new Date().toISOString()} node ${kind} ${stage}\n`);
 }
 
 function writeOutput(output) {
@@ -128,12 +145,27 @@ function workerPermission(input, projectId, sessionKey) {
 }
 
 async function main([action, socket, projectId, sessionKey, argument, ...rest]) {
+  if (action === 'worker-report' && socket) {
+    const report = process.env.AGENTRIX_WORKER_REPORT;
+    if (report) await send(socket, JSON.parse(report));
+    return;
+  }
   if (!socket || !projectId || !sessionKey) return;
+  hookTrace(argument, `start uptime-ms=${Math.round(process.uptime() * 1000)}`);
   const input = action === 'claude-hook' ? await readInput() : null;
+  hookTrace(argument, 'input');
   if (action === 'claude-hook' && argument === 'worker-permission') {
     const { output, event } = workerPermission(input, projectId, sessionKey);
+    hookTrace(argument, 'decision-ready');
+    const bridged = process.env.AGENTRIX_WORKER_PERMISSION_BRIDGE === '1';
+    if (event && bridged) {
+      try {
+        handOffReport(socket, event);
+        hookTrace(argument, 'report-launched');
+      } catch {}
+    }
     if (output) await writeOutput(output);
-    if (event) await send(socket, event);
+    if (event && !bridged) await send(socket, event);
     return;
   }
   if (action === 'claude-hook' && argument === 'seat-routing') {
@@ -156,8 +188,9 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
 }
 
 if (require.main === module) {
-  // Whatever happens, the agent continues: no output, exit code 0, and never longer than a few seconds.
-  setTimeout(() => process.exit(0), 5000).unref();
+  // Bound input and reporting even when a native pipe operation keeps the event loop alive.
+  const bridgedDecision = process.argv[6] === 'worker-permission' && process.env.AGENTRIX_WORKER_PERMISSION_BRIDGE === '1';
+  if (!bridgedDecision) setTimeout(() => process.exit(0), 1500).unref();
   // A pending Windows pipe connect can keep Node alive after its socket is destroyed.
   main(process.argv.slice(2)).catch(() => {}).finally(() => process.exit(0));
 }

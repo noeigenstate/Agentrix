@@ -78,6 +78,18 @@ const requestsFor = (session, prompt) => session.bodies.filter(body => JSON.stri
 const dialogShown = entry => entry.type === 'screen' && ['dialog', 'plan'].includes(entry.name);
 const ownerWait = entry => entry.type === 'hook' && entry.event === 'Notification' && entry.payload?.notification_type === 'permission_prompt';
 
+function diagnoseHooks(t, session) {
+  const hooks = session.debugFile && fs.existsSync(session.debugFile) ? fs.readFileSync(session.debugFile, 'utf8').split(/\r?\n/)
+    .filter(line => /\[agentrix-hook\]|executePermissionRequestHooks|Hooks?:? (?:PermissionRequest|UserPromptSubmit|PreToolUse|Notification)/i.test(line))
+    .map(line => line.replace(/(-SessionKey\s+)\S+/g, '$1<key>')) : [];
+  const timeline = session.observer.timeline, enter = timeline.findLast(entry => entry.type === 'enter');
+  const times = enter && timeline.slice(enter.n + 1)
+    .filter(entry => entry.type === 'api' || entry.type === 'hook' || dialogShown(entry))
+    .map(entry => `${entry.event || entry.name || entry.type} +${Math.round(entry.at - enter.at)}ms`);
+  if (times?.length) t.diagnostic(times.join(', '));
+  t.diagnostic(`Claude hook channel ${session.channel}, permission uses command:\n${hooks.slice(-45).join('\n') || '(no matching lines)'}`);
+}
+
 async function roleTurn(t, session, prompt, inspect) {
   const { observer } = session;
   try {
@@ -92,14 +104,11 @@ async function roleTurn(t, session, prompt, inspect) {
     const turn = observer.timeline.filter(entry => entry.n > enter.n && entry.n <= Math.max(end.n, drawn.n));
     assert.ok(!turn.some(blocked), observer.seen());
     assert.equal(turn.filter(entry => entry.type === 'hook' && entry.event === 'UserPromptSubmit').length, 1, 'one submitted turn');
-    inspect(requestsFor(session, prompt), turn);
+    await inspect(requestsFor(session, prompt), turn);
+    if (process.env.AGENTRIX_HOOK_TRACE) diagnoseHooks(t, session);
   } catch (error) {
     t.diagnostic(observer.seen());
-    if (session.debugFile) {
-      const hooks = fs.existsSync(session.debugFile) ? fs.readFileSync(session.debugFile, 'utf8').split(/\r?\n/)
-        .filter(line => /PermissionRequest|worker-permission/i.test(line)).map(line => line.replace(/(-SessionKey\s+)\S+/g, '$1<key>')) : [];
-      t.diagnostic(`Claude permission hook invocations, output and exit status:\n${hooks.slice(-30).join('\n') || '(no matching lines)'}`);
-    }
+    diagnoseHooks(t, session);
     t.diagnostic(JSON.stringify(requestsFor(session, prompt).map(body => ({
       tools: toolNames(body),
       results: ['Bash', 'Write', 'ExitPlanMode'].map(name => toolResult(body, name)).filter(Boolean),
@@ -113,14 +122,16 @@ async function writableRole(t, conditions = {}) {
   await hooked(t, 'worker', { role: { readOnly: false, ...conditions },
     respond: data => toolResult(data, 'Bash') ? plainAnswer(data)
       : callTool(data, 'Bash', { command, description: 'Run the probe test' }, toolId('Bash')),
-    drive: session => roleTurn(t, session, prompt, (requests, turn) => {
+    drive: session => roleTurn(t, session, prompt, async (requests, turn) => {
       const result = requests[1] && toolResult(requests[1], 'Bash');
-      const refusal = turn.find(entry => entry.event === 'PermissionRequest' && entry.payload?.workerRefused);
-      t.diagnostic(JSON.stringify({ requests: requests.length, result, workerRefused: refusal?.payload.workerRefused,
-        dialogDrawn: turn.some(dialogShown), ownerNotified: turn.some(ownerWait), screen: 'HOOK_ACK', stop: true }));
+      const reported = entry => entry.event === 'PermissionRequest' && entry.payload?.workerRefused;
       assert.equal(requests.length, 2);
       assert.equal(result?.is_error, true);
       assert.match(JSON.stringify(result.content), /This action is not allowed in this role/);
+      // Reporting and Claude's turn continue independently after the bridge exits.
+      const refusal = conditions.permissionPipeDown ? turn.find(reported) : await session.observer.when(reported, turn[0].n - 1, 'worker refusal report');
+      t.diagnostic(JSON.stringify({ requests: requests.length, result, workerRefused: refusal?.payload.workerRefused,
+        dialogDrawn: turn.some(dialogShown), ownerNotified: turn.some(ownerWait), screen: 'HOOK_ACK', stop: true }));
       assert.equal(refusal?.payload.workerRefused, conditions.permissionPipeDown ? undefined : `Bash: ${commandPhrase(command).phrase}`);
     }),
   });

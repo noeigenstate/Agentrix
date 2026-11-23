@@ -171,6 +171,7 @@ async function workerHooks(t, f, observer, role) {
   f.env.GIT_ALLOW_PROTOCOL = 'file';
   observer.markers.plan = /(?:Would you like to proceed|Do you want to (?:approve|execute) (?:the|this) plan|Claude has written up a plan)/i;
   const debugFile = path.join(root, 'claude-debug.log');
+  f.env.AGENTRIX_HOOK_TRACE = '1';
   if (role.permissionHookDelay) {
     const preload = path.join(root, 'slow-permission-hook.cjs');
     fs.writeFileSync(preload, `if (process.argv.includes('worker-permission')) {
@@ -178,7 +179,7 @@ async function workerHooks(t, f, observer, role) {
 }`);
     f.env.NODE_OPTIONS = `--require "${slashes(preload)}"`;
   }
-  return { receiver, settings: workerHookSettings(hooks), trustedFolders: [briefs], debugFile,
+  return { receiver, settings: workerHookSettings(hooks), trustedFolders: [briefs], debugFile, channel: hooks.channel,
     args: [...tools, '--permission-mode', role.readOnly ? READ_ONLY_MODE : 'acceptEdits', '--add-dir', briefs, '--debug-file', debugFile, ...(role.args || [])] };
 }
 
@@ -198,7 +199,7 @@ async function hooked(t, mode, { respond, proxy = null, role, drive }) {
   if (proxy) Object.assign(f.env, { HTTP_PROXY: proxy.url, HTTPS_PROXY: proxy.url, ALL_PROXY: proxy.url, http_proxy: proxy.url, https_proxy: proxy.url });
   const args = [...(settings ? ['--settings', file] : []), ...(worker?.args || [])];
   const input = await terminal(t, f, args, false, observer.chunk, worker?.trustedFolders);
-  const session = { f, observer, input, bodies, receiver, mode, proxy, role, debugFile: worker?.debugFile };
+  const session = { f, observer, input, bodies, receiver, mode, proxy, role, debugFile: worker?.debugFile, channel: worker?.channel };
   await drive(session);
   return { ...session, body: bodies.find(body => body.tools?.length && JSON.stringify(body.messages).includes('HOOK_PROMPT')) };
 }
