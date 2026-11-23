@@ -31,6 +31,20 @@ test('Claude reports effective per-turn effort and recognizes only recorded fast
   assert.equal(replay('claude', [effective, reply('claude-opus-5-5', undefined, 'unrecognized')]).fast, true);
 });
 
+test('Claude fast mode echoes update the current speed and unavailable replies leave it alone', () => {
+  const normal = replay('claude', [reply('claude-fable-5-2', 'max', 'standard')]);
+  const on = { type: 'user', message: { content: [
+    { type: 'text', text: '<local-command-stdout>\x1b[38;2;255;120;20m↯\x1b[39m Fast mode ON · $16/$80 per Mtok</local-command-stdout>' },
+  ] } };
+  const fast = agentSettings(normal, 'claude', on);
+  assert.equal(fast.fast, true);
+  assert.equal(agentSettings(fast, 'claude', said('Fast mode OFF')).fast, false);
+  assert.equal(agentSettings(normal, 'claude', said('Kept Fast mode OFF')), normal);
+  for (const reason of ['Fast mode is currently unavailable', 'Fast mode has been disabled by your organization']) {
+    assert.equal(agentSettings(fast, 'claude', said(`Fast mode unavailable: ${reason}`)), fast);
+  }
+});
+
 test("Codex's model and effort come from each turn, and fast mode from the settings it applies", () => {
   const settings = replay('codex', [
     { type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { model: 'gpt-6.1-sol', service_tier: 'priority', reasoning_effort: 'high' } } },

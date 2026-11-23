@@ -21,7 +21,7 @@ function claudeCommandOutput(record) {
   if (!output) return null;
   const model = /^\s*Set model to\s+`?([^`\n(]+?)`?(?:\s+\(|\s+and\b|\s+for this session only\b|\s*$)/im.exec(output)?.[1];
   const effort = /^\s*Set effort level to\s+([a-z]+)\b/im.exec(output)?.[1];
-  const fast = /\bfast mode\b[^\n.]*?\b(on|enabled|off|disabled)\b/i.exec(output)?.[1];
+  const fast = /^[ \t]*(?:↯\s*|Kept\s+)?Fast mode\s+(?:is (?:now )?)?(on|enabled|off|disabled)\b/i.exec(output)?.[1];
   if (!model && !effort && !fast) return null;
   return { model: text(model), effort: text(effort)?.toLowerCase() ?? null, fast: fast ? /^(?:on|enabled)$/i.test(fast) : null };
 }
