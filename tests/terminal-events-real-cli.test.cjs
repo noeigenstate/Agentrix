@@ -82,8 +82,8 @@ async function roleTurn(t, session, prompt, inspect) {
   const { observer } = session;
   try {
     const enter = await submit(session, prompt);
-    // Claude can draw the writable Bash menu while its synchronous command hook runs.
-    const blocked = entry => ownerWait(entry) || session.role.readOnly && dialogShown(entry);
+    // A writable turn can still accept a synchronous denial after the screen and its notification.
+    const blocked = entry => session.role.readOnly && (ownerWait(entry) || dialogShown(entry));
     const end = await observer.when(entry => blocked(entry) || entry.type === 'hook' && ['Stop', 'StopFailure'].includes(entry.event),
       enter.n, 'role Stop or an owner dialog');
     assert.equal(end.event, 'Stop', observer.seen());
@@ -95,6 +95,11 @@ async function roleTurn(t, session, prompt, inspect) {
     inspect(requestsFor(session, prompt), turn);
   } catch (error) {
     t.diagnostic(observer.seen());
+    if (session.debugFile) {
+      const hooks = fs.existsSync(session.debugFile) ? fs.readFileSync(session.debugFile, 'utf8').split(/\r?\n/)
+        .filter(line => /PermissionRequest|worker-permission/i.test(line)).map(line => line.replace(/(-SessionKey\s+)\S+/g, '$1<key>')) : [];
+      t.diagnostic(`Claude permission hook invocations, output and exit status:\n${hooks.slice(-30).join('\n') || '(no matching lines)'}`);
+    }
     t.diagnostic(JSON.stringify(requestsFor(session, prompt).map(body => ({
       tools: toolNames(body),
       results: ['Bash', 'Write', 'ExitPlanMode'].map(name => toolResult(body, name)).filter(Boolean),
@@ -103,23 +108,28 @@ async function roleTurn(t, session, prompt, inspect) {
   }
 }
 
-test('a real writable role continues the same turn after the worker permission hook denies Bash', { skip, timeout: 240000 }, async t => {
+async function writableRole(t, conditions = {}) {
   const prompt = 'HOOK_PROMPT writable role', command = 'node --test tests/x.test.cjs';
-  await hooked(t, 'worker', { role: { readOnly: false },
+  await hooked(t, 'worker', { role: { readOnly: false, ...conditions },
     respond: data => toolResult(data, 'Bash') ? plainAnswer(data)
       : callTool(data, 'Bash', { command, description: 'Run the probe test' }, toolId('Bash')),
     drive: session => roleTurn(t, session, prompt, (requests, turn) => {
       const result = requests[1] && toolResult(requests[1], 'Bash');
       const refusal = turn.find(entry => entry.event === 'PermissionRequest' && entry.payload?.workerRefused);
       t.diagnostic(JSON.stringify({ requests: requests.length, result, workerRefused: refusal?.payload.workerRefused,
-        dialogDrawn: turn.some(dialogShown), screen: 'HOOK_ACK', stop: true }));
+        dialogDrawn: turn.some(dialogShown), ownerNotified: turn.some(ownerWait), screen: 'HOOK_ACK', stop: true }));
       assert.equal(requests.length, 2);
       assert.equal(result?.is_error, true);
       assert.match(JSON.stringify(result.content), /This action is not allowed in this role/);
-      assert.equal(refusal?.payload.workerRefused, `Bash: ${commandPhrase(command).phrase}`);
+      assert.equal(refusal?.payload.workerRefused, conditions.permissionPipeDown ? undefined : `Bash: ${commandPhrase(command).phrase}`);
     }),
   });
-});
+}
+
+test('a real writable role continues the same turn after the worker permission hook denies Bash', { skip, timeout: 240000 }, t => writableRole(t));
+
+test('a real writable role still denies Bash with cold hook startup and the event endpoint down', { skip, timeout: 240000 }, t =>
+  writableRole(t, { permissionHookDelay: 3500, permissionPipeDown: true }));
 
 test('a real read-only role rejects Write and ExitPlanMode without an owner dialog', { skip, timeout: 240000 }, async t => {
   const mcp = await startMcpProbe(t), prompt = 'HOOK_PROMPT read-only role';

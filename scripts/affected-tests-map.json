@@ -468,7 +468,7 @@
       "reason": "The intercept entrypoint resolves the dispatch helper and the carried lead seat reader in source, packaged or SSH layouts."
     },
     "electron/features/worker-terminals/worker-terminals.cjs": {
-      "digest": "74573a4a5a9f98bdde1ed801d25f6c63781dbea651dcfedfaaef78df68e75cb9",
+      "digest": "ddd513f8d80102632159307844f6a4f4df649e05ea2e427fcf55335aa9381b5b",
       "targets": [
         "integration/shims/intercept.cjs"
       ],

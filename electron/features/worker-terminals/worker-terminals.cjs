@@ -11,6 +11,7 @@ const { findClaudeSession } = require('../../claude-sessions.cjs');
 const { createWorkerMenu } = require('./worker-menu.cjs');
 
 const START_NOTICE_MS = 15000, POLL_MS = 1000, ENTER_DELAY_MS = 100, SETTLE_MS = 200, SETTLE_TRIES = 5, EXIT_WAIT_MS = 5000, REMOVE_TRIES = 5;
+const PERMISSION_HOOK_TIMEOUT = 30;
 const SCROLLBACK = 512 * 1024, KEYS_LIMIT = 65536, TEXT_LIMIT = 256, FIELD_LIMIT = 200, RECORD_LIMIT = 16384;
 // The parent terminal's variables a worker never inherits: its reporting and control credentials, the reading note, the
 // shell integration's event wiring (main.cjs startTerminal, zsh-terminal.cjs), and an entrypoint naming another client.
@@ -115,6 +116,15 @@ function fitsInitialArgument(file, args, prompt, platform) {
   return [file, ...args, '--', prompt].reduce((length, arg) => length + 2 * arg.length + 3, 1) <= 30_000;
 }
 
+function workerHookSettings({ channel, settings }, fast) {
+  const value = JSON.parse(channel === 'http' ? settings.http : settings.fallback);
+  // Leave room for cold PowerShell and Node startup as well as the bridge's own deadlines.
+  const permission = value.hooks?.PermissionRequest?.[0]?.hooks?.[0];
+  if (permission) permission.timeout = PERMISSION_HOOK_TIMEOUT;
+  if (typeof fast === 'boolean') value.fastMode = fast;
+  return JSON.stringify(value);
+}
+
 function killTree(pty, platform = process.platform) {
   const end = () => { try { pty.kill(); } catch {} };
   if (platform === 'win32') {
@@ -178,6 +188,20 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   }
   const clearTimers = w => { for (const timer of w.timers.keys()) clearTimer(w, timer); };
   const delay = (w, ms) => new Promise(resolve => later(w, resolve, ms, resolve));
+  function notePermissionNotice(w) {
+    if (w.permissionNotice) return;
+    w.permissionNotice = true;
+    // Claude can accept a synchronous decision even after its notice.
+    w.permissionFallback = later(w, () => {
+      w.permissionFallback = null;
+      observeMenu(w);
+    }, PERMISSION_HOOK_TIMEOUT * 1000);
+  }
+  function clearPermissionNotice(w) {
+    clearTimer(w, w.permissionFallback);
+    w.permissionFallback = null;
+    w.permissionNotice = false;
+  }
 
   function setAwaiting(w, value, detail = 'resume after an interrupted turn') {
     if (w.awaiting === value) return;
@@ -219,9 +243,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh'),
       allowBackgroundTasks: allowBackgroundTasks() });
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
-    const hookSettings = w.hooks.channel === 'http' ? w.hooks.settings.http : w.hooks.settings.fallback;
-    fs.writeFileSync(settings, typeof w.spec.fast === 'boolean'
-      ? JSON.stringify({ ...JSON.parse(hookSettings), fastMode: w.spec.fast }) : hookSettings, { mode: 0o600 });
+    fs.writeFileSync(settings, workerHookSettings(w.hooks, w.spec.fast), { mode: 0o600 });
     const readOnly = w.spec.readOnly;
     const args = [...workerToolArgs(readOnly), ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,
       '--permission-mode', readOnly ? READ_ONLY_MODE : 'acceptEdits',
@@ -257,13 +279,19 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   function observeMenu(w) {
     if (!w.screenFrame || w.screenFrame.seq !== w.seq) return;
     const { frame, seq } = w.screenFrame;
-    if (!w.asks.size && !w.menuTool && !w.menu.active && !(w.deniedPermission && frame?.kind === 'permission')) return;
+    const permissionWait = w.permissionNotice && frame?.kind === 'permission';
+    if (!w.asks.size && !w.menuTool && !w.menu.active && !permissionWait) return;
+    if (!frame && w.permissionNotice && w.menu.active && !w.asks.size && !w.promptWait) {
+      clearPermissionNotice(w);
+      setAwaiting(w, null);
+      return;
+    }
     if (frame && w.menuTool && frame.kind !== w.menuTool) { w.menu.frame(null, seq); return; }
     if (frame) {
       clearTimer(w, w.enterTimer);
       if (!w.awaiting) setAwaiting(w, 'owner', 'respond to the Claude Code menu');
     }
-    w.menu.frame(frame, seq, w.permissionAction ?? 'Claude Code permission request');
+    w.menu.frame(frame, seq, w.permissionAction ?? 'Claude Code permission request', permissionWait && !w.permissionFallback);
   }
   function exited(w, exitCode) {
     if (w.exited) return;
@@ -342,6 +370,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   // owner and a queued message can go in. The turn itself stays open; the next prompt starts a new one.
   function interrupted(w) {
     closeAsks(w);
+    clearPermissionNotice(w);
     if (!w.running) return;
     w.running = false; clearTimer(w, w.poll);
     w.promptWait = true; setAwaiting(w, 'owner');
@@ -375,8 +404,9 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
       if (name === 'PermissionRequest' && /^[A-Za-z][\w-]{0,79}$/.test(payload.tool_name ?? '')) w.permissionAction = payload.tool_name;
       if (key && !w.closedAsks.has(key)) w.asks.add(key);
       else if (!notice && !key) w.asks.add(`unknown:${agentId || payload.agent_id || ''}`);
-      if (w.asks.size) clearTimer(w, w.enterTimer);
-      setAwaiting(w, w.asks.size || w.promptWait ? 'owner' : null, ownerPrompt(payload, elicitation));
+      if (notice && !elicitation && !w.menuTool && (key ? !w.closedAsks.has(key) : w.running) && (!timed || sentAt >= w.startAt)) notePermissionNotice(w);
+      if (w.asks.size || w.permissionNotice) clearTimer(w, w.enterTimer);
+      if (!notice || key) setAwaiting(w, w.asks.size || w.promptWait ? 'owner' : null, ownerPrompt(payload, elicitation));
       observeMenu(w); return;
     }
     // A Stop from an earlier turn cannot clear this turn's questions.
@@ -386,6 +416,7 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     if (CLEAR_ASKS.has(name)) closeAsks(w);
     else if (ANSWERS.has(name) && key) closeAsks(w, [key]);
     if (PROGRESS.has(name)) {
+      clearPermissionNotice(w);
       w.promptWait = false;
       setAwaiting(w, w.asks.size ? 'owner' : null);
     }
@@ -580,4 +611,4 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
   };
 }
 
-module.exports = { createWorkerTerminals, meterRecord };
+module.exports = { createWorkerTerminals, meterRecord, workerHookSettings };

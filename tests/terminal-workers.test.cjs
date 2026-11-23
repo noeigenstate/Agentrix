@@ -22,7 +22,7 @@ const { terminalHooks } = require('../electron/features/terminal-events/hook-cha
 const { encodeClaudeCwd } = require('../electron/claude-sessions.cjs');
 const { projectTeam } = require('../electron/features/team/team.cjs');
 const { createWorkerMenu } = require('../electron/features/worker-terminals/worker-menu.cjs');
-const { createWorkerTerminals, meterRecord } = require('../electron/features/worker-terminals/worker-terminals.cjs');
+const { createWorkerTerminals, meterRecord, workerHookSettings } = require('../electron/features/worker-terminals/worker-terminals.cjs');
 const { createIpcAdapter } = require('../electron/shared/ipc.cjs');
 const { Terminal } = require('@xterm/xterm');
 const { observeWorkerMenus } = require('../src/features/agents/worker-menu-screen.ts');
@@ -76,7 +76,7 @@ function transcript(claudeHome, cwd, sessionId) {
 }
 
 // The real helper and control channel, under a terminal lead whose terminal main knows.
-async function fixture(t, { detached = false, screenMonitoring = false, now } = {}) {
+async function fixture(t, { detached = false, screenMonitoring = false, now, permissionClock } = {}) {
   const lifetime = resources(t);
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agx-terminal-worker-'))), main = path.join(root, 'main'), repo = path.join(root, 'worker');
   fs.mkdirSync(path.join(main, 'src'), { recursive: true });
@@ -105,7 +105,8 @@ async function fixture(t, { detached = false, screenMonitoring = false, now } = 
     now, screenMonitoring, send: (channel, packet) => { if (channel === 'worker-terminal:screen') screenListener?.(packet); },
     parent: binding => binding.projectId === owner.terminalId ? { env: parent.env, sessionKey: owner.sessionKey, bootstrapFile: parent.bootstrap } : null,
     calls: () => calls, runtimeDir: () => root, claudeHome: () => assert.fail('the worker env names its Claude home'),
-    schedule: (fn, ms) => ms === 15000 ? notices.push(fn) : setTimeout(fn, ms), kill: pty => pty.kill() });
+    schedule: (fn, ms) => ms === 15000 ? notices.push(fn) : ms === 30000 && permissionClock ? permissionClock.schedule(fn, ms) : setTimeout(fn, ms),
+    cancel: timer => typeof timer === 'number' ? permissionClock?.cancel(timer) : clearTimeout(timer), kill: pty => pty.kill() });
   const registerChannel = (channel, handler) => { channels[channel] = handler; };
   terminals.register({ handle: registerChannel, listen: registerChannel });
   if (screenMonitoring) observeWorkerMenus({ onWorkerScreen: listener => { screenListener = listener; },
@@ -190,8 +191,8 @@ function readMenu(folder, name, maxRows = 28) {
   return '\x1b[2J\x1b[H' + rows.slice(-maxRows).join('\r\n');
 }
 
-async function menuFixture(t) {
-  const f = await fixture(t, { detached: true, screenMonitoring: true, now: () => 1000 });
+async function menuFixture(t, permissionClock) {
+  const f = await fixture(t, { detached: true, screenMonitoring: true, now: permissionClock?.now ?? (() => 1000), permissionClock });
   const store = detachedRuns(f.repo);
   const receipt = predict => store.observe(() => predict(store.read(f.id)), 5000);
   fs.writeFileSync(f.parent.bootstrap + '.mode', 'conductor');
@@ -293,6 +294,34 @@ test('a worker permission hook denies without interrupting the turn and reports 
   assert.match(f.stdout(), /exit 0 reason permission/);
   assert.equal(fs.readFileSync(f.out, 'utf8').trim(), answer);
   assert.deepEqual(f.pty.writes, []);
+});
+
+test('an unkeyed permission notice and the current screen recover a missing permission hook', { timeout: 15000 }, async t => {
+  const clock = inputClock(), { f, tools, receipt, menu, draw } = await menuFixture(t, clock);
+  async function showPermission() {
+    f.hook('PreToolUse', { tool_name: 'Bash' });
+    f.hook('Notification', { notification_type: 'permission_prompt', tool_use_id: null });
+    draw('screens', 'claude-permission');
+    assert.equal((await menu('permission'))?.kind, 'permission');
+  }
+  await showPermission();
+  const [role] = await tools.wait_roles({ ids: [f.id], seconds: 5 });
+  assert.match(role.waiting, /permission/);
+  clock.advance(29999);
+  assert.deepEqual(f.pty.writes, [], 'allow the hook to deliver a late decision');
+  f.hook('PostToolUseFailure', { tool_name: 'Bash' });
+  assert.equal(await receipt(entry => entry?.ownerWait === null || undefined), true);
+  clock.advance(1);
+  assert.deepEqual(f.pty.writes, [], 'the completed permission check cancels fallback keys');
+  await showPermission();
+  clock.advance(30000);
+  assert.deepEqual(f.pty.writes, ['\x1b[B\x1b[B\r']);
+  const waiting = await receipt(entry => entry?.ownerWait && entry.refused?.length ? entry : undefined);
+  assert.match(waiting?.ownerWait ?? '', /waiting on permission/);
+  assert.deepEqual(waiting.refused, [{ reason: 'needs approval', action: 'Claude Code permission request' }]);
+  f.hook('Stop', { last_assistant_message: 'Synthetic answer' });
+  assert.equal(await f.result, 0, f.stdout());
+  assert.match(f.stdout(), /exit 0 reason permission/);
 });
 
 test('a still-current menu can be answered once more after the injected clock fires', () => {
@@ -1122,13 +1151,14 @@ test("a worker's hooks never reach a project terminal or its completion", async 
   assert.equal(f.terminals.event({ projectId: workerId, sessionKey: 'forged', type: 'agent-activity', hookEvent: 'PermissionRequest', state: 'attention' }), true);
   assert.equal(calls.snapshot()[0].items[0].awaiting, undefined, 'a forged command event changes nothing');
 
-  // The worker's --settings are exactly terminalHooks()'s for its own id and key, with no note file; its only added
+  // The worker's --settings use terminalHooks() for its own id and key, with no note file; its only added
   // directory is the brief folder, which holds neither the settings nor the start-up hook copy.
-  assert.equal(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'), expected.settings.http);
-  for (const settings of Object.values(expected.settings)) {
-    const permission = JSON.parse(settings).hooks.PermissionRequest[0].hooks[0];
+  assert.equal(fs.readFileSync(f.pty.args[f.pty.args.indexOf('--settings') + 1], 'utf8'), workerHookSettings(expected));
+  for (const channel of ['http', expected.fallback]) {
+    const permission = JSON.parse(workerHookSettings({ ...expected, channel })).hooks.PermissionRequest[0].hooks[0];
     assert.match(permission.command, /-Kind worker-permission/);
     assert.equal(permission.async, undefined);
+    assert.equal(permission.timeout, 30);
   }
   assert.ok(!Object.keys(env).some(name => /READING_NOTE/i.test(name)));
   assert.equal(f.pty.args.filter(arg => arg === '--add-dir').length, 1);

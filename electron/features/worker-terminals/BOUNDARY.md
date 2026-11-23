@@ -3,6 +3,10 @@
 Under a local terminal lead, a dispatched Claude worker runs as a hidden interactive `claude` in a PTY of its own, billed like the lead's terminal: main starts it, routes its hooks, reads its transcript into the dispatch stream, lets the owner answer its confirmations from the split, and kills it when the run ends.
 The worker stream reports active menu ids, kinds, titles and numbered choices. The main window parses the hidden PTY's output
 with the same xterm buffer and menu parser as the visible terminals. Main accepts only the latest output sequence for that PTY.
+The worker's synchronous permission hook has a 30 s budget on either hook channel. A permission notification and
+current permission frame surface the owner wait even when the decision hook could not report it. Claude can still
+accept a late hook decision after that notification, so automatic deny keys wait out the hook budget. The wait stays
+visible until the CLI advances or clears its menu. Tests cover this with a fake clock and a captured permission screen.
 
 ## Owns
 - `electron/features/worker-terminals/**`

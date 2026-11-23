@@ -12,6 +12,7 @@ const { startHookReceiver } = require('../helpers/claude-hook-client.cjs');
 const { createEventServer } = require('../../electron/events.cjs');
 const { terminalHooks } = require('../../electron/features/terminal-events/hook-channel.cjs');
 const { READ_ONLY_MODE, workerToolArgs } = require('../../electron/features/claude-runtime/decide.cjs');
+const { workerHookSettings } = require('../../electron/features/worker-terminals/worker-terminals.cjs');
 
 // The events Agentrix hooks over HTTP (contract C-2); SessionStart stays the command hook and is not part of these tests.
 const HTTP_EVENTS = ['UserPromptSubmit', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'PostToolBatch', 'PermissionDenied',
@@ -144,7 +145,8 @@ async function workerHooks(t, f, observer, role) {
       observer.note({ type: 'hook', event: event.hookEvent, payload: event });
     }
   });
-  t.after(() => eventServer.close());
+  if (role.permissionPipeDown) await eventServer.close();
+  else t.after(() => eventServer.close());
   const integration = path.resolve(__dirname, '../../integration');
   const shell = process.platform === 'win32'
     ? { powershellPath: path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
@@ -154,7 +156,7 @@ async function workerHooks(t, f, observer, role) {
   const receiver = await startHookReceiver({ terminalId, key: terminalHooks(options).key,
     onRequest: ({ event, payload }) => observer.note({ type: 'hook', event, payload }) });
   t.after(() => receiver.close());
-  const { settings } = terminalHooks({ ...options, port: receiver.server.address().port });
+  const hooks = terminalHooks({ ...options, port: receiver.server.address().port });
   const tools = workerToolArgs(role.readOnly);
   if (role.allowMcp) {
     const index = tools.indexOf('--disallowedTools') + 1;
@@ -165,8 +167,16 @@ async function workerHooks(t, f, observer, role) {
   f.env.AGENTRIX_DATA_DIR = path.join(root, 'agentrix');
   f.env.GIT_ALLOW_PROTOCOL = 'file';
   observer.markers.plan = /(?:Would you like to proceed|Do you want to (?:approve|execute) (?:the|this) plan|Claude has written up a plan)/i;
-  return { receiver, settings: settings.http, trustedFolders: [briefs],
-    args: [...tools, '--permission-mode', role.readOnly ? READ_ONLY_MODE : 'acceptEdits', '--add-dir', briefs, ...(role.args || [])] };
+  const debugFile = path.join(root, 'claude-debug.log');
+  if (role.permissionHookDelay) {
+    const preload = path.join(root, 'slow-permission-hook.cjs');
+    fs.writeFileSync(preload, `if (process.argv.includes('worker-permission')) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${role.permissionHookDelay});
+}`);
+    f.env.NODE_OPTIONS = `--require "${slashes(preload)}"`;
+  }
+  return { receiver, settings: workerHookSettings(hooks), trustedFolders: [briefs], debugFile,
+    args: [...tools, '--permission-mode', role.readOnly ? READ_ONLY_MODE : 'acceptEdits', '--add-dir', briefs, '--debug-file', debugFile, ...(role.args || [])] };
 }
 
 // One session of the real terminal CLI in a throwaway profile, hooked the way `mode` says, against a stub model that answers
@@ -185,7 +195,7 @@ async function hooked(t, mode, { respond, proxy = null, role, drive }) {
   if (proxy) Object.assign(f.env, { HTTP_PROXY: proxy.url, HTTPS_PROXY: proxy.url, ALL_PROXY: proxy.url, http_proxy: proxy.url, https_proxy: proxy.url });
   const args = [...(settings ? ['--settings', file] : []), ...(worker?.args || [])];
   const input = await terminal(t, f, args, false, observer.chunk, worker?.trustedFolders);
-  const session = { f, observer, input, bodies, receiver, mode, proxy, role };
+  const session = { f, observer, input, bodies, receiver, mode, proxy, role, debugFile: worker?.debugFile };
   await drive(session);
   return { ...session, body: bodies.find(body => body.tools?.length && JSON.stringify(body.messages).includes('HOOK_PROMPT')) };
 }

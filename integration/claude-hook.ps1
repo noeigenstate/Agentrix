@@ -14,6 +14,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if ($Kind -in @('seat-routing', 'worker-permission')) {
+    $workerPermission = $Kind -eq 'worker-permission'
     try {
         if (-not $NodePath) { exit 0 }
         if ($Kind -eq 'seat-routing' -and (-not $env:AGENTRIX_SEATS -or $env:AGENTRIX_SEATS -eq 'null') -and
@@ -36,12 +37,23 @@ if ($Kind -in @('seat-routing', 'worker-permission')) {
         try {
             $output = $child.StandardOutput.ReadToEndAsync()
             $write = $child.StandardInput.WriteAsync($inputBuffer, 0, $length)
-            if (-not $write.Wait(1500)) { $child.Kill(); exit 0 }
+            if (-not $write.Wait($(if ($workerPermission) { 8000 } else { 1500 }))) {
+                if ($workerPermission) { [Console]::Error.WriteLine('Agentrix worker permission hook timed out writing input to Node.') }
+                $child.Kill()
+                exit 0
+            }
             $child.StandardInput.Close()
-            if ($child.WaitForExit(2500)) { [Console]::Out.Write($output.Result) }
-            else { $child.Kill() }
+            if ($child.WaitForExit($(if ($workerPermission) { 15000 } else { 2500 }))) {
+                [Console]::Out.Write($output.Result)
+                if ($workerPermission -and $child.ExitCode -ne 0) { [Console]::Error.WriteLine("Agentrix worker permission Node exit code: $($child.ExitCode).") }
+            } else {
+                if ($workerPermission) { [Console]::Error.WriteLine('Agentrix worker permission hook timed out waiting for Node.') }
+                $child.Kill()
+            }
         } finally { $child.Dispose() }
-    } catch { }
+    } catch {
+        if ($workerPermission) { [Console]::Error.WriteLine("Agentrix worker permission bridge failed ($($_.Exception.GetType().Name)).") }
+    }
     exit 0
 }
 

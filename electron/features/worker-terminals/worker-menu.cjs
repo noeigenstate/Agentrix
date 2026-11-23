@@ -30,7 +30,8 @@ function createWorkerMenu({ waiting, write, refused, now, retryAfter }) {
     menu.answeredAt = now();
     retryAfter(RETRY_MS);
     try { write(keys); } catch { return reject('delivery_unknown'); }
-    waiting(null);
+    // Permission fallback stays visible until the CLI clears the screen or advances.
+    if (menu.frame.kind !== 'permission') waiting(null);
     return { status: 'delivered' };
   }
   return {
@@ -42,7 +43,7 @@ function createWorkerMenu({ waiting, write, refused, now, retryAfter }) {
       current = undefined;
       ownerTouched = false;
     },
-    frame(frame, seq, action) {
+    frame(frame, seq, action, canAutoDeny) {
       if (!validFrame(frame)) {
         if (current && current.answeredAt === undefined) waiting(null);
         if (current?.answeredAt !== undefined) ownerTouched = false;
@@ -61,7 +62,8 @@ function createWorkerMenu({ waiting, write, refused, now, retryAfter }) {
           && frame.navigable && menu.options.length > 0,
         options: (frame.kind === 'permission' ? frame.options : menu.options).map(({ number, label }) => ({ number, label })) });
       menu.navigable = frame.navigable;
-      if (!menu.retried && frame.kind === 'permission' && frame.navigable && !ownerTouched && menu.options.length === 1 && send(menu, menu.options[0]).status === 'delivered') {
+      if (canAutoDeny && !menu.retried && frame.kind === 'permission' && frame.navigable && !ownerTouched
+          && menu.options.length === 1 && send(menu, menu.options[0]).status === 'delivered') {
         refused({ reason: 'needs approval', action });
       }
     },

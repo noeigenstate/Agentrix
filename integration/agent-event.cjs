@@ -16,11 +16,12 @@ const { seatHookOutput, observedAgentSeat } = require(path.join(runtime, 'featur
 const { deniedAction } = require(path.join(runtime, 'features/agents/start-failure.cjs'));
 const { liveSeatMap, parseSeatMap } = require(path.join(runtime, 'features/agents/call-seat.cjs'));
 
-function send(socket, event) {
+function send(socket, event, deadlineMs) {
   return new Promise(resolve => {
     const connection = net.connect(socket);
-    const done = () => { connection.destroy(); resolve(); };
-    connection.setTimeout(750, done);
+    const done = () => { clearTimeout(deadline); connection.destroy(); resolve(); };
+    const deadline = deadlineMs ? setTimeout(done, deadlineMs) : null;
+    if (!deadline) connection.setTimeout(750, done);
     connection.on('error', done);
     connection.on('close', done);
     connection.on('connect', () => connection.end(JSON.stringify(event) + '\n'));
@@ -128,8 +129,9 @@ async function main([action, socket, projectId, sessionKey, argument, ...rest]) 
   const input = action === 'claude-hook' ? await readInput() : null;
   if (action === 'claude-hook' && argument === 'worker-permission') {
     const { output, event } = workerPermission(input, projectId, sessionKey);
-    if (event) await send(socket, event);
     if (output) process.stdout.write(JSON.stringify(output) + '\n');
+    // Claude waits for the hook process to finish, so reporting needs an absolute deadline as well.
+    if (event) await send(socket, event, 750);
     return;
   }
   if (action === 'claude-hook' && argument === 'seat-routing') {
