@@ -1547,7 +1547,7 @@ function gridMarkup(terminals, { focused = false, native = [], moved = [], hando
   const marker = (name, props) => React.createElement('div', { className: name, 'data-terminal': props.terminalId ?? props.id, 'data-phase': props.switchState?.phase ?? '', 'data-active': String(props.terminalActive ?? '') });
   const load = makeLoader({
     '../agents/SubagentPane': { SubagentPane: () => null }, '../agents/subagent-splits.ts': { closeSplit() {}, splitsOf: () => [], useSplits: () => [] },
-    './AgentLauncher': { AgentLauncher: props => marker('launcher-stub', props) }, './TerminalPane': { TerminalPane: props => marker('pane-stub', props) }, '../reading/ReadingView': { ReadingView: () => null },
+    './AgentLauncher': { AgentLauncher: props => marker('launcher-stub', props) }, './lead-sync': { LeadSync: () => null }, './TerminalPane': { TerminalPane: props => marker('pane-stub', props) }, '../reading/ReadingView': { ReadingView: () => null },
     '../reading/reading-mode': { readingShown: () => false, setReading() {}, syncReading() {}, useTerminalChoice: () => [] }, '../workspace/useProjectReorder': { TERMINAL_SPLITS: {}, useReorder: () => ({}) },
     '../native-session/NativeSessionView': { NativeSessionView: props => marker('native-stub', props) }, '../native-session/NativePathNote': { NativePathNote: props => marker('note-stub', props) },
     '../native-session/draft-handoff.ts': { useHandoff: (id, session, state) => { handoffs.push([id, session, state?.phase ?? null]); return {}; } },

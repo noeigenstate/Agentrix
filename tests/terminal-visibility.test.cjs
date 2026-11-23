@@ -34,6 +34,7 @@ function loadUI(name, overrides = {}) {
     if (key === 'useProjectReorder') return { useReorder: () => ({}) };
     if (key === 'SubagentPane') return { SubagentPane: () => null };
     if (key === 'subagent-splits.ts') return { closeSplit() {}, splitsOf: () => [], useSplits: () => [] };
+    if (key === 'lead-sync') return { LeadSync: () => null };
     if (key === 'TerminalPane') return { TerminalPane: ({ id }) => React.createElement('div', { 'data-pane': id }) };
     return original(name);
   };

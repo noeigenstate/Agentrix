@@ -44,7 +44,7 @@ const screenStub = { readScreen: () => null, subscribeScreen: () => () => {} }, 
 // One loader for the store, the activity pane and the grid, so they share one store, as they do in the window.
 const load = makeLoader({
   '../reading/ConversationFeed': feedStub, '../agents/SubagentPane': viewStub, '../terminal/terminal-screen': screenStub, '../home/send-to-agent': sendStub,
-  './AgentLauncher': { AgentLauncher: () => null }, './TerminalPane': { TerminalPane: ({ id }) => React.createElement('div', { 'data-pane': id }) },
+  './AgentLauncher': { AgentLauncher: () => null }, './lead-sync': { LeadSync: () => null }, './TerminalPane': { TerminalPane: ({ id }) => React.createElement('div', { 'data-pane': id }) },
   '../reading/ReadingView': { ReadingView: () => null }, '../reading/reading-mode': { readingShown: () => false, setReading() {}, syncReading() {}, useTerminalChoice: () => [] },
   '../workspace/useProjectReorder': { TERMINAL_SPLITS: {}, useReorder: () => ({}) },
   // Native sessions have their own tests (native-session-ui.test.cjs); here no terminal runs one, and the usage card is not under test.

@@ -4,6 +4,7 @@ import { BackgroundPane, SubagentPane } from '../agents/SubagentPane';
 import { closeSplit, isBackgroundCall, splitsOf, useSplits } from '../agents/subagent-splits.ts';
 import { AgentLauncher } from './AgentLauncher';
 import { TerminalPane } from './TerminalPane';
+import { LeadSync } from './lead-sync';
 import { terminalInUse, visibleTerminals } from './terminal-visibility.ts';
 import { ReadingView } from '../reading/ReadingView';
 import { readingShown, setReading, syncReading, useTerminalChoice } from '../reading/reading-mode';
@@ -71,6 +72,7 @@ export function ProjectTerminals({ project, visible: projectVisible = true, focu
       const reading = !native && readingShown(terminal, raw);
       const name = `${project.name} ${terminal.title}`;
       return <div key={terminal.id} className={`terminal-slot ${reorder.drag?.id === terminal.id ? 'drag-placeholder' : ''}`} data-terminal-slot={terminal.id} style={{ display: visibleIds.has(terminal.id) ? undefined : 'none' }}>
+      <LeadSync projectId={project.id} terminal={terminal} />
       <section className={`terminal-split ${selected === terminal.id ? 'is-active-terminal' : ''} ${reorder.drag?.id === terminal.id ? 'drag-source' : ''} ${reorder.drag?.targetId === terminal.id ? 'drop-target' : ''}`} data-terminal-id={terminal.id} data-session-id={terminal.sessionId || ''} data-codex-active={terminal.codexActive} aria-label={name} onPointerDownCapture={() => setActiveId(terminal.id)} onFocusCapture={() => setActiveId(terminal.id)}>
         {/* Only with several splits, and only while the pointer or the keyboard is in one: its drag grip (splits are reordered by it), restart and close, in its corner. */}
         {multiple && <div className="terminal-split-tools">

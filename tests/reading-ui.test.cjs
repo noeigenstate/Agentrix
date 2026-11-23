@@ -1654,7 +1654,7 @@ test('the terminal surface follows reading intent even before the reading subtre
     './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
     './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
     './ReadingView': { ReadingView: () => null },
-    './TerminalPane': { TerminalPane: props => React.createElement('div', { className: 'terminal-host', 'data-focused': props.focused }) },
+    './lead-sync': { LeadSync: () => null }, './TerminalPane': { TerminalPane: props => React.createElement('div', { className: 'terminal-host', 'data-focused': props.focused }) },
     './AgentLauncher': { AgentLauncher: () => null }, './VoiceButton': { VoiceButton: () => null },
     './useProjectReorder': { useReorder: () => ({}) },
   });
@@ -1677,7 +1677,7 @@ test('the terminal grid forwards project visibility to the reader without focusi
     './reading-mode': mode,
     './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
     './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
-    './ReadingView': { ReadingView: props => { seen.push(props); return null; } }, './TerminalPane': { TerminalPane: () => null },
+    './ReadingView': { ReadingView: props => { seen.push(props); return null; } }, './lead-sync': { LeadSync: () => null }, './TerminalPane': { TerminalPane: () => null },
     './AgentLauncher': { AgentLauncher: () => null }, './useProjectReorder': { useReorder: () => ({}) },
   });
   for (const visible of [false, true]) {
@@ -1691,7 +1691,7 @@ test('a restored preview and live splits keep the same order and fallback select
   const mode = readingMode(), { ProjectTerminals } = loadUI('features/terminal/ProjectTerminals.tsx', {
     './NativeSessionView': { NativeSessionView: () => null }, './NativePathNote': { NativePathNote: () => null },
     './native-store.ts': { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} },
-    './reading-mode': mode, './ReadingView': { ReadingView: () => null }, './TerminalPane': { TerminalPane: () => null },
+    './reading-mode': mode, './ReadingView': { ReadingView: () => null }, './lead-sync': { LeadSync: () => null }, './TerminalPane': { TerminalPane: () => null },
     './AgentLauncher': { AgentLauncher: () => null }, './useProjectReorder': { useReorder: () => ({}) },
   });
   const first = { ...terminal('preview', null), title: 'Preview', codexActive: false, sessionId: null, readingHistory: { key: 'preview-key', agent: 'codex', threadId: 'saved' } };

@@ -79,7 +79,7 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
-  // In conductor mode a saved lead model reaches a conversation when it starts; a running one keeps the model it has.
+  // In conductor mode a changed lead seat is typed into the running CLI at once (terminal/lead-sync.ts); the note shows until it answers.
   // In native mode the CLI's own /model and /effort decide, and the panel shows what it runs.
   const chosen = seats?.conductor ? seats.leads?.[terminal.agent === 'claude' ? 'claude' : 'codex']?.model : null;
   const pending = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
@@ -125,7 +125,7 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
     <ul className="activity-call-rows">
       <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
-      {pending && <li className="activity-call-note" role="status"><span /><p>{t('已选 {model}，新对话生效。', { model: pending })}</p><span /></li>}
+      {pending && <li className="activity-call-note" role="status"><span /><p>{t('正在切换到 {model}', { model: pending })}</p><span /></li>}
     </ul>
     <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={t('提示')}>
       {expanded ? rows : rows.slice(0, 4)}

@@ -3762,7 +3762,7 @@
   "角色的运行目录在结束七天后自动清理，不再在临时文件夹里越积越多。": "A role run folder is removed seven days after the role ends, so they no longer pile up in the temp folder.",
   "终端角色": "Roles in terminals",
   "用 npm 方式安装的 Claude Code 在 PowerShell 里也能调用角色；SSH 终端会明确提示角色暂不可用。": "A Claude Code installed with npm can now call roles from PowerShell too, and SSH terminals say plainly that roles are not available there yet.",
-  "已选 {model}，新对话生效。": "{model} is selected and applies to new conversations.",
+  "正在切换到 {model}": "Switching to {model}",
   "拒后继续": "Carries on after a refusal",
   "角色被拒绝某个操作后会继续完成其余工作，并在结果里列出被拒的操作，不再停下来等你确认。": "A role that is refused an action now finishes the rest of its work and lists the refused action in its result instead of stopping to wait for you.",
   "模型版本": "Model releases",
