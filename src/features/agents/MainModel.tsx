@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { CaretDown, CheckCircle, Circle, WarningCircle } from '@phosphor-icons/react';
-import type { CliState, ProjectTerminal } from '../../shared/types';
+import type { CliState, ProjectTerminal, SeatsInfo } from '../../shared/types';
 import { currentLanguage, t } from '../../shared/i18n';
 import { modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
@@ -40,17 +40,48 @@ export function useMainTurn(terminal: ProjectTerminal | undefined) {
   return { terminal, cli, activity, prompts, working, background, summary, ended };
 }
 
-export function MainModelGroup({ terminal }: { terminal: ProjectTerminal | undefined }) {
-  const turn = useMainTurn(terminal);
-  return turn && <MainModel turn={turn} />;
+// The routing the conversation was started under and the one saved now, for the heading and the lead's chosen model.
+function useSeats(terminalId: string | undefined, sessionId: string | null | undefined) {
+  const [info, setInfo] = useState<SeatsInfo | null>(null);
+  useEffect(() => {
+    const api = typeof window === 'undefined' ? undefined : window.agentrix;
+    if (!terminalId || !api?.skillSeats) return;
+    let active = true, request = 0;
+    const load = () => {
+      const mine = ++request;
+      void api.skillSeats(null, terminalId).then(
+        next => { if (active && request === mine) setInfo(next); },
+        () => { if (active && request === mine) setInfo(null); },
+      );
+    };
+    setInfo(null); load();
+    const off = api.onSkills?.(load);
+    return () => { active = false; off?.(); };
+  }, [terminalId, sessionId]);
+  return info;
 }
 
-export function MainModel({ turn }: { turn: NonNullable<ReturnType<typeof useMainTurn>> }) {
+// "opus" names whichever Opus runs; a full id names one model.
+function sameModel(chosen: string, actual: string) {
+  const a = chosen.toLowerCase(), b = actual.toLowerCase();
+  return a === b || modelName(chosen).toLowerCase() === modelName(actual).toLowerCase() || /^[a-z]+$/.test(a) && b.split(/[-\s]/).includes(a);
+}
+
+export function MainModelGroup({ terminal }: { terminal: ProjectTerminal | undefined }) {
+  const turn = useMainTurn(terminal);
+  const seats = useSeats(terminal?.codexActive ? terminal.id : undefined, terminal?.sessionId);
+  return turn && <MainModel turn={turn} seats={seats} />;
+}
+
+export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType<typeof useMainTurn>>; seats?: SeatsInfo | null }) {
   const { terminal, cli, activity, prompts, working, background, summary, ended } = turn;
   const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
+  // A saved lead model reaches a conversation when it starts; a running one keeps the model it has.
+  const chosen = seats?.leads?.[terminal.agent === 'claude' ? 'claude' : 'codex']?.model;
+  const pending = chosen && actual && !sameModel(chosen, actual) ? /^[a-z]+$/.test(chosen) ? chosen[0].toUpperCase() + chosen.slice(1) : modelName(chosen) : null;
   const now = useNow(Date.now);
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
   // Native turns distinguish a failure from an interruption only for their own runtime session.
@@ -89,10 +120,11 @@ export function MainModel({ turn }: { turn: NonNullable<ReturnType<typeof useMai
   }
   const hidden = Math.max(0, rows.length - 4);
   return <section className="activity-card activity-main agent-team-group" aria-label={t('主模型')}>
-    <h4>{currentLanguage() === 'en' ? t('Agent 面板 · 总指挥') : '总指挥'}</h4>
+    <h4>{seats?.conductor === false ? t('主模型') : currentLanguage() === 'en' ? t('Agent 面板 · 总指挥') : '总指挥'}</h4>
     <ul className="activity-call-rows">
       <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
+      {pending && <li className="activity-call-note" role="status"><span /><p>{t('已选 {model}，新对话生效。', { model: pending })}</p><span /></li>}
     </ul>
     <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={t('提示')}>
       {expanded ? rows : rows.slice(0, 4)}
