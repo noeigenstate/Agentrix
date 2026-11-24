@@ -23,7 +23,8 @@ function modelChoice(target: string, label: string, description: string) {
   if (context.test(target) !== context.test(label)) return false;
   const name = label.replace(context, '').trim();
   const chosen = target.replace(context, '');
-  if (/^(opus|sonnet|haiku|fable)$/i.test(chosen)) return chosen.toLowerCase() === name.toLowerCase();
+  // Claude Code 2.1.331 labels a line by its release ("Sonnet 5.5"); earlier pickers show the bare alias.
+  if (/^(opus|sonnet|haiku|fable)$/i.test(chosen)) return new RegExp(`^${chosen}(?: \\d+(?:\\.\\d+)?)?$`, 'i').test(name);
   const release = /^(?:opus|sonnet|haiku|fable) \d+(?:\.\d+)?\b/i.exec(description)?.[0];
   const shown = /^(opus|sonnet|haiku|fable)$/i.test(name) ? release : name;
   return !!shown && modelName(chosen).toLowerCase() === shown.toLowerCase();

@@ -17,7 +17,13 @@ const LIMIT_SWITCHED = {
     'Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
 };
 const providerLimit = status => Object.hasOwn(LIMIT_SWITCHED, status);
-function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now, saveSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [], terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {}, prepareConversation = () => {}, retireTerminal = () => {}, switchOptions = {} }) {
+const remoteCodex = spec => spec.agent === 'codex' && spec.kind === 'ssh';
+function createRouter({
+  claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now,
+  saveSession = () => {}, invalidateSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [],
+  terminalSessions = () => [], observeTerminal = () => ({ state: 'unknown' }), prepareTerminal, activateNative = () => {},
+  prepareConversation = () => {}, retireTerminal = () => {}, switchOptions = {},
+}) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
   const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
   const projectLimits = new Map(), historyReads = new Map();
@@ -52,6 +58,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     resolveSpec(id, record.spec.agent, false, true);
     return record;
   }
+  function requireStarted(record) {
+    if (record.startupFailed) throw new Error('会话未能连接，请点击「开始新的对话」重试。');
+    if (busy.has(record.spec.terminalId)) throw new Error('会话正在启动，请稍后重试。');
+  }
   function flushFailures(record) {
     for (const event of record.failures || []) record.stream.publish(event.type, event.payload);
     record.failures = [];
@@ -77,12 +87,20 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     record.runtime = restoreFactory ? restoreFactory(spec, receive) : (agent === 'claude' ? claude : codex).create(spec, receive);
     return record;
   }
+  function rememberSession(record, providerSessionId) {
+    if (!providerSessionId || record.persisted) return;
+    record.persisted = true;
+    saveSession(record.spec.terminalId, { agent: record.spec.agent, providerSessionId });
+  }
   function forward(record, event) {
     const { spec } = record, { agent, terminalId: id } = spec;
     if (sessions.get(id) !== record) return;
     if (!validEvent(event) || event.projectId !== spec.projectId || event.terminalId !== id || event.runtimeSessionId !== spec.runtimeSessionId ||
       record.epoch && event.connectionEpoch !== record.epoch || event.sequence <= (record.sequence || 0)) return;
     record.epoch = event.connectionEpoch; record.sequence = event.sequence;
+    const deferHistory = remoteCodex(spec);
+    // SSH has no local rollout check. A thread/start reply alone does not establish history.
+    if (deferHistory && event.type === 'turn.started' && !event.replay) rememberSession(record, event.providerSessionId);
     if (agent === 'codex' && !event.replay && ['turn.started', 'turn.completed'].includes(event.type)) {
       saveInterrupted(id, !record.ownerStopped && (event.type === 'turn.started' || ['interrupted', 'unknown'].includes(event.payload.status)));
     }
@@ -96,10 +114,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     if (event.providerSessionId && !record.lock) {
       record.lock = `${agent}:${event.providerSessionId}`; occupied.add(record.lock);
     }
-    if (event.providerSessionId && !record.persisted) {
-      record.persisted = true;
-      saveSession(id, { agent, providerSessionId: event.providerSessionId });
-    }
+    if (!deferHistory) rememberSession(record, event.providerSessionId);
     if (event.type === 'limits.updated') {
       const limits = projectLimits.get(spec.projectId) || {};
       limits[agent] = retainLimits(limits[agent], event.payload); projectLimits.set(spec.projectId, limits);
@@ -155,6 +170,9 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         if (record.lock) occupied.delete(record.lock);
         const reason = error.code || error.message;
         if (agent === 'codex') {
+          record.lock = null;
+          record.startupFailed = true;
+          if (remoteCodex(spec) && resume && error.stage === 'thread_resume' && error.missingThread) invalidateSession(id, spec.providerSessionId);
           try { await runtime.close(); } catch { }
           // A sandbox Codex did not apply is named by the runtime, which knows what was asked and what came back.
           const message = reason === 'sandbox_mismatch' ? error.message
@@ -180,6 +198,7 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         flushFailures(record);
         throw error;
       }
+      if (remoteCodex(spec) && resume) rememberSession(record, startup?.providerSessionId);
       const reason = startup?.reason || decision.wire;
       record.stream.publish('path.changed', { previous: null, selected: decision.path === 'api' ? 'api' : 'subscription', reason });
       pathChanged(agent, decision.path, reason); changed(); return { runtimeSessionId: spec.runtimeSessionId };
@@ -358,7 +377,8 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
       const record = current(id, runtimeSessionId);
       if (!record.runtime.shell) throw new Error('此会话不支持运行命令。');
       if (record.spec.agent === 'codex') {
-        if (busy.has(id) || switches.state(id)?.phase && switches.state(id).phase !== 'stable') throw new Error('会话正在切换，请稍后重试。');
+        requireStarted(record);
+        if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') throw new Error('会话正在切换，请稍后重试。');
         record.ownerInput = true; record.ownerStopped = false; switches.input(id, runtimeSessionId);
       }
       const result = await record.runtime.shell(clientMessageId, command);
@@ -366,7 +386,9 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     },
     async newConversation(id, runtimeSessionId) {
       const previous = current(id, runtimeSessionId);
-      if (busy.has(id) || previous.runtime.snapshot().state !== 'idle' || previous.runtime.activity?.().count > 0) throw new Error('请等待当前任务结束后再开始新对话。');
+      if (busy.has(id) || !previous.startupFailed && (previous.runtime.snapshot().state !== 'idle' || previous.runtime.activity?.().count > 0)) {
+        throw new Error('请等待当前任务结束后再开始新对话。');
+      }
       busy.add(id);
       let next, finishPreparation;
       try {
@@ -378,8 +400,10 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
         current(id, runtimeSessionId);
         await activateNative(spec, null, { newConversation: true });
         sessions.set(id, next); switches.forget(id);
-        saveSession(id, { agent: spec.agent, providerSessionId: spec.agent === 'codex' ? spec.providerSessionId : null });
-        if (spec.agent === 'codex') next.persisted = true;
+        if (!remoteCodex(spec)) {
+          saveSession(id, { agent: spec.agent, providerSessionId: spec.agent === 'codex' ? spec.providerSessionId : null });
+          next.persisted = spec.agent === 'codex';
+        }
         next.staged = false;
         for (const event of next.buffered) forward(next, event);
         next.buffered = [];
@@ -403,11 +427,11 @@ function createRouter({ claude, codex, settings, resolveSpec, terminal, emit, ch
     async send(id, runtimeSessionId, message) {
       const record = current(id, runtimeSessionId);
       if (record.spec.owner !== 'dispatch' && routingText(message.text)) throw routingOwned();
+      requireStarted(record);
       // A read-only popup query is not the owner's message: it keeps their stop and input flags, leaves no item in the conversation and, mid-switch, says so
       // instead of leaving an unsent bubble behind.
       const observation = (record.spec.agent === 'codex' ? ['/status', '/usage'] : ['/context', '/cost', '/status', '/usage']).includes(message.text.trim()) && record.spec.owner !== 'dispatch';
       if (!observation) record.ownerInput = true;
-      if (busy.has(id)) throw new Error('会话正在切换，请稍后重试。');
       if (record.inputs.has(message.clientMessageId)) return { status: record.inputs.get(message.clientMessageId) };
       if (switches.state(id)?.phase && switches.state(id).phase !== 'stable') {
         if (observation) throw new Error('会话正在切换，请稍后重试。');

@@ -65,7 +65,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
     return () => { active = false; off(); };
   }, []);
   // The Codex of a project on another computer (SSH) runs there, on that computer's app-server: whether this computer has Codex is none of its business.
-  const remote = kind === 'ssh', runsHere = (agent: Agent) => !(remote && agent === 'codex');
+  const remote = kind === 'ssh', runsHere = (_agent: Agent) => !remote;
   const missing = (agent: Agent) => runsHere(agent) && !!agents && !agents[agent].installed;
   // npm put Claude Code there without its native program: installing again changes nothing. With a key saved the connection test says why (the run-mode page, its test button in focus); without one the test cannot be clicked, and the page with the installer's command opens.
   const incomplete = (agent: Agent) => agent === 'claude' && runsHere(agent) && !!agents?.claude.incomplete;
@@ -91,7 +91,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   const launch = async (id: string, agent: Agent) => {
     const bridge = nativeBridge();
     if (agent === 'claude' && noKey && !next?.path) setNotice(t('只用 API 运行，但还没有保存 API key。请到设置的「运行方式」里保存。'));
-    else if (bridge) {
+    else if (bridge && !(remote && agent === 'claude')) {
       // A start that fails is told in the card it leaves (the session that failed shows its reason, or this card says it): not again as a message in the corner.
       const started = await bridge.start(id, { agent, resume: chosen === 'continue' }).catch(error => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
       if (!started.ok) setNotice(started.error);
@@ -133,10 +133,11 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   const routeNote = (agent: Agent) => {
     if (missing(agent) || incomplete(agent)) return null;
     if (agent === 'codex') return t('原生模式');
+    if (remote) return t('远端终端');
     if (next?.path === 'api' || next?.path === 'native') return t('API · 原生模式');
     return noKey ? (next?.path ? t('没有 API key，改用终端') : t('需先保存 API key')) : null;
   };
-  const choices = AGENTS.filter(({ agent }) => !remote || agent === 'codex');
+  const choices = [...AGENTS];
   const primary = routing?.leadAgent;
   if (primary) choices.sort((a, b) => Number(b.agent === primary) - Number(a.agent === primary));
   const seatLabel = (agent: Agent) => {

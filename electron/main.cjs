@@ -577,6 +577,11 @@ function refreshSkillNotes() {
     if (project.kind === 'ssh') {
       const remote = s.remoteConnection || s.terminal;
       if (remote?.request && !remote.closed) {
+        // The host's prompt hook hands this over with the owner's next prompt (remote-worker.py, claude-hook start).
+        if (!s.nativeStructured && s.agent === 'claude' && s.codexActive) {
+          const change = skills.routingChange(project.id, s.sessionId, s.toldSeats);
+          if (change) { s.toldSeats = change.table; remote.request('prompt-note', { note: change.note }).catch(report); }
+        }
         const lead = s.nativeStructured ? null : skills.terminalLead(project.id, { remote: true });
         const refresh = lead ?? { seatsMap: skills.dispatchSeats(project.id) ?? {} };
         const routing = skills.seatsInfo(project.id);
@@ -1077,7 +1082,7 @@ function launchAfterPrompt(project, session) {
   }
   session.ready = false;
   if (plan.threadId) { session.claudeResumeId = plan.threadId; void followClaudeSession(project, session, plan.threadId); }
-  session.gate.afterPrompt(plan.command);
+  if (project.kind === 'ssh') session.gate.input(plan.command); else session.gate.afterPrompt(plan.command);
   broadcast();
 }
 
@@ -1368,6 +1373,10 @@ function wireNativeSessions(directory, codex, codexFactory) {
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
+    invalidateSession: (id, threadId) => {
+      const saved = store.findTerminal(id)?.record.restore;
+      if (threadId && saved?.threadId === threadId && (saved.agent || 'codex') === 'codex') store.setRestore(id, { threadId: null, interrupted: false });
+    },
     saveInterrupted: (id, interrupted) => { if (!quitting) store.setRestore(id, { interrupted }); },
     terminal: async (spec, reason) => {
       const current = sessions.get(spec.terminalId); if (current?.nativeStructured) disposeTerminal(spec.terminalId, { preserveNative: true, preserveCalls: true });
@@ -1802,7 +1811,6 @@ function registerIpc() {
   handle('agent:launch', async (id, agent, mode) => {
     const project = findProject(id);
     if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
-    if (project.kind === 'ssh' && agent !== 'codex') throw new Error('SSH 原生会话目前仅支持 Codex。');
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
     if (agent === 'codex') {
       if (!nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
@@ -1810,8 +1818,10 @@ function registerIpc() {
       // start resolves the saved thread, or queries folder history, only after this click.
       await nativeSessions.start(id, { agent, resume: mode === 'continue' }); broadcast(); return true;
     }
-    const history = mode === 'continue' ? (await folderHistory(folderOf(id)))[agent] : null;
-    launchPlans.set(id, { agent, command: launchCommand(agent, history), threadId: history?.id || null });
+    // Claude Code on another computer keeps its own conversations: it is asked to continue, never searched for here.
+    const history = mode === 'continue' && project.kind !== 'ssh' ? (await folderHistory(folderOf(id)))[agent] : null;
+    const command = project.kind === 'ssh' && mode === 'continue' ? 'claude --continue' + String.fromCharCode(13) : launchCommand(agent, history);
+    launchPlans.set(id, { agent, command, threadId: history?.id || null });
     startTerminal(id, true); broadcast(); return true;
   });
   registerNativeIpc({ handle });

@@ -2407,6 +2407,9 @@
   "会话已停止。": "The session has stopped.",
   "会话已变化，请刷新后重试。": "The session has changed. Refresh and try again.",
   "会话正在启动。": "The session is starting.",
+  "会话正在启动，请稍后重试。": "The session is starting. Please try again in a moment.",
+  "会话未能连接，请点击「开始新的对话」重试。": "The session could not connect. Click “Start a new conversation” to try again.",
+  "会话正在切换，请稍后重试。": "The session is switching run modes. Please try again in a moment.",
   "会话消息过多，请启动新会话。": "This session has too many messages. Start a new session.",
   "原生会话不支持此命令。": "Native sessions do not support this command.",
   "原生会话仅支持本地项目。": "Native sessions support local projects only.",
@@ -3809,5 +3812,16 @@
   "快速提示": "Fast mode notice",
   "Claude Code 拒绝过快速模式后，在模型路由里点总指挥的“快速”开关会当场提示原因，不用等保存后再看终端；再点一次仍可打开重试。": "After Claude Code has refused fast mode, clicking the orchestrator's Fast switch in model routing shows the reason at once instead of after saving; click again to turn it on and retry.",
   "审查测试": "Review tests",
-  "只读的 Claude 角色（例如审查）现在可以运行命令和测试，是否运行、运行哪些由角色按任务决定；仍不能改文件、提交或推送。": "Read-only Claude roles such as the reviewer can now run commands and tests, and decide from the task whether to run any and which; they still cannot change files, commit or push."
+  "只读的 Claude 角色（例如审查）现在可以运行命令和测试，是否运行、运行哪些由角色按任务决定；仍不能改文件、提交或推送。": "Read-only Claude roles such as the reviewer can now run commands and tests, and decide from the task whether to run any and which; they still cannot change files, commit or push.",
+  "远端终端": "Remote terminal",
+  "远端 Claude": "Remote Claude",
+  "SSH 项目的启动页现在也列出 Claude Code，点击后在远端终端里启动；选“继承开发历史”时由远端的 Claude Code 自己续接。": "The launcher of an SSH project now offers Claude Code too and starts it in the remote terminal; with \"Continue history\" the remote Claude Code continues its own conversation.",
+  "远端切换": "Remote lead switch",
+  "指挥家模式下改总指挥座位，SSH 远端运行中的 Claude Code 也会自动切换模型和思考深度，改动的座位表随你的下一条消息告知模型。": "In conductor mode, changing the orchestrator seat now switches a running Claude Code on an SSH host as well, and the changed seat table reaches the model with your next message.",
+  "别名座位": "Alias seats",
+  "座位用 sonnet、opus 这类别名时，新版 Claude Code 的模型选择器按版本号列出模型也能选中，不再切换失败。": "A seat set to an alias such as sonnet or opus is now found in the newer Claude Code model picker, which lists models by release, instead of failing to switch.",
+  "远端续接": "Remote resume",
+  "SSH 项目里启动后没发过消息的 Codex 会话不再被当成历史，续接不到时“开始新的对话”直接新开；启动中和连接失败时发送有各自的提示。": "On an SSH project, a Codex session that never sent a message is no longer offered as history, and \"Start a new conversation\" starts one directly when a resume finds nothing; sending while starting or after a failed connection says which it is.",
+  "角色启动": "Role start",
+  "修复 Codex 角色在部分 Windows 环境报“沙箱尚未确认工作目录”而无法启动的问题。": "Fixes Codex roles failing to start on some Windows setups with \"the sandbox has not confirmed the working folder\"."
 }

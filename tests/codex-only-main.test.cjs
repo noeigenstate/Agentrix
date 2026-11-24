@@ -55,7 +55,12 @@ test('the launcher sends every local and SSH Codex mode to app-server', async ()
   delete saved.threadId; context.folderHistory = () => assert.fail('SSH must not read local history');
   await handlers.get('agent:launch')('t', 'codex', 'continue');
   assert.equal(calls.at(-1)[1].resume, true);
-  await assert.rejects(handlers.get('agent:launch')('t', 'claude', 'new'), /SSH/);
+  // Claude Code of an SSH project starts in its remote terminal and continues by its own record, never this computer's.
+  const started = []; context.startTerminal = (id, agent) => started.push([id, agent]);
+  await handlers.get('agent:launch')('t', 'claude', 'continue');
+  assert.deepEqual(started, [['t', true]]);
+  assert.deepEqual({ ...context.launchPlans.get('t') }, { agent: 'claude', command: 'claude --continue\r', threadId: null });
+  assert.equal(calls.length, 4, 'no native session starts for Claude Code on another computer');
 });
 
 for (const [code, words] of [['codex_cli_required', '未找到 Codex'], ['unsupported_codex_version', '版本过低'], ['rpc_timeout', '连接失败']]) {

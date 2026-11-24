@@ -76,6 +76,82 @@ test('fallback at a message boundary never replays the submitted text', async ()
 test('an active runtime cannot be replaced by a concurrent start', async () => {
   const { router } = fixture(); await router.start('t', { agent: 'claude' }); await assert.rejects(router.start('t', { agent: 'codex' }));
 });
+
+function sshCodex(t, { savedId = null, startGate, resumeError } = {}) {
+  let stream;
+  const saves = [], invalidated = [], calls = [];
+  const codex = { create(spec, emit) {
+    const events = createEventStream(spec, emit);
+    stream = events;
+    let state = 'starting';
+    const open = async resume => {
+      calls.push(resume ? 'resume' : 'start');
+      events.publish('session.state', { state, reason: null });
+      if (resume && resumeError) throw resumeError;
+      if (startGate) await startGate;
+      const providerSessionId = spec.providerSessionId || 'fresh';
+      events.provider(providerSessionId);
+      state = 'idle'; events.publish('session.state', { state, reason: null });
+      return { providerSessionId };
+    };
+    return { start: () => open(false), resume: () => open(true), snapshot: () => ({ state }),
+      async close() { state = 'stopped'; }, send: () => assert.fail('send reached the provider') };
+  } };
+  const router = createRouter({ claude: {}, codex, emit() {}, settings: { get: () => ({}) },
+    resolveSpec: (terminalId, _agent, resume) => ({ projectId: 'p', terminalId, kind: 'ssh', cwd: '/remote', providerSessionId: resume ? savedId : null }),
+    saveSession: (_id, saved) => saves.push(saved.providerSessionId),
+    invalidateSession: (_id, threadId) => invalidated.push(threadId) });
+  t.after(() => router.close());
+  return { router, saves, invalidated, calls, startTurn(replay = false) {
+    stream.turn('turn');
+    stream.publish('turn.started', { origin: 'user', clientMessageId: null }, { replay });
+  } };
+}
+
+test('an SSH Codex thread becomes history only after a live turn starts', async t => {
+  const f = sshCodex(t);
+  await f.router.start('t', { agent: 'codex' });
+  assert.deepEqual(f.saves, []);
+  f.startTurn(true);
+  assert.deepEqual(f.saves, []);
+  f.startTurn();
+  f.startTurn();
+  assert.deepEqual(f.saves, ['fresh']);
+});
+
+test('a confirmed SSH Codex resume retains history before another turn, and other failures leave the saved ID intact', async t => {
+  const resumed = sshCodex(t, { savedId: 'existing' });
+  await resumed.router.start('t', { agent: 'codex', resume: true });
+  assert.deepEqual(resumed.saves, ['existing']);
+  const failed = sshCodex(t, { savedId: 'existing', resumeError: Object.assign(new Error('timeout'), { stage: 'thread_resume' }) });
+  await assert.rejects(failed.router.start('t', { agent: 'codex', resume: true }));
+  assert.deepEqual(failed.invalidated, []);
+  assert.deepEqual(failed.saves, []);
+});
+
+test('SSH Codex discards a missing rollout and starts a fresh conversation directly from the failed session', async t => {
+  const resumeError = Object.assign(new Error('rpc_rejected'), { code: -32600, stage: 'thread_resume', missingThread: true });
+  const f = sshCodex(t, { savedId: 'stale', resumeError });
+  await assert.rejects(f.router.start('t', { agent: 'codex', resume: true }));
+  assert.deepEqual(f.invalidated, ['stale']);
+  assert.deepEqual(f.saves, []);
+  const next = await f.router.newConversation('t', f.router.snapshot('t').runtimeSessionId);
+  assert.equal(f.router.snapshot('t').runtimeSessionId, next.runtimeSessionId);
+  assert.deepEqual(f.calls, ['resume', 'start']);
+  assert.deepEqual(f.saves, []);
+});
+
+test('sending to a starting or failed Codex session reports its connection state', async t => {
+  const gate = Promise.withResolvers(), f = sshCodex(t, { startGate: gate.promise });
+  const startup = f.router.start('t', { agent: 'codex' });
+  const failed = assert.rejects(startup);
+  const send = () => f.router.send('t', f.router.snapshot('t').runtimeSessionId, { clientMessageId: 'm', text: 'keep this' });
+  const starting = send().catch(error => error);
+  gate.reject(new Error('startup failure'));
+  await failed;
+  await assert.rejects(send(), { message: '会话未能连接，请点击「开始新的对话」重试。' });
+  assert.equal((await starting).message, '会话正在启动，请稍后重试。');
+});
 test('settings validate exact fields and persist independently of workspace settings', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-native-settings-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, 'settings.json'), settings = createSettings(file);

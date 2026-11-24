@@ -8,13 +8,13 @@ const { createCodexRuntime } = require('../electron/features/codex-app-server/in
 const { createHostInputs } = require('../electron/features/native-session/host-inputs.cjs');
 const vm = require('node:vm');
 
-function transport(t, root) {
+function transport(t, root, mode = 'normal') {
   const events = new EventEmitter(), calls = [], processes = new Map();
   const connection = { events, link: { key: 'same-ssh-host' }, closed: false, close() { this.closed = true; events.emit('exit'); }, async request(op, params) {
     calls.push([op, params]);
     if (op === 'codex-open') {
       const child = spawn(process.execPath, [path.join(__dirname, 'fixtures/codex-app-server.cjs')], {
-        cwd: root, env: { ...process.env, GIT_CEILING_DIRECTORIES: root }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: root, env: { ...process.env, GIT_CEILING_DIRECTORIES: root, SYNTHETIC_CODEX_MODE: mode }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
       });
       processes.set(params.processId, child);
       for (const stream of ['stdout', 'stderr']) child[stream].on('data', bytes => events.emit('codex-process', {
@@ -65,6 +65,18 @@ test('SSH Codex starts, sends, resumes and reads accounts solely through its rem
   const inputs = f.calls.filter(([op]) => op === 'codex-input').map(([, params]) => Buffer.from(params.data, 'base64').toString()).join('');
   const start = inputs.trim().split('\n').map(JSON.parse).find(row => row.method === 'thread/start');
   assert.match(start.params.config.developer_instructions, /quoted/);
+});
+
+test('a missing rollout refusal keeps its typed resume evidence across the remote byte channel', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agx-ssh-empty-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
+  const { connection } = transport(t, root, 'empty-thread'), forbidden = () => assert.fail('SSH used a local executable');
+  const runtime = createCodexRuntime({ resolveExecutable: forbidden, spawnProcess: forbidden,
+    launchRemote: async () => ({ cwd: root, child: createRemoteCodexProcess(connection) }),
+  }).create({ kind: 'ssh', owner: 'gui', cwd: '/remote', providerSessionId: '00000000-0000-4000-8000-000000000001' }, () => {});
+  t.after(() => runtime.close());
+  await assert.rejects(runtime.resume(), { code: -32600, stage: 'thread_resume', missingThread: true });
+  assert.equal(connection.closed, true);
 });
 
 test('remote process IDs isolate output; a lost SSH channel fails once without local kill', async () => {

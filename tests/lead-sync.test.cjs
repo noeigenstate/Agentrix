@@ -57,6 +57,21 @@ test('the model picker selects a verified release through the session-only short
   assert.equal(pickerAction(step, rows.slice(0, -1)), null);
 });
 
+// Rows as Claude Code 2.1.331 drew them in a 60-column SSH terminal: labels carry the release and descriptions wrap.
+test('an alias seat finds its line when the picker labels lines by release', () => {
+  const rows = ['  Select model', '  Your pick is the default for new sessions. For other ', '  models, use --model.', '',
+    '  ❯ 1.  Default (recommended)  Opus 5.5', '    2.  Opus 5.5 ✔             For complex work and ', '                               everyday tasks',
+    '    3.  Fable 5.2              For your toughest ', '                               challenges',
+    '    4.  Sonnet 5.5             Most efficient for ', '                               simpler tasks',
+    '    5.  Haiku 5.5              Fastest for quick ', '                               answers', '    ▸   More models             ', '',
+    '  s to use this session only · Enter to save · Esc to cancel'];
+  assert.equal(pickerAction({ kind: 'model', target: 'haiku' }, rows).key, '\x1b[B');
+  rows[4] = rows[4].replace('❯', ' '); rows[11] = rows[11].replace('    5.', '  ❯ 5.');
+  assert.equal(pickerAction({ kind: 'model', target: 'haiku' }, rows).key, 's');
+  assert.equal(pickerAction({ kind: 'model', target: 'sonnet' }, rows).key, '\x1b[A');
+  assert.equal(pickerAction({ kind: 'model', target: 'claude-haiku-5-5' }, rows).key, 's');
+});
+
 test('the effort slider uses the label under its caret and never selects an unavailable effort', () => {
   const rows = ['  Effort', '                             ──────────▲───────────────────────────────      Ultracode off',
     '                             low     medium     high     xhigh      max      Tab to toggle',

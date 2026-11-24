@@ -3,10 +3,9 @@
 // A beta may mark its additions with group: "new"; the list then shows them under their own heading and the rest under "earlier betas".
 // The first beta of a version has nothing earlier to set apart, so it carries no group and shows one list; a stable release carries none either.
 export const WHATS_NEW: { title: string; text: string; group?: "new" }[] = [
-  { title: "快速提示", text: "Claude Code 拒绝过快速模式后，在模型路由里点总指挥的“快速”开关会当场提示原因，不用等保存后再看终端；再点一次仍可打开重试。" },
-  { title: "审查测试", text: "只读的 Claude 角色（例如审查）现在可以运行命令和测试，是否运行、运行哪些由角色按任务决定；仍不能改文件、提交或推送。" },
-  { title: "Ultracode", text: "模型路由里总指挥座位多了 Ultracode 开关：打开后每个任务都用多代理工作流，新对话直接带上，运行中的对话自动切换，左栏和路由卡会显示。" },
-  { title: "快速切换", text: "指挥家模式下，路由里的快速模式会自动切到运行中的 Claude Code，且不改你保存的默认；被拒绝时会弹出命令行给的原因，例如需要 usage credits。" },
-  { title: "重复切换", text: "把总指挥改回这段对话里用过的模型或思考深度时，会再次自动切换，左栏不再停在旧值上。" },
-  { title: "深度切换", text: "指挥家模式下把总指挥的思考深度改成 max 时，运行中的 Claude Code 现在会正确切换，不再被取消。" },
+  { title: "远端 Claude", text: "SSH 项目的启动页现在也列出 Claude Code，点击后在远端终端里启动；选“继承开发历史”时由远端的 Claude Code 自己续接。" },
+  { title: "远端切换", text: "指挥家模式下改总指挥座位，SSH 远端运行中的 Claude Code 也会自动切换模型和思考深度，改动的座位表随你的下一条消息告知模型。" },
+  { title: "别名座位", text: "座位用 sonnet、opus 这类别名时，新版 Claude Code 的模型选择器按版本号列出模型也能选中，不再切换失败。" },
+  { title: "远端续接", text: "SSH 项目里启动后没发过消息的 Codex 会话不再被当成历史，续接不到时“开始新的对话”直接新开；启动中和连接失败时发送有各自的提示。" },
+  { title: "角色启动", text: "修复 Codex 角色在部分 Windows 环境报“沙箱尚未确认工作目录”而无法启动的问题。" },
 ];

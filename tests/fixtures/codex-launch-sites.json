@@ -300,6 +300,10 @@
     "id": "electron/main.cjs:46faab512efeac4c01131a13"
   },
   {
+    "text": "session.gate.input(plan.command)",
+    "id": "electron/main.cjs:514c91a5cd929ecb641a75d3"
+  },
+  {
     "text": "session.gate.afterPrompt(plan.command)",
     "id": "electron/main.cjs:28c8f91ea04265f555e74efd"
   },
@@ -634,6 +638,10 @@
   {
     "text": "actions.run(action, value)",
     "id": "src/features/native-session/NativeSessionView.tsx:236d3a92ec09e344578129d8"
+  },
+  {
+    "text": "actions.run({ kind: 'new' }, text)",
+    "id": "src/features/native-session/NativeSessionView.tsx:409e012e8b374b9bebef2ae1"
   },
   {
     "text": "run(() => quote.pick(who, words))",

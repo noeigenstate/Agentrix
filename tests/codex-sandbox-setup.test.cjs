@@ -374,3 +374,11 @@ test('setup refuses nonlocal homes and preserves Windows refusal and failure res
     assert.equal(await runSetup(file, home, {}, launch), result);
   }
 });
+
+// A sandbox with a read-only temp folder runs PowerShell in constrained language mode: the probe must not need it.
+test('the role folder probe runs cmd, never PowerShell', async () => {
+  const { sandboxCwd } = require('../electron/features/codex-app-server/sandbox-refresh.cjs');
+  const sent = [];
+  await sandboxCwd({ request: async (method, params) => { sent.push([method, params.command]); return { exitCode: 0, stdout: 'C:/work' }; } }, 'C:/work', { SystemRoot: 'C:/Windows' });
+  assert.deepEqual(sent, [['command/exec', [require('node:path').win32.join('C:/Windows', 'System32', 'cmd.exe'), '/d', '/c', 'chcp 65001>nul & cd']]]);
+});

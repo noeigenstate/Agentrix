@@ -55,10 +55,11 @@ async function roleRefreshPending(home, now = Date.now()) {
 }
 
 function sandboxCwd(rpc, cwd, env, sandbox = { type: 'readOnly', networkAccess: false }, deadline = PROBE_LIMIT, requestOptions) {
-  const powershell = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  // cmd, not PowerShell: a sandbox whose temp folder is read-only puts PowerShell in constrained language mode, where
+  // it can call no .NET method and the probe fails although the sandbox works. Code page 65001 keeps the path UTF-8.
+  const cmd = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'cmd.exe');
   return rpc.request('command/exec', { cwd, sandboxPolicy: sandbox, timeoutMs: deadline,
-    command: [powershell, '-NoProfile', '-NonInteractive', '-Command',
-      '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); [Console]::Write([Environment]::CurrentDirectory)'],
+    command: [cmd, '/d', '/c', 'chcp 65001>nul & cd'],
   }, deadline, requestOptions);
 }
 

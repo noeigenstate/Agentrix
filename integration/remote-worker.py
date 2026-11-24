@@ -354,6 +354,17 @@ try:
         if kind=="session":
             try: deliver_skills(hook,identity)
             except Exception: pass
+        if kind=="start":
+            # A routing change waits beside this script and rides the next prompt once, as it does on the owner's computer.
+            try:
+                waiting=os.path.join(os.path.dirname(os.path.abspath(__file__)),"prompt-note.txt")
+                taken=waiting+"."+str(os.getpid())
+                os.rename(waiting,taken)
+                with open(taken,encoding="utf-8") as source_file: note=source_file.read(16385)
+                os.unlink(taken)
+                if note.strip() and len(note)<=16384:
+                    print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":note}}))
+            except Exception: pass
     elif mode=="shell-prompt":
         event["codexAvailable"]=len(sys.argv)>2 and sys.argv[2]=="1"
         event["claudeAvailable"]=len(sys.argv)>3 and sys.argv[3]=="1"
@@ -1786,6 +1797,21 @@ class Worker:
             return self.skill_paths
         finally: self.skill_note_ready.set()
 
+    def update_prompt_note(self, note):
+        # What the running Claude Code is told with the owner's next prompt; an empty note withdraws it.
+        if not self.temp: raise ValueError("No agent environment.")
+        filename = os.path.join(self.temp, "prompt-note.txt")
+        if not isinstance(note, str) or not note.strip():
+            try: os.unlink(filename)
+            except FileNotFoundError: pass
+            return False
+        if len(note) > 16384: raise ValueError("Invalid prompt note.")
+        pending = filename + ".new"
+        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output: output.write(note)
+        os.replace(pending, filename)
+        return True
+
     def agent_environment(self, reading_note, native=False):
         self.temp = tempfile.mkdtemp(prefix="agentrix-")
         self.write_background_choice()
@@ -2045,7 +2071,8 @@ class Channel:
             elif op == "claude-account": value = worker.claude_account()
             elif op == "history": value = history_records(worker.coding_root, worker.codex_home, os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
             elif op == "write-handoff": value = worker.write_handoff(message.get("text"))
-            elif op == "skill-note": value = worker.update_skill_note(message.get("sequence"), message.get("note"), message.get("skills"))
+            elif op == "prompt-note": value = worker.update_prompt_note(message.get("note"))
+            elif op == "skill-note": value =worker.update_skill_note(message.get("sequence"), message.get("note"), message.get("skills"))
             elif op == "create": value = worker.create(message.get("path", ""), message["name"], message["kind"], message.get("unique", False))
             elif op == "rename": value = worker.rename(message["path"], message["name"])
             elif op == "remove": value = worker.remove(message["path"])

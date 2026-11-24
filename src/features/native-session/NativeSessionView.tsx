@@ -185,7 +185,8 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
   const ended = turnStatus && turnStatus !== 'completed' ? sentence(end?.message ?? model.turn.error) ?? (unknown ? t('本轮已结束，完成状态未知。') : null) : null;
   const noticed = model.limits?.notice?.code !== undefined && model.limits.notice.code === model.error?.code;
   const why = ended ?? (noticed ? null : sentence(model.error?.message));
-  const facts = useMemo(() => turnFacts(end, kind, turnStatus === 'completed'), [end, kind, turnStatus]);
+  // Codex history replay has no turn end or trustworthy interval between its items.
+  const facts = useMemo(() => !claude && !end ? { durationMs: null } : turnFacts(end, kind, turnStatus === 'completed'), [claude, end, kind, turnStatus]);
   // The lines of a compaction or a dropped result are no reply and no step of the round: its result is the one it would have without them.
   const result = useMemo(() => unknown ? null : latestResult(entries.filter(entry => !isNotice(entry)), { idle: settled, interrupted: stopped, stopped, failure: failed ? why ?? turnFailed() : undefined, facts }),
     [entries, settled, stopped, failed, unknown, why, facts]);
@@ -239,7 +240,12 @@ export function NativeSession({ terminalId, projectId, entry, autoFocus, switchS
         : actions.told && <NativeToast text={actions.told} />}
     </div>
     {error && <p className="form-error native-error" role="alert">{error}</p>}
-    {over && <div className="native-ended"><span>{reasonWords(model.session?.reason) ?? t('这个会话已经结束')}</span><button type="button" className="button secondary small" onClick={() => dismissNative(terminalId)}>{t('开始新的对话')}</button></div>}
+    {over && <div className="native-ended"><span>{reasonWords(model.session?.reason) ?? t('这个会话已经结束')}</span>
+      <button type="button" className="button secondary small" disabled={actions.renewing} onClick={() => {
+        if (!claude && model.session?.state === 'failed') void actions.run({ kind: 'new' }, text);
+        else dismissNative(terminalId);
+      }}>{t('开始新的对话')}</button>
+    </div>}
     {carried.length > 0 && <div className="reading-attachments" role="status"><ImageIcon size={14} />{t('已附加 {count} 张图片，随下一条消息发送', { count: carried.length })}<UserImages images={carried} onRemove={index => setCarried(list => list.filter((_, at) => at !== index))} /></div>}
     {unsent.length > 0 && <div className="reading-outbox" role="status"><span>{t('未发送的消息')}</span><ul>{unsent.map(item => <li key={item.clientMessageId}><span className="reading-notice-text" title={item.text}>{item.text}</span>
       <div className="reading-notice-actions"><button type="button" className="button small" disabled={!!text.trim() || locked} onClick={() => take(item)}>{t('取回')}</button></div></li>)}</ul></div>}

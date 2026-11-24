@@ -36,7 +36,7 @@ export type RoundCheck = { id: string; phrase: string; target: string; done: boo
 // What the source of a round said about how it ended, in the words the row shows (a native session's turn.completed; a terminal session has none):
 // how long the round took in milliseconds, the spend and the tokens as text, and the sentence for a round that did not complete. A fact the source did
 // not give is absent, never zero.
-export type ResultFacts = { durationMs?: number; spend?: string; tokens?: string; message?: string };
+export type ResultFacts = { durationMs?: number | null; spend?: string; tokens?: string; message?: string };
 export type LatestResult = {
   kind: ResultKind;
   // The entry the status row stands over and the actions under: the picture, the last reply, or the step the round ended on.

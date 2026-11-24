@@ -756,13 +756,14 @@ test('an incomplete npm install of Claude Code is not installed again: the card 
   }
 });
 
-test('the launcher of an SSH project offers Codex and a plain terminal only; Codex starts at once whether or not this computer has it: no 未安装, no install, no Node.js; a local project is unchanged', async () => {
+test('the launcher of an SSH project offers Claude Code, Codex and a plain terminal; Codex starts at once whether or not this computer has it: no 未安装, no install, no Node.js; a local project is unchanged', async () => {
   const runtime = { settings: { claudePath: 'api-then-terminal' }, saved: true };
   const calls = [], remote = launcher(runtime, calls, { kind: 'ssh', codexHere: false });
   const agents = view => elements(view.render()).filter(node => node.type === 'button' && node.props.className?.startsWith('agent-launcher-agent')).map(node => node.props.className.split(' ')[1]);
   try {
     remote.render(); await settle();
-    assert.deepEqual(agents(remote), ['is-codex'], 'Claude on another computer is the owner’s own, in its terminal');
+    assert.deepEqual(agents(remote), ['is-claude', 'is-codex'], 'Claude Code on another computer is offered too and starts in its remote terminal');
+    assert.equal(remote.note('claude'), '开始新的对话 · 远端终端', 'no install offer and no API route for a computer that is not this one');
     assert.equal(remote.note('codex'), '开始新的对话 · 原生模式', 'no "not installed" for a computer that is not the one it runs on');
     remote.button('codex').props.onClick(); await settle();
     assert.deepEqual(calls, [['start', 't1', { agent: 'codex', resume: false }], ['refresh', 't1']], 'the session starts through the bridge, with no install and no Node.js');
@@ -1274,6 +1275,27 @@ test('Stop is the composer’s button while it works, Esc does the same, neither
     ended.find(node => node.type === 'button' && node.props.children === '开始新的对话').props.onClick();
     assert.deepEqual(ended.dismissed, ['t1']);
   } finally { ended.done(); }
+});
+
+test('a failed Codex session starts a new conversation directly from its recovery button', async () => {
+  const calls = [], view = sessionView(ev => [ev('session.state', { state: 'failed', reason: 'connection failed' })],
+    { newConversation: async (...args) => { calls.push(args); return { ok: true, value: {} }; } }, { provider: 'codex' });
+  try {
+    view.find(node => node.type === 'button' && node.props.children === '开始新的对话').props.onClick();
+    await settle();
+    assert.deepEqual(calls, [['t1', 'rs1']]);
+    assert.deepEqual(view.refreshed, ['t1']);
+  } finally { view.done(); }
+});
+
+test('a refused send during Codex startup restores the draft', async () => {
+  const error = '会话正在启动，请稍后重试。';
+  const view = sessionView(ev => [ev('session.state', { state: 'starting' })], { send: async () => ({ ok: false, error }) }, { provider: 'codex' });
+  try {
+    view.type('keep this'); view.press(); await settle();
+    assert.equal(view.box().props.value, 'keep this');
+    assert.equal(view.find(node => node.props?.className === 'form-error native-error').props.children, error);
+  } finally { view.done(); }
 });
 
 // ---- the message box: the reading view's ↑↓ history, "/" command list and "@" files, on the same code -------------------------------------
@@ -2461,6 +2483,16 @@ const endedRound = (completed, { reply = true, extra = [], provider = {} } = {})
   ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'go', clientMessageId: 'c1' } }, { itemId: 'u1' }), ...extra.map(make => make(ev)),
   ...(reply ? [ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'here is the answer' } }, { itemId: 'a1' })] : []), ev('turn.completed', completed)], provider);
 const resultRow = html => (html.match(/<div class="result-status[^"]*"[\s\S]*?<\/p>(?:<p class="result-sub">[^<]*<\/p>)?/) ?? [''])[0];
+
+test('a resumed Codex result shows completion time without an invented duration', async () => {
+  const row = resultRow(await viewHtml(ev => [
+    ev('item.upsert', { kind: 'user-message', status: 'completed', content: { text: 'old question' } }, { itemId: 'u', replay: true }),
+    ev('item.upsert', { kind: 'agent-message', status: 'completed', content: { text: 'old answer' } }, { itemId: 'a', replay: true }),
+    ev('session.state', { state: 'idle', reason: null }),
+  ], { provider: 'codex' }));
+  assert.match(row, /完成<\/p>/);
+  assert.doesNotMatch(row, /用时/);
+});
 
 test('the model keeps how a turn ended as the provider gave it and the provider’s notice, and a field nobody gave stays null', () => {
   const { applyEvents, emptyModel } = load('features/native-session/native-model.ts'), ev = stream();
