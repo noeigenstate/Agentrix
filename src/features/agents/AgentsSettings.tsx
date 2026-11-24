@@ -5,8 +5,10 @@ import { isWindows } from '../../shared/platform';
 import { installerCommand, viaWords } from '../native-session/native-words';
 import { nativeBridge } from '../native-session/native-bridge.ts';
 import { codexWords } from '../../shared/reason-words/codex.ts';
+import { adapters } from '../../../electron/features/cli-adapters/registry.mjs';
 
 const api = window.agentrix;
+const settingsAdapters = [...adapters()].reverse();
 // What an installed agent reads as: Claude Code says which install the terminal runs, a split (the native path runs another),
 // an install that cannot run (too old, a failed check, npm's package without its native program) and the step to take. The
 // connection test is only reachable with an API key saved, so without one the step is the installer's command or saving the key.
@@ -69,7 +71,7 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
   const openNode = async () => { try { const result = await api.openNode(); if (!result.ok) setError(result.error); } catch (err) { setError(String(err)); } };
   return <>
     <p className="agents-intro">{t('Agentrix 基于 Codex 和 Claude Code 这两个命令行工具：在每个项目的终端里运行它们，这里负责并排显示、提醒完成和恢复会话。至少安装其中一个。')}</p>
-    {(['codex', 'claude'] as const).map(agent => {
+    {settingsAdapters.map(({ manifest: { id: agent, install: { label, npm } } }) => {
       // Codex not found says where it looked and what to do next, once the scan of the local drives is over; one found
       // says which file it runs.
       const codex = agent === 'codex' ? agents?.codex : null, scanning = !codex?.installed && codex?.scan === 'running';
@@ -79,14 +81,19 @@ export function AgentsSettings({ agents, onChange, visible = true }: { agents: A
         : codex?.scan === 'done' ? t('也搜索了所有本地磁盘。用下面的命令安装，装好后 Agentrix 会自己发现。')
           : codex?.scan === 'partial' ? t('已搜索部分本地磁盘，下次启动会再搜索一次。用下面的命令安装，装好后 Agentrix 会自己发现。') : t('用下面的命令安装，装好后 Agentrix 会自己发现。');
       const file = codex?.installed ? codex.fileShown : null, settled = !!agents && agents.installing !== agent;
+      const installation = agents?.[agent];
+      const command = installation && 'incomplete' in installation && installation.incomplete ? installerCommand(isWindows) : `npm install -g ${npm}`;
       return <div className="agent-setting" key={agent}>
-      <div className="setting-row"><span className="agent-info"><b>{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</b><small role="status" className="agent-status" title={agents?.[agent].fileShown}>{!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : scanning ? t('正在搜索所有本地磁盘…') : t('未安装')}</small>
+      <div className="setting-row"><span className="agent-info"><b>{label}</b>
+        <small role="status" className="agent-status" title={installation?.fileShown}>
+          {!agents ? t('正在检测…') : agents.installing === agent ? t('正在安装…') : words ? words.text : scanning ? t('正在搜索所有本地磁盘…') : t('未安装')}
+        </small>
         {settled && file && <small className="agent-path"><PathText text={file} /></small>}
         {settled && hint && <small className="agent-hint">{hint}</small>}
         {settled && places.map(place => <small className="agent-path" key={place}><PathText text={place} /></small>)}
         {settled && step && <small className="agent-hint">{step}</small>}</span>
         {agents && !agents[agent].installed && <button type="button" className="button secondary small" disabled={pending || !!agents.installing || !agents.npm} onClick={() => void install(agent)}>{t('一键安装')}</button>}</div>
-      <code className="agent-command">{agent === 'codex' ? 'npm install -g @openai/codex' : agents?.claude.incomplete ? installerCommand(isWindows) : 'npm install -g @anthropic-ai/claude-code'}</code>
+      <code className="agent-command">{command}</code>
     </div>; })}
     {agents && !agents.npm && <div className="agents-node"><span>{t('需要先安装 Node.js')}</span><button type="button" className="button secondary small" onClick={() => void openNode()}>{t('下载 Node.js')}</button></div>}
     {(error || agents?.error) && <p className="form-error agents-error" role="alert">{error || agents?.error}</p>}

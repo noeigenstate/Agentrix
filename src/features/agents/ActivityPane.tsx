@@ -11,7 +11,7 @@ export function ActivityPane({ terminal, terminals = [terminal], projectId }: {
   terminal: ProjectTerminal; terminals?: readonly ProjectTerminal[]; projectId?: string;
 }) {
   const screen = useScreen(terminal.id, terminal.sessionId);
-  const leadWorking = terminal.codexActive && cliStateFor(terminal.agent === 'claude' ? 'claude' : 'codex', screen, terminal).working;
+  const leadWorking = terminal.codexActive && cliStateFor(terminal.agent ?? 'codex', screen, terminal).working;
   const workingSeats = new Set<SeatId>();
   for (const { agentUsage } of terminals) for (const call of agentUsage?.calls ?? []) for (const item of call.items) {
     if (item.seat && item.endedAt == null && item.state !== 'done' && item.state !== 'reviewing') workingSeats.add(item.seat);

@@ -3,6 +3,7 @@ const { lstatSync, realpathSync } = require('node:fs');
 const { StringDecoder } = require('node:string_decoder');
 const path = require('node:path');
 const { claudePrompt, TranscriptTail } = require('../../agent-actions.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 const { TokenRates, emptyRate } = require('./token-rate.cjs');
 const { agentSettings } = require('./agent-settings.cjs');
 const { taskKind } = require('../dashboard/records-routing.cjs');
@@ -60,6 +61,7 @@ function resetChildSettings(call) {
   Object.assign(call, call.requested, call.seatInput, { childEffort: null });
 }
 const agentRoles = new Map(Object.entries({ Explore: '搜索', Plan: '规划', 'general-purpose': '通用', claude: '通用', none: '通用', fork: '分身' }));
+const dispatchLabel = agent => adapterOf(agent)?.manifest.label ?? adapterOf('claude').manifest.label;
 function helperAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   try { process.kill(pid, 0); return true; }
@@ -413,7 +415,7 @@ class AgentCalls {
     // A delayed start can arrive after the lead conversation has already switched.
     if (call?.declaredSpelling != null && event.seat != null && call.declaredSpelling !== event.seat) return false;
     const labels = call?.declaredSpelling == null ? declaredSeat(event.seat, this.roles) : null;
-    const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
+    const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: dispatchLabel(event.agent),
       model: event.model, effort: event.effort, fast: event.fast, declared: event.declared, requestedModel: event.requestedModel ?? null,
       planner: event.planner || UNKNOWN_PLANNER,
       kind: taskKind(event),
@@ -435,7 +437,7 @@ class AgentCalls {
     const call = this.calls.get(event.id);
     if (event.type === 'dispatch-declared') {
       if (call || this.finishedIds.has(event.id)) return false;
-      const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: event.agent === 'codex' ? 'Codex' : 'Claude Code',
+      const next = { id: `dispatch:${event.id}`, key: event.id, dispatch: true, sourceAgent: event.agent, agent: dispatchLabel(event.agent),
         model: 'unreported', effort: null, fast: null, requestedModel: event.requested.model, requested: event.requested,
         planner: event.planner || UNKNOWN_PLANNER, kind: taskKind(event), meeting: event.meeting ?? null,
         role: event.role, title: event.title, task: short(event.title), sessionId: null, cwd: event.cwd, worktree: event.worktree,

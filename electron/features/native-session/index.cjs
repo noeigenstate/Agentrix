@@ -5,6 +5,8 @@ const { registerIpc } = require('./ipc.cjs');
 const { decide } = require('../claude-runtime/decide.cjs');
 const { overlay, testFacts } = require('../claude-runtime/resolver.cjs');
 const { accountChanged, retainConnection, retainLimits, quotaRead } = require('../agents/agent-usage.cjs');
+const { support } = require('../cli-adapters/capabilities.mjs');
+const { adapters } = require('../cli-adapters/registry.cjs');
 // Nothing tells this module that a project was removed, so it holds the last usage of the most recently read ones.
 const HELD_PROJECTS = 64;
 function createNativeSessions(options) {
@@ -38,11 +40,12 @@ function createNativeSessions(options) {
       const usage = router.usage(inputs, projectId);
       const connections = await Promise.resolve().then(() => options.connections?.(projectId)).catch(() => null);
       const previous = project.usage;
-      if (project.revision !== revision && previous) for (const agent of ['claude', 'codex']) {
+      if (project.revision !== revision && previous) for (const { manifest: { id: agent } } of adapters()) {
         usage.agents[agent] = { ...previous.agents[agent], limits: usage.agents[agent].limits };
       }
-      for (const agent of ['claude', 'codex']) {
-        if (remote && agent === 'claude') continue;
+      for (const { manifest } of adapters()) {
+        const agent = manifest.id;
+        if (remote && !support(manifest, 'ssh.native').ok) continue;
         const state = usage.agents[agent], held = previous?.agents[agent];
         // What the account reader named and what main read from the session, oldest first: each is an observation of its
         // own, so the session's (which may name no account) does not hide the reader's by being the later of the two.

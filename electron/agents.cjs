@@ -1,8 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, execFile } = require('node:child_process');
+const { adapters } = require('./features/cli-adapters/registry.cjs');
 
-const AGENT_PACKAGES = Object.freeze({ codex: '@openai/codex', claude: '@anthropic-ai/claude-code' });
+const AGENT_PACKAGES = Object.freeze(Object.fromEntries(adapters().flatMap(({ manifest: { id, install } }) => install.npm ? [[id, install.npm]] : [])));
 // Command Prompt and agent detection must agree without running a CLI that could open a session.
 // Windows finds a command by its extension; macOS and Linux by a file without one that may be executed.
 function onPath(name, env, platform = process.platform) {

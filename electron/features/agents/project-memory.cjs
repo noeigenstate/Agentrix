@@ -11,6 +11,7 @@ const { records, rolloutFiles, sessionMeta } = require('../../session-files.cjs'
 const { interactiveSession } = require('../../session-restore.cjs');
 const { claudeConfigDir, findClaudeSession, listClaudeSessions } = require('../../claude-sessions.cjs');
 const { ConversationLog, claudeConversation, codexConversation } = require('../../conversation.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 
 const TEXT_LIMIT = 4000, CHECKS = new Set(['运行测试', '检查类型', '构建项目', '检查代码格式']);
 
@@ -107,7 +108,8 @@ async function gather(dir, cwd, { codexHome = process.env.CODEX_HOME || path.joi
 
 // The whole memory as Markdown, newest first, for an agent that needs to look further back than the handoff.
 function renderRound(round) {
-  const name = round.agent === 'codex' ? 'Codex' : 'Claude Code', lines = [`### ${new Date(round.at).toLocaleString('zh-CN', { hour12: false })} · ${name}`, '', `**User:** ${round.ask}`];
+  const name = adapterOf(round.agent)?.manifest.label ?? adapterOf('claude').manifest.label;
+  const lines = [`### ${new Date(round.at).toLocaleString('zh-CN', { hour12: false })} · ${name}`, '', `**User:** ${round.ask}`];
   if (round.reply) lines.push(`**${name}:** ${round.reply}`);
   if (round.files?.length) lines.push(`Changed: ${round.files.join(', ')}`);
   if (round.checks?.length) lines.push(`Checks: ${round.checks.join(', ')}`);
