@@ -4,6 +4,8 @@ const { validEvent } = require('./validate.cjs');
 const { createEventStream } = require('./events.cjs');
 const { nextPath } = require('./usage.cjs');
 const { createSwitches } = require('./switches.cjs');
+const { adapters, adapterOf } = require('../cli-adapters/registry.cjs');
+const { support } = require('../cli-adapters/capabilities.mjs');
 const { retainLimits } = require('../agents/agent-usage.cjs');
 const { routingOwned, routingPatch, routingText } = require('../agents/agent-command.cjs');
 // What the owner is told when a provider limit moved a session to the terminal, chosen by the limit's code: [moved, moved with
@@ -17,7 +19,7 @@ const LIMIT_SWITCHED = {
     'Claude 账号或组织的 API 用量已达上限，已转到 Claude Code 终端，未自动发送的消息已保留，请检查终端输入框后继续。'],
 };
 const providerLimit = status => Object.hasOwn(LIMIT_SWITCHED, status);
-const remoteCodex = spec => spec.agent === 'codex' && spec.kind === 'ssh';
+const remoteNative = spec => spec.kind === 'ssh' && support(adapterOf(spec.agent).manifest, 'ssh.native').ok;
 function createRouter({
   claude, codex, settings, resolveSpec, terminal, emit, changed = () => {}, now = Date.now,
   saveSession = () => {}, invalidateSession = () => {}, saveInterrupted = () => {}, readHistory = async () => null, readCommands = async () => [],
@@ -25,7 +27,7 @@ function createRouter({
   prepareConversation = () => {}, retireTerminal = () => {}, switchOptions = {},
 }) {
   const sessions = new Map(), terminalStreams = new Map(), busy = new Set(), occupied = new Set();
-  const agents = { claude: { path: null, reason: null, limits: null }, codex: { path: null, reason: null, limits: null } };
+  const agents = Object.fromEntries(adapters().map(({ manifest: { id } }) => [id, { path: null, reason: null, limits: null }]));
   const projectLimits = new Map(), historyReads = new Map();
   let closed = false;
   const ended = new Set(['stopped', 'failed', 'disconnected']);
@@ -49,7 +51,7 @@ function createRouter({
     return { path, reason: wire };
   }
   function pathChanged(agent, path, reason) {
-    agents[agent] = { ...agents[agent], path, reason, ...(agent === 'claude' && path === 'terminal' ? { limits: null } : {}) };
+    agents[agent] = { ...agents[agent], path, reason, ...(path === 'terminal' ? { limits: null } : {}) };
   }
   function current(id, runtimeSessionId) {
     const record = sessions.get(id);
@@ -98,7 +100,7 @@ function createRouter({
     if (!validEvent(event) || event.projectId !== spec.projectId || event.terminalId !== id || event.runtimeSessionId !== spec.runtimeSessionId ||
       record.epoch && event.connectionEpoch !== record.epoch || event.sequence <= (record.sequence || 0)) return;
     record.epoch = event.connectionEpoch; record.sequence = event.sequence;
-    const deferHistory = remoteCodex(spec);
+    const deferHistory = remoteNative(spec);
     // SSH has no local rollout check. A thread/start reply alone does not establish history.
     if (deferHistory && event.type === 'turn.started' && !event.replay) rememberSession(record, event.providerSessionId);
     if (agent === 'codex' && !event.replay && ['turn.started', 'turn.completed'].includes(event.type)) {
@@ -172,7 +174,7 @@ function createRouter({
         if (agent === 'codex') {
           record.lock = null;
           record.startupFailed = true;
-          if (remoteCodex(spec) && resume && error.stage === 'thread_resume' && error.missingThread) invalidateSession(id, spec.providerSessionId);
+          if (remoteNative(spec) && resume && error.stage === 'thread_resume' && error.missingThread) invalidateSession(id, spec.providerSessionId, agent);
           try { await runtime.close(); } catch { }
           // A sandbox Codex did not apply is named by the runtime, which knows what was asked and what came back.
           const message = reason === 'sandbox_mismatch' ? error.message
@@ -189,7 +191,7 @@ function createRouter({
         if (agent === 'claude' && settings.get().claudePath === 'api-then-terminal'
           && (error.code === 'native_cli_required' || error.beforeInput === true)) {
           const notice = error.beforeInput ? error.message : reason;
-          record.stream.publish('path.changed', { previous: agent === 'claude' ? 'api' : 'subscription', selected: 'terminal', reason: notice });
+          record.stream.publish('path.changed', { previous: 'api', selected: 'terminal', reason: notice });
           terminalStreams.set(id, record.stream);
           await runtime.close(); sessions.delete(id); await terminal(spec, notice);
           terminalStreams.set(id, record.stream); pathChanged(agent, 'terminal', notice); changed();
@@ -198,7 +200,7 @@ function createRouter({
         flushFailures(record);
         throw error;
       }
-      if (remoteCodex(spec) && resume) rememberSession(record, startup?.providerSessionId);
+      if (remoteNative(spec) && resume) rememberSession(record, startup?.providerSessionId);
       const reason = startup?.reason || decision.wire;
       record.stream.publish('path.changed', { previous: null, selected: decision.path === 'api' ? 'api' : 'subscription', reason });
       pathChanged(agent, decision.path, reason); changed(); return { runtimeSessionId: spec.runtimeSessionId };
@@ -359,10 +361,11 @@ function createRouter({
       const record = current(id, runtimeSessionId);
       if (!record.runtime.runOptions) throw new Error('此会话不支持运行选项。');
       if (routingPatch(patch)) throw routingOwned();
-      if (record.spec.agent !== 'codex' && patch.permissions !== undefined) throw new Error('此会话不支持切换权限。');
+      const permissions = support(adapterOf(record.spec.agent).manifest, 'permissionChoice').ok;
+      if (!permissions && patch.permissions !== undefined) throw new Error('此会话不支持切换权限。');
       const result = await record.runtime.runOptions(patch);
       current(id, runtimeSessionId);
-      if (record.spec.agent === 'codex' && result.permissions !== undefined) record.spec.permissions = result.permissions;
+      if (permissions && result.permissions !== undefined) record.spec.permissions = result.permissions;
       return result;
     },
     async applyRouting(id, seat) {
@@ -400,7 +403,7 @@ function createRouter({
         current(id, runtimeSessionId);
         await activateNative(spec, null, { newConversation: true });
         sessions.set(id, next); switches.forget(id);
-        if (!remoteCodex(spec)) {
+        if (!remoteNative(spec)) {
           saveSession(id, { agent: spec.agent, providerSessionId: spec.agent === 'codex' ? spec.providerSessionId : null });
           next.persisted = spec.agent === 'codex';
         }
@@ -490,7 +493,7 @@ function createRouter({
     },
     usage({ cli = {}, limits = {} } = {}, projectId) {
       const config = settings.get(), snapshot = structuredClone(agents);
-      for (const agent of ['claude', 'codex']) {
+      for (const { manifest: { id: agent } } of adapters()) {
         if (projectId) {
           snapshot[agent].limits = structuredClone(projectLimits.get(projectId)?.[agent] || null);
           const running = localSessions().findLast(session => session.spec.projectId === projectId && session.spec.agent === agent);

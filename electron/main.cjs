@@ -1372,9 +1372,9 @@ function wireNativeSessions(directory, codex, codexFactory) {
     emit: event => send('native:event', event), changed: (id, event) => { if (event) structuredEvent(id, event); else scheduleState(); },
     saveSession: (id, saved) => store.setRestore(id, { terminal: true, codex: true, agent: saved.agent, threadId: saved.providerSessionId,
       nativeTransport: saved.agent === 'claude' ? 'claude-sdk' : 'codex-app-server' }),
-    invalidateSession: (id, threadId) => {
+    invalidateSession: (id, threadId, agent) => {
       const saved = store.findTerminal(id)?.record.restore;
-      if (threadId && saved?.threadId === threadId && (saved.agent || 'codex') === 'codex') store.setRestore(id, { threadId: null, interrupted: false });
+      if (threadId && saved?.threadId === threadId && (saved.agent || 'codex') === agent) store.setRestore(id, { threadId: null, interrupted: false });
     },
     saveInterrupted: (id, interrupted) => { if (!quitting) store.setRestore(id, { interrupted }); },
     terminal: async (spec, reason) => {
