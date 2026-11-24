@@ -25,7 +25,7 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 
 ## Invariants
 - Both entry points share the manifests. Each capability names its channel or an unsupported reason — test: `tests/cli-adapters.test.cjs` › "expose complete capability manifests"
-- Screen verification uses inclusive numeric bounds per capability — test: `tests/cli-adapters.test.cjs` › "support honors inclusive numeric verification bounds"
+- Screen verification uses inclusive numeric bounds per capability — test: `tests/cli-adapters.test.cjs` › "support refuses versions older than the verified range and flags newer ones"
 - A CLI without a dedicated install facet uses its manifest for PATH detection and version checks — test: `tests/cli-adapters.test.cjs` › "a manifest supplies a PATH install facet when there is no dedicated locator"
 - Each generic file matches its branch count during migration — test: `tests/cli-branch-guard.test.cjs` › "generic code matches its per-file CLI branch baseline"
 
