@@ -33,7 +33,7 @@ const reviewWarning = /^(?:⚠\uFE0F?|‼)\s+You have not answered all questions
 // numbered options with their description on the next row, "Type something." for an own answer (it becomes the
 // typed text, ticked), a "Submit" row under multi-select options, a rule, "Chat about this" and the key hint. After
 // the last tab comes "Review your answers" with Submit answers / Cancel.
-function claudeQuestion(rows: string[]): ScreenChoice | null {
+export function claudeQuestion(rows: string[]): ScreenChoice | null {
   const end = lastContent(rows);
   let head = end;
   while (head >= 0 && !tabRow.test(rows[head].trim())) head--;
@@ -112,7 +112,7 @@ function claudeQuestion(rows: string[]): ScreenChoice | null {
 
 // Codex's request_user_input (Plan mode): "Question 1/2 (2 unanswered)", the question, numbered options with their
 // description in a second column, "None of the above", an optional notes row ("› Add notes" after Tab) and the hint.
-function codexQuestion(rows: string[]): ScreenChoice | null {
+export function codexQuestion(rows: string[]): ScreenChoice | null {
   const end = lastContent(rows);
   let head = end;
   while (head >= 0 && !/^\s*Question \d+\/\d+\b/.test(rows[head])) head--;

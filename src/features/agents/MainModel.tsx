@@ -5,12 +5,13 @@ import { currentLanguage, t } from '../../shared/i18n';
 import { modelLabel, modelName } from '../../shared/model-name';
 import { useNow } from '../../shared/useNow';
 import { readScreen, subscribeScreen, cliStateFor, nextCliState } from '../terminal/terminal-screen.ts';
+import { screenAgent, screenLabel, screenOf } from '../cli-screens/index.ts';
 import { useNativeEntries } from '../native-session/native-store.ts';
 import { actionText } from './action-text';
 import { CALL_STATES, ModelHead } from './AgentCalls';
 import { resetTime } from './Metric';
 import { elapsedClock } from '../../shared/elapsed-clock.ts';
-import { leadRoutingFailure, leadRoutingScope, subscribeLeadRouting } from '../../shared/lead-routing-notices.ts';
+import { leadRoutingFailure, leadRoutingScope, subscribeLeadRouting, unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
 // A terminal's last worked prompt supplies its finished row when the Agent tab reopens.
 const workedPrompts = new Map<string, { session: string | null; summary: string; text: string }>();
 export function useMainTurn(terminal: ProjectTerminal | undefined) {
@@ -26,9 +27,9 @@ export function useMainTurn(terminal: ProjectTerminal | undefined) {
   if (!terminal?.codexActive) return null;
   const frame = screen.id === id ? screen.frame : readScreen(terminal.id);
   const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
-  const cli = cliStateFor(terminal.agent === 'claude' ? 'claude' : 'codex', frame, terminal, signal);
+  const cli = cliStateFor(screenAgent(terminal.agent), frame, terminal, signal);
   const hasState = !!signal || !!frame && (cli.input || cli.waiting || cli.working);
-  const freshReady = terminal.agent === 'claude' && signal?.state === 'idle' && signal.phase === 'ready' && signal.turn === 0
+  const freshReady = screenOf(terminal.agent)?.facts && signal?.state === 'idle' && signal.phase === 'ready' && signal.turn === 0
     && (!terminal.mainTurn || terminal.mainTurn.state === 'unknown');
   const activity = cli.waiting ? 'waiting' : cli.working ? 'working' : freshReady ? 'ready' : hasState
     ? terminal.mainTurn?.state === 'interrupted' || terminal.mainTurn?.state === 'unknown' ? terminal.mainTurn.state : 'complete' : terminal.mainTurn?.state ?? terminal.codexActivity;
@@ -78,16 +79,18 @@ export function MainModelGroup({ terminal }: { terminal: ProjectTerminal | undef
 
 export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType<typeof useMainTurn>>; seats?: SeatsInfo | null }) {
   const { terminal, cli, activity, prompts, working, background, summary, ended } = turn;
-  const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = terminal.agent === 'claude' ? 'Claude Code' : 'Codex';
+  const kind = screenAgent(terminal.agent);
+  const usage = terminal.agentUsage, settings = terminal.agentSettings, agent = screenLabel(kind);
   const actual = usage?.model || null, configured = settings?.model || null, model = actual ?? configured, name = model ? modelName(model) : agent;
   const title = [[agent, usage?.provider, model && name].filter(Boolean).join(' / '),
     actual && configured && actual !== configured && t('设置为 {configured}，实际回复来自 {actual}', { configured: modelName(configured), actual: name })].filter(Boolean).join('\n');
   // In conductor mode a changed lead seat is typed into the running CLI at once (terminal/lead-sync.ts); the note shows until it answers.
   // In native mode the CLI's own /model and /effort decide, and the panel shows what it runs.
-  const chosen = seats?.conductor ? seats.leads?.[terminal.agent === 'claude' ? 'claude' : 'codex']?.model : null;
+  const chosen = seats?.conductor ? seats.leads?.[kind]?.model : null;
   const pending = chosen && actual && !sameModel(chosen, actual) ? modelLabel(seats?.catalog ?? [], chosen) : null;
-  const routingFailure = () => leadRoutingFailure(terminal.agent === 'claude' ? leadRoutingScope(terminal) : '');
-  const routeFailed = useSyncExternalStore(subscribeLeadRouting, routingFailure, routingFailure)?.targetModel === chosen;
+  const routingFailure = () => leadRoutingFailure(screenOf(kind)?.picker ? leadRoutingScope(terminal) : '');
+  const failure = useSyncExternalStore(subscribeLeadRouting, routingFailure, routingFailure);
+  const routeFailed = failure?.targetModel === chosen, unavailable = routeFailed && failure?.notice.unavailable;
   const now = useNow(Date.now);
   const unknownEnd = activity === 'unknown' && terminal.mainTurn?.state === 'unknown';
   // Native turns distinguish a failure from an interruption only for their own runtime session.
@@ -132,7 +135,8 @@ export function MainModel({ turn, seats = null }: { turn: NonNullable<ReturnType
       <ModelHead agent={agent} name={name} effort={settings?.effort} fast={settings?.fast} ultracode={settings?.ultracode}
         provider={usage?.provider} title={title} rate={usage?.rate} />
       {!model && <li className="activity-call-note"><span /><p>{t('第一次回复后显示模型。')}</p><span /></li>}
-      {pending && <li className="activity-call-note" role="status"><span /><p>{routeFailed
+      {unavailable && <li className="activity-call-note" role="status"><span /><p>{unverifiedSwitchWords(unavailable, t)}</p><span /></li>}
+      {pending && !unavailable && <li className="activity-call-note" role="status"><span /><p>{routeFailed
         ? t('未能切换到 {model}，可在终端里用 /model 手动切换。', { model: pending }) : t('正在切换到 {model}', { model: pending })}</p><span /></li>}
     </ul>
     <ul className="activity-call-rows activity-main-tasks" data-expanded={expanded || undefined} aria-label={t('提示')}>

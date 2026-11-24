@@ -19,6 +19,25 @@ test('screen revisions and timestamps track changed frames, never repeated cache
   assert.equal(next.sessionId, 'one'); assert.ok(next.revision > first.revision); assert.equal(next.updatedAt, 6000);
 });
 
+test('the CLI welcome version takes precedence over installation and stays with its PTY as the welcome scrolls out', t => {
+  const before = global.window;
+  global.window = { setTimeout, agentrix: { screenFacts() {} } };
+  const id = 'welcome-version', input = ['────', '❯ ', '────'];
+  screen.setScreenAgent(id, 'claude', { startedAt: 10, installedVersion: '2.1.331' });
+  const first = terminal(input), uninstall = screen.registerScreen(id, first, 'pty-one');
+  t.after(() => { uninstall(); screen.setScreenAgent(id, null); global.window = before; });
+  assert.equal(screen.readScreen(id).agentVersion, '2.1.331');
+  first.draw(['The text Claude Code v2.1.900 appeared in an answer.', ...input]);
+  assert.equal(screen.readScreen(id).agentVersion, '2.1.331');
+  first.draw([' ▐▛███▛█   Claude Code v2.1.332', ...input]);
+  first.draw(input);
+  assert.equal(screen.readScreen(id).agentVersion, '2.1.332');
+  screen.setScreenAgent(id, 'claude', { startedAt: 11 });
+  const second = screen.registerScreen(id, terminal(input), 'pty-two');
+  t.after(second);
+  assert.equal(screen.readScreen(id).agentVersion, undefined);
+});
+
 test('session replacement clears subscriber snapshots and preserves their subscription to the new terminal', t => {
   t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1000 });
   const before = global.window; global.window = { setTimeout }; t.after(() => { global.window = before; });

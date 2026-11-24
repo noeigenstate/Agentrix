@@ -15,6 +15,8 @@ Shows the expanded project's usage and quota in the Activity pane. The routing d
 - `exactCount` (`src/features/agents/Metric.tsx`) — formats exact counts for the activity view and the Agent tab.
 
 ## May import
+
+- `electron/features/cli-adapters/*.mjs`
 - `src/features/agents/RoutingKeyCard.tsx`
 - `src/features/agents/SeatsHost.tsx`
 - `src/features/home/send-to-agent.ts`

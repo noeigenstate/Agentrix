@@ -5,7 +5,9 @@ import {
   HardDrives, Infinity as InfinityIcon, LockSimple, MagnifyingGlass, PencilSimple, Person, Plus, Prohibit, ShieldCheck, SidebarSimple, Stack, User, Warning, X,
 } from '@phosphor-icons/react';
 import { aliasTarget, modelLabel } from '../../shared/routing-command.ts';
-import { routingNotice } from '../../shared/lead-routing-notices.ts';
+import { routingNotice, unverifiedSwitchWords } from '../../shared/lead-routing-notices.ts';
+import { unverifiedScreenSwitch } from '../cli-screens/index.ts';
+import { useScreen } from '../terminal/terminal-screen.ts';
 import type { RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
 import {
@@ -59,10 +61,10 @@ type Menu = { kind: 'model' | 'role'; slot: SlotId } & ReturnType<typeof menuPla
 type Custom = { text: string; error: string };
 const inside = (node: unknown, target: unknown) => !!node && typeof (node as Node).contains === 'function' && (node as Node).contains(target as Node);
 
-function modelMenuItems(catalog: SeatModel[], selected: string | undefined, pick: (model: string) => void) {
+function modelMenuItems(catalog: SeatModel[], selected: string | undefined, pick: (model: string) => void, unavailable?: string) {
   const current = selected && (aliasTarget(catalog, selected) ?? selected);
   return catalog.filter(row => !aliasTarget(catalog, row.model)).map(row => <button key={row.model} type="button" role="menuitemradio" className="seats-menu-item" aria-checked={row.model === current}
-    data-assign={row.model} title={modelLabel(catalog, row.model)} disabled={!row.available} onClick={() => pick(row.model)}>
+    data-assign={row.model} title={unavailable ?? modelLabel(catalog, row.model)} disabled={!!unavailable || !row.available} onClick={() => pick(row.model)}>
     <i className="seats-mk" data-family={row.family} />
     <span className="seats-menu-model">{modelLabel(catalog, row.model)}</span>
     <span className="seats-menu-details">
@@ -334,7 +336,11 @@ function useMenu({ catalog }: ReturnType<typeof useCatalog>, { setNowOpen }: Ret
   return { menu, setMenu, custom, setCustom, menuBox, openMenu, closeMenu, menuKeys, modelFolds, setModelFolds };
 }
 
-function choiceActions(source: ReturnType<typeof useCatalog> & ReturnType<typeof routingNames>, draft: ReturnType<typeof useDraft>, popup: ReturnType<typeof useMenu>) {
+type SwitchReason = (slot: SlotId, control: Parameters<typeof unverifiedScreenSwitch>[1]) => string | undefined;
+
+function choiceActions(
+  source: ReturnType<typeof useCatalog> & ReturnType<typeof routingNames>, draft: ReturnType<typeof useDraft>, popup: ReturnType<typeof useMenu>, switchReason: SwitchReason,
+) {
   const { label, seatName, catalog, setNotice } = source;
   const { working, setDraft, setDiscarding, saving } = draft;
   const { custom, setCustom, closeMenu } = popup;
@@ -350,9 +356,13 @@ function choiceActions(source: ReturnType<typeof useCatalog> & ReturnType<typeof
     if (text) setNotice({ kind: 'error', text });
   };
   const assign = (slot: SlotId, model: string) => {
+    const reason = switchReason(slot, 'liveModel');
+    if (reason) { setNotice({ kind: 'error', text: reason }); return; }
     apply(assignModel(working, slot, model, catalog), t('草稿 · {seat} 换成 {model}', { seat: seatName(slot), model: label(model) }), model);
   };
   const swap = (from: SlotId, slot: SlotId) => {
+    const reason = switchReason(from, 'liveModel') ?? switchReason(slot, 'liveModel');
+    if (reason) { setNotice({ kind: 'error', text: reason }); return; }
     const result = swapSlots(working, from, slot, catalog);
     apply(result, t('草稿 · {first} 与 {second} 互换了模型', { first: seatName(from), second: seatName(slot) }));
   };
@@ -360,6 +370,8 @@ function choiceActions(source: ReturnType<typeof useCatalog> & ReturnType<typeof
   // 其他模型…: a refused id stays in the box with its reason; an accepted one is assigned like a listed model.
   const submitCustom = (slot: SlotId) => {
     const model = (custom?.text ?? '').trim();
+    const reason = switchReason(slot, 'liveModel');
+    if (reason) { setCustom({ text: model, error: reason }); return; }
     const result = assignCustom(working, slot, model, catalog);
     if (!result.ok && result.reason !== 'same') { setCustom({ text: model, error: refusalText(result, model) ?? '' }); return; }
     apply(result, t('草稿 · {seat} 换成 {model}', { seat: seatName(slot), model: label(model) }));
@@ -505,7 +517,13 @@ function useDialogState(props: SeatsDialogProps) {
     if (!review.visible) return;
     popup.setMenu(null);
   }, [review.visible]);
-  const edits = choiceActions(source, draft, popup), drag = useModelDrag(source.catalog, edits.drop);
+  const frame = useScreen(props.terminalId ?? '');
+  const switchReason: SwitchReason = (slot, control) => {
+    if (draft.scope !== 'project' || !draft.config.conductor || slot !== source.info.lead || !frame?.sessionId || !frame.agent) return;
+    const cli = unverifiedScreenSwitch(frame.agent, control, frame.agentVersion);
+    return cli ? unverifiedSwitchWords(cli, t) : undefined;
+  };
+  const edits = choiceActions(source, draft, popup, switchReason), drag = useModelDrag(source.catalog, edits.drop);
   const warnedFast = useRef(false);
   const [tab, setTab] = useState<Tab>('team');
   const switchTab = (next: Tab) => { popup.setMenu(null); panels.setPaletteOpen(false); setTab(next); };
@@ -531,7 +549,7 @@ function useDialogState(props: SeatsDialogProps) {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   };
-  return { props, source, draft, panels, popup, edits, drag, tab, switchTab, keys, roles, review, warnedFast };
+  return { props, source, draft, panels, popup, edits, drag, tab, switchTab, keys, roles, review, warnedFast, switchReason };
 }
 type DialogState = ReturnType<typeof useDialogState>;
 type DialogPart = { state: DialogState };
@@ -564,7 +582,7 @@ function SeatPicker({ state, role }: DialogPart & { role: TeamRole }) {
   return <button type="button" className="seats-gem" data-pick={slot} data-ultracode-on={seat?.ultracode || undefined} aria-haspopup="menu"
     aria-expanded={menu?.slot === slot && menu.kind === 'model'} title={[name, summary].filter(Boolean).join(' · ')}
     aria-label={t('{seat}：选择模型（{model}）', { seat: seatName(slot), model: [name, summary].filter(Boolean).join(' · ') })}
-    onPointerDown={event => { if (model) startDrag(event, model, slot); }}
+    onPointerDown={event => { if (model && !state.switchReason(slot, 'liveModel')) startDrag(event, model, slot); }}
     onClick={event => { if (!dragged.current || event.detail === 0) openMenu(slot, event.currentTarget); }}>
     {model && <i className="seats-mk" data-family={rowFor(catalog, model)?.family ?? agentOfModel(model)} aria-hidden="true" />}
     <span className="seats-gem-name">{name}</span><span className="seats-gem-summary">{summary}</span><CaretDown size={14} aria-hidden="true" />
@@ -904,10 +922,11 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
   if (!seat) return null;
   const model = rowFor(catalog, seat.model);
   const showUltracode = allowsUltracode(seat.model, role.kind === 'lead');
-  const ultracodeNote = showUltracode ? t('每个任务都用多代理工作流，消耗更多') : null;
+  const effortReason = state.switchReason(slot, 'liveEffort'), fastReason = state.switchReason(slot, 'fast'), ultraReason = state.switchReason(slot, 'ultracode');
+  const ultracodeNote = showUltracode ? ultraReason ?? t('每个任务都用多代理工作流，消耗更多') : null;
   const refusal = config.conductor && role.kind === 'lead' && model?.family === 'claude' && model.fast ? info.claudeFastRefusal : undefined;
-  const fastNote = !model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported'])
-    : refusal ? t('Claude Code 上次拒绝了快速模式，再点一次可重试') : model.family === 'claude' ? t(FAST_BILLING) : undefined;
+  const fastNote = fastReason ?? (!model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported'])
+    : refusal ? t('Claude Code 上次拒绝了快速模式，再点一次可重试') : model.family === 'claude' ? t(FAST_BILLING) : undefined);
   const toggleFast = () => {
     if (!seat.fast && refusal && !state.warnedFast.current) {
       state.warnedFast.current = true;
@@ -920,23 +939,24 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
     <div className="seats-picker-efforts" data-effort={slot} data-tile-effort={slot} role="group" aria-label={t('{seat}的推理强度', { seat: seatName(slot) })}>
       <span>{t('强度')}</span>
       {(model?.efforts ?? [seat.effort]).map(effort => <button key={effort} type="button" className="seats-btn is-small"
-        data-pop-effort={effort} aria-pressed={effort === seat.effort} disabled={saving}
+        data-pop-effort={effort} aria-pressed={effort === seat.effort} disabled={saving || !!effortReason} title={effortReason}
         onClick={() => edit(setEffort(working, slot, effort, catalog))}>{effort}</button>)}
     </div>
     <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.fast} data-fast={slot} data-tile-fast={slot}
-      disabled={saving || !model?.fast && !seat.fast} aria-label={t('{seat}快速模式', { seat: seatName(slot) })} title={fastNote}
+      disabled={saving || !!fastReason || !model?.fast && !seat.fast} aria-label={t('{seat}快速模式', { seat: seatName(slot) })} title={fastNote}
       onClick={toggleFast}>{t('快速')}<i /></button>
     {showUltracode && <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.ultracode} data-ultracode={slot}
-      disabled={saving} aria-describedby="seats-ultracode-note"
+      disabled={saving || !!ultraReason} aria-describedby="seats-ultracode-note"
       onClick={() => edit({ ok: true, map: withSlot(working, slot, { ...seat, ultracode: !seat.ultracode }) })}>Ultracode<i /></button>}
     {role.kind !== 'lead' && <button type="button" className="seats-switch" role="switch" aria-checked={role.fresh} data-fresh={slot}
       disabled={saving} onClick={() => state.roles.change(role, { fresh: !role.fresh })}>{t('新实例')}<i /></button>}
-    {fastNote && <small className="seats-menu-note" data-fast-note>{fastNote}</small>}
+    {effortReason && effortReason !== fastNote && effortReason !== ultracodeNote && <small className="seats-menu-note">{effortReason}</small>}
+    {fastNote && fastNote !== ultracodeNote && <small className="seats-menu-note" data-fast-note>{fastNote}</small>}
     {ultracodeNote && <small className="seats-menu-note" id="seats-ultracode-note">{ultracodeNote}</small>}
   </div>;
 }
 
-function TeamModelOptions({ state, selected, pick }: DialogPart & { selected?: string; pick: (model: string) => void }) {
+function TeamModelOptions({ state, selected, pick, unavailable }: DialogPart & { selected?: string; pick: (model: string) => void; unavailable?: string }) {
   const { catalog } = state.source, { modelFolds, setModelFolds } = state.popup;
   return paletteGroups(catalog).filter(group => group.lines.length > 0).map(({ family, lines }) => {
     const current = lines.flatMap(line => [...line.shown, ...line.older.filter(row => row.model === selected)]);
@@ -944,13 +964,13 @@ function TeamModelOptions({ state, selected, pick }: DialogPart & { selected?: s
     const open = !!modelFolds[family];
     return <div key={family} className="seats-picker-family" role="group" aria-label={family === 'claude' ? 'Claude' : 'Codex'}>
       <span aria-hidden="true">{family === 'claude' ? 'Claude' : 'Codex'}</span>
-      {modelMenuItems(current, selected, pick)}
+      {modelMenuItems(current, selected, pick, unavailable)}
       {older.length > 0 && <>
         <button type="button" className="seats-menu-item seats-menu-fold" role="menuitem" data-picker-fold={family} aria-expanded={open}
           onClick={() => setModelFolds(previous => ({ ...previous, [family]: !open }))}>
           {open ? t('收起更早版本') : t('更早版本 ({count})', { count: older.length })}
         </button>
-        {open && modelMenuItems(older, selected, pick)}
+        {open && modelMenuItems(older, selected, pick, unavailable)}
       </>}
     </div>;
   });
@@ -964,6 +984,7 @@ function DialogMenu({ state }: DialogPart) {
   const pick = (slot: SlotId, model: string) => { assign(slot, model); closeMenu(); };
   const role = state.draft.enabled.find(item => item.id === menu.slot);
   const selected = getSlot(state.draft.working, menu.slot)?.model;
+  const modelReason = state.switchReason(menu.slot, 'liveModel');
   const menuStyle = { left: menu.left, top: menu.top, bottom: menu.bottom, width: menu.width, maxHeight: menu.maxHeight };
   return <>
   {menu.kind === 'role' && role && <div ref={menuBox} className="seats-menu is-role" role="menu"
@@ -973,15 +994,17 @@ function DialogMenu({ state }: DialogPart) {
   </div>}
   {menu.kind === 'model' && <div key={menu.slot} ref={menuBox} className="seats-menu" data-model-picker-menu style={menuStyle}>
     <MenuHeader title={t('{seat}：选择模型', { seat: seatName(menu.slot) })} close={closeMenu} />
+    {modelReason && <small className="seats-menu-note" role="status">{modelReason}</small>}
     <div className="seats-menu-list seats-model-list" role="menu"
       aria-label={t('{seat}：选择模型', { seat: seatName(menu.slot) })} onKeyDown={menuKeys}>
-    <TeamModelOptions state={state} selected={selected} pick={model => pick(menu.slot, model)} />
-    {!custom && <button type="button" role="menuitem" className="seats-menu-item" data-custom onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
+    <TeamModelOptions state={state} selected={selected} pick={model => pick(menu.slot, model)} unavailable={modelReason} />
+    {!custom && <button type="button" role="menuitem" className="seats-menu-item" data-custom disabled={!!modelReason}
+      title={modelReason} onClick={() => setCustom({ text: '', error: '' })}>{t('其他模型…')}</button>}
     </div>
     {custom && <div className="seats-menu-custom">
-      <input type="text" data-custom-input maxLength={160} autoFocus spellCheck={false} aria-label={t('模型名')} placeholder={t('模型名，例如 gpt-6.3-sol')} value={custom.text}
+      <input type="text" data-custom-input maxLength={160} autoFocus spellCheck={false} aria-label={t('模型名')} placeholder={t('模型名，例如 gpt-6.3-sol')} value={custom.text} disabled={!!modelReason}
         onChange={event => setCustom({ text: event.target.value, error: '' })} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); submitCustom(menu.slot); } }} />
-      <button type="button" className="seats-btn is-small" data-custom-apply onClick={() => submitCustom(menu.slot)}>{t('使用')}</button>
+      <button type="button" className="seats-btn is-small" data-custom-apply disabled={!!modelReason} onClick={() => submitCustom(menu.slot)}>{t('使用')}</button>
       {custom.error && <small className="seats-menu-error" role="alert" data-custom-error>{custom.error}</small>}
     </div>}
     {role && <PickerSettings state={state} role={role} />}

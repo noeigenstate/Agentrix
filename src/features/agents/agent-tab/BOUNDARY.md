@@ -11,6 +11,8 @@ Shows the selected terminal's Orchestrator, current step and prompt history in t
 - `useMainTurn` (`src/features/agents/MainModel.tsx`) — observes the selected terminal's CLI state and derives the displayed turn.
 
 ## May import
+
+- `src/features/cli-screens/index.ts`
 - `src/features/agents/AgentCalls.tsx`
 - `src/features/agents/Metric.tsx`
 - `src/features/agents/action-text.ts`

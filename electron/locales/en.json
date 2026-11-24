@@ -3857,5 +3857,6 @@
   "此 CLI 在 Agentrix 中不提供 SSH 交互式终端会话。": "This CLI does not provide interactive SSH terminal sessions in Agentrix.",
   "此 CLI 在 Agentrix 中不提供 SSH 原生会话。": "This CLI does not provide native SSH sessions in Agentrix.",
   "未验证的 {cli} 版本。": "Unverified {cli} version.",
+  "未验证的 {cli} 版本，不支持运行中切换": "This {cli} version is unverified. Switching during a session is unavailable.",
   "此 CLI 不支持这项能力。": "This CLI does not support this capability."
 }

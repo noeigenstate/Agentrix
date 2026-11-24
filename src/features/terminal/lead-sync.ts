@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { AgentSettings, ProjectTerminal, SeatsInfo } from '../../shared/types';
 import { leadRoutingScope, routingNotice, setLeadRoutingFailure, trackLeadRouting, type LeadRoutingNotice } from '../../shared/lead-routing-notices.ts';
 import { t } from '../../shared/i18n';
-import { claudeInputMatches, claudeWorking } from '../agents/agent-screen-input.ts';
+import { screenOf, unverifiedScreenStep } from '../cli-screens/index.ts';
 import { applyLeadStep } from './lead-picker.ts';
 import { comparableModel, leadSteps, type LeadSeat, type LeadStep } from './lead-steps.ts';
 import { canPasteScreen, readScreen, subscribeScreen, type Screen } from './terminal-screen';
@@ -50,6 +50,7 @@ async function switchLead(steps: LeadStep[], terminal: Terminal, scope: string, 
   let incomplete = true;
   try {
     for (const step of steps) {
+      if (!terminal.active()) { incomplete = false; return { observed, notice, incomplete }; }
       let close: (() => void) | undefined;
       let typed = false;
       const failure = (reason: string) => {
@@ -68,7 +69,7 @@ async function switchLead(steps: LeadStep[], terminal: Terminal, scope: string, 
         failure,
       });
       try {
-        const applied = step.kind === 'fast'
+        const applied = step.kind === 'fast' && terminal.picker.restoreFastDefaults
           ? await withFastSettings(step, { ...access, apply, confirmed: () => observed.fast === step.target, failure })
           : await apply();
         if (!applied) {
@@ -99,14 +100,15 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
   const current = useRef(terminal); current.current = terminal;
   const error = useRef(onError); error.current = onError;
   const wake = useRef<(() => void) | null>(null);
-  const claude = terminal.agent === 'claude' && terminal.codexActive && !!terminal.sessionId;
+  const agent = terminal.codexActive ? terminal.agent : null;
   useEffect(() => {
     const api = window.agentrix, session = terminal.sessionId, id = terminal.id;
-    if (!claude || !session || !api?.skillSeats || !api.answerTerminal) return;
+    const facet = screenOf(agent), picker = facet?.picker, echo = facet?.echo, matches = facet?.inputMatches;
+    if (!agent || !session || !picker || !echo || !matches || !api?.skillSeats || !api.answerTerminal) return;
     let active = true, running = false, loading = false, seats: SeatsInfo | null = null, reads = 0;
     let failed = '', scope = '', previous: AgentSettings | null = null, observed: Partial<AgentSettings> = {};
     const clearFailure = () => { if (failed) { failed = ''; setLeadRoutingFailure(scope, null); } };
-    const target = () => seats?.conductor ? seats.leads?.claude : null;
+    const target = () => seats?.conductor ? seats.leads?.[agent] : null;
     const conversation = () => leadRoutingScope(current.current);
     const frame = (): Screen | null => {
       const screen = readScreen(id);
@@ -114,7 +116,7 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
     };
     const ready = () => {
       const screen = frame();
-      return !!screen && !claudeWorking(screen.rows) && canPasteScreen('claude', screen, true);
+      return !!screen && !(facet.facts?.busy ?? facet.working)(screen.rows) && canPasteScreen(agent, screen, true);
     };
     const actual = () => previous ? reconcileSettings(previous, observed, current.current.agentSettings) : current.current.agentSettings;
     const state = (seat: LeadSeat, { model, effort, fast, ultracode }: AgentSettings) =>
@@ -122,27 +124,38 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
     const syncLead = async () => {
       if (running || loading) return;
       const thread = conversation(), seat = target(), choice = targetKey(seat);
-      const bound = () => active && current.current.codexActive && current.current.agent === 'claude' && conversation() === thread;
+      const bound = () => active && current.current.codexActive && current.current.agent === agent && conversation() === thread;
       const live = () => bound() && targetKey(target()) === choice;
       if (scope !== thread) { clearFailure(); scope = thread; previous = null; observed = {}; }
       const settings = actual();
       if (!seat || !settings) { clearFailure(); return; }
       const key = state(seat, settings);
-      if (failed !== key) clearFailure();
-      if (failed || !live() || !ready()) return;
-      const steps = leadSteps(seat, settings, !api.leadFastSettings);
-      if (!steps.length) return;
+      const steps = leadSteps(seat, settings, !!picker.restoreFastDefaults && !api.leadFastSettings);
+      const switchReason = () => {
+        const currentFrame = readScreen(id);
+        const version = currentFrame?.sessionId === session && currentFrame.agent === agent ? currentFrame.agentVersion : undefined;
+        return steps.map(step => unverifiedScreenStep(agent, step, version)).find(Boolean);
+      };
+      const reason = switchReason(), failureKey = reason ? JSON.stringify([key, reason]) : key;
+      if (failed !== failureKey) clearFailure();
+      if (failed || !live() || !steps.length) return;
+      if (reason) {
+        failed = failureKey;
+        setLeadRoutingFailure(thread, { targetModel: seat.model, notice: { unavailable: reason } });
+        return;
+      }
+      if (!ready()) return;
       running = true;
       const rows = () => frame()?.rows ?? [];
-      const picker = { rows, ready, bound, active: live, write: (value: string) => api.answerTerminal(id, value),
-        inputMatches: (command: string) => claudeInputMatches(rows(), command) };
+      const driver = { rows, ready, bound, active: () => live() && !switchReason(), picker, echo,
+        write: (value: string) => api.answerTerminal(id, value), inputMatches: (command: string) => matches(rows(), command) };
       const before = current.current.agentSettings ?? settings;
       try {
-        const result = await switchLead(steps, picker, thread, { id, sessionId: session, access: api.leadFastSettings });
+        const result = await switchLead(steps, driver, thread, { id, sessionId: session, access: api.leadFastSettings });
         if (bound()) {
           for (const field of fields) if (result.observed[field] !== undefined) Object.assign(observed, { [field]: result.observed[field] });
           previous = before;
-          if (result.incomplete && live()) {
+          if (result.incomplete && live() && !switchReason()) {
             failed = state(seat, actual() ?? settings);
             setLeadRoutingFailure(thread, { targetModel: seat.model, notice: result.notice });
           }
@@ -168,6 +181,6 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
     const off = api.onSkills?.(load);
     const unsubscribe = subscribeScreen(id, wake.current);
     return () => { active = false; clearFailure(); wake.current = null; off?.(); unsubscribe(); };
-  }, [claude, projectId, terminal.id, terminal.sessionId]);
+  }, [agent, projectId, terminal.id, terminal.sessionId]);
   useEffect(() => { wake.current?.(); }, [terminal.agentSettings, terminal.readingHistory?.threadId, terminal.agentStartedAt]);
 }

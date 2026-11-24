@@ -481,7 +481,8 @@ function workingComposerHarness(t, agent, overrides = {}) {
   const capture = () => { const next = rows(); if (JSON.stringify(next) !== JSON.stringify(cached)) revision++; cached = next; };
   const frame = () => {
     if (!cached || !view.pending) capture();
-    return { rows: cached, pending: !!view.pending, parsed: true, parse, revision, epoch: view.epoch ?? 1, sessionId: h?.props.terminal.sessionId ?? 'session' };
+    return { rows: cached, pending: !!view.pending, parsed: true, parse, revision, epoch: view.epoch ?? 1,
+      sessionId: h?.props.terminal.sessionId ?? 'session', agent, agentVersion: view.agentVersion };
   };
   const parsed = (render = true) => { capture(); parse++; for (const listener of listeners) listener(frame()); if (render) h?.render(); };
   const subscribe = (_id, listener) => { listeners.add(listener); return () => listeners.delete(listener); };
@@ -519,6 +520,29 @@ function workingComposerHarness(t, agent, overrides = {}) {
     async tick(ms) { clock += ms; if (!view.pending || view.parsed) parsed(); await h.tick(ms); },
     async advance(ms, notify = true) { clock += ms; if (notify && (!view.pending || view.parsed)) parsed(false); await h.advance(ms); } };
 }
+
+test('reading shows an unverified CLI command disabled and does not send the typed command', async t => {
+  const h = workingComposerHarness(t, 'claude'), errors = [];
+  h.props.terminal.id = 'blocked-cli-command';
+  h.props.onError = message => errors.push(message);
+  h.view.agentVersion = '2.1.332';
+  window.agentrix.terminalCommands = async () => ({ ok: true, value: [{ name: '/fast', source: 'builtin', description: '' }] });
+  await h.tick(0);
+  h.edit('/fast');
+  const option = () => elements(h.tree()).find(node => node.props.role === 'option');
+  const send = () => elements(h.tree()).find(node => /\breading-send\b/.test(node.props.className));
+  assert.equal(option().props['aria-disabled'], true);
+  assert.match(option().props.title, /This Claude Code version is unverified/);
+  assert.equal(send().props.disabled, true);
+  h.press('Enter');
+  h.edit('/fast on'); h.press('Enter');
+  await h.tick(0);
+  assert.deepEqual(h.written, []);
+  assert.match(errors.at(-1), /This Claude Code version is unverified/);
+  h.view.agentVersion = '2.1.331'; h.edit('/fast');
+  assert.equal(option().props['aria-disabled'], undefined);
+  assert.equal(send().props.disabled, false);
+});
 
 test('a WaitingCard popup closes after its prompt ends and the held message sends', async t => {
   const h = workingComposerHarness(t, 'claude');

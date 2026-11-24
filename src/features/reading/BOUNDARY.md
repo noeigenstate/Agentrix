@@ -25,14 +25,14 @@ the latest round, and the switch between reading and the raw terminal.
 - `src/features/home/delivery.ts` (withoutDelivery: a reply without the 【交付】 block that closes it)
 - `electron/conversation-blocks.mjs` (the conversation grouping rule the main process and the renderer share)
 - `src/features/agents/agent-screen*.ts`
+- `src/features/cli-screens/index.ts`
 - `src/features/agents/sign-in-screen.ts`
 - `src/features/agents/action-text.ts`
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/files/*.ts` (file-popup, the popup over the view; tree-reveal, a reply's link shown in the open project's file tree)
 - `src/features/native-session/NativeToast.tsx` (the light note after a reply link's path is copied)
 - `src/features/voice/*.ts*` (any voice module; the reading view uses voice-input and VoiceButton)
-- `src/features/terminal/terminal-*.ts`
-- `src/features/terminal/active-terminal.ts`
+- `src/features/terminal/*.ts`
 
 ## Invariants
 

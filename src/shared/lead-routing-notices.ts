@@ -2,7 +2,7 @@ import type { ConversationEntry, ProjectTerminal } from './types';
 
 export type LeadRoutingCommand = '/model' | '/effort' | '/fast on' | '/fast off';
 type Submission = { command: LeadRoutingCommand; at: number; until: number };
-export type LeadRoutingNotice = { model?: string; effort?: string; fast?: boolean; ultracode?: boolean; incomplete?: boolean; fastError?: { target: boolean; reason: string } };
+export type LeadRoutingNotice = { model?: string; effort?: string; fast?: boolean; ultracode?: boolean; incomplete?: boolean; unavailable?: string; fastError?: { target: boolean; reason: string } };
 type LeadRoutingFailure = { targetModel: string; notice: LeadRoutingNotice };
 type Route = { submissions: Submission[]; outcome: LeadRoutingNotice | null };
 
@@ -21,6 +21,8 @@ export function leadRoutingScope(terminal: ProjectTerminal) {
 
 export const leadRoutingSnapshot = (scope: string) => routes.get(scope) ?? empty;
 export const leadRoutingFailure = (scope: string) => failures.get(scope) ?? null;
+export const unverifiedSwitchWords = (cli: string, t: (text: string, values: { cli: string }) => string) =>
+  t('未验证的 {cli} 版本，不支持运行中切换', { cli });
 
 export function setLeadRoutingFailure(scope: string, failure: LeadRoutingFailure | null) {
   if (failure) failures.set(scope, failure);
@@ -66,8 +68,9 @@ function isReceipt(entry: ConversationEntry, { command, at, until }: Submission)
   return !!name && (entry.text === name || entry.text === command) && (args ? `${name} ${args}` : name) === command && !original.replace(wrappers, '').trim();
 }
 
-export function routingNotice({ model, effort, incomplete, fast, ultracode, fastError }: LeadRoutingNotice,
+export function routingNotice({ model, effort, incomplete, fast, ultracode, fastError, unavailable }: LeadRoutingNotice,
   t: (text: string, values?: Record<string, string>) => string) {
+  if (unavailable) return unverifiedSwitchWords(unavailable, t);
   if (fastError) {
     const { reason, target } = fastError;
     return target ? t('快速模式未开启：{reason}', { reason }) : t('快速模式未关闭：{reason}', { reason });

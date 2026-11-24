@@ -20,9 +20,9 @@ export function matchCommands<Item extends PaletteItem>(commands: readonly Item[
 // with no match is still drawn (the reading view does) or leaves the keys to the box. `complete` puts a command into the box, `send` sends the
 // draft as it is. `menu`: a menu of choices drawn in place of the commands (Codex's /permissions); it is open while it has lines, the one marked
 // `current` is chosen first, Enter and Tab choose, and Esc calls `close`. `note`: a line the list draws while it is shut.
-export function useCommandPalette<Item extends PaletteItem>({ id, commands, draft, blocked, recalled, showEmpty, menu = null, note = null, complete, send, close }: {
+export function useCommandPalette<Item extends PaletteItem>({ id, commands, draft, blocked, recalled, showEmpty, menu = null, note = null, complete, send, close, disabledReason }: {
   id: string; commands: readonly Item[]; draft: string; blocked: boolean; recalled: () => boolean; showEmpty: boolean; menu?: readonly Item[] | null; note?: PaletteItem | null;
-  complete: (command: Item) => void; send: () => void; close?: () => void;
+  complete: (command: Item) => void; send: () => void; close?: () => void; disabledReason?: (command: Item) => string | undefined;
 }) {
   const [dismissed, setDismissed] = useState(false), [selection, setSelection] = useState(0);
   const matches = useMemo(() => menu ?? matchCommands(commands, draft), [commands, draft, menu]);
@@ -40,10 +40,12 @@ export function useCommandPalette<Item extends PaletteItem>({ id, commands, draf
       return true;
     }
     if (selected && (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey))) {
-      event.preventDefault(); if (event.key === 'Enter' && !menu && draft === selected.name) send(); else complete(selected);
+      event.preventDefault();
+      if (disabledReason?.(selected)) return true;
+      if (event.key === 'Enter' && !menu && draft === selected.name) send(); else complete(selected);
       return true;
     }
     return false;
   };
-  return { open, matches, note, selected, selection, listId, optionId, complete, keys, dismiss: setDismissed };
+  return { open, matches, note, selected, selection, listId, optionId, complete, disabledReason, keys, dismiss: setDismissed };
 }

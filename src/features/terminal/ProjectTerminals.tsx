@@ -13,7 +13,7 @@ import { NativeSessionView } from '../native-session/NativeSessionView';
 import { useHandoff, type Handoff } from '../native-session/draft-handoff.ts';
 import { ensureNativeSession, nativeShown, useNativeEntries } from '../native-session/native-store.ts';
 import { TERMINAL_SPLITS, useReorder } from '../workspace/useProjectReorder';
-import type { Project, ProjectTerminal, Result } from '../../shared/types';
+import type { AgentsState, Project, ProjectTerminal, Result } from '../../shared/types';
 import { t } from '../../shared/i18n';
 
 // The draft handoff of a run-mode switch, bound to its terminal by the card whatever the card shows (the reading view, the native view or the raw terminal),
@@ -23,6 +23,19 @@ function WithHandoff({ terminal, children }: { terminal: ProjectTerminal; childr
   return <>{children(useHandoff(terminal.id, terminal.nativeRuntimeSessionId ?? null, terminal.switchState, surface))}</>;
 }
 
+function useInstalledAgents(local: boolean) {
+  const [agents, setAgents] = useState<AgentsState | null>(null);
+  useEffect(() => {
+    const api = typeof window === 'undefined' ? undefined : window.agentrix;
+    if (!local || !api?.getAgents) return;
+    let active = true, changed = false;
+    const off = api.onAgents?.(state => { changed = true; if (active) setAgents(state); });
+    void api.getAgents().then(result => { if (active && !changed && result.ok) setAgents(result.value); }, () => {});
+    return () => { active = false; off?.(); };
+  }, [local]);
+  return local ? agents : null;
+}
+
 export function ProjectTerminals({ project, visible: projectVisible = true, focused, fontSize, activeId, setActiveId, onExpand, onAction, onError, onOpenLink }: {
   project: Project; visible?: boolean; focused: boolean; fontSize: number; activeId: string | null; setActiveId: (id: string) => void; onExpand: () => void;
   onAction: <T,>(promise: Promise<Result<T>>) => Promise<T | undefined>;
@@ -30,7 +43,7 @@ export function ProjectTerminals({ project, visible: projectVisible = true, focu
 }) {
   const area = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(600);
-  const terminals = project.terminals;
+  const terminals = project.terminals, agents = useInstalledAgents(project.kind === 'local');
   // A session without a terminal (the Claude API or Codex's app-server) has no pty to be "active" by: the native view stands where a terminal's would.
   const nativeEntries = useNativeEntries(), isNative = (terminal: ProjectTerminal) => !terminal.sessionId && nativeShown(nativeEntries.get(terminal.id));
   const base = new Set(visibleTerminals(terminals, focused).map(terminal => terminal.id));
@@ -84,7 +97,10 @@ export function ProjectTerminals({ project, visible: projectVisible = true, focu
           {reading && <ReadingView projectId={project.id} terminal={terminal} remote={project.kind === 'ssh'} visible={projectVisible && visibleIds.has(terminal.id)} autoFocus={projectVisible && focused && selected === terminal.id} active={selected === terminal.id} handoff={handoff} onShowTerminal={() => setReading(terminal.id, false)} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />}
           {/* A change of run mode on its way to a terminal card, and the note of a path that did not go as chosen; the native view draws its own line and question. */}
           <NativePathNote terminalId={terminal.id} terminalActive={!!terminal.sessionId} switchState={terminal.switchState} sessionId={terminal.nativeRuntimeSessionId ?? null} />
-          {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} agent={terminal.agent} queue={terminal.cliState?.queue ?? 0} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting} onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
+          {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} agent={terminal.agent}
+            agentActive={terminal.codexActive} agentStartedAt={terminal.agentStartedAt} installedVersion={terminal.agent ? agents?.[terminal.agent]?.version : null}
+            queue={terminal.cliState?.queue ?? 0} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting}
+            onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
             : native ? <NativeSessionView terminalId={terminal.id} projectId={project.id} autoFocus={focused && selected === terminal.id} switchState={terminal.switchState} handoff={handoff} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />
             // The card's launcher: a local project picks its agent here; an SSH project offers Codex (it runs on the other computer) and a plain terminal.
             : reading ? null : <AgentLauncher terminalId={terminal.id} projectId={project.id} kind={project.kind} onAction={onAction} onOpenTerminal={openTerminal} />}

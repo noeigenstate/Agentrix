@@ -18,6 +18,9 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - `roleGroups` (`src/features/agents/skill-seats.ts`) — `callSeatRole`, `modelRow`, `roleGroups`, `routeVerdict` and `shortLabel` support the Agent tab's role groups and labels.
 
 ## May import
+
+- `src/features/cli-screens/index.ts`
+- `src/features/terminal/terminal-screen.ts`
 - `electron/features/skills/seat-rules.mjs` (shared seat validation and model rules)
 - `electron/features/skills/role-rules.mjs` (shared role validation, locks and ID generation)
 - `src/features/agents/subagent-splits.ts` (the `CallRow` type)

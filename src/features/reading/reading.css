@@ -103,6 +103,7 @@
 /* Slash commands listed in the page, between the conversation and the message box. */
 .reading-commands.is-inline { flex: none; margin: 0 12px 8px; padding: 4px; max-height: min(266px, 40%); overflow-y: auto; border-radius: 12px; background: var(--bg-menu); border: 1px solid var(--border); }
 .reading-command { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 8px; color: var(--text-1); font-size: calc(12px * var(--reading-text)); cursor: pointer; }
+.reading-command[aria-disabled="true"] { opacity: 0.58; cursor: default; }
 .reading-command:hover { background: var(--bg-hover); }
 .reading-command[aria-selected="true"] { background: var(--bg-selected); }
 .reading-command code { flex: none; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 calc(12px * var(--reading-text)) var(--font-mono); color: var(--text-1); }

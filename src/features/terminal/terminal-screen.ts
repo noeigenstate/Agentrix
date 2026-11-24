@@ -1,10 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { IBuffer, IBufferCell, IBufferLine, Terminal } from '@xterm/xterm';
 import type { ApprovalStamp } from '../../shared/types';
-import type { ScreenAgent, ScreenChoice } from '../agents/agent-screen-types';
-import { choiceIdentity, parseAgentScreen } from '../agents/agent-screen.ts';
-import { claudeInputHint, claudePromptRange, cliDialogShown, cliInputAvailable, cliInputDraft, isAtPrompt, isCliWorking, withoutClaudeCursor }
-  from '../agents/agent-screen-input.ts';
+import { choiceIdentity } from '../agents/agent-screen.ts';
+import { cliDialogShown, cliInputAvailable, cliInputDraft, isAtPrompt, isCliWorking, parseAgentScreen, screenAgents, screenOf,
+  type CliScreen, type ScreenAgent, type ScreenChoice } from '../cli-screens/index.ts';
 import { createFactsPublisher } from '../agents/agent-screen-facts.ts';
 export { cliStateFor, nextCliState } from '../agents/agent-screen-state.ts';
 
@@ -16,15 +15,20 @@ export type Screen = {
   rows: string[]; sessionId: string | null; epoch?: number; revision: number; parse?: number; updatedAt: number;
   stateUpdatedAt?: Record<ScreenAgent, number>; parsed?: boolean; pending?: boolean; queued?: number; approval?: ApprovalStamp | null;
   instances?: Record<ScreenAgent, number>; inputFrames?: Record<ScreenAgent, number>; inputHint?: boolean;
+  agent?: ScreenAgent; agentVersion?: string;
 };
 type Entry = { id: string; terminal: Terminal; listeners: Set<(screen: Screen) => void>; parses: Set<(screen: Screen) => void>; timer: number; dispose: () => void; frame?: Screen; epoch: number;
   sessionId?: string; approval: ApprovalStamp | null; writes: number; pending: number; revision: number; parse: number; updatedAt: number;
   states: Partial<Record<ScreenAgent, string | null>>; stateUpdatedAt: Record<ScreenAgent, number>;
   inputShown: Record<ScreenAgent, boolean>; inputFrames: Record<ScreenAgent, number>;
-  identities: Partial<Record<ScreenAgent, string | null>>; instances: Record<ScreenAgent, number>; rowsKey: string; facts: (frame: Screen) => void; factsTimer: number };
+  identities: Partial<Record<ScreenAgent, string | null>>; instances: Record<ScreenAgent, number>; rowsKey: string;
+  facts: ReturnType<typeof createFactsPublisher>; factsTimer: number; observedVersion?: string };
 const entries = new Map<string, Entry>();
 // What the terminal's owner knows about it (the agent running in it, the messages main holds queued), kept by id across a remount.
-const agentKinds = new Map<string, ScreenAgent | null>();
+type AgentDisplay = { active?: boolean; startedAt?: number | null; installedVersion?: string | null };
+type DisplayedAgent = AgentDisplay & { agent: ScreenAgent };
+const displayedAgents = new Map<string, DisplayedAgent>();
+const perAgent = <T,>(value: () => T) => Object.fromEntries(screenAgents.map(agent => [agent, value()])) as Record<ScreenAgent, T>;
 const queueCounts = new Map<string, number>();
 let incarnation = 0;
 let frameRevision = 0;
@@ -78,9 +82,9 @@ function promptRow(line: IBufferLine, prefix: number, scratch: IBufferCell) {
   return { text: text.trimEnd(), styled, cursor };
 }
 
-function omitClaudeHints(buffer: IBuffer, rows: string[]) {
+function omitStyledHints(buffer: IBuffer, rows: string[], input: NonNullable<CliScreen['styledInput']>) {
   const lineAt = (row: number) => buffer.getLine(buffer.baseY + row);
-  const range = claudePromptRange(rows, row => !!lineAt(row)?.isWrapped);
+  const range = input.range(rows, row => !!lineAt(row)?.isWrapped);
   if (!range) return false;
   const scratch = buffer.getNullCell?.();
   let styled = false, editable = false;
@@ -93,18 +97,12 @@ function omitClaudeHints(buffer: IBuffer, rows: string[]) {
     styled ||= result.styled;
     rows[row] = !prefix && result.text && !/^ {2}\S/.test(result.text) ? '  ' + result.text.trimStart() : result.text;
     // A final inverse cell can be the CLI's cursor following a styled hint.
-    editable ||= !!withoutClaudeCursor(result.text.slice(prefix, result.cursor >= 0 ? result.cursor : undefined)).trim();
+    editable ||= !!input.withoutCursor(result.text.slice(prefix, result.cursor >= 0 ? result.cursor : undefined)).trim();
   }
-  if (!(styled && !editable) && !claudeInputHint(rows)) return false;
+  if (!(styled && !editable) && !input.hint(rows)) return false;
   rows[range.first] = rows[range.first].slice(0, range.prefix).trimEnd();
   rows.fill('', range.first + 1, range.end);
   return true;
-}
-
-// Claude labels the upper input border while Ultracode is on. Keep it a border for the shared input parser.
-function claudeScreenRows(rows: string[]) {
-  return rows.map((row, index) => /^\s*─{2,}\s+ultracode\s+─+\s*$/i.test(row) && /^\s*❯/.test(rows[index + 1] ?? '')
-    ? row.replace(/ ultracode /i, '───────────') : row);
 }
 
 function read(terminal: Terminal, agent?: ScreenAgent | null): Pick<Screen, 'rows' | 'inputHint'> {
@@ -112,34 +110,41 @@ function read(terminal: Terminal, agent?: ScreenAgent | null): Pick<Screen, 'row
   // The live screen, from baseY: viewportY stays wherever the reader scrolled the terminal back to, and writes made from
   // the reading view never scroll it down again, so the questions and command output would be read from old rows.
   for (let index = 0; index < terminal.rows; index++) rows.push(buffer.getLine(buffer.baseY + index)?.translateToString(true) ?? '');
-  if (agent !== 'claude') return { rows };
-  const normalized = claudeScreenRows(rows), inputHint = omitClaudeHints(buffer, normalized);
+  const facet = screenOf(agent), normalized = facet?.normalize?.(rows) ?? rows;
+  const inputHint = facet?.styledInput && omitStyledHints(buffer, normalized, facet.styledInput);
   return inputHint ? { rows: normalized, inputHint } : { rows: normalized };
 }
 
 function capture(entry: Entry): Screen {
-  const screen = read(entry.terminal, agentKinds.get(entry.id));
+  const display = displayedAgents.get(entry.id), agent = display?.agent;
+  const screen = read(entry.terminal, agent);
   // State timestamps advance only when the observed state changes, never for spinner or background output.
   const rowsKey = JSON.stringify(screen.rows);
   if (rowsKey !== entry.rowsKey) {
     entry.revision = ++frameRevision;
     entry.updatedAt = Date.now();
     entry.rowsKey = rowsKey;
-    for (const agent of ['claude', 'codex'] as const) {
-      const parsed = parseAgentScreen(agent, screen.rows), choice = parsed.choice;
-      const waiting = cliDialogShown(agent, screen.rows, parsed);
-      entry.inputShown[agent] = !waiting && cliInputAvailable(agent, screen.rows);
-      const state = waiting ? 'waiting' : isCliWorking(agent, screen.rows, parsed) ? 'working' : isAtPrompt(agent, screen.rows, parsed) ? 'idle' : null;
-      if (entry.states[agent] !== state) { entry.states[agent] = state; entry.stateUpdatedAt[agent] = entry.updatedAt; }
-      const identity = choice ? choiceIdentity(choice) : null;
-      if (entry.identities[agent] !== identity) { entry.identities[agent] = identity; entry.instances[agent] = ++incarnation; }
+    for (const kind of screenAgents) {
+      updateState(entry, kind, screen.rows);
     }
   }
-  // The terminal remains mounted in raw mode. Remember input observed on every parse, including while more output
-  // is queued, so a later identical prompt cannot inherit a dismissed episode the reader never saw end.
-  for (const agent of ['claude', 'codex'] as const) if (entry.inputShown[agent]) entry.inputFrames[agent]++;
-  return entry.frame = { ...screen, sessionId: entry.sessionId ?? null, epoch: entry.epoch, revision: entry.revision, parse: ++entry.parse, updatedAt: entry.updatedAt, parsed: true,
+  const activeAgent = display?.active === false ? undefined : agent;
+  if (activeAgent && !entry.observedVersion && !entry.pending) entry.observedVersion = screenOf(activeAgent)?.version?.(screen.rows);
+  // The terminal remains mounted in raw mode. Remember input on every parse so a later identical prompt starts a new episode.
+  for (const kind of screenAgents) if (entry.inputShown[kind]) entry.inputFrames[kind]++;
+  return entry.frame = { ...screen, agent: activeAgent, agentVersion: activeAgent ? entry.observedVersion ?? display?.installedVersion ?? undefined : undefined,
+    sessionId: entry.sessionId ?? null, epoch: entry.epoch, revision: entry.revision, parse: ++entry.parse, updatedAt: entry.updatedAt, parsed: true,
     stateUpdatedAt: { ...entry.stateUpdatedAt }, approval: entry.pending ? null : entry.approval, instances: { ...entry.instances }, inputFrames: { ...entry.inputFrames } };
+}
+
+function updateState(entry: Entry, agent: ScreenAgent, rows: string[]) {
+  const parsed = parseAgentScreen(agent, rows), choice = parsed.choice;
+  const waiting = cliDialogShown(agent, rows, parsed);
+  entry.inputShown[agent] = !waiting && cliInputAvailable(agent, rows);
+  const state = waiting ? 'waiting' : isCliWorking(agent, rows, parsed) ? 'working' : isAtPrompt(agent, rows, parsed) ? 'idle' : null;
+  if (entry.states[agent] !== state) { entry.states[agent] = state; entry.stateUpdatedAt[agent] = entry.updatedAt; }
+  const identity = choice ? choiceIdentity(choice) : null;
+  if (entry.identities[agent] !== identity) { entry.identities[agent] = identity; entry.instances[agent] = ++incarnation; }
 }
 
 function snapshot(entry: Entry): Screen {
@@ -148,10 +153,11 @@ function snapshot(entry: Entry): Screen {
 
 // Screen facts are computed on the parsed subscribers' 100 ms coalescing: a burst of frames costs one computation, from the last frame.
 function scheduleFacts(entry: Entry) {
-  if (agentKinds.get(entry.id) !== 'claude' || entry.factsTimer) return;
+  if (!screenOf(displayedAgents.get(entry.id)?.agent)?.facts || entry.factsTimer) return;
   entry.factsTimer = window.setTimeout(() => {
     entry.factsTimer = 0;
-    if (entries.get(entry.id) === entry && agentKinds.get(entry.id) === 'claude') entry.facts(snapshot(entry));
+    const agent = displayedAgents.get(entry.id)?.agent;
+    if (agent && entries.get(entry.id) === entry && screenOf(agent)?.facts) entry.facts(snapshot(entry), agent);
   }, 100);
 }
 
@@ -174,8 +180,8 @@ export function registerScreen(id: string, terminal: Terminal, sessionId?: strin
   const parses = previous?.parses ?? pendingParses.get(id) ?? new Set(); pendingParses.delete(id);
   previous?.dispose();
   const entry: Entry = { id, terminal, listeners, parses, timer: 0, dispose: () => {}, epoch: ++incarnation, sessionId, approval: null, writes: 0, pending: 0, parse: 0,
-    inputShown: { claude: false, codex: false }, inputFrames: { claude: 0, codex: 0 },
-    revision: ++frameRevision, updatedAt: Date.now(), states: {}, stateUpdatedAt: { claude: 0, codex: 0 }, identities: {}, instances: { claude: ++incarnation, codex: ++incarnation }, rowsKey: '',
+    inputShown: perAgent(() => false), inputFrames: perAgent(() => 0),
+    revision: ++frameRevision, updatedAt: Date.now(), states: {}, stateUpdatedAt: perAgent(() => 0), identities: {}, instances: perAgent(() => ++incarnation), rowsKey: '',
     facts: createFactsPublisher(facts => window.agentrix.screenFacts(id, facts)), factsTimer: 0 };
   const notify = () => {
     if (entries.get(id) === entry) publish(entry);
@@ -202,11 +208,15 @@ export function setQueueCount(id: string, count: number) {
   if (count) queueCounts.set(id, count); else queueCounts.delete(id);
 }
 
-// The agent running in a terminal; only Claude's screen is read for facts.
-export function setScreenAgent(id: string, agent: ScreenAgent | null) {
-  if (agentKinds.get(id) === agent) return;
-  agentKinds.set(id, agent);
-  const entry = entries.get(id); if (entry) publish(entry);
+export function setScreenAgent(id: string, agent: ScreenAgent | null, { active = !!agent, startedAt, installedVersion }: AgentDisplay = {}) {
+  const previous = displayedAgents.get(id);
+  const changed = previous?.agent !== agent || previous?.startedAt !== startedAt || previous?.active !== active;
+  if (!agent && !previous || !changed && previous?.installedVersion === installedVersion) return;
+  if (agent) displayedAgents.set(id, { agent, active, startedAt, installedVersion }); else displayedAgents.delete(id);
+  const entry = entries.get(id);
+  if (!entry) return;
+  if (changed) entry.observedVersion = undefined;
+  publish(entry);
 }
 
 export function readScreen(id: string): Screen | null {

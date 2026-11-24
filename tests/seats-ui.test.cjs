@@ -122,6 +122,8 @@ function compile(file, hooks, stubs = {}) {
       openSeats: detail => window.dispatchEvent(new CustomEvent('agentrix:open-seats', { detail })) };
     if (name === '../../shared/model-name') return require('../src/shared/model-name.ts');
     if (name === '../../shared/lead-routing-notices.ts') return require('../src/shared/lead-routing-notices.ts');
+    if (name === '../cli-screens/index.ts') return require('../src/features/cli-screens/index.ts');
+    if (name === '../terminal/terminal-screen.ts') return stubs[name] ?? { useScreen: () => null };
     if (name.endsWith('.css')) return {};
     if (name in stubs) return stubs[name];
     return name.startsWith('.') ? {} : original(name);
@@ -189,7 +191,9 @@ function dialogHarness(t, info, props = {}) {
   const listeners = [];
   globalThis.document = { activeElement: null, elementFromPoint: () => null, addEventListener: (type, fn) => listeners.push([type, fn]), removeEventListener: (type, fn) => { const at = listeners.findIndex(entry => entry[0] === type && entry[1] === fn); if (at >= 0) listeners.splice(at, 1); } };
   const h = mount(t, 'SeatsDialog.tsx', 'SeatsDialog',
-    { info, projectId: 'p1', terminalId: 't1', onClose: () => closed.push(true), ...props.dialog }, { language: props.language });
+    { info, projectId: 'p1', terminalId: 't1', onClose: () => closed.push(true), ...props.dialog }, {
+      language: props.language, '../terminal/terminal-screen.ts': { useScreen: () => props.frame?.() ?? null },
+    });
   const outsideMouseDown = target => listeners.filter(entry => entry[0] === 'mousedown').forEach(entry => entry[1]({ target }));
   return Object.assign(h, { calls, closed, refreshes, deliver: next => { current = next; changed?.(); }, outsideMouseDown });
 }
@@ -503,6 +507,25 @@ test('其他模型… takes an id in the menu: a good id is assigned and saved, 
   byAttr(openMenu(lead, 'orchestrator'), 'data-custom').props.onClick();
   typeCustom(lead, 'claude-opus-9'); applyCustom(lead);
   assert.match(textOf(byAttr(lead.render(), 'data-seat', 'orchestrator')), /Opus 9/);
+});
+
+test('an unverified running CLI disables the four lead controls in the project but leaves template and worker choices editable', t => {
+  const base = seatsInfo({ conductor: true, catalog: catalog({ opus: { fast: true } }) });
+  const info = { ...base, config: { roles: {}, conductor: true }, template: { roles: {}, conductor: true } };
+  let agentVersion = '2.1.332';
+  const h = dialogHarness(t, info, { frame: () => ({ sessionId: 'pty', agent: 'claude', agentVersion }) });
+  const buttons = menu => [byAttr(menu, 'data-assign', 'opus'), byAttr(menu, 'data-pop-effort', 'high'),
+    byAttr(menu, 'data-fast', 'orchestrator'), byAttr(menu, 'data-ultracode', 'orchestrator')];
+  const unavailable = openMenu(h, 'orchestrator');
+  assert.ok(buttons(unavailable).every(button => button.props.disabled));
+  assert.match(textOf(unavailable), /This Claude Code version is unverified/);
+  const worker = openMenu(h, 'architect');
+  assert.equal(byAttr(worker, 'data-assign', 'opus').props.disabled, false);
+  byAttr(h.render(), 'data-scope', 'template').props.onClick();
+  assert.ok(buttons(openMenu(h, 'orchestrator')).every(button => !button.props.disabled));
+  byAttr(h.render(), 'data-scope', 'project').props.onClick();
+  agentVersion = '2.1.331';
+  assert.ok(buttons(openMenu(h, 'orchestrator')).every(button => !button.props.disabled));
 });
 
 test('the Claude orchestrator can toggle Ultracode, show it on its card and include it in the save', async t => {

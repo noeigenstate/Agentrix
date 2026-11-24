@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Terminal } from '@xterm/xterm';
 import { registerReadingTerminal } from './terminal-popup';
+import type { ScreenAgent } from '../cli-screens/index.ts';
 import { fitTerminal } from './terminal-fit';
 import type { TerminalPacket } from '../../shared/types';
 import { createTerminalLinkProvider } from './terminal-links';
@@ -17,8 +18,10 @@ import { isMac, isWindows } from '../../shared/platform';
 // The terminal text weight chosen in Settings, which App writes on the document; 400 when none is chosen.
 const chosenWeight = () => Number(document.documentElement.dataset.terminalWeight) || Number(terminalOptions.fontWeight);
 
-export function TerminalPane({ id, sessionId, agent = null, queue = 0, fontSize, onError, focused, onOpenLink, remote = false }: {
-  id: string; sessionId: string | null; agent?: 'claude' | 'codex' | null; queue?: number; fontSize: number; focused: boolean; onError: (message: string) => void;
+export function TerminalPane({ id, sessionId, agent = null, agentActive = !!agent, agentStartedAt, installedVersion, queue = 0, fontSize,
+  onError, focused, onOpenLink, remote = false }: {
+  id: string; sessionId: string | null; agent?: ScreenAgent | null; agentActive?: boolean; agentStartedAt?: number | null; installedVersion?: string | null;
+  queue?: number; fontSize: number; focused: boolean; onError: (message: string) => void;
   onOpenLink: (id: string, target: string) => void;
   remote?: boolean;
 }) {
@@ -34,7 +37,8 @@ export function TerminalPane({ id, sessionId, agent = null, queue = 0, fontSize,
   const openLink = useRef(onOpenLink);
   openLink.current = onOpenLink;
   // Read-only: the screen registry learns which agent runs here and how many messages main holds queued for it.
-  useEffect(() => { setScreenAgent(id, agent); }, [id, agent]);
+  useEffect(() => { setScreenAgent(id, agent, { active: agentActive, startedAt: agentStartedAt, installedVersion }); },
+    [id, agent, agentActive, agentStartedAt, installedVersion]);
   useEffect(() => { setQueueCount(id, queue); }, [id, queue]);
   useEffect(() => () => { setQueueCount(id, 0); setScreenAgent(id, null); }, [id]);
   const copy = async (text: string) => { const result = await window.agentrix.copy(text); if (!result.ok) report.current(result.error); };

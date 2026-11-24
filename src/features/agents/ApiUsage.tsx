@@ -13,6 +13,8 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import type { AgentUsage, ProjectTerminal } from '../../shared/types';
 import { t } from '../../shared/i18n';
+import { adapterOf, adapters } from '../../../electron/features/cli-adapters/registry.mjs';
+import { support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 import { type LimitsPayload, type NativeAgent, type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { useUsageRevision } from '../native-session/native-store.ts';
 import { BillingLink } from '../native-session/native-billing-link.ts';
@@ -23,7 +25,7 @@ import './activity-pane.css';
 
 // Read again a minute after the last read (the month turns over, a limit recovers), and a second after an event says the numbers moved.
 const REFRESH_MS = 60_000, REVISION_DELAY_MS = 1000;
-const AGENTS = ['claude', 'codex'] as const;
+const AGENTS = adapters().filter(({ manifest }) => support(manifest, 'accountLimits').ok).map(({ manifest }) => manifest.id);
 const NAMES: Record<NativeAgent, string> = { claude: 'Claude', codex: 'Codex' };
 // The last usage read per project, shown at once when its pane opens again. Nothing tells this file that a project was removed, so it keeps the most recently read ones.
 const HELD_PROJECTS = 32;
@@ -137,7 +139,8 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   // Subscription is a billing source. Every Codex session runs on app-server;
   // a legacy PTY snapshot needs restoration, not a second supported run mode.
   const known = current || !!state?.next?.path;
-  const channel = agent === 'codex' && known ? current && terminal.sessionId ? t('需用原生模式恢复') : t('原生模式')
+  const manifest = adapterOf(agent)?.manifest, nativeOnly = manifest && !support(manifest, 'terminal').ok && support(manifest, 'native').ok;
+  const channel = nativeOnly && known ? current && terminal.sessionId ? t('需用原生模式恢复') : t('原生模式')
     : (current && terminal.nativeMode || !current && state?.next?.path === 'api') ? t('原生模式') : null;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
   // A session that reported plan windows of its own is on a plan even when main could not tell the connection (a terminal session): its bars show, and it is not 额度 未知.

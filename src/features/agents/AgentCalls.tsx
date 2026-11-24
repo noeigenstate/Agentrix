@@ -32,11 +32,11 @@ function Rate({ rate, quiet }: { rate: TokenRate | null | undefined; quiet?: boo
 
 // A head row: the name, recorded effort and speed, any non-default service (which gives way first), and a fixed rate column.
 export function ModelHead({ agent, name, effort, fast, ultracode, provider, title, rate, quiet }: {
-  agent: AgentCall['agent']; name: string; effort?: string | null; fast?: boolean | null; ultracode?: boolean | null;
+  agent: string; name: string; effort?: string | null; fast?: boolean | null; ultracode?: boolean | null;
   provider: string | null | undefined; title: string; rate: TokenRate | null | undefined; quiet?: boolean;
 }) {
-  const Mark = agent === 'Codex' ? CodexLogo : ClaudeLogo;
-  const visibleProvider = provider === (agent === 'Codex' ? 'OpenAI' : 'Anthropic') ? null : provider;
+  const Mark = agent === 'Codex' ? CodexLogo : agent === 'Claude Code' ? ClaudeLogo : Circle;
+  const visibleProvider = provider === (agent === 'Codex' ? 'OpenAI' : agent === 'Claude Code' ? 'Anthropic' : undefined) ? null : provider;
   const how = [effort === 'default' ? t('默认') : effort, fast != null && (fast ? t('快速') : t('普通')), ultracode === true && 'Ultracode'].filter(Boolean).join(' · ');
   return <li className="activity-call-head" title={[title, how].filter(Boolean).join('\n')}>
     <span className="activity-row-icon"><Mark size={16} /></span>

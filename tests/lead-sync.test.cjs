@@ -3,7 +3,11 @@ const assert = require('node:assert/strict');
 const { leadSteps } = require('../src/features/terminal/lead-steps.ts');
 const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
 const { registerLeadFastSettings } = require('../electron/features/terminal/lead-fast-settings.cjs');
-const { applyLeadStep, pickerAction, pickerResult } = require('../src/features/terminal/lead-picker.ts');
+const { applyLeadStep: driveLeadStep } = require('../src/features/terminal/lead-picker.ts');
+const { screenOf } = require('../src/features/cli-screens/index.ts');
+const { picker, echo } = screenOf('claude');
+const { action: pickerAction, result: pickerResult } = picker;
+const applyLeadStep = (step, terminal, hooks) => driveLeadStep(step, { ...terminal, picker, echo }, hooks);
 const { hookHarness } = require('./helpers/hook-harness.cjs');
 const { leadRoutingFailure, leadRoutingScope, leadRoutingSnapshot, leadRoutingNotices, routingNotice, subscribeLeadRouting, trackLeadRouting } = require('../src/shared/lead-routing-notices.ts');
 
@@ -337,6 +341,38 @@ test('lead sync registers only submitted conductor commands under the live conve
   reload();
   assert.deepEqual(await completed, { effort: 'high', incomplete: false });
   assert.deepEqual(keys, ['/effort', '\r']);
+});
+
+test('an unverified live version reports why and sends no routing keys until a verified version is observed', async t => {
+  const terminal = { id: 'lead-version', sessionId: 'pty', agent: 'claude', codexActive: true,
+    agentSettings: { model: 'sonnet', effort: 'medium', ultracode: false, fast: false } };
+  const scope = leadRoutingScope(terminal), keys = [];
+  let agentVersion = '2.1.332', repaint;
+  const before = global.window;
+  global.window = { agentrix: {
+    skillSeats: async () => ({ conductor: true, leads: { claude: { model: 'opus', effort: 'high', ultracode: true, fast: true } } }),
+    answerTerminal: (_id, key) => keys.push(key), leadFastSettings: async () => assert.fail('fast settings were accessed'),
+  } };
+  const harness = hookHarness('src/features/terminal/lead-sync.ts', {
+    './i18n': { t: value => value },
+    './terminal-screen': { readScreen: () => ({ sessionId: 'pty', agent: 'claude', agentVersion, rows: [] }), canPasteScreen: () => true,
+      subscribeScreen: (_id, callback) => { repaint = callback; return () => {}; } },
+    './lead-picker.ts': { async applyLeadStep(_step, driver) { driver.write('/model'); return false; } },
+  });
+  t.after(() => { harness.dispose(); global.window = before; });
+  const unavailable = new Promise(resolve => {
+    const off = subscribeLeadRouting(() => {
+      const failure = leadRoutingFailure(scope);
+      if (failure) { off(); resolve(failure.notice.unavailable); }
+    });
+  });
+  harness.render('LeadSync', { projectId: 'project', terminal });
+  assert.equal(await unavailable, 'Claude Code');
+  assert.deepEqual(keys, []);
+  assert.deepEqual(leadRoutingSnapshot(scope), []);
+  agentVersion = '2.1.331'; repaint();
+  assert.deepEqual(keys, ['/model']);
+  assert.equal(leadRoutingFailure(scope), null);
 });
 
 test('lead sync returns to old targets and retries a failure only after its inputs change', async t => {

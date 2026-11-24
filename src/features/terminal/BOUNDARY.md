@@ -24,6 +24,7 @@ split is in use.
 ## May import
 - `src/shared/**`
 - `src/features/agents/agent-screen*.ts`
+- `src/features/cli-screens/index.ts`
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/agents/SubagentPane.tsx`
 - `src/features/agents/subagent-splits.ts`
