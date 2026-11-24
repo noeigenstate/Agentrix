@@ -794,9 +794,10 @@ test('a real dispatch sees only worker tools, and its background setting control
   for (const [index, tools] of offered.entries()) {
     const names = tools.map(tool => tool.name);
     assert.ok(names.includes('Read'));
-    for (const name of names) assert.ok((index === 2 ? ['Read', 'Glob', 'Grep', 'LS']
+    for (const name of names) assert.ok((index === 2 ? ['Read', 'Glob', 'Grep', 'LS', 'Bash']
       : ['Read', 'Glob', 'Grep', 'LS', 'Bash', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']).includes(name), name);
   }
+  assert.ok(offered[2].some(tool => tool.name === 'Bash'), 'a read-only role is offered Bash');
   assert.equal(schemas.length, 2);
   assert.ok(schemas[0], 'the Bash tool is offered'); assert.ok('run_in_background' in schemas[0], 'allowed: the field is there');
   assert.ok(schemas[1], 'the Bash tool is offered'); assert.equal('run_in_background' in schemas[1], false, 'disabled: no run_in_background');
