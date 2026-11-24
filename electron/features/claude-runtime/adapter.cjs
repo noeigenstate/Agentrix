@@ -24,4 +24,4 @@ function createInstall(locator = createLocator()) {
   };
 }
 
-module.exports = { createInstall };
+module.exports = { createInstall, transcript: require('./transcript.cjs'), events: { hooks: require('./hooks.cjs') } };

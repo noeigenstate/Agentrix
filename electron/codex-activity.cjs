@@ -1,20 +1,20 @@
 const fs = require('node:fs/promises');
 const { watch: watchFile } = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
 const { interactiveSession } = require('./session-restore.cjs');
 const { rolloutFiles, sessionMeta, nativeWatchPath } = require('./session-files.cjs');
 const { transcriptWindow, LIVE_READ_LIMIT, codexMetadata } = require('./transcript-window.cjs');
 const { readTranscriptChunk } = require('./oversized-record.cjs');
 const { sameThread } = require('./terminal-title.cjs');
-const { promptText } = require('./prompt-queue.cjs');
+const { adapterOf } = require('./features/cli-adapters/registry.cjs');
 const { CompletionHistory } = require('./completion-history.cjs');
+
+const transcript = adapterOf('codex').transcript;
 
 // Only interactive rollout files can own a project card. A child agent can
 // inherit notify, but its completion does not end the interactive parent turn.
 class CodexActivityReader {
-  constructor(cwd, home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), since = Date.now(), options = {}) {
-    this.cwd = cwd; this.directory = path.join(home, 'sessions'); this.since = since;
+  constructor(cwd, home = transcript.home(), since = Date.now(), options = {}) {
+    this.cwd = cwd; this.directory = transcript.root(home); this.since = since;
     this.options = options; this.boundThread = null;
     this.offset = 0; this.buffer = Buffer.alloc(0); this.skipping = false; this.oversized = null;
     this.snapshot = null; this.nextDiscovery = 0;
@@ -44,20 +44,19 @@ class CodexActivityReader {
   record(record) {
     // Every record also goes to whoever follows the agent's steps (agent-actions.cjs).
     this.options.onRecord?.(record);
-    if (record.type !== 'event_msg') return;
-    const item = record.payload || {}, turn = item.turn_id;
-    // The prompt of the round, so its completion can be announced by what it worked on.
-    if (item.type === 'user_message' || item.type === 'item_completed' && item.item?.type === 'UserMessage') {
-      const prompt = item.type === 'user_message' ? promptText(item.message, { ...record, ...item }) : promptText(item.item.content, { ...record, ...item, ...item.item });
-      if (prompt !== null) this.snapshot = { ...this.snapshot, prompt };
+    const event = transcript.record(record);
+    if (!event) return;
+    if (Object.hasOwn(event, 'prompt')) {
+      if (event.prompt !== null) this.snapshot = { ...this.snapshot, prompt: event.prompt };
       return;
     }
-    if (['task_started', 'turn_started'].includes(item.type)) {
-      if (typeof turn !== 'string' || !turn) return;
-      this.snapshot = { ...this.snapshot, turnId: turn, state: 'working', updatedAt: Date.parse(record.timestamp) || 0 };
-    } else if (['task_complete', 'turn_completed', 'turn_aborted', 'turn_interrupted'].includes(item.type)) {
-      if (!this.snapshot.turnId || turn && turn !== this.snapshot.turnId) return;
-      this.snapshot = { ...this.snapshot, state: ['task_complete', 'turn_completed'].includes(item.type) ? 'complete' : 'interrupted', updatedAt: Date.parse(record.timestamp) || 0 };
+    const { state, turnId, at, done } = event;
+    if (!state) return;
+    if (!done) {
+      if (typeof turnId !== 'string' || !turnId) return;
+      this.snapshot = { ...this.snapshot, turnId, state, updatedAt: at };
+    } else if (this.snapshot.turnId && (!turnId || turnId === this.snapshot.turnId)) {
+      this.snapshot = { ...this.snapshot, state, updatedAt: at };
     }
   }
   async read() {

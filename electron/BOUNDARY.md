@@ -1,17 +1,18 @@
 # Boundary: Completion
 
 Decides from an agent's own records when a round is working, complete or interrupted, counting background workers and
-their receipts, and keeps the in-memory list of prompts sent and not yet finished. Covers only the four files in Owns,
-not the rest of electron/.
+their receipts, and keeps the in-memory list of prompts sent and not yet finished. Covers the files listed in Owns.
 
 ## Owns
 - `electron/completion-work.cjs`
 - `electron/completion-history.cjs`
 - `electron/prompt-queue.cjs`
 - `electron/codex-activity.cjs`
+- `electron/features/completion/status.cjs`
 
 ## Interface
 - `CompletionWork` (`electron/completion-work.cjs`) — outstanding background work per terminal; the round state main publishes
+- `finished` (`electron/features/completion/status.cjs`) - recognizes finished background task statuses.
 - `CompletionHistory` (`electron/completion-history.cjs`) — replays the transcript prefix before the display window to the completion counter
 - `CodexActivityReader` (`electron/codex-activity.cjs`) — reads the bound interactive Codex rollout into turn snapshots
 - `monitorActivity` (`electron/codex-activity.cjs`) — one-read-at-a-time poller with an optional file watch
@@ -24,6 +25,7 @@ not the rest of electron/.
 - `ownMessage` (`electron/prompt-queue.cjs`) — messages the CLI writes as the user
 
 ## May import
+- `electron/features/cli-adapters/registry.cjs`
 - `electron/agent-commands.cjs` (shared classification of local commands that run no model turn)
 - `electron/session-restore.cjs`
 - `electron/session-files.cjs`

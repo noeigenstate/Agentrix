@@ -18,14 +18,14 @@ The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook
 - `updateDispatchLaunchSeats` (`electron/features/terminal-events/bootstrap-file.cjs`) — records the bounded launch baseline for helpers whose environment omits the launch seat map. Bootstrap cleanup removes the baseline.
 - `createHookServer` (`electron/features/terminal-events/hook-server.cjs`) — `(ingest, { limit }) → { port, close }`: Claude Code's HTTP hooks, POST `/h/<terminalId>/<EventName>` with `X-Agentrix-Key` on 127.0.0.1, bodies up to 4 MB
 - `createHookIngest` (`electron/features/terminal-events/hook-ingest.cjs`) — `({ keyOf, deliver, noteOf, now }) → { admit, take, note, abort, stats }`: requests become C-2 TerminalHookEvents `{ seq, terminalId, event, at, sessionId, transcriptPath, promptId, toolUseId, agentId, payload }`; stats() counts received, refused (path, terminal, key), oversize, unparsable, failed and aborted, for pipeline health
-- `terminalHooks` (`electron/features/terminal-events/hook-channel.cjs`) — a local terminal's `hooks` (C-2): `{ url, port, key, channel, fallback, channelReason, settings: { http, fallback } }`, the one generator of the --settings every claude wrapper passes; downgradeHooks applies a wrapper's hook-channel report
+- `terminalHooks` (`electron/features/terminal-events/hook-channel.cjs`) - builds a local terminal's hook channel and settings via the hook facet. `downgradeHooks` applies launch reports.
 
 ## May import
+- `electron/features/cli-adapters/registry.cjs`
 - `electron/features/skills/seat-rules.mjs` (validate the lead seat)
 - `electron/shared/reason.cjs` (the term.* Reasons of a hook channel)
 - `electron/atomic-write.cjs` (atomic replacement of the lead file)
 - `electron/features/agents/agent-calls.cjs` (AgentCalls.forTerminal without a factory observes an existing run board during publication)
-- `electron/features/agents/agent-settings.cjs` (recognizes fast mode command echoes from the local Claude terminal)
 - `electron/features/agents/call-seat.cjs` (shared worker seat byte limit)
 
 ## Invariants

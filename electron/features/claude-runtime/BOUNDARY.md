@@ -30,6 +30,7 @@ The CLI worker rules deny explicit Git commit, push and reset --hard on each she
 - `electron/features/claude-runtime/**`
 
 ## Interface
+- `events` (`electron/features/claude-runtime/adapter.cjs`) - Claude hook settings and hook signals. The adapter also exports the transcript facet.
 - `createInstall` (`electron/features/claude-runtime/adapter.cjs`) — maps the locator's results to the install facet and supplies the settings snapshot projection.
 - `workerToolArgs` (`electron/features/claude-runtime/decide.cjs`) — both CLI access levels allow Bash and Windows PowerShell. Read-only roles in dontAsk expose only reading and shell tools.
 - `workerToolEnvironment` (`electron/features/claude-runtime/decide.cjs`) — opts Windows CLI roles into PowerShell when their environment has no explicit choice.
@@ -42,6 +43,14 @@ The CLI worker rules deny explicit Git commit, push and reset --hard on each she
 - `readStoredPath` (`electron/features/claude-runtime/path-env.cjs`) — the stored machine and user PATH as `[machine, user]`, read (never written) by the PowerShell under the environment's SystemRoot within five seconds; null when it cannot be read or the environment has no SystemRoot
 
 ## May import
+- `electron/features/agents/agent-settings.cjs`
+- `electron/prompt-queue.cjs`
+- `electron/agent-commands.cjs`
+- `electron/features/completion/status.cjs`
+- `electron/session-files.cjs`
+- `electron/features/team/team.cjs`
+- `electron/conversation.cjs`
+- `electron/oversized-record.cjs`
 - `electron/shared/reason.cjs` (C-1: every fact's reason is a Reason of the claude table)
 
 ## Invariants

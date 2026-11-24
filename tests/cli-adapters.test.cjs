@@ -125,3 +125,22 @@ test('support honors inclusive numeric verification bounds', () => {
   assert.deepEqual(support(fixture, 'liveModel', '2.1.12'), unverified);
   assert.deepEqual(support(claude, 'native', '2.1.332'), { ok: true, via: 'api' });
 });
+
+test('terminal hooks and local transcript records come from the registered CLI', () => {
+  const claude = adapterOf('claude'), codex = adapterOf('codex');
+  const hooks = claude.events.hooks;
+  assert.equal(codex.events?.hooks, undefined);
+  assert.equal(hooks.signal('Notification', { notification_type: 'idle_prompt' }).activity, null);
+  assert.equal(hooks.signal('StopFailure', {}).activity.state, 'failed');
+  assert.equal(hooks.signal('SubagentStart', { agent_id: 'child' }).subagent.agentId, 'child');
+
+  const usage = { output_tokens: 8 };
+  const reply = claude.transcript.record({ type: 'assistant', message: { model: 'opus', usage, stop_reason: 'end_turn' } });
+  assert.equal(reply.settings.model, 'opus');
+  assert.equal(reply.usage, usage);
+  assert.equal(reply.done, true);
+
+  const timestamp = '2026-01-01T00:00:00.000Z';
+  const evt = codex.transcript.record({ type: 'event_msg', timestamp, payload: { type: 'turn_aborted', turn_id: 'turn' } });
+  assert.deepEqual(evt, { state: 'interrupted', done: true, turnId: 'turn', at: Date.parse(timestamp) });
+});

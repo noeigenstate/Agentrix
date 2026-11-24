@@ -16,4 +16,4 @@ function createInstall(locator = processLocator) {
   };
 }
 
-module.exports = { createInstall };
+module.exports = { createInstall, transcript: require('./transcript.cjs') };

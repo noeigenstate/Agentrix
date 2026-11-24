@@ -1,16 +1,18 @@
 const path = require('node:path');
 const { createSessionMachine, reduce, cliFields, SCREEN_IDLE_MS } = require('./session-machine.cjs');
 const { AgentCalls } = require('../agents/agent-calls.cjs');
-const { claudeFastModeEcho } = require('../agents/agent-settings.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 
-// The hook events the pipe's claude-hook.ps1 kinds stood for (C-2), by the state claudeActivity takes.
-const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', StopFailure: 'failed', Notification: 'attention', PermissionRequest: 'attention',
-  Elicitation: 'attention', PreToolUse: 'progress', PostToolUse: 'progress', PostToolUseFailure: 'progress', PermissionDenied: 'progress',
-  ElicitationResult: 'progress' };
-// The notifications that mean Claude waits for an answer; an idle one must not turn a finished round back into a waiting one.
-const ATTENTION_NOTICES = ['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog'];
 // The session machine's signal for each state claudeActivity takes.
 const SIGNALS = { working: 'start', complete: 'stop', attention: 'attention', progress: 'progress', session: 'session' };
+const claudeTranscript = adapterOf('claude').transcript;
+const hooksOf = s => adapterOf(s.agent)?.events?.hooks;
+const activityOf = s => adapterOf(s.agent)?.transcript?.activity;
+function boundOf(s, restore) {
+  const activity = activityOf(s);
+  return s.cliProviderId || (activity ? activity.bound(s, restore) : s.reportedThreadId || (restore ? s.rootThreadId : undefined));
+}
+const matchesThread = (s, bound, id) => !bound || !id || bound === id || activityOf(s)?.matches?.(bound, id);
 // Prompts the CLI holds back while it works, as the prompt queue and the transcript's queue records show them.
 const queuedOf = s => s.promptQueue.list?.().some(item => item.state === 'queued') || !!s.conversation?.queue?.length;
 // Background work the round waits for, as CompletionWork reports it.
@@ -80,7 +82,7 @@ function createClaudeActivity(deps) {
       const onRecord = record => {
         if (!readCurrent()) return;
         if (!remote && !s.nativeStructured) {
-          const echo = claudeFastModeEcho(record);
+          const echo = claudeTranscript.fastModeEcho(record);
           if (echo) deps.noteClaudeFastMode?.(echo);
         }
         callsOf(s, project).backgroundRecord(record);
@@ -193,8 +195,8 @@ function createClaudeActivity(deps) {
     if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at) || !Number.isFinite(observedAt)) return false;
     const meta = metaOf(s), before = s.cliState;
     if (expectedRevision != null && expectedRevision !== before?.revision) return false;
-    const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId || s.claudeResumeId : s.reportedThreadId || s.rootThreadId);
-    if (!bind && threadId && bound && threadId !== bound && !(s.agent === 'codex' && bound.length >= 8 && threadId.toLowerCase().startsWith(bound.toLowerCase()))) return false;
+    const bound = boundOf(s, true);
+    if (!bind && !matchesThread(s, bound, threadId)) return false;
     if (at < Math.max(s.activitySince || 0, s.activityInputAt || 0, meta.at)) return false;
     if (eventId && meta.events.has(eventId)) return false;
     if (!bind && turnId && (meta.closed.has(turnId) || state !== 'working' && meta.turnId && turnId !== meta.turnId)) return false;
@@ -217,7 +219,7 @@ function createClaudeActivity(deps) {
     // A delayed hook must not outrank a screen drawn after it was sent. Keep publication time monotone in this PTY.
     s.cliState = { sessionId: s.sessionId, revision: s.cliStateRevision,
       updatedAt: Math.max(before?.sessionId === s.sessionId ? before.updatedAt : 0, Math.min(observedAt, Date.now())),
-      state, ...(message ? { message } : {}), ...(s.agent === 'claude' ? cliFields(meta.machine, state, backgroundOf(s)) : {}) };
+      state, ...(message ? { message } : {}), ...(hooksOf(s) ? cliFields(meta.machine, state, backgroundOf(s)) : {}) };
     s.observeNativeSwitch?.();
     broadcast();
     return true;
@@ -229,9 +231,10 @@ function createClaudeActivity(deps) {
       remember, roundsOf, scrubProjectSkills, broadcast } = deps;
     if (sessions.get(s.terminalId) !== s || !s.codexActive) return;
     if (snapshot.updatedAt < (s.activitySince || 0)) return;
-    const bound = s.cliProviderId || (s.agent === 'claude' ? s.claudeSessionId : s.reportedThreadId);
-    if (bound && snapshot.threadId && bound !== snapshot.threadId && !(s.agent === 'codex' && bound.length >= 8 && snapshot.threadId.toLowerCase().startsWith(bound.toLowerCase()))) return;
-    if (s.agent === 'codex' && snapshot.turnId && s.cliStateMeta?.closed.has(snapshot.turnId)
+    const bound = boundOf(s);
+    if (!matchesThread(s, bound, snapshot.threadId)) return;
+    const trackTurns = activityOf(s)?.trackTurns;
+    if (trackTurns && snapshot.turnId && s.cliStateMeta?.closed.has(snapshot.turnId)
       && (snapshot.state === 'working' || snapshot.turnId !== s.cliStateMeta.turnId)) return;
     // Readers deduplicate snapshots. Retain even a completion hidden by provisional
     // input so that expiring that submission can replay it without another record.
@@ -239,9 +242,9 @@ function createClaudeActivity(deps) {
     // Neither a polled result from before new input nor a result from before newer attention can end this interaction.
     if (snapshot.updatedAt < Math.max(s.activityInputAt || 0, s.cliStateMeta?.at || 0)) return;
     // Nor can a terminal's Claude transcript record the session machine finds late: one dated before its turn ended.
-    if (s.agent === 'claude' && !s.nativeStructured && !feed(s, { type: 'record', at: snapshot.updatedAt, state: snapshot.state })) return;
+    if (hooksOf(s) && !s.nativeStructured && !feed(s, { type: 'record', at: snapshot.updatedAt, state: snapshot.state })) return;
     if (snapshot.ended || ['working', 'complete', 'interrupted'].includes(snapshot.state)) publishCliState(s, snapshot.state === 'working' ? 'working' : 'idle',
-      { at: snapshot.updatedAt, threadId: snapshot.threadId, turnId: s.agent === 'codex' ? snapshot.turnId : undefined,
+      { at: snapshot.updatedAt, threadId: snapshot.threadId, turnId: trackTurns ? snapshot.turnId : undefined,
         eventId: `record:${snapshot.threadId}:${snapshot.turnId}:${snapshot.state}:${snapshot.updatedAt}` });
     if (s.completionWork?.reading) { s.codexActivity = 'working'; scheduleState(); return; }
     if (snapshot.ended || ['complete', 'interrupted'].includes(snapshot.state)) {
@@ -251,14 +254,14 @@ function createClaudeActivity(deps) {
     s.activitySnapshot = snapshot;
     const queued = queuedOf(s), held = dispatchOf(s);
     s.dispatchHold = held;
-    if (s.cliState && s.agent === 'claude' && !s.nativeStructured) s.cliState = { ...s.cliState, background: backgroundOf(s) };
+    if (s.cliState && hooksOf(s) && !s.nativeStructured) s.cliState = { ...s.cliState, background: backgroundOf(s) };
     const state = s.completionWork?.state(snapshot, { queued, held })
       || fallbackState(s, snapshot, queued, held);
     // A Claude terminal's Stop completes its round only on the session machine's completion effect: the newest prompt's
     // Stop, once the final gate agrees it is complete. Asked with the queue as it stands after this round's finish,
     // and asked again whenever this snapshot is replayed (a typed submission expiring, background work ending), as
     // a held round always was; the snapshot's turn is the completion key, so without the effect nothing is raised.
-    if (snapshot.hookStop && s.agent === 'claude' && !s.nativeStructured) {
+    if (snapshot.hookStop && hooksOf(s) && !s.nativeStructured) {
       const effects = snapshot.state === 'complete'
         ? feed(s, { type: 'settled', at: snapshot.updatedAt, queued, background: backgroundOf(s), blocked: state !== 'complete' }) || [] : [];
       if (!effects.some(effect => effect.type === 'completion')) snapshot = { ...snapshot, turnId: null };
@@ -270,15 +273,15 @@ function createClaudeActivity(deps) {
     // Keep the last prompt that named work; bare continuations and background callbacks cannot replace it.
     const task = summarizeTask(snapshot.prompt, { spoken: true });
     if (task) { s.lastTask = task; s.lastTaskSummary = summarizeTask(snapshot.prompt); s.lastTaskTitle = snapshot.prompt; }
-    if (s.agent === 'codex') store.setRestore(s.terminalId, { threadId: snapshot.threadId });
+    if (trackTurns) store.setRestore(s.terminalId, { threadId: snapshot.threadId });
     s.codexActivity = snapshot.state;
-    if (s.agent === 'claude') {
+    if (hooksOf(s)) {
       s.claudeActivitySnapshot = snapshot;
       if (snapshot.state === 'complete' && project.kind !== 'ssh') void refreshClaudeAccounts();
       if (['complete', 'interrupted'].includes(snapshot.state)) {
         // The last poll may still add tool calls. Settle both views afterward, unless another round has started.
         const settle = () => {
-          if (sessions.get(s.terminalId) === s && s.codexActive && s.agent === 'claude' && s.claudeActivitySnapshot === snapshot && s.codexActivity !== 'working' && !(s.activityInputAt > snapshot.updatedAt)) {
+          if (sessions.get(s.terminalId) === s && s.codexActive && hooksOf(s) && s.claudeActivitySnapshot === snapshot && s.codexActivity !== 'working' && !(s.activityInputAt > snapshot.updatedAt)) {
             s.actions.settle(); s.conversation.settle();
           }
         };
@@ -295,7 +298,7 @@ function createClaudeActivity(deps) {
     // The round that ended joins the folder's permanent memory (project-memory.cjs), here or over SSH alike. Claude's
     // transcript is read a moment later, when its last reply has arrived.
     if (['complete', 'interrupted'].includes(snapshot.state) && snapshot.threadId) {
-      const agent = s.agent === 'claude' ? 'claude' : 'codex', folder = memoryFolder(project, s);
+      const agent = activityOf(s) ? s.agent : 'codex', folder = memoryFolder(project, s);
       setTimeout(() => { void remember(memoryDir(), folder, roundsOf(s.conversation.list, agent, snapshot.threadId)).catch(() => {}); }, 1500).unref?.();
       if (project.kind !== 'ssh') void scrubProjectSkills(project).catch(() => {});
     }
@@ -313,7 +316,8 @@ function createClaudeActivity(deps) {
     const failed = event.state === 'failed';
     if (failed) event = { ...event, state: 'complete' };
     const { store, publishCliState, followClaude, applyActivity, refreshClaudeAccounts, promptText, isLocalAgentCommand } = deps;
-    if (!s.codexActive || s.agent !== 'claude' || !SIGNALS[event.state]) return;
+    const hooks = hooksOf(s);
+    if (!s.codexActive || !hooks || !Object.hasOwn(SIGNALS, event.state)) return;
     if (typeof event.sessionId !== 'string' || !/^[\w-]{1,100}$/.test(event.sessionId) || typeof event.eventId !== 'string' || event.eventId.length > 200) return;
     const at = Number.isFinite(event.sentAt) ? event.sentAt + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0) : Date.now();
     const bound = s.cliProviderId || s.claudeSessionId || s.claudeResumeId;
@@ -322,11 +326,11 @@ function createClaudeActivity(deps) {
     // Claude Code runs its prompt hooks for automatic turns and some local slash commands (/context, /doctor, /compact)
     // too. Neither is an owner round: an automatic one starts nothing, and a local one opens a screen or prints a line.
     const typed = event.state === 'working' && typeof event.prompt === 'string';
-    const human = !typed || promptText(event.prompt, event) !== null, local = typed && isLocalAgentCommand('claude', event.prompt);
+    const human = !typed || promptText(event.prompt, event) !== null, local = typed && isLocalAgentCommand(s.agent, event.prompt);
     // Every hook names the prompt whose turn it belongs to, and the session machine orders them (session-machine.cjs).
     const before = metaOf(s).machine;
     if (human && !feed(s, { type: SIGNALS[event.state], at, prompt: typeof event.promptId === 'string' ? event.promptId : null, failed, local,
-      notice: event.hookEvent === 'Notification', dialog: event.dialog, agent: event.agentId, async: s.hooks?.channel === 'command-async',
+      notice: hooks.isNotice(event.hookEvent), dialog: event.dialog, agent: event.agentId, async: s.hooks?.channel === 'command-async',
       claudeSession: event.sessionId, compact: event.sessionSource === 'compact' })) return;
     const after = metaOf(s).machine;
     const evidence = { at, observedAt: at, threadId: event.sessionId, turnId: event.turnId, requestId: event.requestId, eventId: event.eventId };
@@ -374,7 +378,8 @@ function createClaudeActivity(deps) {
     // and let a newer turn/input win if it started while the read was in flight.
     const promptEvent = s.claudePromptEventId;
     void Promise.resolve(s.activityMonitor.poll()).then(() => {
-      if (s.agent !== 'claude' || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
+      if (hooksOf(s) !== hooks || s.cliState?.revision !== revision || s.claudeSessionId && s.claudeSessionId !== event.sessionId
+        || s.claudePromptEventId !== promptEvent || s.activityRawSnapshot?.updatedAt > snapshot.updatedAt) return;
       applyActivity(project, s, { ...snapshot, state: s.completionWork?.turn?.state === 'interrupted' ? 'interrupted' : snapshot.state, transcriptRead: true });
     }).catch(() => {});
   }
@@ -383,7 +388,7 @@ function createClaudeActivity(deps) {
   // only on the light: Esc interrupting a turn runs no hook, so a screen that has looked idle long enough turns the light
   // idle (watchIdle). The round, its completion and every owner action still wait for a Stop, the transcript or Esc.
   function claudeScreen(s, facts) {
-    if (deps.sessions.get(s.terminalId) !== s || !s.codexActive || s.agent !== 'claude') return;
+    if (deps.sessions.get(s.terminalId) !== s || !s.codexActive || !hooksOf(s)) return;
     const before = metaOf(s).machine;
     if (feed(s, { ...facts, type: 'screen', at: Date.now(), terminalSession: facts.sessionId }) && before.screenIdle && !metaOf(s).machine.screenIdle) {
       relight(s, `screen:${facts.revision}`);
@@ -396,35 +401,24 @@ function createClaudeActivity(deps) {
   function claudeHook(hookEvent) {
     const { sessions, store, claudeActivity, callsOf, followClaude } = deps;
     const s = sessions.get(hookEvent.terminalId), project = s && store.projects.find(item => item.id === s.projectId);
-    const state = HOOK_STATES[hookEvent.event], { payload } = hookEvent;
-    if (!project) return;
+    const hooks = s && hooksOf(s);
+    if (!project || !hooks) return;
     const sessionId = hookEvent.sessionId || s.claudeSessionId || '';
-    const message = payload.tool_name === 'SendMessage' && !hookEvent.agentId;
-    const receipt = !hookEvent.agentId && hookEvent.toolUseId && ['PostToolUse', 'PostToolUseFailure', 'PermissionDenied'].includes(hookEvent.event);
-    const kind = hookEvent.event === 'SubagentStart' ? 'start' : hookEvent.event === 'SubagentStop' ? 'stop'
-      : !(hookEvent.event === 'PreToolUse' && message) ? null : 'continue';
-    const current = s.codexActive && s.agent === 'claude' && /^[\w-]{1,100}$/.test(sessionId)
-      && sessionId === (s.cliProviderId || s.claudeSessionId || s.claudeResumeId || sessionId) && hookEvent.at >= (s.activitySince || 0);
-    if (current && receipt) callsOf(s, project).finishContinuation(hookEvent.toolUseId, hookEvent.at, hookEvent.event !== 'PostToolUse');
-    const agentId = kind === 'continue' ? payload.tool_input?.to || payload.tool_input?.recipient : hookEvent.agentId;
-    if (current && kind && /^[\w-]{1,100}$/.test(typeof agentId === 'string' ? agentId : '')) {
+    const { receipt, subagent, end, activity } = hooks.signal(hookEvent.event, hookEvent.payload, hookEvent);
+    const current = s.codexActive && /^[\w-]{1,100}$/.test(sessionId)
+      && sessionId === (boundOf(s, true) || sessionId) && hookEvent.at >= (s.activitySince || 0);
+    if (current && receipt) callsOf(s, project).finishContinuation(receipt.toolUseId, hookEvent.at, receipt.failed);
+    const agentId = subagent?.agentId;
+    if (current && subagent && /^[\w-]{1,100}$/.test(typeof agentId === 'string' ? agentId : '')) {
       // Bind the parent folder before delivering the signal: changing it resets the old transcript's tracker.
       if (hookEvent.transcriptPath) followClaude(project, s, { sessionId, transcriptPath: hookEvent.transcriptPath });
-      const signal = { kind, terminalId: s.terminalId, agentId, agentType: payload.agent_type || '',
-        transcriptPath: typeof payload.agent_transcript_path === 'string' ? payload.agent_transcript_path : null,
-        toolUseId: hookEvent.toolUseId || null, at: hookEvent.at };
+      const signal = { ...subagent, terminalId: s.terminalId, at: hookEvent.at };
       // Claude Code runs these hooks for its internal helper agents too: the run board holds a call no tool call names.
       for (const effect of feed(s, { type: 'subagent', at: hookEvent.at, claudeSession: sessionId, signal }) || []) callsOf(s, project).subagent(effect.signal, true);
     }
-    if (current && hookEvent.event === 'SessionEnd') { feed(s, { type: 'end', at: hookEvent.at, claudeSession: sessionId }); return; }
-    if (!state || hookEvent.event === 'Notification' && !ATTENTION_NOTICES.includes(payload.notification_type)) return;
-    const question = hookEvent.event === 'Elicitation' || /^elicitation/.test(payload.notification_type || '');
-    claudeActivity(project, s, { state, sessionId, eventId: `${sessionId}:${hookEvent.at}-${hookEvent.seq}`, sentAt: hookEvent.at,
-      hookEvent: hookEvent.event, transcriptPath: hookEvent.transcriptPath, promptId: hookEvent.promptId, agentId: hookEvent.agentId,
-      message: state === 'attention' ? String(payload.message ?? payload.tool_name ?? '').slice(0, 300) : null,
-      ...(state === 'attention' ? { dialog: question ? 'question' : 'permission' } : {}),
-      prompt: state === 'working' && payload.prompt ? payload.prompt : null,
-      ...(hookEvent.toolUseId ? { requestId: hookEvent.toolUseId } : {}) });
+    if (current && end) { feed(s, { type: 'end', at: hookEvent.at, claudeSession: sessionId }); return; }
+    if (activity) claudeActivity(project, s, { ...activity, sessionId, eventId: `${sessionId}:${hookEvent.at}-${hookEvent.seq}`, sentAt: hookEvent.at,
+      transcriptPath: hookEvent.transcriptPath, promptId: hookEvent.promptId, agentId: hookEvent.agentId });
   }
 
   return { followClaude, followClaudeSession, publishCliState, applyActivity, replayCompletion, claudeActivity, claudeHook };

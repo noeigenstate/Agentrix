@@ -11,7 +11,8 @@ const wrappers = ['integration/bootstrap.ps1', 'integration/bash-integration.bas
 
 test('additionalContext, systemMessage, displayContent, continue and decision:block appear only in hook-response.cjs', () => {
   const answers = /additionalContext|systemMessage|displayContent|["']?\bcontinue["']?\s*:|decision["']?\s*:\s*["']?block/;
-  const hookPath = [...fs.readdirSync(path.join(root, eventsDir)).filter(name => name.endsWith('.cjs') && name !== 'hook-response.cjs').map(name => `${eventsDir}/${name}`), ...wrappers];
+  const hookSources = fs.readdirSync(path.join(root, eventsDir)).filter(name => name.endsWith('.cjs') && name !== 'hook-response.cjs');
+  const hookPath = [...hookSources.map(name => `${eventsDir}/${name}`), 'electron/features/claude-runtime/hooks.cjs', ...wrappers];
   for (const file of hookPath) assert.doesNotMatch(read(file), answers, file);
   // The pipe's command hook answers only SessionStart, the one place skills enter the context.
   const command = read('integration/claude-hook.ps1');

@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const FILES = ['completion-work.cjs', 'completion-history.cjs', 'prompt-queue.cjs', 'codex-activity.cjs'];
+const FILES = ['completion-work.cjs', 'completion-history.cjs', 'prompt-queue.cjs', 'codex-activity.cjs',
+  'features/completion/status.cjs', 'features/claude-runtime/transcript-completion.cjs', 'features/codex-runtime/transcript-completion.cjs'];
 const source = file => fs.readFileSync(path.join(__dirname, '../electron', file), 'utf8');
 const READ_ONLY = new Set(['open', 'stat', 'lstat', 'readdir', 'readFile']);
 

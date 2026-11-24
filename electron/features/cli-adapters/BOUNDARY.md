@@ -12,13 +12,15 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 - `electron/features/cli-adapters/**`
 
 ## Interface
-- `adapters` (`electron/features/cli-adapters/registry.cjs`) — main's registry. `adapterOf(id)` and `adapterOfModel(model)` expose the manifest and install facet. `settingsInstall` binds main's existing locator snapshots and refreshes.
+- `adapters` (`electron/features/cli-adapters/registry.cjs`) - main registry for install and runtime facets. `settingsInstall` binds locator snapshots and refreshes.
 - `adapters` (`electron/features/cli-adapters/registry.mjs`) — the shared declarations for both processes. `agentOfModel(model)` uses the first matching manifest in either entry point.
 - `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version must be within the capability's verification interval when set.
+- `events` (`electron/features/cli-adapters/registry.cjs`) - optional settings builder and hook signal decoder.
+- `transcript` (`electron/features/cli-adapters/registry.cjs`) - resolves, validates and interprets local session records.
 
 ## May import
-- `electron/features/claude-runtime/adapter.cjs` (Claude Code install facet)
-- `electron/features/codex-runtime/adapter.cjs` (Codex install facet)
+- `electron/features/claude-runtime/adapter.cjs` (Claude Code install, hooks and transcript)
+- `electron/features/codex-runtime/adapter.cjs` (Codex install and transcript)
 - `src/shared/agent-events.ts` (the provider ID type for the renderer declaration)
 
 ## Invariants

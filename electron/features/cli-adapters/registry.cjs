@@ -16,8 +16,8 @@ function runtimeInstall(createInstall, callbacks) {
 }
 
 const runtimes = new Map([
-  ['claude', runtimeInstall(claude.createInstall, ({ claude: peek, refreshClaude: refresh }) => ({ peek, refresh }))],
-  ['codex', runtimeInstall(codex.createInstall, ({ codex: peek, refreshCodex: refresh }) => ({ peek, refresh }))],
+  ['claude', { ...runtimeInstall(claude.createInstall, ({ claude: peek, refreshClaude: refresh }) => ({ peek, refresh })), transcript: claude.transcript, events: claude.events }],
+  ['codex', { ...runtimeInstall(codex.createInstall, ({ codex: peek, refreshCodex: refresh }) => ({ peek, refresh })), transcript: codex.transcript }],
 ]);
 
 function createAdapter(manifest, runtime, pathOptions) {

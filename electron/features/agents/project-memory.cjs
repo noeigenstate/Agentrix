@@ -5,13 +5,10 @@
 // conversation when a round ends (SSH projects too), and is what the handoff to the next CLI is made from.
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const os = require('node:os');
 const crypto = require('node:crypto');
-const { records, rolloutFiles, sessionMeta } = require('../../session-files.cjs');
-const { interactiveSession } = require('../../session-restore.cjs');
-const { claudeConfigDir, findClaudeSession, listClaudeSessions } = require('../../claude-sessions.cjs');
-const { ConversationLog, claudeConversation, codexConversation } = require('../../conversation.cjs');
-const { adapterOf } = require('../cli-adapters/registry.cjs');
+const { records } = require('../../session-files.cjs');
+const { ConversationLog } = require('../../conversation.cjs');
+const { adapters, adapterOf } = require('../cli-adapters/registry.cjs');
 
 const TEXT_LIMIT = 4000, CHECKS = new Set(['运行测试', '检查类型', '构建项目', '检查代码格式']);
 
@@ -78,22 +75,18 @@ function remember(dir, folder, rounds) {
 
 async function conversation(agent, filename, cwd) {
   const log = new ConversationLog(() => {}, 4000, { pictures: false });
-  const take = agent === 'claude' ? claudeConversation : codexConversation;
+  const { conversation: take } = adapterOf(agent).transcript;
   for await (const record of records(filename, { historyWindow: true })) { try { take(log, record, cwd); } catch { } }
   return log.list;
 }
 
 // Every conversation both CLIs had in this folder, read again only when its file changed since the last look.
 const looked = new Map();
-async function gather(dir, cwd, { codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), claudeHome = claudeConfigDir() } = {}) {
+async function gather(dir, cwd, homes = {}) {
   const sources = [];
-  for (const session of await listClaudeSessions(cwd, null, claudeHome).catch(() => [])) {
-    const filename = await findClaudeSession(cwd, session.id, claudeHome).catch(() => null);
-    if (filename) sources.push({ agent: 'claude', id: session.id, filename });
-  }
-  const files = (await rolloutFiles(path.join(codexHome, 'sessions')).catch(() => [])).sort((a, b) => b.modified - a.modified).slice(0, 3000);
-  for (const file of files) {
-    try { const meta = await sessionMeta(file.filename); if (interactiveSession(meta, cwd)) sources.push({ agent: 'codex', id: meta.id, filename: file.filename }); } catch { }
+  for (const { manifest: { id: agent }, transcript } of adapters()) {
+    if (!transcript?.list) continue;
+    for (const source of await transcript.list(cwd, homes[`${agent}Home`])) sources.push({ ...source, agent });
   }
   const rounds = [];
   for (const source of sources) {

@@ -1,11 +1,9 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
-const { rolloutFiles } = require('./session-files.cjs');
-const { interactiveSession } = require('./session-restore.cjs');
-const { findClaudeSession } = require('./claude-sessions.cjs');
-const { ConversationLog, codexConversation, claudeConversation } = require('./conversation.cjs');
-const { readTranscriptChunk, ClaudeImageLine } = require('./oversized-record.cjs');
+const { adapterOf } = require('./features/cli-adapters/registry.cjs');
+const { ConversationLog } = require('./conversation.cjs');
+const { readTranscriptChunk } = require('./oversized-record.cjs');
 const { conversationBlocks } = require('./conversation-blocks.mjs');
 
 const INITIAL_BLOCKS = 80, PAGE_BLOCKS = 40, CHUNK = 256 * 1024, BYTE_LIMIT = 8 * 1024 * 1024;
@@ -36,8 +34,8 @@ async function convert(bytes, start, source, current, settled) {
     position = start + line;
     for (let at = line; at <= end; at += 65536) {
       readTranscriptChunk(reader, bytes.subarray(at, Math.min(at + 65536, end + 1)), record => {
-        (source.agent === 'codex' ? codexConversation : claudeConversation)(log, record, source.cwd);
-      }, source.agent === 'claude' ? ClaudeImageLine : undefined);
+        source.transcript.conversation(log, record, source.cwd);
+      }, source.transcript.oversizedLine);
       if (performance.now() - yielded >= 8) {
         await yieldTurn(); yielded = performance.now();
         if (!current()) throw changedHistory();
@@ -50,30 +48,19 @@ async function convert(bytes, start, source, current, settled) {
 }
 
 async function sourceFile(source) {
-  const root = await fs.realpath(path.join(source.home, source.agent === 'codex' ? 'sessions' : 'projects'));
-  let filename = source.filename;
-  if (!filename && source.agent === 'claude') filename = await findClaudeSession(source.cwd, source.threadId, source.home);
-  if (!filename && source.agent === 'codex') filename = (await rolloutFiles(root)).find(item => item.name.endsWith(`${source.threadId}.jsonl`))?.filename;
+  const transcript = adapterOf(source.agent)?.transcript;
+  if (!transcript) throw changedHistory();
+  const root = await fs.realpath(transcript.root(source.home));
+  let filename = source.filename || await transcript.find(source.cwd, source.threadId, source.home, { canonicalRoot: root });
   if (!filename) throw changedHistory();
   filename = await fs.realpath(filename);
   if (!inside(normalized(root), normalized(filename))) throw changedHistory();
   const file = await fs.open(filename, 'r');
   try {
     const header = Buffer.alloc(1024 * 1024), { bytesRead } = await file.read(header, 0, header.length, 0);
-    const end = header.subarray(0, bytesRead).indexOf(10);
-    if (source.agent === 'codex') {
-      if (end < 0) throw changedHistory();
-      const record = JSON.parse(header.subarray(0, end).toString('utf8'));
-      const meta = record.payload;
-      if (record.type !== 'session_meta' || meta?.id !== source.threadId || typeof meta.cwd !== 'string'
-        || !interactiveSession({ ...meta, cwd: await fs.realpath(meta.cwd) }, source.cwd)) throw changedHistory();
-    } else {
-      if (path.basename(filename) !== `${source.threadId}.jsonl`) throw changedHistory();
-      const reported = /"sessionId"\s*:\s*"([\w-]+)"/.exec(header.subarray(0, bytesRead).toString('utf8'))?.[1];
-      if (reported && reported !== source.threadId) throw changedHistory();
-    }
+    if (!await transcript.validate({ ...source, filename }, header.subarray(0, bytesRead))) throw changedHistory();
     const stat = await file.stat({ bigint: true });
-    return { ...source, filename, identity: identity(stat), size: Number(stat.size) };
+    return { ...source, transcript, filename, identity: identity(stat), size: Number(stat.size) };
   } finally { await file.close(); }
 }
 

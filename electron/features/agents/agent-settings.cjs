@@ -50,32 +50,38 @@ function claudeCommandOutput(record) {
     fast: fast ? fastEnabled.test(fast) : null, ultracode: ultracode ? ultracode.toLowerCase() === 'on' : null };
 }
 
-// The settings after this record; the same object when it changes nothing.
-function agentSettings(current, agent, record) {
-  if (!record || typeof record !== 'object') return current;
-  if (agent === 'claude') {
-    // A subagent's replies carry its own model, not the session's.
-    if (record.isSidechain) return current;
-    if (record.type === 'assistant') {
-      const model = text(record.message?.model), speed = record.message?.usage?.speed;
-      return changed(current, { model: model && model !== '<synthetic>' ? model : null, effort: text(record.perTurnEffort) ?? text(record.effort),
-        fast: speed === 'fast' ? true : speed === 'standard' ? false : null });
-    }
-    if (record.type === 'user') { const said = claudeCommandOutput(record); return said ? changed(current, said) : current; }
-    if (record.type === 'attachment') {
-      const kind = record.attachment?.type;
-      if (kind === 'ultra_effort_enter' || kind === 'ultra_effort_exit') return changed(current, { ultracode: kind === 'ultra_effort_enter' });
-    }
-    return current;
+function claudeSettings(record) {
+  // A subagent's replies carry its own model, not the session's.
+  if (record.isSidechain) return null;
+  if (record.type === 'assistant') {
+    const model = text(record.message?.model), speed = record.message?.usage?.speed;
+    return { model: model && model !== '<synthetic>' ? model : null, effort: text(record.perTurnEffort) ?? text(record.effort),
+      fast: speed === 'fast' ? true : speed === 'standard' ? false : null };
   }
-  const payload = record.payload || {};
-  if (record.type === 'turn_context') return changed(current, { model: text(payload.model), effort: text(payload.effort) ?? text(payload.collaboration_mode?.settings?.reasoning_effort) });
-  if (record.type === 'event_msg' && payload.type === 'thread_settings_applied') {
-    const settings = payload.thread_settings || {}, tier = settings.service_tier;
-    return changed(current, { model: text(settings.model), effort: text(settings.reasoning_effort),
-      fast: tier === undefined ? null : tier === 'priority' || tier === 'fast' });
+  if (record.type === 'user') return claudeCommandOutput(record);
+  if (record.type === 'attachment') {
+    const kind = record.attachment?.type;
+    if (kind === 'ultra_effort_enter' || kind === 'ultra_effort_exit') return { ultracode: kind === 'ultra_effort_enter' };
   }
-  return current;
+  return null;
 }
 
-module.exports = { agentSettings, claudeFastModeEcho };
+function codexSettings(record) {
+  const payload = record.payload || {};
+  if (record.type === 'turn_context') return { model: text(payload.model), effort: text(payload.effort) ?? text(payload.collaboration_mode?.settings?.reasoning_effort) };
+  if (record.type === 'event_msg' && payload.type === 'thread_settings_applied') {
+    const settings = payload.thread_settings || {}, tier = settings.service_tier;
+    return { model: text(settings.model), effort: text(settings.reasoning_effort),
+      fast: tier === undefined ? null : tier === 'priority' || tier === 'fast' };
+  }
+  return null;
+}
+
+// The standalone SSH helper also reads settings and has no main-process registry.
+function agentSettings(current, agent, record) {
+  if (!record || typeof record !== 'object') return current;
+  const patch = agent === 'claude' ? claudeSettings(record) : codexSettings(record);
+  return patch ? changed(current, patch) : current;
+}
+
+module.exports = { agentSettings, claudeFastModeEcho, claudeSettings, codexSettings };
