@@ -785,8 +785,8 @@ class SkillsStore {
   }
 
   modeNote(project, sessionId, agent) {
-    const delivery = this.deliveryInfo(project, false, sessionId, agent);
-    return modeNote(delivery.conductor, delivery.skills.find(skill => skill.id === ROUTING_ID && skill.enabled)?.path);
+    const remote = project.kind === 'ssh', delivery = this.deliveryInfo(project, remote, sessionId, agent);
+    return modeNote(delivery.conductor, remote ? null : delivery.skills.find(skill => skill.id === ROUTING_ID && skill.enabled)?.path, remote);
   }
 
   delivery(project, remote = false, sessionId = null, { agent = null, started = false } = {}) {

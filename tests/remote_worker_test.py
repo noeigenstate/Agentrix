@@ -2,6 +2,8 @@ import ast
 import base64
 import contextlib
 import errno
+import hashlib
+import hmac
 import importlib.util
 import io
 import json
@@ -180,52 +182,142 @@ class RemoteFilesTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], dict(payload, sequence=1))
 
-    def test_dispatch_copy_and_bootstrap_exist_only_with_remote_node(self):
-        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+    def dispatch_fixture(self):
+        self.worker.temp = self.temp.name
         self.worker.dispatch_source = "// synthetic dispatch helper\n"
+        self.worker.dispatch_companions = {name: "// synthetic companion\n" for name in remote.DISPATCH_COMPANIONS}
         self.worker.dispatch_modules = {"features/agents/token-rate.cjs": "// synthetic shared meter\n"}
+        self.worker.launch_seats = "null"
         self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
-        with mock.patch.object(remote.shutil, "which", return_value=None):
-            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
-        self.assertIn("unavailable over SSH", note)
-        self.assertIn("workers run unseen", note)
-        self.assertFalse((Path(self.worker.temp) / "dispatch.cjs").exists())
-        self.worker.dispatch_note = None
-        with mock.patch.object(remote.shutil, "which", return_value="/bin/node"):
-            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
-        self.assertIn("Dispatch helper: node ", note)
-        self.assertEqual((Path(self.worker.temp) / "dispatch.cjs").read_text(encoding="utf-8"), self.worker.dispatch_source)
-        meter = Path(self.worker.temp) / "electron/features/agents/token-rate.cjs"
+
+    def test_dispatch_node_comes_from_the_login_path_and_checks_node_and_git(self):
+        self.dispatch_fixture()
+        node = Path(self.temp.name) / "node"
+        node.touch()
+        node.chmod(0o700)
+        lookup = "AGENTRIX_CODEX=\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n" % (node, node.parent)
+        results = [subprocess.CompletedProcess([], 0, lookup.encode(), b""), subprocess.CompletedProcess([], 0)]
+        with mock.patch.object(remote.subprocess, "run", side_effect=results) as run, mock.patch.object(remote.shutil, "which", return_value=None):
+            with mock.patch.object(self.worker, "git_version", return_value=(2, 43, 0)) as git:
+                self.assertEqual(self.worker.dispatch_requirements(), (str(node), str(node.parent)))
+                self.assertEqual(run.call_args_list[0][0][0][:2], ["/bin/bash", "-lic"])
+                self.assertEqual(run.call_args_list[1][0][0][0], str(node))
+                git.assert_called_once_with(str(node.parent))
+        tools = {"AGENTRIX_NODE": str(node), "AGENTRIX_PATH": str(node.parent)}
+        with mock.patch.object(remote, "login_tools", return_value={}), self.assertRaisesRegex(ValueError, "Node.js was not found"):
+            self.worker.dispatch_requirements()
+        with mock.patch.object(remote, "login_tools", return_value=tools):
+            with mock.patch.object(remote.subprocess, "run", return_value=subprocess.CompletedProcess([], 1)), self.assertRaisesRegex(ValueError, "Node.js 20.3"):
+                self.worker.dispatch_requirements()
+            with mock.patch.object(remote.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), mock.patch.object(self.worker, "git_version", return_value=(1, 8, 3)):
+                self.assertIn("Git 2.11", self.worker.install_dispatch())
+                self.assertIsNone(self.worker.role_server("claude"))
+
+    def test_dispatch_companions_and_bootstrap_have_private_permissions_and_runtime_survives_close(self):
+        self.dispatch_fixture()
+        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
+        self.addCleanup(self.worker.stop)
+        home = self.temp.name
+        with mock.patch.object(remote.os.path, "expanduser", return_value=home), mock.patch.object(self.worker, "dispatch_requirements", return_value=("/remote/bin/node", "/remote/bin")):
+            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}", native=True)
+        self.assertIn("Dispatch helper: /remote/bin/node ", note)
+        server = self.worker.role_server("claude")
+        helper = Path(server["args"][0])
+        self.assertEqual(server["args"][1:], ["mcp", "claude"])
+        self.assertEqual(server["env"], {"PATH": "/remote/bin", "AGENTRIX_BOOTSTRAP": os.path.join(self.worker.temp, "dispatch.json"),
+                                          "AGENTRIX_SEATS": "null", "AGENTRIX_DISPATCH_DEPTH": "0", "AGENTRIX_REMOTE_ROLE_TOOLS": "1"})
+        self.assertEqual(helper.read_text(encoding="utf-8"), self.worker.dispatch_source)
+        meter = helper.parent / "electron/features/agents/token-rate.cjs"
         self.assertEqual(meter.read_text(encoding="utf-8"), self.worker.dispatch_modules["features/agents/token-rate.cjs"])
-        bootstrap = json.loads((Path(self.worker.temp) / "dispatch.json").read_text(encoding="utf-8"))
+        binding = Path(server["env"]["AGENTRIX_BOOTSTRAP"])
+        bootstrap = json.loads(binding.read_text(encoding="utf-8"))
         self.assertEqual(bootstrap, {"pipeName": os.path.join(self.worker.temp, "events.sock"), "sessionKey": self.worker.token, "projectId": self.worker.project_id})
-        if os.name == "posix":
-            self.assertEqual(os.stat(Path(self.worker.temp) / "dispatch.json").st_mode & 0o777, 0o600)
-            self.assertEqual(os.stat(meter).st_mode & 0o777, 0o600)
+        for filename in [binding, helper, meter] + [helper.parent / name for name in remote.DISPATCH_COMPANIONS]:
+            self.assertTrue(filename.is_file())
+            if os.name == "posix": self.assertEqual(filename.stat().st_mode & 0o777, 0o600)
+        if os.name == "posix": self.assertEqual(helper.parent.stat().st_mode & 0o777, 0o700)
+        lease = Path(self.worker.dispatch_lease)
+        self.worker.stop()
+        self.assertFalse(lease.exists())
+        self.assertFalse(binding.exists())
+        self.assertTrue(helper.is_file())
 
     def test_invalid_or_oversized_dispatch_modules_leave_the_helper_unavailable_without_failing(self):
-        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        self.worker.dispatch_source = "// synthetic dispatch helper\n"
+        self.dispatch_fixture()
         many = {"m%d.cjs" % index: "" for index in range(remote.DISPATCH_MODULE_COUNT + 1)}
         for modules in ({"../escape.cjs": "bad"}, {"/absolute.cjs": "bad"}, {"module.cjs": None}, {1: "bad"},
                         {"module.cjs": "x" * (remote.DISPATCH_MODULE_BYTES + 1)}, many, []):
-            self.worker.dispatch_modules, self.worker.dispatch_note = modules, None
-            with mock.patch.object(remote.shutil, "which", return_value="/bin/node"):
-                note = self.worker.install_dispatch()
+            self.worker.dispatch_modules, self.worker.dispatch_note, self.worker.dispatch_error = modules, None, None
+            note = self.worker.install_dispatch()
             self.assertIn("unavailable over SSH (helper modules too large or invalid)", note)
             self.assertFalse((Path(self.worker.temp) / "dispatch.cjs").exists())
             self.assertFalse((Path(self.worker.temp) / "electron").exists())
 
+    def test_dispatch_rejects_unexpected_missing_and_oversized_companions(self):
+        self.dispatch_fixture()
+        for companions in ({"../role-tools.cjs": "bad"}, {}, dict(self.worker.dispatch_companions, **{"role-tools.cjs": "x" * remote.DISPATCH_HELPER_BYTES})):
+            self.worker.dispatch_companions, self.worker.dispatch_note, self.worker.dispatch_error = companions, None, None
+            self.assertIn("unavailable over SSH", self.worker.install_dispatch())
+            self.assertFalse(Path(self.worker.temp, "dispatch.json").exists())
+
+    def test_dispatch_cache_prunes_expired_versions_after_the_last_active_lease(self):
+        state = str(Path(self.temp.name, "dispatch-cache"))
+        first, lease = remote.install_dispatch_files(state, {"dispatch.cjs": "// first"})
+        old = time.time() - remote.SKILL_RETENTION_SECONDS - 10
+        os.utime(os.path.dirname(first), (old, old))
+        remote.install_dispatch_files(state, {"dispatch.cjs": "// second"})
+        self.assertTrue(Path(first).is_file())
+        os.utime(lease, (old, old))
+        remote.install_dispatch_files(state, {"dispatch.cjs": "// third"})
+        self.assertFalse(Path(first).exists())
+
     def test_dispatch_modules_the_size_of_release_1_4_0_install(self):
         # 1.4.0 carried 29 modules of about 280 KB; the old 256 KiB limit failed every SSH session it opened.
-        self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
-        self.worker.dispatch_source = "// synthetic dispatch helper\n"
+        self.dispatch_fixture()
         self.worker.dispatch_modules = {"features/m%d.cjs" % index: "x" * 9700 for index in range(29)}
         self.worker.handoff_path = lambda: os.path.join(self.worker.temp, "handoff.md")
-        with mock.patch.object(remote.shutil, "which", return_value="/bin/node"):
-            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}")
-        self.assertIn("Dispatch helper: node ", note)
-        self.assertEqual(len(list((Path(self.worker.temp) / "electron/features").iterdir())), 29)
+        with mock.patch.object(remote.os.path, "expanduser", return_value=self.temp.name), mock.patch.object(self.worker, "dispatch_requirements", return_value=("/bin/node", "/bin")):
+            note = self.worker.startup_note("Read. {AGENTRIX_DISPATCH_NOTE}", native=True)
+        self.assertIn("Dispatch helper: /bin/node ", note)
+        helper = Path(self.worker.role_server("codex")["args"][0])
+        self.assertEqual(len(list((helper.parent / "electron/features").iterdir())), 29)
+
+    @unittest.skipUnless(os.name == "posix", "remote outbox uses POSIX descriptor-relative opens")
+    def test_dispatch_replays_a_lost_end_and_keeps_it_until_an_authenticated_ack(self):
+        worker = self.worker
+        events = []
+        worker.emit, worker.temp, worker.dispatch_server = events.append, self.temp.name, True
+        identity = str(uuid.uuid4())
+        folder = Path(worker.dispatch_outbox(), identity)
+        folder.mkdir(parents=True)
+        key = worker.token.encode("utf-8")
+        key_id = hashlib.sha256(key).hexdigest()
+        def frame(seq, kind):
+            body = dict(id=identity, type=kind, seq=seq, version=1, projectId=worker.project_id, keyId=key_id)
+            signed = json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            return dict(body, mac=hmac.new(key, signed, hashlib.sha256).hexdigest())
+        for seq, kind in [(1, "dispatch-declared"), (2, "dispatch-end")]:
+            (folder / ("%d.json" % seq)).write_text(json.dumps(frame(seq, kind)), encoding="utf-8")
+        ack = frame(1, "dispatch-ack")
+        worker.ack_dispatch(dict(ack, mac="0" * 64))
+        self.assertFalse((folder / "ack.json").exists())
+        worker.ack_dispatch(ack)
+        self.assertFalse((folder / "1.json").exists())
+        self.assertTrue((folder / "2.json").exists())
+        worker.replay_dispatch()
+        worker.replay_dispatch()
+        self.assertEqual([event["event"]["type"] for event in events], ["dispatch-end", "dispatch-end"])
+        self.assertEqual([event["event"]["sequence"] for event in events], [1, 2])
+        self.assertTrue(all(event["event"]["sessionKey"] == worker.token for event in events))
+        end_ack = frame(2, "dispatch-ack")
+        worker.ack_dispatch(end_ack)
+        worker.ack_dispatch(ack)
+        worker.replay_dispatch()
+        self.assertEqual(len(events), 2)
+        self.assertFalse((folder / "2.json").exists())
+        saved = folder / "ack.json"
+        self.assertEqual(json.loads(saved.read_text(encoding="utf-8")), end_ack)
+        self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
 
     def test_each_agent_launch_gets_a_fresh_note_and_stale_launches_cannot_replace_it(self):
         self.worker.temp = tempfile.mkdtemp(prefix="agentrix-")
@@ -1479,7 +1571,7 @@ class RemoteClaudeFastSettingsTest(unittest.TestCase):
 
 class RemoteCodexShellNotifyTest(unittest.TestCase):
     @unittest.skipUnless(os.path.exists(os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash")), "needs Bash")
-    def test_ssh_claude_lead_hears_that_role_tools_are_unavailable(self):
+    def test_ssh_claude_calls_mcp_only_for_conductor_conversations_and_names_missing_requirements(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             cli = root / "claude"
@@ -1487,18 +1579,31 @@ class RemoteCodexShellNotifyTest(unittest.TestCase):
             cli.chmod(0o755)
             (root / "notify.py").touch()
             probe = root / "probe.sh"
-            probe.write_text(remote.BASH_SOURCE + 'PATH="$PWD:$PATH"\nclaude \'fix the test\'\nclaude --version\n', encoding="utf-8", newline="\n")
+            (root / "dispatch.json.mode").write_text("conductor", encoding="utf-8")
+            probe.write_text(remote.BASH_SOURCE + '''
+PATH="$PWD:$PATH"
+claude 'fix the test'
+claude -p 'print this'
+claude --version
+__pg_role_tools=''
+claude 'missing tools'
+printf native > dispatch.json.mode
+claude 'native conversation'
+''', encoding="utf-8", newline="\n")
+            role_config = '--mcp-config=' + json.dumps({"mcpServers": {"agentrix": {"command": "/bin/node"}}})
+            role_error = "Agentrix role tools are unavailable over SSH (remote Git 2.11 or later is required)."
             env = dict(os.environ, HOME=root.as_posix(), AGENTRIX_ROOT=root.as_posix(), AGENTRIX_PYTHON=sys.executable,
                        AGENTRIX_NOTIFY_FILE=(root / "notify.py").as_posix(), AGENTRIX_READING_NOTE_FILE=(root / "note").as_posix(),
-                       AGENTRIX_READING_NOTE="Existing note.")
+                       AGENTRIX_READING_NOTE="Existing note.", AGENTRIX_CLAUDE_LEAD_FILE=(root / "dispatch.json.lead").as_posix(),
+                       AGENTRIX_ROLE_TOOLS=role_config, AGENTRIX_ROLE_ERROR=role_error)
             result = subprocess.run([os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash"), "--noprofile", "--norc", probe.as_posix()],
                                     env=env, capture_output=True, encoding="utf-8", timeout=30, check=True)
             words = [line[4:] for line in result.stdout.splitlines() if line.startswith("CLI=")]
-            self.assertEqual(words[2], "--append-system-prompt")
-            self.assertIn("Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode.", words[3])
-            self.assertTrue(words[3].endswith("Existing note."))
-            self.assertEqual(words[4], "fix the test")
-            self.assertEqual(words[7:], ["--append-system-prompt", "Existing note.", "--version"])
+            launches = [words[index + 2: next((at for at in range(index + 1, len(words)) if words[at] == "--settings"), len(words))]
+                        for index, word in enumerate(words) if word == "--settings"]
+            note = ["--append-system-prompt", "Existing note."]
+            self.assertEqual(launches, [note + [role_config, "fix the test"], note + ["-p", "print this"], note + ["--version"],
+                                        ["--append-system-prompt", role_error + " Existing note.", "missing tools"], note + ["native conversation"]])
 
     def test_manual_codex_request_is_acknowledged_without_waiting_for_a_terminal_skill_note(self):
         worker = object.__new__(remote.Worker)

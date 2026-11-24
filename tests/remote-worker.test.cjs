@@ -17,6 +17,62 @@ function pythonProbe(t, script, timeout = 20_000) {
   return result.stdout;
 }
 
+test('the real Python SSH worker installs a working Claude role MCP package', {
+  skip: process.platform === 'win32' && 'requires the POSIX remote worker and Unix socket',
+}, t => {
+  const integration = path.join(__dirname, '../integration');
+  const { runtimeFiles, dispatchCompanions } = require('../integration/dispatch.cjs');
+  const payload = { dispatchHelper: fs.readFileSync(path.join(integration, 'dispatch.cjs'), 'utf8'), dispatchModules: runtimeFiles(),
+    dispatchCompanions: Object.fromEntries(dispatchCompanions.map(name => [name, fs.readFileSync(path.join(integration, name), 'utf8')])) };
+  const script = String.raw`
+import json, os, runpy, subprocess, sys, tempfile
+from unittest.mock import patch
+worker_source = runpy.run_path(sys.argv[1])
+payload = json.load(sys.stdin)
+with tempfile.TemporaryDirectory(prefix='remote-role-e2e-') as home, patch.dict(os.environ, HOME=os.environ.get('HOME', '')):
+    os.environ['HOME'] = home
+    node = sys.argv[2]
+    login_path = os.path.dirname(node) + os.pathsep + os.environ['PATH']
+    messages = []
+    channel = worker_source['Channel'](1, messages.append)
+    worker = channel.worker
+    try:
+        lookup = {'AGENTRIX_NODE': node, 'AGENTRIX_PATH': login_path}
+        config = dict(payload, path=home, projectId='test-project', token='test-token', native=True, claudeLead={'conductor': True})
+        with patch.dict(worker.install_dispatch.__func__.__globals__, login_tools=lambda _: lookup):
+            channel.open(config)
+        info = messages[-1]['info']
+        assert info['root'] == home or info['root'] == os.path.realpath(home), info
+        assert info['roleServer']['args'][-2:] == ['mcp', 'codex'], info
+        server = worker.role_server('claude')
+        assert server['command'] == node and server['env']['PATH'] == login_path, server
+        request = lambda id, method, params: json.dumps(dict(id=id, jsonrpc='2.0', method=method, params=params)) + '\n'
+        frames = request(1, 'initialize', {'protocolVersion': '2025-06-18'}) + request(2, 'tools/list', {})
+        frames += request(3, 'tools/call', {'name':'roles_status'})
+        result = subprocess.run([server['command']] + server['args'], input=frames.encode(), cwd=info['cwd'],
+                                env=dict(os.environ, **server['env']), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        assert result.returncode == 0, result.stderr.decode()
+        replies = {item['id']: item['result'] for item in map(json.loads, result.stdout.splitlines())}
+        assert replies[1]['serverInfo']['name'] == 'agentrix', replies
+        assert 'start_role' in [tool['name'] for tool in replies[2]['tools']], replies
+        assert json.loads(replies[3]['content'][0]['text'])['roles'] == [], replies
+        channel.receive({'op': 'claude-lead', 'id': 4, 'claudeLead': {'seatsMap': {}, 'conductor': False}})
+        assert messages[-1]['ok'], messages
+        result = subprocess.run([server['command']] + server['args'], input=frames.encode(), cwd=info['cwd'],
+                                env=dict(os.environ, **server['env']), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        assert result.returncode == 0, result.stderr.decode()
+        replies = {item['id']: item['result'] for item in map(json.loads, result.stdout.splitlines())}
+        assert replies[2]['tools'] == [] and replies[3]['isError'], replies
+        assert 'Conductor mode is off' in replies[3]['content'][0]['text'], replies
+    finally:
+        channel.close()
+`;
+  const result = spawnSync('python3', ['-c', script, path.join(integration, 'remote-worker.py'), process.execPath],
+    { input: JSON.stringify(payload), encoding: 'utf8', timeout: 40_000 });
+  if (result.error?.code === 'ENOENT') { t.skip('Python missing'); return; }
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+});
+
 test('remote policy write failure replies without closing the channel; Bash launches a stand-in in both switch directions', t => {
   const script = String.raw`
 import ast, os, pathlib, shutil, subprocess, sys, tempfile, types
@@ -75,7 +131,8 @@ messages = []
 connection = module['Channel'](1, messages.append)
 with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
     connection.worker.temp = directory
-    file = pathlib.Path(directory) / 'claude-lead'
+    file = pathlib.Path(directory) / 'dispatch.json.lead'
+    mode = pathlib.Path(directory) / 'dispatch.json.mode'
     seats = {'researcher': {'model':'sonnet', 'effort':'high'}}
     first = {'model':'claude-opus-5-5[1m]', 'effort':'high', 'fast':True, 'ultracode':True, 'seatsMap':seats}
     current = {'model':'sonnet', 'effort':'medium'}
@@ -84,11 +141,15 @@ with tempfile.TemporaryDirectory(prefix='remote-lead-') as directory:
     def update(lead, ok):
         connection.receive({'op':'claude-lead', 'id':len(messages)+1, 'claudeLead':lead})
         assert messages[-1]['type'] == 'response' and messages[-1]['ok'] is ok, messages
-    update(current, True)
+    update(dict(current, conductor=True), True)
+    assert mode.read_text() == 'conductor'
     for bad in [dict(current, model='bad&model'), dict(current, model='x'*161), dict(current, effort='High'),
-                dict(current, effort='x'*33), dict(current, fast='true'), dict(current, ultracode=1), dict(first, seatsMap={'padding':'x'*8192})]:
+                dict(current, effort='x'*33), dict(current, fast='true'), dict(current, ultracode=1), dict(current, conductor=1), dict(first, seatsMap={'padding':'x'*8192})]:
         update(bad, False)
         assert file.read_bytes() == b'sonnet\nmedium\n0\nnull\n'
+        assert mode.read_text() == 'conductor'
+    update({'seatsMap': {}, 'conductor': False}, True)
+    assert mode.read_text() == 'native'
     update(None, True)
     assert file.read_bytes() == b''
 `);
@@ -160,7 +221,7 @@ with tempfile.TemporaryDirectory(prefix='ssh-launch-seats-') as directory:
     worker.claude_lead = {'seatsMap': new, 'launchSeatsMap': coder}
     def install_note(note, native):
         (folder / 'skill-key.txt').write_text('fixture')
-        (folder / 'dispatch.json').write_text('{}')
+        worker.dispatch_server = {'env': {'AGENTRIX_BOOTSTRAP': str(folder / 'dispatch.json')}}
         (folder / 'events.sock').touch()
         return note
     fixtures = (patch.object(worker, 'startup_note', install_note), patch.object(tempfile, 'mkdtemp', return_value=directory),
@@ -227,20 +288,18 @@ claude
     env = {key: value for key, value in os.environ.items() if not key.startswith(('AGENTRIX_', 'CLAUDE_', 'ANTHROPIC_')) and key != 'BASH_ENV'}
     env.update(HOME=root.as_posix(), AGENTRIX_ROOT=root.as_posix(), AGENTRIX_PYTHON=pathlib.Path(sys.executable).as_posix(),
                AGENTRIX_NOTIFY_FILE=(root/'notify').as_posix(), AGENTRIX_READING_NOTE_FILE=(root/'note').as_posix(),
-               AGENTRIX_CLAUDE_LEAD_FILE=(root/'claude-lead').as_posix(), AGENTRIX_CLAUDE_BACKGROUND_FILE=(root/'policy').as_posix())
+               AGENTRIX_CLAUDE_LEAD_FILE=(root/'dispatch.json.lead').as_posix(), AGENTRIX_CLAUDE_BACKGROUND_FILE=(root/'policy').as_posix())
     result = subprocess.run([bash, '--noprofile', '--norc', '-c', probe, 'probe', rc.as_posix()], cwd=directory,
                             env=env, encoding='utf-8', stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
     assert result.returncode == 0, result.stderr
-    notice = ('Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode. '
-              'Work directly with Claude Code tools.')
-    conversation = ['--append-system-prompt', notice, '--model', 'sonnet', '--effort', 'high']
+    conversation = ['--model', 'sonnet', '--effort', 'high']
     assert [line.split('|') for line in result.stdout.splitlines() if line.startswith('values=')] == [
         ['values=', '', '{}', *conversation, '--resume', 'fixture'],
         ['values=', '', '{}', *conversation],
         ['values=', '', 'null', '--version'],
         ['values=', '', '{}', *conversation],
         ['values=', '', 'null', *conversation],
-        ['values=', '', 'null', *conversation[:2]],
+        ['values=', '', 'null', ''],
     ], result.stdout
     assert [line for line in result.stdout.splitlines() if line.startswith('settings=')] == [
         'settings=1|1', 'settings=1|1', 'settings=0|0', 'settings=0|0', 'settings=0|0', 'settings=0|0',
@@ -285,15 +344,18 @@ test('SSH open carries the background switch and Claude seat, and changes use se
       sent.push(message); remote.receive({ type: 'response', id: message.id, ok: true, value: true });
     } };
     vm.runInNewContext(fs.readFileSync(filename, 'utf8') + '\nlinkFor = () => testLink;', {
-      module, testLink: link, require: name => name.endsWith('dispatch.cjs') ? { runtimeFiles: () => ({}) } : native(name),
+      module, testLink: link, require: native,
       process, Buffer, setInterval, clearInterval, setTimeout, clearTimeout,
     });
     const claudeLead = allow ? { model: 'opus', effort: 'high', fast: true, ultracode: true } : null;
+    const deliveries = [];
     remote = new module.exports.RemoteConnection({ path: '/fixture', id: 'fixture', ssh: {} }, {
-      auth: {}, integrationDir: path.join(__dirname, '../integration'), allowBackgroundTasks: allow, claudeLead });
+      auth: {}, integrationDir: path.join(__dirname, '../integration'), allowBackgroundTasks: allow, claudeLead, onEvent: (...args) => deliveries.push(args) });
     t.after(() => remote.close());
     assert.equal(sent[0].allowBackgroundTasks, allow);
     assert.deepEqual(sent[0].claudeLead, claudeLead);
+    assert.deepEqual(Object.keys(sent[0].dispatchCompanions), ['role-tools.cjs', 'role-artifacts.cjs']);
+    assert.ok(Object.keys(sent[0].dispatchCompanions).every(name => !(name in sent[0].dispatchModules)));
     remote.receive({ type: 'ready', info: { root: '/fixture', cwd: '/fixture' } });
     await remote.setBackgroundTasks(!allow);
     assert.equal(sent[1].op, 'claude-background');
@@ -302,6 +364,13 @@ test('SSH open carries the background switch and Claude seat, and changes use se
     await remote.setClaudeLead(nextLead);
     assert.equal(sent[2].op, 'claude-lead');
     assert.deepEqual(sent[2].claudeLead, nextLead);
+    const event = { type: 'dispatch-end', seq: 1 }, ack = { type: 'dispatch-ack', seq: 1 };
+    remote.receive({ type: 'event', event });
+    assert.deepEqual(deliveries, [[event, remote]]);
+    remote.ackDispatch(ack);
+    assert.equal(sent[3].op, 'dispatch-ack');
+    assert.equal(sent[3].ack, ack);
+    assert.equal(sent[3].channel, remote.channel);
   }
 });
 
@@ -329,4 +398,10 @@ test('routing saves queue only the latest connecting-host update and bound ready
   await pending;
   assert.deepEqual(failed, ['failed']);
   assert.deepEqual(remote.appliedRouting, routing);
+
+  const modeChanges = [];
+  remote.request = async () => {};
+  const modeCallbacks = { ...callbacks, changed: modeChanged => modeChanges.push(modeChanged) };
+  for (const conductor of [false, true, true, false]) await refreshRemoteRouting(remote, { ...next, conductor }, routing, modeCallbacks);
+  assert.deepEqual(modeChanges, [false, true, false, true]);
 });

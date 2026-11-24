@@ -388,11 +388,11 @@
       "reason": "Only Node builtins reach this require; carried modules are compiled through the executor."
     },
     "electron/remote-connection.cjs": {
-      "digest": "42c2988032145ed3fb38e95b65d744a13889ad080dabe8d34445ced05126f885",
+      "digest": "02f5c2b3b8d161d2014329067b33e3f142277e92206a71d42425963ff2a08f1e",
       "targets": [
         "integration/dispatch.cjs"
       ],
-      "reason": "Reads the carried dispatch runtime inventory."
+      "reason": "Reads the carried dispatch runtime and SSH companion inventories."
     },
     "electron/voice-worker.cjs": {
       "digest": "dbde1e6005d856cd483f152a10d80a7035d3f2f0617f709ea386b1248dcad42c",
@@ -410,7 +410,7 @@
       "reason": "The packaged runtime root is electron."
     },
     "integration/dispatch.cjs": {
-      "digest": "2b0d7e420cfefdb5bd7ca869dade5aed1172e82ad1cd5cb730baf95f95d82295",
+      "digest": "b601bb4f678be623bc2dbbda4b85d553e87c234ca6f389d9962375a469e3e8dd",
       "targets": [
         "electron/features/agents/token-rate.cjs",
         "electron/features/agents/agent-settings.cjs",

@@ -447,7 +447,7 @@ function createCodexRuntime({ spawnProcess = spawn, resolveExecutable = codexExe
             if (!launchRemote) throw new Error('remote_transport_required');
             const remote = await launchRemote(spec, { signal: connectionAbort.signal });
             hosts = remote.hosts || [];
-            spec.cwd = remote.cwd; spec.env = {}; spec.context = remote.context || '';
+            spec.cwd = remote.cwd; spec.env = {}; spec.context = remote.context || ''; spec.roleServer = remote.roleServer;
             child = remote.child;
             if (closed) { try { await stopProcess(child); } finally { child.dispose?.(); child = null; } assertOpen(); }
           }

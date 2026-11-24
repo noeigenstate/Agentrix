@@ -41,11 +41,11 @@ class DispatchInbox {
     const pending = this.work.then(() => this.disposed ? { accepted: false } : action());
     this.work = pending.catch(() => {}); return pending;
   }
-  accept(frame) { return this.enqueue(() => this.receive(frame)); }
+  accept(frame, acknowledge) { return this.enqueue(() => this.receive(frame, acknowledge)); }
   async rotate(key) {
     return this.enqueue(async () => { await this.scan(); this.sessionKey = key; });
   }
-  async receive(frame) {
+  async receive(frame, acknowledge) {
     if (this.disposed) return { accepted: false };
     if (!uuid(frame?.id) || !Number.isSafeInteger(frame.seq) || frame.seq < 1 || frame.version !== 1) return this.refuse(frame, 'dispatch.invalid_event');
     if (frame.projectId !== this.projectId) return this.refuse(frame, 'dispatch.project_mismatch');
@@ -74,24 +74,28 @@ class DispatchInbox {
         if (next.type === 'dispatch-end') run.ended = true;
       }
     }
-    if (run.seq && this.directory) {
-      try {
-        const folder = path.join(this.directory, frame.id), stat = await fs.lstat(folder);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('dispatch.outbox_unreadable');
-        const ack = dispatchFrame({ type: 'dispatch-ack', id: frame.id }, { projectId: this.projectId, sessionKey: run.key, seq: run.seq });
-        const temporary = path.join(folder, `ack-${randomUUID()}.tmp`);
-        try {
-          const handle = await fs.open(temporary, 'wx', 0o600);
-          try { await handle.writeFile(JSON.stringify(ack)); await handle.sync(); } finally { await handle.close(); }
-          await fs.rename(temporary, path.join(folder, 'ack.json'));
-        }
-        finally { await fs.rm(temporary, { force: true }); }
-        // A helper may already have exited. Main also reclaims acknowledged frames, so sweeps do not reread old runs.
-        for (let seq = (run.reclaimed || 0) + 1; seq <= run.seq; seq++) await fs.rm(path.join(folder, `${seq}.json`), { force: true });
-        run.reclaimed = run.seq;
-      } catch { return this.refuse(frame, 'dispatch.outbox_unreadable'); }
-    }
+    if (!run.seq || !(this.directory || acknowledge)) return { accepted: true, seq: run.seq };
+    const ack = dispatchFrame({ type: 'dispatch-ack', id: frame.id }, { projectId: this.projectId, sessionKey: run.key, seq: run.seq });
+    try {
+      if (this.directory) await this.writeAck(frame.id, ack, run);
+      else await acknowledge(ack);
+    } catch { return this.refuse(frame, 'dispatch.outbox_unreadable'); }
     return { accepted: true, seq: run.seq };
+  }
+  async writeAck(id, ack, run) {
+    const folder = path.join(this.directory, id), stat = await fs.lstat(folder);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('dispatch.outbox_unreadable');
+    const temporary = path.join(folder, `ack-${randomUUID()}.tmp`);
+    try {
+      const handle = await fs.open(temporary, 'wx', 0o600);
+      try {
+        await handle.writeFile(JSON.stringify(ack)); await handle.sync();
+      } finally { await handle.close(); }
+      await fs.rename(temporary, path.join(folder, 'ack.json'));
+    } finally { await fs.rm(temporary, { force: true }); }
+    // A helper may already have exited. Main also reclaims acknowledged frames for local runs.
+    for (let seq = (run.reclaimed || 0) + 1; seq <= ack.seq; seq++) await fs.rm(path.join(folder, `${seq}.json`), { force: true });
+    run.reclaimed = ack.seq;
   }
   sweep() { return this.enqueue(() => this.scan()); }
   async scan() {

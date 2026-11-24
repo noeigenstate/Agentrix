@@ -43,6 +43,15 @@ test('conductor startup and mode switching both give the lead the role escalatio
   for (const text of [startup(false), modeNote(false)]) assert.doesNotMatch(text, /## Needs (decision|approval)/);
 });
 
+test('SSH conductor notes describe the tool connection and the lack of interactive role menus', () => {
+  const context = skillInstructions({ conductor: true, remote: true, skills: [], globalFolder: '<home>/skills' });
+  assert.match(context, /SSH roles have no interactive menu for answer_role/);
+  const change = modeNote(true, null, true);
+  assert.match(change, /reopen it to connect the role tools/);
+  assert.doesNotMatch(change, /read and follow/);
+  assert.doesNotMatch(modeNote(false, null, true), /reopen/);
+});
+
 test('a running conductor is told a changed seat table once; native mode and an unchanged table tell nothing', t => {
   const { SkillsStore } = require('../electron/features/skills/store.cjs');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-routing-change-'));

@@ -577,17 +577,12 @@ function refreshSkillNotes() {
     if (project.kind === 'ssh') {
       const remote = s.remoteConnection || s.terminal;
       if (remote?.request && !remote.closed) {
-        // The host's prompt hook hands this over with the owner's next prompt (remote-worker.py, claude-hook start).
-        if (!s.nativeStructured && s.agent === 'claude' && s.codexActive) {
-          const change = skills.routingChange(project.id, s.sessionId, s.toldSeats);
-          if (change) { s.toldSeats = change.table; remote.request('prompt-note', { note: change.note }).catch(report); }
-        }
         const lead = s.nativeStructured ? null : skills.terminalLead(project.id, { remote: true });
-        const refresh = lead ?? { seatsMap: skills.dispatchSeats(project.id) ?? {} };
         const routing = skills.seatsInfo(project.id);
+        const refresh = { ...(lead ?? { seatsMap: skills.dispatchSeats(project.id) ?? {} }), conductor: routing?.conductor === true };
         const update = refreshRemoteRouting(remote, refresh, routing, {
           bound: () => sessions.get(s.terminalId) === s && (s.remoteConnection || s.terminal) === remote,
-          changed: () => send('skills:changed', skills.infos()),
+          changed: modeChanged => { tellRemoteRouting(s, project, remote, modeChanged); send('skills:changed', skills.infos()); },
           failed: () => report(new Error(t('远程请求失败。'))),
         });
         if (update) remoteWrites.push(update);
@@ -871,12 +866,13 @@ async function openCodexFromShell(project, s, event) {
   }
 }
 
-function onEvent(event) {
+function onEvent(event, remote) {
   const s = sessions.get(event.projectId);
   if (!s) return;
   const project = store.projects.find(p => p.id === s.projectId);
   if (!project) return;
-  if (event.version === 1 && acceptDispatchEvent(s, project, event)) return;
+  if (remote && remote !== (s.remoteConnection || s.terminal)) return;
+  if (event.version === 1 && acceptDispatchEvent(s, project, event, remote && (ack => remote.ackDispatch(ack)))) return;
   if (event.sessionKey !== s.sessionKey) return;
   if (acceptDispatchEvent(s, project, event)) return;
   if (event.type === 'claude-seat-input') {
@@ -1142,6 +1138,18 @@ function tellMode(s, project) {
   if (!s.nativeStructured) { s.modeNote = s.agent === 'claude' && !s.modeNote ? text : null; return; }
   if (s.nativeRuntimeSessionId) nativeSessions?.send(s.terminalId, s.nativeRuntimeSessionId, { clientMessageId: randomUUID(), text }).catch(report);
 }
+
+function tellRemoteRouting(s, project, remote, modeChanged) {
+  if (!s.codexActive) return;
+  if (s.nativeStructured) { if (modeChanged) tellMode(s, project); return; }
+  if (s.agent !== 'claude') return;
+  const change = skills.routingChange(project.id, s.sessionId, s.toldSeats);
+  const mode = modeChanged ? skills.modeNote(project, s.sessionId, s.agent) : null;
+  if (!mode && !change) return;
+  if (change) s.toldSeats = change.table;
+  // The remote prompt hook hands over the mode and routing together with the owner's next prompt.
+  remote.request('prompt-note', { ...(mode && { mode }), ...(change && { note: change.note }) }).catch(report);
+}
 // The note a terminal's next prompt carries, handed over once.
 function takeModeNote(terminalId) {
   const s = sessions.get(terminalId);
@@ -1261,12 +1269,12 @@ async function initializeNativeSessions() {
       const routing = readOnly ? null : skills.seatsInfo(project.id);
       const remote = new RemoteConnection({ ...project, id: spec.terminalId }, { integrationDir, auth: sshAuth,
         allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
-        claudeLead: readOnly ? null : { seatsMap: skills.dispatchSeats(project.id) ?? {}, launchSeatsMap: delivery?.agentSeats ?? {} },
+        claudeLead: readOnly ? null : { conductor: routing?.conductor === true, seatsMap: skills.dispatchSeats(project.id) ?? {}, launchSeatsMap: delivery?.agentSeats ?? {} },
         sessionKey: spec.sessionKey, onEvent, codingPath: spec.cwd, askpassPath: prepareAskpass(), native: true,
         skills: delivery?.bundle, readingNote: readOnly ? '' : startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}',
           path.posix.join(project.path, 'skills'), delivery, '{AGENTRIX_DISPATCH}') });
       const cancel = () => remote.close();
-      if (routing) remote.appliedRouting = { effective: routing.effective, roles: routing.roles };
+      if (routing) remote.appliedRouting = { effective: routing.effective, roles: routing.roles, conductor: routing.conductor === true };
       signal.addEventListener('abort', cancel, { once: true });
       if (signal.aborted) cancel();
       const host = sessions.get(spec.terminalId); if (host && !readOnly) host.remoteConnection = remote;
@@ -1274,7 +1282,7 @@ async function initializeNativeSessions() {
         const info = await remote.ready;
         if (signal.aborted) throw new Error('session_closed');
         // The host's alias and address are redacted from a failed start's reason.
-        return { cwd: info.cwd || info.root, context: info.context, hosts: [project.ssh.host, project.ssh.host.split('@').at(-1)],
+        return { cwd: info.cwd || info.root, context: info.context, roleServer: info.roleServer, hosts: [project.ssh.host, project.ssh.host.split('@').at(-1)],
           child: require('./features/ssh/codex-process.cjs').createRemoteCodexProcess(remote) };
       } catch (error) { remote.close(); throw error; }
       finally { signal.removeEventListener('abort', cancel); }
@@ -1466,7 +1474,8 @@ function startTerminal(id, agentStarting = false, transfer = null) {
   const remoteSkills = project.kind === 'ssh' ? skills.delivery(project, true, sessionId) : null;
   const terminal = project.kind === 'ssh' ? new RemoteConnection({ ...project, id }, { integrationDir, auth: sshAuth, sessionKey, onEvent, codingPath: startPath, askpassPath: sshAskpassPath,
     allowBackgroundTasks: store.settings?.claudeBackgroundTasks,
-    claudeLead: skills.terminalLead?.(project.id, { remote: true }) ?? { seatsMap: skills.dispatchSeats?.(project.id) ?? {} },
+    claudeLead: { ...(skills.terminalLead?.(project.id, { remote: true }) ?? { seatsMap: skills.dispatchSeats?.(project.id) ?? {} }),
+      conductor: remoteSkills.conductor === true, launchSeatsMap: remoteSkills.agentSeats ?? {} },
     readingNote: startupNote(READING_NOTE, '{AGENTRIX_HANDOFF}', path.posix.join(project.path, 'skills'), remoteSkills, '{AGENTRIX_DISPATCH}'), skills: remoteSkills.bundle,
     onReady: info => { remoteBranch(project.id, info.branch); },
   }) : shellKind === 'zsh' ? pty.spawn(shell.file, ['-l', '-i'], terminalOptions)
@@ -1475,7 +1484,7 @@ function startTerminal(id, agentStarting = false, transfer = null) {
     : pty.spawn(powershellPath, ['-NoLogo', '-NoProfile', '-NoExit', '-ExecutionPolicy', 'Bypass', '-File', path.join(integrationDir, 'bootstrap.ps1')], terminalOptions);
   const s = createTerminalSession({ id, project, terminal, env, transfer, sessionId, sessionKey, controlCapability,
     bootstrapFile, hooks, skillNoteFile, agentStarting, shellKind });
-  if (remoteSkills) terminal.appliedRouting = { effective: remoteSkills.seatsMap, roles: remoteSkills.roles };
+  if (remoteSkills) terminal.appliedRouting = { effective: remoteSkills.seatsMap, roles: remoteSkills.roles, conductor: remoteSkills.conductor === true };
   registerTerminalSession(s, project);
   bindTerminalEvents(s, project, env);
 }

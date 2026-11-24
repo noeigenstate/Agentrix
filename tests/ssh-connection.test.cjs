@@ -313,15 +313,13 @@ test('Linux SSH Claude wrapper forwards hooks and reads compacted transcripts ov
   const stub = `#!/usr/bin/env python3
 import json,os,subprocess,sys
 args=sys.argv[1:]
-notice=("Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode. "
-        "Work directly with Claude Code tools.")
 reading=("You run inside Agentrix. SSH reading note. "
          "Agentrix delivers skill instructions through its SessionStart hook.")
 if "--version" in args:
     assert args[2:]==["--append-system-prompt", reading, "--version"]
     sys.exit(7)
 assert args.count("--append-system-prompt")==1
-assert args[2:4]==["--append-system-prompt", notice+" "+reading]
+assert args[2:4]==["--append-system-prompt", reading]
 settings_file=args[args.index("--settings")+1]
 assert os.path.dirname(settings_file)==os.path.dirname(os.environ["AGENTRIX_READING_NOTE_FILE"])
 assert os.path.basename(settings_file).startswith("claude-settings.")

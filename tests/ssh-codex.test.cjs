@@ -37,8 +37,10 @@ test('SSH Codex starts, sends, resumes and reads accounts solely through its rem
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'r13-ssh-')), seen = [];
   t.after(async () => { await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); });
   const f = transport(t, root), forbidden = () => assert.fail('SSH accessed local executable/account/process');
+  const roleServer = { command: '/remote/nvm/bin/node', args: ['/remote/state/dispatch.cjs', 'mcp', 'codex'],
+    env: { PATH: '/remote/nvm/bin:/usr/bin', AGENTRIX_BOOTSTRAP: '/tmp/remote-channel/dispatch.json' } };
   const factory = createCodexRuntime({ resolveExecutable: forbidden, spawnProcess: forbidden,
-    launchRemote: async () => ({ cwd: root, context: 'Remote instructions "quoted"\nsecond line', child: createRemoteCodexProcess(f.connection) }) });
+    launchRemote: async () => ({ cwd: root, context: 'Remote instructions "quoted"\nsecond line', roleServer, child: createRemoteCodexProcess(f.connection) }) });
   const runtime = factory.create({ kind: 'ssh', owner: 'gui', projectId: 'remote', cwd: '/srv/project' }, event => seen.push(event));
   t.after(() => runtime.close());
   const opened = await runtime.start(); assert.equal(runtime.pid, undefined);
@@ -57,7 +59,7 @@ test('SSH Codex starts, sends, resumes and reads accounts solely through its rem
   await runtime.close(); assert.ok(f.connection.closed);
   const second = transport(t, root), resumed = createCodexRuntime({ resolveExecutable: forbidden, spawnProcess: forbidden,
     launchRemote: async () => ({ cwd: root, child: createRemoteCodexProcess(second.connection) }) }).create({
-    kind: 'ssh', owner: 'gui', projectId: 'remote', providerSessionId: opened.providerSessionId, cwd: '/srv/project',
+    kind: 'ssh', owner: 'gui', projectId: 'remote', providerSessionId: opened.providerSessionId, cwd: '/srv/project', roleServer: { command: process.execPath },
   }, () => {});
   t.after(() => resumed.close());
   assert.equal((await resumed.resume()).providerSessionId, opened.providerSessionId);
@@ -65,6 +67,10 @@ test('SSH Codex starts, sends, resumes and reads accounts solely through its rem
   const inputs = f.calls.filter(([op]) => op === 'codex-input').map(([, params]) => Buffer.from(params.data, 'base64').toString()).join('');
   const start = inputs.trim().split('\n').map(JSON.parse).find(row => row.method === 'thread/start');
   assert.match(start.params.config.developer_instructions, /quoted/);
+  assert.deepEqual(start.params.config.mcp_servers, { agentrix: roleServer });
+  const resume = second.calls.filter(([op]) => op === 'codex-input').map(([, p]) => Buffer.from(p.data, 'base64').toString())
+    .join('').trim().split('\n').map(JSON.parse).find(row => row.method === 'thread/resume' && row.params.threadId === opened.providerSessionId);
+  assert.equal(resume.params.config.mcp_servers, undefined);
 });
 
 test('a missing rollout refusal keeps its typed resume evidence across the remote byte channel', async t => {

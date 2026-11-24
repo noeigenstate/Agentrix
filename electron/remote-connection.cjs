@@ -113,10 +113,12 @@ class RemoteConnection {
       if (seconds > 60) this.fail(new Error('SSH 连接超时。请确认主机可连接，且远端已安装 Python 3 和 Bash。'));
     }, 1000);
     this.connectTimer.unref?.();
+    const dispatchFile = path.join(options.integrationDir, 'dispatch.cjs');
+    const { runtimeFiles, dispatchCompanions } = require(dispatchFile);
     this.link.open({ channel: this.channel, op: 'open', path: project.path, codingPath, projectId: project.id, token: sessionKey, cols: 90, rows: 24, readingNote, skills, native: options.native === true,
       allowBackgroundTasks: options.allowBackgroundTasks === true, claudeLead: options.claudeLead ?? null,
-      dispatchHelper: fs.readFileSync(path.join(options.integrationDir, 'dispatch.cjs'), 'utf8'),
-      dispatchModules: require(path.join(options.integrationDir, 'dispatch.cjs')).runtimeFiles() });
+      dispatchHelper: fs.readFileSync(dispatchFile, 'utf8'), dispatchModules: runtimeFiles(),
+      dispatchCompanions: Object.fromEntries(dispatchCompanions.map(name => [name, fs.readFileSync(path.join(options.integrationDir, name), 'utf8')])) });
   }
   onData(callback) { this.events.on('data', callback); return { dispose: () => this.events.off('data', callback) }; }
   onExit(callback) { this.events.on('exit', callback); return { dispose: () => this.events.off('exit', callback) }; }
@@ -137,7 +139,7 @@ class RemoteConnection {
         if (typeof message.data === 'string') this.events.emit('data', this.terminalDecoder.write(Buffer.from(message.data, 'base64')));
         return;
       case 'event':
-        if (message.event && typeof message.event === 'object') this.onEvent?.(message.event);
+        if (message.event && typeof message.event === 'object') this.onEvent?.(message.event, this);
         return;
       case 'exit':
         this.emitExit(Number.isInteger(message.code) ? message.code : 1);
@@ -159,6 +161,7 @@ class RemoteConnection {
   }
   setBackgroundTasks(allow) { return this.request('claude-background', { allow: allow === true }); }
   setClaudeLead(claudeLead) { return this.request('claude-lead', { claudeLead }); }
+  ackDispatch(ack) { this.send({ op: 'dispatch-ack', ack }); }
   async request(op, data = {}, { signal, timeout = 30000, timeoutMessage = '读取远程文件超时，请重试。' } = {}) {
     await this.ready;
     if (signal?.aborted) throw new Error('Remote request cancelled');

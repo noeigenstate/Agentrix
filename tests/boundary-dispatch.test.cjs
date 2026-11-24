@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { builtinModules } = require('node:module');
-const { runtimeFiles } = require('../integration/dispatch.cjs');
+const { runtimeFiles, dispatchCompanions } = require('../integration/dispatch.cjs');
 
 const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
@@ -101,7 +101,9 @@ test('the helper and its runtime modules fit the SSH worker limits with a quarte
   };
   const carried = runtimeFiles(), count = Object.keys(carried).length;
   const bytes = Object.values(carried).reduce((sum, text) => sum + Buffer.byteLength(text), 0);
-  const helper = Buffer.byteLength(read('integration/dispatch.cjs'));
+  assert.deepEqual(dispatchCompanions, ['role-tools.cjs', 'role-artifacts.cjs']);
+  assert.ok(dispatchCompanions.every(file => !(file in carried)));
+  const helper = ['dispatch.cjs', ...dispatchCompanions].reduce((bytes, file) => bytes + Buffer.byteLength(read(`integration/${file}`)), 0);
   assert.ok(count <= limit('DISPATCH_MODULE_COUNT') * 0.75, `${count} runtime modules leave under 25% of DISPATCH_MODULE_COUNT`);
   assert.ok(bytes <= limit('DISPATCH_MODULE_BYTES') * 0.75, `${bytes} bytes of runtime modules leave under 25% of DISPATCH_MODULE_BYTES`);
   assert.ok(helper <= limit('DISPATCH_HELPER_BYTES') * 0.75, `the ${helper}-byte helper leaves under 25% of DISPATCH_HELPER_BYTES`);

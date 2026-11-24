@@ -7,7 +7,7 @@ const { execFileSync } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { createRoleTools, serve, TOOLS } = require('../integration/role-tools.cjs');
-const { argumentsOf, run } = require('../integration/dispatch.cjs');
+const { argumentsOf, run, sshRoleReadiness } = require('../integration/dispatch.cjs');
 
 // A bootstrap with a mode file and live seats, as main writes them beside a session's bootstrap.
 function session(t, mode, seats = { developer: { model: 'gpt-6.2-sol', effort: 'high', fast: true }, reviewer: { model: 'opus', effort: 'high' } }) {
@@ -46,6 +46,43 @@ test('native mode refuses every role and names conductor mode', async t => {
   const { tools } = createRoleTools({ env, cwd: os.tmpdir(), engine: fake.run });
   await assert.rejects(tools.start_role({ seat: 'developer', title: 'x', brief: 'y', allow: ['src/**'] }), /Conductor mode is off/);
   assert.equal(fake.calls.length, 0);
+});
+
+test('a remote Codex sandbox probe requires command output even with a successful exit', async () => {
+  const check = (stdout, stderr) => sshRoleReadiness('/remote/project', { PATH: '/remote/bin' }, async () => '/remote/bin/codex',
+    (file, args, options, callback) => {
+      assert.equal(file, '/remote/bin/codex');
+      assert.deepEqual(args, ['sandbox', '--', '/bin/echo', 'agentrix-sandbox-ready']);
+      assert.equal(options.cwd, '/remote/project');
+      assert.deepEqual(options.env, { PATH: '/remote/bin' });
+      callback(null, stdout, stderr);
+    });
+  assert.equal(await check('', 'bwrap: Creating new namespace failed'), 'unavailable');
+  assert.equal(await check('agentrix-sandbox-ready\n', ''), 'ready');
+});
+
+test('an unavailable SSH sandbox reroutes Claude leads and gives Codex leads built-in agent instructions', async t => {
+  const { env, folder } = session(t, 'conductor');
+  env.AGENTRIX_REMOTE_ROLE_TOOLS = '1';
+  fs.writeFileSync(env.AGENTRIX_BOOTSTRAP + '.lead', 'opus\nmedium\n');
+  const fake = engine((args, _timing, context) => {
+    assert.equal(args[0], 'claude');
+    assert.deepEqual(context.roleFallback, { configured: 'gpt-6.2-sol', model: 'opus', effort: 'high', fast: false });
+    return '[dispatch] started run-1 fallback';
+  });
+  const options = { env, cwd: folder, engine: fake.run, tempRoot: folder, checkSshReadiness: async () => 'unavailable' };
+  const request = { seat: 'developer', title: 'Review', brief: 'Read', readOnly: true };
+  const claude = createRoleTools({ ...options, leadAgent: 'claude' });
+  const started = await claude.tools.start_role(request);
+  assert.equal(started.id, 'run-1');
+  assert.match(started.instruction, /sysctl user.max_user_namespaces.*改派.*opus/);
+  const codex = createRoleTools({ ...options, leadAgent: 'codex' });
+  assert.match((await codex.tools.start_role(request)).instruction, /sysctl user.max_user_namespaces.*内置的子代理/);
+  await assert.rejects(codex.tools.answer_role({ id: 'run-1' }), /SSH roles have no interactive menu/);
+  assert.equal(fake.calls.length, 1);
+  fs.writeFileSync(env.AGENTRIX_BOOTSTRAP + '.mode', 'native');
+  assert.deepEqual(claude.list(), []);
+  await assert.rejects(claude.tools.start_role(request), /Conductor mode is off/);
 });
 
 test('start_role launches the seat on its own agent in the background and checks scope', async t => {

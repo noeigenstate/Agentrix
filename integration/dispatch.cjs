@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, execFile, execFileSync } = require('node:child_process');
 const { randomUUID, createHmac, randomBytes } = require('node:crypto');
 const { StringDecoder } = require('node:string_decoder');
 const { homedir, tmpdir, constants: { signals } } = require('node:os');
@@ -35,6 +35,7 @@ const outboxFile = path.join(__dirname, fs.existsSync(path.join(__dirname, 'disp
 const { DispatchOutbox, DetachedRuns } = require(outboxFile);
 const shimDirectory = path.join(__dirname, fs.existsSync(path.join(__dirname, 'shims/intercept.cjs')) ? 'shims' : 'electron/shims');
 const { withShims, runtimeFiles: shimRuntimeFiles } = require(path.join(shimDirectory, 'intercept.cjs'));
+const dispatchCompanions = Object.freeze(['role-tools.cjs', 'role-artifacts.cjs']);
 const RUNTIME_FILES = ['boundaries.cjs', 'command-phrase.cjs', 'generated-image-path.cjs', 'session-files.cjs', 'transcript-tail.cjs', 'transcript-window.cjs', 'completion-history.cjs',
   'oversized-record.cjs', 'prompt-queue.cjs', 'features/agents/token-rate.cjs', 'features/agents/agent-settings.cjs', 'features/agents/agent-command.cjs',
   'features/team/team.cjs', 'features/team/inbox.cjs', 'features/dashboard/records-routing.cjs',
@@ -635,6 +636,18 @@ async function roleReadiness(cwd, env, locate = locateCodex, check = readiness) 
   const file = await locate(env);
   return file ? check(file, { cwd, env }) : null;
 }
+
+async function sshRoleReadiness(cwd, env, locate = locateCodex, execute = execFile) {
+  const file = await locate(env);
+  if (!file) return 'missing';
+  const proof = 'agentrix-sandbox-ready';
+  return new Promise(resolve => {
+    execute(file, ['sandbox', '--', '/bin/echo', proof], { cwd, env, timeout: 5000, maxBuffer: 64 * 1024 }, (error, stdout, stderr) => {
+      // Bubblewrap can fail while the Codex sandbox command exits zero. Require the command's own output.
+      resolve(!error && stdout.trim() === proof && !/bwrap:.*(?:fail|denied|permitted)/i.test(stderr) ? 'ready' : 'unavailable');
+    });
+  });
+}
 // The Claude Code file a terminal would run, outside the shim folder; null when there is none.
 const locateClaude = async env => (await helperClaudeLocator.locate({ env })).terminal?.file || null;
 
@@ -1065,8 +1078,8 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   let drained = new Promise(resolve => { drain = resolve; });
   const signal = line => stdout.write(`[dispatch] ${line}\n`);
   const fallbackNote = () => options.fallbackFrom
-    ? ' · {configured} → {actual}，因为这台电脑尚未完成 Codex 沙箱设置。'
-      .replace('{configured}', () => options.fallbackFrom).replace('{actual}', () => output.model || options.model)
+    ? ` · ${options.fallbackFrom} → ${output.model || options.model}，${env.AGENTRIX_REMOTE_ROLE_TOOLS === '1'
+      ? '因为远端 Codex 或其 Linux 沙箱不可用。' : '因为这台电脑尚未完成 Codex 沙箱设置。'}`
     : '';
   const declared = () => ({ model: options.model, effort: options.effort, fast: options.fast });
   const assignment = () => ({ type: 'dispatch-start', id, helperPid: process.pid, agent: options.agent, role: options.role, title: options.title,
@@ -1816,7 +1829,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
   }
 }
 
-module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles,
+module.exports = { argumentsOf, commandOf, briefOf, recordFindings, WorkerOutput, CodexRollout, workerInput, runtimeFiles, dispatchCompanions,
   run, startDetached, runDetached, waitDetached, detachedRuns, locateCodex, locateClaude, executable, validateSmallScope, RATE_INTERVAL,
-  localWindowsCodex, roleReadiness, elevatedSetupMessage, answerDetachedRole };
+  localWindowsCodex, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole };
 if (require.main === module) run(process.argv.slice(2)).then(code => { process.exitCode = code; });

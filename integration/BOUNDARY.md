@@ -10,7 +10,8 @@ The Codex shell wrappers request native launch. The local and SSH native launche
 Local and SSH Claude wrappers read the lead file at launch. It carries model, effort, fast flag and seat-map JSON.
 Local and SSH conductor conversations also read an optional fifth line, `ultracode`, and add the setting to the selected hook JSON.
 Six-line legacy files still take the seat map from line six.
-The local Claude wrappers give the conversation they start the role tools (the Intercept boundary's `--role-tools`). The SSH wrapper tells Claude that the tools are unavailable there.
+The local Claude wrappers attach the role tools through Intercept. The SSH wrapper attaches the remote MCP server to conductor conversations.
+SSH Codex receives that server from its own channel at thread start or resume. A conversation opened in native mode needs to reopen after enabling conductor mode to connect it.
 Readers also accept the legacy three-line and six-line forms. Hooks and the helper read accepted seats from the private sidecar at invocation.
 The helper puts one standing-rules section before every brief and tells roles to skip absent skills. Normal briefs inline the
 code standards when the base and extensions fit the 8 KiB source budget. Small or oversized briefs keep the path references.

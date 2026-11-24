@@ -5,10 +5,12 @@ import concurrent.futures
 import errno
 import glob
 import hashlib
+import hmac
 import json
 import math
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -34,6 +36,10 @@ MAX_MESSAGE = 2 * 1024 * 1024
 DISPATCH_HELPER_BYTES = 256 * 1024
 DISPATCH_MODULE_COUNT = 64
 DISPATCH_MODULE_BYTES = 768 * 1024
+DISPATCH_COMPANIONS = frozenset(("role-tools.cjs", "role-artifacts.cjs"))
+DISPATCH_ID = re.compile(r"[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}", re.I)
+DISPATCH_SEQ = re.compile(r"([1-9][0-9]{0,15})\.json")
+DISPATCH_FRAME_BYTES = 16384
 PREFIX = "PGW1 "
 SKILL_STATE_LOCK = threading.Lock()
 SKILL_LEASE_SECONDS = 10 * 60
@@ -358,16 +364,17 @@ try:
             try: deliver_skills(hook,identity)
             except Exception: pass
         if kind=="start":
-            # A routing change waits beside this script and rides the next prompt once, as it does on the owner's computer.
-            try:
-                waiting=os.path.join(os.path.dirname(os.path.abspath(__file__)),"prompt-note.txt")
-                taken=waiting+"."+str(os.getpid())
-                os.rename(waiting,taken)
-                with open(taken,encoding="utf-8") as source_file: note=source_file.read(16385)
-                os.unlink(taken)
-                if note.strip() and len(note)<=16384:
-                    print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":note}}))
-            except Exception: pass
+            notes=[]
+            for name in ("mode-note.txt","prompt-note.txt"):
+                try:
+                    waiting=os.path.join(os.path.dirname(os.path.abspath(__file__)),name)
+                    taken=waiting+"."+str(os.getpid())
+                    os.rename(waiting,taken)
+                    with open(taken,encoding="utf-8") as source_file: note=source_file.read(16385)
+                    os.unlink(taken)
+                    if note.strip() and len(note)<=16384: notes.append(note)
+                except Exception: pass
+            if notes: print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":" ".join(notes)}}))
     elif mode=="shell-prompt":
         event["codexAvailable"]=len(sys.argv)>2 and sys.argv[2]=="1"
         event["claudeAvailable"]=len(sys.argv)>3 and sys.argv[3]=="1"
@@ -396,6 +403,8 @@ BASH_SOURCE = r'''if [ -r "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi
 cd -- "$AGENTRIX_ROOT" || exit 1
 __pg_note=$AGENTRIX_READING_NOTE; unset AGENTRIX_READING_NOTE
 __pg_note_file=$AGENTRIX_READING_NOTE_FILE; unset AGENTRIX_READING_NOTE_FILE
+__pg_role_tools=$AGENTRIX_ROLE_TOOLS; unset AGENTRIX_ROLE_TOOLS
+__pg_role_error=$AGENTRIX_ROLE_ERROR; unset AGENTRIX_ROLE_ERROR
 __pg_reading_note() { if [ -r "$__pg_note_file" ]; then cat -- "$__pg_note_file"; else printf '%s' "$__pg_note"; fi; }
 unalias codex 2>/dev/null || true
 unalias claude 2>/dev/null || true
@@ -420,7 +429,7 @@ function codex {
     return 0
 }
 function claude {
-    local executable result settings word conversation=1
+    local executable result settings word conversation=1 print_mode=0
     case ${1-} in
         auth|config|doctor|install|login|logout|mcp|migrate-installer|plugin|setup-token|update|upgrade) conversation=0;;
     esac
@@ -428,6 +437,7 @@ function claude {
         case $word in
             --) break;;
             --model|--model=*|--effort|--effort=*) printf '%s\n' '模型由模型路由决定，请在模型路由中更改。' >&2; return 2;;
+            -p|--print) print_mode=1;;
             --version|-v|-V|--help|-h) conversation=0;;
         esac
     done
@@ -464,13 +474,16 @@ if sys.argv[3]=="1": settings["ultracode"]=True
 print(json.dumps(settings))
 PY
     )
-    local -a note=()
+    local -a note=() role_tools=()
     local current_note=$(__pg_reading_note)
     if [[ $current_note == *" Agentrix skill delivery: "* ]]; then
         current_note="${current_note%%" Agentrix skill delivery: "*} Agentrix delivers skill instructions through its SessionStart hook."
     fi
-    if [[ $conversation == 1 ]]; then
-        current_note="Agentrix role tools are unavailable in this SSH Claude terminal, including in conductor mode. Work directly with Claude Code tools.${current_note:+ $current_note}"
+    if [[ $conversation == 1 && $print_mode == 0 ]] && [[ $(cat "${AGENTRIX_CLAUDE_LEAD_FILE%/*}/dispatch.json.mode" 2>/dev/null) == conductor ]]; then
+        if [[ -n $__pg_role_tools ]]; then role_tools=("$__pg_role_tools");
+        elif [[ -n $__pg_role_error && $current_note != *"$__pg_role_error"* ]]; then
+            current_note="$__pg_role_error${current_note:+ $current_note}"
+        fi
     fi
     [[ -n $current_note ]] && note=(--append-system-prompt "$current_note")
     local settings_file
@@ -481,7 +494,7 @@ PY
     allowed=$(cat "$AGENTRIX_CLAUDE_BACKGROUND_FILE" 2>/dev/null)
     [[ $allowed == 1 ]] || background+=(CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1)
     command env "${background[@]}" AGENTRIX_SEATS="$seat_map" AGENTRIX_READING_NOTE_FILE="$__pg_note_file" \
-        "$executable" --settings "$settings_file" ${note[@]+"${note[@]}"} ${lead_args[@]+"${lead_args[@]}"} "$@"
+        "$executable" --settings "$settings_file" ${note[@]+"${note[@]}"} ${lead_args[@]+"${lead_args[@]}"} ${role_tools[@]+"${role_tools[@]}"} "$@"
     result=$?
     rm -f -- "$settings_file"
     __pg_emit codex-exited "$result" claude
@@ -1176,10 +1189,10 @@ class CodexActivityReader:
             return dict(self.snapshot) if self.offset >= size else None
 
 # Marked lines, because a login shell's startup files may print anything before them.
-CODEX_LOOKUP = r'''printf '\nAGENTRIX_CODEX=%s\nAGENTRIX_PATH=%s\n' "$(type -P codex)" "$PATH"'''
+CODEX_LOOKUP = r'''printf '\nAGENTRIX_CODEX=%s\nAGENTRIX_NODE=%s\nAGENTRIX_PATH=%s\n' "$(type -P codex)" "$(type -P node)" "$PATH"'''
 
-def resolve_codex(env):
-    """The Codex executable and the PATH it runs with, both from the login shell."""
+def login_tools(env):
+    """Resolve the remote tools and their PATH from the same login shell."""
     # SSH's command shell does not load the login/interactive PATH used by nvm and volta. An npm Codex is a
     # "#!/usr/bin/env node" script whose node is on that PATH only, so the app-server must start with it too.
     # Bytes, not text: without LANG, Python 3.6 decodes as ASCII and one Chinese character a startup file prints would
@@ -1187,15 +1200,22 @@ def resolve_codex(env):
     result = subprocess.run(["/bin/bash", "-lic", CODEX_LOOKUP], env=dict(env),
         stdin=subprocess.DEVNULL, start_new_session=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
-    found = dict(line.split(b"=", 1) for line in result.stdout.splitlines() if line.startswith((b"AGENTRIX_CODEX=", b"AGENTRIX_PATH=")))
+    found = dict(line.split(b"=", 1) for line in result.stdout.splitlines() if line.startswith((b"AGENTRIX_CODEX=", b"AGENTRIX_NODE=", b"AGENTRIX_PATH=")))
     if b"AGENTRIX_CODEX" not in found:
         # A startup file that runs exec or exit ends the shell before the lookup: that is not a missing Codex.
         tail = " / ".join(result.stderr.decode("utf-8", "replace").strip().splitlines()[-3:])[-500:]
         raise ValueError("远端登录 shell 没有执行到 Codex 查找（退出码 %s）。请检查远端 ~/.bash_profile、~/.profile 和 ~/.bashrc 中的 exec 或 exit。%s"
             % (result.returncode, tail))
-    file = os.fsdecode(found[b"AGENTRIX_CODEX"].strip())
-    if os.path.isabs(file) and os.path.isfile(file) and os.access(file, os.X_OK):
-        return file, ({"PATH": os.fsdecode(found[b"AGENTRIX_PATH"])} if found.get(b"AGENTRIX_PATH") else {})
+    return {os.fsdecode(key): os.fsdecode(value) for key, value in found.items()}
+
+def login_executable(tools, key):
+    file = tools.get(key, "")
+    return file if os.path.isabs(file) and os.path.isfile(file) and os.access(file, os.X_OK) else None
+
+def resolve_codex(env, tools=None):
+    tools = login_tools(env) if tools is None else tools
+    file = login_executable(tools, "AGENTRIX_CODEX")
+    if file: return file, ({"PATH": tools["AGENTRIX_PATH"]} if tools.get("AGENTRIX_PATH") else {})
     error = ValueError("远端未找到 Codex 程序。请在远端登录 shell 中安装 Codex，并确认 type -P codex 能找到它。")
     error.code = "codex_cli_required"
     raise error
@@ -1206,6 +1226,120 @@ def valid_dispatch_modules(modules):
     return isinstance(modules, dict) and len(modules) <= DISPATCH_MODULE_COUNT and all(
         isinstance(name, str) and re.fullmatch(r"[\w-]+(?:/[\w-]+)*\.cjs", name) and isinstance(text, str)
         for name, text in modules.items()) and sum(len(text.encode("utf-8")) for text in modules.values()) <= DISPATCH_MODULE_BYTES
+
+def dispatch_files(source, companions, modules):
+    if not isinstance(source, str) or not source or not isinstance(companions, dict) or set(companions) != DISPATCH_COMPANIONS:
+        raise ValueError("helper or companion files missing or invalid")
+    payload = dict(companions, **{"dispatch.cjs": source})
+    if not all(isinstance(text, str) and text for text in payload.values()): raise ValueError("invalid helper or companion content")
+    if sum(len(text.encode("utf-8")) for text in payload.values()) > DISPATCH_HELPER_BYTES:
+        raise ValueError("helper and companion files exceed their size limit")
+    if not valid_dispatch_modules(modules): raise ValueError("helper modules too large or invalid")
+    payload.update(("electron/" + name, text) for name, text in modules.items())
+    return payload
+
+def private_directory(folder):
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    info = os.lstat(folder)
+    if not stat.S_ISDIR(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
+        raise ValueError("unsafe remote dispatch directory")
+    os.chmod(folder, 0o700)
+
+def install_dispatch_files(state, files):
+    digest = hashlib.sha256(json.dumps(files, sort_keys=True).encode("utf-8")).hexdigest()
+    folder = os.path.join(state, digest)
+    private_directory(state)
+    with skill_state_lock(state):
+        if not os.path.lexists(folder):
+            stage = tempfile.mkdtemp(prefix=".install-", dir=state)
+            try:
+                for name, body in files.items():
+                    filename = os.path.join(stage, *name.split("/"))
+                    os.makedirs(os.path.dirname(filename), mode=0o700, exist_ok=True)
+                    parent = os.path.dirname(filename)
+                    while parent != stage:
+                        os.chmod(parent, 0o700)
+                        parent = os.path.dirname(parent)
+                    descriptor = os.open(filename, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(descriptor, "w", encoding="utf-8") as target: target.write(body)
+                os.replace(stage, folder)
+            finally:
+                if os.path.exists(stage): shutil.rmtree(stage)
+        private_directory(folder)
+        os.utime(folder, None)
+        descriptor, lease = tempfile.mkstemp(prefix=".lease-", dir=folder)
+        os.close(descriptor)
+        now = time.time()
+        # Detached runs do not hold the SSH channel open. Keep their loaded version for the full retention period.
+        with os.scandir(state) as versions:
+            for entry in versions:
+                if not re.fullmatch(r"[a-f0-9]{64}|\.install-[a-z0-9_]{8}", entry.name) or not entry.is_dir(follow_symlinks=False): continue
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                    if info.st_mtime >= now - SKILL_RETENTION_SECONDS or (hasattr(os, "getuid") and info.st_uid != os.getuid()): continue
+                    with os.scandir(entry.path) as leases:
+                        active = any(item.name.startswith(".lease-") and item.is_file(follow_symlinks=False)
+                                     and item.stat(follow_symlinks=False).st_mtime >= now - SKILL_LEASE_SECONDS for item in leases)
+                    if not active: shutil.rmtree(entry.path)
+                except OSError: pass
+    return os.path.join(folder, "dispatch.cjs"), lease
+
+@contextmanager
+def dispatch_directory(path, parent=None):
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    try: yield descriptor
+    finally: os.close(descriptor)
+
+def dispatch_sequences(folder):
+    return sorted(int(match.group(1)) for name in os.listdir(folder) for match in [DISPATCH_SEQ.fullmatch(name)] if match)
+
+def read_dispatch_frame(name, folder):
+    with open_regular(name, folder) as source: data = source.read(DISPATCH_FRAME_BYTES + 1)
+    if len(data) > DISPATCH_FRAME_BYTES: raise ValueError("Invalid dispatch frame.")
+    return json.loads(data)
+
+def dispatch_ack_valid(ack, project_id, token):
+    if not isinstance(ack, dict) or set(ack) != {"id", "type", "seq", "version", "projectId", "keyId", "mac"}: return False
+    if not isinstance(ack["id"], str) or not DISPATCH_ID.fullmatch(ack["id"]): return False
+    if type(ack["version"]) is not int or ack["version"] != 1 or ack["type"] != "dispatch-ack" or ack["projectId"] != project_id: return False
+    if type(ack["seq"]) is not int or not 1 <= ack["seq"] <= 9007199254740991: return False
+    if not isinstance(ack["mac"], str) or not re.fullmatch(r"[a-f0-9]{64}", ack["mac"]): return False
+    key = token.encode("utf-8")
+    if ack["keyId"] != hashlib.sha256(key).hexdigest(): return False
+    body = {name: value for name, value in ack.items() if name != "mac"}
+    signed = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hmac.compare_digest(hmac.new(key, signed, hashlib.sha256).hexdigest(), ack["mac"])
+
+def persist_dispatch_ack(folder, ack):
+    seq = ack["seq"]
+    try: frame = read_dispatch_frame("%d.json" % seq, folder)
+    except (OSError, ValueError): return False
+    if not isinstance(frame, dict) or frame.get("id") != ack["id"] or frame.get("seq") != seq or frame.get("keyId") != ack["keyId"]: return False
+    temporary = "ack-%s.tmp" % os.urandom(16).hex()
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600, dir_fd=folder)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as target:
+            json.dump(ack, target)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, "ack.json", src_dir_fd=folder, dst_dir_fd=folder)
+    finally:
+        try: os.unlink(temporary, dir_fd=folder)
+        except FileNotFoundError: pass
+    return True
+
+def write_dispatch_ack(folder, ack, token):
+    try: previous = read_dispatch_frame("ack.json", folder)
+    except (OSError, ValueError): previous = None
+    # Reordered acknowledgments leave a newer watermark in place and finish any interrupted reclamation.
+    seq = ack["seq"]
+    if dispatch_ack_valid(previous, ack["projectId"], token) and previous["id"] == ack["id"] and previous["seq"] >= seq:
+        seq = previous["seq"]
+    elif not persist_dispatch_ack(folder, ack): return
+    for number in dispatch_sequences(folder):
+        if number > seq: break
+        try: os.unlink("%d.json" % number, dir_fd=folder)
+        except FileNotFoundError: pass
 
 
 class Worker:
@@ -1218,6 +1352,12 @@ class Worker:
         self.skills_bundle = None
         self.dispatch_source = None
         self.dispatch_note = None
+        self.dispatch_error = None
+        self.dispatch_lease = None
+        self.dispatch_login = None
+        self.dispatch_server = None
+        self.dispatch_halt = threading.Event()
+        self.dispatch_ack_lock = threading.Lock()
         self.skill_paths = {}
         self.skill_state_dir = None
         self.skill_leases = {}
@@ -1257,7 +1397,7 @@ class Worker:
         with self.lock:
             if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
             if self.codex_processes: raise ValueError("远程 Codex 进程数量已达上限。")
-        executable, login = resolve_codex(self.agent_env)
+        executable, login = resolve_codex(self.agent_env, tools=self.dispatch_login) if self.dispatch_login is not None else resolve_codex(self.agent_env)
         with self.lock:
             if self.stopping or process_id in self.codex_processes: raise ValueError("远程进程已关闭或已经启动。")
             child = subprocess.Popen([executable, "app-server", "--listen", "stdio://"], cwd=self.coding_root,
@@ -1371,6 +1511,7 @@ class Worker:
         self.skills_bundle = config.get("skills")
         self.dispatch_source = config.get("dispatchHelper")
         self.dispatch_modules = config.get("dispatchModules", {})
+        self.dispatch_companions = config.get("dispatchCompanions")
         branch = ""
         try:
             # rev-parse names the branch on every Git; branch --show-current needs 2.22 and -C needs 1.8.5.
@@ -1390,15 +1531,18 @@ class Worker:
         info = os.stat(filename)
         return {"path": relative, "name": os.path.basename(filename), "size": info.st_size, "modifiedAt": int(info.st_mtime * 1000), "realPath": os.path.relpath(filename, self.root).replace(os.sep, "/"), "directory": stat.S_ISDIR(info.st_mode), "file": stat.S_ISREG(info.st_mode), "link": os.path.islink(os.path.join(self.root, relative))}
 
-    def git_version(self):
-        """Git's version as (major, minor, patch); None when it cannot be told. Asked once."""
-        if not hasattr(self, "_git_version"):
-            try:
-                found = subprocess.run(["git", "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3).stdout
-                parts = [int(part) for part in re.findall(r"\d+", found)[:3]]
-                self._git_version = tuple(parts + [0] * (3 - len(parts))) if len(parts) >= 2 else None
-            except (OSError, ValueError, subprocess.TimeoutExpired): self._git_version = None
-        return self._git_version
+    def git_version(self, login_path=None):
+        """Git's version as (major, minor, patch); None when it cannot be told."""
+        if login_path is None and hasattr(self, "_git_version"): return self._git_version
+        version = None
+        try:
+            env = dict(os.environ, PATH=login_path) if login_path else None
+            found = subprocess.run(["git", "--version"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=3).stdout
+            parts = [int(part) for part in re.findall(r"\d+", found)[:3]]
+            if len(parts) >= 2: version = tuple(parts + [0] * (3 - len(parts)))
+        except (OSError, ValueError, subprocess.TimeoutExpired): pass
+        if login_path is None: self._git_version = version
+        return version
 
     def no_relative(self):
         """--no-relative keeps paths from the top of the repository despite diff.relative; both came in Git 2.28, so
@@ -1812,6 +1956,9 @@ class Worker:
                 for lease in self.skill_leases.values():
                     try: os.utime(lease, None)
                     except OSError: pass
+            if self.dispatch_lease:
+                try: os.utime(self.dispatch_lease, None)
+                except OSError: pass
             self.skill_lease_next = now + 60
 
     def release_skill_leases(self):
@@ -1834,29 +1981,48 @@ class Worker:
 
     def install_dispatch(self):
         if self.dispatch_note is not None: return self.dispatch_note
-        source, modules = self.dispatch_source, getattr(self, "dispatch_modules", {})
-        unavailable = "Dispatch helper: unavailable over SSH (%s); command-line workers run unseen in Agentrix."
-        # Without the helper the session still starts; only command-line workers lose their Agentrix cards.
-        if not shutil.which("node") or not isinstance(source, str) or not source or len(source.encode("utf-8")) > DISPATCH_HELPER_BYTES:
-            self.dispatch_note = unavailable % "remote Node.js or helper missing"
-            return self.dispatch_note
-        if not valid_dispatch_modules(modules):
-            self.dispatch_note = unavailable % "helper modules too large or invalid"
-            return self.dispatch_note
-        filename = os.path.join(self.temp, "dispatch.cjs")
-        for name, text in modules.items():
-            target = os.path.join(self.temp, "electron", *name.split("/"))
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with open(target, "w", encoding="utf-8") as output: output.write(text)
-            os.chmod(target, 0o600)
-        with open(filename, "w", encoding="utf-8") as output: output.write(source)
-        os.chmod(filename, 0o600)
-        bootstrap = os.path.join(self.temp, "dispatch.json")
-        with open(bootstrap, "w", encoding="utf-8") as output:
-            json.dump({"pipeName": os.path.join(self.temp, "events.sock"), "sessionKey": self.token, "projectId": self.project_id}, output)
-        os.chmod(bootstrap, 0o600)
-        self.dispatch_note = "Dispatch helper: node %s — start every command-line Codex or Claude worker through it (see the agent-dispatch rules)." % filename.replace(os.sep, "/")
+        try:
+            files = dispatch_files(self.dispatch_source, self.dispatch_companions, self.dispatch_modules)
+            node, login_path = self.dispatch_requirements()
+            state = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-dispatch")
+            filename, self.dispatch_lease = install_dispatch_files(state, files)
+            bootstrap = os.path.join(self.temp, "dispatch.json")
+            binding = {"pipeName": os.path.join(self.temp, "events.sock"), "sessionKey": self.token, "projectId": self.project_id}
+            self.write_routing_file("dispatch.json", json.dumps(binding))
+            env = {"PATH": login_path, "AGENTRIX_BOOTSTRAP": bootstrap, "AGENTRIX_SEATS": self.launch_seats,
+                   "AGENTRIX_DISPATCH_DEPTH": "0", "AGENTRIX_REMOTE_ROLE_TOOLS": "1"}
+            self.dispatch_server = {"command": node, "args": [filename, "mcp"], "env": env}
+            command = " ".join(shlex.quote(word) for word in (node, filename))
+            self.dispatch_note = "Dispatch helper: %s — start command-line workers through it (see the agent-dispatch rules)." % command
+        except ValueError as error:
+            self.dispatch_error = self.dispatch_unavailable(str(error))
+        except OSError:
+            self.dispatch_error = self.dispatch_unavailable("could not install the private remote helper")
+        if self.dispatch_error: self.dispatch_note = self.dispatch_error
         return self.dispatch_note
+
+    def dispatch_requirements(self):
+        try: self.dispatch_login = login_tools(os.environ)
+        except (OSError, ValueError, subprocess.TimeoutExpired): raise ValueError("remote login shell could not resolve Node.js") from None
+        node = login_executable(self.dispatch_login, "AGENTRIX_NODE")
+        login_path = self.dispatch_login.get("AGENTRIX_PATH")
+        if not node or not login_path: raise ValueError("Node.js was not found on the remote login PATH")
+        check = "const [major, minor] = process.versions.node.split('.').map(Number); if (major < 20 || major === 20 && minor < 3 || !AbortSignal.any) process.exitCode = 1"
+        try:
+            probe = subprocess.run([node, "-e", check], env=dict(os.environ, PATH=login_path), cwd=self.coding_root,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        except (OSError, subprocess.TimeoutExpired): raise ValueError("could not run remote Node.js") from None
+        if probe.returncode: raise ValueError("remote Node.js 20.3 or later is required")
+        version = self.git_version(login_path)
+        if not version or version < (2, 11): raise ValueError("remote Git 2.11 or later is required")
+        return node, login_path
+
+    def dispatch_unavailable(self, reason):
+        return "Agentrix role tools are unavailable over SSH (%s)." % reason
+
+    def role_server(self, agent):
+        if self.dispatch_server:
+            return dict(self.dispatch_server, args=self.dispatch_server["args"] + [agent])
 
     def update_skill_note(self, sequence, note, bundle):
         if sequence != self.skill_note_sequence: raise ValueError("Agent launch changed.")
@@ -1869,19 +2035,15 @@ class Worker:
             return self.skill_paths
         finally: self.skill_note_ready.set()
 
-    def update_prompt_note(self, note):
+    def update_prompt_note(self, name, note):
         # What the running Claude Code is told with the owner's next prompt; an empty note withdraws it.
         if not self.temp: raise ValueError("No agent environment.")
-        filename = os.path.join(self.temp, "prompt-note.txt")
         if not isinstance(note, str) or not note.strip():
-            try: os.unlink(filename)
+            try: os.unlink(os.path.join(self.temp, name))
             except FileNotFoundError: pass
             return False
         if len(note) > 16384: raise ValueError("Invalid prompt note.")
-        pending = filename + ".new"
-        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output: output.write(note)
-        os.replace(pending, filename)
+        self.write_routing_file(name, note)
         return True
 
     def agent_environment(self, reading_note, native=False):
@@ -1892,9 +2054,13 @@ class Worker:
         seat_map = lead.get("launchSeatsMap", lead.get("seatsMap"))
         encoded = json.dumps(seat_map, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > 8192: encoded = "null"
+        self.launch_seats = encoded
         self.write_routing_file("dispatch.json.launch-seats", encoded)
         self.skill_state_dir = os.path.join(os.path.expanduser("~"), ".local", "state", "agentrix", "ssh-skills")
+        if reading_note or lead.get("conductor"): self.install_dispatch()
         reading_note = self.startup_note(reading_note, native=native)
+        if native and lead.get("conductor") and self.dispatch_error and self.dispatch_error not in reading_note:
+            reading_note = (reading_note + " " + self.dispatch_error).strip()
         with open(os.path.join(self.temp, "skill-key.txt"), encoding="utf-8") as source: current_key = source.read()
         prune_skill_state(self.skill_state_dir, current_key)
         with open(os.path.join(self.temp, "skill-note.txt"), "w", encoding="utf-8") as output: output.write(reading_note)
@@ -1912,10 +2078,14 @@ class Worker:
         self.listener.settimeout(0.5)
         env = dict(os.environ, TERM="xterm-256color", COLORTERM="truecolor", AGENTRIX_ROOT=self.coding_root, AGENTRIX_PYTHON=sys.executable, AGENTRIX_NOTIFY_FILE=notify_file, AGENTRIX_SOCKET=self.socket_path, AGENTRIX_TOKEN=self.token, AGENTRIX_NOTIFY_COMMAND=json.dumps([sys.executable, notify_file, "notify"]))
         env["AGENTRIX_CLAUDE_BACKGROUND_FILE"] = os.path.join(self.temp, "claude-background")
-        env["AGENTRIX_CLAUDE_LEAD_FILE"] = os.path.join(self.temp, "claude-lead")
+        env["AGENTRIX_CLAUDE_LEAD_FILE"] = os.path.join(self.temp, "dispatch.json.lead")
         env["AGENTRIX_SEATS"] = encoded if native else "null"
-        if os.path.isfile(os.path.join(self.temp, "dispatch.json")): env["AGENTRIX_BOOTSTRAP"] = os.path.join(self.temp, "dispatch.json")
-        # Plain words for the Codex wrapper in BASH_SOURCE; anything that could break its TOML string is left out.
+        if self.dispatch_server:
+            env["AGENTRIX_BOOTSTRAP"] = self.dispatch_server["env"]["AGENTRIX_BOOTSTRAP"]
+            if not native:
+                server = dict(self.role_server("claude"), type="stdio")
+                env["AGENTRIX_ROLE_TOOLS"] = "--mcp-config=" + json.dumps({"mcpServers": {"agentrix": server}}, separators=(",", ":"))
+        elif self.dispatch_error and not native: env["AGENTRIX_ROLE_ERROR"] = self.dispatch_error
         # The note names where this terminal's handoff of earlier work is written on this computer (write_handoff).
         if reading_note: env["AGENTRIX_READING_NOTE"] = reading_note
         env["AGENTRIX_READING_NOTE_FILE"] = os.path.join(self.temp, "skill-note.txt")
@@ -1925,7 +2095,46 @@ class Worker:
         if env.get("FORCE_COLOR") == "0": env.pop("FORCE_COLOR", None)
         self.agent_env, self.agent_context = env, reading_note
         threading.Thread(target=self.events_loop, daemon=True).start()
+        if self.dispatch_server: threading.Thread(target=self.dispatch_replay_loop, daemon=True).start()
         return env, rc_file
+
+    def dispatch_outbox(self):
+        return os.path.join(self.temp, "dispatch-outbox", "dispatch.json")
+
+    def ack_dispatch(self, ack):
+        if not self.dispatch_server or not dispatch_ack_valid(ack, self.project_id, self.token): return
+        try:
+            with self.dispatch_ack_lock, dispatch_directory(self.dispatch_outbox()) as outbox, dispatch_directory(ack["id"], outbox) as folder:
+                if not self.stopping: write_dispatch_ack(folder, ack, self.token)
+        except (OSError, ValueError): pass
+
+    def replay_dispatch(self):
+        try:
+            with dispatch_directory(self.dispatch_outbox()) as outbox:
+                for identity in os.listdir(outbox):
+                    if self.stopping: return
+                    if not DISPATCH_ID.fullmatch(identity): continue
+                    try:
+                        with dispatch_directory(identity, outbox) as folder: self.replay_dispatch_run(identity, folder)
+                    except OSError: pass
+        except OSError: pass
+
+    def replay_dispatch_run(self, identity, folder):
+        for seq in dispatch_sequences(folder):
+            if self.stopping: return
+            try: frame = read_dispatch_frame("%d.json" % seq, folder)
+            except (OSError, ValueError): continue
+            if not isinstance(frame, dict) or frame.get("projectId") != self.project_id or frame.get("version") != 1: continue
+            if frame.get("id") != identity or frame.get("seq") != seq or not str(frame.get("type", "")).startswith("dispatch-"): continue
+            with self.sequence_lock:
+                self.sequence += 1
+                frame.update(sessionKey=self.token, sequence=self.sequence)
+                self.emit({"type": "event", "event": frame})
+
+    def dispatch_replay_loop(self):
+        while not self.dispatch_halt.wait(60):
+            self.refresh_skill_leases()
+            self.replay_dispatch()
 
     def write_background_choice(self):
         if self.temp:
@@ -1943,7 +2152,9 @@ class Worker:
         if seat_map is not None and not isinstance(seat_map, dict): raise ValueError("Invalid routing seat snapshot.")
         encoded = json.dumps(seat_map, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > 8192: raise ValueError("Routing seat snapshot too large.")
-        if lead is not None and set(lead) - {"seatsMap", "launchSeatsMap"}:
+        conductor = lead.get("conductor") if lead is not None else None
+        if conductor is not None and type(conductor) is not bool: raise ValueError("Invalid conductor mode.")
+        if lead is not None and set(lead) - {"seatsMap", "launchSeatsMap", "conductor"}:
             model, effort, fast = lead.get("model"), lead.get("effort"), lead.get("fast", False)
             ultracode = lead.get("ultracode", False)
             model_pattern = r"[A-Za-z0-9][A-Za-z0-9_.:@+/\[\]-]{0,159}"
@@ -1952,8 +2163,11 @@ class Worker:
                     or type(fast) is not bool or type(ultracode) is not bool):
                 raise ValueError("Invalid Claude lead seat.")
             text = "\n".join([model, effort, "1" if fast else "0", encoded] + (["ultracode"] if ultracode else []) + [""])
-        self.write_routing_file("claude-lead", text)
+        self.write_routing_file("dispatch.json.lead", text)
         self.write_routing_file("dispatch.json.seats", encoded)
+        if conductor is not None or self.claude_lead is None:
+            self.write_routing_file("dispatch.json.mode", "conductor" if conductor else "native")
+        self.claude_lead = lead
 
     def write_routing_file(self, name, text):
         filename = os.path.join(self.temp, name)
@@ -2069,6 +2283,7 @@ class Worker:
         with self.lock:
             if self.stopping: return
             self.stopping = True
+        self.dispatch_halt.set()
         with FAST_SETTINGS_LOCK:
             for token, run in list(FAST_SETTINGS_PENDING.items()):
                 if run[0] is self: del FAST_SETTINGS_PENDING[token]
@@ -2082,6 +2297,9 @@ class Worker:
             except OSError: pass
         if hasattr(self, "listener"): self.listener.close()
         self.release_skill_leases()
+        if self.dispatch_lease:
+            try: os.unlink(self.dispatch_lease)
+            except OSError: pass
         if self.temp and os.path.dirname(os.path.realpath(self.temp)) == os.path.realpath(tempfile.gettempdir()) and os.path.basename(self.temp).startswith("agentrix-"):
             shutil.rmtree(self.temp, ignore_errors=True)
 
@@ -2103,6 +2321,9 @@ class Channel:
             else: worker.start_terminal(config.get("cols", 90), config.get("rows", 24), config.get("readingNote", ""))
             info.update(cwd=worker.coding_root, context=getattr(worker, "agent_context", ""))
             info["skills"] = worker.skill_paths
+            if (worker.claude_lead or {}).get("conductor"):
+                server = worker.role_server("codex" if config.get("native") is True else "claude")
+                if server: info["roleServer"] = server
             worker.emit({"type": "ready", "info": info})
         except Exception as error:
             worker.emit({"type": "error", "error": str(error)[:1000]})
@@ -2129,6 +2350,8 @@ class Channel:
                 worker.emit({"type": "response", "id": message.get("id"), "ok": False, "error": "Could not update routing seats."})
         elif op == "resize": worker.resize(message["cols"], message["rows"])
         elif op == "input": self.typing.submit(worker.input, message["data"])
+        elif op == "dispatch-ack": self.requests.submit(worker.ack_dispatch, message.get("ack"))
+        elif op == "prompt-note": self.dispatch(message)
         else: self.requests.submit(self.dispatch, message)
 
     def dispatch(self, message):
@@ -2156,7 +2379,10 @@ class Channel:
                 except Exception: raise ValueError(FAST_SETTINGS_ERROR) from None
             elif op == "history": value = history_records(worker.coding_root, worker.codex_home, os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"))
             elif op == "write-handoff": value = worker.write_handoff(message.get("text"))
-            elif op == "prompt-note": value = worker.update_prompt_note(message.get("note"))
+            elif op == "prompt-note":
+                if "mode" in message: worker.update_prompt_note("mode-note.txt", message["mode"])
+                if "note" in message: worker.update_prompt_note("prompt-note.txt", message["note"])
+                value = True
             elif op == "skill-note": value =worker.update_skill_note(message.get("sequence"), message.get("note"), message.get("skills"))
             elif op == "create": value = worker.create(message.get("path", ""), message["name"], message["kind"], message.get("unique", False))
             elif op == "rename": value = worker.rename(message["path"], message["name"])

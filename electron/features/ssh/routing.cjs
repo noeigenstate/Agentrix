@@ -7,8 +7,10 @@ function refreshRemoteRouting(remote, lead, routing, { bound, changed, failed })
     if (!bound()) return;
     try {
       await remote.request('claude-lead', { claudeLead: lead }, { timeout: 3000 });
-      remote.appliedRouting = { effective: routing?.effective ?? {}, roles: routing?.roles ?? [] };
-      if (bound()) changed();
+      const previous = remote.appliedRouting?.conductor;
+      remote.appliedRouting = { effective: routing?.effective ?? {}, roles: routing?.roles ?? [],
+        ...(typeof lead.conductor === 'boolean' && { conductor: lead.conductor }) };
+      if (bound()) changed(typeof previous === 'boolean' && previous !== lead.conductor);
     } catch {
       if (bound()) failed();
     }

@@ -157,9 +157,10 @@ Six tools call the team; they are yours alone, and a role cannot call them.
   For a small edit, list each allowed file explicitly and have the role read the referenced module boundaries before editing.
 - A role that changes files reports what it changed and checked; an end with `OUT OF SCOPE` means it changed files
   outside `allow`: have them reverted and the work redone, or split the task.
-- Running `codex exec` or `claude -p` from the shell is refused in conductor mode; roles start only through
-  `start_role`. Claude Code's own Agent tool still works: its `description` starts with `[<seat>]` and the seat's
-  model applies.
+- Start roles through `start_role`. On local projects, conductor mode refuses shell delegation through `codex exec`
+  and `claude -p`. On SSH, the role tools run on the remote host with Node.js 20.3 or later and Git 2.11 or later.
+  Reopen an SSH conversation opened in native mode after enabling conductor mode. SSH roles have no interactive menu
+  for `answer_role`. Claude Code's own Agent tool still works: its `description` starts with `[<seat>]` and the seat's model applies.
 
 ### Tools you may use
 

@@ -7,7 +7,7 @@ const path = require('node:path');
 const readline = require('node:readline');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { validateSmallScope, localWindowsCodex, roleReadiness, elevatedSetupMessage, answerDetachedRole } = require('./dispatch.cjs');
+const { validateSmallScope, localWindowsCodex, roleReadiness, sshRoleReadiness, elevatedSetupMessage, answerDetachedRole } = require('./dispatch.cjs');
 const { createRoleArtifacts, stampRoleArtifacts, sweepRoleArtifacts, RETENTION, ORPHAN_RETENTION } = require('./role-artifacts.cjs');
 
 const runtime = path.join(__dirname, fs.existsSync(path.join(__dirname, 'electron')) ? 'electron' : '../electron');
@@ -175,8 +175,9 @@ function summarize(run) {
 }
 
 function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadAgent, leadSeat,
-  platform = process.platform, checkReadiness = roleReadiness, now = Date.now, tempRoot = os.tmpdir(), cleanup = false }) {
+  platform = process.platform, checkReadiness = roleReadiness, checkSshReadiness = sshRoleReadiness, now = Date.now, tempRoot = os.tmpdir(), cleanup = false }) {
   const runs = new Map();
+  const ssh = env.AGENTRIX_REMOTE_ROLE_TOOLS === '1';
   let lastRoleCwd;
   let nextSweep = 0, sweeping = false;
   function sweep() {
@@ -192,7 +193,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
   function sandboxStatus() {
     if (!readiness || readiness.until <= now()) {
       const entry = { until: Infinity };
-      entry.result = Promise.resolve().then(() => checkReadiness(cwd, env)).catch(() => null)
+      entry.result = Promise.resolve().then(() => (ssh ? checkSshReadiness : checkReadiness)(cwd, env)).catch(() => ssh ? 'unavailable' : null)
         .then(status => {
           if (status !== 'ready') entry.until = now() + READINESS_CACHE_MS;
           return status;
@@ -202,17 +203,22 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
     return readiness.result;
   }
   async function sandboxRoute(agent, seat) {
-    if (!['claude', 'codex'].includes(leadAgent) || !localWindowsCodex(agent, env, platform)) return {};
+    if (!['claude', 'codex'].includes(leadAgent) || !(ssh ? agent === 'codex' : localWindowsCodex(agent, env, platform))) return {};
     const lead = leadAgent === 'claude' ? leadSeat ?? claudeLeadSeat(env.AGENTRIX_BOOTSTRAP) : null;
-    if (leadAgent === 'claude' && (!lead || familyOf(lead.model) !== 'claude')) return {};
+    const claudeSeat = lead && familyOf(lead.model) === 'claude';
+    if (!ssh && leadAgent === 'claude' && !claudeSeat) return {};
     const status = await sandboxStatus();
-    if (status !== 'notConfigured' && status !== 'updateRequired') return {};
+    if (ssh ? status === 'ready' : status !== 'notConfigured' && status !== 'updateRequired') return {};
+    const reason = !ssh ? null : status === 'missing' ? '远端未找到 Codex。请在远端登录 shell 中安装 Codex。'
+      : '远端 Codex Linux 沙箱不可用。请管理员用 sysctl user.max_user_namespaces 检查，设为合适的正数后重试，例如 sudo sysctl -w user.max_user_namespaces=1024。';
     if (leadAgent === 'codex') {
+      if (ssh) return { instruction: `${reason} 请用 Codex 内置的子代理完成这个席位的工作。` };
       const instruction = '这台电脑尚未完成 Codex 角色沙箱设置。请用 Codex 内置的子代理完成这个席位的工作。';
       return { instruction: instruction + ' ' + elevatedSetupMessage(env) };
     }
+    if (!claudeSeat) return { instruction: `${reason} 请在模型路由中为 Claude 总指挥选择 Claude 模型后重试。` };
     return { roleFallback: { configured: seat.model, model: lead.model,
-      effort: ['low', 'medium', 'high'].includes(seat.effort) ? seat.effort : lead.effort, fast: false } };
+      effort: ['low', 'medium', 'high'].includes(seat.effort) ? seat.effort : lead.effort, fast: false }, reason };
   }
   const call = async (args, options) => {
     let output = '';
@@ -308,7 +314,8 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       if (typeof brief !== 'string' || !brief.trim()) throw new Error('A role needs a non-empty brief.');
       if (typeof title !== 'string' || !title.trim()) throw new Error('A role needs a non-empty title.');
       const configuredAgent = familyOf(seats[id].model);
-      const { instruction, roleFallback } = await sandboxRoute(configuredAgent, seats[id]);
+      const { instruction, roleFallback, reason } = await sandboxRoute(configuredAgent, seats[id]);
+      if (ssh && !conductor()) throw new Error('Conductor mode is off: the team roles are unavailable.');
       if (instruction) return { instruction };
       const agent = roleFallback ? 'claude' : configuredAgent;
       const checkout = worktree === undefined ? undefined : await createWorktree(cwd, worktree, folder, from, lastRoleCwd);
@@ -341,6 +348,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
         runs.set(started[1], run);
         lastRoleCwd = work;
         return { id: started[1], seat, started: started[2],
+          ...(reason && { instruction: `${reason} 已将此席位改派给 Claude 模型 ${roleFallback.model}。` }),
           ...(checkout && { cwd: work, branch: checkout.branch, base: checkout.base, baseSource: checkout.baseSource }) };
       } catch (error) {
         if (waitingId) runs.delete(waitingId);
@@ -367,6 +375,7 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       return selected.map((run, index) => waitState(run).some((value, field) => value !== before[index][field]) ? describe(run) : summarize(run));
     },
     async answer_role({ id, wait, choice }) {
+      if (ssh) throw new Error('SSH roles have no interactive menu to answer.');
       const run = own(id);
       if (typeof wait !== 'string' || !/^[a-f\d-]{36}$/.test(wait)) throw new Error('A current menu wait id is required.');
       if (!(Number.isInteger(choice) && choice > 0) && !(typeof choice === 'string' && choice.length > 0 && choice.length <= 512)) {
@@ -409,7 +418,8 @@ function createRoleTools({ env = process.env, cwd = process.cwd(), engine, leadA
       return { ...describe(run), stop: lines.filter(Boolean).pop() ?? null };
     },
   };
-  return { tools, list: () => TOOLS };
+  const available = () => !ssh || conductor();
+  return { tools, available, list: () => available() ? TOOLS : [] };
 }
 
 function formatRoleRows(roles, indent) {
@@ -437,6 +447,7 @@ async function serve({ roles, input = process.stdin, output = process.stdout }) 
   const pending = new Set();
   const callTool = async (id, params) => {
     try {
+      if (roles.available?.() === false) throw new Error('Conductor mode is off: the team roles are unavailable.');
       const result = await roles.tools[params.name](params.arguments || {}, controller.signal);
       reply(id, { result: { content: [{ type: 'text', text: toolResultText(params.name, result) }] } });
     }

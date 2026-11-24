@@ -6,6 +6,29 @@ const path = require('node:path');
 const os = require('node:os');
 const { randomUUID } = require('node:crypto');
 
+test('replayed SSH wakes apply the lost end once and send a signed cumulative acknowledgment to the same channel', async t => {
+  const { DispatchInbox } = require('../electron/features/agents/dispatch-inbox.cjs');
+  const { dispatchFrame, verifyDispatchFrame } = require('../electron/features/agents/dispatch-events.cjs');
+  const sessionKey = 'test-key', projectId = 'terminal', id = randomUUID(), applied = [], acks = [];
+  const inbox = new DispatchInbox({ projectId, sessionKey, apply: event => applied.push(event.seq) });
+  t.after(() => inbox.dispose());
+  const declare = dispatchFrame({ type: 'dispatch-declared', id, helperPid: process.pid, agent: 'claude', role: '执行', title: 'Task',
+    cwd: '/remote/repo', worktree: '/remote/repo', requested: { model: 'opus', effort: 'high', fast: false }, source: 'dispatch', at: 1000 },
+  { projectId, sessionKey, seq: 1 });
+  const end = dispatchFrame({ type: 'dispatch-end', id, model: 'opus', effort: 'high', fast: false, reason: 'exit', exitCode: 0, endedAt: 1001,
+    outputTokens: null, activeMs: null },
+  { projectId, sessionKey, seq: 2 });
+  const acknowledge = ack => { assert.equal(ack.type, 'dispatch-ack'); assert.equal(verifyDispatchFrame(ack, sessionKey), true); acks.push(ack.seq); };
+  await inbox.accept(declare, acknowledge);
+  assert.deepEqual(applied, [1]);
+  assert.deepEqual(acks, [1]);
+  assert.equal((await inbox.accept(end, () => { throw new Error('lost ack'); })).accepted, false);
+  await inbox.accept(end, acknowledge);
+  await inbox.accept(end, acknowledge);
+  assert.deepEqual(applied, [1, 2]);
+  assert.deepEqual(acks, [1, 2, 2]);
+});
+
 test('an unadmittable frame is counted once across wakes and sweeps and logged once per run and code', async t => {
   const { DispatchInbox } = require('../electron/features/agents/dispatch-inbox.cjs');
   const { DispatchOutbox } = require('../integration/dispatch-outbox.cjs');

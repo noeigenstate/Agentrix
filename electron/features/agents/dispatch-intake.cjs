@@ -52,11 +52,11 @@ function createDispatchIntake(deps) {
   }
 
   // True when the event is a dispatch event, which ends its handling, whether or not the gate accepted it.
-  function acceptDispatchEvent(s, project, event) {
+  function acceptDispatchEvent(s, project, event, acknowledge) {
     if (event.type !== 'dispatch-account' && !DISPATCH_EVENTS.includes(event.type)) return false;
     if (event.version === 1) {
       const inbox = bindDispatchInbox(s, project);
-      void inbox.accept(event).then(() => inbox.sweep()).catch(() => inbox.refuse(event, 'dispatch.outbox_unreadable'));
+      void inbox.accept(event, acknowledge).then(() => inbox.sweep()).catch(() => inbox.refuse(event, 'dispatch.outbox_unreadable'));
     } else applyDispatchEvent(s, project, event);
     return true;
   }
