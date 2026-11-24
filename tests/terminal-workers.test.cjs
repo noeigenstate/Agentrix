@@ -692,10 +692,13 @@ test('a read-only terminal role passes an exact short brief to the executable an
     const result = f.start(prompt, true);
     const pty = await f.launched, { args } = pty, folder = path.join(f.root, 'worker-launch', 'brief');
     const value = flag => args[args.indexOf(flag) + 1];
+    assert.equal(pty.options.env.CLAUDE_CODE_USE_POWERSHELL_TOOL, '1');
     if (Array.isArray(args)) {
       assert.equal(value('--permission-mode'), 'dontAsk');
-      assert.equal(value('--tools'), 'Read,Glob,Grep,LS');
-      for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'NotebookEdit']) assert.ok(value('--disallowedTools').split(',').includes(tool));
+      assert.equal(value('--tools'), 'Read,Glob,Grep,LS,Bash,PowerShell');
+      assert.equal(value('--allowedTools'), 'Bash,PowerShell');
+      const denied = value('--disallowedTools').split(',');
+      assert.ok(denied.includes('PowerShell(git commit *)') && denied.includes('Write'));
       if (inline) assert.deepEqual(args.slice(-2), ['--', prompt]);
       else assert.equal(args.at(-1), `Read the task brief in ${path.join(folder, 'brief.md')} and carry it out.`);
     } else {

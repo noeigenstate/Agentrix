@@ -91,3 +91,19 @@ test('routing IPC forwards saves and review actions with the exact contract argu
   assert.deepEqual(await handlers['skills:resolveRouting']('p', 'keep', 'digest'), { ok: true });
   assert.deepEqual(calls, [['project', 'terminal', true], ['project', 'p', config, null], ['p', 'keep', 'digest']]);
 });
+test('seat reads and refreshes carry the last local Claude fast refusal in conductor mode only', async () => {
+  const { registerSkillsIpc } = require('../electron/features/skills/ipc.cjs');
+  const handlers = new Map();
+  let reason = 'Fast mode requires usage credits';
+  const seatsInfo = project => ({ conductor: project !== 'native', routing: { remote: project === 'ssh' } });
+  registerSkillsIpc({ handle: (name, fn) => handlers.set(name, fn), claudeFastRefusal: () => reason,
+    skills: { seatsInfo, refreshSeats: async project => seatsInfo(project) } });
+  for (const channel of ['skills:seats', 'skills:seats-refresh']) {
+    const read = handlers.get(channel);
+    assert.equal((await read('local')).claudeFastRefusal, reason);
+    assert.equal((await read('ssh')).claudeFastRefusal, undefined);
+    assert.equal((await read('native')).claudeFastRefusal, undefined);
+  }
+  reason = null;
+  assert.deepEqual(handlers.get('skills:seats')('local'), seatsInfo('local'));
+});

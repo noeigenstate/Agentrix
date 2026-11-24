@@ -885,6 +885,10 @@ test('the MCP server lists the role tools and answers a call as an error result'
   assert.deepEqual(replies.map(reply => reply.id), [1, 2, 3, 4]);
   assert.equal(replies[0].result.serverInfo.name, 'agentrix');
   assert.deepEqual(replies[1].result.tools.map(tool => tool.name), TOOLS.map(tool => tool.name));
+  const start = replies[1].result.tools.find(tool => tool.name === 'start_role');
+  assert.match(start.description, /can run commands and decide whether to run tests and which task-related tests to run/);
+  assert.match(start.description, /leave project files untouched.*never commit, push, or run git reset --hard/);
+  assert.match(start.inputSchema.properties.readOnly.description, /Leave project files untouched.*Claude roles can run commands and tests/);
   assert.deepEqual(replies[1].result.tools.filter(tool => tool.annotations?.readOnlyHint).map(tool => tool.name),
     ['roles_status', 'wait_roles', 'role_result']);
   assert.equal(replies[2].result.isError, true);

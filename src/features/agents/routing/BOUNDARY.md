@@ -22,6 +22,7 @@ The dialog uses `src/features/agents/seats-dialog.css` for its layout and contro
 - `electron/features/skills/role-rules.mjs` (shared role validation, locks and ID generation)
 - `src/features/agents/subagent-splits.ts` (the `CallRow` type)
 - `src/shared/i18n.ts`
+- `src/shared/lead-routing-notices.ts` (formats the same fast-mode refusal as automatic lead switching)
 - `src/shared/routing-command.ts`
 - `src/shared/types.ts`
 

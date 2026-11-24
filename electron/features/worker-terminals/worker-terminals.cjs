@@ -4,7 +4,7 @@ const { createHmac, randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { withoutShims } = require('../../shared/agentrix-shims.cjs');
 const { claudeBackgroundEnvironment } = require('../../shared/claude-background.cjs');
-const { READ_ONLY_MODE, workerToolArgs } = require('../claude-runtime/decide.cjs');
+const { READ_ONLY_MODE, workerToolArgs, workerToolEnvironment } = require('../claude-runtime/decide.cjs');
 const { isTerminalResponse } = require('../../terminal-input.cjs');
 const { TranscriptTail } = require('../../transcript-tail.cjs');
 const { findClaudeSession } = require('../../claude-sessions.cjs');
@@ -240,12 +240,12 @@ function createWorkerTerminals({ spawn, claudeFile, parent, calls, hooks, runtim
     // beside it, out of that directory's reach.
     fs.mkdirSync(w.briefs, { recursive: true, mode: 0o700 });
     const brief = path.join(w.briefs, 'brief.md'), settings = path.join(w.folder, 'settings.json');
-    w.env = workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey, claudeEnvFile: path.join(w.folder, 'claude-env.sh'),
-      allowBackgroundTasks: allowBackgroundTasks() });
+    const readOnly = w.spec.readOnly;
+    w.env = workerToolEnvironment(workerEnvironment(env0.env, { shims, runId: w.runId, sessionKey: env0.sessionKey,
+      claudeEnvFile: path.join(w.folder, 'claude-env.sh'), allowBackgroundTasks: allowBackgroundTasks() }), readOnly, platform);
     w.hooks = hooks({ terminalId: w.id, sessionKey: w.key, env: w.env, cwd: w.spec.cwd });
     fs.writeFileSync(settings, workerHookSettings(w.hooks, w.spec.fast), { mode: 0o600 });
-    const readOnly = w.spec.readOnly;
-    const args = [...workerToolArgs(readOnly), ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,
+    const args = [...workerToolArgs(readOnly, platform), ...(w.resume ? ['--resume', w.resume] : []), '--settings', settings, '--add-dir', w.briefs,
       '--permission-mode', readOnly ? READ_ONLY_MODE : 'acceptEdits',
       ...(w.spec.model ? ['--model', w.spec.model] : []), ...(w.spec.effort ? ['--effort', w.spec.effort] : [])];
     if (fitsInitialArgument(file, args, prompt, platform)) args.push('--', prompt);

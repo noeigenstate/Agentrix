@@ -369,7 +369,7 @@ function createClaudeSession(spec, emit, dependencies) {
         },
         canUseTool: async (name, input, context) => {
           if (closed || stopping || run.closing) return { behavior: 'deny', message: '会话已停止。' };
-          if (name === 'AskUserQuestion') return requests.open(name, input, context);
+          if (name === 'AskUserQuestion' && !(spec.owner === 'dispatch' && spec.readOnly)) return requests.open(name, input, context);
           const decision = policy(name, input);
           if (decision.behavior === 'defer' || decision.behavior === 'ask') return requests.open(name, input, context);
           return decision.behavior === 'allow' ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: decision.reason };

@@ -25,7 +25,7 @@ const { ROLE_LIMIT } = require(path.join(runtime, 'features/codex-app-server/san
 const { connectDispatchControl } = require(path.join(runtime, 'features/agents/dispatch-control.cjs'));
 const { createCodexLocator } = require(path.join(runtime, 'features/codex-runtime/locator.cjs'));
 const { createLocator } = require(path.join(runtime, 'features/claude-runtime/locator.cjs'));
-const { READ_ONLY_MODE, workerToolArgs } = require(path.join(runtime, 'features/claude-runtime/decide.cjs'));
+const { READ_ONLY_MODE, workerToolArgs, workerToolEnvironment } = require(path.join(runtime, 'features/claude-runtime/decide.cjs'));
 const { dispatchDirectory, validSeat, REFUSAL_LIMIT, validRefusal } = require(path.join(runtime, 'features/agents/dispatch-events.cjs'));
 const { familyOf, launchSeat, liveSeatMap, launchSeatMap, parseSeatMap, seatExpectation } =
   require(path.join(runtime, 'features/agents/call-seat.cjs'));
@@ -292,7 +292,9 @@ function inlineStandards(options, files) {
 
 function standingRules(options) {
   const readOnly = isReadOnly(options), files = codeStandardFiles(options.cwd), inline = inlineStandards(options, files);
-  const scope = readOnly ? 'This task is read-only: change, create and delete no file.'
+  const claudeReview = readOnly && options.agent === 'claude';
+  const scope = claudeReview ? 'This task is read-only: do not change, create, or delete project files.'
+    : readOnly ? 'This task is read-only: change, create and delete no file.'
     : options.allow.length ? 'Change only the paths under "Files you may change"; stay inside the task.'
       : 'Change only what the task needs.';
   const standard = files.length ? `read ${files.map(file => `\`${file}\``).join(' and ')} and follow them`
@@ -300,8 +302,10 @@ function standingRules(options) {
   return ['# Standing rules\n\nAgentrix gives these to every worker. They hold unless the task below states an exception.\n',
     inline ? 'Follow the Code standards below in any code you write or review.' : `Code standard: ${standard} in any code you write or review.`,
     `Scope: ${scope}`,
-    'Do not commit or push, and do not start another worker or agent.',
+    claudeReview ? 'Do not commit, push, or run git reset --hard. Do not start another worker or agent.'
+      : 'Do not commit or push, and do not start another worker or agent.',
     'Run no GUI smoke test and never read or write the system clipboard.',
+    ...(claudeReview ? ['You may run commands and tests. Decide whether to run tests and which to run based on the task.'] : []),
     'Run only the tests the task touches, never the whole suite.',
     'Skip a named skill only if it is neither installed nor present under the repository\'s skills/ folder. Do not search elsewhere.',
     'Never ask the user. Finish independent work. Report exact refusals under ## Needs approval. Do not work around them.',
@@ -1712,6 +1716,7 @@ async function run(argv, { env = process.env, stdout = process.stdout, source = 
 
       if (killed) throw new Error('Dispatch interrupted before launch');
       if (!started) workerStartedAt = Date.now();
+      workerEnv = workerToolEnvironment(workerEnv, isReadOnly(effective));
       child = trackWorker(launch(command.file, command.args, { cwd: options.cwd, env: workerEnv, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
         detached: process.platform !== 'win32' }));
       if (killed) stop('SIGTERM');

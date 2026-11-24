@@ -17,20 +17,37 @@ function changed(current, patch) {
 
 // What Claude Code printed for one of its own commands: "Set model to `Opus 5.5` …", "Set effort level to max (…)",
 // and fast mode turned on or off.
-function claudeCommandOutput(record) {
+function claudeStdout(record) {
   const content = record.message?.content;
   const words = typeof content === 'string' ? content : Array.isArray(content) ? content.map(block => typeof block?.text === 'string' ? block.text : '').join('\n') : '';
-  const output = /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(words)?.[1].replace(/\x1b\[[0-9;]*m/g, '');
+  return /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(words)?.[1].replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+const fastEcho = /^[ \t]*(?:↯\s*|Kept\s+)?Fast mode\s+(?:is (?:now )?)?(on|enabled|off|disabled)\b/i;
+const fastEnabled = /^(?:on|enabled)$/i;
+
+function claudeFastModeEcho(record) {
+  if (record?.type !== 'user' || record.isSidechain || record.isMeta || record.isCompactSummary) return null;
+  const output = claudeStdout(record);
+  if (!output) return null;
+  const reason = /^[ \t]*(?:↯\s*)?Fast mode unavailable:\s*(.+)/i.exec(output)?.[1].trim();
+  if (!reason && !fastEnabled.test(fastEcho.exec(output)?.[1] ?? '')) return null;
+  const at = Date.parse(record.timestamp);
+  return Number.isFinite(at) ? { at, reason: reason || null } : null;
+}
+
+function claudeCommandOutput(record) {
+  const output = claudeStdout(record);
   if (!output) return null;
   const model = /^\s*Set model to\s+`?([^`\n(]+?)`?(?:\s+\(|\s+and\b|\s+for this session only\b|\s*$)/im.exec(output)?.[1];
   const effort = /^\s*Set effort level to\s+([a-z]+)\b/im.exec(output)?.[1];
-  const fast = /^[ \t]*(?:↯\s*|Kept\s+)?Fast mode\s+(?:is (?:now )?)?(on|enabled|off|disabled)\b/i.exec(output)?.[1];
+  const fast = fastEcho.exec(output)?.[1];
   const fastModel = fast && /\bmodel set to\s+`?([^`·\n]+?)`?(?:\s*·|\s*$)/i.exec(output)?.[1];
   const standaloneUltra = /^\s*Ultracode (?:on|off) \(|^\s*Ultracode off\. Effort stays \w+\./i;
   const ultracode = (effort || standaloneUltra.test(output)) && /\bUltracode\s+(on|off)\b/i.exec(output)?.[1];
   if (!model && !effort && !fast && !ultracode) return null;
   return { model: text(model || fastModel), effort: text(effort)?.toLowerCase() ?? null,
-    fast: fast ? /^(?:on|enabled)$/i.test(fast) : null, ultracode: ultracode ? ultracode.toLowerCase() === 'on' : null };
+    fast: fast ? fastEnabled.test(fast) : null, ultracode: ultracode ? ultracode.toLowerCase() === 'on' : null };
 }
 
 // The settings after this record; the same object when it changes nothing.
@@ -61,4 +78,4 @@ function agentSettings(current, agent, record) {
   return current;
 }
 
-module.exports = { agentSettings };
+module.exports = { agentSettings, claudeFastModeEcho };

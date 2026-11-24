@@ -4,12 +4,32 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { decide } = require('../electron/features/claude-runtime/decide.cjs');
+const { decide, workerToolArgs, workerToolEnvironment } = require('../electron/features/claude-runtime/decide.cjs');
 const { fact } = require('../electron/features/claude-runtime/facts.cjs');
 const { codesOf } = require('../electron/shared/reason.cjs');
 
 const root = path.join(__dirname, '..');
 const of = (name, code, fields) => fact(name, code, { source: 'test', observedAt: 1, ...fields });
+test('read-only CLI roles allow shells and deny three Git operations on each shell', () => {
+  const denied = 'Edit,Write,MultiEdit,NotebookEdit,EnterPlanMode,ExitPlanMode,AskUserQuestion,mcp__*';
+  const bash = 'Bash(git commit *),Bash(git push *),Bash(git reset *--hard*)';
+  const powershell = 'PowerShell(git commit *),PowerShell(git push *),PowerShell(git reset *--hard*)';
+  assert.deepEqual(workerToolArgs(true, 'win32'), ['--tools', 'Read,Glob,Grep,LS,Bash,PowerShell',
+    '--allowedTools', 'Bash,PowerShell', '--disallowedTools', [denied, bash, powershell].join(',')]);
+  assert.deepEqual(workerToolArgs(true, 'linux'), ['--tools', 'Read,Glob,Grep,LS,Bash',
+    '--allowedTools', 'Bash', '--disallowedTools', [denied, bash].join(',')]);
+  assert.deepEqual(workerToolArgs(false, 'win32'), ['--disallowedTools', 'EnterPlanMode']);
+});
+
+test('PowerShell defaults on for Windows read-only CLI workers when the environment has no preference', () => {
+  const env = {}, optedOut = { claude_code_use_powershell_tool: '0' };
+  assert.deepEqual(workerToolEnvironment(env, true, 'win32'), { CLAUDE_CODE_USE_POWERSHELL_TOOL: '1' });
+  assert.deepEqual(env, {});
+  assert.equal(workerToolEnvironment(optedOut, true, 'win32'), optedOut);
+  assert.equal(workerToolEnvironment(env, false, 'win32'), env);
+  assert.equal(workerToolEnvironment(env, true, 'linux'), env);
+});
+
 // Each fact decide() reads, in the order it explains a refusal.
 const FACTS = {
   no_key: of('key', 'no_key'), invalid_key: of('key', 'invalid_key'),

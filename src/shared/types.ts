@@ -292,6 +292,7 @@ export type RoutingSource = {
 export type SeatsInfo = {
   skill: string;
   conductor: boolean;
+  claudeFastRefusal?: string;
   seats: SeatId[];
   roles: TeamRole[];
   lead: SeatId;

@@ -4,7 +4,7 @@ import { OPEN_SEATS, type SeatsRequest, type SeatsTarget } from '../../shared/ro
 
 const SeatsDialog = lazy(() => import('./SeatsDialog').then(module => ({ default: module.SeatsDialog })));
 
-export function SeatsHost() {
+export function SeatsHost({ onError }: { onError: (message: string) => void }) {
   const [dialog, setDialog] = useState<(SeatsTarget & { info: SeatsInfo; opener: HTMLElement | null; request: number }) | null>(null);
   const [migration, setMigration] = useState<{ text: string; acknowledged?: boolean } | null>(null);
   const rememberMigration = (text: string) => setMigration(current => current?.text === text ? current : { text });
@@ -25,7 +25,7 @@ export function SeatsHost() {
   }, []);
 
   return dialog && <Suspense fallback={null}><SeatsDialog key={dialog.request} info={dialog.info} projectId={dialog.projectId} terminalId={dialog.terminalId}
-    migration={migration?.acknowledged ? undefined : migration?.text} onMigration={rememberMigration}
+    migration={migration?.acknowledged ? undefined : migration?.text} onMigration={rememberMigration} onError={onError}
     onDismissMigration={() => setMigration(current => current && current.text === migration?.text ? { ...current, acknowledged: true } : current)}
     onClose={() => { setDialog(null); dialog.opener?.focus(); }} /></Suspense>;
 }

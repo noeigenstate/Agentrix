@@ -150,6 +150,8 @@ Six tools call the team; they are yours alone, and a role cannot call them.
   stay in scope (no file changes for a read-only role), no commit or push, no other workers, no GUI smoke tests or
   clipboard, only the tests the task touches, what to report, and the brief's language. Do not repeat any of these;
   state only an exception the task needs.
+- A read-only role can run commands and tests but changes no project file and never commits, pushes or runs
+  `git reset --hard`. Let a reviewing role decide from the task whether to run tests and which; do not hand it a test list.
 - Set `small: true` for a read-only lookup with a named target or an edit limited to one or two named files in `allow`.
   Small briefs omit project memory and also omit active roles and repository state for lookups.
   For a small edit, list each allowed file explicitly and have the role read the referenced module boundaries before editing.

@@ -2,10 +2,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { matches } = require('../../boundaries.cjs');
 const { deniedAction } = require('../agents/start-failure.cjs');
-const { READ_TOOLS, EDIT_TOOLS } = require('../claude-runtime/decide.cjs');
+const { READ_TOOLS, EDIT_TOOLS, forbiddenGit } = require('../claude-runtime/decide.cjs');
 const DENIALS = {
   unsupported_tool: '此角色不允许使用该工具。',
-  read_only: '此角色是只读的，不能执行命令或编辑文件。',
+  read_only: '此角色是只读的，不能使用编辑工具。',
   git_forbidden: '任务策略禁止此 Git 操作。',
   outside_worktree: '目标位于角色工作目录之外。',
   invalid_path: '任务策略无法验证目标路径。',
@@ -14,7 +14,7 @@ const DENIALS = {
 };
 const READ = new Set(READ_TOOLS);
 const EDIT = new Set(EDIT_TOOLS);
-const workerTools = readOnly => [...READ_TOOLS, ...(readOnly ? [] : ['Bash', ...EDIT_TOOLS])];
+const workerTools = readOnly => [...READ_TOOLS, 'Bash', ...(readOnly ? [] : EDIT_TOOLS)];
 function realTarget(file) {
   let parent = path.resolve(file), suffix = [];
   while (!fs.existsSync(parent)) {
@@ -37,9 +37,9 @@ function createPolicy(spec, audit = () => {}) {
     let reasonCode = 'allowed';
     if (spec.owner !== 'dispatch') return { behavior: 'defer', reasonCode: 'owner', reason: '由 Claude Code 权限规则决定。' };
     if (intent.operation === 'network' || intent.operation === 'other' || name === 'PowerShell') reasonCode = 'unsupported_tool';
-    if (spec.readOnly && ['command', 'edit'].includes(intent.operation)) reasonCode = 'read_only';
+    if (spec.readOnly && intent.operation === 'edit') reasonCode = 'read_only';
     // This catches explicit forbidden Git operations; it is a policy check, not a shell sandbox.
-    if (intent.command && /\bgit\b[^\n;&|]*(?:\bcommit\b|\bpush\b|\breset\b[^\n;&|]*--hard\b)/i.test(intent.command)) reasonCode = 'git_forbidden';
+    if (intent.command && forbiddenGit.test(intent.command)) reasonCode = 'git_forbidden';
     for (const file of intent.paths) {
       if (file.startsWith('~') || /^[A-Za-z]:[^\\/]/.test(file)) { reasonCode = 'outside_worktree'; continue; }
       let relative;

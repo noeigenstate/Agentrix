@@ -5,9 +5,27 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const skip = !process.env.AGENTRIX_REAL_CLAUDE && 'set AGENTRIX_REAL_CLAUDE';
+const { harness, opening, textBlock, finish } = require('./fixtures/claude-real.cjs');
 
-test('a real Claude Code worker terminal reports through its hooks and gives its final text', { skip, timeout: 90000 }, async t => {
-  const { harness, opening, textBlock, finish } = require('./fixtures/claude-real.cjs');
+const answer = data => [opening(data), ...textBlock(0, 'REAL WORKER ANSWER'), ...finish('end_turn')];
+const permissionProbes = [
+  ['Bash', { command: 'node --test probe.test.cjs', description: 'Run the probe test' }],
+  ['Bash', { command: 'git commit -m probe', description: 'Try a Git commit' }],
+  ['Write', { file_path: 'made.txt', content: 'blocked' }],
+];
+
+function probeReply(data, results) {
+  const blocks = data.messages.flatMap(({ content }) => Array.isArray(content) ? content : []);
+  const tools = blocks.filter(block => block.type === 'tool_use');
+  for (const tool of tools) results.set(tool.id, blocks.find(block => block.tool_use_id === tool.id && block.type === 'tool_result'));
+  if (tools.length === permissionProbes.length) return answer(data);
+  const [name, input] = permissionProbes[tools.length];
+  return [opening(data), { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: `toolu_probe${tools.length}`, name, input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
+    { type: 'content_block_stop', index: 0 }, ...finish('tool_use')];
+}
+
+for (const readOnly of [false, true]) test(`a real ${readOnly ? 'read-only' : 'writable'} Claude Code worker terminal completes through its hooks`, { skip, timeout: 90000 }, async t => {
   const { createWorkerTerminals } = require('../electron/features/worker-terminals/worker-terminals.cjs');
   const { createEventStream } = require('../electron/features/native-session/events.cjs');
   const { createHookServer } = require('../electron/features/terminal-events/hook-server.cjs');
@@ -15,7 +33,8 @@ test('a real Claude Code worker terminal reports through its hooks and gives its
   const { terminalHooks } = require('../electron/features/terminal-events/hook-channel.cjs');
   const { createEventServer } = require('../electron/events.cjs');
   const pty = require('node-pty');
-  const f = await harness(t, data => [opening(data), ...textBlock(0, 'REAL WORKER ANSWER'), ...finish('end_turn')]);
+  const results = new Map(), f = await harness(t, readOnly ? data => probeReply(data, results) : answer);
+  if (readOnly) fs.writeFileSync(path.join(f.cwd, 'probe.test.cjs'), 'require("node:test")("WORKER_TEST_OK", () => {});\n');
   const env = { ...f.env }; delete env.CI;
   const run = { runId: 'offline-run', projectId: 'terminal', agent: 'claude', cwd: f.cwd, local: true, leadMode: 'terminal' };
   const runtimeDir = path.join(path.dirname(f.cwd), 'runtime'), integration = path.join(__dirname, '../integration');
@@ -52,7 +71,7 @@ test('a real Claude Code worker terminal reports through its hooks and gives its
       shell: { posix: process.platform !== 'win32', script: path.join(integration, 'claude-hook.ps1'), node: process.execPath, helper: path.join(integration, 'agent-event.cjs'),
         powershellPath: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') } }) });
   const spec = { agent: 'claude', projectId: 'terminal', terminalId: 'offline-run', runtimeSessionId: 'offline-run', runId: 'offline-run', cwd: f.cwd,
-    model: 'claude-sonnet-4-5', permission: 'acceptEdits' };
+    model: 'claude-sonnet-4-5', readOnly, permission: readOnly ? 'dontAsk' : 'acceptEdits' };
   const events = [];
   const runtime = terminals.create(run, spec, createEventStream(spec, event => events.push(event)));
   await runtime.start();
@@ -64,6 +83,16 @@ test('a real Claude Code worker terminal reports through its hooks and gives its
   assert.equal(events.find(event => event.type === 'item.upsert' && event.payload.kind === 'agent-message')?.payload.content.text, 'REAL WORKER ANSWER');
   assert.equal(events.find(event => event.type === 'path.changed').payload.selected, 'terminal-worker');
   assert.ok(f.stats.keys.every(key => key === env.ANTHROPIC_API_KEY), 'the worker used the throwaway profile\'s key only');
+  if (readOnly) {
+    const [ran, git, write] = results.values();
+    assert.ok(ran);
+    assert.notEqual(ran.is_error, true, JSON.stringify(ran.content));
+    assert.match(JSON.stringify(ran.content), /WORKER_TEST_OK/);
+    assert.equal(git?.is_error, true);
+    assert.match(JSON.stringify(git.content), /denied|permission|not allowed/i);
+    assert.equal(write?.is_error, true);
+    assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false);
+  }
   await runtime.close();
   assert.ok(exited, 'close waits for the PTY exit, not just the shutdown deadline');
   if (process.platform === 'win32') {

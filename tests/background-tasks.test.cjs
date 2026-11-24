@@ -5,18 +5,18 @@ const vm = require('node:vm');
 const capture = require('./fixtures/claude-user-round-background.json');
 const modulePath = '../electron/features/agents/background-tasks.cjs';
 
-function hostFeed(t) {
+function hostFeed(t, { kind = 'local', noteClaudeFastMode } = {}) {
   const path = require('node:path');
   const { AgentCalls } = require('../electron/features/agents/agent-calls.cjs');
   const { createClaudeActivity } = require('../electron/features/terminal-events/claude-activity.cjs');
   const calls = new AgentCalls({ terminalId: 'terminal-1', local: false, now: () => 10000 }); t.after(() => calls.dispose());
-  const root = path.resolve('synthetic-claude-home'), project = { id: 'project', path: root, kind: 'local' };
-  let tail, read, armed = 0;
+  const root = path.resolve('synthetic-claude-home'), project = { id: 'project', path: root, kind };
+  let tail, read, armed = 0, remoteRecords = [];
   const s = { terminalId: 'terminal-1', agent: 'claude', codexActive: true, promptQueue: { finishedAt: 0 },
     conversation: { beginHistory() {}, endHistory() {}, reset() {} }, actions: { reset() {} }, usage: { reset() {} },
-    completionWork: { record() {}, reset: () => false } };
+    completionWork: { record() {}, reset: () => false }, terminal: { request: async () => ({ records: remoteRecords.splice(0), historyDone: true }) } };
   const deps = { sessions: new Map([['terminal-1', s]]), store: { expectCompletion() { armed++; } },
-    callsOf: () => calls, claudeConfigDir: () => root, prepareReading: async () => {}, usageHistory() {},
+    callsOf: () => calls, claudeConfigDir: () => root, prepareReading: async () => {}, usageHistory() {}, noteClaudeFastMode,
     TranscriptTail: class {
       constructor(filename, options) { this.filename = filename; this.options = options; tail = this; this.records = []; this.buffer = ''; this.offset = 0; this.fileSize = 0; }
       async read(deliver) { for (const record of this.records.splice(0)) deliver(record); }
@@ -24,10 +24,10 @@ function hostFeed(t) {
     monitorActivity: reader => { read = reader; return { poll: reader, stop() {} }; }, readEvery: () => 250,
     claudeConversation() {}, describeActions() {}, claudeRecord() {}, noteSettings() {}, applyActivity() {} };
   const activity = createClaudeActivity(deps);
-  const follow = id => activity.followClaude(project, s, { sessionId: id, transcriptPath: path.join(root, `${id}.jsonl`) });
+  const follow = id => activity.followClaude(project, s, { sessionId: id, transcriptPath: kind === 'ssh' ? '/project/' + id + '.jsonl' : path.join(root, id + '.jsonl') });
   follow('provider');
   return { calls, s, follow, tail: () => tail, historical: record => tail.options.onWorkRecord(record),
-    live: async record => { tail.records.push(record); await read(); }, armed: () => armed,
+    live: async record => { (kind === 'ssh' ? remoteRecords : tail.records).push(record); await read(); }, armed: () => armed,
     shown: () => calls.usage?.(null)?.background || [] };
 }
 
@@ -57,6 +57,35 @@ test('a new transcript binding resets background usage and ignores the previous 
   assert.equal(host.shown()[0].endedAt, 3200); assert.equal(host.armed(), 0);
 });
 const stamp = at => new Date(at).toISOString();
+
+test('local fast-mode refusals survive restart and ON clears them even across older replays', async t => {
+  const os = require('node:os'), path = require('node:path');
+  const { WorkspaceStore } = require('../electron/state.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentrix-fast-refusal-')), file = path.join(dir, 'workspace.json');
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let store = new WorkspaceStore(file);
+  const noteClaudeFastMode = echo => store.recordClaudeFastMode(echo);
+  const local = hostFeed(t, { noteClaudeFastMode }), ssh = hostFeed(t, { kind: 'ssh', noteClaudeFastMode });
+  const output = (words, at) => ({ type: 'user', timestamp: stamp(at), message: { content: '<local-command-stdout>' + words + '</local-command-stdout>' } });
+  const reason = 'Fast mode requires usage credits · /usage-credits to turn them on';
+  const refusal = output('Fast mode unavailable: ' + reason, 1000);
+  await ssh.live(refusal);
+  assert.equal(store.claudeFastMode, null);
+  await local.live(refusal);
+  store = new WorkspaceStore(file);
+  assert.deepEqual(store.claudeFastMode, { at: 1000, reason });
+  await ssh.live(output('Fast mode ON', 2000));
+  assert.equal(store.claudeFastMode.reason, reason);
+  await local.live(output('Fast mode OFF', 2000));
+  assert.equal(store.claudeFastMode.reason, reason);
+  await local.live(output('Fast mode unavailable: Disabled by your organization', 2500));
+  assert.equal(store.claudeFastMode.reason, 'Disabled by your organization');
+  await local.live(output('Fast mode ON', 3000));
+  store = new WorkspaceStore(file);
+  local.historical(refusal);
+  assert.deepEqual(store.claudeFastMode, { at: 3000, reason: null });
+  assert.equal(local.armed(), 0);
+});
 const tool = (name, id, input, at = 1000) => ({ type: 'assistant', timestamp: stamp(at), message: { content: [{ type: 'tool_use', name, id, input }] } });
 const result = (id, toolUseResult, at = 1100, { error = false, content = '' } = {}) => ({ type: 'user', timestamp: stamp(at), toolUseResult,
   message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: error, content }] } });

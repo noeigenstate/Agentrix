@@ -1,10 +1,15 @@
-function registerSkillsIpc({ handle, skills, dialog, getWindow }) {
+function registerSkillsIpc({ handle, skills, dialog, getWindow, claudeFastRefusal }) {
   async function afterRefresh(result) {
     if (result.ok) await skills.deliveryRefresh;
     return result;
   }
-  handle('skills:seats', (projectId, terminalId) => skills.seatsInfo(projectId, terminalId, true));
-  handle('skills:seats-refresh', (projectId, terminalId, reason = 'manual') => skills.refreshSeats(projectId, terminalId, reason === 'dialog' ? 'dialog' : 'manual'));
+  function withFastRefusal(info) {
+    const reason = info?.conductor && !info.routing?.remote && claudeFastRefusal?.();
+    return reason ? { ...info, claudeFastRefusal: reason } : info;
+  }
+  handle('skills:seats', (projectId, terminalId) => withFastRefusal(skills.seatsInfo(projectId, terminalId, true)));
+  handle('skills:seats-refresh', async (projectId, terminalId, reason = 'manual') =>
+    withFastRefusal(await skills.refreshSeats(projectId, terminalId, reason === 'dialog' ? 'dialog' : 'manual')));
   handle('skills:setRouting', (scope, projectId, config, base) => afterRefresh(skills.setRouting(scope, projectId, config, base)));
   handle('skills:resolveRouting', (projectId, action, digest) => afterRefresh(skills.resolveRouting(projectId, action, digest)));
   handle('skills:list', () => skills.list());

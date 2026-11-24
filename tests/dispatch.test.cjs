@@ -1025,6 +1025,11 @@ test('standing rules inline bounded standards for normal briefs and keep referen
       if (small) assert.match(text, /^- Decide implementation.+## Needs decision.+$/m);
     }
     assert.match(claude, /^- End with a plain text answer\. Never call ExitPlanMode\.$/m);
+    assert.match(claude, /do not change, create, or delete project files/);
+    assert.match(claude, /may run commands and tests\. Decide whether to run tests and which to run based on the task/);
+    assert.match(claude, /Do not commit, push, or run git reset --hard/);
+    assert.match(claude, /Run only the tests the task touches, never the whole suite/);
+    assert.match(claude, /what you ran with its result/);
     assert.doesNotMatch(codex, /ExitPlanMode/);
   }
   for (const rule of [/code-standard skill this session was given/, /Change only the paths under "Files you may change"/, /Do not commit or push/,
@@ -1062,8 +1067,11 @@ test('a read-only Claude headless role disables writing tools and detects tracke
   const { args } = JSON.parse(await fs.readFile(f.capture, 'utf8'));
   const value = flag => args[args.indexOf(flag) + 1];
   assert.equal(value('--permission-mode'), 'dontAsk');
-  assert.equal(value('--tools'), 'Read,Glob,Grep,LS');
-  for (const tool of ['Bash', 'PowerShell', 'Edit', 'Write', 'NotebookEdit']) assert.ok(value('--disallowedTools').split(',').includes(tool));
+  const shell = process.platform === 'win32' ? ',PowerShell' : '';
+  assert.equal(value('--tools'), 'Read,Glob,Grep,LS,Bash' + shell);
+  assert.equal(value('--allowedTools'), 'Bash' + shell);
+  assert.ok(value('--disallowedTools').split(',').includes('Bash(git commit *)'));
+  assert.ok(value('--disallowedTools').split(',').includes('Write'));
   assert.match(result.stdout, /reason exit · files changed during run: 2 \(author unknown\)/);
   const end = f.events.find(event => event.type === 'dispatch-end');
   assert.equal(end.reason, 'exit');

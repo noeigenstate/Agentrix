@@ -121,6 +121,7 @@ function compile(file, hooks, stubs = {}) {
       routingRoleName: text => stubs.language === 'zh' ? text : en['席位 · ' + text] ?? en[text] ?? text,
       openSeats: detail => window.dispatchEvent(new CustomEvent('agentrix:open-seats', { detail })) };
     if (name === '../../shared/model-name') return require('../src/shared/model-name.ts');
+    if (name === '../../shared/lead-routing-notices.ts') return require('../src/shared/lead-routing-notices.ts');
     if (name.endsWith('.css')) return {};
     if (name in stubs) return stubs[name];
     return name.startsWith('.') ? {} : original(name);
@@ -799,6 +800,60 @@ test('the picker footer changes effort and fast and explains unsupported fast mo
   assert.deepEqual(h.calls, [['project', 'p1', { roles: {
     architect: { model: 'opus', effort: 'ultra' }, developer: { model: 'gpt-6.2-sol', effort: 'high' }, designer: { fresh: true },
   } }, 'at-open']]);
+});
+
+test('the Claude lead warns once per open dialog before enabling fast and leaves other switches alone', t => {
+  const reason = 'Fast mode requires usage credits · /usage-credits to turn them on';
+  const errors = [];
+  const info = seatsInfo({ claudeFastRefusal: reason, catalog: catalog({ opus: { fast: true } }), project: {
+    orchestrator: { model: 'opus', effort: 'high', fast: false },
+    architect: { model: 'opus', effort: 'high', fast: false },
+  } });
+  info.config.conductor = true;
+  const h = dialogHarness(t, info, { dialog: { onError: message => errors.push(message) } });
+  const fast = slot => byAttr(liveMenu(h), 'data-fast', slot);
+  const checked = slot => fast(slot).props['aria-checked'];
+  const lead = 'orchestrator';
+  assert.equal(textOf(byAttr(openMenu(h, lead), 'data-fast-note')), 'Claude Code refused fast mode last time. Click again to retry.');
+  fast(lead).props.onClick();
+  assert.deepEqual(errors, [en['快速模式未开启：{reason}'].replace('{reason}', reason)]);
+  assert.equal(checked(lead), false);
+  assert.equal(byAttr(h.render(), 'data-save').props.disabled, true);
+  assert.deepEqual(h.calls, []);
+  h.render().props.children.props.onKeyDown(keyEvent('Escape'));
+  openMenu(h, lead);
+  fast(lead).props.onClick();
+  assert.equal(checked(lead), true);
+  assert.equal(byAttr(h.render(), 'data-save').props.disabled, false);
+  fast(lead).props.onClick();
+  assert.equal(checked(lead), false);
+  assert.equal(errors.length, 1);
+
+  const untouched = [];
+  const other = dialogHarness(t, info, { dialog: { onError: message => untouched.push(message) } });
+  byAttr(openMenu(other, 'architect'), 'data-fast', 'architect').props.onClick();
+  assert.equal(byAttr(liveMenu(other), 'data-fast', 'architect').props['aria-checked'], true);
+  const menu = openMenu(other, lead);
+  byAttr(menu, 'data-assign', 'gpt-6.2-sol').props.onClick();
+  openMenu(other, lead);
+  byAttr(liveMenu(other), 'data-fast', lead).props.onClick();
+  assert.equal(byAttr(liveMenu(other), 'data-fast', lead).props['aria-checked'], false);
+  byAttr(liveMenu(other), 'data-fast', lead).props.onClick();
+  assert.equal(byAttr(liveMenu(other), 'data-fast', lead).props['aria-checked'], true);
+  assert.deepEqual(untouched, []);
+});
+
+test('the Claude lead enables fast directly without a refusal or with conductor mode off', async t => {
+  for (const conductor of [true, false]) await t.test(String(conductor), t => {
+    const info = seatsInfo({ claudeFastRefusal: conductor ? undefined : 'Refused', catalog: catalog({ opus: { fast: true } }),
+      project: { orchestrator: { model: 'opus', effort: 'high', fast: false } } });
+    info.config.conductor = conductor;
+    const h = dialogHarness(t, info, { dialog: { onError: message => assert.fail(message) } });
+    const menu = openMenu(h, 'orchestrator');
+    assert.match(textOf(byAttr(menu, 'data-fast-note')), /billed at a different price/);
+    byAttr(menu, 'data-fast', 'orchestrator').props.onClick();
+    assert.equal(byAttr(liveMenu(h), 'data-fast', 'orchestrator').props['aria-checked'], true);
+  });
 });
 
 test('picker arrows reach provider folds and other models in both directions', t => {

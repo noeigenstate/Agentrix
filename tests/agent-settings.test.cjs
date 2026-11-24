@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { agentSettings } = require('../electron/features/agents/agent-settings.cjs');
+const { agentSettings, claudeFastModeEcho } = require('../electron/features/agents/agent-settings.cjs');
 const { modelName } = require('../src/shared/model-name.ts');
 
 const replay = (agent, records) => records.reduce((current, record) => agentSettings(current, agent, record), null);
@@ -59,6 +59,17 @@ test('Claude Ultracode follows its root attachments and effort feedback', () => 
   assert.deepEqual(off, { ...disabled, effort: 'xhigh' });
   assert.equal(agentSettings(off, 'claude', said('Set effort level to max (this session only): Maximum capability')).ultracode, false);
   assert.equal(agentSettings(on, 'claude', said('Ultracode off. Effort stays max.')).ultracode, false);
+});
+
+test('only dated root Claude command echoes report a fast-mode refusal or clear it', () => {
+  const reason = 'Fast mode requires usage credits · /usage-credits to turn them on';
+  const record = { ...said('Fast mode unavailable: ' + reason), timestamp: new Date(1000).toISOString() };
+  assert.deepEqual(claudeFastModeEcho(record), { at: 1000, reason });
+  assert.deepEqual(claudeFastModeEcho({ ...record, ...said('\x1b[33m↯\x1b[39m Fast mode ON · $16/$80 per Mtok') }), { at: 1000, reason: null });
+  assert.equal(claudeFastModeEcho({ ...record, ...said('Fast mode OFF') }), null);
+  assert.equal(claudeFastModeEcho({ ...record, isSidechain: true }), null);
+  assert.equal(claudeFastModeEcho({ ...record, message: { content: 'Fast mode unavailable: ' + reason } }), null);
+  assert.equal(claudeFastModeEcho({ ...record, timestamp: undefined }), null);
 });
 
 test("Codex's model and effort come from each turn, and fast mode from the settings it applies", () => {

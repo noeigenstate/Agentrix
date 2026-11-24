@@ -244,6 +244,9 @@ const { confirmTerminalClose, requestQuit, liveTerminalCount } = createCloseGuar
 const host = {
   sessions, nativeSpecs, projectAccounts, claudeAccounts, codexAccounts, randomUUID, send, broadcast, scheduleState, findProject,
   startTerminal, disposeTerminal, launchCommand, callsOf, prepareReading, usageHistory, noteSettings, describeActions, notifyCompletion,
+  noteClaudeFastMode: echo => {
+    try { store.recordClaudeFastMode(echo); } catch (error) { report(error); }
+  },
   refreshClaudeAccounts, localClaudeMeters, checkClaude, codexExecutable, memoryFolder, memoryDir, scrubProjectSkills, remember, roundsOf,
   summarizeTask, promptText, isLocalAgentCommand, rememberClaudeSource, claudeConfigDir, findClaudeSession, TranscriptTail, claudeRecord,
   claudeConversation, monitorActivity, createTerminalEnvironment, withoutAppImage, writeBootstrap, nativeSubagent, startupNote, READING_NOTE,
@@ -1718,7 +1721,7 @@ function registerIpc() {
   if (nativeSessions) nativeSessions.register(handle);
   else registerUnavailableNative(handle);
   if (process.platform === 'darwin') listen('titlebar:state', state => macTitlebar?.update(state));
-  registerSkillsIpc({ handle, skills, dialog, getWindow: () => window });
+  registerSkillsIpc({ handle, skills, dialog, getWindow: () => window, claudeFastRefusal: () => store.claudeFastMode?.reason });
   workerTerminals.register({ handle, listen });
   registerAgentsIpc({ handle, agents, openExternal: url => shell.openExternal(url), getSession: id => sessions.get(id), findProject,
     routingOwned: projectId => skills.routingOwned(projectId),

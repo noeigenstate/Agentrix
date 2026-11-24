@@ -205,17 +205,19 @@ test('worker policy permits general commands, rejects explicit Git and scoped pa
   assert.equal(policy('WebFetch', {}).behavior, 'deny'); assert.equal(policy('Agent', {}).behavior, 'deny');
   assert.equal(audit.length, 6);
 });
-test('read-only workers deny edits and shell and require exact SKILL authorization', t => {
+test('read-only workers use the same shell policy and deny edits', t => {
   const dir = directory(t), policy = createPolicy({ owner: 'dispatch', cwd: dir, readOnly: true, allow: ['**'] });
   assert.equal(policy('Read', { file_path: path.join(dir, 'file') }).behavior, 'allow');
-  assert.equal(policy('Bash', { command: 'echo test' }).behavior, 'deny');
+  assert.equal(policy('Bash', { command: 'node --test tests/example.test.cjs' }).behavior, 'allow');
+  assert.equal(policy('Bash', { command: 'git push' }).reasonCode, 'git_forbidden');
+  assert.equal(policy('PowerShell', { command: 'Write-Output test' }).behavior, 'deny');
   assert.equal(policy('Write', { file_path: path.join(dir, 'file') }).behavior, 'deny');
   assert.equal(createPolicy({ owner: 'dispatch', cwd: dir, allow: ['**'] })('Edit', { file_path: path.join(dir, 'SKILL.md') }).reasonCode, 'skill_not_authorized');
 });
 
-test('a read-only SDK role opens a non-plan query with only reading tools', async t => {
-  const { runtime, spec, fake } = setup(t);
-  const worker = runtime.create({ ...spec, owner: 'dispatch', readOnly: true }, () => {});
+test('a read-only SDK role exposes Bash and automatically refuses disallowed requests', async t => {
+  const { runtime, spec, fake } = setup(t, { auto: false }), events = [];
+  const worker = runtime.create({ ...spec, owner: 'dispatch', readOnly: true }, event => events.push(event));
   t.after(() => worker.close());
   await worker.start();
   worker.send({ clientMessageId: randomUUID(), text: 'Inspect the repository.' });
@@ -223,10 +225,18 @@ test('a read-only SDK role opens a non-plan query with only reading tools', asyn
   const { options } = fake.calls[0];
   assert.equal(options.permissionMode, 'dontAsk');
   assert.equal(options.allowDangerouslySkipPermissions, undefined);
-  assert.deepEqual(options.tools, ['Read', 'Glob', 'Grep', 'LS']);
-  for (const tool of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'PowerShell', 'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'mcp__*']) {
-    assert.ok(options.disallowedTools.includes(tool), tool);
+  assert.deepEqual(options.tools, ['Read', 'Glob', 'Grep', 'LS', 'Bash']);
+  assert.deepEqual(options.disallowedTools, ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'EnterPlanMode', 'ExitPlanMode', 'AskUserQuestion', 'mcp__*']);
+  const policyHook = options.hooks.PreToolUse[0].hooks[0];
+  for (const [command, decision] of [['node --test tests/example.test.cjs', 'allow'], ['git push', 'deny']]) {
+    const input = { command };
+    const { hookSpecificOutput } = await policyHook({ tool_name: 'Bash', tool_input: input });
+    assert.equal(hookSpecificOutput.permissionDecision, decision);
+    assert.equal((await options.canUseTool('Bash', input, {})).behavior, decision);
   }
+  assert.equal((await options.canUseTool('AskUserQuestion', {}, {})).behavior, 'deny');
+  assert.equal(events.some(event => event.type === 'request.opened'), false);
+  assert.ok(events.some(event => event.type === 'worker.refused' && event.payload.reason === 'git_forbidden'));
 });
 
 test('a generic failed turn keeps the same SDK query for the next explicit send', async t => {

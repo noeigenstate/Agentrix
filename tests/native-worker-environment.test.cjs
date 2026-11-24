@@ -87,6 +87,7 @@ for (const sdkParent of [false, true]) test(`N5: CLI preserves owner authenticat
       const expected = sdkParent ? { PATH: '', CLAUDE_CONFIG_DIR: 'synthetic-config' } : { ...synthetic };
       delete expected.AGENTRIX_CONTROL_CAPABILITY; delete expected.AGENTRIX_BOOTSTRAP;
       delete expected.CLAUDE_CODE_ENTRYPOINT; delete expected.claude_code_entrypoint;
+      if (process.platform === 'win32') expected.CLAUDE_CODE_USE_POWERSHELL_TOOL = '1';
       // Plus the shim environment every worker gets (integration/shims/BOUNDARY.md).
       const { AGENTRIX_RUN_ID: runId, AGENTRIX_RUN_PROOF: proof } = options.env;
       assert.deepEqual(options.env, withShims(expected, { depth: 1, runId, proof })); return lifetime.child(spawn(file, args, options));

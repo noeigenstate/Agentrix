@@ -26,12 +26,13 @@ const text = description => ({ type: 'string', description });
 const TOOLS = [
   { name: 'start_role',
     description: 'Start a role with its seat settings. Returns a run id and any worktree base and source, or instructions when dispatch is unavailable. '
-      + 'Read-only Claude roles cannot run commands or tests. Use a Codex seat for those reviews or run the tests yourself.',
+      + 'Read-only Claude roles can run commands and decide whether to run tests and which task-related tests to run. '
+      + 'They must leave project files untouched and must never commit, push, or run git reset --hard.',
     inputSchema: { type: 'object', required: ['seat', 'title', 'brief'], properties: {
       seat: text('Seat id from the team table, for example developer, developer/frontend or reviewer'),
       title: text('One line: what the role does'),
       brief: text('The task only, kept short: the goal, what was wrong, what must keep working, done-when. Agentrix adds the standing rules'),
-      readOnly: { type: 'boolean', description: 'Read-only Claude roles cannot run commands or tests. Choose a Codex seat for test-running reviews or run the tests yourself.' },
+      readOnly: { type: 'boolean', description: 'Leave project files untouched. Claude roles can run commands and tests.' },
       small: { type: 'boolean', description: 'Use a short brief for a precise read-only lookup or an edit to one or two named files.' },
       allow: { type: 'array', items: { type: 'string' }, description: 'Globs of the files the role may change; required unless readOnly' },
       cwd: text('Folder to work in. With worktree, a same-repository cwd supplies HEAD when from is omitted or HEAD.'),

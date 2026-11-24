@@ -53,9 +53,27 @@ const READ_ONLY_MODE = 'dontAsk';
 const READ_TOOLS = ['Read', 'Glob', 'Grep', 'LS'];
 const EDIT_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'];
 const WORKER_DENIED = ['EnterPlanMode'];
-const READ_ONLY_DENIED = [...EDIT_TOOLS, 'Bash', 'PowerShell', ...WORKER_DENIED, 'ExitPlanMode', 'AskUserQuestion', 'mcp__*'];
-const workerToolArgs = readOnly => [...(readOnly ? ['--tools', READ_TOOLS.join(',')] : []),
-  '--disallowedTools', (readOnly ? READ_ONLY_DENIED : WORKER_DENIED).join(',')];
-const readOnlyArgs = () => workerToolArgs(true);
+const READ_ONLY_DENIED = [...EDIT_TOOLS, ...WORKER_DENIED, 'ExitPlanMode', 'AskUserQuestion', 'mcp__*'];
+const FORBIDDEN_GIT_OPERATIONS = ['commit', 'push', 'reset --hard'];
+const forbiddenGit = new RegExp('\\bgit\\b[^\\n;&|]*(?:' + FORBIDDEN_GIT_OPERATIONS
+  .map(operation => '\\b' + operation.replace(' ', '\\b[^\\n;&|]*') + '\\b').join('|') + ')', 'i');
 
-module.exports = { decide, nameOf, READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED, workerToolArgs, readOnlyArgs };
+function workerToolArgs(readOnly, platform = process.platform) {
+  if (!readOnly) return ['--disallowedTools', WORKER_DENIED.join(',')];
+  const shells = platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
+  const gitRules = shells.flatMap(shell => FORBIDDEN_GIT_OPERATIONS.map(operation => {
+    const command = operation.includes(' ') ? operation.replace(' ', ' *') + '*' : operation + ' *';
+    return `${shell}(git ${command})`;
+  }));
+  return ['--tools', [...READ_TOOLS, ...shells].join(','), '--allowedTools', shells.join(','),
+    '--disallowedTools', [...READ_ONLY_DENIED, ...gitRules].join(',')];
+}
+const readOnlyArgs = () => workerToolArgs(true);
+function workerToolEnvironment(env, readOnly, platform = process.platform) {
+  const key = 'CLAUDE_CODE_USE_POWERSHELL_TOOL';
+  if (!readOnly || platform !== 'win32' || Object.keys(env).some(name => name.toUpperCase() === key)) return env;
+  return { ...env, [key]: '1' };
+}
+
+module.exports = { decide, nameOf, READ_ONLY_MODE, READ_TOOLS, EDIT_TOOLS, READ_ONLY_DENIED, WORKER_DENIED,
+  workerToolArgs, workerToolEnvironment, readOnlyArgs, forbiddenGit };

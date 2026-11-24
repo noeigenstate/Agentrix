@@ -1,6 +1,7 @@
 const path = require('node:path');
 const { createSessionMachine, reduce, cliFields, SCREEN_IDLE_MS } = require('./session-machine.cjs');
 const { AgentCalls } = require('../agents/agent-calls.cjs');
+const { claudeFastModeEcho } = require('../agents/agent-settings.cjs');
 
 // The hook events the pipe's claude-hook.ps1 kinds stood for (C-2), by the state claudeActivity takes.
 const HOOK_STATES = { UserPromptSubmit: 'working', Stop: 'complete', StopFailure: 'failed', Notification: 'attention', PermissionRequest: 'attention',
@@ -78,6 +79,10 @@ function createClaudeActivity(deps) {
       s.activityMonitor?.stop();
       const onRecord = record => {
         if (!readCurrent()) return;
+        if (!remote && !s.nativeStructured) {
+          const echo = claudeFastModeEcho(record);
+          if (echo) deps.noteClaudeFastMode?.(echo);
+        }
         callsOf(s, project).backgroundRecord(record);
         s.completionWork?.record(record, 'claude', remote ? s.activityClockOffset || 0 : 0);
         // Finish this user round even if later background records replace the poll's final snapshot.

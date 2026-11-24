@@ -25,6 +25,7 @@ The Claude wrapper passes the launch map as a fallback. Each Agent and Task hook
 - `electron/shared/reason.cjs` (the term.* Reasons of a hook channel)
 - `electron/atomic-write.cjs` (atomic replacement of the lead file)
 - `electron/features/agents/agent-calls.cjs` (AgentCalls.forTerminal without a factory observes an existing run board during publication)
+- `electron/features/agents/agent-settings.cjs` (recognizes fast mode command echoes from the local Claude terminal)
 - `electron/features/agents/call-seat.cjs` (shared worker seat byte limit)
 
 ## Invariants

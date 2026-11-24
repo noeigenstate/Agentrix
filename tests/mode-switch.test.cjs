@@ -36,7 +36,8 @@ test('conductor startup and mode switching both give the lead the role escalatio
     assert.match(text, /## Needs decision, decide and continue or restart the role with your decision/);
     assert.match(text, /Ask the owner only about irreversible or outward-facing actions.+or product decisions they have not delegated/);
     assert.match(text, /Ask once with options and a recommendation/);
-    assert.match(text, /Read-only Claude roles cannot run commands or tests.*Codex seat or run the tests yourself/);
+    assert.match(text, /Read-only Claude roles can run commands and tests.*leave project files untouched.*never commit, push, or run git reset --hard/);
+    assert.match(text, /Let the role decide whether to run tests and which task-related tests to run/);
     assert.match(text, /## Needs approval, do the refused action yourself if allowed, or ask the owner once and restart the role with a wider allowance if approved/);
   }
   for (const text of [startup(false), modeNote(false)]) assert.doesNotMatch(text, /## Needs (decision|approval)/);

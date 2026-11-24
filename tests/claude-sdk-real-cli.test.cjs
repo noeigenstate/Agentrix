@@ -17,7 +17,10 @@ if (process.env.AGENTRIX_REQUIRE_REAL_CLI === '1' && (!cli || !fs.existsSync(cli
 const skip = !cli && 'set AGENTRIX_REAL_CLAUDE';
 const { queryOptions, inputQueue } = require('../electron/features/claude-sdk/query.cjs');
 const { createPolicy } = require('../electron/features/claude-sdk/policy.cjs');
-const { spawn } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
+const { promisify } = require('node:util');
+const { commandOf } = require('../integration/dispatch.cjs');
+const { workerToolEnvironment } = require('../electron/features/claude-runtime/decide.cjs');
 const { harness, opening, textBlock, finish, stream, toolThenDone, thinkingThenText } = require('./fixtures/claude-real.cjs');
 const { observeShellChild, windowsTreeStopError } = require('./fixtures/shell-child.cjs');
 
@@ -404,7 +407,7 @@ test('under bypass a question still reaches the owner through canUseTool', { ski
 });
 
 for (const [label, name, input, spec, written] of [
-  ['read-only Bash', 'Bash', { command: 'echo x > made.txt' }, { readOnly: true, allow: ['**'] }, false],
+  ['read-only Write', 'Write', { file_path: 'made.txt', content: 'x' }, { readOnly: true, allow: ['**'] }, false],
   ['outside scope', 'Write', { file_path: 'made.txt', content: 'x' }, { allow: ['src/**'] }, false],
   ['inside scope', 'Write', { file_path: 'made.txt', content: 'x' }, { allow: ['made.txt'] }, true],
   ['outside worktree', 'Write', { file_path: '../made.txt', content: 'x' }, { allow: ['**'] }, false],
@@ -414,6 +417,49 @@ for (const [label, name, input, spec, written] of [
   const result = await f.run({}, () => {}, { owner: 'dispatch', ...spec });
   assert.equal(fs.existsSync(path.resolve(f.cwd, input.file_path || 'made.txt')), written);
   assert.equal(result.result, written ? 'DONE' : 'REFUSED');
+});
+
+test('a real read-only SDK worker runs Bash without asking', { skip, timeout: 60000 }, async t => {
+  const f = await harness(t, useTool('Bash', { command: 'node -e "console.log(1)"', description: 'Print a number' }));
+  const result = await f.run({ canUseTool: async () => assert.fail('unexpected approval') }, () => {}, { owner: 'dispatch', readOnly: true });
+  assert.equal(result.result, 'DONE');
+});
+
+test('a real read-only print worker runs tests, refuses forbidden Git and Write and exits', { skip, timeout: 60000 }, async t => {
+  const shells = process.platform === 'win32' ? ['Bash', 'PowerShell'] : ['Bash'];
+  const commands = ['node --test probe.test.cjs', 'git commit -m probe', 'git push', 'git reset --hard'];
+  const probes = shells.flatMap(shell => commands.map(command => [shell, { command, description: 'Check worker permissions' }]));
+  probes.push(['Write', { file_path: 'made.txt', content: 'blocked' }]);
+  const results = [];
+  let toolsOffered;
+  const f = await harness(t, data => {
+    toolsOffered ??= data.tools.map(tool => tool.name);
+    const blocks = data.messages.flatMap(({ content }) => Array.isArray(content) ? content : []);
+    const tools = blocks.filter(block => block.type === 'tool_use');
+    results.splice(0, results.length, ...tools.map(tool => blocks.find(block => block.tool_use_id === tool.id && block.type === 'tool_result')));
+    if (tools.length === probes.length) return [opening(data), ...textBlock(0, 'DONE'), ...finish('end_turn')];
+    return useTool(...probes[tools.length])({ ...data, messages: [] });
+  });
+  fs.writeFileSync(path.join(f.cwd, 'probe.test.cjs'), 'require("node:test")("WORKER_TEST_OK", () => {});\n');
+  const args = commandOf({ agent: 'claude', model: 'claude-sonnet-4-5', effort: 'high', readOnly: true });
+  const env = workerToolEnvironment(f.env, true);
+  const { stdout } = await promisify(execFile)(cli, [...args, 'Run the permission probes.'], { cwd: f.cwd, env, timeout: 30000, windowsHide: true });
+  const result = stdout.trim().split(/\r?\n/).map(line => JSON.parse(line)).find(record => record.type === 'result');
+  assert.equal(result?.result, 'DONE');
+  for (const shell of shells) assert.ok(toolsOffered.includes(shell));
+  for (const [index, [tool, input]] of probes.entries()) {
+    const outcome = results[index];
+    assert.ok(outcome, tool + ' ' + (input.command || ''));
+    const content = JSON.stringify(outcome.content);
+    if (input.command === commands[0]) {
+      assert.notEqual(outcome.is_error, true, `${tool}: ${content}`);
+      assert.match(content, /WORKER_TEST_OK/);
+    } else {
+      assert.equal(outcome.is_error, true, `${tool}: ${content}`);
+      if (input.command) assert.match(content, /denied|permission|not allowed/i);
+    }
+  }
+  assert.equal(fs.existsSync(path.join(f.cwd, 'made.txt')), false);
 });
 
 test('A7 product worker policy remains active on resume and a throwing hook blocks', { skip, timeout: 60000 }, async t => {

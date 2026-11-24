@@ -8,7 +8,8 @@ const CONDUCTOR_MODE = 'Agentrix runs this session in conductor mode: forget how
   + 'For ## Needs decision, decide and continue or restart the role with your decision. Ask the owner only about irreversible or outward-facing actions '
   + '(such as publishing, sending or deleting) or product decisions they have not delegated. Ask once with options and a recommendation. '
   + 'When a role waits on a question or plan menu, decide and answer with answer_role, asking the owner only under the same rules as ## Needs decision. '
-  + 'Read-only Claude roles cannot run commands or tests. Send test-running reviews to a Codex seat or run the tests yourself. '
+  + 'Read-only Claude roles can run commands and tests. They must leave project files untouched and must never commit, push, or run git reset --hard. '
+  + 'Let the role decide whether to run tests and which task-related tests to run. '
   + 'For ## Needs approval, do the refused action yourself if allowed, or ask the owner once and restart the role with a wider allowance if approved.';
 
 // What a running session is told when the owner switches its mode: the mode itself and, for a conductor, its instructions.

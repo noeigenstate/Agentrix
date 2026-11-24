@@ -5,6 +5,7 @@ import {
   HardDrives, Infinity as InfinityIcon, LockSimple, MagnifyingGlass, PencilSimple, Person, Plus, Prohibit, ShieldCheck, SidebarSimple, Stack, User, Warning, X,
 } from '@phosphor-icons/react';
 import { aliasTarget, modelLabel } from '../../shared/routing-command.ts';
+import { routingNotice } from '../../shared/lead-routing-notices.ts';
 import type { RoleConfig, RoutingAction, RoutingConfig, SeatId, SeatIssue, SeatMap, SeatModel, SeatsInfo, TeamRole } from '../../shared/types';
 import { t, currentLanguage } from '../../shared/i18n';
 import {
@@ -109,6 +110,7 @@ function migrationLine(line: string) {
 type SeatsDialogProps = {
   info: SeatsInfo; projectId?: string; terminalId?: string; migration?: string;
   onMigration: (text: string) => void; onDismissMigration: () => void; onClose: () => void;
+  onError: (message: string) => void;
 };
 
 function useCatalog({ info: given, projectId, terminalId, onMigration }: SeatsDialogProps) {
@@ -504,6 +506,7 @@ function useDialogState(props: SeatsDialogProps) {
     popup.setMenu(null);
   }, [review.visible]);
   const edits = choiceActions(source, draft, popup), drag = useModelDrag(source.catalog, edits.drop);
+  const warnedFast = useRef(false);
   const [tab, setTab] = useState<Tab>('team');
   const switchTab = (next: Tab) => { popup.setMenu(null); panels.setPaletteOpen(false); setTab(next); };
   const { dialog, nowOpen, nowButton, paletteOpen, paletteButton, setNowOpen, setPaletteOpen, close } = panels;
@@ -528,7 +531,7 @@ function useDialogState(props: SeatsDialogProps) {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     }
   };
-  return { props, source, draft, panels, popup, edits, drag, tab, switchTab, keys, roles, review };
+  return { props, source, draft, panels, popup, edits, drag, tab, switchTab, keys, roles, review, warnedFast };
 }
 type DialogState = ReturnType<typeof useDialogState>;
 type DialogPart = { state: DialogState };
@@ -895,14 +898,24 @@ function DialogStrip({ state }: DialogPart) {
 }
 
 function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
-  const { catalog, seatName } = state.source, { working, saving } = state.draft;
+  const { catalog, seatName, info } = state.source, { working, saving, config } = state.draft;
   const { edit } = state.edits;
   const slot = role.id, seat = getSlot(working, slot);
   if (!seat) return null;
   const model = rowFor(catalog, seat.model);
   const showUltracode = allowsUltracode(seat.model, role.kind === 'lead');
   const ultracodeNote = showUltracode ? t('每个任务都用多代理工作流，消耗更多') : null;
-  const fastNote = !model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported']) : model.family === 'claude' ? t(FAST_BILLING) : undefined;
+  const refusal = config.conductor && role.kind === 'lead' && model?.family === 'claude' && model.fast ? info.claudeFastRefusal : undefined;
+  const fastNote = !model?.fast ? t(FAST_REASONS[model?.fastReason ?? 'unsupported'])
+    : refusal ? t('Claude Code 上次拒绝了快速模式，再点一次可重试') : model.family === 'claude' ? t(FAST_BILLING) : undefined;
+  const toggleFast = () => {
+    if (!seat.fast && refusal && !state.warnedFast.current) {
+      state.warnedFast.current = true;
+      state.props.onError(routingNotice({ fastError: { target: true, reason: refusal } }, t));
+      return;
+    }
+    edit(setFast(working, slot, !seat.fast, catalog));
+  };
   return <div className="seats-menu-settings">
     <div className="seats-picker-efforts" data-effort={slot} data-tile-effort={slot} role="group" aria-label={t('{seat}的推理强度', { seat: seatName(slot) })}>
       <span>{t('强度')}</span>
@@ -912,7 +925,7 @@ function PickerSettings({ state, role }: DialogPart & { role: TeamRole }) {
     </div>
     <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.fast} data-fast={slot} data-tile-fast={slot}
       disabled={saving || !model?.fast && !seat.fast} aria-label={t('{seat}快速模式', { seat: seatName(slot) })} title={fastNote}
-      onClick={() => edit(setFast(working, slot, !seat.fast, catalog))}>{t('快速')}<i /></button>
+      onClick={toggleFast}>{t('快速')}<i /></button>
     {showUltracode && <button type="button" className="seats-switch" role="switch" aria-checked={!!seat.ultracode} data-ultracode={slot}
       disabled={saving} aria-describedby="seats-ultracode-note"
       onClick={() => edit({ ok: true, map: withSlot(working, slot, { ...seat, ultracode: !seat.ultracode }) })}>Ultracode<i /></button>}

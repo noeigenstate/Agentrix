@@ -45,6 +45,14 @@ function cleanRestore(input, kind) {
   };
 }
 
+function cleanClaudeFastMode(value) {
+  if (!Number.isSafeInteger(value?.at) || value.at <= 0) return null;
+  if (value.reason === null) return { at: value.at, reason: null };
+  if (typeof value.reason !== 'string') return null;
+  const reason = value.reason.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 500);
+  return reason ? { at: value.at, reason } : null;
+}
+
 // Where the window opens: the decisions to make (the home page) or the grid of projects. Isolated test profiles
 // open on the grid they exercise unless they ask for the home page.
 const DEFAULT_START = process.env.AGENTRIX_DATA_DIR && process.env.AGENTRIX_TEST_HOME !== '1' ? 'workspace' : 'decisions';
@@ -127,6 +135,7 @@ class WorkspaceStore {
     this.projects = [];
     this.history = [];
     this.sshHistory = [];
+    this.claudeFastMode = null;
     this.settings = { ...defaults, codexSandboxPromptDismissed: false };
     this.warning = null;
     // Only a profile with no workspace file follows the system; an existing file keeps its saved theme, or the first.
@@ -164,6 +173,7 @@ class WorkspaceStore {
         };
       });
       this.settings = cleanSettings(value.settings);
+      this.claudeFastMode = cleanClaudeFastMode(value.claudeFastMode);
       this.history = cleanHistory(value.history);
       this.sshHistory = cleanSSHHistory(value.sshHistory);
       const terminalIds = new Set(this.projects.map(project => project.id));
@@ -339,10 +349,19 @@ class WorkspaceStore {
     this.projects = this.projects.filter(p => p.id !== id); this.save();
   }
   updateSettings(patch) { this.settings = cleanSettings({ ...this.settings, ...patch }); this.save(); }
+  recordClaudeFastMode(echo) {
+    const next = cleanClaudeFastMode(echo), previous = this.claudeFastMode;
+    // Keep the timestamp of an ON echo so replaying an older refusal cannot restore it.
+    if (!next || (previous && next.at <= previous.at)) return;
+    this.claudeFastMode = next;
+    try { this.save(); }
+    catch (error) { this.claudeFastMode = previous; throw error; }
+  }
   save() {
     fs.mkdirSync(path.dirname(this.filename), { recursive: true });
     const tmp = `${this.filename}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify({ version: 2, projects: this.projects, settings: this.settings, history: this.history, sshHistory: this.sshHistory }, null, 2));
+    const { projects, settings, history, sshHistory, claudeFastMode } = this;
+    fs.writeFileSync(tmp, JSON.stringify({ version: 2, projects, settings, history, sshHistory, ...(claudeFastMode && { claudeFastMode }) }, null, 2));
     for (let attempt = 0; ; attempt++) {
       try { fs.renameSync(tmp, this.filename); break; }
       catch (error) {
