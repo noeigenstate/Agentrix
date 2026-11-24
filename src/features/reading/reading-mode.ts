@@ -46,11 +46,11 @@ export function setReading(id: string, on: boolean, auto = false) {
 export function useTerminalChoice() {
   return useSyncExternalStore(listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => snapshot);
 }
-export const readingShown = (terminal: ProjectTerminal, raw: string[]) => (!!terminal.sessionId && terminal.codexActive || !!terminal.readingHistory) && !raw.includes(terminal.id);
+export const readingShown = (terminal: ProjectTerminal, raw: string[]) => (!!terminal.sessionId && terminal.cliActive || !!terminal.readingHistory) && !raw.includes(terminal.id);
 // Forget a terminal's choice once its agent has exited.
 export function agentExited(terminal: ProjectTerminal) {
-  if (!terminal.codexActive || !terminal.sessionId) releaseMonitor(terminal.id);
-  if (terminal.codexActive || terminal.readingHistory) return;
+  if (!terminal.cliActive || !terminal.sessionId) releaseMonitor(terminal.id);
+  if (terminal.cliActive || terminal.readingHistory) return;
   cancelHandoff(terminal.id); choices.delete(terminal.id); inputSeen.delete(terminal.id); automatic.delete(terminal.id);
   if (terminals.has(terminal.id)) setReading(terminal.id, true);
 }
@@ -58,7 +58,7 @@ export function agentExited(terminal: ProjectTerminal) {
 export function syncReading(terminal: ProjectTerminal) {
   agentExited(terminal);
   // Keep watching the terminal after an automatic handoff unmounts ReadingView; no new host output is needed to return.
-  if (terminal.codexActive && terminal.sessionId && terminal.agent) {
+  if (terminal.cliActive && terminal.sessionId && terminal.agent) {
     const current = monitors.get(terminal.id);
     if (current) current.terminal = terminal;
     else {
@@ -76,7 +76,7 @@ export function syncReading(terminal: ProjectTerminal) {
         for (const [id, watched] of monitors) {
           const value = live.get(id);
           if (value) syncReading(value);
-          else agentExited({ ...watched.terminal, sessionId: null, codexActive: false, readingHistory: undefined });
+          else agentExited({ ...watched.terminal, sessionId: null, cliActive: false, readingHistory: undefined });
         }
       });
     }
@@ -85,7 +85,7 @@ export function syncReading(terminal: ProjectTerminal) {
   if (monitor) monitor.signal = signal;
   const waiting = screen && terminal.agent ? readingState(terminal.agent, screen.rows, parseAgentScreen(terminal.agent, screen.rows), terminal, signal, screen).waiting
     : signal ? signal.state === 'waiting' : terminal.needsInput != null;
-  if (!waiting || !terminal.codexActive) {
+  if (!waiting || !terminal.cliActive) {
     cancelHandoff(terminal.id);
     inputSeen.delete(terminal.id);
     if (automatic.delete(terminal.id) && terminals.has(terminal.id)) setReading(terminal.id, true, true);

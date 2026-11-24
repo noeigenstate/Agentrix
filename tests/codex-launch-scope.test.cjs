@@ -79,7 +79,7 @@ test('Windows cwd aliases compare by normalized path identity while different di
 });
 
 test('shell event capability is enum-only and does not change first-word command detection', () => {
-  const fields = ['codex-started', '1', '0', 'codex', 'true', 'false', '/fixture/home', '/fixture/project', '-m'];
+  const fields = ['agent-started', '1', '0', 'codex', 'true', 'false', '/fixture/home', '/fixture/project', '-m'];
   const safe = shellEvent([...fields, 'model-only-v1'], 'fixture', 'key');
   assert.equal(safe.accountLaunch, 'model-only-v1'); assert.equal(safe.command, '-m');
   for (const proof of [undefined, true, 'unavailable', 'opaque fixture input']) {

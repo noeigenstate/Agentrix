@@ -3,6 +3,8 @@ import type { AgentCommand, NativeRunOptions } from '../../shared/types';
 import { isRoutingCommand } from '../../shared/routing-command.ts';
 import type { PanelCommand } from './native-panel.ts';
 import { CODEX_PERMISSIONS, isCodexPermissions, type CodexPermissions } from '../../shared/codex-permissions.ts';
+import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
+import { support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 
 export type ComposerAction = { kind: 'new' } | { kind: 'shell'; command: string } | { kind: 'option'; option: 'permissions'; value: string } | { kind: 'routing' } | { kind: 'panel'; command: PanelCommand };
 // One line the "/" list draws (the list's own `AgentCommand` without a view); `current` marks the value that is set now in a choice menu.
@@ -22,7 +24,8 @@ export function composerAction(words: string, agent: 'claude' | 'codex' = 'claud
   if (isRoutingCommand(words)) return { kind: 'routing' };
   const option = OPTION.exec(words);
   // /permissions is Codex's: a Claude session runs without asking, and the words stay a message there.
-  if (!option || agent !== 'codex') return null;
+  const manifest = adapterOf(agent)?.manifest;
+  if (!option || !manifest || !support(manifest, 'permissionChoice').ok) return null;
   return { kind: 'option', option: 'permissions', value: option[2]?.trim() ?? '' };
 }
 

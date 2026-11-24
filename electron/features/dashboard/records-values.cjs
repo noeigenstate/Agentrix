@@ -2,6 +2,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { routingVerdict } = require('./records-routing.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 
 const text = (value, limit = 160) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, limit) : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
@@ -39,11 +40,11 @@ function gradeRecord(grade, project, session) {
   if (!session || project?.id !== grade.projectId || session.projectId !== project.id || session.terminalId !== grade.terminalId) {
     throw new Error('评分终端与项目不匹配。');
   }
+  const adapter = adapterOf(session.agent);
   return { projectId: grade.projectId, project: text(projectName(project), 240), terminalId: grade.terminalId,
-    agent: ['codex', 'claude'].includes(session.agent) ? session.agent : null,
+    agent: adapter?.manifest.id ?? null,
     model: text(session.agentSettings?.model), effort: text(session.agentSettings?.effort, 32),
-    sessionId: text(session.agent === 'claude' ? session.claudeSessionId || session.claudeResumeId
-      : session.agent === 'codex' ? session.rootThreadId || session.reportedThreadId : null),
+    sessionId: text(adapter?.usage?.dashboardSession(session)),
     outcome: grade.outcome, submission: grade.submission,
     ...(grade.outcome === 'sent-back' && grade.note !== undefined ? { note: grade.note.slice(0, 2000) } : {}) };
 }
@@ -58,9 +59,10 @@ function quotaWindows(limits) {
 // Account series contain a stable digest, never the host or CLI-home path that selected the account.
 function quotaScope(provider, project, session) {
   const remote = project.kind === 'ssh', env = remote ? {} : session.usageEnv || process.env;
-  let home = provider === 'codex' ? session.codexHome || env.CODEX_HOME : env.CLAUDE_CONFIG_DIR;
+  const usage = adapterOf(provider)?.usage;
+  let home = usage?.quotaHome(session, env);
   if (!remote) {
-    home = path.resolve(home || path.join(os.homedir(), provider === 'codex' ? '.codex' : '.claude'));
+    home = path.resolve(home || path.join(os.homedir(), usage?.defaultHome || '.claude'));
     if (process.platform === 'win32') home = home.toLowerCase();
   }
   return createHash('sha256').update(JSON.stringify([provider, remote ? 'ssh' : 'local',

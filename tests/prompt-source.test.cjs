@@ -21,7 +21,7 @@ function activityHarness(mode = 'codex') {
   const store = new WorkspaceStore(''); store.save = () => {}; store.projects = [project];
   const expectCompletion = store.expectCompletion.bind(store);
   store.expectCompletion = (...args) => { arms++; expectCompletion(...args); };
-  const s = { terminalId: project.id, projectId: project.id, sessionId: 'pty', sessionKey: 'key', status: 'running', codexActive: true, agent,
+  const s = { terminalId: project.id, projectId: project.id, sessionId: 'pty', sessionKey: 'key', status: 'running', cliActive: true, agent,
     activitySince: 1000, activityInputAt: 0, promptQueue: new PromptQueue(() => {}, { now: () => now }), actions: new ActionLog(), submissions: new SubmissionTracker(),
     gate: { input() {} }, nativeMessages: [], native: mode.endsWith('-native') ? { registry: { list: () => [] } } : null };
   const sessions = new Map([[s.terminalId, s]]);

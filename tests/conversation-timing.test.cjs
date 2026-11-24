@@ -64,7 +64,7 @@ test('Codex and Claude are polled at 150, 400 and 900 ms after submission', t =>
   t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const agent of ['codex', 'claude']) {
     let polls = 0;
-    const session = { agent, codexActive: true, activityMonitor: { poll: () => { polls++; } } };
+    const session = { agent, cliActive: true, activityMonitor: { poll: () => { polls++; } } };
     pollAfterSubmission(session, () => true);
     assert.equal(polls, 0);
     t.mock.timers.tick(149); assert.equal(polls, 0);
@@ -80,7 +80,7 @@ test('Codex and Claude are polled at 150, 400 and 900 ms after submission', t =>
 test('a Claude follower attached after submission receives the remaining polls', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let polls = 0;
-  const session = { codexActive: true };
+  const session = { cliActive: true };
   pollAfterSubmission(session, () => true);
   t.mock.timers.tick(150);
   session.activityMonitor = { poll: () => { polls++; } };
@@ -91,18 +91,18 @@ test('a Claude follower attached after submission receives the remaining polls',
 test('delayed polls stop touching replaced or inactive sessions', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let polls = 0, current = true;
-  const session = { codexActive: true, activityMonitor: { poll: () => { polls++; } } };
+  const session = { cliActive: true, activityMonitor: { poll: () => { polls++; } } };
   pollAfterSubmission(session, () => current);
   t.mock.timers.tick(150); assert.equal(polls, 1);
   current = false; t.mock.timers.tick(750); assert.equal(polls, 1);
-  current = true; pollAfterSubmission(session, () => current); session.codexActive = false;
+  current = true; pollAfterSubmission(session, () => current); session.cliActive = false;
   t.mock.timers.tick(900); assert.equal(polls, 1);
 });
 
 test('submission poll timers can all be cancelled when disposing the terminal', t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   let polls = 0;
-  const session = { codexActive: true, activityMonitor: { poll: () => { polls++; } } };
+  const session = { cliActive: true, activityMonitor: { poll: () => { polls++; } } };
   pollAfterSubmission(session, () => true);
   for (const timer of session.submissionPolls) clearTimeout(timer);
   t.mock.timers.tick(1000); assert.equal(polls, 0);

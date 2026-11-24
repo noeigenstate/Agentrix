@@ -407,8 +407,8 @@ for (const trigger of ['always', 'first-open']) test(`${trigger} first run is cl
   assert.equal(store.options[id].firstOpenedProjects[project.id], 'first', 'a later terminal cannot replace the first agent');
   assert.ok(note(start(store, projects[1], 'other-project')).includes(firstInstruction(file, trigger)));
   store.invalidateDelivery();
-  const sessions = new Map([['one', { projectId: project.id, terminalId: 'one', sessionId: 'first', codexActive: true, skillNoteFile: 'one.txt' }],
-    ['two', { projectId: project.id, terminalId: 'two', sessionId: 'second', codexActive: true, skillNoteFile: 'two.txt' }],
+  const sessions = new Map([['one', { projectId: project.id, terminalId: 'one', sessionId: 'first', cliActive: true, skillNoteFile: 'one.txt' }],
+    ['two', { projectId: project.id, terminalId: 'two', sessionId: 'second', cliActive: true, skillNoteFile: 'two.txt' }],
     ['idle', { projectId: projects[1].id, terminalId: 'idle', sessionId: 'idle', skillNoteFile: 'idle.txt' }]]), written = new Map();
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const refresh = vm.runInNewContext('(' + main.slice(main.indexOf('function refreshSkillNotes()'), main.indexOf('// Workspace broadcasts')) + ')', {

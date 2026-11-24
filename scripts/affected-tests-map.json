@@ -364,7 +364,7 @@
     "electron/features/agents/dispatch-control.cjs": {
       "targets": [],
       "reason": "The control listener loads only Node fs for Unix socket permissions.",
-      "digest": "de86d74866b47fa312aeb52aba64350fe5b9c6af5f60dddbf22cccf09e862ce6"
+      "digest": "fe85cf284f722b10c26dceaba5e9f95f64c23db4fcfa69b996e6084118ab0103"
     },
     "electron/features/lab/sandbox.cjs": {
       "targets": [
@@ -450,7 +450,7 @@
       "reason": "Loads semver from the installed updater package; dependency/lockfile changes force full coverage."
     },
     "electron/features/native-session/host-inputs.cjs": {
-      "digest": "fd0e6b9a19f45cfd2f464008aa9b66c027123473002dd97c9c0314d56d8cc0f6",
+      "digest": "e1667bcd471e889ef10242d90cbfc62567f970517af610d93e6865302e8d9af1",
       "targets": [
         "integration/shims/intercept.cjs"
       ],
@@ -472,7 +472,7 @@
       "reason": "The lab bundles the intercept module beside its private helper copy, found beside the source or packaged helper."
     },
     "integration/shims/intercept.cjs": {
-      "digest": "41fbaff57972390b9fae51a400d1de0548866d0cf8692ac9c2ef05b45344bdfa",
+      "digest": "575ad8a362b9ebb18007e449c671fdaf0df160e98a4b5bb18507312a0be92520",
       "targets": [
         "integration/dispatch.cjs",
         "electron/features/agents/call-seat.cjs",

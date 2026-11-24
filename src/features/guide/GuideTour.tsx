@@ -38,12 +38,12 @@ export function GuideTour({ projects, focusedId, withAdd, nativeTitlebar, onClos
     {
       id: 'start', title: t('启动编码助手'), interactive: true,
       body: [project?.terminals[0]?.sessionId ? t('在这个终端里输入 codex 或 claude，按回车启动。') : t('在方框里选择 Claude Code 或 Codex：有开发记录时可以接着上次继续，也可以开始新开发。'), t('还没有安装？稍后可在设置的「编码助手」里一键安装。')],
-      target: () => visible('.project-panel .panel-terminal-area'), done: () => !!project?.codexActive,
+      target: () => visible('.project-panel .panel-terminal-area'), done: () => !!project?.cliActive,
     },
     {
       id: 'prompt', title: t('下达指令'), interactive: true,
       body: [t('直接写下要做的事，按回车发送；按 {key} 可以用说的。', { key: shortcut('voice') }), t('全部做完后，方框亮起白色呼吸光并语音提醒，你不必盯着。')],
-      target: () => visible('.project-panel'), done: () => !!project?.codexActive && project.codexActivity === 'working',
+      target: () => visible('.project-panel'), done: () => !!project?.cliActive && project.codexActivity === 'working',
     },
     {
       id: 'expand', title: t('放大查看'), interactive: true,

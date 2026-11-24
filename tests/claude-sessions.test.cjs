@@ -105,7 +105,7 @@ function mainHarness(t, f) {
   const project = { id: 'project', path: f.cwd, kind: 'local' };
   const restore = { cwd: f.cwd, agent: 'claude' };
   let resets = 0;
-  const s = { terminalId: 'terminal', projectId: project.id, sessionId: 'pty', sessionKey: 'key', agent: 'claude', codexActive: true,
+  const s = { terminalId: 'terminal', projectId: project.id, sessionId: 'pty', sessionKey: 'key', agent: 'claude', cliActive: true,
     actions: new ActionLog(), conversation: new ConversationLog(), promptQueue: { reset() {} }, submissions: { reset() {} } };
   const reset = s.conversation.reset.bind(s.conversation); s.conversation.reset = () => { resets++; reset(); };
   const sessions = new Map([[s.terminalId, s]]);
@@ -198,7 +198,7 @@ test('SSH Claude ignores stale reads after a session change or terminal exit and
   pending.shift()({ records: [user('Old answer')], reset: true, historyDone: true });
   await old; assert.equal(h.resets(), 0); assert.equal(h.s.conversation.list.length, 0);
   const exited = h.s.activityMonitor.poll();
-  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'codex-exited', agent: 'claude' });
+  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'agent-exited', agent: 'claude' });
   pending.shift()({ records: [user('Late answer')], reset: true, historyDone: true });
   await exited; assert.equal(h.resets(), 0); assert.equal(h.s.conversation.list.length, 0);
 });
@@ -340,13 +340,13 @@ test('restored sessions follow before a hook and keep history when the agent-sta
   const h = mainHarness(t, f);
   Object.assign(h.restore, { threadId: id });
   const written = [];
-  Object.assign(h.s, { ready: true, inputDirty: false, claudeAvailable: true, codexActive: false, gate: { afterPrompt: text => written.push(text) } });
+  Object.assign(h.s, { ready: true, inputDirty: false, claudeAvailable: true, cliActive: false, gate: { afterPrompt: text => written.push(text) } });
   h.context.restorePlans.set('terminal', { codex: true });
   await h.context.resumeAfterPrompt(h.project, h.s);
   assert.deepEqual(written, [`claude --resume ${id}\r`]);
   assert.equal(h.s.conversation.list[0].text, 'Restored prompt');
   const tail = h.s.claudeTranscript;
-  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'codex-started', agent: 'claude', cwd: f.cwd });
+  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'agent-started', agent: 'claude', cwd: f.cwd });
   await h.s.activityMonitor.poll();
   assert.equal(h.s.claudeTranscript, tail); assert.equal(h.resets(), 1); assert.equal(h.s.conversation.list[0].text, 'Restored prompt');
 });
@@ -356,7 +356,7 @@ test('Claude restore keeps the same read-only preview in broadcasts until its CL
   await f.write(id, [user('Restored prompt')]);
   const h = mainHarness(t, f), scope = { key: 'saved-preview', agent: 'claude', threadId: id }, snapshots = [];
   Object.assign(h.restore, { threadId: id, codex: true });
-  Object.assign(h.s, { ready: true, status: 'shell', codexActive: false, claudeAvailable: true, gate: { afterPrompt() {} } });
+  Object.assign(h.s, { ready: true, status: 'shell', cliActive: false, claudeAvailable: true, gate: { afterPrompt() {} } });
   h.s.promptQueue.list = () => [];
   h.context.readingHistory.summary = () => scope;
   h.context.readingHistory.close = () => assert.fail('a launched restore retains its preview binding');
@@ -384,7 +384,7 @@ test('Claude restore keeps the same read-only preview in broadcasts until its CL
   assert.equal(shown().readingHistory, scope); assert.equal(shown().agentStarting, true); assert.equal(shown().shellReady, false);
   resumeFollow(); await restoring;
   assert.equal(shown().readingHistory, scope); assert.equal(shown().agentStarting, true);
-  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'codex-started', agent: 'claude', cwd: f.cwd });
+  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'agent-started', agent: 'claude', cwd: f.cwd });
   assert.equal(h.s.agentStarting, false); assert.equal(shown().agentStarting, false); assert.equal(shown().readingHistory, scope);
   assert.ok(snapshots.length >= 3); assert.ok(snapshots.every(value => value.readingHistory === scope));
 });
@@ -393,7 +393,7 @@ test('Claude restore failures clear startup and close the consumed preview bindi
   const f = await fixture(t);
   for (const failure of ['dirty', 'missing', 'terminal-only', 'invalid-id', 'active']) {
     const h = mainHarness(t, f), closed = [];
-    Object.assign(h.s, { ready: true, codexActive: failure === 'active', claudeAvailable: failure !== 'missing',
+    Object.assign(h.s, { ready: true, cliActive: failure === 'active', claudeAvailable: failure !== 'missing',
       agentStarting: true, inputDirty: failure === 'dirty', gate: { afterPrompt: () => assert.fail(failure) } });
     if (failure === 'invalid-id') h.restore.threadId = 'invalid';
     h.context.readingHistory.close = id => closed.push(id);
@@ -419,13 +419,13 @@ for (const catchingUp of [false, true]) test(`Claude CLI start preserves recover
   h.store.expectCompletion = (_id, value = true) => changes.push(value);
   h.store.complete = () => assert.fail('historical replay cannot grant completion');
   h.context.notifyCompletion = () => assert.fail('historical replay cannot notify');
-  Object.assign(h.s, { codexActive: false, claudeResumeId: id });
+  Object.assign(h.s, { cliActive: false, claudeResumeId: id });
   await h.context.followClaudeSession(h.project, h.s, id);
   assert.ok(h.s.completionWork.find('prefix-worker'), 'the launch before the display window was recovered');
   assert.equal(h.s.completionWork.reading, false);
   h.s.completionWork.reading = catchingUp;
   const tail = h.s.claudeTranscript, workVersion = h.s.completionWork.version;
-  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'codex-started', agent: 'claude', cwd: f.cwd });
+  h.context.onEvent({ projectId: 'terminal', sessionKey: 'key', type: 'agent-started', agent: 'claude', cwd: f.cwd });
   assert.equal(h.s.claudeTranscript, tail);
   assert.ok(h.s.completionWork.find('prefix-worker'));
   assert.equal(h.s.completionWork.reading, catchingUp);
@@ -444,7 +444,7 @@ test('following a different session replaces history, and invalid ids or closed 
   await h.context.followClaudeSession(h.project, h.s, 'second');
   assert.deepEqual(h.s.conversation.list.map(entry => entry.text), ['second']); assert.equal(h.resets(), 2);
   assert.equal(await h.context.followClaudeSession(h.project, h.s, '../bad'), false);
-  h.s.codexActive = false;
+  h.s.cliActive = false;
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'first'), false);
   h.sessions.delete('terminal');
   assert.equal(await h.context.followClaudeSession(h.project, h.s, 'first'), false);
@@ -490,7 +490,7 @@ test('SessionStart after clear/resume and process exit retire old background wor
   await bind('resumed'); assert.equal(h.s.completionWork.tasks.size, 0);
   h.s.completionWork.start('resumed-worker', Date.now());
   // Claude's wrappers name it in their exit report; one that names Codex (which has no terminal run) is ignored.
-  h.context.onEvent({ projectId: h.s.terminalId, sessionKey: h.s.sessionKey, type: 'codex-exited', agent: 'claude', exitCode: 0 });
-  assert.equal(h.s.completionWork.tasks.size, 0); assert.equal(h.s.codexActive, false); assert.equal(h.s.activitySnapshot, null);
+  h.context.onEvent({ projectId: h.s.terminalId, sessionKey: h.s.sessionKey, type: 'agent-exited', agent: 'claude', exitCode: 0 });
+  assert.equal(h.s.completionWork.tasks.size, 0); assert.equal(h.s.cliActive, false); assert.equal(h.s.activitySnapshot, null);
   assert.deepEqual(changes, [false, false, false]);
 });

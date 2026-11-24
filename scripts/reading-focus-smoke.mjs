@@ -51,10 +51,10 @@ async function grid() {
 async function agent(id, kind) {
   await waitFor(async () => (await state()).projects.flatMap(project => project.terminals).find(item => item.id === id)?.shellReady, `${kind} shell ready`);
   const fixture = path.join(root, 'scripts/reading-smoke-fixture.ps1').replace(/'/g, "''");
-  await write(id, `. '${fixture}'; Clear-Host; Write-Host 'RAW TERMINAL MUST NOT FLASH'; Write-Host ([char]27 + '[48;2;255;0;255m' + (' ' * 24) + [char]27 + '[0m'); Show-ReadingFixtureInput; Send-AgentrixEvent 'codex-started' -Agent '${kind}'\r`);
+  await write(id, `. '${fixture}'; Clear-Host; Write-Host 'RAW TERMINAL MUST NOT FLASH'; Write-Host ([char]27 + '[48;2;255;0;255m' + (' ' * 24) + [char]27 + '[0m'); Show-ReadingFixtureInput; Send-AgentrixEvent 'agent-started' -Agent '${kind}'\r`);
   await terminal(id).locator('.reading-view').waitFor();
   await terminal(id).locator('.reading-step.is-user').waitFor();
-  await waitFor(async () => (await state()).projects.flatMap(project => project.terminals).find(item => item.id === id)?.codexActive, `${kind} active`);
+  await waitFor(async () => (await state()).projects.flatMap(project => project.terminals).find(item => item.id === id)?.cliActive, `${kind} active`);
   await page.waitForTimeout(300);
 }
 
@@ -91,7 +91,7 @@ async function sample(name, ids, action, { raw = false } = {}) {
         if (reading) reference.reading = reading;
         if (xterm) reference.xterm = xterm;
         return {
-          id, readingShown: !!split?.dataset.sessionId && split?.dataset.codexActive === 'true' && !raw,
+          id, readingShown: !!split?.dataset.sessionId && split?.dataset.cliActive === 'true' && !raw,
           readingPresent: !!reading, readingVisible: !!reading?.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }),
           sameReading, sameXterm,
           xtermVisibility: xterm && getComputedStyle(xterm).visibility, xtermVisible: !!uncovered,
@@ -236,7 +236,7 @@ try {
     await grid(); const index = offset + 2, id = projects[index].id;
     const frames = await sample(`startup-${kind}`, [id], () => panel(index).getByRole('button', { name: new RegExp(`^${kind === 'codex' ? 'Codex' : 'Claude Code'}`) }).click());
     assert.ok(frames.some(frame => frame.splits.some(split => split.readingShown && split.readingVisible)), `${kind} startup captures the visible agent document`);
-    await waitFor(async () => (await state()).projects[index].terminals[0].codexActive, `${kind} fake CLI starts`);
+    await waitFor(async () => (await state()).projects[index].terminals[0].cliActive, `${kind} fake CLI starts`);
   }
   assert.deepEqual(errors, []);
   console.log(`Evidence: ${output}`);

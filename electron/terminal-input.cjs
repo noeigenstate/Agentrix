@@ -78,7 +78,7 @@ class SubmissionTracker {
 // A native host has no shell, yet across a run-mode switch it keeps the key of the terminal it replaces or stages. That
 // terminal's last reports (its CLI exiting, its next prompt) can arrive after the host is back, and are never the host's.
 function acceptShellEvent(session, event) {
-  if (session.nativeStructured || !['shell-ready', 'shell-prompt', 'codex-started', 'codex-exited'].includes(event.type)) return false;
+  if (session.nativeStructured || !['shell-ready', 'shell-prompt', 'agent-started', 'agent-exited'].includes(event.type)) return false;
   if (!Number.isSafeInteger(event.sequence) || event.sequence <= (session.lastShellEventSequence || 0)) return false;
   session.lastShellEventSequence = event.sequence;
   return true;

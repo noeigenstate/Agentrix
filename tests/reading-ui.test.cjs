@@ -142,8 +142,8 @@ function projectHeaderHarness(t) {
   });
   const props = {
     project: { id: 'project', name: 'Example', path: '/example', branch: 'main', status: 'codex',
-      unread: 0, codexActive: true, codexActivity: 'unknown', agent: 'codex', error: null, lastCompletedAt: null,
-      terminals: [{ id: 'terminal', sessionId: 'session', status: 'codex', codexActive: true }] },
+      unread: 0, cliActive: true, codexActivity: 'unknown', agent: 'codex', error: null, lastCompletedAt: null,
+      terminals: [{ id: 'terminal', sessionId: 'session', status: 'codex', cliActive: true }] },
     index: 0, hidden: false, focused: false, activityOpen: true, fontSize: 12, now: 0,
     onFocus: id => focused.push(id), onAction: promise => promise, onError: assert.fail, onOpenLink() {}, onRevealProject() {},
   };
@@ -379,7 +379,7 @@ function dictationHarness(t, overrides = {}) {
     writeTerminal: (id, text) => written.push({ id, text }),
     pasteTerminal: async (id, text) => { pasted.push({ id, text }); return { ok: true }; },
   } };
-  const props = { projectId: 'project', terminal: { id: 'dictation', sessionId: 'session', agent: 'codex', codexActive: true, needsInput: null },
+  const props = { projectId: 'project', terminal: { id: 'dictation', sessionId: 'session', agent: 'codex', cliActive: true, needsInput: null },
     autoFocus: false, onShowTerminal() {}, onError: message => assert.fail(message), onOpenLink() {},
   };
   const screen = fakeScreen({ status: { model: 'fixture', effort: null, context: null, mode: null, notes: [] } });
@@ -525,7 +525,7 @@ test('reading shows an unverified CLI command disabled and does not send the typ
   const h = workingComposerHarness(t, 'claude'), errors = [];
   h.props.terminal.id = 'blocked-cli-command';
   h.props.onError = message => errors.push(message);
-  h.view.agentVersion = '2.1.332';
+  h.view.agentVersion = '2.1.316';
   window.agentrix.terminalCommands = async () => ({ ok: true, value: [{ name: '/fast', source: 'builtin', description: '' }] });
   await h.tick(0);
   h.edit('/fast');
@@ -1459,7 +1459,7 @@ test('welcome command rows call the existing completion callback with the cached
 function readingMode(overrides = {}) {
   return loadUI('features/reading/reading-mode.ts', { react: { useSyncExternalStore: (_subscribe, snapshot) => snapshot() }, ...overrides });
 }
-const terminal = (id, needsInput = 'Allow command?') => ({ id, sessionId: 'session', codexActive: true, needsInput });
+const terminal = (id, needsInput = 'Allow command?') => ({ id, sessionId: 'session', cliActive: true, needsInput });
 const isReading = (mode, value) => mode.readingShown(value, mode.useTerminalChoice());
 
 test('terminal screen callbacks return an automatic raw handoff immediately without another host update', t => {
@@ -1533,7 +1533,7 @@ test('permission notice clearing or agent exit cancels its timeout', t => {
   const mode = readingMode(), value = terminal('cancel');
   mode.syncReading(value); mode.syncReading(terminal(value.id, null)); t.mock.timers.tick(1500);
   assert.equal(isReading(mode, value), true);
-  mode.syncReading(value); mode.syncReading({ ...value, codexActive: false }); t.mock.timers.tick(1500);
+  mode.syncReading(value); mode.syncReading({ ...value, cliActive: false }); t.mock.timers.tick(1500);
   assert.equal(isReading(mode, value), true);
 });
 
@@ -1546,7 +1546,7 @@ test('one automatic handoff per notice and manual toggles cancel automatic retur
   mode.syncReading(terminal(value.id, null)); mode.syncReading(value); t.mock.timers.tick(1500);
   mode.setReading(value.id, false); mode.syncReading(terminal(value.id, null));
   assert.equal(isReading(mode, value), false);
-  mode.agentExited({ ...value, codexActive: false }); assert.equal(isReading(mode, value), true);
+  mode.agentExited({ ...value, cliActive: false }); assert.equal(isReading(mode, value), true);
 });
 
 test('manual choice during the delay cancels the pending handoff', t => {
@@ -1565,12 +1565,12 @@ test('choice visibility and handoff timers are isolated per terminal', t => {
 
 test('reading view requires an active agent and a live terminal session', () => {
   const mode = readingMode(), value = terminal('shell', null);
-  assert.equal(mode.readingShown({ ...value, codexActive: false }, []), false);
+  assert.equal(mode.readingShown({ ...value, cliActive: false }, []), false);
   assert.equal(mode.readingShown({ ...value, sessionId: null }, []), false);
 });
 
 test('an identity-checked restored history may show before the CLI, respects raw choice and disappears when unbound', () => {
-  const mode = readingMode(), value = { ...terminal('restored-preview', null), sessionId: null, codexActive: false,
+  const mode = readingMode(), value = { ...terminal('restored-preview', null), sessionId: null, cliActive: false,
     readingHistory: { key: 'checked-session', agent: 'claude', threadId: 'restored' } };
   assert.equal(isReading(mode, value), true);
   mode.setReading(value.id, false); assert.equal(isReading(mode, value), false);
@@ -1581,7 +1581,7 @@ test('an identity-checked restored history may show before the CLI, respects raw
 test('the composer offers its hint longest first and shows the one that fits, so a narrow box reads a short hint instead of a cut-off one', async t => {
   const offered = [], narrow = { './useFittingHint': { ...require('../src/shared/useFittingHint.ts'), useFittingHint: (box, hints) => (offered.splice(0, offered.length, ...hints), hints.at(-1)) } };
   const h = dictationHarness(t, narrow);
-  Object.assign(h.props.terminal, { codexActive: true, readingHistory: null });
+  Object.assign(h.props.terminal, { cliActive: true, readingHistory: null });
   const shown = h.render().props.placeholder;
   const strictlyShorter = list => list.every((hint, index) => index === 0 || hint.length < list[index - 1].length);
   assert.equal(offered.length, 4); assert.ok(strictlyShorter(offered), 'longest first'); assert.ok(['输入消息…', 'Message…'].includes(offered.at(-1)), 'a 240px box and below still reads something');
@@ -1592,7 +1592,7 @@ test('the composer offers its hint longest first and shows the one that fits, so
   assert.equal(box.props.title, offered[0], 'the full hint, shortcuts included, is the narrow box’s tooltip');
   assert.match(box.props['aria-describedby'], /^reading-hint-/); assert.equal(note.props.children, offered[0], 'and its accessible description, in a hidden element');
   assert.equal(note.props.style.position, 'absolute', 'the description is not drawn');
-  Object.assign(h.props.terminal, { codexActive: false });
+  Object.assign(h.props.terminal, { cliActive: false });
   h.render();
   assert.deepEqual(offered, [en['会话未启动或已退出'], en['会话未运行'], en['未运行']], 'a session that is not running also steps down to a short hint');
 });
@@ -1600,14 +1600,14 @@ test('the composer offers its hint longest first and shows the one that fits, so
 test('a restored preview cannot send until its own CLI input is ready, and a different thread disables it again', async t => {
   let rows = [];
   const h = dictationHarness(t, { './terminal-screen': { useScreen: () => ({ rows }), readScreen: () => ({ rows }) } });
-  Object.assign(h.props.terminal, { sessionId: null, codexActive: false, readingHistory: { key: 'history-a', agent: 'codex', threadId: 'restored' } });
+  Object.assign(h.props.terminal, { sessionId: null, cliActive: false, readingHistory: { key: 'history-a', agent: 'codex', threadId: 'restored' } });
   assert.equal(h.render().props.disabled, true);
   assert.equal(h.render().props.placeholder, en['历史预览，等待会话输入就绪']);
   h.edit('do not send before ready'); h.press('Enter'); await h.tick(1000);
   h.command('/status'); await h.tick(1000);
   h.dictate('/status'); await h.tick(1000);
   assert.deepEqual(h.written, []); assert.deepEqual(h.pasted, []);
-  Object.assign(h.props.terminal, { sessionId: 'resumed-runtime', codexActive: true });
+  Object.assign(h.props.terminal, { sessionId: 'resumed-runtime', cliActive: true });
   assert.equal(h.render().props.disabled, true);
   rows = ['› Ask Codex to do anything', '', 'gpt-6.1-sol · high · 100% context left'];
   assert.equal(h.render().props.disabled, false);
@@ -1651,7 +1651,7 @@ test('pending echoes survive a newly learned thread but a real thread or runtime
 test('a read-only preview suppresses stale screen choices and approval cards', t => {
   const h = dictationHarness(t);
   h.screen.choice = { kind: 'permission', options: [], question: 'stale screen' };
-  Object.assign(h.props.terminal, { codexActive: false, readingHistory: { key: 'preview', agent: 'codex', threadId: 'saved' }, nativeApprovals: [{ token: 'stale' }] });
+  Object.assign(h.props.terminal, { cliActive: false, readingHistory: { key: 'preview', agent: 'codex', threadId: 'saved' }, nativeApprovals: [{ token: 'stale' }] });
   assert.equal(h.render().props.disabled, true);
   assert.equal(elements(h.tree()).some(node => node.props.choice || node.props.request), false);
 });
@@ -1685,14 +1685,14 @@ test('the terminal surface follows reading intent even before the reading subtre
   const render = terminal => renderToStaticMarkup(React.createElement(ProjectTerminals, {
     project: { id: 'project', name: 'Project', terminals: [terminal] }, focused: true, activeId: value.id, setActiveId() {}, fontSize: 14,
   }));
-  const starting = render({ ...value, codexActive: false, agentStarting: true });
+  const starting = render({ ...value, cliActive: false, agentStarting: true });
   assert.match(starting, /data-reading="true"/); assert.match(starting, /data-focused="false"/);
   const reading = render(value);
   assert.match(reading, /data-reading="true"/); assert.doesNotMatch(reading, /class="reading-view"/);
   mode.setReading(value.id, false);
   const raw = render(value);
   assert.match(raw, /data-reading="false"/); assert.match(raw, /data-focused="true"/);
-  assert.match(render({ ...value, codexActive: false }), /data-reading="false"/, 'ordinary shells remain visible');
+  assert.match(render({ ...value, cliActive: false }), /data-reading="false"/, 'ordinary shells remain visible');
 });
 
 test('the terminal grid forwards project visibility to the reader without focusing a hidden project', () => {
@@ -1718,7 +1718,7 @@ test('a restored preview and live splits keep the same order and fallback select
     './reading-mode': mode, './ReadingView': { ReadingView: () => null }, './lead-sync': { LeadSync: () => null }, './TerminalPane': { TerminalPane: () => null },
     './AgentLauncher': { AgentLauncher: () => null }, './useProjectReorder': { useReorder: () => ({}) },
   });
-  const first = { ...terminal('preview', null), title: 'Preview', codexActive: false, sessionId: null, readingHistory: { key: 'preview-key', agent: 'codex', threadId: 'saved' } };
+  const first = { ...terminal('preview', null), title: 'Preview', cliActive: false, sessionId: null, readingHistory: { key: 'preview-key', agent: 'codex', threadId: 'saved' } };
   const second = { ...terminal('live', null), title: 'Live' };
   for (const focused of [false, true]) {
     const html = renderToStaticMarkup(React.createElement(ProjectTerminals, {
@@ -1739,7 +1739,7 @@ function readingHarness(t, entries = [], overrides = {}) {
     if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow); else delete globalThis.window;
     if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument); else delete globalThis.document;
   });
-  const state = { entries, pending: [], terminal: { id: 'terminal', sessionId: 'session', agent: 'codex', codexActive: true, needsInput: null } };
+  const state = { entries, pending: [], terminal: { id: 'terminal', sessionId: 'session', agent: 'codex', cliActive: true, needsInput: null } };
   const parsed = [], icon = () => React.createElement('svg');
   // A sent message's quote block is laid out by the same Markdown renderer, so it gets the same stubs.
   const markdownStubs = { './markdown-escape': { readingMarked: { parse: text => { parsed.push(text); return text; } } }, dompurify: { default: () => ({ sanitize: html => html }) }, ...overrides };

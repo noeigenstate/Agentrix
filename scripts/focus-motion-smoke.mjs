@@ -74,8 +74,8 @@ try {
   await panel.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).shellReady, 'initial PowerShell prompt');
   // Keep the real PowerShell editor active as an offline agent terminal, including after each submitted command.
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'PS ' + (Get-Location).Path + '> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), id);
-  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).codexActive, 'authenticated agent fixture');
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'PS ' + (Get-Location).Path + '> ' }; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r"), id);
+  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).cliActive, 'authenticated agent fixture');
   await panel.locator('.reading-view').waitFor();
   await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
   await panel.locator('.reading-view').waitFor({ state: 'detached' });
@@ -91,7 +91,7 @@ try {
   await page.keyboard.press('Enter');
   await waitFor(async () => fs.access(path.join(projects.at(-1).path, 'second-line.txt')).then(() => true, () => false), 'both submitted PowerShell lines execute');
   await waitFor(async () => panel.locator('.xterm-rows > div').allTextContents().then(rows => rows.join('').replace(/\s/g, '').endsWith(`PS${projects.at(-1).path}>`.replace(/\s/g, ''))), 'PowerShell prompt after multiline input');
-  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).codexActive, true, 'the fixture remains an agent after multiline execution');
+  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects.find(project => project.id === id).cliActive, true, 'the fixture remains an agent after multiline execution');
   assert.equal(await fs.readFile(path.join(projects.at(-1).path, 'first-line.txt'), 'utf8'), 'FIRST');
   assert.equal(await fs.readFile(path.join(projects.at(-1).path, 'second-line.txt'), 'utf8'), 'SECOND');
   console.log('PASS: real PowerShell edits two lines with Shift+Enter and executes both only after Enter');

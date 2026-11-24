@@ -22,7 +22,7 @@ function tracker(t, options = {}) {
   return calls;
 }
 function hooks(t, { local = false, ...options } = {}) {
-  const calls = tracker(t, { local, ...options }), stateEvents = [], s = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true,
+  const calls = tracker(t, { local, ...options }), stateEvents = [], s = { terminalId: 't', projectId: 'p', agent: 'claude', cliActive: true,
     claudeSessionId: 'parent', activitySince: at(0), activityMonitor: { poll: async () => {} } };
   const project = { id: 'p', kind: local ? 'local' : 'ssh', path: '/project' };
   const deps = { sessions: new Map([['t', s]]), store: { projects: [project] }, callsOf: () => calls,
@@ -141,7 +141,7 @@ test('old sessions, other terminals and invalid lifecycle identities never add r
   const f = hooks(t);
   f.take('SubagentStart', { session_id: 'old-parent', agent_id: 'child' });
   f.take('SubagentStart', { agent_id: '../child' });
-  f.s.codexActive = false;
+  f.s.cliActive = false;
   f.take('SubagentStart', { agent_id: 'inactive' });
   assert.equal(items(f.calls).length, 0);
   assert.equal(f.calls.subagent(signal('start', 'other', 1, { terminalId: 'another-terminal' })), false);
@@ -196,7 +196,7 @@ for (const end of ['reset', 'dispose', 'monitor']) {
       '<task-notification><tool-use-id>toolu_child</tool-use-id><status>completed</status></task-notification>' } });
     assert.equal(finished.length, 0);
     if (end === 'monitor') {
-      const project = { id: 'p', kind: 'ssh', path: '/project' }, s = { terminalId: 't', codexActive: true, agent: 'claude' };
+      const project = { id: 'p', kind: 'ssh', path: '/project' }, s = { terminalId: 't', cliActive: true, agent: 'claude' };
       const deps = { sessions: new Map([['t', s]]), claudeConfigDir: () => '/unused', callsOf: () => calls,
         monitorActivity: () => ({ poll: async () => {}, stop() {} }), applyActivity() {} };
       createClaudeActivity(deps).followClaude(project, s, { sessionId: 'parent', transcriptPath: '/claude/projects/project/parent.jsonl' });
@@ -340,7 +340,7 @@ test('current-generation terminal end proofs release signal-held rows with SSH c
   for (const offset of [-60000, 60000]) {
     const calls = tracker(t), project = { id: 'p', kind: 'ssh', path: '/project' };
     let records = [use()];
-    const s = { terminalId: 't', agent: 'claude', codexActive: true, activityClockOffset: offset,
+    const s = { terminalId: 't', agent: 'claude', cliActive: true, activityClockOffset: offset,
       terminal: { request: async () => ({ records }) } };
     const deps = { sessions: new Map([['t', s]]), callsOf: () => calls, monitorActivity: read => ({ poll: read, stop() {} }),
       claudeConversation() {}, describeActions() {}, claudeRecord: () => [], noteSettings: (_session, _agent, record) => calls.apply(record), applyActivity() {} };
@@ -408,7 +408,7 @@ test('an existing transcript monitor sends remote records and clock updates to t
   const first = tracker(t), second = tracker(t), project = { id: 'p', kind: 'ssh', path: '/project' };
   const records = (await fs.readFile(path.join(__dirname, 'fixtures/claude-subagent-ssh.compact.jsonl'), 'utf8')).trim().split('\n').map(JSON.parse);
   let current = first;
-  const s = { terminalId: 't', agent: 'claude', codexActive: true, activityClockOffset: 60000,
+  const s = { terminalId: 't', agent: 'claude', cliActive: true, activityClockOffset: 60000,
     terminal: { request: async () => ({ subagents: current === first
       ? { child: { records: records.slice(0, 3), reset: true, partial: false, behind: true } }
       : { next: { records, reset: true, partial: false, behind: true } } }) } };

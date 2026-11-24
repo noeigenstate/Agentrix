@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { MAX_FRAME, jsonFrames } = require('../../oversized-record.cjs');
 const { accountKey: processAccountKey } = require('./codex-account-usage.cjs');
+const { workerOf, brokerMethods } = require('../cli-adapters/workers.cjs');
 
 /**
  * @typedef {{operation:'read'|'edit'|'command'|'network'|'other', toolName:string, cwd:string|null,
@@ -77,8 +78,8 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
         const run = { ...verified, readOnly: !!verified.readOnly || value.readOnly === true };
         if (value.answerOnly === true) {
           const target = clients.get(run.runId);
-          if (!run.local || run.leadMode !== 'terminal' || run.agent !== 'claude' || target?.run.projectId !== run.projectId
-              || target.run.leadMode !== 'terminal' || target.run.agent !== 'claude' || !target.control) {
+          if (!run.local || run.leadMode !== 'terminal' || !workerOf(run.agent)?.terminalAnswers || target?.run.projectId !== run.projectId
+              || target.run.leadMode !== 'terminal' || target.run.agent !== run.agent || !target.control) {
             return refuse(run.runId, 'dispatch.control_unbound', run.leadMode);
           }
           client = { run, answerTarget: target };
@@ -87,7 +88,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
           return;
         }
         if (clients.has(run.runId)) return refuse(run.runId, 'dispatch.duplicate_run', run.leadMode);
-        client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), sdkRequested: false, supportsFinish: value.finishProtocol === 1 };
+        client = { run, send, pending: new Map(), control: null, requests: new Set(), delivered: new Map(), brokerRequested: false, supportsFinish: value.finishProtocol === 1 };
         clients.set(run.runId, client); socket.setTimeout(0);
         send({ type: 'registered', runId: run.runId, ...(accountKey && verified.local === true ? { accountKey } : {}) });
         return;
@@ -108,9 +109,12 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
       } else if (value.type === 'request' && validId(value.requestId) && typeof value.method === 'string') {
         if (client.requests.has(value.requestId) || client.requests.size >= 4000) return socket.destroy();
         client.requests.add(value.requestId);
-        if (value.method === 'claude-sdk.run') {
-          if (client.run.agent !== 'claude' || client.sdkRequested) return send({ type: 'result', requestId: value.requestId, ok: false, error: 'run_binding_rejected' });
-          client.sdkRequested = true;
+        const broker = brokerMethods.has(value.method);
+        if (broker) {
+          if (workerOf(client.run.agent)?.brokerMethod !== value.method || client.brokerRequested) {
+            return send({ type: 'result', requestId: value.requestId, ok: false, error: 'run_binding_rejected' });
+          }
+          client.brokerRequested = true;
         }
         const handler = value.method === 'control.finish' ? async () => client.control ? client.control({ type: 'finish' }) : { status: 'delivered' }
           : value.method === 'control.deliver' ? async (run, payload) => {
@@ -130,7 +134,7 @@ function createDispatchControl({ resolveRun, accountKey = processAccountKey, now
           });
           send({ type: 'result', requestId: value.requestId, ok: true, value: result });
         } catch (error) { send({ type: 'result', requestId: value.requestId, ok: false, error: error.message === 'control_unavailable' ? 'control_unavailable' : 'run_failed' }); }
-        finally { if (value.method === 'claude-sdk.run') client.control = null; }
+        finally { if (broker) client.control = null; }
       }
     };
     send = frames(socket, value => { void handle(value).catch(() => socket.destroy()); }, () => {

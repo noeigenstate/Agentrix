@@ -52,7 +52,7 @@ function registerLeadFastSettings({ handle, getSession, findProject, claudeConfi
       }
       const session = getSession(id);
       if (typeof request.sessionId !== 'string' || typeof request.target !== 'boolean' || session?.sessionId !== request.sessionId
-        || session.nativeStructured || session.status === 'exited' || !session.codexActive || session.agent !== 'claude') throw unavailable();
+        || session.nativeStructured || session.status === 'exited' || !session.cliActive || session.agent !== 'claude') throw unavailable();
       if (findProject(id).kind === 'ssh') {
         const remote = session.terminal;
         if (!remote?.request || !remote.connected || remote.closed) throw unavailable();

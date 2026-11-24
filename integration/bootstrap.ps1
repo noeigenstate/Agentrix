@@ -224,7 +224,7 @@ function global:Send-AgentrixEvent {
             cwd = (Get-Location).Path
             command = $Command
         }
-        if ($Type -eq 'codex-started' -and $Agent -eq 'codex') {
+        if ($Type -eq 'agent-started' -and $Agent -eq 'codex') {
             $eventData.args = @($Arguments)
         }
         $eventData = $eventData | ConvertTo-Json -Compress
@@ -235,7 +235,7 @@ function global:Send-AgentrixEvent {
             try {
                 $writer.WriteLine($eventData); $writer.Flush()
                 # The main process closes the pipe after writing this launch's agent-specific note.
-                if ($Type -eq 'codex-started') {
+                if ($Type -eq 'agent-started') {
                     $ack = [byte[]]::new(1)
                     [void]$pipe.ReadAsync($ack, 0, 1).Wait(1500)
                 }
@@ -267,7 +267,7 @@ function global:agentrix_agent {
         return
     }
     if ($route -ceq 'native') {
-        Send-AgentrixEvent 'codex-started' -Arguments $arguments -Agent $agent
+        Send-AgentrixEvent 'agent-started' -Arguments $arguments -Agent $agent
         Write-Host @'
 已请求在原生模式打开 Codex。
 '@
@@ -306,7 +306,7 @@ function global:Invoke-AgentrixHookAgent([string]$Agent, [bool]$Conversation, [s
         $settings = if (-not $settings -or $settings -ceq '{}') { '{"ultracode":true}' }
                     else { '{"ultracode":true,' + $settings.Substring(1) }
     }
-    Send-AgentrixEvent 'codex-started' -Agent $Agent -Command (Get-AgentrixCommand $Arguments)
+    Send-AgentrixEvent 'agent-started' -Agent $Agent -Command (Get-AgentrixCommand $Arguments)
     $currentNote = Get-AgentrixReadingNote
     # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
     $settingsFile = $null
@@ -318,7 +318,7 @@ function global:Invoke-AgentrixHookAgent([string]$Agent, [bool]$Conversation, [s
     try { $planner = Set-AgentrixPlanner $Agent $launch $settingsFile $currentNote $Arguments }
     catch {
         if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
-        Send-AgentrixEvent 'codex-exited' 1 -Agent $Agent
+        Send-AgentrixEvent 'agent-exited' 1 -Agent $Agent
         $global:LASTEXITCODE = 1
         throw
     }
@@ -327,7 +327,7 @@ function global:Invoke-AgentrixHookAgent([string]$Agent, [bool]$Conversation, [s
         finally {
             Restore-AgentrixEnvironment $planner.Previous
             if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
-            Send-AgentrixEvent 'codex-exited' $global:LASTEXITCODE -Agent $Agent
+            Send-AgentrixEvent 'agent-exited' $global:LASTEXITCODE -Agent $Agent
         }
         return
     }
@@ -341,7 +341,7 @@ function global:Invoke-AgentrixHookAgent([string]$Agent, [bool]$Conversation, [s
     } finally {
         Restore-AgentrixEnvironment $planner.Previous
         if ($settingsFile) { Remove-Item -LiteralPath $settingsFile -Force -ErrorAction SilentlyContinue }
-        Send-AgentrixEvent 'codex-exited' $claudeExit -Agent $Agent
+        Send-AgentrixEvent 'agent-exited' $claudeExit -Agent $Agent
         $global:LASTEXITCODE = $claudeExit
     }
 }

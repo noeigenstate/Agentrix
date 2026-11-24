@@ -54,8 +54,8 @@ try {
   await card.getByRole('button', { name: '只打开终端', exact: true }).click();
   const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals[0];
   await waitFor(async () => (await state()).shellReady, 'isolated shell ready');
-  await page.evaluate(({ id, prompt }) => window.agentrix.writeTerminal(id, prompt + "Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), { id: project.id, prompt: fixturePrompt });
-  await waitFor(async () => (await state()).codexActive && (await state()).agent === 'claude', 'fixture agent active');
+  await page.evaluate(({ id, prompt }) => window.agentrix.writeTerminal(id, prompt + "Send-AgentrixEvent 'agent-started' -Agent 'claude'\r"), { id: project.id, prompt: fixturePrompt });
+  await waitFor(async () => (await state()).cliActive && (await state()).agent === 'claude', 'fixture agent active');
   if (!await page.locator('.focus-mode').count()) await card.getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
   await page.waitForFunction(() => document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
   if (!await card.locator('.reading-view').count()) await page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true }).click();
@@ -115,7 +115,7 @@ try {
   // model its empty transcript too. Otherwise its first refresh immediately reloads the previous run's fixture.
   await app.evaluate(() => { globalThis.hierarchyEntries = []; });
   const earlier = (await state()).agentStartedAt;
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), project.id);
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'agent-started' -Agent 'claude'\r"), project.id);
   await waitFor(async () => (await state()).agent === 'claude' && (await state()).agentStartedAt > earlier, 'Claude fixture starts again');
   await page.waitForFunction(() => document.querySelector('.reading-composer textarea')?.disabled === false);
   // The main log is empty in this injected fixture, so its no-op reset emits no packet. Model the

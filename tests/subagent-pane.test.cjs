@@ -527,7 +527,7 @@ test('a grouped Agent tab card opens its worker session directly and an unavaila
 });
 
 // ---- the terminal grid ----------------------------------------------------------------------------------------------------------
-const terminal = id => ({ id, title: id, sessionId: `s-${id}`, status: 'running', codexActive: true, agent: 'claude', readingHistory: false });
+const terminal = id => ({ id, title: id, sessionId: `s-${id}`, status: 'running', cliActive: true, agent: 'claude', readingHistory: false });
 test('a viewable row is a plain block row with one full-width button: the row has no grid of its own, so the button never lands in the 16px icon column', () => {
   const css = fs.readFileSync(path.join(src, 'features/agents/activity-pane.css'), 'utf8');
   assert.match(css, /\.activity-call-rows li\.activity-call-item \{ display: block; height: auto; \}/, 'the row is a plain block, so the button fills it');

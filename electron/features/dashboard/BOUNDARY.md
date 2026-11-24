@@ -22,6 +22,7 @@ Successful in-scope runs with a permission note remain eligible for first pass a
 ## May import
 - `electron/i18n.cjs`
 - `electron/shared/ipc.cjs`
+- `electron/features/cli-adapters/registry.cjs` (session identity and quota scope)
 
 ## Invariants
 - App records contain only the declared metadata fields, with the owner's sent-back note as the local text field — conversations, credentials and scope filenames do not belong in evaluation data — test: `tests/dashboard-records.test.cjs` › "run and grade hooks retain only local evaluation metadata"

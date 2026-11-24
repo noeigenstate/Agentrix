@@ -10,7 +10,6 @@ const fs = require('node:fs'), os = require('node:os'), path = require('node:pat
 const { spawn, spawnSync } = require('node:child_process');
 const { root, SIGNATURE, discover, registry } = require('./helpers/stand-ins.cjs');
 
-const VERSION = { claude: /^\d+\.\d+\.\d+ \(Claude Code\)\r?\n$/, codex: /^codex-cli \d+\.\d+\.\d+\r?\n$/ };
 const TYPES = { 'read-only': 'readOnly', 'workspace-write': 'workspaceWrite', 'danger-full-access': 'dangerFullAccess' };
 // What the CLI gets from Agentrix: HTTP hooks, except SessionStart, which stays a command.
 const SETTINGS = { hooks: {
@@ -18,7 +17,7 @@ const SETTINGS = { hooks: {
   UserPromptSubmit: [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:1/h/terminal-1/UserPromptSubmit', headers: { 'X-Agentrix-Key': 'key-1' }, timeout: 10 }] }],
   PermissionRequest: [{ hooks: [{ type: 'http', url: 'http://127.0.0.1:1/h/terminal-1/PermissionRequest', headers: { 'X-Agentrix-Key': 'key-1' }, timeout: 600 }] }],
 } };
-const { standIns: entries, notStandIns } = registry();
+const { standIns: entries, notStandIns, products } = registry();
 const csc = path.join(process.env.SystemRoot || 'C:\\Windows', 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
 // One compiled program per source, shared by the tests that run it and removed when the file is done.
 const compiled = new Map(), builds = [];
@@ -70,7 +69,7 @@ test('every Claude and Codex stand-in found under tests/ and scripts/ is registe
     // Answering thread/start is a fact about the source, so the registry cannot leave out the sandbox check.
     assert.equal(Boolean(entry.appServer), /['"]thread\/start['"]/.test(source), `${file}: appServer is listed exactly when the file answers thread/start`);
     for (const mode of Object.keys(entry.deliberate || {})) assert.ok(source.includes(mode.split('=')[1]), `${file} is excused for mode ${mode}, which it no longer has`);
-    for (const launch of entry.launches || []) assert.ok(VERSION[launch.product], `${file}: unknown product ${launch.product}`);
+    for (const launch of entry.launches || []) assert.ok(Object.hasOwn(products, launch.product) && products[launch.product].version, `${file}: unknown product ${launch.product}`);
   }
   for (const [file, reason] of Object.entries(notStandIns)) assert.match(reason, /\S/, `${file} is excused without a reason`);
   assert.ok(SIGNATURE.test("send({ method: 'thread/start' })") && SIGNATURE.test('class X { static void Main() {} }'), 'the signature sees both kinds of stand-in');
@@ -81,13 +80,13 @@ for (const [file, entry] of live.filter(([, entry]) => entry.launches)) for (con
     const result = run(t, file, entry, launch.args);
     if (!result) return;
     assert.equal(result.status, 0, `${file}: ${result.stderr}`);
-    assert.match(result.stdout, VERSION[launch.product]);
+    assert.match(result.stdout, new RegExp(products[launch.product].version));
     assert.equal(result.stderr, '');
     assert.deepEqual(result.left, [], `${file} wrote to its own folder while answering --version`);
   });
 
   if (entry.build !== 'node') continue;
-  if (launch.product === 'claude') for (const form of ['file', 'inline']) test(`${file} ${launch.args.join(' ')}: echoes the --settings it is given as ${form === 'file' ? 'a file' : 'inline JSON'}, and the hooks in them`, t => {
+  if (products[launch.product].settings) for (const form of ['file', 'inline']) test(`${file} ${launch.args.join(' ')}: echoes the --settings it is given as ${form === 'file' ? 'a file' : 'inline JSON'}, and the hooks in them`, t => {
     const settingsFile = path.join(folder('agx-settings-'), 'settings.json'); t.after(() => remove(path.dirname(settingsFile)));
     fs.writeFileSync(settingsFile, JSON.stringify(SETTINGS));
     const given = form === 'file' ? settingsFile : JSON.stringify(SETTINGS);

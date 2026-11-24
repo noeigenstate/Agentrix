@@ -204,10 +204,11 @@ test('queue IDs agree between a full live log and a page that omits earlier enqu
 
 test('all main-process binding requests derive the same launched cwd and account home', async () => {
   const vm = require('node:vm'), main = await fs.readFile(path.join(__dirname, '../electron/main.cjs'), 'utf8'), calls = [];
+  const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
   const session = { agentCwd: 'C:\\project\\subfolder', codexHome: 'C:\\isolated-codex' };
   const context = vm.createContext({ sessions: new Map([['terminal', session]]), store: { findTerminal: () => ({ record: { restore: { cwd: 'C:\\project\\old-subfolder' } } }) },
     findProject: () => ({ kind: 'local', path: 'C:\\project' }), readingHistory: { bind: (_id, source) => calls.push(source) },
-    claudeConfigDir: () => 'C:\\isolated-claude', path, process, os });
+    adapterOf: id => id === 'claude' ? { transcript: { ...adapterOf(id).transcript, home: () => 'C:\\isolated-claude' } } : adapterOf(id) });
   vm.runInContext(main.slice(main.indexOf('function prepareReading('), main.indexOf('const { handoffFile', main.indexOf('function prepareReading('))), context);
   context.prepareReading('terminal', { agent: 'claude', threadId: 'thread' });
   context.prepareReading('terminal', { agent: 'claude', threadId: 'thread', cwd: 'C:\\project' });

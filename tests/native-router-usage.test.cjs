@@ -93,7 +93,7 @@ test('real main assembly reports terminal-only Claude subscription usage without
   const forbidden = () => assert.fail('usage read must not start an account poll, CLI session, SDK or network request');
   const safeStorage = { isEncryptionAvailable: () => true, encryptString: value => Buffer.from(value), decryptString: forbidden };
   const at = Date.now(), reset = at + 3600000;
-  const terminal = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true, status: 'codex',
+  const terminal = { terminalId: 't', projectId: 'p', agent: 'claude', cliActive: true, status: 'codex',
     activitySince: at, usage: { agent: 'claude', limits: [] } };
   const claudeAccounts = new Proxy({ account: { at, source: 'Claude', limits: [
     { minutes: 300, percent: 25, resetsAt: reset }, { minutes: 10080, percent: 60, resetsAt: reset + 86400000 },

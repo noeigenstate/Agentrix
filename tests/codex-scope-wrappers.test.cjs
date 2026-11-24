@@ -20,7 +20,7 @@ function fixture(t) {
 }
 const powershell = () => path.join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe');
 const recorded = file => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line)) : [];
-const requests = events => events.filter(event => event.type === 'codex-started').map(event => event.args);
+const requests = events => events.filter(event => event.type === 'agent-started').map(event => event.args);
 
 // A terminal's own wrappers in one PowerShell, with `folder` first on PATH. Each case is one typed codex (with piped
 // input when it has one); the result is what the shell printed, the requests the host received and what the stand-in
@@ -76,7 +76,7 @@ test('PowerShell and the cmd shim request native Codex for every conversation fo
     await exec(powershell(), ['-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(integration, 'agent.ps1'), 'codex', ...argv],
       { cwd: typed.root, env: typed.env, windowsHide: true, timeout: 8000 * timeoutScale });
     assert.deepEqual(requests(typed.events).at(-1), argv);
-    assert.equal(typed.events.some(event => event.type === 'codex-exited'), false, 'no terminal Codex invocation or fabricated completion');
+    assert.equal(typed.events.some(event => event.type === 'agent-exited'), false, 'no terminal Codex invocation or fabricated completion');
     assert.deepEqual(recorded(typed.record), [], 'no conversation form reaches the CLI');
     await assert.rejects(exec(process.env.ComSpec, ['/d', '/c', 'codex'], { cwd: typed.root, env: typed.env, windowsHide: true }), { code: 7 });
     assert.deepEqual(recorded(typed.record), [{ args: [], input: null }], 'outside an injected shell the executable is unchanged');

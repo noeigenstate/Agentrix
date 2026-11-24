@@ -12,7 +12,7 @@ function fixture(t, agent = 'claude', nativeStructured = false) {
   const completed = new Set(), project = { id: 'project', kind: 'local', path: '/synthetic' };
   const calls = new AgentCalls({ terminalId: 'terminal', local: true, dispatchAlive: () => alive });
   const s = { terminalId: 'terminal', projectId: project.id, sessionId: 'pty', sessionKey: 'synthetic',
-    agent, nativeStructured, calls, codexActive: true, activitySince: 1000, claudeSessionId: 'provider', reportedThreadId: 'provider',
+    agent, nativeStructured, calls, cliActive: true, activitySince: 1000, claudeSessionId: 'provider', reportedThreadId: 'provider',
     completionWork: new CompletionWork(), promptQueue: { finish() {}, list: () => [] },
     actions: { settle() {} }, conversation: { settle() {}, list: [] } };
   const deps = { sessions: new Map([[s.terminalId, s]]), callsOf: () => calls,

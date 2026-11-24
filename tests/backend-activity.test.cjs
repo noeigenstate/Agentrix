@@ -26,7 +26,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
   const store = new WorkspaceStore(path.join(directory, 'workspace.json'));
   const project = store.add(directory).project; project.kind = kind;
-  const s = { terminalId: project.id, projectId: project.id, sessionId: 'pty', agent, codexActive: true, status: 'running',
+  const s = { terminalId: project.id, projectId: project.id, sessionId: 'pty', agent, cliActive: true, status: 'running',
     activitySince: 1000, activityInputAt: 0, submissions: new SubmissionTracker(),
     actions: { settle() {} }, gate: { input() {} } };
   const sessions = new Map([[s.terminalId, s]]);
@@ -56,7 +56,7 @@ async function harness(t, kind = 'local', agent = 'codex') {
   const setup = main.indexOf('  const refreshCompletion = () => {');
   vm.runInContext(main.slice(setup, main.indexOf('  // A prompt the agent', setup)), context);
   s.completionWork.now = s.promptQueue.now = () => now;
-  t.after(() => { s.codexActive = false; s.promptQueue.reset(); s.completionWork.reset(); });
+  t.after(() => { s.cliActive = false; s.promptQueue.reset(); s.completionWork.reset(); });
   vm.runInContext(main.slice(main.indexOf('async function resumeAfterPrompt('), main.indexOf('function remoteFor(')), context);
   // Use the actual terminal's conversation callback, including its input/history filter.
   context.ConversationLog = ConversationLog;
@@ -188,7 +188,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   const previous = s.rootThreadId;
   // The wrapper returns to a shell prompt before a manually typed codex can
   // request a native session. It no longer launches another Codex TUI in this PTY.
-  h.now(2300); event('codex-exited', 1); event('shell-prompt', 2); event('codex-started', 3);
+  h.now(2300); event('agent-exited', 1); event('shell-prompt', 2); event('agent-started', 3);
   await Promise.resolve();
   assert.equal(launches.length, 1); assert.deepEqual(errors, []);
   if (kind === 'local') {
@@ -218,7 +218,7 @@ for (const kind of ['local', 'ssh']) test(`a second Codex launch from the ${kind
   assert.equal(next.codexActivity, 'working'); assert.equal(h.alerts(), 0);
   const snapshot = next.activitySnapshot;
   h.user('Late old PTY input', 2450);
-  event('codex-started', 4); // The old shell capability cannot open another native host.
+  event('agent-started', 4); // The old shell capability cannot open another native host.
   context.applyActivity(project, s, { threadId: previous, turnId: 'first', state: 'complete', updatedAt: 2600 });
   context.applyActivity(project, next, { threadId: previous, turnId: 'first', state: 'complete', updatedAt: 2600 });
   publish('item.upsert', { kind: 'user-message', content: { clientMessageId: 'stale', text: 'Wrong session' } }, 2600, { runtimeSessionId: 'old-runtime', providerSessionId: previous });
@@ -309,7 +309,7 @@ test('consumed restore plans without a launched CLI close their preview, includi
     const h = await harness(t, 'local', agent), closed = [];
     h.context.readingHistory.close = id => closed.push(id);
     h.store.setRestore(h.s.terminalId, { agent });
-    Object.assign(h.s, { ready: true, codexActive: false, claudeAvailable: true, codexAvailable: true });
+    Object.assign(h.s, { ready: true, cliActive: false, claudeAvailable: true, codexAvailable: true });
     h.context.restorePlans.set(h.s.terminalId, { codex: failure !== 'terminal-only' });
     if (failure === 'missing') h.s[agent === 'claude' ? 'claudeAvailable' : 'codexAvailable'] = false;
     if (failure === 'dirty') h.s.inputDirty = true;
@@ -437,7 +437,7 @@ for (const clockOffset of [100000, -100000]) test(`SSH Codex null history polls 
   assert.equal(s.activityRawSnapshot.updatedAt, 2300, 'a fresh remote snapshot is shifted once and replaces the cache');
   s.completionWork.changed(); await Promise.resolve();
   const otherId = h.store.addTerminal(project.id);
-  const other = { terminalId: otherId, projectId: project.id, sessionId: 'other-pty', agent: 'codex', codexActive: true, promptQueue: new PromptQueue() };
+  const other = { terminalId: otherId, projectId: project.id, sessionId: 'other-pty', agent: 'codex', cliActive: true, promptQueue: new PromptQueue() };
   h.sessions.set(otherId, other); t.after(() => other.promptQueue.reset());
   h.context.applyActivity(project, other, { threadId: 'sibling', turnId: 'done', state: 'complete', updatedAt: 2400 });
   assert.equal(s.codexActivity, 'working'); assert.equal(project.unread, 0); assert.equal(h.alerts(), 1);
@@ -1068,7 +1068,7 @@ test('native process exit cancels its pending work and alert without waiting for
   vm.runInContext(main.slice(start, main.indexOf('  captureBranch(project);', start)), context);
   exited({ exitCode: 0 });
   assert.equal(s.completionWork.tasks.size, 0); assert.equal(s.completionWork.timer, null); assert.equal(s.activitySnapshot, null);
-  assert.equal(s.codexActive, false); assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
+  assert.equal(s.cliActive, false); assert.equal(h.project.completionArmed, false); assert.equal(h.alerts(), 0);
 });
 
 test('actual activity + store alerts once per input, stays quiet after acknowledgment and automatically acknowledges next send', async t => {
@@ -1153,7 +1153,7 @@ test('restore routes Claude to its own local/SSH gate and only interrupted work 
   for (const kind of ['local', 'ssh']) for (const interrupted of [false, true]) {
     const h = await harness(t, kind, 'claude'), writes = [], follows = [];
     h.store.setRestore(h.s.terminalId, { agent: 'claude', threadId: id, interrupted });
-    Object.assign(h.s, { ready: true, codexActive: false, claudeAvailable: true, codexAvailable: false,
+    Object.assign(h.s, { ready: true, cliActive: false, claudeAvailable: true, codexAvailable: false,
       gate: { input: text => writes.push(['input', text]), afterPrompt: text => writes.push(['afterPrompt', text]) },
       terminal: { request: () => assert.fail('Claude must never request Codex resume-info') } });
     h.context.followClaudeSession = async (...args) => follows.push(args);
@@ -1163,7 +1163,7 @@ test('restore routes Claude to its own local/SSH gate and only interrupted work 
     assert.equal(follows.length, kind === 'ssh' ? 0 : 1); assert.equal(h.s.claudeResumeId, id);
     assert.equal(h.project.completionArmed, interrupted);
     // Exercise the real activity/store boundary after restart, with no new manually typed prompt.
-    h.s.codexActive = true; h.apply('complete', 'restored', 3000);
+    h.s.cliActive = true; h.apply('complete', 'restored', 3000);
     assert.equal(h.alerts(), interrupted ? 1 : 0);
     h.store.acknowledge(h.project.id); h.apply('working', null, 3100); h.apply('complete', 'background', 3200);
     assert.equal(h.alerts(), interrupted ? 1 : 0);
@@ -1174,12 +1174,12 @@ test('restore preserves plan/readiness/input safeguards and the recorded newest-
   for (const change of ['no-plan', 'not-ready', 'dirty', 'active', 'not-installed', 'terminal-only']) {
     const h = await harness(t, 'ssh', 'claude'), writes = [];
     h.store.setRestore(h.s.terminalId, { agent: 'claude' });
-    Object.assign(h.s, { ready: true, codexActive: false, claudeAvailable: true, gate: { input: text => writes.push(text) } });
+    Object.assign(h.s, { ready: true, cliActive: false, claudeAvailable: true, gate: { input: text => writes.push(text) } });
     h.context.restorePlans.set(h.s.terminalId, { codex: true });
     if (change === 'no-plan') h.context.restorePlans.clear();
     if (change === 'not-ready') h.s.ready = false;
     if (change === 'dirty') h.s.inputDirty = true;
-    if (change === 'active') h.s.codexActive = true;
+    if (change === 'active') h.s.cliActive = true;
     if (change === 'not-installed') h.s.claudeAvailable = false;
     if (change === 'terminal-only') h.context.restorePlans.set(h.s.terminalId, { codex: false });
     await h.context.resumeAfterPrompt(h.project, h.s);
@@ -1187,7 +1187,7 @@ test('restore preserves plan/readiness/input safeguards and the recorded newest-
   }
   const h = await harness(t, 'ssh', 'claude'), writes = [];
   h.store.setRestore(h.s.terminalId, { agent: 'claude' });
-  Object.assign(h.s, { ready: true, codexActive: false, claudeAvailable: true, gate: { input: text => writes.push(text) } });
+  Object.assign(h.s, { ready: true, cliActive: false, claudeAvailable: true, gate: { input: text => writes.push(text) } });
   h.context.restorePlans.set(h.s.terminalId, { codex: true });
   await h.context.resumeAfterPrompt(h.project, h.s);
   assert.deepEqual(writes, ['claude --continue\r']);
@@ -1221,7 +1221,7 @@ test('two SSH Claude terminals restore their own recorded conversations through 
   const second = { terminalId: secondId };
   const ids = ['00000000-0000-4000-8000-000000000001', '00000000-0000-4000-8000-000000000002'];
   [h.s, second].forEach((s, index) => {
-    Object.assign(s, { ready: true, inputDirty: false, codexActive: false, claudeAvailable: true, codexAvailable: false,
+    Object.assign(s, { ready: true, inputDirty: false, cliActive: false, claudeAvailable: true, codexAvailable: false,
       gate: { input: command => writes.push([s.terminalId, command]) },
       terminal: { request: () => assert.fail('no extra remote query or login is needed') } });
     h.sessions.set(s.terminalId, s);
@@ -1238,7 +1238,7 @@ test('desktop task fixture emits a fresh received prompt that completes through 
   for (const observationFails of [false, true]) {
     const h = await harness(t, 'local', 'claude'), home = path.join(h.project.path, 'claude-home'), waits = [], records = [];
     const startedAt = Date.now();
-    h.s.codexActive = false;
+    h.s.cliActive = false;
     let script, session;
     const hook = (state, id, extra = {}) => h.context.claudeActivity(h.project, h.s, { state, sessionId: session, eventId: `${session}:${id}`, ...extra });
     const page = { evaluate: async (_callback, args) => {
@@ -1248,16 +1248,16 @@ test('desktop task fixture emits a fresh received prompt that completes through 
         assert.ok(file, 'the terminal runs the fixture script');
         script = await fs.readFile(file, 'utf8'); session = path.basename(file, '.ps1');
         // The script reports the shell as the wrapper does, then sends each hook through the real hook script.
-        assert.ok(script.includes("Send-AgentrixEvent 'codex-started' -Agent 'claude'"));
-        assert.ok(script.includes("Send-AgentrixEvent 'codex-exited' -Agent 'claude'"));
+        assert.ok(script.includes("Send-AgentrixEvent 'agent-started' -Agent 'claude'"));
+        assert.ok(script.includes("Send-AgentrixEvent 'agent-exited' -Agent 'claude'"));
         assert.ok(script.includes('Test-Path -LiteralPath'));
         assert.deepEqual([...script.matchAll(/-Kind (\w+)/g)].map(match => match[1]), ['start', 'stop', 'stop', 'notify']);
         assert.ok(script.includes('"prompt":"Run desktop test task fixture-input-turn."'));
         // Simulate only shell startup, leaving notification arming to the real hook and store path below.
-        h.s.codexActive = true; h.s.activitySince = Date.now(); h.now(h.s.activitySince);
+        h.s.cliActive = true; h.s.activitySince = Date.now(); h.now(h.s.activitySince);
         return;
       }
-      return { value: { projects: [{ ...h.project, agent: h.s.agent, codexActive: h.s.codexActive, codexActivity: h.s.codexActivity, shellReady: !h.s.codexActive }] } };
+      return { value: { projects: [{ ...h.project, agent: h.s.agent, cliActive: h.s.cliActive, codexActivity: h.s.codexActivity, shellReady: !h.s.cliActive }] } };
     } };
     const waitFor = async (predicate, label) => {
       waits.push(label);
@@ -1284,7 +1284,7 @@ test('desktop task fixture emits a fresh received prompt that completes through 
       }
       if (label === 'offline task returns to shell') {
         assert.equal(await fs.readFile(path.join(home, 'projects', 'desktop-task', session + '.done'), 'utf8'), '');
-        h.s.codexActive = false;
+        h.s.cliActive = false;
       }
       assert.equal(await predicate(), true, label);
     };

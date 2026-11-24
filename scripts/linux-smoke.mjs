@@ -98,7 +98,7 @@ try {
   // Codex as an app-server, sends the typed prompt and follows the turn. The shell itself never runs the executable.
   await page.keyboard.type("codex 'PG native prompt'");
   await page.keyboard.press('Enter');
-  await waitFor(async () => { const value = await state(); return value.codexActive === true && value.terminals[0].nativeMode === 'codex-app-server'; }, 'typing codex opens Codex in native mode');
+  await waitFor(async () => { const value = await state(); return value.cliActive === true && value.terminals[0].nativeMode === 'codex-app-server'; }, 'typing codex opens Codex in native mode');
   assert.equal((await state()).agent, 'codex');
   await waitFor(async () => (await receipt())?.input === 'PG native prompt', 'the typed prompt reaches Codex through the host');
   assert.deepEqual((await receipt()).args, ['app-server', '--listen', 'stdio://'], 'the host starts Codex as an app-server; the shell never runs it with the typed words');
@@ -111,7 +111,7 @@ try {
   assert.equal(await page.locator('.project-panel .xterm').count(), 0, "the native session takes the terminal's place");
   await page.screenshot({ path: path.join(output, 'native-codex.png') });
   await page.evaluate(({ id, runtime }) => window.agentrix.nativeSession.stop(id, runtime), { id: terminalId, runtime: (await native()).runtimeSessionId });
-  await waitFor(async () => (await state()).codexActive === false, 'stopping the native session ends Codex');
+  await waitFor(async () => (await state()).cliActive === false, 'stopping the native session ends Codex');
 
   assert.deepEqual(errors, []);
   console.log(`PASS: Linux ${appImage ? 'AppImage' : packaged ? 'packaged' : 'development'} app runs a ${shellName} terminal and hands a typed codex to native mode; screenshots: ${output}`);

@@ -10,7 +10,7 @@ function pollAfterSubmission(session, isCurrent) {
   for (const delay of [150, 400, 900]) {
     const timer = setTimeout(() => {
       session.submissionPolls.delete(timer);
-      if (isCurrent() && session.codexActive) void session.activityMonitor?.poll();
+      if (isCurrent() && session.cliActive) void session.activityMonitor?.poll();
     }, delay);
     timer.unref?.(); session.submissionPolls.add(timer);
   }

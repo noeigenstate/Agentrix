@@ -75,10 +75,10 @@ function registerTerminalIpc({
     // picker) as a prompt recalled from history: the agent's own records report a round it really starts.
     const prompts = s.submissions.sent.filter(text => text && !isLocalCommand(text));
     const at = now();
-    if (submitted && s.codexActive) for (const text of prompts) s.promptQueue.submit(text, s.codexActivity === 'working', at);
+    if (submitted && s.cliActive) for (const text of prompts) s.promptQueue.submit(text, s.codexActivity === 'working', at);
     // Sending a new prompt means the last result has been read: clear the unviewed state before the next round.
     if (submitted && getProjectById(s.projectId)?.unread) { acknowledgeProject(s.projectId); scheduleState(); }
-    if (prompts.length && s.codexActive) {
+    if (prompts.length && s.cliActive) {
       expectCompletion(s.projectId);
       s.activityConfirmedInputAt ??= s.activityInputAt || 0;
       s.codexActivity = 'working'; s.activityInputAt = at;
@@ -87,21 +87,21 @@ function registerTerminalIpc({
     // Escape on its own interrupts a working Claude Code turn. It runs no hook then, writes nothing to its transcript
     // and only puts the prompt back in its input, so this key is the only sign the round has ended. While Claude asks
     // something (a permission or a question), Escape only answers it and the round may go on.
-    if (data === '\x1b' && s.codexActive && s.agent === 'claude' && s.codexActivity === 'working' && !s.needsInput) {
+    if (data === '\x1b' && s.cliActive && s.agent === 'claude' && s.codexActivity === 'working' && !s.needsInput) {
       const project = getProjectById(s.projectId);
       if (project) applyActivity(project, s, { threadId: s.claudeSessionId, turnId: null, state: 'interrupted', updatedAt: now() });
     }
     // Claude runs no hook once its permission prompt is answered, so the key that answers it ends the waiting notice:
     // Enter, a number or Escape, typed in the terminal. Otherwise the notice
     // (and the reading view's switch to the terminal) would last until the round ends.
-    else if (s.needsInput && s.codexActive && s.agent === 'claude' && /^(?:\r|\x1b|[1-9])$/.test(data)) { s.needsInput = null; scheduleState(); }
-    if (!s.codexActive && !response) {
+    else if (s.needsInput && s.cliActive && s.agent === 'claude' && /^(?:\r|\x1b|[1-9])$/.test(data)) { s.needsInput = null; scheduleState(); }
+    if (!s.cliActive && !response) {
       const wasReady = s.ready && !s.inputDirty;
       s.inputDirty = true; if (data.includes('\r') || data.includes('\n')) s.ready = false;
       if (wasReady) scheduleState();
     }
     s.gate.input(data);
-    if (submitted && s.codexActive) pollAfterSubmission(s, () => getSession(id) === s);
+    if (submitted && s.cliActive) pollAfterSubmission(s, () => getSession(id) === s);
   }
   listen('terminal:write', writeTerminal);
   listen('terminal:resize', (id, cols, rows) => {
@@ -116,13 +116,13 @@ function registerTerminalIpc({
     if (typeof text !== 'string' || text.length > 1024 * 1024) throw new Error('无效的文字。');
     // Codex on Windows takes a pasted line break as Enter, even inside a bracketed paste, and drops a bare "\n" after
     // Chinese text; Alt+Enter is its new line.
-    const lineBreak = platform === 'win32' && session.codexActive && session.agent === 'codex' ? '\x1b\r' : null;
+    const lineBreak = platform === 'win32' && session.cliActive && session.agent === 'codex' ? '\x1b\r' : null;
     send('terminal:paste', { id, sessionId, text, lineBreak });
   });
   // Facts for the session the renderer drew, on change only; the Claude session machine decides what they mean.
   listen('terminal:screenFacts', (id, facts) => {
     const s = getSession(id);
-    if (!validFacts(facts) || !s || s.nativeStructured || !s.codexActive || s.agent !== 'claude' || s.sessionId !== facts.sessionId) return;
+    if (!validFacts(facts) || !s || s.nativeStructured || !s.cliActive || s.agent !== 'claude' || s.sessionId !== facts.sessionId) return;
     s.cliStateMeta?.screenFacts?.(facts);
   });
   listen('terminal:focus', (id, focused) => { if (hasSession(id) && focused) { setActiveTerminal(id); setActiveFileTree(null); } else if (getActiveTerminal() === id) setActiveTerminal(null); });

@@ -22,6 +22,7 @@ The events' envelope and types are contract §1 (`src/shared/agent-events.ts`). 
 
 ## May import
 - `src/shared/**`
+- `electron/features/cli-adapters/*.mjs` (native permission capability)
 - `src/features/reading/ConversationFeed.tsx`
 - `src/features/reading/feed-parts.ts`
 - `src/features/agents/action-text.ts`

@@ -9,10 +9,12 @@ const print = ['-p', '--print'];
 
 export default Object.freeze({
   id: 'claude', label: 'Claude Code', command: 'claude',
+  usage: { label: 'Claude', showUnavailable: true, apiSpend: true },
   install: { npm: '@anthropic-ai/claude-code', versionPattern: /\b(\d+)\.(\d+)\.(\d+)\b/, minVersion: '2.1.317', label: 'Claude Code' },
   models: { match: /^(opus|sonnet|haiku|fable|claude-)/, efforts: ['low', 'medium', 'high', 'xhigh', 'max'], ultracodeLead: true },
   words: {
     utilities: [...subcommands, ...versionHelp, ...print], harmless, print, subcommands, versionHelp,
+    welcome: ['/init', '/help', '/status', '/review'],
   },
   supports: {
     terminal: { via: 'arg' }, native: { via: 'api' }, resume: { via: 'arg' }, roleTools: { via: 'arg' },

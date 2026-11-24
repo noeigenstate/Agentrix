@@ -77,7 +77,7 @@ function popupHarness(t, agent = 'codex', rows = idle[agent], activity = 'comple
     './i18n': { t: (text, values = {}) => text.replace(/\{(\w+)\}/g, (match, key) => values[key] ?? match) },
   });
   const props = { projectId: 'fixture', terminal: { id: 'popup-fixture-' + ++nextId, sessionId: 'fixture-session', agent,
-    codexActive: true, codexActivity: activity, status: 'codex', needsInput: null }, active: true, autoFocus: false,
+    cliActive: true, codexActivity: activity, status: 'codex', needsInput: null }, active: true, autoFocus: false,
     onShowTerminal() {}, onError: assert.fail, onOpenLink() {} };
   let tree;
   const render = () => {

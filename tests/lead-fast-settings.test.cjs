@@ -11,7 +11,7 @@ function fixture(t, atomic = writeFileAtomic) {
   t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
   const file = path.join(folder, 'settings.json');
   let handler, remote = false;
-  const session = { sessionId: 'pty', agent: 'claude', codexActive: true, usageEnv: { CLAUDE_CONFIG_DIR: folder } };
+  const session = { sessionId: 'pty', agent: 'claude', cliActive: true, usageEnv: { CLAUDE_CONFIG_DIR: folder } };
   registerLeadFastSettings({
     handle: (channel, fn) => { assert.equal(channel, 'terminal:leadFastSettings'); handler = fn; },
     getSession: () => session, findProject: () => ({ kind: remote ? 'ssh' : 'local' }), claudeConfigDir: () => folder, writeFileAtomic: atomic,

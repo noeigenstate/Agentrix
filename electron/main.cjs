@@ -28,7 +28,7 @@ const { inspectClaudeExecutable, resolveClaudeExecutable } = require('./features
 const { createLocator } = require('./features/claude-runtime/locator.cjs');
 const { recoveryWarnings, readJson: readNativeJson, writeJson: writeNativeJson } = require('./features/native-session/storage.cjs');
 const { netRequest, apiEnvironment, listModels } = require('./features/claude-sdk/index.cjs');
-const { adapterOf, legacyRestoreAgent } = require('./features/cli-adapters/registry.cjs');
+const { adapterOf, legacyRestoreAgent, support } = require('./features/cli-adapters/registry.cjs');
 const { createSdkLoader } = require('./features/claude-sdk/runtime.cjs');
 const { registerClaudeWorker } = require('./features/native-session/worker.cjs');
 const { createWorkerTerminals } = require('./features/worker-terminals/worker-terminals.cjs');
@@ -61,7 +61,7 @@ const { DashboardRecords, quotaScope } = require('./features/dashboard/records.c
 const { createDashboard } = require('./features/dashboard/index.cjs');
 const { createLab } = require('./features/lab/index.cjs');
 const { routingNote } = require('./features/dashboard/decisions.cjs');
-const { CodexAccountUsage, readCodexAccount, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
+const { CodexAccountUsage, resetCreditMessage } = require('./features/agents/codex-account-usage.cjs');
 const { createRpc: createResetRpc } = require('./features/codex-app-server/rpc.cjs');
 const { createCodexLocator } = require('./features/codex-runtime/locator.cjs');
 const { scanDrives, fixedDrives } = require('./features/codex-runtime/drive-scan.cjs');
@@ -80,7 +80,7 @@ const codexLocator = createCodexLocator({ scan: process.env.AGENTRIX_DATA_DIR ? 
     if (codexLocator.peek()?.file) void offerCodexSandboxSetup?.();
   } });
 const codexExecutable = () => codexLocator.locate().then(found => found.file);
-const codexAccounts = new CodexAccountUsage({ read: options => readCodexAccount({ ...options, resolveExecutable: codexExecutable }),
+const codexAccounts = new CodexAccountUsage({ read: options => adapterOf('codex').usage.accountReader({ ...options, resolveExecutable: codexExecutable }),
   resetClient: { rpcFactory: createResetRpc, resolveExecutable: codexExecutable }, resetStorage: {
   read: () => readNativeJson(path.join(app.getPath('userData'), 'codex-reset-attempts.json'), null),
   write: value => writeNativeJson(path.join(app.getPath('userData'), 'codex-reset-attempts.json'), value),
@@ -90,13 +90,12 @@ const codexAccounts = new CodexAccountUsage({ read: options => readCodexAccount(
   writeNativeJson(file, [...(Array.isArray(previous) ? previous : []), event].slice(-500));
 } });
 const projectAccounts = createProjectAccounts({ codex: codexAccounts, readClaude: readClaudeAccountCache });
-const { ClaudeAccountUsage, readClaudeAccount } = require('./features/agents/claude-account-usage.cjs');
-const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccounts(), read: options => readClaudeAccount({ ...options,
+const { ClaudeAccountUsage } = require('./features/agents/claude-account-usage.cjs');
+const claudeAccounts = new ClaudeAccountUsage({ changed: () => queueClaudeAccounts(), read: options => adapterOf('claude').usage.accountReader({ ...options,
   routes: localClaudeMeters().map(s => ({ cwd: s.usageCwd, env: s.usageEnv || process.env })),
   fetch: (url, options) => electronNet.fetch(url, options),
 }) });
 const { agentCommand } = require('./features/agents/agent-command.cjs');
-const { adapterOf } = require('./features/cli-adapters/registry.cjs');
 const { setThumbnailer, isGeneratedImage, setGeneratedPreview, setConversationTranslator } = require('./conversation.cjs');
 const { saveDialogOptions, saveTarget } = require('./image-save.cjs');
 const { registerVoiceIpc } = require('./features/voice/ipc.cjs');
@@ -187,10 +186,11 @@ const sessions = new Map();
 const readingHistory = new ReadingHistory(() => { if (window && store && !quitting) broadcast(); });
 function prepareReading(id, restore, filename) {
   const project = findProject(id);
-  if (project.kind === 'ssh' || !['codex', 'claude'].includes(restore?.agent) || !/^[\w-]{1,100}$/.test(restore?.threadId || '')) return Promise.resolve();
+  const transcript = adapterOf(restore?.agent)?.transcript, session = sessions.get(id);
+  if (project.kind === 'ssh' || !transcript || !/^[\w-]{1,100}$/.test(restore?.threadId || '')) return Promise.resolve();
   return readingHistory.bind(id, { agent: restore.agent, threadId: restore.threadId,
-    cwd: sessions.get(id)?.agentCwd || restore.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path,
-    home: restore.agent === 'claude' ? claudeConfigDir() : sessions.get(id)?.codexHome || process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), filename });
+    cwd: session?.agentCwd || restore.cwd || store.findTerminal(id)?.record.restore?.cwd || project.path,
+    home: transcript.terminalHome?.(session) ?? transcript.home(), filename });
 }
 const { handoffFile, memoryDir, memoryFolder, scrubProjectSkills, sshHandoff } = createProjectHandoff({ app, getStore: () => store, sessions });
 const { setBranch, captureBranch, getBranch, forgetBranch, remoteBranch } = createGitRuntime({ getProjects: () => store.projects, execFile, broadcast });
@@ -319,34 +319,34 @@ function publicState() {
       const opened = terminalIds(p);
       const terminals = shownTerminalIds(p).map(id => {
         const current = sessions.get(id), s = current?.switchPreviousHost || current;
-        const reading = !s?.nativeStructured && !s?.error && !startupErrors.has(id) && (s?.codexActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
+        const reading = !s?.nativeStructured && !s?.error && !startupErrors.has(id) && (s?.cliActive || !s?.inputDirty && (restorePlans.has(id) || s?.agentStarting)) ? readingHistory.summary(id) : null;
         const usage = s?.nativeStructured ? s.nativeUsage?.snapshot(s.calls?.snapshot()) || dispatchedOnly(s)
-          : s?.codexActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s);
-        return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.nativeStructured ? null : s?.sessionId || null, status: s?.status || 'stopped', codexActive: s?.codexActive || false, agent: s?.codexActive ? s.agent || 'codex' : null,
+          : s?.cliActive && s.usage ? s.usage.snapshot(s.usageHistory) : dispatchedOnly(s);
+        return { id, title: t('终端 {n}', { n: opened.indexOf(id) + 1 }), shell: s?.shellKind || (p.kind === 'ssh' ? 'bash' : localShell().kind), sessionId: s?.nativeStructured ? null : s?.sessionId || null, status: s?.status || 'stopped', cliActive: s?.cliActive || false, agent: s?.cliActive ? s.agent || 'codex' : null,
           ...(reading ? { readingHistory: reading } : {}),
-          agentStarting: !!s?.agentStarting && !s.codexActive && s.status !== 'exited' && !s.error,
-          agentStartedAt: s?.codexActive ? s.activitySince : null,
+          agentStarting: !!s?.agentStarting && !s.cliActive && s.status !== 'exited' && !s.error,
+          agentStartedAt: s?.cliActive ? s.activitySince : null,
           nativeMode: s?.nativeMode || null, nativeRuntimeSessionId: s?.nativeRuntimeSessionId || null, nativePathReason: s?.nativePathReason || null, switchState: s?.switchState || null,
           // The model, effort and fast mode its records show, above the reading view's message box.
-          agentSettings: s?.codexActive ? s.agentSettings || null : null,
+          agentSettings: s?.cliActive ? s.agentSettings || null : null,
           // The service its model is reached through, the context it fills and the tokens it took, for the activity pane.
           agentUsage: s?.calls?.usage(usage) || usage,
           // A run of the CLI that is no conversation (update, --version, login), for the reading view to say so.
-          agentCommand: s?.codexActive ? s.agentCommand || null : null,
+          agentCommand: s?.cliActive ? s.agentCommand || null : null,
           codexActivity: s?.completionWork?.reading ? 'working' : s?.codexActivity || 'unknown', needsInput: s?.needsInput?.message || null, shellReady: !!s?.ready && !s?.inputDirty, codexAvailable: s?.codexAvailable ?? null,
-          mainTurn: s?.codexActive ? s.completionWork?.mainTurn(s.activitySnapshot) || null : null,
-          cliState: s?.codexActive ? s.cliState || null : null,
+          mainTurn: s?.cliActive ? s.completionWork?.mainTurn(s.activitySnapshot) || null : null,
+          cliState: s?.cliActive ? s.cliState || null : null,
           lastCompletedAt: s?.lastCompletedAt || null, error: s?.error || startupErrors.get(id) || null,
           // The step a working agent is on, for the card's one-line status; the full list is sent separately.
-          action: s?.codexActive && s.codexActivity === 'working' ? briefAction(s.actions.current()) : null,
+          action: s?.cliActive && s.codexActivity === 'working' ? briefAction(s.actions.current()) : null,
           // What the round was asked to do, in a few words, for the activity overview.
-          task: s?.codexActive ? s.promptQueue.task?.summary || s.lastTaskSummary || s.lastTask || '' : '',
-          taskTitle: s?.codexActive ? s.promptQueue.task?.title || s.lastTaskTitle || '' : '',
+          task: s?.cliActive ? s.promptQueue.task?.summary || s.lastTaskSummary || s.lastTask || '' : '',
+          taskTitle: s?.cliActive ? s.promptQueue.task?.title || s.lastTaskTitle || '' : '',
           // The prompts sent and not finished yet: the ones being worked on, then the ones waiting.
-          prompts: s?.codexActive ? s.promptQueue.list() : [] };
+          prompts: s?.cliActive ? s.promptQueue.list() : [] };
       });
       const first = terminals[0];
-      const activeCodex = terminals.filter(item => item.codexActive);
+      const activeCodex = terminals.filter(item => item.cliActive);
       const activity = activeCodex.some(item => item.codexActivity === 'working') ? 'working' : activeCodex.some(item => item.codexActivity === 'interrupted') ? 'interrupted' : activeCodex.length && activeCodex.every(item => item.codexActivity === 'complete') ? 'complete' : 'unknown';
       const status = activeCodex.length ? 'codex' : terminals.some(item => item.status === 'shell') ? 'shell' : terminals.some(item => item.status === 'starting') ? 'starting' : first.status;
       return {
@@ -356,7 +356,7 @@ function publicState() {
         ...(p.imageMode ? { imageMode: p.imageMode } : {}),
         branch: getBranch(p.id) || '',
         terminals, sessionId: first.sessionId, status,
-        codexActive: activeCodex.length > 0, codexActivity: activity, agent: activeCodex[0]?.agent || null,
+        cliActive: activeCodex.length > 0, codexActivity: activity, agent: activeCodex[0]?.agent || null,
         shellReady: first.shellReady, codexAvailable: first.codexAvailable,
         error: terminals.find(item => item.error)?.error || null,
         action: terminals.find(item => item.action)?.action || null,
@@ -524,11 +524,7 @@ function noteSettings(s, agent, record) {
     if (!s.usageHistory) s.recordQuota?.(agent, s.usage.limits);
     scheduleState(); scheduleUsageRollover();
   }
-  if (agent === 'codex' && record?.type === 'session_meta') s.bindUsageAccount?.();
-  if (agent === 'codex' && !s.usageHistory && record?.type === 'event_msg') {
-    if (record.payload?.type === 'token_count') s.usageAccount?.refresh(30000);
-    else if (['task_complete', 'turn_completed'].includes(record.payload?.type)) s.usageAccount?.refresh();
-  }
+  if (s.usage?.agent === agent) s.usage.facet?.terminal?.refreshOnRecord?.(s, record);
 }
 // A skill step names the skill; what the skill is for comes from its SKILL.md, a moment later.
 function describeActions(s, cwd, actions) {
@@ -571,7 +567,7 @@ function refreshSkillNotes() {
     if (!project) continue;
     const lead = s.nativeStructured && nativeSessions && skills.leadOptions(project.id, s.agent);
     // A running terminal conductor reads its seats once; a change rides its next prompt, as a mode switch does.
-    if (!s.nativeStructured && s.agent === 'claude' && s.codexActive && project.kind !== 'ssh') {
+    if (!s.nativeStructured && s.agent === 'claude' && s.cliActive && project.kind !== 'ssh') {
       const change = skills.routingChange(project.id, s.sessionId, s.toldSeats);
       if (change) { s.toldSeats = change.table; s.routingNote = change.note; }
     }
@@ -594,13 +590,13 @@ function refreshSkillNotes() {
     if (s.bootstrapFile) {
       try {
         updateDispatchSeats(s.bootstrapFile, skills.dispatchSeats(project.id) ?? {});
-        if (updateBootstrapMode(s.bootstrapFile, skills.seatsInfo(project.id)?.conductor) && s.codexActive) tellMode(s, project);
+        if (updateBootstrapMode(s.bootstrapFile, skills.seatsInfo(project.id)?.conductor) && s.cliActive) tellMode(s, project);
       } catch (error) { report(error); }
-      if (s.skillNoteFile || lead && s.agent === 'claude') {
+      if (s.skillNoteFile || lead && adapterOf(s.agent)?.terminal?.hookSession) {
         try { updateBootstrapLead(s.bootstrapFile, s.nativeStructured ? lead : skills.terminalLead(project.id)); } catch (error) { report(error); }
       }
     }
-    if (!s.skillNoteFile || s.codexActive) continue;
+    if (!s.skillNoteFile || s.cliActive) continue;
     const note = startupNote(READING_NOTE, handoffFile(s.terminalId), path.join(project.path, 'skills'),
       skills.delivery(project, false, s.sessionId, { agent: 'claude' }));
     if (note !== s.skillNote) { writeFileAtomic(s.skillNoteFile, note); s.skillNote = note; }
@@ -681,39 +677,43 @@ function startUsage(project, s, event) {
   s.usageCwd = event.cwd || project.path;
   const usage = s.usage = new UsageMeter(s.agent, { rates: project.kind !== 'ssh', calls: callsOf(s, project), codexHome: event.codexHome || s.codexHome,
     changed: () => { if (s.usage === usage && !s.usageHistory) scheduleState(); } });
-  if (s.agent === 'codex') {
-    s.terminalAccount = null;
-    let binding;
-    s.bindUsageAccount = () => {
-      const options = { codexHome: event.codexHome || s.codexHome, cwd: event.cwd || project.path,
-        recordedCwd: usage.scopeCwd, env: s.usageEnv || process.env, provider: usage.providerId,
-        remote: project.kind === 'ssh', accountLaunch: event.accountLaunch, projectId: project.id, scopeReported: usage.scopeReported };
-      const scope = codexAccounts.scopeFor(options), next = scope.key || scope.reason;
-      if (s.usage !== usage || (s.usageAccount && binding === next)) return;
-      s.usageAccount?.dispose(); binding = next;
-      s.usageAccount = codexAccounts.watch(options, account => {
-        if (s.usage === usage && s.codexActive && sessions.get(s.terminalId) === s) {
-          s.terminalAccount = account;
-          usage.codexAccount(account); s.recordQuota?.('codex', usage.limits); scheduleState(); scheduleUsageRollover();
-          if (account.atLimit && !s.nativeStructured) void resetTerminalCodex(project, s, options);
-        }
-      });
-    };
-    s.bindUsageAccount();
-  }
+  const policy = usage.facet?.terminal;
+  policy?.bind?.(s, project, event, { bindCodexAccount });
   if (project.kind === 'ssh') {
-    if (s.agent === 'claude') bindRemoteClaudeAccount(s);
+    policy?.bindRemote?.(s, { bindRemoteClaudeAccount });
     return;
   }
   const named = update => { if (s.usage === usage) { update(); scheduleState(); } };
-  if (s.agent === 'claude') {
-    void claudeProvider(event.cwd || project.path, claudeConfigDir()).then(provider => named(() => { usage.provider = provider; })).catch(() => {});
-    void refreshClaudeAccounts();
-  } else void codexProvider(event.codexHome || s.codexHome).then(names => named(() => { usage.names = names; })).catch(() => {});
+  policy?.bindLocal?.({ cwd: s.usageCwd, codexHome: event.codexHome || s.codexHome }, {
+    loadClaudeProvider: cwd => void claudeProvider(cwd, claudeConfigDir()).then(provider => named(() => { usage.provider = provider; })).catch(() => {}),
+    loadCodexProviders: home => void codexProvider(home).then(names => named(() => { usage.names = names; })).catch(() => {}),
+    refreshClaudeAccounts,
+  });
+}
+function bindCodexAccount(project, s, event) {
+  const usage = s.usage;
+  s.terminalAccount = null;
+  let binding;
+  s.bindUsageAccount = () => {
+    const options = { codexHome: event.codexHome || s.codexHome, cwd: event.cwd || project.path,
+      recordedCwd: usage.scopeCwd, env: s.usageEnv || process.env, provider: usage.providerId,
+      remote: project.kind === 'ssh', accountLaunch: event.accountLaunch, projectId: project.id, scopeReported: usage.scopeReported };
+    const scope = codexAccounts.scopeFor(options), next = scope.key || scope.reason;
+    if (s.usage !== usage || (s.usageAccount && binding === next)) return;
+    s.usageAccount?.dispose(); binding = next;
+    s.usageAccount = codexAccounts.watch(options, account => {
+      if (s.usage === usage && s.cliActive && sessions.get(s.terminalId) === s) {
+        s.terminalAccount = account;
+        usage.codexAccount(account); s.recordQuota?.('codex', usage.limits); scheduleState(); scheduleUsageRollover();
+        if (account.atLimit && !s.nativeStructured) void resetTerminalCodex(project, s, options);
+      }
+    });
+  };
+  s.bindUsageAccount();
 }
 async function resetTerminalCodex(project, s, options) {
   const usage = s.usage;
-  const current = () => sessions.get(s.terminalId) === s && s.agent === 'codex' && s.usage === usage && s.codexActive && nativeSessions?.getSettings().codexAutoReset === true;
+  const current = () => sessions.get(s.terminalId) === s && s.agent === 'codex' && s.usage === usage && s.cliActive && nativeSessions?.getSettings().codexAutoReset === true;
   if (project.kind === 'ssh' || !current()) return;
   try {
     const result = await codexAccounts.resetAtLimit({ ...options, owner: 'gui' }, { enabled: true, atLimit: true, current });
@@ -733,7 +733,7 @@ function bindRemoteClaudeAccount(s) {
     if (usage.account(observed, observed)) {
       s.recordQuota?.('claude', usage.limits); scheduleState(); scheduleUsageRollover();
     }
-  }, { current: () => s.usage === usage && s.codexActive && s.agent === 'claude' && sessions.get(s.terminalId) === s });
+  }, { current: () => s.usage === usage && s.cliActive && s.agent === 'claude' && sessions.get(s.terminalId) === s });
 }
 function stopUsageAccount(s) {
   s.bindUsageAccount = null; s.usageAccount?.dispose(); s.usageAccount = null;
@@ -748,7 +748,7 @@ let claudeAccountTimer = null;
 let claudeAccountSoon = null, claudeAccountPending = null, claudeAccountQueued = false, claudeAccountGeneration = 0;
 const claudeAccountWatchers = new Map();
 function localClaudeMeters(skip) {
-  return [...sessions.values()].filter(s => s !== skip && s.codexActive && s.agent === 'claude' && s.usage?.agent === 'claude' &&
+  return [...sessions.values()].filter(s => s !== skip && s.cliActive && s.agent === 'claude' && s.usage?.agent === 'claude' &&
     store.projects.some(p => p.id === s.projectId && p.kind !== 'ssh'));
 }
 function disposeClaudeAccounts() {
@@ -826,7 +826,7 @@ function scheduleUsageRollover(skip) {
   const now = Date.now();
   let next = Infinity;
   if (!quitting) for (const s of sessions.values()) {
-    if (s === skip || !s.codexActive || store.projects.find(p => p.id === s.projectId)?.kind === 'ssh') continue;
+    if (s === skip || !s.cliActive || store.projects.find(p => p.id === s.projectId)?.kind === 'ssh') continue;
     for (const limit of s.usage?.limits || []) {
       if (Number.isFinite(limit.resetsAt) && limit.resetsAt > now) next = Math.min(next, limit.resetsAt);
     }
@@ -838,7 +838,7 @@ function scheduleUsageRollover(skip) {
   usageRolloverTimer = setTimeout(() => {
     usageRolloverTimer = null; usageRolloverAt = null;
     if (Date.now() >= next) {
-      for (const s of sessions.values()) if (s.codexActive && s.usage?.agent === 'codex') s.usageAccount?.refresh();
+      for (const s of sessions.values()) if (s.cliActive && s.usage?.agent === 'codex') s.usageAccount?.refresh();
       void refreshClaudeAccounts();
     }
     scheduleUsageRollover();
@@ -877,17 +877,23 @@ function onEvent(event, remote) {
   if (event.version === 1 && acceptDispatchEvent(s, project, event, remote && (ack => remote.ackDispatch(ack)))) return;
   if (event.sessionKey !== s.sessionKey) return;
   if (acceptDispatchEvent(s, project, event)) return;
+  // Remove next version. Shells opened before the update still send these names.
+  if (event.type === 'codex-started') event = { ...event, type: 'agent-started' };
+  if (event.type === 'codex-exited') event = { ...event, type: 'agent-exited' };
   if (event.type === 'claude-seat-input') {
-    if (s.codexActive && s.agent === 'claude' && !s.nativeStructured && event.sessionId === s.claudeSessionId) callsOf(s, project).observeSeatInput(event);
+    if (s.cliActive && s.agent === 'claude' && !s.nativeStructured && event.sessionId === s.claudeSessionId) callsOf(s, project).observeSeatInput(event);
     return;
   }
   if (event.type === 'agent-activity') { claudeActivity(project, s, event); return; }
   // The claude wrapper found a proxy set since the terminal started; its command field names the variable.
   if (event.type === 'hook-channel') { reportHookChannel(s, event.command, event.sequence); return; }
   if (event.type !== 'turn-complete' && !acceptShellEvent(s, event)) return;
-  const shellAdapter = event.type === 'codex-started' ? adapterOf(event.agent) ?? adapterOf('codex') : null;
+  const shellAdapter = event.type === 'agent-started' ? adapterOf(event.agent) ?? adapterOf('codex') : null;
   if (shellAdapter?.terminal?.redirect === 'native') { void openCodexFromShell(project, s, event); return; }
-  if (event.type === 'codex-exited' && event.agent !== 'claude') return;
+  if (event.type === 'agent-exited') {
+    const terminal = adapterOf(event.agent)?.terminal;
+    if (!terminal || terminal.redirect) return;
+  }
   s.approval?.context('shell-event', [event.type, event.sequence]);
   if (event.type === 'shell-ready' || event.type === 'shell-prompt') {
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
@@ -895,7 +901,7 @@ function onEvent(event, remote) {
     s.needsInput = null; s.agentCommand = null; stopUsageAccount(s);
     s.claudeResumeId = null; s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     s.activityMonitor?.stop(); s.activityMonitor = null;
-    s.codexActive = false; s.codexActivity = 'unknown'; s.reportedThreadId = null; s.promptQueue.reset(); s.activitySnapshot = s.activityRawSnapshot = null;
+    s.cliActive = false; s.codexActivity = 'unknown'; s.reportedThreadId = null; s.promptQueue.reset(); s.activitySnapshot = s.activityRawSnapshot = null;
     if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
     s.ready = event.type === 'shell-prompt';
     s.inputDirty = false;
@@ -906,7 +912,7 @@ function onEvent(event, remote) {
     s.claudeAvailable = event.claudeAvailable === true;
     if (typeof event.codexHome === 'string') s.codexHome = event.codexHome;
     if (!quitting && typeof event.cwd === 'string') store.setRestore(s.terminalId, { cwd: event.cwd });
-  } else if (event.type === 'codex-started') {
+  } else if (event.type === 'agent-started') {
     const hookSession = shellAdapter?.terminal?.hookSession;
     if (hookSession) startHookLaunch(s, event.sequence);
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
@@ -926,7 +932,7 @@ function onEvent(event, remote) {
     if (s.agentCommand) {
       readingHistory.close(s.terminalId);
       stopUsageAccount(s);
-      s.ready = false; s.codexActive = true; s.status = 'codex'; s.error = null; s.codexActivity = 'unknown'; s.agentSettings = null; s.usage = null;
+      s.ready = false; s.cliActive = true; s.status = 'codex'; s.error = null; s.codexActivity = 'unknown'; s.agentSettings = null; s.usage = null;
       s.agent = startingAgent;
       startSkillSession(project, s, event.sequence, false);
       s.activityMonitor?.stop(); s.activityMonitor = null; s.actions.reset(); s.conversation.reset(); s.promptQueue.reset();
@@ -941,7 +947,7 @@ function onEvent(event, remote) {
     const keepClaudeHistory = claudeResumeId && s.claudeSessionId === claudeResumeId && s.claudeTranscript;
     if (!keepClaudeHistory) s.claudeSessionId = null;
     s.ready = false;
-    s.codexActive = true;
+    s.cliActive = true;
     // A resumed Claude conversation whose transcript is still followed keeps what its records showed.
     if (!keepClaudeHistory) s.agentSettings = null;
     s.status = 'codex';
@@ -973,7 +979,7 @@ function onEvent(event, remote) {
     store.setRestore(s.terminalId, agentRestore);
     const remoteSince = Number.isFinite(event.sentAt) ? event.sentAt : s.activitySince;
     s.activityMonitor?.stop();
-    const readCurrent = () => sessions.get(s.terminalId) === s && s.codexReadEvent === event && s.codexActive && s.agent === 'codex';
+    const readCurrent = () => sessions.get(s.terminalId) === s && s.codexReadEvent === event && s.cliActive && s.agent === 'codex';
     // Its records feed the reading view and the activity pane: read here, or, over SSH, read on that computer and
     // sent back compacted with each status (integration/remote-worker.py), with the same history start and end.
     const onHistory = ready => {
@@ -1038,7 +1044,7 @@ function onEvent(event, remote) {
     );
     store.setRestore(s.terminalId, { terminal: true, codex: true, cwd: event.cwd });
     // Unread completion is independent of session activity. It survives new turns.
-  } else if (event.type === 'codex-exited') {
+  } else if (event.type === 'agent-exited') {
     s.calls?.endSession();
     s.cliState = s.cliStateMeta = s.cliProviderId = null;
     readingHistory.close(s.terminalId);
@@ -1049,12 +1055,12 @@ function onEvent(event, remote) {
     if (s.completionWork?.reset()) store.expectCompletion(project.id, false);
     s.activitySnapshot = s.activityRawSnapshot = null;
     s.ready = false;
-    s.codexActive = false;
+    s.cliActive = false;
     s.status = 'shell';
     s.reportedThreadId = null;
     if (!quitting) store.setRestore(s.terminalId, { codex: false });
     const code = Number(event.exitCode);
-    if (code && code !== 130 && code !== -1073741510) s.error = t('{agent} 已退出（代码 {code}），请查看终端输出。', { agent: s.agent === 'claude' ? 'Claude Code' : 'Codex', code });
+    if (code && code !== 130 && code !== -1073741510) s.error = t('{agent} 已退出（代码 {code}），请查看终端输出。', { agent: adapterOf(s.agent)?.manifest.label ?? 'Codex', code });
   } else if (event.type === 'turn-complete') {
     if (s.agent === 'codex' && event.threadId && event.turnId && s.cliStateMeta?.turnId === event.turnId
       && (s.cliProviderId || s.rootThreadId || s.reportedThreadId) === event.threadId) {
@@ -1064,7 +1070,7 @@ function onEvent(event, remote) {
     }
     // notify is inherited by child agents. It only requests a refresh; the
     // interactive parent's task lifecycle is the authority for completion.
-    if (s.codexActive && (!s.rootThreadId || event.threadId === s.rootThreadId)) { s.usageAccount?.refresh(); void s.activityMonitor?.poll(); }
+    if (s.cliActive && (!s.rootThreadId || event.threadId === s.rootThreadId)) { s.usageAccount?.refresh(); void s.activityMonitor?.poll(); }
     return;
   } else return;
   broadcast();
@@ -1089,7 +1095,7 @@ async function resumeAfterPrompt(project, session) {
     if (restore?.agent === 'claude') {
       if (!session.claudeAvailable || !plan.codex) return;
       const command = claudeResumeCommand(restore);
-      if (sessions.get(session.terminalId) !== session || !session.ready || session.inputDirty || session.codexActive) return;
+      if (sessions.get(session.terminalId) !== session || !session.ready || session.inputDirty || session.cliActive) return;
       store.expectCompletion(project.id, restore.interrupted === true);
       session.ready = false;
       session.claudeResumeId = restore.threadId || null;
@@ -1145,7 +1151,7 @@ function tellMode(s, project) {
 }
 
 function tellRemoteRouting(s, project, remote, modeChanged) {
-  if (!s.codexActive) return;
+  if (!s.cliActive) return;
   if (s.nativeStructured) { if (modeChanged) tellMode(s, project); return; }
   if (!adapterOf(s.agent)?.notes.message(null).hook) return;
   const change = skills.routingChange(project.id, s.sessionId, s.toldSeats);
@@ -1165,7 +1171,7 @@ function takeModeNote(terminalId) {
 
 function nativeSubagent(spec, signal, { runtimeSessionId, providerSessionId, folder }) {
   const s = sessions.get(spec.terminalId), project = store.findTerminal(spec.terminalId)?.project;
-  if (quitting || !project || nativeSpecs.get(spec.terminalId) !== spec || !s?.nativeStructured || !s.codexActive
+  if (quitting || !project || nativeSpecs.get(spec.terminalId) !== spec || !s?.nativeStructured || !s.cliActive
     || s.agent !== 'claude' || s.nativeRuntimeSessionId !== runtimeSessionId || s.claudeSessionId !== providerSessionId
     || signal.terminalId !== spec.terminalId) return;
   const calls = callsOf(s, project);
@@ -1190,7 +1196,7 @@ function structuredEvent(id, event) {
     if (event.type !== 'session.state' || event.payload.state !== 'starting') return;
     s = { nativeStructured: true, nativeSpec: spec, terminalId: id, projectId: project.id, sessionId: spec.sessionId, skillSessionId: spec.skillSessionId,
       sessionKey: spec.sessionKey, controlCapability: spec.controlCapability, bootstrapFile: spec.bootstrapFile,
-      status: 'codex', ready: false, codexActive: true, agent: spec.agent, nativeMode: event.transport,
+      status: 'codex', ready: false, cliActive: true, agent: spec.agent, nativeMode: event.transport,
       activitySince: Date.now(), codexActivity: 'unknown', error: null, nativeMessages: new Map(), usageEnv: spec.env,
       recordRun: (call, value) => dashboard.run(project, call, value),
       terminal: { kill: () => { void nativeSessions.stop(id, event.runtimeSessionId).catch(report); }, resize() {} },
@@ -1236,7 +1242,7 @@ function structuredEvent(id, event) {
     s.nativeState = event.payload.state;
     if (['stopped', 'failed', 'disconnected'].includes(event.payload.state)) {
       s.calls?.endSession();
-      s.status = 'exited'; s.codexActive = false;
+      s.status = 'exited'; s.cliActive = false;
       store.setRestore(id, { terminal: false, codex: false });
     }
     if (event.payload.state === 'failed') s.error = event.payload.reason;
@@ -1509,7 +1515,7 @@ function createTerminalSession({ id, project, terminal, env, transfer, sessionId
     prompts: shellKind === 'cmd' ? new PromptMarkers() : null,
     tools: shellKind === 'cmd' ? { codex: !!env.AGENTRIX_CODEX_EXECUTABLE || onPath('codex', env), claude: !!env.AGENTRIX_CLAUDE_EXECUTABLE || onPath('claude', env) } : null,
     titles: new TerminalTitleTracker(), reportedThreadId: null,
-    codexActive: false, codexAvailable: null, seq: 0, chunks: [], bytes: 0, pending: '',
+    cliActive: false, codexAvailable: null, seq: 0, chunks: [], bytes: 0, pending: '',
     flushTimer: null, error: null, submissions: new SubmissionTracker(), draftSubmissions: null,
     approval: new ApprovalGuard(sessionId), approvalRemote: project.kind === 'ssh',
     native: null, nativeMode: null,
@@ -1529,9 +1535,9 @@ function registerTerminalSession(s, project) {
       void Promise.resolve().then(() => s.observeNativeSwitch?.());
     }
     terminal.write(data);
-  }, { shellOwnsInput: () => !s.codexActive });
+  }, { shellOwnsInput: () => !s.cliActive });
   const refreshCompletion = () => {
-    if (sessions.get(id) === s && s.codexActive && (s.activityRawSnapshot || s.activitySnapshot)) applyActivity(project, s, s.activityRawSnapshot || s.activitySnapshot);
+    if (sessions.get(id) === s && s.cliActive && (s.activityRawSnapshot || s.activitySnapshot)) applyActivity(project, s, s.activityRawSnapshot || s.activitySnapshot);
   };
   s.completionWork = new CompletionWork({ changed: refreshCompletion });
   s.promptQueue = new PromptQueue(expired => {
@@ -1558,10 +1564,10 @@ function registerTerminalSession(s, project) {
     // Local transcripts already use the main clock; the hook offset includes delivery latency.
     const at = (entry?.receivedAt ?? entry?.at) + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0);
     if (entry?.cancelled) s.promptQueue.cancel(entry.original ?? entry.text, at, entry.id);
-    else if (entry?.role === 'user' && entry.queued && s.codexActive && at >= (s.activitySince || 0) - 1000) s.promptQueue.enqueue(entry.original ?? entry.text, at, entry.id);
-    if (entry?.role === 'assistant' && s.codexActive) s.promptQueue.reply({ ...entry, at });
+    else if (entry?.role === 'user' && entry.queued && s.cliActive && at >= (s.activitySince || 0) - 1000) s.promptQueue.enqueue(entry.original ?? entry.text, at, entry.id);
+    if (entry?.role === 'assistant' && s.cliActive) s.promptQueue.reply({ ...entry, at });
     // An answer to the agent's own question is not a prompt: it goes on with the round it answered.
-    if (entry?.role === 'user' && !entry.answer && !entry.queued && s.codexActive) {
+    if (entry?.role === 'user' && !entry.answer && !entry.queued && s.cliActive) {
       const localCommand = isLocalAgentCommand(s.agent, entry.text);
       if (at >= (s.activitySince || 0) - 1000) {
         const inputAt = s.promptQueue.start(entry.original ?? entry.text, at, entry.id, localCommand);
@@ -1620,7 +1626,7 @@ function bindTerminalEvents(s, project, env) {
         }
         s.approval.context('terminal-title', threadId);
         // A title cut short names the session only by how its id begins: the whole id is kept once its record is found.
-        if (s.codexActive) { s.codexActivity = 'unknown'; s.activityInputAt = s.activityConfirmedInputAt = 0; if (wholeThread(threadId)) store.setRestore(id, { threadId }); void s.activityMonitor?.poll(); }
+        if (s.cliActive) { s.codexActivity = 'unknown'; s.activityInputAt = s.activityConfirmedInputAt = 0; if (wholeThread(threadId)) store.setRestore(id, { threadId }); void s.activityMonitor?.poll(); }
       }
     }
     s.usageAccount?.output(data);
@@ -1642,7 +1648,7 @@ function bindTerminalEvents(s, project, env) {
     endSkillSession(s);
     skills.endSession(project.id, sessionId);
     stopUsageAccount(s);
-    s.status = 'exited'; s.ready = false; s.codexActive = false;
+    s.status = 'exited'; s.ready = false; s.cliActive = false;
     readingHistory.close(id);
     s.activityMonitor?.stop(); s.activityMonitor = null; s.codexActivity = 'unknown';
     if (s.completionWork.reset()) store.expectCompletion(project.id, false);
@@ -1700,10 +1706,11 @@ function disposeTerminal(id, { preserveNative = false, preserveSwitch = false, p
 function registerUnavailableNative(handle) {
   const settings = { claudePath: 'terminal-only', codexAutoReset: false };
   function start(id, options) {
+    const adapter = adapterOf(options?.agent);
     if (!options || typeof options !== 'object' || Object.keys(options).some(key => !['agent', 'resume'].includes(key)) ||
-      !['claude', 'codex'].includes(options.agent) || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
+      !adapter || options.resume !== undefined && typeof options.resume !== 'boolean') throw new Error('无效的原生会话请求。');
     const project = findProject(id), saved = store.findTerminal(id).record.restore;
-    if (options.agent === 'codex') throw new Error('Codex 原生模式连接失败，请重试。');
+    if (!support(adapter.manifest, 'terminal').ok) throw new Error('Codex 原生模式连接失败，请重试。');
     if (project.kind === 'ssh') throw new Error('SSH 原生会话目前仅支持 Codex。');
     const history = options.resume && saved?.agent === options.agent && /^[a-f\d-]{36}$/i.test(saved.threadId || '') ? { id: saved.threadId } : null;
     launchPlans.set(id, { agent: options.agent, command: launchCommand(options.agent, history), threadId: history?.id || null });
@@ -1818,10 +1825,10 @@ function registerIpc() {
     return { claude: null, codex: saved?.threadId ? { id: saved.threadId } : null };
   });
   handle('agent:launch', async (id, agent, mode) => {
-    const project = findProject(id);
-    if (!['claude', 'codex'].includes(agent)) throw new Error('无效的助手。');
+    const project = findProject(id), adapter = adapterOf(agent);
+    if (!adapter) throw new Error('无效的助手。');
     if (!['new', 'continue'].includes(mode)) throw new Error('Unsupported agent session mode');
-    if (agent === 'codex') {
+    if (adapter.terminal?.redirect === 'native') {
       if (!nativeSessions) throw new Error('Codex 原生模式连接失败，请重试。');
       launchPlans.delete(id); restorePlans.delete(id);
       // start resolves the saved thread, or queries folder history, only after this click.
@@ -1829,7 +1836,7 @@ function registerIpc() {
     }
     // Claude Code on another computer keeps its own conversations: it is asked to continue, never searched for here.
     const history = mode === 'continue' && project.kind !== 'ssh' ? (await folderHistory(folderOf(id)))[agent] : null;
-    const command = project.kind === 'ssh' && mode === 'continue' ? 'claude --continue' + String.fromCharCode(13) : launchCommand(agent, history);
+    const command = project.kind === 'ssh' && mode === 'continue' && adapter.terminal?.resumeLine ? adapter.terminal.resumeLine() : launchCommand(agent, history);
     launchPlans.set(id, { agent, command, threadId: history?.id || null });
     startTerminal(id, true); broadcast(); return true;
   });
@@ -1904,11 +1911,11 @@ if (!app.requestSingleInstanceLock()) {
       },
       seatSession: id => {
         const session = sessions.get(id), spec = nativeSpecs.get(id);
-        return session && session.status !== 'exited' && session.codexActive
+        return session && session.status !== 'exited' && session.cliActive
           ? { projectId: session.projectId, sessionId: session.skillSessionId || spec?.sessionId || session.sessionId,
             appliedRouting: (session.remoteConnection || session.terminal)?.appliedRouting } : null;
       },
-      getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.codexActive).map(s => s.projectId),
+      getProjects: () => store.projects, getAgents: () => agents.getState(), activeProjects: () => [...sessions.values()].filter(s => s.cliActive).map(s => s.projectId),
       changed: (infos, { deliveryChanged }) => {
         const refreshed = deliveryChanged && refreshSkillNotes();
         send('skills:changed', infos);

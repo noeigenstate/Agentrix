@@ -81,8 +81,8 @@ try {
     await waitFor(async () => (await state()).projects[index].shellReady, 'native terminal ready');
     // Submitting a shell command acknowledges a restored unread completion.
     if (index === 1) continue;
-    await write(index, `function global:prompt { 'AGENT_FIXTURE> ' }; Clear-Host; Write-Host 'Agentrix / ${names[index]}'; Write-Host ''; Write-Host '  项目、终端和输入草稿各自独立。'; Write-Host '  Ctrl + 鼠标左键打开文件与链接'; Write-Host ''; Write-Host '  PASS  ANSI colors and readable text' -ForegroundColor Green; Write-Host '  INFO  状态变更后继续工作' -ForegroundColor Cyan; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r`);
-    await waitFor(async () => (await state()).projects[index].codexActive, 'visible visual fixture agent');
+    await write(index, `function global:prompt { 'AGENT_FIXTURE> ' }; Clear-Host; Write-Host 'Agentrix / ${names[index]}'; Write-Host ''; Write-Host '  项目、终端和输入草稿各自独立。'; Write-Host '  Ctrl + 鼠标左键打开文件与链接'; Write-Host ''; Write-Host '  PASS  ANSI colors and readable text' -ForegroundColor Green; Write-Host '  INFO  状态变更后继续工作' -ForegroundColor Cyan; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r`);
+    await waitFor(async () => (await state()).projects[index].cliActive, 'visible visual fixture agent');
     await setMode(page, names[index], 'terminal');
     await waitFor(async () => panel(index).locator('.xterm-rows').innerText().then(text => text.includes('ANSI colors and readable text')), 'readable terminal output');
   }
@@ -92,8 +92,8 @@ try {
   // This blocking task restores shell events so cleanup can observe its return to PowerShell. It is a new run of the
   // agent in this terminal, which the earlier fixture agent's start time tells apart.
   const earlier = (await state()).projects[0].terminals[0].agentStartedAt;
-  await write(0, `function global:prompt { Send-AgentrixEvent 'shell-prompt'; 'PS> ' }; Clear-Host; Write-Host 'Agentrix / 界面开发'; Write-Host ''; Write-Host '  正在处理：验证独立项目的任务状态' -ForegroundColor Cyan; Write-Host '  背景任务运行中，可操作其他窗口。'; Write-Host ''; Send-AgentrixEvent 'codex-started' -Agent 'claude'; for ($pgVisual=0; $pgVisual -lt 2400 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgVisual++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'codex-exited' -Agent 'claude'\r`);
-  await waitFor(async () => { const project = (await state()).projects[0]; return project.codexActive && project.agent === 'claude' && project.terminals[0].agentStartedAt > earlier; }, 'offline task active');
+  await write(0, `function global:prompt { Send-AgentrixEvent 'shell-prompt'; 'PS> ' }; Clear-Host; Write-Host 'Agentrix / 界面开发'; Write-Host ''; Write-Host '  正在处理：验证独立项目的任务状态' -ForegroundColor Cyan; Write-Host '  背景任务运行中，可操作其他窗口。'; Write-Host ''; Send-AgentrixEvent 'agent-started' -Agent 'claude'; for ($pgVisual=0; $pgVisual -lt 2400 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgVisual++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'agent-exited' -Agent 'claude'\r`);
+  await waitFor(async () => { const project = (await state()).projects[0]; return project.cliActive && project.agent === 'claude' && project.terminals[0].agentStartedAt > earlier; }, 'offline task active');
   // The agent a terminal runs is Claude Code. Its rounds are reported by its hooks, sent here by the real hook script
   // while the stand-in occupies the shell: a submitted prompt starts a round and Stop ends it.
   const bootstrap = await terminalBootstrap(profile, (await state()).projects[0].terminals[0].id), session = randomUUID();

@@ -93,7 +93,7 @@ test('native main arms completion only for an explicit user turn and ignores rep
 });
 test('native stop preserves resume identity while marking its saved launch inactive', () => {
   const main = host(); main.structuredEvent('t', event('session.state', { state: 'stopped', reason: null }));
-  assert.equal(main.terminal.codexActive, false); assert.equal(main.terminal.claudeSessionId, 'provider');
+  assert.equal(main.terminal.cliActive, false); assert.equal(main.terminal.claudeSessionId, 'provider');
   assert.equal(main.restored[0].patch.codex, false); assert.equal(main.restored[0].patch.threadId, undefined);
 });
 test('late native shutdown events cannot recreate a disposed host session', () => {
@@ -105,7 +105,8 @@ test('late native shutdown events cannot recreate a disposed host session', () =
 
 test('M5 failed native initialization keeps terminal starts and safe settings available', async () => {
   const handlers = new Map(), starts = [], plans = new Map();
-  const context = { randomUUID: () => 'fallback-runtime', launchPlans: plans, readNativeConnections: async () => ({}),
+  const { adapterOf, support } = require('../electron/features/cli-adapters/registry.cjs');
+  const context = { adapterOf, support, randomUUID: () => 'fallback-runtime', launchPlans: plans, readNativeConnections: async () => ({}),
     claudeRuntime: null, readNativeSubscriptionLimits: () => ({}),
     findProject: id => { assert.equal(id, 't'); return { kind: 'local' }; },
     store: { findTerminal: () => ({ record: { restore: { agent: 'claude', threadId: '11111111-1111-4111-8111-111111111111' } } }) },

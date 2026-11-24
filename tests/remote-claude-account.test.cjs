@@ -103,7 +103,7 @@ test('SSH Claude startUsage binds only the remote channel and quota scopes separ
   const source = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
   const body = source.slice(source.indexOf('function startUsage('), source.indexOf('\nfunction stopUsageAccount('));
   const project = { id: 'p', kind: 'ssh', path: '/srv/project', ssh: { host: 'one', configFile: '/fixture/ssh' } };
-  const session = { agent: 'claude', terminalId: 't', codexActive: true, activityClockOffset: 60000, terminal: {}, quotas: [], recordQuota(provider, limits) { this.quotas.push({ provider, limits }); } };
+  const session = { agent: 'claude', terminalId: 't', cliActive: true, activityClockOffset: 60000, terminal: {}, quotas: [], recordQuota(provider, limits) { this.quotas.push({ provider, limits }); } };
   let binding;
   const context = { UsageMeter, sessions: new Map([['t', session]]), stopUsageAccount() {}, callsOf: () => null,
     scheduleState() {}, scheduleUsageRollover() {}, watchRemoteClaudeAccount(remote, changed, options) { binding = { remote, changed, options }; return { dispose() {} }; },
@@ -115,15 +115,15 @@ test('SSH Claude startUsage binds only the remote channel and quota scopes separ
   assert.equal(session.usage.snapshot().limits[0].percent, 41); assert.equal(session.quotas.length, 1);
   assert.equal(session.usage.limitsAt, localAt);
   assert.equal(session.usage.limits[0].resetsAt, account.limits[0].resetsAt, 'server reset timestamps must not acquire the host clock offset');
-  session.codexActive = false; assert.equal(binding.options.current(), false);
-  session.codexActive = true; context.sessions.delete('t'); assert.equal(binding.options.current(), false);
+  session.cliActive = false; assert.equal(binding.options.current(), false);
+  session.cliActive = true; context.sessions.delete('t'); assert.equal(binding.options.current(), false);
   const first = quotaScope('claude', project, session);
   assert.notEqual(first, quotaScope('claude', { ...project, ssh: { ...project.ssh, host: 'two' } }, session));
   assert.notEqual(first, quotaScope('claude', { ...project, kind: 'local' }, { usageEnv: { CLAUDE_CONFIG_DIR: '/fixture/local-claude' } }));
 });
 
 test('SSH Claude attention events show the waiting notice without rearming completion or sending any input', () => {
-  const session = { terminalId: 't', sessionId: 'pty', codexActive: true, agent: 'claude', needsInput: null, codexActivity: 'complete' };
+  const session = { terminalId: 't', sessionId: 'pty', cliActive: true, agent: 'claude', needsInput: null, codexActivity: 'complete' };
   const event = { state: 'attention', sessionId: 'fixture-session', eventId: 'fixture-session:notify:1', message: 'Claude needs your answer' };
   let broadcasts = 0;
   const context = defineMain({ project: { kind: 'ssh' }, session, event,
@@ -149,7 +149,7 @@ test('resuming SSH Claude rebinds its quota poller while preserving the existing
   // Extract the real event handler, ending before unrelated launcher declarations.
   vm.runInContext(source.slice(source.indexOf('function onEvent('), source.indexOf('// The agent chosen on a new project')), context);
   defineMain(context, 'acceptDispatchEvent');
-  context.onEvent({ type: 'codex-started', projectId: project.id, sessionKey: 'fixture', agent: 'claude', cwd: project.path, sequence: 2 });
+  context.onEvent({ type: 'agent-started', projectId: project.id, sessionKey: 'fixture', agent: 'claude', cwd: project.path, sequence: 2 });
   assert.equal(rebound, 1); assert.equal(session.usage, usage);
   assert.deepEqual(session.usage.round, { input: 15, cached: 3, output: 9 });
 });

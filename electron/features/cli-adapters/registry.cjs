@@ -7,6 +7,7 @@ const codexAppServer = require('../codex-app-server/adapter.cjs');
 const { support } = require('./capabilities.mjs');
 const { workerOf } = require('./workers.cjs');
 const { terminalAdapters } = require('./terminal.cjs');
+const usage = require('./usage.cjs');
 
 // Bind the locators main already owns for its terminal and native sessions.
 function runtimeInstall(createInstall, callbacks) {
@@ -25,16 +26,17 @@ const runtimes = new Map([
   ['codex', { ...runtimeInstall(codex.createInstall, ({ codex: peek, refreshCodex: refresh }) => ({ peek, refresh })), transcript: codex.transcript, ...codexAppServer }],
 ]);
 
-function createAdapter(manifest, runtime, pathOptions) {
+function createAdapter(manifest, runtime = {}, pathOptions) {
   const defaultInstall = () => createPathInstall(manifest, pathOptions);
+  const install = runtime.install ? {} : { install: defaultInstall(), settingsInstall: defaultInstall };
   const worker = workerOf(manifest.id);
-  return Object.freeze({ manifest, ...(runtime ?? { install: defaultInstall(), settingsInstall: defaultInstall }), ...(worker && { worker }) });
+  return Object.freeze({ manifest, ...install, ...runtime, ...(worker && { worker }) });
 }
 
 const terminalFacets = terminalAdapters(Object.fromEntries(declarations().map(({ manifest }) => [manifest.id, manifest.words])));
 const registered = Object.freeze(declarations().map(({ manifest }) => {
   const runtime = runtimes.get(manifest.id);
-  return createAdapter(manifest, runtime && { ...runtime, ...terminalFacets[manifest.id] });
+  return createAdapter(manifest, { ...runtime, ...terminalFacets[manifest.id], usage: usage[manifest.id] });
 }));
 const adapters = () => registered;
 const adapterOf = id => registered.find(({ manifest }) => manifest.id === id);

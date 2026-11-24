@@ -604,12 +604,12 @@
     "id": "src/features/cli-screens/index.ts:b097596f63afdeabce2d4d65"
   },
   {
-    "text": "screenOf(agent)?.input(rows)",
-    "id": "src/features/cli-screens/index.ts:dc14a9dba99739564cdc819e"
+    "text": "lookup(agent)?.input(rows)",
+    "id": "src/features/cli-screens/index.ts:2eaf7303792beb14982f62ea"
   },
   {
-    "text": "screenOf(agent)?.input(rows, screen.inputHint)",
-    "id": "src/features/cli-screens/index.ts:a77594a4b091fbbafe5b499e"
+    "text": "lookup(agent)?.input(rows, screen.inputHint)",
+    "id": "src/features/cli-screens/index.ts:0e23b19e0078ac2883114d7e"
   },
   {
     "text": "run(item, item.state === 'open' ? 'adopted' : 'open')",

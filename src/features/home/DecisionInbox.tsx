@@ -12,7 +12,7 @@ const GROUPS: [Group, string][] = [['decide', '等你决定'], ['working', '工�
 // What a session is doing, in the words a person uses for work: never a percentage it cannot know.
 export function sessionStateLabel(project: Project, terminal: ProjectTerminal) {
   if (!terminal.sessionId || terminal.status === 'exited') return t('未启动');
-  if (!terminal.codexActive) return t('终端');
+  if (!terminal.cliActive) return t('终端');
   if (terminal.codexActivity === 'working') return t('工作中');
   if (terminal.codexActivity !== 'complete') return t('等待指令');
   return project.unread > 0 ? t('等你查看') : t('本轮完成');

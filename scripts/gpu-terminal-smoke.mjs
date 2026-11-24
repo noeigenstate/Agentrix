@@ -32,8 +32,8 @@ try {
   const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects[0];
   await waitFor(async () => (await state()).shellReady, 'shell ready');
   // Ordinary shell prompts clear agent state; this fixture keeps its agent visible while commands run.
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), project.id);
-  await waitFor(async () => (await state()).codexActive, 'GPU fixture agent active');
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r"), project.id);
+  await waitFor(async () => (await state()).cliActive, 'GPU fixture agent active');
   await page.getByRole('button', { name: '切换到终端', exact: true }).click();
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));
@@ -98,7 +98,7 @@ try {
   await host.click({ position: { x: 120, y: 60 } });
   await page.keyboard.type('Write-Output ("STILL" + "_LIVE")'); await page.keyboard.press('Enter');
   await waitFor(async () => (await screen()).includes('STILL_LIVE\r\n'), 'the session kept running through the switches');
-  assert.equal((await state()).codexActive, true, 'ordinary commands keep the fixture agent visible');
+  assert.equal((await state()).cliActive, true, 'ordinary commands keep the fixture agent visible');
   assert.ok(await countPixels(true) > 400, 'text is drawn again on the GPU');
   assert.deepEqual(errors, []);
   console.log('PASS: GPU terminal renderer draws, types, selects and copies, and switches renderers without losing the session');

@@ -31,10 +31,12 @@ test('Codex shell model, effort and service tier overrides get the routing refus
 
 test('the existing shell event carries bounded argv intact without forging a CLI completion', () => {
   const args = ['resume', thread, '中文 "quotes" \\ end'];
-  const event = shellEvent(['codex-started', '3', '0', 'codex', 'true', 'true', '/home/.codex', '/p', '', '', JSON.stringify(args)], 't', 'key');
+  const event = shellEvent(['agent-started', '3', '0', 'codex', 'true', 'true', '/home/.codex', '/p', '', '', JSON.stringify(args)], 't', 'key');
   assert.deepEqual(event.args, args);
-  assert.equal(event.type, 'codex-started');
-  assert.equal(shellEvent(['codex-started', '3', '0', 'codex', 'true', 'true', '', '/p', '', '', 'broken'], 't', 'key'), null);
+  assert.equal(event.type, 'agent-started');
+  assert.deepEqual(shellEvent(['codex-started', '3', '0', 'codex', 'true', 'true', '/home/.codex', '/p', '', '', JSON.stringify(args)], 't', 'key'), event);
+  assert.equal(shellEvent(['codex-exited', '4', '0', 'claude'], 't', 'key').type, 'agent-exited');
+  assert.equal(shellEvent(['agent-started', '3', '0', 'codex', 'true', 'true', '', '/p', '', '', 'broken'], 't', 'key'), null);
 });
 
 function host(kind = 'local') {
@@ -84,11 +86,13 @@ test('authenticated manual Codex events leave before any terminal agent tracking
   f.context.openCodexFromShell = () => { accepted++; };
   vm.runInContext(main.slice(main.indexOf('function onEvent('), main.indexOf('\n// The agent chosen', main.indexOf('function onEvent('))), f.context);
   defineMain(f.context, 'acceptDispatchEvent');
-  const event = { type: 'codex-started', projectId: 't', sessionKey: 'key', sequence: 2, agent: 'codex', args: [] };
+  const event = { type: 'agent-started', projectId: 't', sessionKey: 'key', sequence: 2, agent: 'codex', args: [] };
   f.context.onEvent({ ...event, sessionKey: 'wrong' }); assert.equal(accepted, 0);
   f.context.onEvent(event); assert.equal(accepted, 1);
   f.context.onEvent(event); assert.equal(accepted, 1, 'delayed duplicates cannot open another native session');
-  assert.equal(f.session.codexActive, undefined);
+  f.context.onEvent({ ...event, type: 'codex-started', sequence: 3 }); assert.equal(accepted, 2);
+  f.context.onEvent({ ...event, sequence: 3 }); assert.equal(accepted, 2, 'old and new names share one sequence guard');
+  assert.equal(f.session.cliActive, undefined);
 });
 
 for (const kind of ['local', 'ssh']) test(`${kind} native spec applies only the host-mapped shell launch settings`, () => {

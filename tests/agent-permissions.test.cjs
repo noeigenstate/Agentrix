@@ -12,7 +12,7 @@ const { defineMain } = require('./helpers/main-modules.cjs');
 const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8');
 // Exercise the actual event handlers without opening Electron or the user's terminals.
 function handlers() {
-  const project = { id: 'p', completionArmed: false }, session = { terminalId: 't', projectId: 'p', sessionId: 'pty', sessionKey: 'key', codexActive: true, agent: 'claude', codexActivity: 'working', promptQueue: { reset() {} }, submissions: { reset() {} }, approval: new (require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard)('pty') };
+  const project = { id: 'p', completionArmed: false }, session = { terminalId: 't', projectId: 'p', sessionId: 'pty', sessionKey: 'key', cliActive: true, agent: 'claude', codexActivity: 'working', promptQueue: { reset() {} }, submissions: { reset() {} }, approval: new (require('../electron/features/terminal/approval-guard.cjs').ApprovalGuard)('pty') };
   const calls = { broadcast: 0, restore: 0, activity: 0, follow: 0, completion: [], usageDispose: 0 };
   session.usageAccount = { dispose() { calls.usageDispose++; } };
   session.bindUsageAccount = () => {};
@@ -67,7 +67,8 @@ test('Claude hook event identities conservatively invalidate old approval action
 
 test('working and complete clear waiting without disposing usage; actual agent/shell exits clean up', () => {
   // Claude's wrappers name it in their exit report; Codex has no terminal run, so its wrappers send none.
-  for (const event of [{ state: 'working', prompt: 'Actual task' }, { state: 'complete' }, { type: 'codex-exited', agent: 'claude', exitCode: 0 }, { type: 'shell-ready', cwd: '/project' }, { type: 'shell-prompt', cwd: '/project' }]) {
+  const exits = ['agent-exited', 'codex-exited'].map(type => ({ type, agent: 'claude', exitCode: 0 }));
+  for (const event of [{ state: 'working', prompt: 'Actual task' }, { state: 'complete' }, ...exits, { type: 'shell-ready', cwd: '/project' }, { type: 'shell-prompt', cwd: '/project' }]) {
     const { session, calls, send } = handlers();
     const account = session.usageAccount, bind = session.bindUsageAccount;
     send({ state: 'attention', message: 'Approve tool' });
@@ -86,8 +87,8 @@ test('working and complete clear waiting without disposing usage; actual agent/s
   }
   // An exit report that names Codex is not this Claude session's: it ends nothing.
   const { session, calls, send } = handlers();
-  send({ state: 'attention', message: 'Approve tool' }); send({ type: 'codex-exited', agent: 'codex', exitCode: 0 });
-  assert.equal(session.needsInput.message, 'Approve tool'); assert.equal(session.codexActive, true);
+  send({ state: 'attention', message: 'Approve tool' }); send({ type: 'agent-exited', agent: 'codex', exitCode: 0 });
+  assert.equal(session.needsInput.message, 'Approve tool'); assert.equal(session.cliActive, true);
   assert.deepEqual([calls.restore, calls.usageDispose, calls.broadcast], [0, 0, 1]);
 });
 
@@ -135,7 +136,7 @@ test('the key that answers Claude\'s permission prompt ends the waiting notice; 
   const listeners = {}, keys = [];
   let scheduled = 0;
   const waiting = () => ({ message: 'Claude needs your permission', since: 1 });
-  const session = { status: 'running', codexActive: true, agent: 'claude', codexActivity: 'working', needsInput: waiting(),
+  const session = { status: 'running', cliActive: true, agent: 'claude', codexActivity: 'working', needsInput: waiting(),
     submissions: { write: () => false, sent: [] }, gate: { input: key => keys.push(key) } };
   require('../electron/features/terminal/ipc.cjs').registerTerminalIpc({ handle() {}, listen: (name, callback) => { listeners[name] = callback; },
     getSession: () => session, getProjectById: () => ({ id: 'p' }), scheduleState: () => { scheduled++; }, applyActivity: () => assert.fail('an answer is no interruption') });
@@ -201,7 +202,7 @@ test('public state exposes waiting messages and null for terminals without a not
   session.agentStarting = true; assert.equal(shown(), scope);
   session.error = 'start failed'; assert.equal(shown(), undefined); session.error = null;
   context.startupErrors.set('waiting', 'startTerminal threw'); assert.equal(shown(), undefined);
-  context.startupErrors.clear(); session.agentStarting = false; session.inputDirty = true; session.codexActive = true;
+  context.startupErrors.clear(); session.agentStarting = false; session.inputDirty = true; session.cliActive = true;
   session.promptQueue = { list: () => [] }; assert.equal(shown(), scope, 'a CLI that really started owns its history even after shell typing');
   session.completionWork = { reading: true, mainTurn: () => null };
   assert.equal(context.publicState().projects[0].terminals[0].codexActivity, 'working', 'catch-up is visible even when the only lifecycle snapshot predates this launch');

@@ -26,7 +26,6 @@ import './activity-pane.css';
 // Read again a minute after the last read (the month turns over, a limit recovers), and a second after an event says the numbers moved.
 const REFRESH_MS = 60_000, REVISION_DELAY_MS = 1000;
 const AGENTS = adapters().filter(({ manifest }) => support(manifest, 'accountLimits').ok).map(({ manifest }) => manifest.id);
-const NAMES: Record<NativeAgent, string> = { claude: 'Claude', codex: 'Codex' };
 // The last usage read per project, shown at once when its pane opens again. Nothing tells this file that a project was removed, so it keeps the most recently read ones.
 const HELD_PROJECTS = 32;
 const observations = new Map<string, { bridge: ReturnType<typeof nativeBridge>; usage: NativeUsage }>();
@@ -101,12 +100,12 @@ function quotaWindows(limits: LimitsPayload | null | undefined, current: boolean
 }
 
 // Where the numbers come from, under the bars: the account read (main's answer, with when it was observed) or the session's own source; null when nothing is said.
-function quotaSource(agent: NativeAgent, limits: LimitsPayload | null | undefined, current: boolean, usage: AgentUsage | null | undefined) {
+function quotaSource(label: string, showUnavailable: boolean, limits: LimitsPayload | null | undefined, current: boolean, usage: AgentUsage | null | undefined) {
   const { windows, onScreen } = quotaWindows(limits, current, usage);
-  if (!windows.length) return current && agent === 'claude' && usage?.limitsAt == null ? t('账号额度暂不可用。') : null;
+  if (!windows.length) return current && showUnavailable && usage?.limitsAt == null ? t('账号额度暂不可用。') : null;
   if (onScreen) return usage?.limitsAt == null ? t('账号额度暂不可用。') : usage.limitsFrom === 'CodePulse' ? t('额度来自 CodePulse 状态记录，{time} 写入', { time: resetTime(usage.limitsAt) })
     : t('额度来自 {source}，{time} 更新', { source: usage.limitsFrom || 'Claude Code', time: resetTime(usage.limitsAt) });
-  return typeof limits?.observedAtMs === 'number' ? t('额度来自 {source}，{time} 更新', { source: NAMES[agent], time: resetTime(limits.observedAtMs) }) : null;
+  return typeof limits?.observedAtMs === 'number' ? t('额度来自 {source}，{time} 更新', { source: label, time: resetTime(limits.observedAtMs) }) : null;
 }
 
 // The subscription's windows as bars, what is not known said as such, and the provider's rate-limit lines.
@@ -135,11 +134,12 @@ const ApiSpend = ({ usage }: { usage: NativeUsage }) =>
 function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgent; usage: NativeUsage | null; terminal: ProjectTerminal; projectId?: string }) {
   const state = usage?.agents[agent], connection = connectionWord(agent, state?.connection), kind = state?.connection?.kind, notice = noticeWords(state?.limits?.notice);
   // The session in view belongs to one agent; only it has a context length and a round.
-  const current = terminal.codexActive && terminal.agent === agent, tokens = terminal.agentUsage;
+  const current = terminal.cliActive && terminal.agent === agent, tokens = terminal.agentUsage;
   // Subscription is a billing source. Every Codex session runs on app-server;
   // a legacy PTY snapshot needs restoration, not a second supported run mode.
   const known = current || !!state?.next?.path;
   const manifest = adapterOf(agent)?.manifest, nativeOnly = manifest && !support(manifest, 'terminal').ok && support(manifest, 'native').ok;
+  const display = manifest?.usage, label = display?.label ?? manifest?.label ?? agent;
   const channel = nativeOnly && known ? current && terminal.sessionId ? t('需用原生模式恢复') : t('原生模式')
     : (current && terminal.nativeMode || !current && state?.next?.path === 'api') ? t('原生模式') : null;
   const rows = [[t('本轮'), tokens?.round], [t('本次对话'), tokens?.total]] as const;
@@ -148,10 +148,10 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
   // The console button is the owner's way to check a rejection for balance, shown only next to the notice that says it.
   const checkNotice = !!notice && !!projectId && consoleCheck(state?.limits?.notice);
   // Only Claude on the API, and only once main has a spend record, has a spend row; Codex on the API has nothing of its own, so no empty block.
-  const spend = agent === 'claude' && kind === 'api' && !!usage?.apiRecords;
-  const source = plan ? quotaSource(agent, state?.limits, current, tokens) : null;
-  return <section className="api-agent" aria-label={NAMES[agent]}>
-    <h4 className="api-agent-title">{NAMES[agent]}</h4>
+  const spend = display?.apiSpend && kind === 'api' && !!usage?.apiRecords;
+  const source = plan ? quotaSource(label, !!display?.showUnavailable, state?.limits, current, tokens) : null;
+  return <section className="api-agent" aria-label={label}>
+    <h4 className="api-agent-title">{label}</h4>
     <dl className="api-usage">
       {channel && <Row label={t('通道')}><span>{channel}</span></Row>}
       <Row label={t('连接')}><span title={[connection.source, typeof state?.connection?.observedAt === 'number' ? t('{time} 更新', { time: resetTime(state.connection.observedAt) }) : null].filter(Boolean).join(' · ') || undefined}>{connection.text}</span></Row>
@@ -168,7 +168,7 @@ function AgentSection({ agent, usage, terminal, projectId }: { agent: NativeAgen
     {source && <p className="activity-note" data-usage-detail>{source}</p>}
     {current && tokens?.context && !tokens.round && <p className="activity-note" data-usage-detail>{t('本轮从更早的记录开始，暂无法统计。')}</p>}
     {current && tokens?.context && !tokens.total && <p className="activity-note" data-usage-detail>{t('本次对话的总量在更早的记录里。')}</p>}
-    {current && agent === 'codex' && plan && <ResetQuota key={`${terminal.id}:${terminal.sessionId}:${terminal.agentStartedAt}`} terminal={terminal} />}
+    {current && display?.resetCredits && plan && <ResetQuota key={`${terminal.id}:${terminal.sessionId}:${terminal.agentStartedAt}`} terminal={terminal} />}
   </section>;
 }
 
@@ -208,7 +208,7 @@ export function ApiUsage({ terminal, projectId }: { terminal: ProjectTerminal; p
     else if (!state.timer) state.timer = setTimeout(() => { state.timer = null; state.read(); }, wait);
   }, [revision]);
   // Without the bridge there is no one to ask; the card still tells a running session's context, bars and tokens.
-  if (!bridge && !terminal.codexActive) return null;
+  if (!bridge && !terminal.cliActive) return null;
   const label = t('运行方式与额度');
   return <section className="activity-card activity-api" aria-label={label}>
     <h3 className="activity-card-title">{label}</h3>

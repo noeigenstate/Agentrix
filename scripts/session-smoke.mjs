@@ -94,7 +94,7 @@ async function verifyResume() {
     const resumeArgs = [project.sessionId, ...(project.restore.interrupted ? ['继续'] : [])];
     assertClaudeTerminalArgs((await receipt(project)).args, project.name, resumeArgs);
   }
-  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.filter(p => p.codexActive).length === 4, 'four active restored conversations');
+  await waitFor(async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.filter(p => p.cliActive).length === 4, 'four active restored conversations');
   assert.deepEqual((await page.evaluate(() => window.agentrix.getState())).value.projects.filter(p => p.agent === 'claude').map(p => p.id).sort(), claudeProjects.map(p => p.id).sort());
   const stored = JSON.parse(await fs.readFile(path.join(dataDir, 'workspace.json'), 'utf8'));
   assert.equal(stored.projects.find(project => project.id === projects[0].id).completionArmed, true, 'automatic continuation arms a completion alert');
@@ -135,7 +135,7 @@ try {
     const snapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), projects[0].id);
     await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: projects[0].id, runtime: snapshot.value.runtimeSessionId });
     await page.evaluate(id => window.agentrix.restartTerminal(id), projects[0].id);
-    await waitFor(async () => { const project = await first(); return project.shellReady && !project.codexActive; }, label);
+    await waitFor(async () => { const project = await first(); return project.shellReady && !project.cliActive; }, label);
   };
   await backToShell('manual shell ready');
   // Codex has no terminal run: typed at the prompt it asks the host for a native session of its own, and its argument
@@ -165,7 +165,7 @@ try {
   await application.evaluate(async ({ clipboard }) => { globalThis.testClipboardLast = await clipboard.readText(); });
   assert.ok((await clipboardText()).includes('COPY_SAMPLE_START'), 'selection includes scrollback');
   assert.equal(await page.locator('.focus-mode').count(), 0, 'selection in red card leaves overview visible');
-  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].codexActive, true, 'Ctrl+C with selection did not interrupt');
+  assert.equal((await page.evaluate(() => window.agentrix.getState())).value.projects[0].cliActive, true, 'Ctrl+C with selection did not interrupt');
   const selectionRect = await panel.locator('.xterm-rows > div').filter({ hasText: 'COPY_SAMPLE_END' }).evaluate(row => {
     const node = row.querySelector('span').firstChild;
     const range = document.createRange(); range.setStart(node, 0); range.setEnd(node, 15);

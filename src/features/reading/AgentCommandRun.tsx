@@ -2,11 +2,12 @@ import { CircleNotch, TerminalWindow } from '@phosphor-icons/react';
 import { commandRows, commandRun } from './agent-command-run';
 import { t } from '../../shared/i18n';
 import { PathText } from './PathText';
+import { adapterOf } from '../../../electron/features/cli-adapters/registry.mjs';
 
 // In place of the conversation while the agent's CLI runs something that is no conversation (codex update): what it
 // does, and what it prints as the terminal shows it. When it ends the terminal comes back by itself.
 export function AgentCommandRun({ agent, command, rows, onShowTerminal }: { agent: 'claude' | 'codex'; command: string; rows: readonly string[]; onShowTerminal: () => void }) {
-  const name = agent === 'claude' ? 'Claude Code' : 'Codex', cli = agent === 'claude' ? 'claude' : 'codex';
+  const { label: name, command: cli } = adapterOf(agent)!.manifest;
   const run = commandRun(command), shown = commandRows(rows, cli, command);
   return <section className="reading-command-run" role="status" aria-live="polite">
     <header>{run.working ? <CircleNotch size={16} className="loading-spinner" /> : <TerminalWindow size={16} />}

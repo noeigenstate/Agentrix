@@ -344,6 +344,8 @@ if sys.argv[1:2] == ["terminal-launch"]:
 
 try:
     mode=sys.argv[1]
+    # Remove next version. Older shells can use the updated emitter.
+    mode={"codex-started":"agent-started","codex-exited":"agent-exited"}.get(mode,mode)
     event={"type":mode,"token":os.environ["AGENTRIX_TOKEN"],"cwd":os.getcwd(),"codexHome":os.environ.get("CODEX_HOME",os.path.expanduser("~/.codex")),"sentAt":int(time.time()*1000)}
     if mode=="notify":
         payload=json.loads(sys.argv[2])
@@ -419,9 +421,9 @@ try:
     elif mode=="shell-prompt":
         event["codexAvailable"]=len(sys.argv)>2 and sys.argv[2]=="1"
         event["claudeAvailable"]=len(sys.argv)>3 and sys.argv[3]=="1"
-    elif mode in ("codex-started","codex-exited"):
+    elif mode in ("agent-started","agent-exited"):
         event["agent"]="claude" if len(sys.argv)>3 and sys.argv[3]=="claude" else "codex"
-        if mode=="codex-exited": event["exitCode"]=int(sys.argv[2])
+        if mode=="agent-exited": event["exitCode"]=int(sys.argv[2])
         elif event["agent"] == "codex":
             event["args"] = json.loads(sys.argv[4]) if len(sys.argv)>4 else []
             if not isinstance(event["args"], list) or len(event["args"])>64 or any(not isinstance(arg, str) or "\0" in arg for arg in event["args"]) or len(json.dumps(event["args"]))>32768: sys.exit(0)
@@ -433,10 +435,10 @@ try:
             "secureDir":(os.environ.get("CLAUDE_SECURESTORAGE_CONFIG_DIR") or os.path.join(home,".claude")) if "CLAUDE_SECURESTORAGE_CONFIG_DIR" in os.environ else None,
             "overridden":any(name.upper() in CLAUDE_ROUTE_ENV for name in os.environ)}
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
-        client.settimeout(5 if mode == "codex-started" else 2)
+        client.settimeout(5 if mode == "agent-started" else 2)
         client.connect(os.environ["AGENTRIX_SOCKET"])
         client.sendall((json.dumps(event)+"\n").encode())
-        if mode == "codex-started": client.recv(1)
+        if mode == "agent-started": client.recv(1)
 except Exception: pass
 '''
 
@@ -463,7 +465,7 @@ function agentrix_agent {
     case $route in
         native)
             arguments=$("$AGENTRIX_PYTHON" -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@") || return
-            __pg_emit codex-started '' "$agent" "$arguments"
+            __pg_emit agent-started '' "$agent" "$arguments"
             printf '%s\n' '已请求在原生模式打开 Codex。'
             return 0;;
         refused)
@@ -500,7 +502,7 @@ __pg_hook_agent() {
     fi
     [[ ${seat_map-} == \{* ]] || seat_map=null
     [[ $seat_valid == 1 ]] || { model=; effort=; }
-    __pg_emit codex-started "$(__pg_command "$@")" "$agent"
+    __pg_emit agent-started "$(__pg_command "$@")" "$agent"
     # Claude runs hooks with sh, so quote each argument for that shell, including paths with spaces.
     settings=$("$AGENTRIX_PYTHON" - "$AGENTRIX_NOTIFY_FILE" "$fast" "$ultra" <<'PY'
 import json,shlex,sys
@@ -541,7 +543,7 @@ PY
         result=$?
     fi
     rm -f -- "$settings_file"
-    __pg_emit codex-exited "$result" "$agent"
+    __pg_emit agent-exited "$result" "$agent"
     return "$result"
 }
 __pg_launch_plan() {
@@ -2277,6 +2279,9 @@ class Worker:
                     if dispatch:
                         if event.pop("sessionKey", None) != self.token or event.get("projectId") != self.project_id: continue
                     elif event.pop("token", None) != self.token: continue
+                    # Remove next version. Older emitters can still be attached.
+                    for old, new in (("codex-started", "agent-started"), ("codex-exited", "agent-exited")):
+                        if event.get("type") == old: event["type"] = new
                     route = event.pop("accountRoute", None)
                     if not dispatch and event.get("agent") == "claude":
                         # No credential values cross even the host-local socket. Never forward route paths to Agentrix.
@@ -2286,24 +2291,24 @@ class Worker:
                             if self.claude_route != route: self.claude_route = route
                             self.claude_home = route["configDir"] or os.path.join(route["home"], ".claude")
                         else: self.claude_route = None
-                        if event.get("type") == "codex-started":
+                        if event.get("type") == "agent-started":
                             # Use the environment that launched Claude, even if a later hook runs elsewhere.
                             self.claude_fast_home = self.claude_home if self.claude_route else None
-                        elif event.get("type") == "codex-exited":
+                        elif event.get("type") == "agent-exited":
                             self.claude_fast_home = None
                     codex_home = event.pop("codexHome", None)
-                    if event.get("type") in ("shell-prompt", "codex-started"):
+                    if event.get("type") in ("shell-prompt", "agent-started"):
                         if isinstance(codex_home, str) and os.path.isabs(codex_home): self.codex_home = codex_home
                         if isinstance(event.get("cwd"), str) and os.path.isabs(event["cwd"]): self.coding_root = event["cwd"]
                     with self.sequence_lock:
                         self.sequence += 1
                         event.update(projectId=self.project_id, sessionKey=self.token, sequence=self.sequence)
-                        needs_note = event.get("type") == "codex-started" and event.get("agent") == "claude"
+                        needs_note = event.get("type") == "agent-started" and event.get("agent") == "claude"
                         if needs_note:
                             self.skill_note_sequence = self.sequence
                             self.skill_note_ready.clear()
                         self.emit({"type": "event", "event": event})
-                    if event.get("type") == "codex-started":
+                    if event.get("type") == "agent-started":
                         if needs_note: self.skill_note_ready.wait(4)
                         client.sendall(b"\n")
                 except (OSError, ValueError): pass

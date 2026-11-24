@@ -46,8 +46,8 @@ try {
   await first.getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects[0].shellReady, 'shell ready');
   // Keep a visible agent terminal on the overview while its PowerShell fixture prints ANSI output.
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), projects[0].id);
-  await waitFor(async () => (await state()).projects[0].codexActive, 'appearance fixture agent active');
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r"), projects[0].id);
+  await waitFor(async () => (await state()).projects[0].cliActive, 'appearance fixture agent active');
   await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));

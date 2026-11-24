@@ -348,7 +348,7 @@ class RemoteFilesTest(unittest.TestCase):
         client.recv.return_value = b"\n"
         output = io.StringIO()
         with mock.patch.dict(sys.modules, {"socket": sockets}), mock.patch.dict(os.environ, {"AGENTRIX_SOCKET": "fixture", "AGENTRIX_TOKEN": "fixture"}), \
-                mock.patch.object(sys, "argv", ["notify.py", "codex-started"]), contextlib.redirect_stdout(output):
+                mock.patch.object(sys, "argv", ["notify.py", "agent-started"]), contextlib.redirect_stdout(output):
             exec(compile(remote.NOTIFY_SOURCE, "notify.py", "exec"), {})
         names = [call[0] for call in client.mock_calls]
         self.assertLess(names.index("sendall"), names.index("recv"))
@@ -369,7 +369,7 @@ class RemoteFilesTest(unittest.TestCase):
         thread = threading.Thread(target=self.worker.events_loop, daemon=True)
         thread.start()
         env = dict(os.environ, AGENTRIX_SOCKET=socket_path, AGENTRIX_TOKEN=self.worker.token)
-        process = subprocess.Popen([sys.executable, "-c", remote.NOTIFY_SOURCE, "codex-started", "", "claude"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen([sys.executable, "-c", remote.NOTIFY_SOURCE, "agent-started", "", "claude"], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.addCleanup(lambda: process.poll() is None and process.kill())
         event = events.get(timeout=5)["event"]
         self.assertIsNone(process.poll(), "launch waits until the host writes its note")
@@ -470,9 +470,11 @@ class RemoteFilesTest(unittest.TestCase):
             self.assertIsNone(notify(kind, hook))
 
     def test_notify_shell_events_name_claude_and_default_to_codex(self):
-        for args, expected in ((["codex-started", "--version", "claude"], {"agent": "claude", "command": "--version"}),
-                               (["codex-exited", "7", "claude"], {"agent": "claude", "exitCode": 7}),
-                               (["codex-started", ""], {"agent": "codex"}), (["codex-exited", "0"], {"agent": "codex", "exitCode": 0}),
+        for args, expected in ((["agent-started", "--version", "claude"], {"agent": "claude", "command": "--version"}),
+                               (["agent-exited", "7", "claude"], {"agent": "claude", "exitCode": 7}),
+                               (["codex-started", "--version", "claude"], {"type": "agent-started", "agent": "claude", "command": "--version"}),
+                               (["codex-exited", "7", "claude"], {"type": "agent-exited", "agent": "claude", "exitCode": 7}),
+                               (["agent-started", ""], {"agent": "codex"}), (["agent-exited", "0"], {"agent": "codex", "exitCode": 0}),
                                (["shell-prompt", "0", "1"], {"codexAvailable": False, "claudeAvailable": True})):
             client = mock.MagicMock(); client.__enter__.return_value = client
             with mock.patch("sys.argv", ["notify.py"] + args), mock.patch.dict(os.environ, {"AGENTRIX_TOKEN": "test", "AGENTRIX_SOCKET": "test.sock"}), \
@@ -1550,7 +1552,7 @@ class RemoteClaudeFastSettingsTest(unittest.TestCase):
         worker.token, worker.project_id = "fixture-key", "fixture-project"
         worker.skill_note_ready = mock.Mock()
         route = {"home": str(folder), "configDir": str(folder / "custom"), "secureDir": None, "overridden": False}
-        events = [("codex-started", route), ("agent-activity", dict(route, configDir=None)), ("codex-exited", route)]
+        events = [("agent-started", route), ("agent-activity", dict(route, configDir=None)), ("agent-exited", route)]
         clients = []
         for kind, config in events:
             client = mock.MagicMock()
@@ -1569,6 +1571,15 @@ class RemoteClaudeFastSettingsTest(unittest.TestCase):
         self.assertEqual(homes, [route["configDir"], route["configDir"], None])
 
 
+def write_shell_notifier(root):
+    script = 'process.stdout.write(require("./integration/shims/intercept.cjs").runtimeFiles()["shims/launchers.cjs"].split("\\n")[0])'
+    declaration = subprocess.check_output(["node", "-e", script], cwd=MODULE_PATH.parent.parent, encoding="utf-8")
+    prefix = "const terminalWire = "
+    wire = json.loads(declaration[len(prefix):-1])
+    (root / "terminal-wire.json").write_text(json.dumps(wire), encoding="utf-8")
+    (root / "notify.py").write_text(remote.NOTIFY_SOURCE, encoding="utf-8")
+
+
 class RemoteCodexShellNotifyTest(unittest.TestCase):
     @unittest.skipUnless(os.path.exists(os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash")), "needs Bash")
     def test_ssh_claude_calls_mcp_only_for_conductor_conversations_and_names_missing_requirements(self):
@@ -1577,7 +1588,7 @@ class RemoteCodexShellNotifyTest(unittest.TestCase):
             cli = root / "claude"
             cli.write_text('#!/bin/sh\nprintf "CLI=%s\\n" "$@"\n', encoding="utf-8", newline="\n")
             cli.chmod(0o755)
-            (root / "notify.py").touch()
+            write_shell_notifier(root)
             probe = root / "probe.sh"
             (root / "dispatch.json.mode").write_text("conductor", encoding="utf-8")
             probe.write_text(remote.BASH_SOURCE + '''
@@ -1621,6 +1632,7 @@ claude 'native conversation'
         worker.events_loop()
         worker.skill_note_ready.wait.assert_not_called()
         client.sendall.assert_called_once_with(b"\n")
+        self.assertEqual(events[0]["event"]["type"], "agent-started")
         self.assertEqual(events[0]["event"]["args"], ["resume", "--last"])
         self.assertEqual(events[0]["event"]["sessionKey"], "key")
         self.assertEqual(events[0]["event"]["projectId"], "p")
@@ -1628,12 +1640,12 @@ claude 'native conversation'
     def test_manual_codex_request_keeps_argv_on_existing_authenticated_shell_channel(self):
         args = ["resume", "11111111-1111-4111-8111-111111111111", "-m", "fixture", '中文 "quoted" \\ end']
         client = mock.MagicMock(); client.__enter__.return_value = client
-        with mock.patch("sys.argv", ["notify.py", "codex-started", "", "codex", json.dumps(args)]), \
+        with mock.patch("sys.argv", ["notify.py", "agent-started", "", "codex", json.dumps(args)]), \
              mock.patch.dict(os.environ, {"AGENTRIX_TOKEN": "test", "AGENTRIX_SOCKET": "test.sock"}), \
              mock.patch("socket.AF_UNIX", 1, create=True), mock.patch("socket.socket", return_value=client):
             exec(remote.NOTIFY_SOURCE, {})
         event = json.loads(client.sendall.call_args[0][0])
-        self.assertEqual(event["type"], "codex-started")
+        self.assertEqual(event["type"], "agent-started")
         self.assertEqual(event["agent"], "codex")
         self.assertEqual(event["token"], "test")
         self.assertEqual(event["args"], args)
@@ -1644,16 +1656,18 @@ claude 'native conversation'
     def test_typed_codex_runs_the_cli_for_management_commands_only(self):
         """The shell function alone: a stand-in CLI beside the probe prints its arguments and exits with 7 (or the PATH
         holds only the system folders, for a host without Codex); the emitter prints the request."""
-        wrapper = remote.BASH_SOURCE.split("__pg_codex_terminal() {", 1)[1].split("function claude {", 1)[0]
         with tempfile.TemporaryDirectory() as folder:
-            cli = Path(folder, "codex")
+            root = Path(folder)
+            write_shell_notifier(root)
+            cli = root / "codex"
             cli.write_text('#!/bin/sh\nfor word in "$@"; do printf \'RAN=%s\n\' "$word"; done\nexit 7\n', encoding="utf-8", newline="\n")
             cli.chmod(0o755)
-            probe = Path(folder, "probe.sh")
-            probe.write_text("__pg_codex_terminal() {" + wrapper + "__pg_emit() { printf 'REQUEST=%s\n' \"$4\"; }\n"
+            probe = root / "probe.sh"
+            probe.write_text(remote.BASH_SOURCE + "\n__pg_emit() { printf 'REQUEST=%s\n' \"$4\"; }\n"
                              + "PATH=${PROBE_INSTALLED:+$(cd -- \"$(dirname -- \"$0\")\" && pwd):}/usr/bin:/bin\ncodex \"$@\"\nprintf 'STATUS=%s\n' \"$?\"\n", encoding="utf-8", newline="\n")
             def typed(args, installed=True):
-                env = dict(os.environ, AGENTRIX_PYTHON=sys.executable, PROBE_INSTALLED="1" if installed else "")
+                env = dict(os.environ, HOME=root.as_posix(), AGENTRIX_ROOT=root.as_posix(), AGENTRIX_PYTHON=sys.executable,
+                           AGENTRIX_NOTIFY_FILE=(root / "notify.py").as_posix(), PROBE_INSTALLED="1" if installed else "")
                 lines = subprocess.run([os.environ.get("AGENTRIX_TEST_BASH", "/bin/bash"), "--noprofile", "--norc", probe.as_posix(), *args],
                                        env=env, capture_output=True, encoding="utf-8", timeout=30).stdout.splitlines()
                 request = [json.loads(line[8:]) for line in lines if line.startswith("REQUEST=")]

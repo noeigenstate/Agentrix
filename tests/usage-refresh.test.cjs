@@ -26,7 +26,7 @@ const histories = [...activity.matchAll(/const onHistory = ready => \{[\s\S]*?\r
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const account = (at = 1000, percent = 12, resetsAt = null) => ({ limits: [{ minutes: 300, percent, resetsAt }], at, source: 'Claude Code' });
 const session = (terminalId, agent = 'claude', projectId = 'local') => ({
-  terminalId, projectId, sessionId: `pty-${terminalId}`, codexActive: true, agent, usage: new UsageMeter(agent),
+  terminalId, projectId, sessionId: `pty-${terminalId}`, cliActive: true, agent, usage: new UsageMeter(agent),
   promptQueue: { list: () => [], finish() {} },
 });
 
@@ -59,6 +59,8 @@ function runtime(overrides = {}) {
     desktopGlassBackend: null, desktopGlassActive: false, desktopGlassWindow: false, windowZoom: null, macTitlebar: null, app: { getVersion: () => 'test' },
     ...overrides,
   });
+  const { adapterOf } = require('../electron/features/cli-adapters/registry.cjs');
+  context.adapterOf = id => id === 'claude' ? { ...adapterOf(id), usage: { ...adapterOf(id).usage, accountReader: context.readClaudeAccount } } : adapterOf(id);
   // Run the real main-process functions without requiring Electron or creating a terminal.
   defineMain(context, 'publishCliState', 'claudeActivity', 'acceptDispatchEvent');
   const api = vm.runInContext(`${claudeService}\n${accounts}\n${notes}\n${historyUsage}\n${lifecycle}\n${hooks}\n${events}\n${state}\n({
@@ -181,9 +183,9 @@ test('new account limits reach the pane during slow history while conversation t
 test('one Claude account read updates every local meter and publishes once', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 100000 });
   const sessions = new Map(['first', 'middle', 'last'].map(terminalId => [terminalId, {
-    terminalId, projectId: 'local', codexActive: true, agent: 'claude', usage: new UsageMeter('claude'),
+    terminalId, projectId: 'local', cliActive: true, agent: 'claude', usage: new UsageMeter('claude'),
   }]));
-  sessions.set('remote', { projectId: 'remote', codexActive: true, agent: 'claude', usage: new UsageMeter('claude') });
+  sessions.set('remote', { projectId: 'remote', cliActive: true, agent: 'claude', usage: new UsageMeter('claude') });
   let at = 1000, reads = 0, publishes = 0;
   const api = runtime({
     sessions, scheduleState: () => ++publishes,
@@ -205,7 +207,7 @@ test('the real Claude poller uses Chromium fetch, publishes sanitized limits wit
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1000000 });
   const root = path.join(__dirname, '../.test-output/claude-account-usage-20261028/main-fake-home');
   const sessions = new Map([['remote', session('remote', 'claude', 'remote')], ['codex', session('codex', 'codex')],
-    ['inactive', { ...session('inactive'), codexActive: false }], ['stale', { ...session('stale'), agent: 'codex' }]]);
+    ['inactive', { ...session('inactive'), cliActive: false }], ['stale', { ...session('stale'), agent: 'codex' }]]);
   const fakeToken = 'fake-wiring-token-never-publish';
   let requests = 0, publishes = 0, signal, release;
   const api = runtime({ sessions, scheduleState: () => ++publishes,
@@ -245,7 +247,7 @@ test('the real Claude poller uses Chromium fetch, publishes sanitized limits wit
   const event = { state: 'complete', sessionId: 'one-session', eventId: 'one-stop' };
   api.claudeActivity({ id: 'local', kind: 'local' }, s, event); await flush();
   t.mock.timers.tick(59975); await flush(); assert.equal(requests, 2);
-  api.stopUsageAccount(s); s.codexActive = false;
+  api.stopUsageAccount(s); s.cliActive = false;
   assert.equal(signal.aborted, true); assert.equal(api.claudeAccounts.active, false);
   const before = publishes;
   release({ status: 200, json: async () => ({ five_hour: { utilization: 99 } }) }); await flush();
@@ -293,10 +295,10 @@ test('shared Claude folder watchers coalesce atomic-replace bursts and release w
   assert.deepEqual(['one', 'two', 'three'].map(id => sessions.get(id).usage.limitsAt), [2000, 2000, 2000]);
   pulse.callback('rename', 'claude-quota.json'); pulse.callback('change', 'claude-quota.json');
   t.mock.timers.tick(25); await flush(); assert.equal(reads, 3, 'a replacement does not detach the watcher');
-  for (const id of ['one', 'two']) { api.stopUsageAccount(sessions.get(id)); sessions.get(id).codexActive = false; }
+  for (const id of ['one', 'two']) { api.stopUsageAccount(sessions.get(id)); sessions.get(id).cliActive = false; }
   assert.ok(watched.watchers.every(watcher => !watcher.closed));
   own.callback('change', '.claude.json');
-  api.stopUsageAccount(sessions.get('three')); sessions.get('three').codexActive = false;
+  api.stopUsageAccount(sessions.get('three')); sessions.get('three').cliActive = false;
   assert.ok(watched.watchers.every(watcher => watcher.closed));
   assert.equal(api.resources().claudeAccountTimer, null);
   assert.equal(api.resources().claudeAccountSoon, null);
@@ -371,7 +373,7 @@ test('Claude coalesces reads in flight and drops a cache read after its last ses
   void api.refreshClaudeAccounts(); void api.refreshClaudeAccounts(); await flush(); assert.equal(pending.length, 1);
   pending[0](account()); await first;
   t.mock.timers.tick(25); await flush(); assert.equal(pending.length, 2);
-  api.stopUsageAccount(s); s.codexActive = false;
+  api.stopUsageAccount(s); s.cliActive = false;
   pending[1](account(2000, 80)); await flush();
   assert.equal(s.usage.limitsAt, 1000);
   assert.equal(api.resources().claudeAccountPending, null);
@@ -465,7 +467,7 @@ test('one rollover deadline refreshes each account scope once, keeps stale value
   assert.equal(codexReads, 2); assert.equal(claudeReads, 2);
   sessions.get('claude-one').usage.account(account(2000, 10, 120000)); api.scheduleUsageRollover();
   assert.equal(api.resources().usageRolloverAt, 120000);
-  for (const s of sessions.values()) { api.stopUsageAccount(s); s.codexActive = false; }
+  for (const s of sessions.values()) { api.stopUsageAccount(s); s.cliActive = false; }
   assert.equal(api.resources().usageRolloverTimer, null);
   t.mock.timers.tick(120000); await flush(); assert.equal(codexReads, 2); assert.equal(claudeReads, 2);
 });

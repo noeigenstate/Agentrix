@@ -35,7 +35,7 @@ function activity(terminal, frame) {
 }
 
 test('the activity monitor and reading view agree on host waiting, fresh input and fresh work', () => {
-  const terminal = { id: 't', sessionId: 'pty', agent: 'claude', codexActive: true, codexActivity: 'working',
+  const terminal = { id: 't', sessionId: 'pty', agent: 'claude', cliActive: true, codexActivity: 'working',
     mainTurn: { state: 'working', updatedAt: 9000 }, prompts: [{ id: 'old', state: 'working', summary: 'old task', text: 'old task', at: 9000 }],
     cliState: { sessionId: 'pty', revision: 1, state: 'waiting', message: 'Approve current tool', updatedAt: 10000 } };
   const frame = { sessionId: 'pty', revision: 1, updatedAt: 9999, rows: ['────', '❯ ', '────'] };
@@ -50,7 +50,7 @@ test('the activity monitor and reading view agree on host waiting, fresh input a
 });
 
 test('a positively parsed current permission dialog stays waiting after newer sibling progress', () => {
-  const terminal = { id: 't', sessionId: 'pty', agent: 'claude', codexActive: true, codexActivity: 'working',
+  const terminal = { id: 't', sessionId: 'pty', agent: 'claude', cliActive: true, codexActivity: 'working',
     cliState: { sessionId: 'pty', revision: 2, state: 'working', updatedAt: 10002 } };
   const frame = { sessionId: 'pty', revision: 1, updatedAt: 10000,
     rows: fs.readFileSync(path.join(__dirname, 'fixtures/screens/claude-permission.txt'), 'utf8').split(/\r?\n/) };
@@ -62,7 +62,7 @@ test('a positively parsed current permission dialog stays waiting after newer si
 });
 
 test('only the active prompt waits for confirmation while later prompts stay queued', () => {
-  const terminal = { id: 'queued', sessionId: 'pty', agent: 'claude', codexActive: true,
+  const terminal = { id: 'queued', sessionId: 'pty', agent: 'claude', cliActive: true,
     cliState: { sessionId: 'pty', revision: 1, state: 'waiting', message: 'Approve current tool', updatedAt: 10000 },
     prompts: [
       { id: 'active', state: 'working', summary: 'Active prompt', text: 'Active prompt' },

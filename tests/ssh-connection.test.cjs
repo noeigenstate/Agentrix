@@ -364,12 +364,12 @@ hook("Stop")
   await connection.ready;
   await waitFor(() => events.some(event => event.type === 'shell-prompt' && event.claudeAvailable));
   connection.write('claude --resume fixture\r');
-  await waitFor(() => events.some(event => event.type === 'codex-exited' && event.agent === 'claude'));
-  const exited = events.find(event => event.type === 'codex-exited' && event.agent === 'claude');
+  await waitFor(() => events.some(event => event.type === 'agent-exited' && event.agent === 'claude'));
+  const exited = events.find(event => event.type === 'agent-exited' && event.agent === 'claude');
   assert.equal(exited.exitCode, 0, output);
   const settings = JSON.parse(await fs.readFile(path.join(fixture.project, 'claude-settings.json'), 'utf8'));
   await assert.rejects(fs.stat(settings.path), { code: 'ENOENT' }, 'the SSH wrapper removes its settings file after exit');
-  const started = events.find(event => event.type === 'codex-started');
+  const started = events.find(event => event.type === 'agent-started');
   assert.equal(started.agent, 'claude'); assert.equal(started.command, '--resume');
   const hooks = events.filter(event => event.type === 'agent-activity');
   assert.deepEqual(hooks.map(event => event.state), ['session', 'session', 'session', 'working', 'attention', 'complete']);
@@ -388,12 +388,12 @@ hook("Stop")
   await waitFor(() => /\r?\nMODEL_STATUS=2\b/.test(output), 'the SSH wrapper to refuse the model override');
   connection.write('claude --effort low; printf "EFFORT_STATUS=%d\\n" $?\r');
   await waitFor(() => /\r?\nEFFORT_STATUS=2\b/.test(output), 'the SSH wrapper to refuse the effort override');
-  assert.equal(events.filter(event => event.type === 'codex-started').length, 1);
+  assert.equal(events.filter(event => event.type === 'agent-started').length, 1);
   connection.write('claude --resume next\r');
-  await waitFor(() => events.some(event => event.type === 'codex-exited' && event.agent === 'claude' && event.exitCode === 8), 'the new seat and hook settings on the resumed launch');
+  await waitFor(() => events.some(event => event.type === 'agent-exited' && event.agent === 'claude' && event.exitCode === 8), 'the new seat and hook settings on the resumed launch');
   connection.write('claude --version\r');
-  await waitFor(() => events.some(event => event.type === 'codex-exited' && event.agent === 'claude' && event.exitCode === 7));
-  assert.ok(events.some(event => event.type === 'codex-started' && event.command === '--version' && event.agent === 'claude'));
+  await waitFor(() => events.some(event => event.type === 'agent-exited' && event.agent === 'claude' && event.exitCode === 7));
+  assert.ok(events.some(event => event.type === 'agent-started' && event.command === '--version' && event.agent === 'claude'));
 });
 
 test('Linux remote worker reads real files, enforces boundaries and hands a typed codex to the native host', { timeout: 40000, skip: process.platform === 'win32' }, async t => {
@@ -435,8 +435,8 @@ test('Linux remote worker reads real files, enforces boundaries and hands a type
   // Codex has no terminal run: typing it asks the host for a native session (over app-server, whose turns report
   // completion) and returns to the prompt.
   connection.write('codex resume --last\r');
-  await waitFor(() => events.some(event => event.type === 'codex-started'), 'the native Codex request');
-  const started = events.find(event => event.type === 'codex-started');
+  await waitFor(() => events.some(event => event.type === 'agent-started'), 'the native Codex request');
+  const started = events.find(event => event.type === 'agent-started');
   assert.equal(started.agent, 'codex'); assert.deepEqual(started.args, ['resume', '--last']);
   assert.equal(started.cwd, await fs.realpath(fixture.project));
   await waitFor(() => events.some(event => event.type === 'shell-prompt' && event.sequence > started.sequence), 'the prompt after the native request');
@@ -457,13 +457,13 @@ test('Linux remote worker reads real files, enforces boundaries and hands a type
   assert.equal(complete.snapshot.state, 'complete');
   assert.equal(complete.reset, false);
   assert.deepEqual(complete.records.map(record => record.payload.type), ['task_complete']);
-  assert.equal(events.some(event => ['turn-complete', 'codex-exited'].includes(event.type)), false, 'no terminal Codex run and no completion made up for one');
+  assert.equal(events.some(event => ['turn-complete', 'agent-exited'].includes(event.type)), false, 'no terminal Codex run and no completion made up for one');
   await assert.rejects(fs.stat(executed), { code: 'ENOENT' }, 'the shell never executes Codex');
   // A management command is the CLI itself on that host, with its arguments and exit status and no request to this one.
   connection.write('codex mcp add "中文 name" -- tool; echo "status=$?" > codex-status.txt\r');
   await waitFor(async () => fs.readFile(path.join(fixture.project, 'codex-status.txt'), 'utf8').then(value => value.trim() === 'status=3', () => false), 'the management command to return its exit status');
   assert.equal(await fs.readFile(executed, 'utf8'), 'mcp\nadd\n中文 name\n--\ntool\n');
-  assert.equal(events.filter(event => event.type === 'codex-started').length, 1, 'a management command asks for no native session');
+  assert.equal(events.filter(event => event.type === 'agent-started').length, 1, 'a management command asks for no native session');
   let clipboard = [];
   const operations = new FileOperations({ cacheRoot: path.join(fixture.directory, 'clipboard-cache'), remote: () => connection,
     clipboard: async (action, paths) => action === 'copy' ? (clipboard = paths) : clipboard, confirmDelete: async () => true,

@@ -168,10 +168,10 @@ background:radial-gradient(circle at 20% 15%,#ff7ab6 0,transparent 42%),radial-g
       await waitFor(async () => (await state(index)).shellReady, `${projects[index].name}: shell ready`);
       const agent = index === 3 ? 'claude' : 'codex';
       const title = agent === 'codex' ? `[Console]::Write(([string][char]27) + ']0;' + ${quote(sessions[index].thread)} + ([string][char]7)); ` : '';
-      await write(index, `Clear-Host; Send-AgentrixEvent 'codex-started' -Agent '${agent}'; ${title}${index === 3 ? hook + '; ' : ''}${say(screens[index])}; Start-Sleep -Seconds 3600\r`);
+      await write(index, `Clear-Host; Send-AgentrixEvent 'agent-started' -Agent '${agent}'; ${title}${index === 3 ? hook + '; ' : ''}${say(screens[index])}; Start-Sleep -Seconds 3600\r`);
       await waitFor(async () => {
         const current = await state(index);
-        return current.codexActive && current.terminals[0].agent === agent;
+        return current.cliActive && current.terminals[0].agent === agent;
       }, `${projects[index].name}: fixture agent active`);
       // Mode switches live only in the expanded title bar. Seed them before any completions can be acknowledged.
       await setMode(page, projects[index].name, 'terminal');

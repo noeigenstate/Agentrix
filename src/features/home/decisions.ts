@@ -47,7 +47,7 @@ function useScreens(ids: string[]) {
 }
 
 export function useDecisions(projects: readonly Project[]) {
-  const live = projects.flatMap(project => project.terminals.filter(terminal => terminal.codexActive && terminal.sessionId).map(terminal => ({ project, terminal })));
+  const live = projects.flatMap(project => project.terminals.filter(terminal => terminal.cliActive && terminal.sessionId).map(terminal => ({ project, terminal })));
   const screens = useScreens(live.map(({ terminal }) => terminal.id));
   const snoozed = useSnoozes();
   const [now, setNow] = useState(Date.now());

@@ -26,7 +26,7 @@ class ApprovalGuard {
 // Recheck the live session binding at snapshot/IPC boundaries too. Lifecycle callbacks above the transport
 // still need context() calls to retain intermediate A/B/A changes that a final value comparison would miss.
 function approvalStamp(session) {
-  session.approval.context('binding', [session.sessionId, session.agent, session.codexActive, session.status,
+  session.approval.context('binding', [session.sessionId, session.agent, session.cliActive, session.status,
     session.rootThreadId, session.reportedThreadId, session.claudeSessionId, session.claudePromptEventId,
     session.activitySince, session.activityInputAt]);
   return session.approval.stamp();

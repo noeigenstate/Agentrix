@@ -13,7 +13,7 @@ const functions = ast.statements.filter(node => ts.isFunctionDeclaration(node) &
 function fixture(agent = 'claude') {
   let now = 2000, armed = false, notifications = 0, beginnings = 0;
   const frames = [], project = { id: 'p', kind: 'ssh' };
-  const s = { terminalId: 't', projectId: 'p', sessionId: 'pty', sessionKey: 'cap', agent, codexActive: true, activitySince: 1000, activityInputAt: 0,
+  const s = { terminalId: 't', projectId: 'p', sessionId: 'pty', sessionKey: 'cap', agent, cliActive: true, activitySince: 1000, activityInputAt: 0,
     claudeSessionId: agent === 'claude' ? 'provider' : null, reportedThreadId: agent === 'codex' ? 'provider' : null,
     promptQueue: { finish() {}, list: () => [] }, actions: { settle() {} }, conversation: { settle() {}, list: [] },
     completionWork: { begin() { beginnings++; }, end() {}, state: snapshot => snapshot.state } };
@@ -337,11 +337,11 @@ test("a hook-channel report and its claude launch pair by sequence, whichever pi
   Object.assign(h.s, { actions: { reset() {} }, conversation: { reset() {} }, promptQueue: { reset() {} } });
   h.s.hooks = { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' };
   const shell = (type, sequence, extra = {}) => h.context.onEvent({ projectId: 't', sessionKey: 'cap', type, sequence, agent: 'claude', ...extra });
-  // Launch 1: codex-started (2) lands before the report (1) that precedes it.
-  shell('codex-started', 2); shell('hook-channel', 1, { command: 'HTTP_PROXY' });
+  // Launch 1: agent-started (2) lands before the report (1) that precedes it.
+  shell('agent-started', 2); shell('hook-channel', 1, { command: 'HTTP_PROXY' });
   assert.equal(h.s.hooks.channel, 'command-async');
   // Launch 2 follows no report: the terminal's own channel again.
-  shell('codex-started', 4);
+  shell('agent-started', 4);
   assert.equal(h.s.hooks.channel, 'http');
   // A report of a past launch landing now changes nothing.
   shell('hook-channel', 1, { command: 'HTTP_PROXY' });

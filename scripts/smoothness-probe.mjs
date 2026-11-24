@@ -65,11 +65,11 @@ try {
   for (const index of [0, 1, 2, 3]) {
     await page.evaluate(id => window.agentrix.startTerminal(id), projects[index].id);
     await waitFor(async () => (await state(index)).terminals[0].shellReady, 'shell');
-    const data = index < 3 ? `Send-AgentrixEvent 'codex-started' -Agent 'claude'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; & '${scripts[index]}'\r`
-      : "function global:prompt { 'reading> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r";
+    const data = index < 3 ? `Send-AgentrixEvent 'agent-started' -Agent 'claude'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; & '${scripts[index]}'\r`
+      : "function global:prompt { 'reading> ' }; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r";
     await page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: projects[index].id, data });
   }
-  await waitFor(async () => (await state(3)).terminals[0].codexActive, 'the reading project');
+  await waitFor(async () => (await state(3)).terminals[0].cliActive, 'the reading project');
   await page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: projects[3].id, data: hook('start', { session_id: 's1', transcript_path: transcript, prompt: '第 39 个需求' }) });
   await sleep(1200);
   await page.evaluate(({ id, data }) => window.agentrix.writeTerminal(id, data), { id: projects[3].id, data: hook('stop', { session_id: 's1' }) });

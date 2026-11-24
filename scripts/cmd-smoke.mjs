@@ -47,7 +47,7 @@ try {
   assert.equal((await receipt()).threadId, sessionId);
   assert.match((await receipt()).developerInstructions, /^You run inside Agentrix/);
   assert.equal((await terminal()).shell, 'cmd');
-  await waitFor(async () => (await terminal()).codexActive, 'the wrapper reports Codex as started');
+  await waitFor(async () => (await terminal()).cliActive, 'the wrapper reports Codex as started');
   const panel = page.locator(`[data-project-id="${project.id}"]`);
   const { id: terminalId } = await terminal(); let shellSession;
   const shell = panel.locator(`[data-terminal-slot="${terminalId}"]`);
@@ -66,7 +66,7 @@ try {
   const manual = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
   await page.evaluate(p => window.agentrix.nativeSession.stop(p.id, p.runtime), { id: terminalId, runtime: manual.value.runtimeSessionId });
   await page.evaluate(id => window.agentrix.restartTerminal(id), terminalId);
-  await waitFor(async () => { const state = await terminal(); return !state.codexActive && state.shellReady; }, 'back at the cmd prompt after Codex stops');
+  await waitFor(async () => { const state = await terminal(); return !state.cliActive && state.shellReady; }, 'back at the cmd prompt after Codex stops');
   shellSession = (await terminal()).sessionId;
   assert.equal(await page.locator('.focus-mode').count(), 0, 'exiting Codex keeps the project in the grid');
   await shell.waitFor({ state: 'hidden' });
@@ -98,7 +98,7 @@ try {
   await shell.waitFor({ state: 'hidden' });
   const returned = await terminal();
   assert.equal(returned.sessionId, shellSession, 'returning to the grid preserves the cmd session');
-  assert.ok(!returned.codexActive && returned.shellReady, 'the hidden cmd shell stays ready');
+  assert.ok(!returned.cliActive && returned.shellReady, 'the hidden cmd shell stays ready');
   const saved = JSON.parse(await fs.readFile(path.join(dataDir, 'workspace.json'), 'utf8'));
   assert.equal(saved.projects[0].restore.cwd, path.join(project.path, 'sub'), 'returning to the grid preserves the reported directory');
   await page.screenshot({ path: path.join(output, 'cmd-grid.png') });

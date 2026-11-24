@@ -20,7 +20,7 @@ import { relativeTime } from '../../shared/time';
 
 
 function statusText(project: Project) {
-  if (project.codexActive && project.codexActivity === 'working') return t('正在处理');
+  if (project.cliActive && project.codexActivity === 'working') return t('正在处理');
   if (project.unread) return t('等待你查看');
   if (project.error) return t('需要检查');
   if (project.status === 'codex') return project.codexActivity === 'complete' ? t('本轮已完成') : project.codexActivity === 'interrupted' ? t('已中断') : t('{agent} 会话中', { agent: agentName(project.agent) });
@@ -34,7 +34,7 @@ function statusText(project: Project) {
 function agentName(agent: Project['agent']) { return agent === 'claude' ? 'Claude' : 'Codex'; }
 
 function isRoundComplete(project: Project) {
-  return project.codexActive && project.codexActivity === 'complete' && !project.unread && !project.error;
+  return project.cliActive && project.codexActivity === 'complete' && !project.unread && !project.error;
 }
 
 export function ProjectPanel({ project, index, hidden, focused, navTarget, navPosition, fontSize, now, activityOpen, onFocus, onAction, onError, onOpenLink, onRevealProject, dragging, dropTarget }: {
@@ -63,7 +63,7 @@ export function ProjectPanel({ project, index, hidden, focused, navTarget, navPo
   const stopped = first?.status === 'stopped' || first?.status === 'exited';
   const addTerminal = async () => { const id = await onAction(api.addTerminal(project.id)); if (id) { setActiveTerminal(project.id, id); if (!focused) onFocus(project.id); } };
   const completionAge = project.lastCompletedAt === null ? Infinity : Date.now() - project.lastCompletedAt;
-  const working = project.codexActive && project.codexActivity === 'working';
+  const working = project.cliActive && project.codexActivity === 'working';
   const freshCompletion = !!project.unread && !working && completionAge >= 0 && completionAge < 9000;
   const roundComplete = isRoundComplete(project);
   // A new turn starts the edge and dot together; ordinary renders keep their clock.

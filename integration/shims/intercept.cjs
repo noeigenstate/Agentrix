@@ -186,15 +186,19 @@ async function intercept(argv, { env = process.env, cwd = process.cwd(), stderr 
 function plannerLaunch(source, agent, args) {
   const next = withShims(claudeLaunchEnvironment(source), { depth: 0 });
   const terminal = Object.hasOwn(terminalFacets(), agent) && terminalFacets()[agent].terminal;
-  const tools = planner(next) && terminal && terminal.converses(args) && !terminal.delegates(args);
+  const tools = planner(next) && terminal?.converses?.(args) && !terminal.delegates?.(args);
   return { env: envWords(source, next), roleTools: tools ? roleToolArgs(agent, next) : [] };
 }
 
-function terminalLaunch(source, agent, action, mode, args) {
-  const terminal = Object.hasOwn(terminalFacets(), agent) && terminalFacets()[agent].terminal;
+function terminalLaunch(source, agent, action, mode, args, lookup = id => Object.hasOwn(terminalFacets(), id) ? terminalFacets()[id] : undefined) {
+  const adapter = lookup(agent), terminal = adapter?.terminal;
   if (!terminal) throw new Error('Unknown terminal adapter');
   const remote = mode === 'remote';
-  if (action === 'classify') return terminal.classify(args, { native: mode === 'native', remote, alias: remote ? undefined : source.AGENTRIX_LAUNCH_ALIAS });
+  if (action === 'classify') {
+    const classified = terminal.classify?.(args, { native: mode === 'native', remote, alias: remote ? undefined : source.AGENTRIX_LAUNCH_ALIAS });
+    const words = adapter.manifest?.words ?? adapter.words;
+    return classified ?? (words?.utilities.includes(args[0]) ? 'passthrough' : terminal.redirect ?? 'conversation');
+  }
   if (terminal.redirect) throw new Error('Terminal launch redirects to ' + terminal.redirect);
   const { AGENTRIX_LAUNCH_MODEL: model, AGENTRIX_LAUNCH_EFFORT: effort,
     AGENTRIX_LAUNCH_NOTE: note, AGENTRIX_LAUNCH_SETTINGS: file, AGENTRIX_LAUNCH_ROLE: role, AGENTRIX_LAUNCH_ROLE_ERROR: roleError } = source;

@@ -1,11 +1,20 @@
 {
-  "note": "Every program in tests/ and scripts/ that stands in for the Claude Code or Codex CLI (found by tests/helpers/stand-ins.cjs, checked by tests/fake-cli-contract.test.cjs). A new stand-in is found by what it says and fails the guard until it is listed here.",
+  "note": "Every program in tests/ and scripts/ that stands in for a CLI is found by tests/helpers/stand-ins.cjs and checked by tests/fake-cli-contract.test.cjs.",
   "contract": {
     "version": "Every stand-in answers --version at once, with nothing written to its folder (Claude: '<n.n.n> (Claude Code)'; Codex: 'codex-cli <n.n.n>').",
     "echo": "With AGENTRIX_STAND_IN_ECHO naming a file, a node stand-in writes there the arguments it was given, the --settings it was given and the hooks in them (tests/fixtures/stand-in-echo.cjs).",
     "appServer": "A stand-in that answers thread/start answers the sandbox and approvals it was asked for, as Codex does."
   },
+  "products": {
+    "claude": { "version": "^\\d+\\.\\d+\\.\\d+ \\(Claude Code\\)\\r?\\n$", "settings": true },
+    "codex": { "version": "^codex-cli \\d+\\.\\d+\\.\\d+\\r?\\n$" },
+    "terminal-example": { "version": "^Terminal Example \\d+\\.\\d+\\.\\d+\\r?\\n$" }
+  },
   "standIns": {
+    "tests/fixtures/terminal-example.cjs": {
+      "build": "node",
+      "launches": [{ "args": ["--version"], "product": "terminal-example" }]
+    },
     "tests/fixtures/codex-app-server.cjs": {
       "build": "node",
       "launches": [{ "args": ["--version"], "product": "codex" }],

@@ -98,13 +98,16 @@ function claudeEvent(input, projectId, sessionKey, kind) {
   };
 }
 
-// A shell's own report (shell-ready, shell-prompt, codex-started, codex-exited, hook-channel), as zsh-integration.zsh writes it.
-const shellEvents = ['shell-ready', 'shell-prompt', 'codex-started', 'codex-exited', 'hook-channel'];
+// A shell's own report (shell-ready, shell-prompt, agent-started, agent-exited, hook-channel), as zsh-integration.zsh writes it.
+const shellEvents = ['shell-ready', 'shell-prompt', 'agent-started', 'agent-exited', 'hook-channel'];
 // command: the first word given to the CLI when it is a subcommand or an option (update, --version), else empty.
 function shellEvent([type, sequence, exitCode, agent, codex, claude, codexHome, cwd, command, accountLaunch, argumentsJson], projectId, sessionKey) {
+  // Remove next version. An older shell wrapper may use the updated helper.
+  if (type === 'codex-started') type = 'agent-started';
+  if (type === 'codex-exited') type = 'agent-exited';
   if (!shellEvents.includes(type) || !/^\d+$/.test(String(sequence))) return null;
   let args;
-  if (type === 'codex-started' && agent === 'codex' && argumentsJson !== undefined) {
+  if (type === 'agent-started' && agent === 'codex' && argumentsJson !== undefined) {
     try { args = JSON.parse(argumentsJson); } catch { return null; }
     if (!Array.isArray(args) || args.length > 64 || args.some(value => typeof value !== 'string' || value.includes('\0')) || JSON.stringify(args).length > 32768) return null;
   }
@@ -113,7 +116,7 @@ function shellEvent([type, sequence, exitCode, agent, codex, claude, codexHome, 
     codexAvailable: codex === 'true', claudeAvailable: claude === 'true', codexHome: String(codexHome ?? ''), cwd: String(cwd ?? ''),
     ...(command ? { command: String(command).slice(0, 24) } : {}),
     ...(args ? { args } : {}),
-    ...(type === 'codex-started' && agent === 'codex' ? { accountLaunch: accountLaunch === 'model-only-v1' ? accountLaunch : 'unavailable' } : {}),
+    ...(type === 'agent-started' && agent === 'codex' ? { accountLaunch: accountLaunch === 'model-only-v1' ? accountLaunch : 'unavailable' } : {}),
   };
 }
 

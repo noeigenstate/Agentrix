@@ -62,7 +62,7 @@ try {
   await legacyPanel.locator(`[data-terminal-id="${legacy.id}"]`).getByRole('button', { name: '只打开终端', exact: true }).click();
   await waitFor(async () => (await state()).projects.find(project => project.id === legacy.id).terminals[0].shellReady, 'migrated primary can start manually');
   const started = (await state()).projects.find(project => project.id === legacy.id);
-  assert.equal(started.terminals.length, 2); assert.equal(started.terminals[0].codexActive, false); assert.equal(started.terminals[1].sessionId, null);
+  assert.equal(started.terminals.length, 2); assert.equal(started.terminals[0].cliActive, false); assert.equal(started.terminals[1].sessionId, null);
   assert.deepEqual(await page.evaluate(id => window.agentrix.closeTerminal(id), legacy.id), { ok: true, value: true });
   await waitFor(async () => (await state()).projects.find(project => project.id === legacy.id).terminals.length === 1, 'explicitly closing a primary still removes its pane');
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
@@ -95,9 +95,9 @@ try {
   const sessionId = (await state()).projects.find(project => project.id === remote.id).sessionId;
   await app.evaluate(() => {
     const { connection, event } = globalThis.navigationSSH;
-    connection.receive({ type: 'event', event: { ...event, type: 'codex-started', sequence: event.sequence + 1, agent: 'claude', cwd: connection.project.path } });
+    connection.receive({ type: 'event', event: { ...event, type: 'agent-started', sequence: event.sequence + 1, agent: 'claude', cwd: connection.project.path } });
   });
-  await waitFor(async () => (await state()).projects.find(project => project.id === remote.id).codexActive, 'visible SSH fixture agent');
+  await waitFor(async () => (await state()).projects.find(project => project.id === remote.id).cliActive, 'visible SSH fixture agent');
   await page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }).click();
   await page.getByRole('button', { name: '返回总览', exact: true }).click(); await settled(false);
   // Cycle all four cards, including a live reading view whose hidden xterm cannot take focus.
@@ -105,8 +105,8 @@ try {
     const terminalId = (await state()).projects.find(item => item.id === project.id).terminals[0].id;
     await page.evaluate(id => window.agentrix.startTerminal(id), terminalId);
     await waitFor(async () => (await state()).projects.find(item => item.id === project.id).shellReady, 'navigation shell ready');
-    await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r"), terminalId);
-    await waitFor(async () => (await state()).projects.find(item => item.id === project.id).codexActive, 'visible navigation fixture agent');
+    await page.evaluate(id => window.agentrix.writeTerminal(id, "function global:prompt { 'AGENT_FIXTURE> ' }; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r"), terminalId);
+    await waitFor(async () => (await state()).projects.find(item => item.id === project.id).cliActive, 'visible navigation fixture agent');
     await setMode(page, project.name, 'terminal');
   }
   const hiddenShell = (await state()).projects.find(project => project.id === local.id).terminals[0].id;
@@ -114,8 +114,8 @@ try {
   await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.shellReady, 'navigation agent shell ready');
   // Agent lifecycle alone no longer enables the composer: draw the CLI's positive idle-input evidence too.
   // The agent a terminal runs is Claude Code (Codex opens in native mode), so the frame is Claude Code's input box.
-  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'codex-started' -Agent 'claude'; Clear-Host; Write-Host '────'; Write-Host '❯ '; Write-Host '────'; Write-Host '  ⏸ manual mode on'; Start-Sleep 3600\r"), agentId);
-  await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.codexActive, 'navigation fake agent session');
+  await page.evaluate(id => window.agentrix.writeTerminal(id, "Send-AgentrixEvent 'agent-started' -Agent 'claude'; Clear-Host; Write-Host '────'; Write-Host '❯ '; Write-Host '────'; Write-Host '  ⏸ manual mode on'; Start-Sleep 3600\r"), agentId);
+  await waitFor(async () => (await state()).projects.find(project => project.id === local.id).terminals.find(terminal => terminal.id === agentId)?.cliActive, 'navigation fake agent session');
   const agent = first.locator(`[data-terminal-id="${agentId}"]`);
   await agent.locator('.reading-composer textarea').waitFor();
   await page.waitForFunction(id => document.querySelector(`[data-terminal-id="${id}"] .reading-composer textarea`)?.disabled === false, agentId);

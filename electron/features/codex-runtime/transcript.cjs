@@ -10,6 +10,7 @@ const { codexSettings } = require('../agents/agent-settings.cjs');
 const { completion, nativeCompletion, turnOf } = require('./transcript-completion.cjs');
 
 const home = (env = process.env) => env.CODEX_HOME || path.join(os.homedir(), '.codex');
+const terminalHome = session => session?.codexHome || home();
 const root = directory => path.join(directory, 'sessions');
 
 async function find(_cwd, id, directory = home(), { canonicalRoot } = {}) {
@@ -57,4 +58,4 @@ const activity = {
   trackTurns: true,
 };
 
-module.exports = { home, root, find, list, validate, record, conversation: codexConversation, activity, completion, nativeCompletion };
+module.exports = { home, terminalHome, root, find, list, validate, record, conversation: codexConversation, activity, completion, nativeCompletion };

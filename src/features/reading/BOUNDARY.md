@@ -22,11 +22,11 @@ the latest round, and the switch between reading and the raw terminal.
 
 ## May import
 - `src/shared/**`
+- `electron/features/cli-adapters/registry.mjs` (CLI labels and welcome commands)
 - `src/features/home/delivery.ts` (withoutDelivery: a reply without the 【交付】 block that closes it)
 - `electron/conversation-blocks.mjs` (the conversation grouping rule the main process and the renderer share)
-- `src/features/agents/agent-screen*.ts`
+- `src/features/agents/*screen*.ts` (agent and sign-in screens)
 - `src/features/cli-screens/index.ts`
-- `src/features/agents/sign-in-screen.ts`
 - `src/features/agents/action-text.ts`
 - `src/features/agents/AgentBrandIcon.ts`
 - `src/features/files/*.ts` (file-popup, the popup over the view; tree-reveal, a reply's link shown in the open project's file tree)

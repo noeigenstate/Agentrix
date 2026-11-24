@@ -1,5 +1,5 @@
 const { records, sameDirectory } = require('./session-files.cjs');
-const { adapterOf } = require('./features/cli-adapters/registry.cjs');
+const { claudeResumeLine } = require('./features/cli-adapters/terminal.cjs');
 
 // Whether a rollout file is an interactive session (not a child agent or exec run) started in this folder.
 function interactiveSession(meta, directory) {
@@ -11,7 +11,7 @@ function interactiveSession(meta, directory) {
 function claudeResumeCommand(restore) {
   const id = restore?.threadId;
   if (id && !/^[a-f\d-]{36}$/i.test(id)) throw new Error('无效的 Claude Code 会话。');
-  return adapterOf('claude').terminal.resumeLine(id, restore?.interrupted);
+  return claudeResumeLine(id, restore?.interrupted);
 }
 
 module.exports = { claudeResumeCommand, records, interactiveSession };

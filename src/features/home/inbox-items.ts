@@ -4,12 +4,12 @@ import type { Decision } from './decisions';
 export type Group = 'decide' | 'working' | 'other';
 export type InboxItem = { id: string; group: Group; project: Project; terminal: ProjectTerminal; decision?: Decision };
 
-export const isWorking = (terminal: ProjectTerminal) => terminal.codexActive && terminal.codexActivity === 'working';
+export const isWorking = (terminal: ProjectTerminal) => terminal.cliActive && terminal.codexActivity === 'working';
 
 // The projects the box can send to: local ones and SSH ones with a running agent. The picked project is the one exception: a stopped
 // SSH project stays the box's only target (its send is disabled, with the reason), so it is never silently swapped for another.
 export function newWorkProjects(projects: readonly Project[], selectedProjectId?: string): Project[] {
-  const pickable = (project: Project) => project.kind !== 'ssh' || !!project.terminals[0]?.codexActive;
+  const pickable = (project: Project) => project.kind !== 'ssh' || !!project.terminals[0]?.cliActive;
   const selected = projects.find(project => project.id === selectedProjectId);
   return selected && !pickable(selected) ? [selected] : projects.filter(pickable);
 }

@@ -1,4 +1,5 @@
 const { promptText } = require('../../prompt-queue.cjs');
+const { workerOf } = require('../cli-adapters/workers.cjs');
 
 const emptyRate = partial => ({ outputTokens: 0, activeMs: 0, samples: 0, updatedAt: 0, partial });
 const outputOf = usage => Number.isFinite(usage?.output_tokens) && usage.output_tokens >= 0 ? usage.output_tokens : null;
@@ -75,7 +76,7 @@ class FallbackIndex {
 // Completed-response latency, including prefill and transport. Reasoning is already in output_tokens.
 // Keep only recent causal bookkeeping; older samples stay in the per-model sums.
 class TokenRates {
-  constructor(agent, { sidechain = false } = {}) { this.agent = agent; this.sidechain = sidechain; this.reset(); }
+  constructor(agent, { sidechain = false } = {}) { this.worker = workerOf(agent); this.sidechain = sidechain; this.reset(); }
   reset(partial = false) {
     this.partial = partial; this.model = null; this.modelAt = -Infinity; this.rates = new Map(); this.frozenAt = new Map();
     this.rateTimes = new Map(); this.timeline = null; this.legacy = new TimeIndex(); this.fallbacks = new FallbackIndex();
@@ -249,10 +250,10 @@ class TokenRates {
     this.fallbacks.remove(reply);
   }
   apply(record) {
-    if (this.agent === 'claude' && (record.isSidechain && !this.sidechain || !record.uuid && !record.message && !this.pending.size)) return false;
+    if (!this.worker || this.worker.acceptsRateRecord?.(this, record) === false) return false;
     const model = this.model, before = this.rates.get(model);
     const output = before?.outputTokens || 0, active = before?.activeMs || 0, samples = before?.samples || 0, updated = before?.updatedAt || 0;
-    if (this.agent === 'claude') this.claude(record); else this.codex(record);
+    this.worker.applyRateRecord(this, record);
     const after = this.rates.get(this.model);
     return model !== this.model || output !== (after?.outputTokens || 0) || active !== (after?.activeMs || 0) ||
       samples !== (after?.samples || 0) || updated !== (after?.updatedAt || 0);

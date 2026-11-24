@@ -108,7 +108,7 @@ __pg_send() {
   __pg_json ${CODEX_HOME:-$HOME/.codex}; home=$REPLY
   __pg_program codex && codex=true
   __pg_program claude && claude=true
-  if [[ $1 == codex-started ]]; then
+  if [[ $1 == agent-started ]]; then
     # Wait for the main process to finish the launch note before the CLI reads it.
     ELECTRON_RUN_AS_NODE=1 "$__pg_node" "$__pg_helper" shell-event "$__pg_socket" "$__pg_project" "$__pg_key" \
       "$1" "$__pg_sequence" "${2:-0}" "${3:-codex}" "$codex" "$claude" "${CODEX_HOME:-$HOME/.codex}" "$PWD" "${4:-}" "${5:-}" "${6-}" </dev/null >/dev/null 2>&1
@@ -134,7 +134,7 @@ __pg_redirect_agent() {
     __pg_json "$word"; payload+="$separator$REPLY"; separator=,
   done
   payload+=']'
-  __pg_send codex-started 0 "$agent" '' '' "$payload"
+  __pg_send agent-started 0 "$agent" '' '' "$payload"
   printf '%s\n' '已请求在原生模式打开 Codex。'
   return 0
 }
@@ -216,7 +216,7 @@ agentrix_agent() {
     if __pg_hook_proxy $__pg_hook_port; then __pg_send hook-channel 0 "$agent" $REPLY; else settings=$launch_http; fi
   fi
   [[ ${ultracode-} == ultracode && $seat_valid == 1 ]] && settings=$(__pg_ultracode_settings "$settings")
-  __pg_send codex-started 0 "$agent" "$(__pg_command "$@")"
+  __pg_send agent-started 0 "$agent" "$(__pg_command "$@")"
   local current_note=$(__pg_reading_note)
   # Without settings for this terminal Claude Code starts with the user's own alone, never with an empty file.
   local session_folder=${__pg_note_file%/*} session_name=${__pg_note_file##*/} settings_file=
@@ -241,7 +241,7 @@ agentrix_agent() {
     code=$?
   fi
   [[ -n $settings_file ]] && rm -f -- "$settings_file"
-  __pg_send codex-exited $code "$agent"
+  __pg_send agent-exited $code "$agent"
   return $code
 }
 

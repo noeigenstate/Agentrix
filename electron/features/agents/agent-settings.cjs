@@ -4,7 +4,7 @@
 // every reply (message.model, effort/perTurnEffort, usage.speed) and answers /model, /effort and /fast at once in its own output.
 // The reading view shows them above its message box.
 const EMPTY = { model: null, effort: null, fast: null, ultracode: null };
-const text = value => typeof value === 'string' && value.trim() ? value.trim() : null;
+const { workerOf, claudeFastModeEcho, claudeSettings, codexSettings } = require('../cli-adapters/workers.cjs');
 
 function changed(current, patch) {
   const base = current || EMPTY;
@@ -15,72 +15,10 @@ function changed(current, patch) {
   return Object.keys(next).every(key => next[key] === base[key]) ? current : next;
 }
 
-// What Claude Code printed for one of its own commands: "Set model to `Opus 5.5` …", "Set effort level to max (…)",
-// and fast mode turned on or off.
-function claudeStdout(record) {
-  const content = record.message?.content;
-  const words = typeof content === 'string' ? content : Array.isArray(content) ? content.map(block => typeof block?.text === 'string' ? block.text : '').join('\n') : '';
-  return /<local-command-stdout>([\s\S]*?)<\/local-command-stdout>/.exec(words)?.[1].replace(/\x1b\[[0-9;]*m/g, '');
-}
-
-const fastEcho = /^[ \t]*(?:↯\s*|Kept\s+)?Fast mode\s+(?:is (?:now )?)?(on|enabled|off|disabled)\b/i;
-const fastEnabled = /^(?:on|enabled)$/i;
-
-function claudeFastModeEcho(record) {
-  if (record?.type !== 'user' || record.isSidechain || record.isMeta || record.isCompactSummary) return null;
-  const output = claudeStdout(record);
-  if (!output) return null;
-  const reason = /^[ \t]*(?:↯\s*)?Fast mode unavailable:\s*(.+)/i.exec(output)?.[1].trim();
-  if (!reason && !fastEnabled.test(fastEcho.exec(output)?.[1] ?? '')) return null;
-  const at = Date.parse(record.timestamp);
-  return Number.isFinite(at) ? { at, reason: reason || null } : null;
-}
-
-function claudeCommandOutput(record) {
-  const output = claudeStdout(record);
-  if (!output) return null;
-  const model = /^\s*Set model to\s+`?([^`\n(]+?)`?(?:\s+\(|\s+and\b|\s+for this session only\b|\s*$)/im.exec(output)?.[1];
-  const effort = /^\s*Set effort level to\s+([a-z]+)\b/im.exec(output)?.[1];
-  const fast = fastEcho.exec(output)?.[1];
-  const fastModel = fast && /\bmodel set to\s+`?([^`·\n]+?)`?(?:\s*·|\s*$)/i.exec(output)?.[1];
-  const standaloneUltra = /^\s*Ultracode (?:on|off) \(|^\s*Ultracode off\. Effort stays \w+\./i;
-  const ultracode = (effort || standaloneUltra.test(output)) && /\bUltracode\s+(on|off)\b/i.exec(output)?.[1];
-  if (!model && !effort && !fast && !ultracode) return null;
-  return { model: text(model || fastModel), effort: text(effort)?.toLowerCase() ?? null,
-    fast: fast ? fastEnabled.test(fast) : null, ultracode: ultracode ? ultracode.toLowerCase() === 'on' : null };
-}
-
-function claudeSettings(record) {
-  // A subagent's replies carry its own model, not the session's.
-  if (record.isSidechain) return null;
-  if (record.type === 'assistant') {
-    const model = text(record.message?.model), speed = record.message?.usage?.speed;
-    return { model: model && model !== '<synthetic>' ? model : null, effort: text(record.perTurnEffort) ?? text(record.effort),
-      fast: speed === 'fast' ? true : speed === 'standard' ? false : null };
-  }
-  if (record.type === 'user') return claudeCommandOutput(record);
-  if (record.type === 'attachment') {
-    const kind = record.attachment?.type;
-    if (kind === 'ultra_effort_enter' || kind === 'ultra_effort_exit') return { ultracode: kind === 'ultra_effort_enter' };
-  }
-  return null;
-}
-
-function codexSettings(record) {
-  const payload = record.payload || {};
-  if (record.type === 'turn_context') return { model: text(payload.model), effort: text(payload.effort) ?? text(payload.collaboration_mode?.settings?.reasoning_effort) };
-  if (record.type === 'event_msg' && payload.type === 'thread_settings_applied') {
-    const settings = payload.thread_settings || {}, tier = settings.service_tier;
-    return { model: text(settings.model), effort: text(settings.reasoning_effort),
-      fast: tier === undefined ? null : tier === 'priority' || tier === 'fast' };
-  }
-  return null;
-}
-
 // The standalone SSH helper also reads settings and has no main-process registry.
 function agentSettings(current, agent, record) {
   if (!record || typeof record !== 'object') return current;
-  const patch = agent === 'claude' ? claudeSettings(record) : codexSettings(record);
+  const patch = workerOf(agent)?.parseSettings(record);
   return patch ? changed(current, patch) : current;
 }
 

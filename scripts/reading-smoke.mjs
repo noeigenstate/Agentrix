@@ -91,8 +91,8 @@ try {
   // PowerShell read at the cursor the idle frame supplies. A truly empty return invokes PowerShell's PS> fallback,
   // so return one blank that overwrites the frame's blank after ❯ instead of drawing a second prompt below it.
   const fixturePrompt = ". '" + path.join(root, 'scripts/reading-smoke-fixture.ps1').replace(/'/g, "''") + "'";
-  await write(fixturePrompt + "; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r");
-  await waitFor(async () => (await state()).codexActive && (await state()).agent === 'claude', 'authenticated Claude fixture');
+  await write(fixturePrompt + "; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r");
+  await waitFor(async () => (await state()).cliActive && (await state()).agent === 'claude', 'authenticated Claude fixture');
   await showReading(); // The activity pane follows the selected split; the first plain shell is still selected.
   const claudeQuota = page.locator('.activity-pane').getByRole('region', { name: 'Claude', exact: true });
   await claudeQuota.waitFor();
@@ -156,7 +156,7 @@ try {
     assert.ok((await physicalRows()).some(row => row.includes('CommandNotFoundException')), `${label}: the agent stand-in executes the slash command in its real PowerShell`);
     const hidden = (await page.evaluate(() => window.agentrix.getState())).value.projects[0].terminals.find(item => item.id === project.id);
     assert.equal(hidden.sessionId, plainSession, 'the hidden plain shell keeps its running session');
-    assert.equal(hidden.codexActive, false, 'the separate plain shell never becomes the agent fixture');
+    assert.equal(hidden.cliActive, false, 'the separate plain shell never becomes the agent fixture');
     await closePopup();
     await waitFor(async () => await composer.isEnabled(), `${label} returned to the reading view`);
     // This Console-based stand-in has no CLI resize handler. Repaint its input
@@ -686,8 +686,8 @@ try {
   // (a terminal with a running agent refuses another), it takes this terminal's place as a native session (the
   // app-server stand-in), whose box is no terminal frame and whose commands are Codex's own.
   await composer.fill('/'); await palette.getByRole('option').filter({ hasText: '/fix-issue' }).waitFor(); await composer.fill('');
-  await write("Send-AgentrixEvent 'codex-exited' -Agent 'claude'; codex\r");
-  await waitFor(async () => { const now = await state(); return now.agent === 'codex' && now.nativeMode === 'codex-app-server' && now.codexActive; }, 'typed codex opens Codex in native mode');
+  await write("Send-AgentrixEvent 'agent-exited' -Agent 'claude'; codex\r");
+  await waitFor(async () => { const now = await state(); return now.agent === 'codex' && now.nativeMode === 'codex-app-server' && now.cliActive; }, 'typed codex opens Codex in native mode');
   await waitFor(async () => (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId)).value?.state === 'idle', 'native Codex is ready');
   await waitFor(async () => !await composer.isDisabled(), 'the native box takes messages');
   assert.equal(await terminal.locator('.xterm').count(), 0, "the native session takes the terminal's place");
@@ -700,7 +700,7 @@ try {
   await composer.fill('');
   const native = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), terminalId);
   await page.evaluate(({ id, runtime }) => window.agentrix.nativeSession.stop(id, runtime), { id: terminalId, runtime: native.value.runtimeSessionId });
-  await waitFor(async () => !(await state()).codexActive, 'stopping the native session ends Codex');
+  await waitFor(async () => !(await state()).cliActive, 'stopping the native session ends Codex');
   checks.push('command list reloads when the terminal agent changes: a typed codex opens natively with its own commands');
   assert.deepEqual(errors, []);
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify({ packaged, checks, errors, targeting: { plainTerminalId: project.id, plainSession, agentTerminalId: terminalId, commandTargets } }, null, 2));

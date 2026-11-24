@@ -11,7 +11,7 @@ function terminalWriter(agent, activity = 'idle') {
   const submit = promptQueue.submit.bind(promptQueue);
   promptQueue.submit = (text, working) => { calls.prompts.push([text, working]); submit(text, working); };
   const session = {
-    projectId: 'project', status: 'running', agent, codexActive: true, codexActivity: activity,
+    projectId: 'project', status: 'running', agent, cliActive: true, codexActivity: activity,
     activityInputAt: 0, submissions: new SubmissionTracker(), promptQueue,
     gate: { input: data => calls.forwarded.push(data) },
   };
@@ -52,7 +52,7 @@ test('only submissions in active agent sessions request faster transcript pickup
     assert.equal(calls.polls, 0, 'typing and bracketed paste do not submit');
     write('\r'); assert.equal(calls.polls, 1);
     write('/model\r'); assert.equal(calls.polls, 2, 'commands may update the transcript too');
-    session.codexActive = false;
+    session.cliActive = false;
     write('echo hello\r'); assert.equal(calls.polls, 2);
     session.promptQueue.reset();
   }
@@ -140,9 +140,9 @@ test('late startup events cannot overwrite prompt-ready or newer Codex events', 
   assert.equal(acceptShellEvent(session, { type: 'shell-prompt', sequence: 2 }), true);
   assert.equal(acceptShellEvent(session, { type: 'shell-ready', sequence: 1 }), false);
   assert.equal(acceptShellEvent(session, { type: 'shell-prompt', sequence: 2 }), false);
-  assert.equal(acceptShellEvent(session, { type: 'codex-started', sequence: 3 }), true);
+  assert.equal(acceptShellEvent(session, { type: 'agent-started', sequence: 3 }), true);
   assert.equal(acceptShellEvent(session, { type: 'shell-prompt', sequence: 2 }), false);
-  assert.equal(acceptShellEvent(session, { type: 'codex-exited', sequence: 4 }), true);
+  assert.equal(acceptShellEvent(session, { type: 'agent-exited', sequence: 4 }), true);
   assert.equal(acceptShellEvent(session, { type: 'shell-prompt', sequence: 5 }), true);
   assert.equal(acceptShellEvent(session, { type: 'shell-ready' }), false);
   assert.equal(acceptShellEvent({}, { type: 'shell-ready', sequence: 1 }), true);
@@ -150,7 +150,7 @@ test('late startup events cannot overwrite prompt-ready or newer Codex events', 
 
 test('a native host takes no shell report, whatever its sequence', () => {
   const host = { nativeStructured: true };
-  for (const type of ['shell-ready', 'shell-prompt', 'codex-started', 'codex-exited']) assert.equal(acceptShellEvent(host, { type, sequence: 5 }), false, type);
+  for (const type of ['shell-ready', 'shell-prompt', 'agent-started', 'agent-exited']) assert.equal(acceptShellEvent(host, { type, sequence: 5 }), false, type);
   assert.equal(host.lastShellEventSequence, undefined);
 });
 

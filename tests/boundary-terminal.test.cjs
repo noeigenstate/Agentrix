@@ -125,7 +125,7 @@ test("typing, selecting or copying in a small card's terminal never expands the 
     './useProjectReorder': { TERMINAL_SPLITS: {}, useReorder: () => ({}) }, './i18n': { t: text => text },
   });
   t.after(() => { harness.dispose(); restore(); });
-  const agent = { id: 'agent', title: 'agent', sessionId: 'session', status: 'running', codexActive: true };
+  const agent = { id: 'agent', title: 'agent', sessionId: 'session', status: 'running', cliActive: true };
   const tree = harness.render('ProjectTerminals', { project: { id: 'p', name: 'p', terminals: [agent] }, focused: false, fontSize: 14, activeId: null,
     setActiveId: id => selected.push(id), onExpand: () => expanded.push('expand'), onAction: noop, onError: noop, onOpenLink: noop }).result;
   // The card's body is drawn by the function child of the card that holds its draft handoff.

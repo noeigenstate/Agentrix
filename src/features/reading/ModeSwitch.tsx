@@ -9,7 +9,7 @@ import { readingShown, setReading, useTerminalChoice } from './reading-mode';
 export function ModeSwitch({ project }: { project: Project }) {
   const terminal = terminalInUse(visibleTerminals(project.terminals, true), useActiveTerminal(project.id));
   const raw = useTerminalChoice();
-  if (!terminal?.sessionId || !terminal.codexActive) return null;
+  if (!terminal?.sessionId || !terminal.cliActive) return null;
   const reading = readingShown(terminal, raw);
   const modes = [
     { reading: false, label: t('切换到终端'), text: t('终端'), icon: <TerminalIcon size={14} aria-hidden="true" /> },

@@ -41,7 +41,7 @@ function createClaudeActivity(deps) {
     return expired ? 'interrupted' : queued || held?.count ? 'working' : snapshot.state;
   }
   function replayCompletion(project, s) {
-    if (s && deps.sessions.get(s.terminalId) === s && s.codexActive && (s.activityRawSnapshot || s.activitySnapshot)) {
+    if (s && deps.sessions.get(s.terminalId) === s && s.cliActive && (s.activityRawSnapshot || s.activitySnapshot)) {
       deps.applyActivity(project, s, s.activityRawSnapshot || s.activitySnapshot);
     }
   }
@@ -66,7 +66,7 @@ function createClaudeActivity(deps) {
       callsOf(s, project).bindBackground(file);
       let tail;
       const readCurrent = () => sessions.get(s.terminalId) === s && (!tail || s.claudeTranscript === tail)
-        && (s.codexActive && s.agent === 'claude' || s.claudeResumeId === event.sessionId);
+        && (s.cliActive && s.agent === 'claude' || s.claudeResumeId === event.sessionId);
       const onHistory = ready => {
         if (ready) s.conversation.endHistory();
         else { callsOf(s, project).bindBackground(file, true); s.conversation.beginHistory(); s.actions.reset(); s.conversation.reset(); s.usage?.reset(true); }
@@ -140,7 +140,7 @@ function createClaudeActivity(deps) {
     const request = s.claudeFollowRequest = (s.claudeFollowRequest || 0) + 1;
     const cwd = store.findTerminal(s.terminalId)?.record.restore?.cwd || project.path;
     const file = await findClaudeSession(cwd, id);
-    if (!file || sessions.get(s.terminalId) !== s || (!s.codexActive && s.claudeResumeId !== id) || (s.codexActive && s.agent !== 'claude')) return false;
+    if (!file || sessions.get(s.terminalId) !== s || (!s.cliActive && s.claudeResumeId !== id) || (s.cliActive && s.agent !== 'claude')) return false;
     if (s.claudeFollowRequest !== request) return s.claudeSessionId === id && s.claudeTranscript?.filename === file;
     followClaude(project, s, { sessionId: id, transcriptPath: file });
     store.setRestore(s.terminalId, { threadId: id });
@@ -192,7 +192,7 @@ function createClaudeActivity(deps) {
   // CLI interaction is independent of project completion: progress never arms another completion notification.
   function publishCliState(s, state, { at = Date.now(), observedAt = Date.now(), threadId, turnId, requestId, eventId, message: detail, bind = false, progress = false, expectedRevision, newTurn = false } = {}) {
     const { sessions, broadcast } = deps;
-    if (!s.sessionId || s.nativeStructured || !s.codexActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at) || !Number.isFinite(observedAt)) return false;
+    if (!s.sessionId || s.nativeStructured || !s.cliActive || sessions.get(s.terminalId) !== s || !Number.isFinite(at) || !Number.isFinite(observedAt)) return false;
     const meta = metaOf(s), before = s.cliState;
     if (expectedRevision != null && expectedRevision !== before?.revision) return false;
     const bound = boundOf(s, true);
@@ -229,7 +229,7 @@ function createClaudeActivity(deps) {
   function applyActivity(project, s, snapshot) {
     const { sessions, store, scheduleState, publishCliState, summarizeTask, refreshClaudeAccounts, notifyCompletion, memoryFolder, memoryDir,
       remember, roundsOf, scrubProjectSkills, broadcast } = deps;
-    if (sessions.get(s.terminalId) !== s || !s.codexActive) return;
+    if (sessions.get(s.terminalId) !== s || !s.cliActive) return;
     if (snapshot.updatedAt < (s.activitySince || 0)) return;
     const bound = boundOf(s);
     if (!matchesThread(s, bound, snapshot.threadId)) return;
@@ -281,7 +281,7 @@ function createClaudeActivity(deps) {
       if (['complete', 'interrupted'].includes(snapshot.state)) {
         // The last poll may still add tool calls. Settle both views afterward, unless another round has started.
         const settle = () => {
-          if (sessions.get(s.terminalId) === s && s.codexActive && hooksOf(s) && s.claudeActivitySnapshot === snapshot && s.codexActivity !== 'working' && !(s.activityInputAt > snapshot.updatedAt)) {
+          if (sessions.get(s.terminalId) === s && s.cliActive && hooksOf(s) && s.claudeActivitySnapshot === snapshot && s.codexActivity !== 'working' && !(s.activityInputAt > snapshot.updatedAt)) {
             s.actions.settle(); s.conversation.settle();
           }
         };
@@ -292,7 +292,7 @@ function createClaudeActivity(deps) {
     if (snapshot.state === 'complete' && snapshot.turnId) {
       s.lastCompletedAt = snapshot.updatedAt;
       const allComplete = [...sessions.values()].filter(item => item.projectId === project.id || item.terminalId === project.id)
-        .every(item => !item.codexActive || item.codexActivity === 'complete');
+        .every(item => !item.cliActive || item.codexActivity === 'complete');
       if (allComplete && store.complete(project.id, `${snapshot.threadId}:${snapshot.turnId}`, snapshot.updatedAt)) notifyCompletion(project);
     }
     // The round that ended joins the folder's permanent memory (project-memory.cjs), here or over SSH alike. Claude's
@@ -317,7 +317,7 @@ function createClaudeActivity(deps) {
     if (failed) event = { ...event, state: 'complete' };
     const { store, publishCliState, followClaude, applyActivity, refreshClaudeAccounts, promptText, isLocalAgentCommand } = deps;
     const hooks = hooksOf(s);
-    if (!s.codexActive || !hooks || !Object.hasOwn(SIGNALS, event.state)) return;
+    if (!s.cliActive || !hooks || !Object.hasOwn(SIGNALS, event.state)) return;
     if (typeof event.sessionId !== 'string' || !/^[\w-]{1,100}$/.test(event.sessionId) || typeof event.eventId !== 'string' || event.eventId.length > 200) return;
     const at = Number.isFinite(event.sentAt) ? event.sentAt + (project.kind === 'ssh' ? s.activityClockOffset || 0 : 0) : Date.now();
     const bound = s.cliProviderId || s.claudeSessionId || s.claudeResumeId;
@@ -388,7 +388,7 @@ function createClaudeActivity(deps) {
   // only on the light: Esc interrupting a turn runs no hook, so a screen that has looked idle long enough turns the light
   // idle (watchIdle). The round, its completion and every owner action still wait for a Stop, the transcript or Esc.
   function claudeScreen(s, facts) {
-    if (deps.sessions.get(s.terminalId) !== s || !s.codexActive || !hooksOf(s)) return;
+    if (deps.sessions.get(s.terminalId) !== s || !s.cliActive || !hooksOf(s)) return;
     const before = metaOf(s).machine;
     if (feed(s, { ...facts, type: 'screen', at: Date.now(), terminalSession: facts.sessionId }) && before.screenIdle && !metaOf(s).machine.screenIdle) {
       relight(s, `screen:${facts.revision}`);
@@ -405,7 +405,7 @@ function createClaudeActivity(deps) {
     if (!project || !hooks) return;
     const sessionId = hookEvent.sessionId || s.claudeSessionId || '';
     const { receipt, subagent, end, activity } = hooks.signal(hookEvent.event, hookEvent.payload, hookEvent);
-    const current = s.codexActive && /^[\w-]{1,100}$/.test(sessionId)
+    const current = s.cliActive && /^[\w-]{1,100}$/.test(sessionId)
       && sessionId === (boundOf(s, true) || sessionId) && hookEvent.at >= (s.activitySince || 0);
     if (current && receipt) callsOf(s, project).finishContinuation(receipt.toolUseId, hookEvent.at, receipt.failed);
     const agentId = subagent?.agentId;

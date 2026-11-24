@@ -14,7 +14,7 @@ const { SubmissionTracker } = require('../electron/terminal-input.cjs');
 function fixture({ channel = 'http', native = false, real = false } = {}) {
   let now = 2000, armed = false, notifications = 0;
   const project = { id: 'p', kind: 'ssh' }, subagents = [], timers = [];
-  const s = { terminalId: 't', projectId: 'p', sessionId: 'pty', agent: 'claude', codexActive: true, activitySince: 1000, activityInputAt: 0,
+  const s = { terminalId: 't', projectId: 'p', sessionId: 'pty', agent: 'claude', cliActive: true, activitySince: 1000, activityInputAt: 0,
     claudeSessionId: 'provider', hooks: { channel }, promptQueue: { finish() {}, list: () => [] }, actions: { settle() {} }, conversation: { settle() {}, list: [] },
     completionWork: { tasks: new Map(), notifications: new Set(), begin() {}, end() {}, state: snapshot => snapshot.state },
     ...(native ? { nativeStructured: true } : {}), flush() {}, chunks: [], seq: 0, status: 'codex', submissions: { write: () => false, sent: [] }, gate: { input() {} } };

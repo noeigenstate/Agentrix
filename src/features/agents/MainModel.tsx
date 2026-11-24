@@ -15,7 +15,7 @@ import { leadRoutingFailure, leadRoutingScope, subscribeLeadRouting, unverifiedS
 // A terminal's last worked prompt supplies its finished row when the Agent tab reopens.
 const workedPrompts = new Map<string, { session: string | null; summary: string; text: string }>();
 export function useMainTurn(terminal: ProjectTerminal | undefined) {
-  const id = terminal?.codexActive ? terminal.id : undefined;
+  const id = terminal?.cliActive ? terminal.id : undefined;
   const sessionId = terminal?.sessionId;
   const [screen, setScreen] = useState(() => ({ id, frame: id ? readScreen(id) : null }));
   useEffect(() => {
@@ -24,7 +24,7 @@ export function useMainTurn(terminal: ProjectTerminal | undefined) {
     return subscribeScreen(id, frame => setScreen({ id, frame }));
   }, [id, sessionId]);
   const latestSignal = useRef<CliState | null>(null);
-  if (!terminal?.codexActive) return null;
+  if (!terminal?.cliActive) return null;
   const frame = screen.id === id ? screen.frame : readScreen(terminal.id);
   const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
   const cli = cliStateFor(screenAgent(terminal.agent), frame, terminal, signal);
@@ -73,7 +73,7 @@ function sameModel(chosen: string, actual: string) {
 
 export function MainModelGroup({ terminal }: { terminal: ProjectTerminal | undefined }) {
   const turn = useMainTurn(terminal);
-  const seats = useSeats(terminal?.codexActive ? terminal.id : undefined, terminal?.sessionId);
+  const seats = useSeats(terminal?.cliActive ? terminal.id : undefined, terminal?.sessionId);
   return turn && <MainModel turn={turn} seats={seats} />;
 }
 

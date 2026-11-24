@@ -11,7 +11,7 @@ const closeShells = ast.statements.find(node => ts.isFunctionDeclaration(node) &
 
 test('material teardown awaits each isolated shell exit before asking the next PTY to close', async () => {
   const terminals = ['first', 'second'].map(id => ({ id, shellReady: true, status: 'shell' }));
-  terminals.push({ id: 'agent', shellReady: false, codexActive: true });
+  terminals.push({ id: 'agent', shellReady: false, cliActive: true });
   const calls = [], context = vm.createContext({
     state: async () => ({ projects: [{ terminals }] }),
     page: { async evaluate(_fn, id) {

@@ -108,8 +108,8 @@ async function runTheme(theme) {
       }
     };
     for (const [at, { agent, dir: fixtures, file, card }] of FIXTURES.entries()) {
-      await write("function global:prompt { 'question-fixture> ' }; Send-AgentrixEvent 'codex-started' -Agent '" + agent + "'\r");
-      await waitFor(async () => (await state()).projects[0].codexActive && (await state()).projects[0].agent === agent, 'authenticated question fixture');
+      await write("function global:prompt { 'question-fixture> ' }; Send-AgentrixEvent 'agent-started' -Agent '" + agent + "'\r");
+      await waitFor(async () => (await state()).projects[0].cliActive && (await state()).projects[0].agent === agent, 'authenticated question fixture');
       const raw = page.locator('.titlebar-tools').getByRole('button', { name: '切换到终端', exact: true }); if (await raw.isVisible()) await raw.click();
       const content = (await fs.readFile(path.join(root, 'tests/fixtures', fixtures, file + '.txt'), 'utf8')).replace(/\r?\n/g, '\r\n'), encoded = Buffer.from(content).toString('base64');
       const release = path.join(dir, file + '.done').replaceAll("'", "''");

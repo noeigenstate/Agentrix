@@ -150,6 +150,7 @@ function mainFixture(t, { native = true, now = Date.now } = {}) {
   const project = { id: 'project', kind: 'local', path: root }, sessions = new Map(), nativeSpecs = new Map(), errors = [], warnings = [];
   let binds = 0;
   const context = vm.createContext({ path, fs, os, process, randomUUID, sameDirectory, sessions, nativeSpecs, quitting: false, errors,
+    adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf,
     Date: class extends Date { static now() { return now(); } },
     AgentCalls: class extends AgentCalls { constructor(options) { super({ ...options, now }); } },
     store: { projects: [project], findTerminal: () => ({ project, record: { restore: {} } }), setRestore() {} },
@@ -262,7 +263,7 @@ async function endedSession(t, ending) {
   if (ending === 'handoff') f.context.disposeTerminal('terminal', { preserveCalls: true });
   else if (ending === 'cli') {
     f.session.nativeStructured = false;
-    f.context.onEvent({ type: 'codex-exited', agent: 'claude', projectId: 'terminal', sessionKey: f.session.sessionKey, exitCode: 0 });
+    f.context.onEvent({ type: 'agent-exited', agent: 'claude', projectId: 'terminal', sessionKey: f.session.sessionKey, exitCode: 0 });
   } else {
     const callback = findNode(node => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'onExit');
     vm.runInContext(`(${callback.arguments[0].getText(ast)})`, f.context)({ exitCode: 0 });

@@ -1,7 +1,7 @@
 import type { ProjectTerminal } from '../../shared/types';
 
 export function visibleTerminals(terminals: ProjectTerminal[], expanded: boolean) {
-  return expanded ? terminals : terminals.filter(terminal => !!terminal.sessionId && (terminal.codexActive || terminal.agentStarting));
+  return expanded ? terminals : terminals.filter(terminal => !!terminal.sessionId && (terminal.cliActive || terminal.agentStarting));
 }
 
 // The terminal in use: the one the reader picked, else the first.

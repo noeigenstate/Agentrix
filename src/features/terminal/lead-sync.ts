@@ -100,7 +100,7 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
   const current = useRef(terminal); current.current = terminal;
   const error = useRef(onError); error.current = onError;
   const wake = useRef<(() => void) | null>(null);
-  const agent = terminal.codexActive ? terminal.agent : null;
+  const agent = terminal.cliActive ? terminal.agent : null;
   useEffect(() => {
     const api = window.agentrix, session = terminal.sessionId, id = terminal.id;
     const facet = screenOf(agent), picker = facet?.picker, echo = facet?.echo, matches = facet?.inputMatches;
@@ -124,7 +124,7 @@ function useLeadSync(projectId: string, terminal: ProjectTerminal, onError?: (me
     const syncLead = async () => {
       if (running || loading) return;
       const thread = conversation(), seat = target(), choice = targetKey(seat);
-      const bound = () => active && current.current.codexActive && current.current.agent === agent && conversation() === thread;
+      const bound = () => active && current.current.cliActive && current.current.agent === agent && conversation() === thread;
       const live = () => bound() && targetKey(target()) === choice;
       if (scope !== thread) { clearFailure(); scope = thread; previous = null; observed = {}; }
       const settings = actual();

@@ -88,7 +88,7 @@ async function run(theme, output) {
       const terminal = state?.ok && state.value.projects[0]?.terminals[0];
       const rows = (await page.locator('.xterm-rows').allTextContents()).map(text => text.replace(/[a-f0-9]{64}/gi, '[redacted]'));
       const launch = 'app-server';
-      await fs.writeFile(path.join(dir, 'failure.json'), JSON.stringify({ error: error.message, terminal: terminal && { status: terminal.status, active: terminal.codexActive, error: terminal.error }, launch, rows, errors }, null, 2));
+      await fs.writeFile(path.join(dir, 'failure.json'), JSON.stringify({ error: error.message, terminal: terminal && { status: terminal.status, active: terminal.cliActive, error: terminal.error }, launch, rows, errors }, null, 2));
     }
     throw error;
   } finally {

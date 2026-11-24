@@ -83,12 +83,12 @@ async function quiet(agent, timeout = 30000) {
 async function settle(agent, startup = false) {
   for (let round = 0; round < 40; round++) {
     const s = await state(), v = await view();
-    if (s.codexActive && v.composer && v.enabled && !v.choice && !v.panel) return;
+    if (s.cliActive && v.composer && v.enabled && !v.choice && !v.panel) return;
     if (v.panel || (v.choice && !startup)) await dismiss();
     else if (v.choice) {
       const first = terminal.locator('.reading-choice').first();
       await first.focus(); await page.keyboard.press('Enter');
-    } else if (s.codexActive && !v.composer) {
+    } else if (s.cliActive && !v.composer) {
       // Handed off to the raw terminal for a prompt: take its default, then return to reading.
       await write('\r'); await sleep(800);
       const back = page.locator('.titlebar-tools').getByRole('button', { name: '阅读视图：按文档排版显示对话', exact: true });
@@ -99,9 +99,9 @@ async function settle(agent, startup = false) {
   throw new Error(`${agent} never reached its input box`);
 }
 async function start(agent) {
-  if ((await state()).codexActive) return;
+  if ((await state()).cliActive) return;
   await write(`${agent}\r`);
-  await waitFor(async () => (await state()).codexActive && (await state()).agent === agent, `${agent} started`, 90000);
+  await waitFor(async () => (await state()).cliActive && (await state()).agent === agent, `${agent} started`, 90000);
   await composer.waitFor({ state: 'visible', timeout: 30000 });
   await settle(agent, true);
   // The input box appears before the CLI has finished starting (plugins, MCP servers); a command typed in that
@@ -113,7 +113,7 @@ async function dismiss(command = '') {
   for (let round = 0; round < 6; round++) {
     const v = await view();
     const s = await state();
-    if (!s.codexActive) return 'exited';
+    if (!s.cliActive) return 'exited';
     if (v.composer && v.enabled && !v.choice && !v.panel && s.codexActivity !== 'working') return 'ready';
     const target = terminal.locator(v.panel ? '.reading-terminal-popup' : '.reading-choice').first();
     if (v.panel) {
@@ -145,7 +145,7 @@ async function run(agent, command) {
     if (v.panel) { seen.panel = true; panelText = await text('.reading-terminal-popup .xterm-rows'); }
     if (v.choice) { seen.choice = true; choiceText = await text('.reading-choice'); }
     if (s.codexActivity === 'working') seen.working = true;
-    if (!s.codexActive) break;
+    if (!s.cliActive) break;
     if ((seen.panel || seen.choice) && Date.now() > until - 4000) break;
     await sleep(300);
   }
@@ -155,7 +155,7 @@ async function run(agent, command) {
   // Only the CLI's own answer to this command counts; its autocomplete says "No commands match" while a name is typed.
   const name = command.slice(1);
   const unknown = new RegExp(`(Unknown (slash )?command:? |Unrecognized command '?)/${name}(?![\\w-])`, 'i').test(screen + panelText);
-  let after = LAST.has(command) ? ((await state()).codexActive ? 'still running' : 'exited') : await dismiss(command);
+  let after = LAST.has(command) ? ((await state()).cliActive ? 'still running' : 'exited') : await dismiss(command);
   if (after === 'ready' && !await quiet(agent)) after = 'CLI never went idle';
   const shown = seen.choice ? 'choice' : seen.panel ? 'live terminal' : seen.working ? 'agent turn' : 'nothing';
   const ok = !unknown && shown !== 'nothing' && (LAST.has(command) ? after === 'exited' : after === 'ready');
@@ -188,7 +188,7 @@ try {
       // /vim toggles a saved setting; send it again so the setting ends where it started.
       if (command === '/vim') { await run(agent, '/vim').catch(() => {}); results.pop(); }
     }
-    if ((await state()).codexActive) { await write('\x03'); await sleep(500); await write('\x03'); await waitFor(async () => !(await state()).codexActive, `${agent} closed`, 30000).catch(() => {}); }
+    if ((await state()).cliActive) { await write('\x03'); await sleep(500); await write('\x03'); await waitFor(async () => !(await state()).cliActive, `${agent} closed`, 30000).catch(() => {}); }
   }
 } finally {
   await fs.writeFile(path.join(output, 'results.json'), JSON.stringify(results, null, 2));

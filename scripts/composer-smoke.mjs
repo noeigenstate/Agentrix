@@ -77,8 +77,8 @@ try {
   // The stand-in's screen: a faint hint on the dark surface, then Claude Code's empty input box, where the prompt waits.
   const surface = `[Console]::Write([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${Buffer.from('\x1b[48;2;30;30;30m \x1b[2mAsk the agent to do anything\x1b[22m \x1b[0m\r\n').toString('base64')}')))`;
   const idle = `Clear-Host; ${surface}; Show-ReadingFixtureInput\r`;
-  await write(projects[0].id, `. '${path.join(root, 'scripts/reading-smoke-fixture.ps1').replace(/'/g, "''")}'; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r`);
-  await waitFor(async () => { const agent = (await state()).projects[0].terminals[0]; return agent.codexActive && agent.agent === 'claude'; }, 'agent identity reaches renderer');
+  await write(projects[0].id, `. '${path.join(root, 'scripts/reading-smoke-fixture.ps1').replace(/'/g, "''")}'; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r`);
+  await waitFor(async () => { const agent = (await state()).projects[0].terminals[0]; return agent.cliActive && agent.agent === 'claude'; }, 'agent identity reaches renderer');
   await write(projects[0].id, idle);
   // A running agent shows its conversation as a document by default; this test is about the agent's own input box in
   // the terminal, so it switches to the terminal the way a user does.
@@ -164,8 +164,8 @@ try {
   // An authenticated agent fixture covers the same surface in output/history,
   // alongside backgrounds that must remain colored in an active agent's terminal.
   const quote = value => "'" + value.replaceAll("'", "''") + "'";
-  await write(controlId, `Clear-Host; Send-AgentrixEvent 'codex-started' -Agent 'claude'; ${paint}; for ($pgComposer=0; $pgComposer -lt 1200 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgComposer++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'codex-exited' -Agent 'claude'\r`);
-  await waitFor(async () => (await state()).projects[0].terminals[1].codexActive, 'control becomes an authenticated agent fixture');
+  await write(controlId, `Clear-Host; Send-AgentrixEvent 'agent-started' -Agent 'claude'; ${paint}; for ($pgComposer=0; $pgComposer -lt 1200 -and -not (Test-Path -LiteralPath ${quote(doneFile)}); $pgComposer++) { Start-Sleep -Milliseconds 100 }; Send-AgentrixEvent 'agent-exited' -Agent 'claude'\r`);
+  await waitFor(async () => (await state()).projects[0].terminals[1].cliActive, 'control becomes an authenticated agent fixture');
   await showTerminal(control);
   await waitFor(async () => (await cellBackgrounds()).DARK_SURFACE === 'rgba(0, 0, 0, 0)', 'same dark history surface becomes transparent');
   const agentColors = await cellBackgrounds();

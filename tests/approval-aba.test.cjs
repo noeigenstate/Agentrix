@@ -17,7 +17,7 @@ const nodes = node => Array.isArray(node) ? node.flatMap(nodes) : React.isValidE
 function backend(agent) {
   const writes = [], handles = {}, listeners = {};
   let scheduled = 0, raw, current;
-  const s = current = { sessionId: 'session', terminalId: 'aba', projectId: 'p', status: 'codex', codexActive: true, agent,
+  const s = current = { sessionId: 'session', terminalId: 'aba', projectId: 'p', status: 'codex', cliActive: true, agent,
     approval: new ApprovalGuard('session'), gate: { open: 0, held: [], input: key => writes.push(key), output() {} },
     terminal: { write: key => writes.push(key) }, submissions: { write: () => false, sent: [] },
     titles: { write: () => [] }, chunks: [], bytes: 0, pending: '', seq: 0 };

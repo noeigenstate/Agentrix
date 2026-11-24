@@ -1577,13 +1577,13 @@ function gridMarkup(terminals, { focused = false, native = [], moved = [], hando
   });
   return renderToStaticMarkup(React.createElement(load('features/terminal/ProjectTerminals.tsx').ProjectTerminals, { project: { id: 'p', name: 'P', kind: 'local', terminals }, focused, fontSize: 13, activeId: null, setActiveId() {}, onExpand() { throw new Error('expanded'); }, onAction: async () => {}, onError() {}, onOpenLink() {} }));
 }
-const terminal = (id, patch = {}) => ({ id, title: id, sessionId: null, status: 'stopped', codexActive: false, readingHistory: null, agentStarting: false, needsInput: null, ...patch });
+const terminal = (id, patch = {}) => ({ id, title: id, sessionId: null, status: 'stopped', cliActive: false, readingHistory: null, agentStarting: false, needsInput: null, ...patch });
 
 test('a native session takes the card’s cell where a terminal would, with no launcher; the terminal’s own view takes it back with the reason', () => {
   const small = gridMarkup([terminal('t1')], { native: ['t1'] });
   assert.match(small, /class="native-stub" data-terminal="t1"/); assert.doesNotMatch(small, /launcher-stub|pane-stub/); assert.match(small, /data-reading="true"/);
   assert.match(gridMarkup([terminal('t1')]), /launcher-stub/, 'without a session the launcher stays');
-  const back = gridMarkup([terminal('t1', { sessionId: 's1', codexActive: true })], { native: ['t1'] });
+  const back = gridMarkup([terminal('t1', { sessionId: 's1', cliActive: true })], { native: ['t1'] });
   assert.match(back, /pane-stub/); assert.match(back, /class="note-stub" data-terminal="t1"/); assert.doesNotMatch(back, /native-stub/, 'a terminal that runs shows the terminal, not the old native view');
   const both = gridMarkup([terminal('t1'), terminal('t2')], { focused: true, native: ['t2'] });
   assert.deepEqual([(both.match(/native-stub/g) ?? []).length, (both.match(/launcher-stub/g) ?? []).length], [1, 1], 'an expanded project: the native split beside the one still to be started');
@@ -1705,7 +1705,7 @@ const usageOf = (patch = {}) => ({
 });
 
 // The terminal in view when none runs an agent: no current agent, so no section has a context length or a round.
-const quietTerminal = { id: 't1', agent: 'claude', codexActive: false, sessionId: null, agentUsage: null };
+const quietTerminal = { id: 't1', agent: 'claude', cliActive: false, sessionId: null, agentUsage: null };
 async function usageHtml(bridge, terminal = quietTerminal, projectId = 'p1') {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window');
   Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: { agentrix: bridge ? { nativeSession: bridge } : {} } });
@@ -1773,7 +1773,7 @@ test('a burst of quota changes is read at most once a second and never moves the
 test('Codex billing keeps ChatGPT subscriptions while legacy terminal snapshots require app-server restoration', async () => {
   const usage = async () => ({ ok: true, value: usageOf() });
   for (const sessionId of ['legacy-pty', null]) {
-    const html = await usageHtml({ usage }, terminal('codex-billing', { agent: 'codex', codexActive: true, sessionId }));
+    const html = await usageHtml({ usage }, terminal('codex-billing', { agent: 'codex', cliActive: true, sessionId }));
     const codex = usageSection(html, 'Codex');
     assert.match(codex, /ChatGPT 订阅/);
     assert.doesNotMatch(codex, /<span>终端<\/span>/);
@@ -1843,7 +1843,7 @@ test('the usage block distinguishes no API records from records with unknown or 
 
 test('the allowance of each agent follows its connection: the current session’s agent leads with the context and ends with the round, windows come from main with the session’s own as fallback', async () => {
   const future = Date.now() + 3600_000, tokens = { input: 496000, cached: 476000, output: 5100 };
-  const current = (agent, extra = {}) => ({ id: 't1', agent, codexActive: true, sessionId: 's1', agentStartedAt: 1, agentUsage: { provider: null, limits: [], context: { used: 170000, window: 1000000 }, round: tokens, total: null, ...extra } });
+  const current = (agent, extra = {}) => ({ id: 't1', agent, cliActive: true, sessionId: 's1', agentStartedAt: 1, agentUsage: { provider: null, limits: [], context: { used: 170000, window: 1000000 }, round: tokens, total: null, ...extra } });
   const usage = usageOf(), sub = { kind: 'subscription', source: null, observedAt: 1 };
   usage.agents.claude = { ...usage.agents.claude, connection: sub, limits: null };
   // The session's agent without windows from main falls back to what its own records gave; the other agent has neither context nor round.
@@ -2001,7 +2001,7 @@ test('in English the sentences main writes for a console balance and a billing m
 
 test('when main gives no usage (a read that failed or has not come back, a project it cannot answer for, no bridge) the current session’s context, bars and tokens stay, and the connection and the allowance read 未知', async () => {
   const future = Date.now() + 3600_000, round = { input: 496000, cached: 476000, output: 5100 };
-  const session = { id: 't1', agent: 'claude', codexActive: true, sessionId: null, agentStartedAt: 1, agentUsage: { provider: null, limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code', context: { used: 170000, window: 1000000 }, round, total: null } };
+  const session = { id: 't1', agent: 'claude', cliActive: true, sessionId: null, agentStartedAt: 1, agentUsage: { provider: null, limits: [{ minutes: 300, percent: 20, resetsAt: future }], limitsAt: Date.now(), limitsFrom: 'Claude Code', context: { used: 170000, window: 1000000 }, round, total: null } };
   for (const bridge of [{ usage: async () => ({ ok: false, error: 'native sessions are local only' }) }, { usage: async () => new Promise(() => {}) }, null]) {
     const html = await usageHtml(bridge, session), claude = usageSection(html, 'Claude'), codex = usageSection(html, 'Codex');
     assert.match(claude, /上下文长度/); assert.match(claude, /aria-valuenow="17"/); assert.match(claude, /5 小时额度/); assert.match(claude, />本轮</, 'its context, bar and round are the session’s own');
@@ -2372,7 +2372,7 @@ test('a failed switch is told in the path note whichever transport the card is o
 
 test('every card holds its draft handoff, whatever it shows: the raw terminal, the reading view and the native view alike, so a switch never waits for a view that is not there', () => {
   const handoffs = [], state = switchState({ phase: 'preparing' });
-  gridMarkup([terminal('t1', { sessionId: 's1', codexActive: true, switchState: state, nativeRuntimeSessionId: 'rs1' }), terminal('t2'), terminal('t3', { switchState: state })], { focused: true, native: ['t3'], handoffs });
+  gridMarkup([terminal('t1', { sessionId: 's1', cliActive: true, switchState: state, nativeRuntimeSessionId: 'rs1' }), terminal('t2'), terminal('t3', { switchState: state })], { focused: true, native: ['t3'], handoffs });
   assert.deepEqual(handoffs.sort(), [['t1', 'rs1', 'preparing'], ['t2', null, null], ['t3', null, 'preparing']], 'one per card, with its own switch state');
   const grid = fs.readFileSync(path.join(src, 'features/terminal/ProjectTerminals.tsx'), 'utf8');
   assert.equal((grid.match(/useHandoff\(/g) ?? []).length, 1, 'one place holds it');
@@ -2381,7 +2381,7 @@ test('every card holds its draft handoff, whatever it shows: the raw terminal, t
 
 test('the grid hands each card’s switch state to the note over it and to the native view, on both transports', () => {
   const state = switchState({ phase: 'preparing' });
-  const term = gridMarkup([terminal('t1', { sessionId: 's1', codexActive: true, switchState: state })]);
+  const term = gridMarkup([terminal('t1', { sessionId: 's1', cliActive: true, switchState: state })]);
   assert.match(term, /class="note-stub" data-terminal="t1" data-phase="preparing" data-active="true"/);
   const native = gridMarkup([terminal('t1', { switchState: state })], { native: ['t1'] });
   assert.match(native, /class="native-stub" data-terminal="t1" data-phase="preparing"/, 'the native view draws its own line in its header');

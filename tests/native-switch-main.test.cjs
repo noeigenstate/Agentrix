@@ -10,14 +10,14 @@ function fixture({ wrongIdentity = false } = {}) {
   const agent = 'claude';
   const call = { id: 'dispatch:worker', dispatch: true, title: 'Worker', cwd: '/synthetic' }, saves = [], signals = [];
   const old = { nativeStructured: true, sessionId: 'old-pty', sessionKey: 'same-key', controlCapability: 'same-capability',
-    bootstrapFile: '/synthetic/old-bootstrap', nativeSpec: {}, terminalId: 't', projectId: 'p', agent, codexActive: true,
+    bootstrapFile: '/synthetic/old-bootstrap', nativeSpec: {}, terminalId: 't', projectId: 'p', agent, cliActive: true,
     claudeSessionId: 'same-conversation', promptQueue: { items: [], changed() {} }, completionWork: { changed() {} }, calls: { byId: () => call } };
   const project = { id: 'p', kind: 'local', path: '/synthetic' };
   const sessions = new Map([['t', old]]);
   const context = { sessions, nativeSpecs: new Map(), launchPlans: new Map(), store: { findTerminal: () => ({ project }), setRestore: (_id, value) => saves.push(value) },
     launchCommand: (_agent, history) => { assert.equal(history.id, 'same-conversation'); return 'synthetic-resume'; }, broadcast() {},
     startTerminal(id, _starting, previous) {
-      sessions.set(id, { sessionId: 'new-pty', terminalId: id, projectId: 'p', agent, codexActive: true,
+      sessions.set(id, { sessionId: 'new-pty', terminalId: id, projectId: 'p', agent, cliActive: true,
         sessionKey: 'same-key', controlCapability: 'same-capability', bootstrapFile: '/synthetic/new-bootstrap', switchPreviousHost: previous,
         native: null, reportedThreadId: null,
         claudeSessionId: wrongIdentity ? 'wrong-conversation' : 'same-conversation', status: wrongIdentity ? 'exited' : 'codex',
@@ -118,7 +118,7 @@ test('a confirmed shell prompt after the launched CLI exits fails immediately in
   const f = fixture(), start = f.context.startTerminal;
   f.context.startTerminal = (...args) => {
     start(...args); f.context.launchPlans.clear();
-    Object.assign(f.sessions.get('t'), { ready: true, status: 'shell', agentStarting: false, codexActive: false, cliState: null });
+    Object.assign(f.sessions.get('t'), { ready: true, status: 'shell', agentStarting: false, cliActive: false, cliState: null });
   };
   await assert.rejects(f.context.prepareSwitchTerminal({ terminalId: 't', providerSessionId: 'same-conversation', agent: 'claude', runtimeSessionId: 'new' }, {}, () => true), /terminal_agent_exited/);
   assert.equal(f.sessions.get('t'), f.old); assert.equal(f.saves.length, 0);
@@ -133,9 +133,9 @@ test('after a failed switch the late exit and prompt reports of the staged termi
   defineMain(main, 'acceptDispatchEvent');
   f.old.status = 'codex';
   // The staged shell reports under the key the host keeps: its CLI's exit, then its next prompt.
-  main.onEvent({ projectId: 't', sessionKey: 'same-key', type: 'codex-exited', agent: 'claude', sequence: 4, exitCode: 2 });
+  main.onEvent({ projectId: 't', sessionKey: 'same-key', type: 'agent-exited', agent: 'claude', sequence: 4, exitCode: 2 });
   main.onEvent({ projectId: 't', sessionKey: 'same-key', type: 'shell-prompt', sequence: 5 });
-  assert.equal(f.sessions.get('t'), f.old); assert.equal(f.old.status, 'codex'); assert.equal(f.old.codexActive, true); assert.equal(f.old.error, undefined);
+  assert.equal(f.sessions.get('t'), f.old); assert.equal(f.old.status, 'codex'); assert.equal(f.old.cliActive, true); assert.equal(f.old.error, undefined);
 });
 test('terminal text blocks switching, but an arrow/history key alone is not proof of a draft', () => {
   const f = fixture();

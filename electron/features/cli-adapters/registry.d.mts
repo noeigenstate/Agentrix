@@ -5,9 +5,10 @@ type Manifest = Readonly<{
   id: AgentProvider;
   label: string;
   command: string;
+  usage?: Readonly<{ label?: string; showUnavailable?: boolean; apiSpend?: boolean; resetCredits?: boolean }>;
   install: Readonly<{ npm: string; versionPattern: RegExp; minVersion: string; label: string }>;
   models: Readonly<{ match: RegExp; efforts: readonly string[]; ultracodeLead?: boolean }>;
-  words: Readonly<{ utilities: readonly string[]; harmless: readonly string[]; print?: readonly string[] }>;
+  words: Readonly<{ utilities: readonly string[]; harmless?: readonly string[]; print?: readonly string[]; welcome?: readonly string[] }>;
   supports: Readonly<Partial<Record<string, Capability>>>;
 }>;
 type Adapter = Readonly<{ manifest: Manifest }>;

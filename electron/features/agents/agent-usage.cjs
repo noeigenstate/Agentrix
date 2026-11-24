@@ -6,6 +6,7 @@ const { claudePrompt } = require('../../agent-actions.cjs');
 const { AgentCalls } = require('./agent-calls.cjs');
 const { TokenRates } = require('./token-rate.cjs');
 const { DIRECT_USAGE_FRESH_MS } = require('./claude-account-usage.cjs');
+const { adapterOf } = require('../cli-adapters/registry.cjs');
 const accountFingerprintKey = randomBytes(32);
 
 // What an agent spends, as its own records tell it, for the activity pane: the service its model is reached through,
@@ -32,7 +33,8 @@ const claudeWindow = (model, used) => LARGE_WINDOW.test(model || '') || used > 2
 class UsageMeter {
   // calls: the terminal session's called models, which outlive this agent (dispatched workers stay when it restarts).
   constructor(agent, { provider = null, names = codexProviderName, changed = () => {}, rates = true, calls = null, codexHome = null, claudeHome = null } = {}) {
-    this.agent = agent; this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
+    this.agent = agent; this.facet = adapterOf(agent)?.usage;
+    this.provider = provider; this.names = names; this.providerId = null; this.limits = [];
     this.resets = null; this.limitsAt = null; this.claudeDirect = null; this.scopeReported = false;
     this.rates = new TokenRates(agent); this.readRates = rates; this.mainCodex = true;
     this.calls = calls || new AgentCalls({ changed, local: rates, codexHome, claudeHome });
@@ -40,7 +42,12 @@ class UsageMeter {
   }
   // Claude's plan limits from the read-only account query or the existing local caches.
   account(account, direct = null) {
-    if (this.agent !== 'claude') return false;
+    return this.facet?.observeCachedAccount?.(this, account, direct) ?? false;
+  }
+  codexAccount(account) {
+    return this.facet?.observeResetAccount?.(this, account) ?? false;
+  }
+  observeClaudeAccount(account, direct) {
     const now = Date.now();
     for (const candidate of [account, direct]) {
       if (candidate?.source === 'Claude' && Array.isArray(candidate.limits) && candidate.limits.length && Number.isFinite(candidate.at) && candidate.at <= now &&
@@ -52,8 +59,8 @@ class UsageMeter {
     return !!account && this.observeLimits(account.limits, account.at, account.source);
   }
   // Sanitized official Codex account read. Null/unavailable never means zero.
-  codexAccount(account) {
-    if (this.agent !== 'codex' || !account?.resetQuery) return false;
+  observeCodexAccount(account) {
+    if (!account?.resetQuery) return false;
     this.resets = account.resets; this.resetQuery = account.resetQuery;
     this.observeLimits(account.limits, account.at, account.source);
     return true;
@@ -62,7 +69,7 @@ class UsageMeter {
     if (!Array.isArray(limits) || !limits.length) return false;
     at = Number.isFinite(at) ? at : null;
     // An undated cache or replay cannot prove it is newer than a dated observation.
-    const observed = this.agent === 'claude' && this.limitsFrom === 'CodePulse' && freshClaudeUsage(this.claudeDirect) &&
+    const observed = this.limitsFrom === 'CodePulse' && freshClaudeUsage(this.claudeDirect) &&
       ['Claude', 'Claude Code'].includes(source) && at != null && at >= this.claudeDirect.at;
     if (!observed && this.limitsAt != null && (at == null || at < this.limitsAt)) return false;
     if (at === this.limitsAt && source === (this.limitsFrom ?? null) && limits.length === this.limits.length &&
@@ -89,13 +96,16 @@ class UsageMeter {
   // Whether this record changed what the pane shows.
   apply(record) {
     if (!record || typeof record !== 'object') return false;
-    if (this.agent !== 'claude') {
-      if (record.type === 'session_meta') this.mainCodex = record.payload?.source !== 'exec';
-      if (!this.mainCodex) return false;
-      const changed = this.codex(record);
-      const callsChanged = record.type === 'event_msg' && record.payload?.type === 'user_message' && this.calls.review(Date.parse(record.timestamp), true);
-      return this.rates.apply(record) || changed || callsChanged;
-    }
+    return this.facet?.applyRecord(this, record) ?? false;
+  }
+  applyCodex(record) {
+    if (record.type === 'session_meta') this.mainCodex = record.payload?.source !== 'exec';
+    if (!this.mainCodex) return false;
+    const changed = this.codex(record);
+    const callsChanged = record.type === 'event_msg' && record.payload?.type === 'user_message' && this.calls.review(Date.parse(record.timestamp), true);
+    return this.rates.apply(record) || changed || callsChanged;
+  }
+  applyClaude(record) {
     if (record.isSidechain) return false;
     const callsChanged = this.calls.apply(record);
     const rateChanged = this.rates.apply(record);

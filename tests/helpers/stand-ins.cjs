@@ -9,7 +9,7 @@ const REGISTRY_FILE = 'tests/fixtures/stand-ins.json';
 // What a stand-in looks like from the inside, whichever language it is written in: it answers Codex's thread/start, it
 // speaks Claude Code's control protocol or stream records, it is a compiled program with a Main, or it takes the provider
 // from its first argument. A file that says none of this is not found, and a new stand-in that does is.
-const SIGNATURE = /['"]thread\/start['"]|control_request|subtype: 'init'|static (?:void|int) Main|argv\[2\] === 'claude'|mode === 'claude'|argv\.includes\('app-server'\)/;
+const SIGNATURE = /['"]thread\/start['"]|control_request|subtype: 'init'|static (?:void|int) Main|argv\[2\] === 'claude'|mode === 'claude'|argv\.includes\('app-server'\)|stand-in-echo\.cjs/;
 const SOURCE = /\.(?:c|m)?js$|\.cs$/;
 // This file spells the signature out, and is not itself a stand-in.
 const SELF = 'tests/helpers/stand-ins.cjs';

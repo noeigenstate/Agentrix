@@ -11,7 +11,7 @@ function createSwitchHost(deps) {
     const result = [];
     for (const [id, current] of sessions) {
       const s = current.switchPreviousHost || current, project = store.findTerminal(id)?.project;
-      if (!project || project.kind === 'ssh' || !s.codexActive || s.nativeStructured || s.status === 'exited' || s.agent !== 'claude') continue;
+      if (!project || project.kind === 'ssh' || !s.cliActive || s.nativeStructured || s.status === 'exited' || s.agent !== 'claude') continue;
       s.nativeRuntimeSessionId ||= randomUUID();
       const providerSessionId = s.claudeSessionId || s.claudeResumeId || null;
       result.push({ identity: s, path: 'terminal', spec: { owner: 'gui', agent: s.agent, kind: project.kind,
@@ -46,7 +46,7 @@ function createSwitchHost(deps) {
       if (source[key] !== undefined) target[key] = source[key];
     }
     target.completionWork.changed = () => {
-      if (sessions.get(target.terminalId) === target && target.codexActive && target.activitySnapshot) applyActivity(findProject(target.terminalId), target, target.activitySnapshot);
+      if (sessions.get(target.terminalId) === target && target.cliActive && target.activitySnapshot) applyActivity(findProject(target.terminalId), target, target.activitySnapshot);
     };
     target.promptQueue.changed = expired => {
       if (sessions.get(target.terminalId) !== target) return;
@@ -112,7 +112,7 @@ function createSwitchHost(deps) {
     const { sessions, store, broadcast } = deps;
     const host = sessions.get(session.spec.terminalId);
     if (host !== session.identity) return;
-    host.status = 'exited'; host.codexActive = false; host.nativePathReason = reason;
+    host.status = 'exited'; host.cliActive = false; host.nativePathReason = reason;
     store.setRestore(session.spec.terminalId, { codex: false }); broadcast();
   }
   function activateNative(spec, _handoff, transition = {}) {

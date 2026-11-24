@@ -171,7 +171,7 @@ try {
   await grid();
   // Product Codex launch uses the native protocol; terminal interactions below use an explicitly typed command.
   await panel.getByRole('button', { name: /^Codex/ }).click();
-  await waitFor(async () => (await projectState()).terminals.some(item => item.nativeMode === 'codex-app-server' && item.codexActive), 'launcher starts Codex through app-server');
+  await waitFor(async () => (await projectState()).terminals.some(item => item.nativeMode === 'codex-app-server' && item.cliActive), 'launcher starts Codex through app-server');
   const nativeTerminal = (await projectState()).terminals.find(item => item.nativeMode === 'codex-app-server');
   await waitFor(async () => (await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), nativeTerminal.id)).value?.state === 'idle', 'native Codex is ready');
   const nativeSnapshot = await page.evaluate(id => window.agentrix.nativeSession.snapshot(id), nativeTerminal.id);
@@ -180,8 +180,8 @@ try {
   await page.evaluate(id => window.agentrix.closeTerminal(id), nativeTerminal.id);
   await waitFor(async () => (await projectState()).terminals.length === 1, 'native test terminal closed without restarting the shell');
   await panel.getByRole('button', { name: /^Claude/ }).click();
-  await waitFor(async () => (await projectState()).terminals.some(terminal => terminal.codexActive), 'launcher starts the fixture agent in a new dedicated terminal');
-  const agentId = (await projectState()).terminals.find(terminal => terminal.codexActive).id;
+  await waitFor(async () => (await projectState()).terminals.some(terminal => terminal.cliActive), 'launcher starts the fixture agent in a new dedicated terminal');
+  const agentId = (await projectState()).terminals.find(terminal => terminal.cliActive).id;
   const agent = panel.locator(`[data-terminal-id="${agentId}"]`);
   assert.equal((await projectState()).terminals[0].sessionId, shellSession, 'starting an agent never restarts the existing shell');
   assert.equal(await panel.locator('.terminal-split:visible').count(), 1);
@@ -218,7 +218,7 @@ try {
   assert.ok((await page.evaluate(id => window.agentrix.attachTerminal(id), project.id)).value.data.includes('GRID_HIDDEN_SHELL_BUFFER'));
   await waitFor(async () => (await shell.locator('.xterm-rows').innerText()).includes('GRID_HIDDEN_SHELL_BUFFER'), 'the original shell buffer renders after refit');
   await write(agentId, '\x03');
-  await waitFor(async () => (await projectState()).terminals.every(terminal => !terminal.codexActive && terminal.shellReady), 'agent exits back to its shell');
+  await waitFor(async () => (await projectState()).terminals.every(terminal => !terminal.cliActive && terminal.shellReady), 'agent exits back to its shell');
   await grid();
   assert.equal(await panel.locator('.terminal-split:visible').count(), 0, 'an agent exit hides its shell');
   await panel.getByRole('button', { name: '2 个终端运行中 · 点击展开', exact: true }).waitFor();
@@ -226,12 +226,12 @@ try {
   // An agent typed at the prompt of a hidden shell shows that terminal again. Claude Code is the agent that runs in a
   // terminal; a typed codex opens in native mode instead (session-smoke and cmd-smoke type one).
   await agent.locator('.xterm-helper-textarea').focus(); await page.keyboard.type('claude'); await page.keyboard.press('Enter');
-  await waitFor(async () => { const terminal = (await projectState()).terminals.find(terminal => terminal.id === agentId); return terminal.codexActive && terminal.agent === 'claude' && !terminal.nativeMode; }, 'typing claude uses the existing wrapper detection');
+  await waitFor(async () => { const terminal = (await projectState()).terminals.find(terminal => terminal.id === agentId); return terminal.cliActive && terminal.agent === 'claude' && !terminal.nativeMode; }, 'typing claude uses the existing wrapper detection');
   await grid();
   assert.equal(await panel.locator('.terminal-split:visible').count(), 1);
   assert.equal(await agent.isVisible(), true);
   await expand(); await write(agentId, '\x03');
-  await waitFor(async () => (await projectState()).terminals.every(terminal => !terminal.codexActive && terminal.shellReady), 'typed fixture exits');
+  await waitFor(async () => (await projectState()).terminals.every(terminal => !terminal.cliActive && terminal.shellReady), 'typed fixture exits');
   await agent.hover();
   await agent.getByRole('button', { name: `关闭 ${project.name} ${(await projectState()).terminals.find(terminal => terminal.id === agentId).title}`, exact: true }).click();
   await waitFor(async () => (await projectState()).terminals.length === 1, 'only the original shell remains');

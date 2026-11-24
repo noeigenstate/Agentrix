@@ -70,8 +70,8 @@ test('terminals started from an AppImage leave out its folders and variables', (
 test('a Bash report becomes the event zsh sends', () => {
   assert.deepEqual(shellEvent(['shell-prompt', '7', '0', 'codex', 'true', 'false', '/h/.codex', '/p/中文 项目'], 'p', 'k'),
     { projectId: 'p', sessionKey: 'k', type: 'shell-prompt', sequence: 7, exitCode: 0, agent: 'codex', codexAvailable: true, claudeAvailable: false, codexHome: '/h/.codex', cwd: '/p/中文 项目' });
-  assert.equal(shellEvent(['codex-exited', '8', '130', 'claude', 'false', 'true', '', '/'], 'p', 'k').exitCode, 130);
-  assert.equal(shellEvent(['codex-exited', '8', 'x', 'other', 'yes', 'no', '', '/'], 'p', 'k').agent, 'codex');
+  assert.equal(shellEvent(['agent-exited', '8', '130', 'claude', 'false', 'true', '', '/'], 'p', 'k').exitCode, 130);
+  assert.equal(shellEvent(['agent-exited', '8', 'x', 'other', 'yes', 'no', '', '/'], 'p', 'k').agent, 'codex');
   assert.equal(shellEvent(['turn-complete', '1'], 'p', 'k'), null, 'only shell reports');
   assert.equal(shellEvent(['shell-prompt', '-1'], 'p', 'k'), null);
 });
@@ -179,7 +179,7 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
 
   // Manual Codex returns to the shell and requests the native host instead of running a TUI.
   type('codex resume --last');
-  const started = await waitEvent(event => event.type === 'codex-started', 'native Codex request');
+  const started = await waitEvent(event => event.type === 'agent-started', 'native Codex request');
   assert.equal(started.agent, 'codex');
   assert.deepEqual(started.args, [...(loginFiles ? ['--model', 'login-model'] : []), 'resume', '--last']);
   await waitEvent(event => event.type === 'shell-prompt' && event.sequence > started.sequence, 'the prompt after the native request');
@@ -187,7 +187,7 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
   // A management command is the CLI itself in this terminal, with its arguments and exit status and no request to the
   // host. An alias that adds options is not one: its first word is the option.
   type('codex mcp add "中文 name" -- tool; echo "status=$?" > "$PG_TEST_LOG/codex-status"');
-  const requests = () => events.filter(event => event.type === 'codex-started' && event.agent === 'codex').map(event => event.args);
+  const requests = () => events.filter(event => event.type === 'agent-started' && event.agent === 'codex').map(event => event.args);
   if (loginFiles) {
     await waitEvent(() => requests().length === 2, 'the aliased management words as a native request');
     assert.deepEqual(requests()[1], ['--model', 'login-model', 'mcp', 'add', '中文 name', '--', 'tool']);
@@ -198,14 +198,14 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(log, 'codex.json'), 'utf8')), ['mcp', 'add', '中文 name', '--', 'tool']);
     assert.equal(requests().length, 1, 'a management command asks for no native session');
   }
-  assert.equal(events.some(event => event.type === 'codex-exited'), false);
+  assert.equal(events.some(event => event.type === 'agent-exited'), false);
 
   // claude: the user's alias still applies, and the hooks it is given report each turn.
   type('claude -p "中文 prompt"');
-  const claudeExited = await waitEvent(event => event.type === 'codex-exited' && event.agent === 'claude', 'claude to exit');
+  const claudeExited = await waitEvent(event => event.type === 'agent-exited' && event.agent === 'claude', 'claude to exit');
   await waitEvent(event => event.type === 'shell-prompt' && event.sequence > claudeExited.sequence, 'the prompt after Claude exits');
   assert.equal(claudeExited.exitCode, 0);
-  assert.ok(events.some(event => event.type === 'codex-started' && event.agent === 'claude' && event.command === '-p'));
+  assert.ok(events.some(event => event.type === 'agent-started' && event.agent === 'claude' && event.command === '-p'));
   const claudeArgs = JSON.parse(fs.readFileSync(path.join(log, 'claude.json'), 'utf8'));
   assert.deepEqual([claudeArgs.slice(0, 2), claudeArgs.slice(4)], [['--model', 'opus'], [...(readingNote ? ['--append-system-prompt', readingNote] : []), '-p', '中文 prompt']]);
   assert.equal(claudeArgs[2], '--settings');
@@ -222,7 +222,7 @@ process.exitCode = Number(process.env.PG_TEST_EXIT || 0);
 
   // Without a note file the wrapper uses a named file in TMPDIR, and also cleans up after a failed CLI.
   type('__pg_note_file=; PG_TEST_EXIT=7 claude --version');
-  const failed = await waitEvent(event => event.type === 'codex-exited' && event.agent === 'claude' && event.sequence > claudeExited.sequence, 'claude to exit without a note file');
+  const failed = await waitEvent(event => event.type === 'agent-exited' && event.agent === 'claude' && event.sequence > claudeExited.sequence, 'claude to exit without a note file');
   assert.equal(failed.exitCode, 7);
   const fallbackArgs = JSON.parse(fs.readFileSync(path.join(log, 'claude.json'), 'utf8'));
   assert.equal(path.dirname(fallbackArgs[3]), sessionFolder);

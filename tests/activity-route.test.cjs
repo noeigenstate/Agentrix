@@ -67,7 +67,7 @@ function mainMarkup(calls, language = 'zh', terminal = {}) {
   const { MainModel, useMainTurn } = loadAgentsFile('MainModel.tsx', language);
   const Main = ({ terminal }) => React.createElement(MainModel, { turn: useMainTurn(terminal) });
   return renderToStaticMarkup(React.createElement(Main, { terminal: {
-    id: 'placeholder', agent: 'claude', codexActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false },
+    id: 'placeholder', agent: 'claude', cliActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false },
     agentUsage: { provider: 'Anthropic', limits: [], calls },
     ...terminal,
   } }));
@@ -75,7 +75,7 @@ function mainMarkup(calls, language = 'zh', terminal = {}) {
 
 function rightMarkup(terminal = {}, language = 'zh') {
   const { ActivityPane } = loadAgentsFile('ActivityPane.tsx', language);
-  return renderToStaticMarkup(React.createElement(ActivityPane, { terminal: { id: 'placeholder', codexActive: true, ...terminal } }));
+  return renderToStaticMarkup(React.createElement(ActivityPane, { terminal: { id: 'placeholder', cliActive: true, ...terminal } }));
 }
 
 function routingWorkMarkup(terminal, { terminals = [terminal], conductor = true, language = 'en' } = {}) {
@@ -90,7 +90,7 @@ function routingWorkMarkup(terminal, { terminals = [terminal], conductor = true,
 const hammerSeats = markup => [...markup.matchAll(/data-seat="([^"]+)"[^>]*>(?:(?!data-seat=).)*?data-icon="Hammer"/g)].map(match => match[1]);
 
 test('routing shows one hammer per seat with an unfinished role across the project and removes it after the last one ends', () => {
-  const terminal = { id: 'selected', codexActive: true };
+  const terminal = { id: 'selected', cliActive: true };
   const running = { seat: 'developer', state: 'running', endedAt: null };
   const starting = { ...running, state: 'starting' };
   const done = { ...running, state: 'done', endedAt: 42 };
@@ -104,7 +104,7 @@ test('routing shows one hammer per seat with an unfinished role across the proje
 });
 
 test('routing shows the lead hammer only while the selected main conversation works', () => {
-  const terminal = { id: 'selected', sessionId: 'pty', codexActive: true, mainTurn: { state: 'working' } };
+  const terminal = { id: 'selected', sessionId: 'pty', cliActive: true, mainTurn: { state: 'working' } };
   const working = routingWorkMarkup(terminal, { language: 'zh' });
   assert.deepEqual(hammerSeats(working), ['orchestrator']);
   assert.match(working, /data-icon="Hammer" role="img" aria-label="正在工作" focusable="false"/);
@@ -115,7 +115,7 @@ test('routing shows the lead hammer only while the selected main conversation wo
 });
 
 test('native routing shows no hammer even when the lead and a role are working', () => {
-  const terminal = { id: 'selected', codexActive: true, mainTurn: { state: 'working' },
+  const terminal = { id: 'selected', cliActive: true, mainTurn: { state: 'working' },
     agentUsage: { calls: [{ items: [{ seat: 'developer', state: 'preparing', endedAt: null }] }] } };
   assert.deepEqual(hammerSeats(routingWorkMarkup(terminal)), ['orchestrator', 'developer']);
   assert.deepEqual(hammerSeats(routingWorkMarkup(terminal, { conductor: false })), []);
@@ -196,7 +196,7 @@ function usageMarkup(language = 'zh', terminal = {}, options = {}) {
   const state = agent => ({ path: null, reason: null, next: { path: null, reason: null }, limits: options.limits?.[agent] ?? null, connection: connection(options[agent] ?? 'subscription') });
   const usage = { month: '2030-05', apiRecords: true, todayUsdMicros: 100000, monthUsdMicros: 6400000, estimated: true, budgetUsd: null, agents: { claude: state('claude'), codex: state('codex') }, ...options.usage };
   return renderToStaticMarkup(React.createElement(AgentSections, { usage, terminal: {
-    id: 'placeholder', agent: 'claude', codexActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false }, agentUsage: { provider: 'Anthropic', limits: [] }, ...terminal } }));
+    id: 'placeholder', agent: 'claude', cliActive: true, prompts: [], agentSettings: { model: 'claude-opus-5-5', effort: 'xhigh', fast: false }, agentUsage: { provider: 'Anthropic', limits: [] }, ...terminal } }));
 }
 const agentSection = (html, name) => new RegExp('<section class="api-agent" aria-label="' + name + '">[\\s\\S]*?</section>').exec(html)[0];
 // The main block and the called models together, for the heads they share.
@@ -204,7 +204,7 @@ const bothMarkup = (calls, language, terminal) => mainMarkup(calls, language, te
 
 test('with routing off the lead panel is the main model and names no routing model; in conductor mode a saved model that differs says when it applies', () => {
   const { MainModel, useMainTurn } = loadAgentsFile('MainModel.tsx');
-  const terminal = { id: 'lead', agent: 'claude', codexActive: true, prompts: [], agentUsage: { model: 'claude-fable-5-2', limits: [], calls: [] } };
+  const terminal = { id: 'lead', agent: 'claude', cliActive: true, prompts: [], agentUsage: { model: 'claude-fable-5-2', limits: [], calls: [] } };
   const markup = seats => renderToStaticMarkup(React.createElement(({ terminal }) => React.createElement(MainModel, { turn: useMainTurn(terminal), seats }), { terminal }));
   const leads = model => ({ claude: { model, effort: 'medium' }, codex: null });
   const off = markup({ conductor: false, leads: leads('opus') });
@@ -220,7 +220,7 @@ test('with routing off the lead panel is the main model and names no routing mod
 test('the lead panel replaces pending with the failure of the current seat and conversation', t => {
   const { MainModel, useMainTurn } = loadAgentsFile('MainModel.tsx');
   const { leadRoutingScope, setLeadRoutingFailure } = require('../src/shared/lead-routing-notices.ts');
-  const terminal = { id: 'lead-failure', sessionId: 'pty', agent: 'claude', codexActive: true, agentUsage: { model: 'claude-fable-5-2' } };
+  const terminal = { id: 'lead-failure', sessionId: 'pty', agent: 'claude', cliActive: true, agentUsage: { model: 'claude-fable-5-2' } };
   const scope = leadRoutingScope(terminal);
   const render = (model, sessionId = terminal.sessionId) => renderToStaticMarkup(React.createElement(() => React.createElement(MainModel, {
     turn: useMainTurn({ ...terminal, sessionId }), seats: { conductor: true, leads: { claude: { model, effort: 'medium' } } },
@@ -239,8 +239,8 @@ test('the Agent tab leads with the selected terminal’s Orchestrator above call
   const { AgentSidebar } = loadAgentsFile('AgentSidebar.tsx');
   const call = { agent: 'Claude Code', model: 'claude-sonnet-5-5', items: [{ id: 'one', state: 'running', role: '执行', title: 'First terminal’s worker' }] };
   const terminals = [
-    { id: 'first', codexActive: true, agent: 'claude', agentUsage: { model: 'claude-opus-5-5', calls: [call] } },
-    { id: 'selected', codexActive: true, agent: 'codex', agentUsage: { model: 'gpt-6.1-sol', calls: [] } },
+    { id: 'first', cliActive: true, agent: 'claude', agentUsage: { model: 'claude-opus-5-5', calls: [call] } },
+    { id: 'selected', cliActive: true, agent: 'codex', agentUsage: { model: 'gpt-6.1-sol', calls: [] } },
   ];
   const html = renderToStaticMarkup(React.createElement(AgentSidebar, { project: { id: 'p1', terminals } }, ({ panel }) => panel));
   assert.match(html, /aria-label="主模型"[^>]*><h4>总指挥<\/h4>[\s\S]*?GPT-6\.1-Sol[\s\S]*?First terminal’s worker/);
@@ -249,7 +249,7 @@ test('the Agent tab leads with the selected terminal’s Orchestrator above call
 
 test('a terminal screen frame updates the mounted Orchestrator without rendering a sidebar sibling', t => {
   const directory = 'src/features/agents/';
-  const terminal = { id: 'selected', agent: 'claude', codexActive: true, sessionId: 'pty', codexActivity: 'working' };
+  const terminal = { id: 'selected', agent: 'claude', cliActive: true, sessionId: 'pty', codexActivity: 'working' };
   const listeners = new Set();
   const screenFor = rerender => ({
     ...require('../src/features/terminal/terminal-screen.ts'),
@@ -633,7 +633,7 @@ test('the lead shows the current prompt while Codex usage lists context, limit b
 });
 
 test('the inactive pane shows its usage and routing hint; only the sidebar lists can scroll', () => {
-  const html = rightMarkup({ codexActive: false }, 'en');
+  const html = rightMarkup({ cliActive: false }, 'en');
   assert.ok(html.includes('class="activity-empty"') && html.includes('model route, context length and usage'));
   assert.doesNotMatch(html, /activity-main|activity-calls|activity-tasks|No task yet/);
   const css = fs.readFileSync(path.join(__dirname, '../src/features/agents/activity-pane.css'), 'utf8');
@@ -965,12 +965,12 @@ test('the session’s own windows win when the screen read them after main did; 
 });
 
 test('the main card tells a round that ended unknown quietly: no check, not complete, not interrupted; a complete one keeps its check', () => {
-  const turn = state => ({ codexActive: true, mainTurn: { state, updatedAt: Date.now(), background: null } });
+  const turn = state => ({ cliActive: true, mainTurn: { state, updatedAt: Date.now(), background: null } });
   const main = html => /<section class="activity-card activity-main agent-team-group"[\s\S]*?<\/section>/.exec(html)[0];
   const unknown = main(mainMarkup([], 'zh', turn('unknown'))), complete = main(mainMarkup([], 'zh', turn('complete')));
   assert.match(unknown, /本轮已结束，完成状态未知。/); assert.doesNotMatch(unknown, /本轮已完成|已中断|is-done|data-icon="CheckCircle"/);
   assert.match(complete, /本轮已完成/); assert.doesNotMatch(complete, /完成状态未知/);
-  assert.doesNotMatch(main(mainMarkup([], 'zh', { codexActive: true })), /完成状态未知/, 'a session that has not ended a round says nothing of one');
+  assert.doesNotMatch(main(mainMarkup([], 'zh', { cliActive: true })), /完成状态未知/, 'a session that has not ended a round says nothing of one');
 });
 
 test('a ready Claude terminal before its first turn is idle despite unknown completion history', () => {
@@ -987,7 +987,7 @@ test('a ready Claude terminal before its first turn is idle despite unknown comp
 
 test('the main card says 失败 for a round that failed (a /compact that compacted nothing), as the conversation’s card does, and 已中断 for a real interruption or another session', () => {
   const main = html => /<section class="activity-card activity-main agent-team-group"[\s\S]*?<\/section>/.exec(html)[0];
-  const ended = { codexActive: true, id: 't-ended', nativeRuntimeSessionId: 'rs1', mainTurn: { state: 'interrupted', updatedAt: Date.now(), background: null } };
+  const ended = { cliActive: true, id: 't-ended', nativeRuntimeSessionId: 'rs1', mainTurn: { state: 'interrupted', updatedAt: Date.now(), background: null } };
   const turn = (status, runtimeSessionId = 'rs1') => { nativeTurns.clear(); nativeTurns.set('t-ended', { model: { identity: { runtimeSessionId }, turn: { status } } }); };
   try {
     turn('failed');

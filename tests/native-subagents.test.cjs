@@ -39,7 +39,7 @@ function workspace(t) {
 
 function nativeHost(f, calls) {
   const project = { id: 'project', kind: 'local', path: f.cwd }, sessions = new Map(), nativeSpecs = new Map();
-  const s = { terminalId: 'terminal', agent: 'claude', nativeStructured: true, codexActive: true,
+  const s = { terminalId: 'terminal', agent: 'claude', nativeStructured: true, cliActive: true,
     status: 'codex', nativeRuntimeSessionId: 'native-run', claudeSessionId: f.parentId };
   let scheduled = 0;
   const context = vm.createContext({ path, randomUUID, sessions, nativeSpecs, quitting: false,
@@ -395,7 +395,7 @@ test('main binds the native rate folder before reporting a row and ignores stale
   host.spec.onSubagent(signal, { ...binding, runtimeSessionId: 'old-run' });
   host.spec.onSubagent(signal, { ...binding, providerSessionId: 'old-session' });
   host.spec.onSubagent({ ...signal, terminalId: 'other-terminal' }, binding);
-  host.s.codexActive = false; host.spec.onSubagent(signal, binding); host.s.codexActive = true;
+  host.s.cliActive = false; host.spec.onSubagent(signal, binding); host.s.cliActive = true;
   host.context.quitting = true; host.spec.onSubagent(signal, binding); host.context.quitting = false;
   host.nativeSpecs.set('terminal', { ...host.spec }); host.spec.onSubagent(signal, binding);
   assert.equal(received.length, 2); assert.equal(host.scheduled(), 1);
@@ -417,7 +417,7 @@ test('native retirement clears its child rows and keeps dispatched workers', t =
   vm.runInContext(source.slice(source.indexOf('function structuredEvent('), source.indexOf('async function initializeNativeSessions(')), host.context);
   host.context.structuredEvent('terminal', { type: 'session.state', runtimeSessionId: 'native-run', providerSessionId: f.parentId, payload: { state: 'stopped' } });
   assert.deepEqual([...calls.calls.keys()], ['dispatched-worker']);
-  assert.equal(calls.folder, null); assert.equal(host.s.codexActive, false);
+  assert.equal(calls.folder, null); assert.equal(host.s.cliActive, false);
 });
 
 test('native transcript folder discovery keeps SDK aliases before the parent file exists and rejects escapes', async t => {

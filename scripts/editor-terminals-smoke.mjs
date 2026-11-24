@@ -203,7 +203,7 @@ try {
   for (const id of ids) await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex\r'), id);
   assert.equal(await page.getByRole('button', { name: '启动 Codex', exact: true }).count(), 0, 'no launch button: agents start from the prompt');
   // Codex has no terminal run: each typed codex gives its split to a native session of its own (the app-server stand-in).
-  await waitFor(async () => (await state()).terminals.every(item => item.codexActive && item.nativeMode === 'codex-app-server'), 'each typed codex opens in native mode');
+  await waitFor(async () => (await state()).terminals.every(item => item.cliActive && item.nativeMode === 'codex-app-server'), 'each typed codex opens in native mode');
   await waitFor(async () => { const saved = await readSaved(); return !!saved.restore.threadId && !!saved.terminals[0].restore.threadId; }, 'distinct native conversations');
   const saved = await readSaved(), threads = [saved.restore.threadId, saved.terminals[0].restore.threadId];
   assert.notEqual(threads[0], threads[1]);
@@ -219,7 +219,7 @@ try {
   assert.equal((await state()).codexActivity, 'working');
   await restoreClipboard(); await application.close(); application = null;
   await launch();
-  await waitFor(async () => (await state()).terminals.length === 2 && (await state()).terminals.every(item => item.codexActive), 'both terminals restored');
+  await waitFor(async () => (await state()).terminals.length === 2 && (await state()).terminals.every(item => item.cliActive), 'both terminals restored');
   for (const thread of threads) {
     await waitFor(async () => { const receipt = JSON.parse(await fs.readFile(path.join(codexHome, 'sessions', `${thread}-receipt.json`), 'utf8')); return receipt.protocol === 'app-server' && receipt.threadId === thread; }, 'exact conversation resumed');
   }
@@ -229,7 +229,7 @@ try {
   await page.getByRole('button', { name: `关闭 ${project.name} 终端 1`, exact: true }).click();
   await waitFor(async () => (await state()).terminals.length === 1, 'close one split');
   assert.equal((await state()).terminals[0].sessionId, secondSession);
-  assert.equal((await state()).terminals[0].codexActive, true);
+  assert.equal((await state()).terminals[0].cliActive, true);
   console.log('PASS: independent terminals, automatic splits, exact Codex recovery and closing one without restarting its neighbor');
   const remoteId = (await page.evaluate(() => window.agentrix.addSSHProject({ host: 'fixture', path: '/srv/fixture', name: 'SSH 分屏验证' }))).value;
   const remoteState = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(item => item.id === remoteId);

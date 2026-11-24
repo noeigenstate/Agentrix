@@ -156,7 +156,7 @@ $bare = claude hello
   assert.equal(result.plain, hooks.settings.http);
   assert.equal(result.proxied, hooks.settings.fallback);
   assert.equal(result.bare, 'none:hello', 'an empty settings value is no --settings and no empty file');
-  assert.deepEqual(result.sent, ['codex-started|', 'codex-exited|', 'hook-channel|HTTP_PROXY', 'codex-started|', 'codex-exited|', 'hook-channel|HTTP_PROXY', 'codex-started|', 'codex-exited|']);
+  assert.deepEqual(result.sent, ['agent-started|', 'agent-exited|', 'hook-channel|HTTP_PROXY', 'agent-started|', 'agent-exited|', 'hook-channel|HTTP_PROXY', 'agent-started|', 'agent-exited|']);
   assert.deepEqual(fs.readdirSync(directory), [], 'each launch removes its settings file');
 });
 
@@ -216,7 +216,7 @@ test("Agentrix adds no NO_PROXY entry anywhere but system-proxy.cjs's adoption, 
 
 test('the channel field follows each launch, so a launch after a downgrade without a proxy reads http', () => {
   const s = { hooks: { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' } };
-  // Launch 1: the wrapper found a proxy and reported it (shell event 1) before codex-started (2).
+  // Launch 1: the wrapper found a proxy and reported it (shell event 1) before agent-started (2).
   reportHookChannel(s, 'HTTP_PROXY', 1); startHookLaunch(s, 2);
   assert.equal(s.hooks.channel, 'command-async'); assert.equal(s.hooks.channelReason.params.variable, 'HTTP_PROXY');
   // Launch 2: no proxy, so no report; the server still accepts HTTP and the field says so.
@@ -233,7 +233,7 @@ test('the channel field follows each launch, so a launch after a downgrade witho
 
 test('a report and its launch pair by sequence, since they land on separate pipe connections in either order', () => {
   const s = { hooks: { channel: 'http', fallback: 'command-async', channelReason: null, key: 'k' } };
-  // Launch 1: codex-started (2) lands before the report (1) that precedes it; the report still downgrades it.
+  // Launch 1: agent-started (2) lands before the report (1) that precedes it; the report still downgrades it.
   startHookLaunch(s, 2); reportHookChannel(s, 'HTTP_PROXY', 1);
   assert.equal(s.hooks.channel, 'command-async');
   // Launch 2 follows no report, so the late report does not carry into it.

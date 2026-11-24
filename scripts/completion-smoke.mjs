@@ -183,7 +183,7 @@ async function launch() {
   bootstrap = await terminalBootstrap(dataDir, (await state()).terminals[0].id);
   // The agent is started by typing it at the prompt, as a user does: the wrapper runs the stand-in with Claude Code's hooks.
   await input('claude\r');
-  await waitFor(async () => (await state()).codexActive && (await state()).agent === 'claude', 'offline Claude Code fixture');
+  await waitFor(async () => (await state()).cliActive && (await state()).agent === 'claude', 'offline Claude Code fixture');
   await hook('session', { source: 'startup' });
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('.focus-mode') && !document.querySelector('[data-focus-motion]'));

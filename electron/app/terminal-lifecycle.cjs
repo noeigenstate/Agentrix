@@ -48,7 +48,7 @@ function restoreTerminals({ store, restorePlans, startupErrors, startTerminal, b
 
 function launchAfterPrompt(project, session, { launchPlans, t, broadcast, followClaudeSession }) {
   const plan = launchPlans.get(session.terminalId);
-  if (!plan || !session.ready || session.inputDirty || session.codexActive) return;
+  if (!plan || !session.ready || session.inputDirty || session.cliActive) return;
   launchPlans.delete(session.terminalId);
   if (!session.claudeAvailable) {
     session.error = project.kind === 'ssh' ? t('远端主机上没有找到 Claude Code。请在该主机上安装，并确保它在 PATH 中。')

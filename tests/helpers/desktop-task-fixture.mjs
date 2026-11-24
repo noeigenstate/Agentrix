@@ -41,19 +41,19 @@ export async function runDesktopTask(page, project, claudeHome, turn, waitFor) {
   await fs.mkdir(folder, { recursive: true });
   await fs.writeFile(transcript, row({ type: 'user', uuid: randomUUID(), message: { role: 'user', content: prompt } }));
   await fs.writeFile(file('.ps1'), '﻿' + [
-    "Send-AgentrixEvent 'codex-started' -Agent 'claude'",
+    "Send-AgentrixEvent 'agent-started' -Agent 'claude'",
     // A fresh round includes received input; lifecycle callbacks alone must never arm completion.
     claudeHook('start', { ...hook, prompt }),
     until('.replied'), claudeHook('stop', hook),
     until('.idle'), claudeHook('stop', hook), claudeHook('notify', { ...hook, notification_type: 'idle_prompt', message: 'Claude is waiting for your input' }),
     `Set-Content -LiteralPath ${quote(file('.quiet'))} -Value 'sent'`,
-    until('.done'), "Send-AgentrixEvent 'codex-exited' -Agent 'claude'",
+    until('.done'), "Send-AgentrixEvent 'agent-exited' -Agent 'claude'",
   ].join('\r\n') + '\r\n');
   const state = async () => (await page.evaluate(() => window.agentrix.getState())).value.projects.find(item => item.id === project.id);
   const previous = (await state()).lastCompletedAt;
   await page.evaluate(({ id, command }) => window.agentrix.writeTerminal(id, command), { id: project.id, command: `& ${quote(file('.ps1'))}\r` });
   try {
-    await waitFor(async () => { const now = await state(); return now.codexActive && now.agent === 'claude' && now.codexActivity === 'working'; }, 'offline task starts with its prompt');
+    await waitFor(async () => { const now = await state(); return now.cliActive && now.agent === 'claude' && now.codexActivity === 'working'; }, 'offline task starts with its prompt');
     await fs.appendFile(transcript, row({ type: 'assistant', uuid: randomUUID(), message: { role: 'assistant', content: [{ type: 'text', text: `Finished ${turn}.` }], stop_reason: 'end_turn' } }));
     await fs.writeFile(file('.replied'), '');
     await waitFor(async () => (await state()).lastCompletedAt !== previous, 'interactive parent task completion');

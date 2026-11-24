@@ -180,8 +180,8 @@ test('public state reserves the reading surface during agent startup and release
   const terminal = () => context.publicState().projects[0].terminals[0];
   assert.equal(terminal().agentStarting, true);
   session.status = 'shell'; assert.equal(terminal().agentStarting, true, 'the first shell prompt still belongs to the pending agent launch');
-  session.codexActive = true; assert.equal(terminal().agentStarting, false);
-  session.codexActive = false; session.error = 'agent not installed'; assert.equal(terminal().agentStarting, false, 'errors expose the terminal for diagnosis');
+  session.cliActive = true; assert.equal(terminal().agentStarting, false);
+  session.cliActive = false; session.error = 'agent not installed'; assert.equal(terminal().agentStarting, false, 'errors expose the terminal for diagnosis');
   session.error = null; session.status = 'exited'; assert.equal(terminal().agentStarting, false);
   session.status = 'shell'; session.agentStarting = false; assert.equal(terminal().agentStarting, false, 'a plain shell stays visible');
 });
@@ -189,6 +189,7 @@ test('public state reserves the reading surface during agent startup and release
 test('agent:launch refuses the removed native mode without starting or replacing a session, and sends Codex to app-server', async () => {
   const main = fs.readFileSync(path.join(__dirname, '../electron/main.cjs'), 'utf8'), handlers = {}, starts = [], deleted = [];
   const context = vm.createContext({ handle: (name, run) => handlers[name] = run, findProject: () => ({ kind: 'local' }), sessions: new Map(),
+    adapterOf: require('../electron/features/cli-adapters/registry.cjs').adapterOf,
     launchPlans: { delete: id => deleted.push(id) }, restorePlans: { delete: id => deleted.push(id) }, startTerminal: () => assert.fail('no Codex TUI'),
     store: { findTerminal: () => ({ record: {} }) }, nativeSessions: { start: async (...args) => starts.push(args) }, broadcast() {} });
   const start = main.indexOf("  handle('agent:launch'");

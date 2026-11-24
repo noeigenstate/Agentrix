@@ -21,14 +21,14 @@ function createHostInputs(deps) {
       else result[agent] = nativePolicy.nativeConnection(host, claudeRuntime);
     }
     for (const agent of observed.keys()) result[agent] = { ...result[agent], active: true };
-    for (const [agent, host] of observed) if (sessions.get(host.terminalId) !== host || !host.codexActive || host.status === 'exited') result[agent] = { kind: 'none', active: false, source: null, observedAt: null };
+    for (const [agent, host] of observed) if (sessions.get(host.terminalId) !== host || !host.cliActive || host.status === 'exited') result[agent] = { kind: 'none', active: false, source: null, observedAt: null };
     return result;
   }
 
   // The agent's running session in a project (any project without one), the latest started.
   function liveHost(projectId, agent) {
     const { sessions } = deps;
-    return [...sessions.values()].reverse().find(s => (!projectId || s.projectId === projectId) && s.agent === agent && s.codexActive === true && s.status !== 'exited');
+    return [...sessions.values()].reverse().find(s => (!projectId || s.projectId === projectId) && s.agent === agent && s.cliActive === true && s.status !== 'exited');
   }
 
   function readNativeSubscriptionLimits(projectId) {
@@ -89,7 +89,7 @@ function createHostInputs(deps) {
     if (project.kind === 'ssh' && !supportsNative(agent, project.kind)) throw new Error('SSH 原生会话目前仅支持 Codex。');
     if (validateOnly) return;
     if (old?.nativeStructured && old.status !== 'exited') return old.nativeSpec;
-    if (old?.codexActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
+    if (old?.cliActive && old.status !== 'exited') throw new Error('请先停止当前会话。');
     if (old) deps.disposeTerminal(id, { preserveNative: !!old.nativeStructured, preserveCalls: true });
     const { nativePolicy } = adapterOf(agent);
     const saved = store.findTerminal(id).record.restore;
@@ -123,7 +123,7 @@ function createHostInputs(deps) {
       roleServer: roleServer(env, agent) };
     env.AGENTRIX_SEATS = nativePolicy.envSeats?.(dispatchSnapshot) ?? JSON.stringify(spec.seatsMap ?? null);
     nativePolicy.observeSubagents?.(spec, (session, signal, binding) => deps.nativeSubagent(session, signal, binding));
-    const running = s => s.codexActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId);
+    const running = s => s.cliActive && [s.claudeSessionId, s.reportedThreadId, s.claudeResumeId].includes(spec.providerSessionId);
     if (spec.providerSessionId && [...sessions.values()].some(running)) throw new Error('该会话正在其他终端运行。');
     nativeSpecs.set(id, spec); return spec;
   }

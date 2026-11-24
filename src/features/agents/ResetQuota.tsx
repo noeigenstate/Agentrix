@@ -74,7 +74,7 @@ export function ResetQuota({ terminal }: { terminal: ProjectTerminal }) {
   const title = counting ? t('倒计时进行中，可点击「取消」、按 Esc 或点击空白处取消') : left === 0 ? t('没有剩余重置次数，此行不可点击')
     : [left === null && unknown.full, t('点击后开始 10 秒倒计时，期间可取消；结束后打开 {agent} 的 /usage，由你选择并确认重置', { agent: 'Codex' })].filter(Boolean).join('\n');
   return <div className="activity-reset">
-    <button ref={row} type="button" className="activity-reset-row activity-estop" disabled={counting || left === 0 || !terminal.codexActive} title={title} onClick={start}>
+    <button ref={row} type="button" className="activity-reset-row activity-estop" disabled={counting || left === 0 || !terminal.cliActive} title={title} onClick={start}>
       <span className="activity-row-icon"><ArrowCounterClockwise size={14} aria-hidden="true" /></span>
       <span className="activity-reset-label">{t('重置额度')}</span>
       <small>{status}</small>

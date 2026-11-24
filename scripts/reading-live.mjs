@@ -48,7 +48,7 @@ for (const agent of agents) {
     await card.getByRole('button', { name: '只打开终端', exact: true }).click();
     for (let i = 0; i < 150 && !(await state()).shellReady; i++) await sleep(200);
     await page.evaluate(({ id, agent }) => window.agentrix.writeTerminal(id, agent + '\r'), { id: project.id, agent });
-    for (let i = 0; i < 150 && !(await state()).codexActive; i++) await sleep(300);
+    for (let i = 0; i < 150 && !(await state()).cliActive; i++) await sleep(300);
     await composer.waitFor({ state: 'visible' }); await sleep(4000);
 
     // Sends a prompt and waits for the round to end. While it runs, notes when the marker first shows in the terminal

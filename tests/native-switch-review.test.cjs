@@ -26,7 +26,7 @@ async function fixture(t, { native = false, ssh = false, apiOnly = false } = {})
     for (const s of context.sessions.values()) s.calls?.dispose();
     fs.rmSync(directory, { recursive: true, force: true });
   });
-  const host = { terminalId: 't', projectId: 'p', agent: 'claude', codexActive: true, sessionId: 'pty', status: 'codex',
+  const host = { terminalId: 't', projectId: 'p', agent: 'claude', cliActive: true, sessionId: 'pty', status: 'codex',
     nativeRuntimeSessionId: 'r', nativeStructured: native, nativeSpec: {}, cliState: { sessionId: 'pty', state: 'idle' },
     submissions: new SubmissionTracker(), promptQueue: new PromptQueue(), completionWork: new CompletionWork(), approval: { invalidate() {} } };
   const context = { createNativeUsage: require('../electron/features/native-session/agent-usage.cjs').createNativeUsage, sessions: new Map([['t', host]]), store: { findTerminal: () => ({ project, record: { restore: {} } }) },

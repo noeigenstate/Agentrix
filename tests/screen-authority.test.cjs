@@ -6,12 +6,12 @@ const { cliStateFor } = require('../src/features/agents/agent-screen-state.ts');
 
 // Deliver a hook after the input frame was drawn, through the real host publisher and renderer authority rule.
 function permission(sentAt, hookEvent = 'PermissionRequest') {
-  const s = { terminalId: 't', sessionId: 'pty', agent: 'claude', codexActive: true, activitySince: 1000,
+  const s = { terminalId: 't', sessionId: 'pty', agent: 'claude', cliActive: true, activitySince: 1000,
     claudeSessionId: 'provider', promptQueue: { list: () => [] } };
   const context = vm.createContext({ sessions: new Map([['t', s]]), broadcast() {}, Date: class extends Date { static now() { return 2100; } } });
   defineMain(context, 'publishCliState', 'claudeActivity');
   context.claudeActivity({ kind: 'local' }, s, { state: 'attention', sessionId: 'provider', eventId: 'provider:permission', sentAt, hookEvent, message: 'Approve' });
-  const terminal = { id: 't', sessionId: 'pty', agent: 'claude', codexActive: true, cliState: s.cliState, needsInput: s.needsInput.message };
+  const terminal = { id: 't', sessionId: 'pty', agent: 'claude', cliActive: true, cliState: s.cliState, needsInput: s.needsInput.message };
   const frame = { sessionId: 'pty', revision: 2, updatedAt: 2090, stateUpdatedAt: { claude: 2050 }, rows: ['────', '❯ ', '────'] };
   return { terminal, frame, state: () => cliStateFor('claude', frame, terminal) };
 }

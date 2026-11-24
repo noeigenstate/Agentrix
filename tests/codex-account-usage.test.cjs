@@ -490,7 +490,7 @@ test('main project-open handover shows loading or the cached answer immediately 
   t.after(() => service.dispose());
   const { startUsage, stopUsageAccount, noteSettings, sessions, store } = mainUsage(service, { CODEX_HOME: options.codexHome });
   const project = { id: 'project', path: options.cwd, kind: 'local' };
-  const s = { terminalId: 'test', codexActive: true, agent: 'codex', usageEnv: { CODEX_HOME: options.codexHome, AGENTRIX_BOOTSTRAP: 'different-copy' } };
+  const s = { terminalId: 'test', cliActive: true, agent: 'codex', usageEnv: { CODEX_HOME: options.codexHome, AGENTRIX_BOOTSTRAP: 'different-copy' } };
   sessions.set(s.terminalId, s);
   const event = { codexHome: options.codexHome, accountLaunch: 'model-only-v1' };
   const meta = (provider, cwd = project.path) => ({ type: 'session_meta', payload: { model_provider: provider, cwd } });
@@ -530,7 +530,7 @@ test('main lifecycle follows recorded provider, replaces sessions safely and nev
   const pending = [];
   const service = new CodexAccountUsage({ scope: async () => null, read: opts => new Promise(resolve => pending.push({ opts, resolve })) });
   const { startUsage, stopUsageAccount, noteSettings, sessions } = mainUsage(service);
-  const s = { terminalId: 'test', codexActive: true, agent: 'codex', usageEnv: {} };
+  const s = { terminalId: 'test', cliActive: true, agent: 'codex', usageEnv: {} };
   sessions.set(s.terminalId, s);
   const project = { path: os.tmpdir(), kind: 'local' };
   const event = { codexHome: options.codexHome, accountLaunch: 'model-only-v1', command: '-m' };

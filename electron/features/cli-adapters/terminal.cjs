@@ -73,6 +73,8 @@ function codexLaunch(args, words, routingOwned) {
   return result;
 }
 
+const claudeResumeLine = (id, interrupted) => id ? `claude --resume ${id}${interrupted ? ' "继续"' : ''}\r` : 'claude --continue\r';
+
 function terminalAdapters(words) {
   const claude = words.claude, codex = words.codex;
   return {
@@ -80,7 +82,7 @@ function terminalAdapters(words) {
       words: claude, roleTools: claudeRoleTools,
       terminal: {
         launch: claudeLaunch,
-        resumeLine: (id, interrupted) => id ? `claude --resume ${id}${interrupted ? ' "继续"' : ''}\r` : 'claude --continue\r',
+        resumeLine: claudeResumeLine,
         freshLine: 'claude\r',
         classify: (args, { native = false, remote = false } = {}) => {
           const options = beforeSeparator(args);
@@ -117,4 +119,11 @@ function terminalAdapters(words) {
   };
 }
 
-module.exports = { claudeWire, terminalAdapters };
+function terminalLine(adapter, history) {
+  const terminal = adapter?.terminal;
+  if (!terminal || terminal.redirect) return null;
+  if (history && terminal.resumeLine) return terminal.resumeLine(history.id);
+  return terminal.freshLine ?? adapter.manifest.command + '\r';
+}
+
+module.exports = { claudeWire, claudeResumeLine, terminalAdapters, terminalLine };

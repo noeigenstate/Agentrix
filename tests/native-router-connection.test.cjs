@@ -59,18 +59,18 @@ test('account/read sanitizes API and ChatGPT modes without retaining personal fi
 });
 test('main connections use init and account evidence and discard a late result after terminal exit', async () => {
   let finish;
-  const claude = { terminalId: 'c', agent: 'claude', codexActive: true, status: 'codex', nativeStructured: true, nativeRuntimeSessionId: 'r' };
-  const codex = { terminalId: 'x', agent: 'codex', codexActive: true, status: 'codex', nativeStructured: true,
+  const claude = { terminalId: 'c', agent: 'claude', cliActive: true, status: 'codex', nativeStructured: true, nativeRuntimeSessionId: 'r' };
+  const codex = { terminalId: 'x', agent: 'codex', cliActive: true, status: 'codex', nativeStructured: true,
     nativeReadConnection: () => new Promise(resolve => { finish = resolve; }) };
   const context = { projectAccounts: { snapshot: () => null }, sessions: new Map([['c', claude], ['x', codex]]), claudeRuntime: { connection: () => ({ kind: 'api', source: 'init', observedAt: 1 }) } };
   defineMain(context, 'readNativeConnections', 'liveHost');
-  const pending = context.readNativeConnections(); codex.codexActive = false; finish({ kind: 'subscription', source: 'account/read', observedAt: 2 });
+  const pending = context.readNativeConnections(); codex.cliActive = false; finish({ kind: 'subscription', source: 'account/read', observedAt: 2 });
   const result = await pending; assert.equal(result.claude.kind, 'api'); assert.equal(result.codex.kind, 'none');
-  codex.codexActive = true;
-  const delayed = context.readNativeConnections(); claude.codexActive = false;
+  codex.cliActive = true;
+  const delayed = context.readNativeConnections(); claude.cliActive = false;
   finish({ kind: 'subscription', source: 'account/read', observedAt: 2 });
-  assert.equal((await delayed).claude.kind, 'none'); claude.codexActive = true;
-  codex.nativeStructured = false; codex.codexActive = true;
+  assert.equal((await delayed).claude.kind, 'none'); claude.cliActive = true;
+  codex.nativeStructured = false; codex.cliActive = true;
   assert.equal((await context.readNativeConnections()).codex.kind, 'unknown');
   for (const kind of ['api', 'subscription']) {
     codex.terminalAccount = { connection: { kind }, at: 3 };
@@ -82,7 +82,7 @@ test('main connections use init and account evidence and discard a late result a
   codex.terminalAccount = { connection: { kind: 'none', scopeId: 'fixture-name' }, at: 3 };
   assert.equal(Object.hasOwn((await context.readNativeConnections()).codex, 'scopeId'), false, 'a name is not attached to a kind the terminal cannot vouch for');
   claude.nativeStructured = false; assert.equal((await context.readNativeConnections()).claude.kind, 'subscription');
-  claude.codexActive = false; assert.equal((await context.readNativeConnections()).claude.kind, 'none');
+  claude.cliActive = false; assert.equal((await context.readNativeConnections()).claude.kind, 'none');
 });
 
 test('unavailable native usage still reports actual terminal connections', async () => {

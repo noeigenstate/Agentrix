@@ -80,7 +80,7 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
   const [text, setText] = useState(''), [dockProject, setDockProject] = useState(''), [agent, setAgent] = useState<'claude' | 'codex'>('claude'), [busy, setBusy] = useState(false);
   const project = choices.find(item => item.id === (selectedProjectId ?? dockProject)) ?? choices[0], terminal = project?.terminals[0];
   const pickProject = (id: string) => selectedProjectId === undefined ? setDockProject(id) : onPickProject?.(id);
-  const sshUnavailable = project?.kind === 'ssh' && !terminal?.codexActive;
+  const sshUnavailable = project?.kind === 'ssh' && !terminal?.cliActive;
   // Dictation (its microphone or the voice shortcut) puts the words where the cursor is; Enter only puts them in, since
   // the project to send to is chosen below once there is something to send.
   const box = useRef<HTMLTextAreaElement>(null);
@@ -105,10 +105,10 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
   const start = async () => {
     let goal = text.trim();
     if ((!goal && !images.length) || !project || !terminal || busy || sshUnavailable) return;
-    const kind = terminal.codexActive ? (terminal.agent === 'codex' ? 'codex' : 'claude') : agent, name = kind === 'codex' ? 'Codex' : 'Claude Code';
+    const kind = terminal.cliActive ? (terminal.agent === 'codex' ? 'codex' : 'claude') : agent, name = kind === 'codex' ? 'Codex' : 'Claude Code';
     setBusy(true);
     try {
-      if (!terminal.codexActive) {
+      if (!terminal.cliActive) {
         if (terminal.sessionId && terminal.shellReady) window.agentrix.writeTerminal(terminal.id, `${agent}\r`);
         else if (!terminal.sessionId && await onAction(window.agentrix.agentLaunch(terminal.id, agent, 'new')) === undefined) return;
         onDone(t('正在启动 {agent}，准备好就把任务发给它…', { agent: name }));
@@ -146,9 +146,9 @@ function NewWork({ projects, selectedProjectId, stage = false, takeFocus = false
       </span>)}</div>}
       <div className="new-work-bar">
         <Select className="new-work-select" label={t('项目')} icon={<FolderSimple size={16} aria-hidden="true" />} value={project?.id ?? ''} onChange={pickProject} options={choices.map(item => ({ value: item.id, label: item.name }))} />
-        {(sshUnavailable || !empty) && <span className="new-work-note">{sshUnavailable ? t('SSH 项目请先启动终端，再在终端里运行助手。') : terminal?.codexActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
+        {(sshUnavailable || !empty) && <span className="new-work-note">{sshUnavailable ? t('SSH 项目请先启动终端，再在终端里运行助手。') : terminal?.cliActive ? t('直接发给它，不离开这一页') : t('先启动助手，准备好就发给它')}</span>}
         <span className="new-work-tools">
-          {terminal && !terminal.codexActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
+          {terminal && !terminal.cliActive && !sshUnavailable && <Select className="new-work-select is-agent" label={t('助手')} value={agent} onChange={value => setAgent(value as 'claude' | 'codex')} options={AGENT_OPTIONS} />}
           <button type="button" className="icon-button new-work-attach" title={t('添加图片')} aria-label={t('添加图片')} onClick={() => picker.current?.click()}><Paperclip size={16} /></button>
           <input ref={picker} type="file" accept="image/*" multiple hidden onChange={event => { addImages([...(event.target.files ?? [])]); event.target.value = ''; }} />
           <VoiceButton terminalId={VOICE_TARGET} sessionId={null} name={t('新任务')} size={16} onError={onError} />

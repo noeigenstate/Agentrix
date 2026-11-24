@@ -305,7 +305,7 @@ test('the real xterm screen registry recognizes a prompt with an Ultracode borde
 });
 
 test('lead sync registers only submitted conductor commands under the live conversation', async t => {
-  const terminal = { id: 'lead', sessionId: 'pty', agent: 'claude', codexActive: true, readingHistory: { threadId: 'conversation' },
+  const terminal = { id: 'lead', sessionId: 'pty', agent: 'claude', cliActive: true, readingHistory: { threadId: 'conversation' },
     agentSettings: { model: 'Fable 5.2', effort: 'medium' } };
   const scope = leadRoutingScope(terminal), leads = { claude: { model: 'claude-fable-5-2', effort: 'high' } };
   const native = Promise.resolve({ conductor: false, leads });
@@ -344,7 +344,7 @@ test('lead sync registers only submitted conductor commands under the live conve
 });
 
 test('an unverified live version reports why and sends no routing keys until a verified version is observed', async t => {
-  const terminal = { id: 'lead-version', sessionId: 'pty', agent: 'claude', codexActive: true,
+  const terminal = { id: 'lead-version', sessionId: 'pty', agent: 'claude', cliActive: true,
     agentSettings: { model: 'sonnet', effort: 'medium', ultracode: false, fast: false } };
   const scope = leadRoutingScope(terminal), keys = [];
   let agentVersion = '2.1.316', repaint;
@@ -376,7 +376,7 @@ test('an unverified live version reports why and sends no routing keys until a v
 });
 
 test('lead sync returns to old targets and retries a failure only after its inputs change', async t => {
-  let terminal = { id: 'lead-retry', sessionId: 'pty', agent: 'claude', codexActive: true,
+  let terminal = { id: 'lead-retry', sessionId: 'pty', agent: 'claude', cliActive: true,
     agentSettings: { model: 'Fable 5.2', effort: 'low', fast: false, ultracode: null } };
   const scope = leadRoutingScope(terminal), attempts = [];
   let effort = 'medium', reload, frame, fail = false;
@@ -437,7 +437,7 @@ test('lead sync returns to old targets and retries a failure only after its inpu
 });
 
 test('a fast refusal is the same message in the routing notice and the terminal error', async t => {
-  const terminal = { id: 'lead-fast-error', sessionId: 'pty', agent: 'claude', codexActive: true,
+  const terminal = { id: 'lead-fast-error', sessionId: 'pty', agent: 'claude', cliActive: true,
     agentSettings: { model: 'Fable 5.2', effort: 'high', fast: false, ultracode: null } };
   const calls = [], reason = 'Fast mode requires usage credits · /usage-credits to turn them on';
   const previous = global.window;
@@ -459,7 +459,7 @@ test('a fast refusal is the same message in the routing notice and the terminal 
 });
 
 test('SSH conductor applies Ultracode alongside effort before preparing and confirming fast mode', async t => {
-  const terminal = { id: 'ssh-lead', sessionId: 'pty', agent: 'claude', codexActive: true,
+  const terminal = { id: 'ssh-lead', sessionId: 'pty', agent: 'claude', cliActive: true,
     agentSettings: { model: 'Fable 5.2', effort: 'high', fast: false, ultracode: false } };
   const leads = { claude: { model: 'claude-fable-5-2', effort: 'max', fast: true, ultracode: true } };
   const calls = [], native = Promise.resolve({ conductor: false, leads });

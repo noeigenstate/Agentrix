@@ -143,7 +143,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // Readiness outlives this component: a dialog with no input box must still show after a trip to the raw terminal.
   // Rendering only reads it; the effect remembers it.
   const inputShown = cliInputAvailable(kind, visibleScreen?.rows ?? []);
-  const run = { session: terminal.sessionId, thread, start: terminal.agentStartedAt, active: terminal.codexActive };
+  const run = { session: terminal.sessionId, thread, start: terminal.agentStartedAt, active: terminal.cliActive };
   const preview = !!terminal.readingHistory && !cliReady(terminal.id, run, inputShown);
   useEffect(() => rememberReady(terminal.id, run, inputShown));
   const screen = preview ? { ...parsedScreen, choice: null, waiting: null } : parsedScreen;
@@ -152,7 +152,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   const signal = latestSignal.current = nextCliState(latestSignal.current, terminal);
   const state = readingState(kind, visibleScreen?.rows ?? [], parsedScreen, terminal, signal, visibleScreen);
   const idleInput = state.idle;
-  const live = terminal.codexActive && !!terminal.sessionId && terminal.status !== 'exited';
+  const live = terminal.cliActive && !!terminal.sessionId && terminal.status !== 'exited';
   const working = live && state.working;
   const hasChoice = live && state.waiting;
   const waitingShown = hasChoice;
@@ -250,7 +250,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
       if (currentPopup.current?.prompt) rearmDialog(terminal.id, currentPopup.current.prompt);
       cancelSend();
     };
-  }, [terminal.id, terminal.sessionId, epoch, terminal.codexActive]);
+  }, [terminal.id, terminal.sessionId, epoch, terminal.cliActive]);
   const ownership = useRef({ active, autoFocus, visible, locked: handoff?.locked });
   useLayoutEffect(() => {
     const previous = ownership.current; ownership.current = { active, autoFocus, visible, locked: handoff?.locked };
@@ -872,7 +872,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     event.preventDefault();
     if (sending.current) return;
     if (inputBlocked || choiceVisible.current) { onError(t('图片未能附加，已从输入框移除。请等终端准备好后重新粘贴。')); return; }
-    if (!terminal.codexActive || !terminal.sessionId) { onError(t('启动 Codex 或 Claude Code 后才能粘贴图片。')); return; }
+    if (!terminal.cliActive || !terminal.sessionId) { onError(t('启动 Codex 或 Claude Code 后才能粘贴图片。')); return; }
     const held = native.readInput()?.text;
     if (held && ownInput(held)) { keepNativeInput(); return; }
     const file = item.getAsFile();
@@ -954,7 +954,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
     : null;
   // The latest round once it has ended gets its status above the result and its actions under it; nothing while the agent
   // works or waits, and nothing for earlier rounds.
-  const settled = !shownWorking && terminal.codexActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
+  const settled = !shownWorking && terminal.cliActive && !cards.prompts.length && !hasChoice, interrupted = terminal.codexActivity === 'interrupted';
   const result = useMemo(() => latestResult(roundEntries, { idle: settled, interrupted }), [roundEntries, settled, interrupted]);
   // Only the owner's click on a message's 引用 gets here, so only it moves the keyboard to the message box.
   const quoteMessage = (who: string, text: string) => {
@@ -992,7 +992,7 @@ export function ReadingView({ projectId, terminal, remote = false, autoFocus, ac
   // The first is the full hint: when the box shows a shorter one (or none), it is the box's tooltip and accessible description.
   const commandReason = blockedCommand(draft, visibleScreen);
   const reasonInPalette = palette.open && palette.matches.some(item => item.name === draft.trim() && disabledCommand(item));
-  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续'), t('正在切换运行方式'), t('切换中')] : preview ? [t('历史预览，等待会话输入就绪'), t('历史预览'), t('预览')] : !live ? [t('会话未启动或已退出'), t('会话未运行'), t('未运行')] : hasChoice ? [t('等终端处理完后发送'), t('等终端处理完'), t('等终端')] : shownBlocked ? [t('等待终端输入就绪后发送'), t('等输入就绪后发送'), t('等输入就绪')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.codexActive
+  const hints = handoff?.locked ? [t('正在切换运行方式，稍后继续'), t('正在切换运行方式'), t('切换中')] : preview ? [t('历史预览，等待会话输入就绪'), t('历史预览'), t('预览')] : !live ? [t('会话未启动或已退出'), t('会话未运行'), t('未运行')] : hasChoice ? [t('等终端处理完后发送'), t('等终端处理完'), t('等终端')] : shownBlocked ? [t('等待终端输入就绪后发送'), t('等输入就绪后发送'), t('等输入就绪')] : result ? [t('继续修改，或描述下一步…'), t('继续修改…')] : terminal.cliActive
     ? [t('给 {agent} 发消息，/ 查看命令，@ 提及文件，Enter 发送，Shift+Enter 换行', { agent }), t('给 {agent} 发消息，/ 查看命令，@ 提及文件', { agent }), t('给 {agent} 发消息', { agent }), t('输入消息…')]
     : [t('输入命令，Enter 发送'), t('输入命令')];
   const hint = useFittingHint(input, hints), hintId = `reading-hint-${terminal.id}`, fullHint = fullHintProps(hints, hint, hintId);

@@ -45,7 +45,7 @@ test('the local Claude wrappers read the lead file and refuse overrides before r
     assert.ok(begin >= 0, file);
     assert.match(source, /\.lead/);
     assert.match(wrapper, refusal);
-    assert.ok(wrapper.indexOf(flags) >= 0 && wrapper.indexOf(flags) < wrapper.lastIndexOf('codex-started'), file);
+    assert.ok(wrapper.indexOf(flags) >= 0 && wrapper.indexOf(flags) < wrapper.lastIndexOf('agent-started'), file);
   }
 });
 

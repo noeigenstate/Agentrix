@@ -16,7 +16,7 @@ export type Project = {
   lastCompletedAt: number | null;
   sessionId: string | null; status: 'stopped' | 'starting' | 'shell' | 'codex' | 'exited';
   action: AgentActionBrief | null;
-  codexActive: boolean; agent: 'codex' | 'claude' | null; codexActivity: 'unknown' | 'working' | 'complete' | 'interrupted'; shellReady: boolean; codexAvailable: boolean | null; error: string | null;
+  cliActive: boolean; agent: 'codex' | 'claude' | null; codexActivity: 'unknown' | 'working' | 'complete' | 'interrupted'; shellReady: boolean; codexAvailable: boolean | null; error: string | null;
   terminals: ProjectTerminal[];
 };
 // A document, page or video an agent wrote, as its card in the reading view shows it.
@@ -81,7 +81,7 @@ export type ProjectTerminal = {
   shell: 'powershell' | 'cmd' | 'bash' | 'zsh';
   sessionId: string | null;
   status: Project['status'];
-  codexActive: boolean;
+  cliActive: boolean;
   agent: Project['agent'];
   codexActivity: Project['codexActivity'];
   needsInput: string | null;

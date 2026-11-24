@@ -12,7 +12,7 @@ function hostFeed(t, { kind = 'local', noteClaudeFastMode } = {}) {
   const calls = new AgentCalls({ terminalId: 'terminal-1', local: false, now: () => 10000 }); t.after(() => calls.dispose());
   const root = path.resolve('synthetic-claude-home'), project = { id: 'project', path: root, kind };
   let tail, read, armed = 0, remoteRecords = [];
-  const s = { terminalId: 'terminal-1', agent: 'claude', codexActive: true, promptQueue: { finishedAt: 0 },
+  const s = { terminalId: 'terminal-1', agent: 'claude', cliActive: true, promptQueue: { finishedAt: 0 },
     conversation: { beginHistory() {}, endHistory() {}, reset() {} }, actions: { reset() {} }, usage: { reset() {} },
     completionWork: { record() {}, reset: () => false }, terminal: { request: async () => ({ records: remoteRecords.splice(0), historyDone: true }) } };
   const deps = { sessions: new Map([['terminal-1', s]]), store: { expectCompletion() { armed++; } },
@@ -39,7 +39,7 @@ test('the host feeds historical workOnly and live Claude records into background
   assert.deepEqual(host.shown()[0].tail, ['inline output'], 'main publishes the contract\'s tail?: string[]');
   await host.live(notice('shell'));
   assert.equal(host.shown()[0].state, 'done'); assert.equal(host.shown()[0].endedAt, 2000);
-  assert.equal(host.armed(), 0); assert.equal(host.s.codexActive, true);
+  assert.equal(host.armed(), 0); assert.equal(host.s.cliActive, true);
 });
 
 test('a new transcript binding resets background usage and ignores the previous reader while preserving live delivery', async t => {

@@ -23,6 +23,7 @@ split is in use.
 
 ## May import
 - `src/shared/**`
+- `electron/features/cli-adapters/*.mjs` (launcher labels and supported launch channels)
 - `src/features/agents/agent-screen*.ts`
 - `src/features/cli-screens/index.ts`
 - `src/features/agents/AgentBrandIcon.ts`

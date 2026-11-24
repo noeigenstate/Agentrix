@@ -19,6 +19,7 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 - `support` (`electron/features/cli-adapters/capabilities.mjs`) — reports `via` or a reason key with optional parameters. A detected version older than the capability's verified range is refused; a newer one is tried and flagged `unverified`.
 - `events` (`electron/features/cli-adapters/registry.cjs`) - optional settings builder and hook signal decoder.
 - `transcript` (`electron/features/cli-adapters/registry.cjs`) - resolves, validates and interprets local session records.
+- `usage` (`electron/features/cli-adapters/usage.cjs`) — reads account limits, selects usage record handling and supplies dashboard identity and quota scope.
 - `bindNativeAdapters` (`electron/features/cli-adapters/registry.cjs`) — binds each host's runtime as `native.create(spec, emit)`. The registered facet loads the factory with `native.load()`.
 
 - `workerOf` (`electron/features/cli-adapters/workers.cjs`) — the CJS worker registry for dispatch, including CLI argv, normalized output, permission and standing rules.
@@ -30,6 +31,8 @@ Regenerate branch count reductions with `node tests/cli-branch-guard.test.cjs --
 - `electron/features/claude-sdk/adapter.cjs` (Claude native runtime and policy)
 - `electron/features/codex-app-server/adapter.cjs` (Codex native runtime and policy)
 - `electron/features/agents/call-seat.cjs` (Claude lead seat fallback from the bootstrap sidecar)
+- `electron/features/agents/claude-account-usage.cjs` (read-only account reader)
+- `electron/features/agents/codex-account-usage.cjs` (read-only account reader)
 - `electron/oversized-record.cjs` (worker stream image metadata)
 - `electron/features/dashboard/records-routing.cjs` (shared routing verdict)
 - `src/shared/agent-events.ts` (the provider ID type for the renderer declaration)

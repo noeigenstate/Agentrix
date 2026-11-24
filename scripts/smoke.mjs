@@ -196,7 +196,7 @@ try {
     return result.ok && result.value.data.includes('codex-cli');
   }, 'Codex wrapper returns version without a model request');
   await waitFor(async () => { const project = await managed(); return project.status === 'shell' && project.shellReady; }, 'Codex process exit returns to shell');
-  assert.deepEqual([(await managed()).unread, (await managed()).codexActive, (await managed()).terminals[0].nativeMode], [0, false, null]);
+  assert.deepEqual([(await managed()).unread, (await managed()).cliActive, (await managed()).terminals[0].nativeMode], [0, false, null]);
   console.log('PASS: actual Codex CLI runs its version command through the wrapper in the terminal; no session opens and nothing completes');
   await page.evaluate(id => window.agentrix.writeTerminal(id, 'codex features list\r'), projects[1].id);
   await waitFor(async () => {
@@ -204,7 +204,7 @@ try {
     return result.ok && result.value.data.includes('stable');
   }, 'a Codex management subcommand keeps its arguments and prints in the terminal');
   await waitFor(async () => (await managed()).shellReady, 'Codex management subcommand returns prompt');
-  assert.deepEqual([(await managed()).error, (await managed()).codexActive, (await managed()).terminals[0].nativeMode], [null, false, null]);
+  assert.deepEqual([(await managed()).error, (await managed()).cliActive, (await managed()).terminals[0].nativeMode], [null, false, null]);
   await page.getByRole('button', { name: '返回总览', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('[data-focus-motion]'));
 
@@ -667,7 +667,7 @@ try {
     // at once; forced parallel disposal can stall Windows runner teardown.
     try {
       const testPage = await application.firstWindow();
-      await testPage.evaluate(async () => { const state = await window.agentrix.getState(); if (state.ok) for (const project of state.value.projects) if (project.shellReady && !project.codexActive) window.agentrix.writeTerminal(project.id, 'exit\r'); });
+      await testPage.evaluate(async () => { const state = await window.agentrix.getState(); if (state.ok) for (const project of state.value.projects) if (project.shellReady && !project.cliActive) window.agentrix.writeTerminal(project.id, 'exit\r'); });
       await waitFor(async () => (await testPage.evaluate(() => window.agentrix.getState())).value.projects.every(project => project.status === 'exited' || project.status === 'stopped'), 'fixture shells exit', 4000);
     } catch {}
     await application.close();

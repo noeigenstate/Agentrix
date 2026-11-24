@@ -45,7 +45,7 @@ test('Agentrix injected shells never start a Codex TUI: a typed codex runs the C
     const source = fs.readFileSync(path.join(__dirname, '../integration', file), 'utf8');
     assert.match(source, /agentrix_agent codex/, file + ' uses the classifier');
     assert.match(source, /passthrough/, file + ' admits management commands before executing the CLI');
-    assert.match(source, /codex-started/, file + ' uses the existing authenticated shell event');
+    assert.match(source, /agent-started/, file + ' uses the existing authenticated shell event');
     assert.match(source, /原生模式/, file + ' tells the owner where Codex opens');
     assert.doesNotMatch(source, /notify=|tui\.terminal_title/, file + ' has no Codex terminal conversation');
   }

@@ -121,7 +121,7 @@ function mainSlice(names) {
 test('a transcript bound before the meter exists keeps its sub-agents folder through startUsage', t => {
   // Synthetic absolute paths on every platform; nothing is read from them.
   const home = path.resolve('/synthetic-claude'), file = path.join(home, 'projects', 'project', 'session.jsonl');
-  const s = { terminalId: 't', agent: 'claude', codexActive: true, recordRun() {} }, project = { id: 'p', kind: 'local', path: path.resolve('/synthetic-project') };
+  const s = { terminalId: 't', agent: 'claude', cliActive: true, recordRun() {} }, project = { id: 'p', kind: 'local', path: path.resolve('/synthetic-project') };
   const context = mainSlice({ sessions: new Map([['t', s]]), claudeConfigDir: () => home });
   context.followClaude(project, s, { sessionId: 'session', transcriptPath: file });
   const folder = path.join(home, 'projects', 'project', 'session', 'subagents');
@@ -216,7 +216,7 @@ test('over SSH the poll asks for the running sub-agents and counts their records
   // Timestamps after the calls' own start, so the completion is a live one that is recorded.
   const shift = Date.now() + 60000 - Date.parse(at(0)), later = record => ({ ...record, timestamp: new Date(Date.parse(record.timestamp) + shift).toISOString() });
   const finished = [], requests = [], answers = [];
-  const s = { terminalId: 't', agent: 'claude', codexActive: true, recordRun: (_call, event) => finished.push(event),
+  const s = { terminalId: 't', agent: 'claude', cliActive: true, recordRun: (_call, event) => finished.push(event),
     conversation: { beginHistory() {}, endHistory() {}, reset() {} }, actions: { reset() {} },
     // A copy made here: what main builds belongs to the script context.
     terminal: { request: async (op, args) => { requests.push([op, JSON.parse(JSON.stringify(args))]); return answers.shift(); } } };

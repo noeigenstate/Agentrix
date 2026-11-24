@@ -106,7 +106,7 @@ test('manual native TUI keys never become inferred prompts or rearm completion',
   const { registerTerminalIpc } = require('../electron/features/terminal/ipc.cjs'), listeners = {}, writes = [];
   const { SubmissionTracker } = require('../electron/terminal-input.cjs');
   const session = { native: {}, nativeInputRequests: new Set(['approval']), draftSubmissions: new SubmissionTracker({ captureText: false }),
-    status: 'codex', codexActive: true, approval: { invalidate() {} }, gate: { input: data => writes.push(data) }, submissions: { write: () => assert.fail('native keys are not prompt records') } };
+    status: 'codex', cliActive: true, approval: { invalidate() {} }, gate: { input: data => writes.push(data) }, submissions: { write: () => assert.fail('native keys are not prompt records') } };
   registerTerminalIpc({ handle() {}, listen: (name, run) => listeners[name] = run, getSession: () => session,
     getProjectById: () => assert.fail('TUI answers cannot acknowledge a round'), expectCompletion: assert.fail, pollAfterSubmission: assert.fail });
   for (const data of ['synthetic free-text answer', '\r', '1', '\x1b']) listeners['terminal:write']('fixture', data);

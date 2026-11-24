@@ -36,17 +36,25 @@ export function cliDialogShown(agent: ScreenAgent, rows: string[], screen: Agent
   return facet?.otherDialog?.(rows) ?? false;
 }
 
-export const cliInputAvailable = (agent: ScreenAgent, rows: string[]) => !!screenOf(agent)?.input(rows);
-export const cliInputDraft = (agent: ScreenAgent, rows: string[], screen: AgentScreen) => screenOf(agent)?.input(rows, screen.inputHint)?.text ?? '';
-export const isCliWorking = (agent: ScreenAgent, rows: string[], _screen: AgentScreen) => screenOf(agent)?.working(rows) ?? false;
-export const hasCliInput = (agent: ScreenAgent, rows: string[], screen: AgentScreen) => {
-  const input = screenOf(agent)?.input(rows, screen.inputHint);
-  return !!input && !input.hint;
-};
-export const isAtPrompt = (agent: ScreenAgent, rows: string[], screen: AgentScreen) =>
-  !cliDialogShown(agent, rows, screen) && !isCliWorking(agent, rows, screen) && !!screenOf(agent)?.atPrompt(rows);
-export const isCliIdle = (agent: ScreenAgent, rows: string[], screen: AgentScreen) =>
-  isAtPrompt(agent, rows, screen) && !cliInputDraft(agent, rows, screen);
+export function createScreenSelectors<Agent extends string>(
+  lookup: (agent: Agent) => CliScreen | undefined,
+  dialogShown: (agent: Agent, rows: string[], screen: AgentScreen) => boolean,
+) {
+  const cliInputAvailable = (agent: Agent, rows: string[]) => !!lookup(agent)?.input(rows);
+  const cliInputDraft = (agent: Agent, rows: string[], screen: AgentScreen) => lookup(agent)?.input(rows, screen.inputHint)?.text ?? '';
+  const isCliWorking = (agent: Agent, rows: string[], _screen: AgentScreen) => lookup(agent)?.working(rows) ?? false;
+  const hasCliInput = (agent: Agent, rows: string[], screen: AgentScreen) => {
+    const input = lookup(agent)?.input(rows, screen.inputHint);
+    return !!input && !input.hint;
+  };
+  const isAtPrompt = (agent: Agent, rows: string[], screen: AgentScreen) =>
+    !dialogShown(agent, rows, screen) && !isCliWorking(agent, rows, screen) && !!lookup(agent)?.atPrompt(rows);
+  const isCliIdle = (agent: Agent, rows: string[], screen: AgentScreen) => isAtPrompt(agent, rows, screen) && !cliInputDraft(agent, rows, screen);
+  return { cliInputAvailable, cliInputDraft, isCliWorking, hasCliInput, isAtPrompt, isCliIdle };
+}
+
+export const { cliInputAvailable, cliInputDraft, isCliWorking, hasCliInput, isAtPrompt, isCliIdle } =
+  createScreenSelectors<ScreenAgent>(screenOf, cliDialogShown);
 
 export function unverifiedScreenSwitch(agent: ScreenAgent | null, control: LiveControl, version: string | null | undefined) {
   const manifest = agent && adapterOf(agent)?.manifest;

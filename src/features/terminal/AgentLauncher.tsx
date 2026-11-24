@@ -5,13 +5,16 @@ import type { AgentsState, Result, SeatsInfo } from '../../shared/types';
 import { relativeTime } from '../../shared/time';
 import { t } from '../../shared/i18n';
 import { ClaudeLogo, CodexLogo } from '../agents/AgentBrandIcon.ts';
-import { type NextPath, nativeBridge } from '../native-session/native-bridge.ts';
+import { type NativeUsage, nativeBridge } from '../native-session/native-bridge.ts';
 import { refreshNativeSession } from '../native-session/native-store.ts';
+import { adapterOf, adapters } from '../../../electron/features/cli-adapters/registry.mjs';
+import { support } from '../../../electron/features/cli-adapters/capabilities.mjs';
 import './agent-launcher.css';
 
 type Agent = 'claude' | 'codex';
 type History = Record<Agent, { id: string; at: number } | null>;
-const AGENTS: { agent: Agent; name: string; mark: ReactNode }[] = [{ agent: 'claude', name: 'Claude Code', mark: <ClaudeLogo size={22} /> }, { agent: 'codex', name: 'Codex', mark: <CodexLogo size={22} /> }];
+const marks: Partial<Record<Agent, ReactNode>> = { claude: <ClaudeLogo size={22} />, codex: <CodexLogo size={22} /> };
+const AGENTS = adapters().map(({ manifest: { id: agent, label: name } }) => ({ agent, name, mark: marks[agent] ?? <TerminalIcon size={22} /> }));
 
 // Routing labels describe the selected project. Loading those labels is independent of starting an agent.
 function useLauncherRouting(projectId: string) {
@@ -48,14 +51,14 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   const [starting, setStarting] = useState<Agent | 'terminal' | null>(null);
   const [agents, setAgents] = useState<AgentsState | null>(null);
   // What main decided for a new Claude session in this project (usage's `next`): the card shows it and never works the path out itself.
-  const [next, setNext] = useState<NextPath | null>(null);
+  const [routes, setRoutes] = useState<NativeUsage['agents'] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const routing = useLauncherRouting(projectId);
   useEffect(() => {
     const bridge = nativeBridge();
     if (!bridge) return;
     let active = true;
-    void bridge.usage(projectId).then(usage => { if (active && usage.ok) setNext(usage.value.agents.claude.next); });
+    void bridge.usage(projectId).then(usage => { if (active && usage.ok) setRoutes(usage.value.agents); });
     return () => { active = false; };
   }, [projectId]);
   useEffect(() => {
@@ -68,7 +71,10 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   const remote = kind === 'ssh', runsHere = (_agent: Agent) => !remote;
   const missing = (agent: Agent) => runsHere(agent) && !!agents && !agents[agent].installed;
   // npm put Claude Code there without its native program: installing again changes nothing. With a key saved the connection test says why (the run-mode page, its test button in focus); without one the test cannot be clicked, and the page with the installer's command opens.
-  const incomplete = (agent: Agent) => agent === 'claude' && runsHere(agent) && !!agents?.claude.incomplete;
+  const incomplete = (agent: Agent) => {
+    const installation = agents?.[agent];
+    return runsHere(agent) && !!installation && 'incomplete' in installation && !!installation.incomplete;
+  };
   useEffect(() => {
     let active = true;
     void window.agentrix.agentHistory(terminalId).then(result => {
@@ -87,11 +93,12 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
     return onAction(window.agentrix.addTerminal(projectId, false));
   };
   // Main refuses a Claude start with no path only for a missing key under API-only: the card says so and starts nothing.
-  const noKey = next?.reason === 'no_key';
+  const noKey = (agent: Agent) => routes?.[agent]?.next?.reason === 'no_key';
   const launch = async (id: string, agent: Agent) => {
     const bridge = nativeBridge();
-    if (agent === 'claude' && noKey && !next?.path) setNotice(t('只用 API 运行，但还没有保存 API key。请到设置的「运行方式」里保存。'));
-    else if (bridge && !(remote && agent === 'claude')) {
+    const manifest = adapterOf(agent)!.manifest;
+    if (noKey(agent) && !routes?.[agent]?.next?.path) setNotice(t('只用 API 运行，但还没有保存 API key。请到设置的「运行方式」里保存。'));
+    else if (bridge && support(manifest, remote ? 'ssh.native' : 'native').ok) {
       // A start that fails is told in the card it leaves (the session that failed shows its reason, or this card says it): not again as a message in the corner.
       const started = await bridge.start(id, { agent, resume: chosen === 'continue' }).catch(error => ({ ok: false as const, error: error instanceof Error ? error.message : String(error) }));
       if (!started.ok) setNotice(started.error);
@@ -106,7 +113,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
       await onAction(window.agentrix.startTerminal(terminalId));
       onOpenTerminal(terminalId);
     }
-    else if (incomplete(what)) window.dispatchEvent(new CustomEvent('agentrix:open-settings', { detail: noKey ? { section: 'agents' } : { section: 'runtime', focus: true } }));
+    else if (incomplete(what)) window.dispatchEvent(new CustomEvent('agentrix:open-settings', { detail: noKey(what) ? { section: 'agents' } : { section: 'runtime', focus: true } }));
     else if (missing(what) && !agents?.npm) await onAction(window.agentrix.openNode());
     else {
       const installed = missing(what) ? await onAction(window.agentrix.installAgent(what)) : agents;
@@ -120,7 +127,7 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   };
   const note = (agent: Agent) => {
     if (runsHere(agent) && agents?.installing === agent) return t('正在安装…');
-    if (incomplete(agent)) return noKey ? t('安装不完整 · 点击查看') : t('安装不完整 · 去测试连接查看');
+    if (incomplete(agent)) return noKey(agent) ? t('安装不完整 · 点击查看') : t('安装不完整 · 去测试连接查看');
     if (missing(agent)) return agents!.npm ? t('未安装 · 点击一键安装') : t('未安装 · 需要先安装 Node.js');
     if (chosen === 'new') return t('开始新的对话');
     if (!history) return t('正在查找开发记录…');
@@ -132,10 +139,11 @@ export function AgentLauncher({ terminalId, projectId, kind = 'local', onAction,
   // Where a click would run the agent, said beside the choice when it is not the terminal it always was.
   const routeNote = (agent: Agent) => {
     if (missing(agent) || incomplete(agent)) return null;
-    if (agent === 'codex') return t('原生模式');
+    const manifest = adapterOf(agent)!.manifest, next = routes?.[agent]?.next;
+    if (!support(manifest, 'terminal').ok && support(manifest, 'native').ok) return t('原生模式');
     if (remote) return t('远端终端');
     if (next?.path === 'api' || next?.path === 'native') return t('API · 原生模式');
-    return noKey ? (next?.path ? t('没有 API key，改用终端') : t('需先保存 API key')) : null;
+    return noKey(agent) ? (next?.path ? t('没有 API key，改用终端') : t('需先保存 API key')) : null;
   };
   const choices = [...AGENTS];
   const primary = routing?.leadAgent;

@@ -73,7 +73,7 @@ async function mainAssembly(t, { kind = 'local', projectAccount = null, locate, 
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const forbidden = () => assert.fail('usage read must not start an account poll, CLI session, SDK or network request');
   const project = { id: 'p', kind, path: root }, calls = new AgentCalls(), sent = []; t.after(() => calls.dispose());
-  const planner = { terminalId: 't', projectId: 'p', sessionKey: 'planner-key', controlCapability: 'synthetic-capability', agent: 'claude', codexActive: true, status: 'codex',
+  const planner = { terminalId: 't', projectId: 'p', sessionKey: 'planner-key', controlCapability: 'synthetic-capability', agent: 'claude', cliActive: true, status: 'codex',
     activitySince: Date.now(), usage: { agent: 'claude', limits: [] } };
   const { adapterOf, legacyRestoreAgent } = require('../electron/features/cli-adapters/registry.cjs');
   const context = { path, structuredClone, sessions: new Map([['t', planner]]), claudeAccounts: { account: claudeAccount },

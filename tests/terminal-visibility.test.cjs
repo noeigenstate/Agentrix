@@ -9,7 +9,7 @@ const { renderToStaticMarkup } = require('react-dom/server');
 const { visibleTerminals } = require('../src/features/terminal/terminal-visibility.ts');
 const { fitTerminal } = require('../src/features/terminal/terminal-fit.ts');
 
-const terminal = (id, overrides = {}) => ({ id, title: id, sessionId: `session-${id}`, status: 'shell', codexActive: false, agent: null, ...overrides });
+const terminal = (id, overrides = {}) => ({ id, title: id, sessionId: `session-${id}`, status: 'shell', cliActive: false, agent: null, ...overrides });
 const translate = (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, name) => values[name]);
 
 function loadUI(name, overrides = {}) {
@@ -25,7 +25,7 @@ function loadUI(name, overrides = {}) {
     if (key === 'i18n') return { t: translate };
     if (key === 'time') return { relativeTime: () => '' };
     if (key === 'active-terminal') return { useActiveTerminal: () => null, setActiveTerminal() {} };
-    if (key === 'reading-mode') return { useTerminalChoice: () => [], syncReading() {}, readingShown: item => !!item.sessionId && item.codexActive };
+    if (key === 'reading-mode') return { useTerminalChoice: () => [], syncReading() {}, readingShown: item => !!item.sessionId && item.cliActive };
     if (key === 'NativeSessionView') return { NativeSessionView: () => null };
     if (key === 'NativePathNote') return { NativePathNote: () => null };
     if (key === 'native-store.ts') return { useNativeEntries: () => new Map(), nativeShown: () => false, ensureNativeSession() {} };
@@ -79,19 +79,19 @@ test('cards use live agent detection, including typed commands and startup, rath
   assert.deepEqual(visibleTerminals(shells, false), []);
   const typed = terminal('typed', { shell: 'powershell' });
   assert.deepEqual(visibleTerminals([typed], false), [], 'typing a command alone has no effect');
-  typed.codexActive = true; typed.agent = 'codex';
-  assert.deepEqual(visibleTerminals([typed], false), [typed], 'the existing codex-started detection makes it visible');
-  typed.codexActive = false;
+  typed.cliActive = true; typed.agent = 'codex';
+  assert.deepEqual(visibleTerminals([typed], false), [typed], 'the existing agent-started detection makes it visible');
+  typed.cliActive = false;
   assert.deepEqual(visibleTerminals([typed], false), [], 'the shell-prompt/agent-exited state hides it again');
-  const claude = terminal('claude', { codexActive: true, agent: 'claude' });
+  const claude = terminal('claude', { cliActive: true, agent: 'claude' });
   const starting = terminal('starting', { agentStarting: true });
-  assert.deepEqual(visibleTerminals([...shells, claude, starting, terminal('stale', { sessionId: null, codexActive: true })], false), [claude, starting]);
+  assert.deepEqual(visibleTerminals([...shells, claude, starting, terminal('stale', { sessionId: null, cliActive: true })], false), [claude, starting]);
   assert.equal(visibleTerminals(shells, true), shells, 'expanded projects retain their complete list and order');
 });
 
 test('a single visible agent fills the card while hidden shell panes remain rendered, and expansion restores splits', () => {
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', { AgentLauncher: { AgentLauncher: () => React.createElement('div', { className: 'agent-launcher' }) } });
-  const props = { project: { id: 'p', name: 'Project', terminals: [terminal('shell'), terminal('codex', { codexActive: true })] }, activeId: 'shell', fontSize: 14, setActiveId() {}, onExpand() {} };
+  const props = { project: { id: 'p', name: 'Project', terminals: [terminal('shell'), terminal('codex', { cliActive: true })] }, activeId: 'shell', fontSize: 14, setActiveId() {}, onExpand() {} };
   const card = renderToStaticMarkup(React.createElement(ProjectTerminals, { ...props, focused: false }));
   assert.match(card, /data-terminal-slot="shell" style="display:none"/);
   assert.match(card, /data-pane="shell"/);
@@ -100,7 +100,7 @@ test('a single visible agent fills the card while hidden shell panes remain rend
   const expanded = renderToStaticMarkup(React.createElement(ProjectTerminals, { ...props, focused: true }));
   assert.match(expanded, /has-splits/); assert.doesNotMatch(expanded, /display:none/);
   assert.match(expanded, /is-active-terminal[^>]*data-terminal-id="shell"/);
-  props.project.terminals.push(terminal('claude', { codexActive: true, agent: 'claude' }));
+  props.project.terminals.push(terminal('claude', { cliActive: true, agent: 'claude' }));
   assert.match(renderToStaticMarkup(React.createElement(ProjectTerminals, props)), /has-splits/);
 });
 
@@ -127,7 +127,7 @@ test('empty grid cards render one launcher, and expansion renders one for each s
 });
 
 test('grid visibility preserves the expanded selection and plain-launch keeps its requested terminal through delayed expansion', async () => {
-  const effects = [], terminals = [terminal('first'), terminal('chosen'), terminal('agent', { codexActive: true })];
+  const effects = [], terminals = [terminal('first'), terminal('chosen'), terminal('agent', { cliActive: true })];
   let activeId = 'chosen', expanded = false, expansion;
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', {
     react: { useRef: current => ({ current }), useState: initial => [initial, () => {}], useEffect: effect => effects.push(effect) },
@@ -143,7 +143,7 @@ test('grid visibility preserves the expanded selection and plain-launch keeps it
   assert.ok(card.find(node => node.props?.['data-terminal-id'] === 'agent').props.className.includes('is-active-terminal'));
   assert.ok(!card.find(node => node.props?.['data-terminal-id'] === 'chosen').props.className.includes('is-active-terminal'));
   assert.equal(render(true).find(node => node.props?.id === 'chosen').props.focused, true);
-  terminals[1].sessionId = null; terminals[2].codexActive = false; activeId = 'first';
+  terminals[1].sessionId = null; terminals[2].cliActive = false; activeId = 'first';
   const launcher = render(false).find(node => node.props?.terminalId === 'chosen');
   assert.ok(launcher);
   terminals[1].sessionId = 'session-chosen';
@@ -297,14 +297,14 @@ test('a user-typed SSH agent becomes visible while plain PTY panes stay mounted'
     const props = { project: { id: 'p', kind: 'ssh', terminals: [shell, typed] }, focused: false, activeId: 'shell', setActiveId() {} };
     const render = () => renderToStaticMarkup(React.createElement(ProjectTerminals, props));
     assert.match(render(), /data-terminal-slot="typed" style="display:none"/);
-    Object.assign(typed, { codexActive: true, agent, status: 'codex' });
+    Object.assign(typed, { cliActive: true, agent, status: 'codex' });
     const active = render();
     assert.match(active, /is-active-terminal[^>]*data-terminal-id="typed"/);
     assert.match(active, /data-terminal-slot="typed"><section/);
     assert.match(active, /data-terminal-slot="shell" style="display:none"/);
     assert.match(active, /data-pane="shell"/); assert.match(active, /data-pane="typed"/);
     assert.doesNotMatch(active, /terminal-empty|agent-launcher|has-splits/);
-    Object.assign(typed, { codexActive: false, status: 'shell' });
+    Object.assign(typed, { cliActive: false, status: 'shell' });
     const exited = render();
     assert.match(exited, /data-terminal-slot="typed" style="display:none"/);
     assert.match(exited, /2 个终端运行中 · 点击展开/);
@@ -323,7 +323,7 @@ test('card restart and voice actions target the visible agent even when the stor
     IconButton: { IconButton: () => null }, shortcuts: { shortcut: () => '' },
     'voice-input': { useVoice: () => ({ recording: null }), toggleDictation: (id, session) => calls.push(['voice', id, session]) },
   });
-  const tree = ProjectPanel({ project: { id: 'p', name: 'Project', status: 'codex', codexActive: true, codexActivity: 'working', lastCompletedAt: null, terminals: [terminal('shell'), terminal('agent', { codexActive: true })] }, focused: false, onAction: async promise => (await promise).value });
+  const tree = ProjectPanel({ project: { id: 'p', name: 'Project', status: 'codex', cliActive: true, codexActivity: 'working', lastCompletedAt: null, terminals: [terminal('shell'), terminal('agent', { cliActive: true })] }, focused: false, onAction: async promise => (await promise).value });
   assert.ok(!elements(tree).some(node => node.props?.label === '切换到终端' || node.props?.label === '阅读视图：按文档排版显示对话'), 'the card header has no mode toggle');
   const menuItem = text => elements(tree).find(node => node.props?.role === 'menuitem' && React.Children.toArray(node.props.children).includes(text));
   menuItem('重启当前终端').props.onClick(); menuItem('语音输入').props.onClick();
@@ -335,9 +335,9 @@ test('the title bar switch shows both modes for the terminal in use, selects the
   let picked = null, raw = [];
   const { ModeSwitch } = loadUI('reading/ModeSwitch.tsx', {
     'active-terminal': { useActiveTerminal: () => picked },
-    'reading-mode': { useTerminalChoice: () => raw, readingShown: (item, hidden) => !!item.sessionId && item.codexActive && !hidden.includes(item.id), setReading: (id, on) => calls.push([id, on]) },
+    'reading-mode': { useTerminalChoice: () => raw, readingShown: (item, hidden) => !!item.sessionId && item.cliActive && !hidden.includes(item.id), setReading: (id, on) => calls.push([id, on]) },
   });
-  const project = { id: 'p', terminals: [terminal('shell'), terminal('agent', { codexActive: true })] };
+  const project = { id: 'p', terminals: [terminal('shell'), terminal('agent', { cliActive: true })] };
   const buttons = () => elements(ModeSwitch({ project })).filter(node => node.type === 'button');
   // The terminal in use of the expanded project is the one picked, else the first: a plain shell has no switch (only an agent session has two modes).
   assert.equal(ModeSwitch({ project }), null);
@@ -354,7 +354,7 @@ test('the title bar switch shows both modes for the terminal in use, selects the
 
 test('splits have no title or status bars: a corner cluster (grip, restart, close), a restart over a stopped body, and the grip is what reorders them', () => {
   const { ProjectTerminals } = loadUI('terminal/ProjectTerminals.tsx', { AgentLauncher: { AgentLauncher: () => React.createElement('div', { className: 'agent-launcher' }) } });
-  const props = { project: { id: 'p', name: 'Project', kind: 'local', terminals: [terminal('shell', { title: '终端 1' }), terminal('codex', { title: '终端 2', codexActive: true, agent: 'codex' }), terminal('old', { title: '终端 3', status: 'exited' })] },
+  const props = { project: { id: 'p', name: 'Project', kind: 'local', terminals: [terminal('shell', { title: '终端 1' }), terminal('codex', { title: '终端 2', cliActive: true, agent: 'codex' }), terminal('old', { title: '终端 3', status: 'exited' })] },
     activeId: 'shell', fontSize: 14, setActiveId() {}, onExpand() {}, focused: true };
   const html = renderToStaticMarkup(React.createElement(ProjectTerminals, props));
   assert.doesNotMatch(html, /terminal-split-header|terminal-split-footer|split-status|session-label|PowerShell|CODEX/, 'no bars, no status text, no shell or agent label');

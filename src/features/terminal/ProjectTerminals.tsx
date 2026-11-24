@@ -86,7 +86,7 @@ export function ProjectTerminals({ project, visible: projectVisible = true, focu
       const name = `${project.name} ${terminal.title}`;
       return <div key={terminal.id} className={`terminal-slot ${reorder.drag?.id === terminal.id ? 'drag-placeholder' : ''}`} data-terminal-slot={terminal.id} style={{ display: visibleIds.has(terminal.id) ? undefined : 'none' }}>
       <LeadSync projectId={project.id} terminal={terminal} onError={onError} />
-      <section className={`terminal-split ${selected === terminal.id ? 'is-active-terminal' : ''} ${reorder.drag?.id === terminal.id ? 'drag-source' : ''} ${reorder.drag?.targetId === terminal.id ? 'drop-target' : ''}`} data-terminal-id={terminal.id} data-session-id={terminal.sessionId || ''} data-codex-active={terminal.codexActive} aria-label={name} onPointerDownCapture={() => setActiveId(terminal.id)} onFocusCapture={() => setActiveId(terminal.id)}>
+      <section className={`terminal-split ${selected === terminal.id ? 'is-active-terminal' : ''} ${reorder.drag?.id === terminal.id ? 'drag-source' : ''} ${reorder.drag?.targetId === terminal.id ? 'drop-target' : ''}`} data-terminal-id={terminal.id} data-session-id={terminal.sessionId || ''} data-codex-active={terminal.cliActive} aria-label={name} onPointerDownCapture={() => setActiveId(terminal.id)} onFocusCapture={() => setActiveId(terminal.id)}>
         {/* Only with several splits, and only while the pointer or the keyboard is in one: its drag grip (splits are reordered by it), restart and close, in its corner. */}
         {multiple && <div className="terminal-split-tools">
           <span className="terminal-split-grip" title={t('拖动调整顺序')} aria-hidden="true"><DotsSixVertical size={14} /></span>
@@ -98,7 +98,7 @@ export function ProjectTerminals({ project, visible: projectVisible = true, focu
           {/* A change of run mode on its way to a terminal card, and the note of a path that did not go as chosen; the native view draws its own line and question. */}
           <NativePathNote terminalId={terminal.id} terminalActive={!!terminal.sessionId} switchState={terminal.switchState} sessionId={terminal.nativeRuntimeSessionId ?? null} />
           {terminal.sessionId ? <TerminalPane id={terminal.id} sessionId={terminal.sessionId} agent={terminal.agent}
-            agentActive={terminal.codexActive} agentStartedAt={terminal.agentStartedAt} installedVersion={terminal.agent ? agents?.[terminal.agent]?.version : null}
+            agentActive={terminal.cliActive} agentStartedAt={terminal.agentStartedAt} installedVersion={terminal.agent ? agents?.[terminal.agent]?.version : null}
             queue={terminal.cliState?.queue ?? 0} fontSize={fontSize} focused={focused && selected === terminal.id && !reading && !terminal.agentStarting}
             onError={onError} onOpenLink={(_id, target) => onOpenLink(project.id, target)} remote={project.kind === 'ssh'} />
             : native ? <NativeSessionView terminalId={terminal.id} projectId={project.id} autoFocus={focused && selected === terminal.id} switchState={terminal.switchState} handoff={handoff} onError={onError} onOpenLink={target => onOpenLink(project.id, target)} />

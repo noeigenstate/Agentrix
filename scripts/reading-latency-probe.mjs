@@ -46,16 +46,16 @@ try {
   // Claude: a transcript followed through the hooks, as Claude Code's own are.
   const transcript = path.join(claude, 'projects', 's1.jsonl'), at = new Date().toISOString();
   await fs.writeFile(transcript, JSON.stringify({ type: 'user', uuid: 'u0', timestamp: at, message: { role: 'user', content: '开始' } }) + '\n');
-  await write(projects[0].id, "function global:prompt { 'claude> ' }; Send-AgentrixEvent 'codex-started' -Agent 'claude'\r");
-  for (let i = 0; i < 100 && !(await state(0)).terminals[0].codexActive; i++) await sleep(200);
+  await write(projects[0].id, "function global:prompt { 'claude> ' }; Send-AgentrixEvent 'agent-started' -Agent 'claude'\r");
+  for (let i = 0; i < 100 && !(await state(0)).terminals[0].cliActive; i++) await sleep(200);
   await write(projects[0].id, hook('start', { session_id: 's1', transcript_path: transcript, prompt: '开始' }));
   // Codex: a rollout in its home for the folder, found the way Codex's own are.
   const thread = randomUUID(), rollout = path.join(codexHome, 'sessions', `rollout-2026-10-13T10-00-00-${thread}.jsonl`);
   await fs.writeFile(rollout, [{ type: 'session_meta', timestamp: at, payload: { id: thread, cwd: projects[1].path, source: 'cli' } },
     { type: 'event_msg', timestamp: at, payload: { type: 'task_started', turn_id: 't0' } },
     { type: 'event_msg', timestamp: at, payload: { type: 'item_completed', item: { type: 'UserMessage', id: 'u0', content: [{ type: 'text', text: '开始' }] } } }].map(record => JSON.stringify(record)).join('\n') + '\n');
-  await write(projects[1].id, `function global:prompt { 'codex> ' }; Send-AgentrixEvent 'codex-started' -Agent 'codex'; $Host.UI.RawUI.WindowTitle = '${thread}'\r`);
-  for (let i = 0; i < 100 && !(await state(1)).terminals[0].codexActive; i++) await sleep(200);
+  await write(projects[1].id, `function global:prompt { 'codex> ' }; Send-AgentrixEvent 'agent-started' -Agent 'codex'; $Host.UI.RawUI.WindowTitle = '${thread}'\r`);
+  for (let i = 0; i < 100 && !(await state(1)).terminals[0].cliActive; i++) await sleep(200);
   for (const project of projects) {
     await page.locator(`[data-project-id="${project.id}"]`).getByRole('button', { name: `进入 ${project.name}`, exact: true }).click();
     await sleep(600);

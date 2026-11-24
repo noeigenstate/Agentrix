@@ -4,13 +4,14 @@ const harmless = ['--version', '-V', '--help', '-h', 'help'];
 
 export default Object.freeze({
   id: 'codex', label: 'Codex', command: 'codex',
+  usage: { resetCredits: true },
   install: { npm: '@openai/codex', versionPattern: /\b\d+\.\d+\.\d+(?:-[\w.]+)?/, minVersion: '0.166.0', label: 'Codex CLI' },
   // Keep this catch-all after the specific model rules.
   models: { match: /^/, efforts: ['low', 'medium', 'high', 'xhigh'], ultracodeLead: false },
   words: {
     utilities: [...harmless, 'login', 'logout', 'mcp', 'plugin', 'app-server', 'remote-control', 'app', 'completion',
       'update', 'doctor', 'sandbox', 'debug', 'apply', 'a', 'archive', 'delete', 'unarchive', 'migrate-rollouts', 'migrate-nfs-db', 'exec-server', 'features'],
-    harmless, print: ['exec', 'e'],
+    harmless, print: ['exec', 'e'], welcome: ['/init', '/status', '/review', '/permissions'],
     nativeRejected: ['upgrade', 'mcp-server', 'review', 'cloud', 'fork', 'agents', 'queue'],
   },
   supports: {
